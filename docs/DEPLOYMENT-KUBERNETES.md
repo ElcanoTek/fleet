@@ -459,7 +459,8 @@ sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bun
 ## Configuration reference
 
 Every knob can come from env (the chart sets these) or the bundle manifest's
-`sandbox:` block (env wins, field by field):
+`sandbox:` block (env wins, field by field). `fleet serve`, `fleet task run`
+and `fleet validate-config` resolve them the same way:
 
 | Env | Manifest | Meaning |
 | --- | --- | --- |
@@ -472,6 +473,7 @@ Every knob can come from env (the chart sets these) or the bundle manifest's
 | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | `…seccomp_profile` | node-local Localhost seccomp profile; empty = RuntimeDefault |
 | `FLEET_SANDBOX_K8S_KUBECONFIG` | `…kubeconfig` | out-of-cluster auth (token / client-cert kubeconfigs only); empty = in-cluster |
 | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | `…network_policy` | deny-all policy name the preflight requires (default `fleet-sandbox-deny-all`) |
+| `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `…open_egress_policy` | open-egress policy name the preflight requires when the default network mode is `open` (default `fleet-sandbox-open-egress`; [below](#honest-scope--what-the-kubernetes-backend-does-differently)) |
 | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `…bundle_docs_in_image` | the sandbox image carries the bundle's `protocols/`, `personas/` and `system_prompts/` at the same absolute paths — keeps their fileop read anchors valid in a pod ([above](#bundle-docs-inside-a-sandbox-pod)); skills need no declaration (staged into the claim); a non-boolean refuses to boot |
 | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | `…node_selector` | pin sandbox pods to a dedicated runner pool — env form `"pool=sandboxes,arch=amd64"`, manifest form a map; a malformed value refuses to boot |
 | `FLEET_SANDBOX_K8S_TOLERATIONS` | `…tolerations` | tolerations for a tainted runner pool — env form a JSON array of `{key,operator,value,effect}`, manifest form a YAML list |

@@ -23,25 +23,21 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
@@ -56,16 +52,13 @@ import (
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
-	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/logging"
-	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/ownerdigest"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
-	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -388,16 +381,12 @@ func run() error {
 	// the generic bundle.
 	cfg.A2APeers = bundle.A2APeerConfigs()
 
-	// Resolve the sandbox image, OCI runtime, and backend from env + bundle
-	// (env wins). Fail-closed on an unrecognized backend value (#989).
+	// Resolve the sandbox image, OCI runtime, backend (and its kubernetes
+	// settings) and egress allowlist from env + bundle (env wins). Fail-closed
+	// on an unrecognized backend value (#989).
 	if err := resolveSandboxInto(cfg, bundle); err != nil {
 		return err
 	}
-	// Sandbox egress allowlist (#211): the bundle manifest supplies the default
-	// allowed domains for allowlisted network mode (operator-authored deployment
-	// config, like the runtime + image). FLEET_DEFAULT_NETWORK_MODE selects the
-	// mode; this fills the allowlist it draws from.
-	cfg.SandboxNetworkAllowlist = bundle.Sandbox().NetworkAllowlist
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
@@ -460,7 +449,7 @@ func run() error {
 		// paths resolve, and fileOpRoot treats the tree as a read-only
 		// supporting-doc root so write_file/edit_file refuse it (the sandbox
 		// mounts enforce the same read-only posture for bash/run_python).
-		tools.SharedFilesDirName: tools.SharedFilesDir(workspaceRootOrDefault(cfg.WorkspaceRoot)),
+		tools.SharedFilesDirName: tools.SharedFilesDir(cfg.WorkspaceRoot),
 	})
 
 	// Confine the host-side file tools (view_file/write_file/edit_file) to the
@@ -1042,7 +1031,7 @@ func run() error {
 	// Last-resort fallback only — config.Load already defaults Addr to
 	// 127.0.0.1:8080; keep the fallback loopback too so an explicitly empty
 	// FLEET_SERVER_ADDR can never widen the bind to every interface.
-	chatAddr := addrOr(cfg.Addr, "127.0.0.1:8080")
+	chatAddr := defaultString(cfg.Addr, "127.0.0.1:8080")
 	orchAddr := orchestratorAddr()
 
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
@@ -1093,11 +1082,15 @@ func run() error {
 
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
-	defer watchConfigReloadSignal(ctx, cfg)()
+	defer onSignal(ctx, syscall.SIGUSR2, "cmd.config-reload", func() {
+		logConfigReload(cfg.Reload(os.Getenv("FLEET_ENV_FILE")))
+	})()
 
 	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply
 	// server add/remove/restart to the live Manager without a restart.
-	defer watchMCPReloadSignal(ctx, mgr)()
+	defer onSignal(ctx, syscall.SIGHUP, "cmd.mcp-reload", func() {
+		logMCPReload(reloadMCPServers(ctx, mgr))
+	})()
 
 	// Worker pool runs until ctx is cancelled, then drains. Guarded so a panic in
 	// the pool loop is a contained, logged event — and poolDone still closes
@@ -1193,96 +1186,6 @@ func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
 	}()
 }
 
-// awaitShutdown blocks until a terminal signal or a fatal listener error,
-// returning whether shutdown should be graceful (SIGTERM — deployment restart)
-// or immediate (SIGINT — dev Ctrl-C — or a listener error). SIGUSR1 logs a
-// diagnostic in-flight snapshot and keeps waiting (no shutdown).
-func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.Server, pool *runner.Pool, lim *admission.Limiter) bool {
-	for {
-		select {
-		case sig := <-sigCh:
-			switch sig {
-			case syscall.SIGTERM:
-				log.Printf("fleet: SIGTERM received; beginning graceful shutdown")
-				return true
-			case syscall.SIGINT:
-				log.Printf("fleet: SIGINT received; shutting down immediately")
-				return false
-			case syscall.SIGUSR1:
-				//nolint:gosec // G706: only integer counters are formatted (%d) — no string from request input is logged, so no CR/LF log-line forgery is possible.
-				log.Printf("fleet: status — active_chat_turns=%d active_sched_tasks=%d admission_inflight=%d/%d",
-					chatSrv.ActiveTurns(), pool.ActiveTasks(), lim.InFlight(), lim.Total())
-			}
-		case err := <-errCh:
-			log.Printf("fleet: listener error: %v; shutting down", err)
-			return false
-		}
-	}
-}
-
-// performShutdown runs the drain sequence: stop admitting, drain in-flight chat
-// turns + scheduled tasks within the grace budget (force-cancelling stragglers),
-// then close the listeners. graceful=false is the fast path (cancel everything
-// now). cancel stops the claim loop / scheduler-fed pool.
-func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer, webServer *http.Server) {
-	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
-	sdNotify("STOPPING=1")
-	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
-	// routing here) and notify attached SSE clients to reconnect elsewhere.
-	chatSrv.BeginShutdown()
-
-	if graceful {
-		// Stop the claim loop + scheduler-fed pool; in-flight tasks keep their
-		// decoupled context and drain within the pool's own grace budget (parallel).
-		cancel()
-		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
-		if chatSrv.DrainTurns(graceCtx) {
-			log.Printf("fleet: all in-flight chat turns drained within grace")
-		} else {
-			//nolint:gosec // G706: grace is a time.Duration (digits+unit) and n is an int count — neither can forge a log line; values are operator-config-derived, not request input.
-			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
-		}
-		// An approved card's call can outlive its POST (a long deal write
-		// answers "executing" and finishes detached), so the HTTP handler
-		// drain no longer covers it. Wait for it within the same grace; one
-		// still running when the process exits keeps its executing sentinel,
-		// which the next boot records as outcome unknown.
-		if !chatSrv.DrainApprovalRuns(graceCtx) {
-			//nolint:gosec // G706: grace is a time.Duration (digits+unit), operator-config-derived, not request input.
-			log.Printf("fleet: grace period (%s) expired with approved actions still executing; their outcome will be recorded as unknown at the next start", grace)
-		}
-		graceStop()
-		// After the turns, not before: a turn's completion tail can schedule a
-		// queue-drain re-kick, so background work has to settle second or the
-		// last thing shut down would be the thing that re-armed itself.
-		chatSrv.StopBackground()
-		<-poolDone // pool ran its own grace-bounded task drain in parallel
-	} else {
-		// Immediate path (SIGINT / listener error): cancel everything now.
-		cancel()
-		pool.ForceCancel()
-		if n := chatSrv.CancelInflightTurns(); n > 0 {
-			//nolint:gosec // G706: only an int count is formatted (%d) — no request-input string is logged, so no log-line forgery.
-			log.Printf("fleet: cancelled %d in-flight chat turn(s)", n)
-		}
-		// Cancels pending timers and waits only for background work already
-		// running, so this stays an immediate path.
-		chatSrv.StopBackground()
-		<-poolDone
-	}
-
-	// Close the HTTP listeners last: handlers have returned and detached work has
-	// drained or been cancelled, so Shutdown completes promptly. Each server gets
-	// the full grace budget and they close in parallel (not one off the other's
-	// remainder).
-	servers := []*http.Server{chatServer, orchServer}
-	if webServer != nil {
-		servers = append(servers, webServer)
-	}
-	closeServers(grace, servers...)
-	log.Printf("fleet: shutdown complete")
-}
-
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant
 // to be deferred. A misconfigured exporter is NON-FATAL: it logs and returns a
 // no-op stop, so a bad FLEET_OTEL_ENDPOINT degrades to disabled tracing rather
@@ -1308,173 +1211,6 @@ func flushObservability(active bool) {
 	if active {
 		observability.Flush(2 * time.Second)
 	}
-}
-
-// reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
-// reloadable settings from the env file + process environment and returns a JSON
-// diff of what changed / was skipped (non-reloadable) / errored. cfg may be nil
-// in route-walking tests (the route only needs to exist there); a real request
-// against a nil cfg returns 503.
-func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		if cfg == nil {
-			http.Error(w, "config reload unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		result, err := cfg.Reload(os.Getenv("FLEET_ENV_FILE"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(result)
-	}
-}
-
-// watchConfigReloadSignal reloads cfg's reloadable settings on every SIGUSR2 until
-// ctx is cancelled, and returns a stop func that deregisters the signal. A
-// separate channel/goroutine (not the shutdown loop) keeps cfg in scope and
-// decouples reload from the lifecycle signals; SIGUSR2 (not SIGHUP) avoids
-// clashing with log-rotation tooling. A panic in a reload is contained. (#286)
-func watchConfigReloadSignal(ctx context.Context, cfg *config.Config) func() {
-	reloadSig := make(chan os.Signal, 1)
-	signal.Notify(reloadSig, syscall.SIGUSR2)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-reloadSig:
-				// Recover PER iteration (not once around the loop) so a panic in one
-				// reload can't permanently disable SIGUSR2 reloads for the process.
-				func() {
-					defer safe.Recover("cmd.config-reload", nil)
-					logConfigReload(cfg.Reload(os.Getenv("FLEET_ENV_FILE")))
-				}()
-			}
-		}
-	}()
-	return func() { signal.Stop(reloadSig) }
-}
-
-// reloadMCPServers hot-reloads the running Manager's MCP servers (#218). An
-// injected credential owner re-reads its own bundle and returns public metadata;
-// the local compatibility path re-reads the bundle here and builds throwaway
-// specs without mutating the shared cfg.MCPServers.
-func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSummary, error) {
-	if mgr == nil {
-		return &mcp.ReloadSummary{}, nil
-	}
-	if mgr.MCPReloadOwnsConfig() {
-		return mgr.ReloadMCPServers(ctx, nil)
-	}
-	bundle, err := clientconfig.Load(clientconfig.Dir())
-	if err != nil {
-		return nil, fmt.Errorf("reload client-config bundle: %w", err)
-	}
-	specs := scheduledrun.BuildMCPSpecs(&config.Config{MCPServers: bundle.MCPServerConfigs()})
-	summary, err := mgr.ReloadMCPServers(ctx, specs)
-	if err == nil {
-		// The picker's categories and needs-setup rows follow the same read.
-		mgr.SetConnectorMeta(bundle.ConnectorMeta())
-	}
-	return summary, err
-}
-
-// mcpSchemaIssuesResponse is the GET /admin/mcp-servers/schema-issues body.
-type mcpSchemaIssuesResponse struct {
-	// Since is when this process started recording; a connector no turn has
-	// used since then is not reflected.
-	Since  time.Time                   `json:"since"`
-	Issues []agentcore.ToolSchemaIssue `json:"issues"`
-}
-
-// mcpSchemaIssuesHandler serves GET /admin/mcp-servers/schema-issues from the
-// runtime record the model boundary keeps (agentcore.ToolSchemaIssues).
-func mcpSchemaIssuesHandler(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(mcpSchemaIssuesResponse{
-		Since:  agentcore.ToolSchemaRecordSince(),
-		Issues: agentcore.ToolSchemaIssues(),
-	})
-}
-
-// mcpReloadHandler serves POST /admin/mcp-servers/reload (#218): it hot-reloads
-// the MCP catalog and returns a JSON ReloadSummary. mgr may be nil in
-// route-walking tests (the route only needs to exist there); a real request
-// against a nil mgr returns 503.
-func mcpReloadHandler(mgr *agent.Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if mgr == nil {
-			http.Error(w, "mcp reload unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		summary, err := reloadMCPServers(r.Context(), mgr)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(summary)
-	}
-}
-
-// watchMCPReloadSignal hot-reloads the MCP catalog on every SIGHUP until ctx is
-// cancelled, and returns a stop func that deregisters the signal (#218). SIGHUP
-// is the canonical "reload configuration" signal and is deliberately left free
-// by the config-reload path (which uses SIGUSR2). A panic in a reload is
-// contained per-iteration.
-func watchMCPReloadSignal(ctx context.Context, mgr *agent.Manager) func() {
-	reloadSig := make(chan os.Signal, 1)
-	signal.Notify(reloadSig, syscall.SIGHUP)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-reloadSig:
-				func() {
-					defer safe.Recover("cmd.mcp-reload", nil)
-					logMCPReload(reloadMCPServers(ctx, mgr))
-				}()
-			}
-		}
-	}()
-	return func() { signal.Stop(reloadSig) }
-}
-
-// logMCPReload logs the outcome of a SIGHUP-triggered MCP reload.
-func logMCPReload(summary *mcp.ReloadSummary, err error) {
-	if err != nil {
-		log.Printf("mcp reload (SIGHUP): error: %v", err)
-		return
-	}
-	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d", //nolint:gosec // G706 false positive: every arg is a len() int; gosec's taint engine misattributes a DB-string flow from the LLM-provider boot logs to this sink
-		len(summary.Added), len(summary.Removed), len(summary.Restarted), len(summary.Unchanged))
-}
-
-// logConfigReload logs the outcome of a SIGUSR2-triggered reload.
-func logConfigReload(result config.ReloadResult, err error) {
-	if err != nil {
-		log.Printf("config reload (SIGUSR2): error: %v", err)
-		return
-	}
-	log.Printf("config reload (SIGUSR2): %d changed, %d skipped, %d error(s)",
-		len(result.Changed), len(result.Skipped), len(result.Errors))
-	for _, ch := range result.Changed {
-		log.Printf("config reload: %s: %q -> %q", ch.Key, ch.Old, ch.New)
-	}
-}
-
-// poolDrainGrace maps the process shutdown grace onto the worker pool's
-// DrainGrace contract (#278): a non-positive grace (operator set
-// FLEET_SHUTDOWN_GRACE_SECONDS=0) becomes negative so the pool force-cancels
-// immediately instead of substituting its default.
-func poolDrainGrace(cfg *config.Config) time.Duration {
-	if grace := shutdownGrace(cfg); grace > 0 {
-		return grace
-	}
-	return -1
 }
 
 // startA2APush runs the A2A push-notification dispatcher (#1279 Phase 2) on
@@ -1577,282 +1313,8 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 	}, nil
 }
 
-// buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
-// auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
-//
-// trustedProxies is cfg.TrustedProxies (FLEET_TRUSTED_PROXIES); it decides
-// whether X-Forwarded-For is consulted at all — see the comment at its use.
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, trustedProxies []net.IP) http.Handler {
-	r := chi.NewRouter()
-	// The client IP keys login and API rate limiting (getClientIP), so it
-	// follows the FLEET_TRUSTED_PROXIES contract, resolved by the same
-	// httpmw.TrustedProxies the chat server's IP filter uses
-	// (internal/httpapi/ipfilter.go) so the two servers always name the same
-	// client: empty, the default, means X-Forwarded-For is NEVER consulted
-	// (Middleware is a pass-through) and getClientIP falls back to the TCP
-	// peer in r.RemoteAddr; set, it is read only when that peer is one of the
-	// named proxies. ClientIPFromXFF treats r.RemoteAddr as the
-	// rightmost hop, so a client reaching fleet directly cannot pick its own
-	// identity by sending the header (GHSA-j6qf-3m9c-vwj3); behind a trusted
-	// proxy it walks the chain right-to-left past trusted hops, so a
-	// prepended spoof never wins either (GHSA-3fxj-6jh8-hvhx et al.).
-	r.Use(httpmw.NewTrustedProxies(trustedProxies).Middleware())
-	r.Use(httpmw.Recoverer)
-	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
-	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
-	r.Use(h.SecurityHeadersMiddleware)
-	r.Use(h.BodySizeLimitMiddleware)
-	r.Use(h.CSRFMiddleware)
-
-	r.Get("/health", h.HealthCheck)
-	r.Get("/api/config", h.GetDashboardConfig)
-	// Version discovery (#321): unauthenticated, unversioned-forever (like /health).
-	// Also reachable at /v1/api-info via the apiversion.Router wrapper.
-	r.Get("/api-info", apiversion.InfoHandler(version.Version()))
-	// A2A discovery (#1279): the Agent Card, public by construction (it names
-	// capabilities and the endpoint URL, nothing else) at the well-known path
-	// the A2A spec fixes — unversioned forever (apiversion.unversionedForever).
-	// Answers 501 until FLEET_A2A_ENABLED wires SetA2A.
-	r.Get("/.well-known/agent-card.json", h.A2AAgentCard)
-
-	// Admin-gated mutations.
-	r.Group(func(r chi.Router) {
-		r.Use(h.AdminAuthMiddleware)
-		// Prometheus scrape endpoint (#176) — admin-API-key gated like other
-		// sensitive reads; cost/token data must not be public.
-		r.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-			_, _ = w.Write([]byte(metrics.Render()))
-		})
-		r.Post("/tasks/cleanup", h.CleanupHistory)
-		r.Post("/tasks/model", h.BulkSetTaskModel) // fleet-wide model re-assignment (admin-gated)
-		// Pending-queue inspection (#230): per-tier depth + oldest wait, so an
-		// operator can see backlog and starvation. Admin-gated like the other
-		// sensitive reads.
-		r.Get("/admin/queue", h.QueueStats)
-		r.Get("/admin/pipeline-metrics", h.PipelineMetrics)
-		// Migration status (#256): applied vs pending sched-DB migrations, the
-		// current tracking-row version + dirty flag. Admin-gated like the other
-		// sensitive reads; strictly read-only (applies nothing).
-		r.Get("/admin/migrations", h.MigrationStatus)
-		// Config hot-reload (#286): re-read the reloadable settings (cost/token/
-		// iteration ceilings, temperatures) without a restart. Admin-gated like the
-		// other sensitive mutations; returns a JSON diff of what changed, what was
-		// skipped (non-reloadable, needs restart), and any parse errors.
-		r.Post("/admin/reload-config", reloadConfig)
-		// MCP hot-reload (#218): re-read the client-config bundle's MCP catalog and
-		// apply server add/remove/restart to the live interactive Manager without a
-		// restart. Admin-gated like the other sensitive mutations; returns a JSON
-		// summary of what changed. Equivalent to sending SIGHUP.
-		r.Post("/admin/mcp-servers/reload", reloadMCP)
-		// MCP tool schema findings: tools whose input schema used older JSON
-		// Schema drafts (translated) or is invalid (withheld from the model),
-		// as recorded by the turns this process has run. Admin-gated read;
-		// `fleet mcp schema-issues` and `fleet doctor` consume it.
-		r.Get("/admin/mcp-servers/schema-issues", mcpSchemaIssuesHandler)
-		r.Post("/users", h.CreateUser)
-		r.Post("/keys", h.CreateAPIKey)
-		r.Get("/keys", h.ListAPIKeys)
-		r.Get("/keys/audit", h.GetAuditLog)
-		r.Get("/keys/{key_id}", h.GetAPIKey)
-		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
-		r.Post("/keys/{key_id}/revoke", h.RevokeAPIKey)
-		r.Delete("/keys/{key_id}", h.DeleteAPIKey)
-
-		// Notes admin: CRUD + proposal decisions (NOTES_WIKI_SPEC §6).
-		r.Post("/notes", notes.CreateNote)
-		r.Put("/notes/{slug}", notes.UpdateNote)
-		r.Delete("/notes/{slug}", notes.ArchiveNote)
-		r.Post("/notes/proposals/{id}/publish", notes.PublishProposal)
-		r.Post("/notes/proposals/{id}/reject", notes.RejectProposal)
-	})
-
-	// Admin-or-user reads.
-	r.Group(func(r chi.Router) {
-		r.Use(h.AdminOrUserAuthMiddleware)
-		// SLA report (#274): per-prompt actual-duration p50/p95 + breach rate over a
-		// window. Registered here (not under AdminAuthMiddleware) so the Next proxy's
-		// header-trust/bearer path resolves the caller into a principal; the handler
-		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
-		// unreachable from the dashboard — the proxy can never send X-API-Key.
-		r.Get("/sla-report", h.GetSLAReport)
-		// Usage analytics (#601 part 1): cost/token roll-up by principal /
-		// project / model / time bucket over the persisted metering. Same
-		// placement rationale as /sla-report: behind AdminOrUserAuthMiddleware
-		// so the Next proxy's header-trust/bearer path resolves a principal,
-		// with the admin gate enforced in-handler on PermissionAdmin.
-		r.Get("/admin/usage", h.GetUsageReport)
-		// Adoption analytics: the per-user AI-adoption read model behind the
-		// Operations Center's exec Adoption view (per-user daily series, trend
-		// deltas vs the previous window, and the seat roster). Same placement
-		// rationale and in-handler PermissionAdmin gate as /admin/usage.
-		r.Get("/admin/usage/adoption", h.GetAdoptionReport)
-		// Per-principal rolling budgets (#601 part 2): admin CRUD over the
-		// budget rows the shared create gate enforces. Same placement rationale
-		// as /admin/usage — AdminOrUserAuthMiddleware for proxy reachability,
-		// with the admin gate enforced in-handler on PermissionAdmin.
-		r.Get("/admin/budgets", h.ListBudgets)
-		r.Post("/admin/budgets", h.UpsertBudget)
-		r.Delete("/admin/budgets/{budget_id}", h.DeleteBudget)
-		// Dataset / table agent (#514): typed tables whose rows the agent works
-		// in the background, proposing structured write-backs a human approves.
-		// Reads + review actions live here; run/pause drive the in-process
-		// dataset runner via the SetDatasetRunner seam.
-		r.Get("/datasets", h.ListDatasets)
-		r.Post("/datasets", h.CreateDataset)
-		r.Get("/datasets/{datasetID}", h.GetDataset)
-		r.Delete("/datasets/{datasetID}", h.DeleteDataset)
-		r.Get("/datasets/{datasetID}/rows", h.ListDatasetRows)
-		r.Post("/datasets/{datasetID}/rows", h.ImportDatasetRows)
-		r.Post("/datasets/{datasetID}/run", h.RunDataset)
-		r.Post("/datasets/{datasetID}/pause", h.PauseDataset)
-		r.Post("/datasets/{datasetID}/approve", h.ApproveDatasetRows)
-		r.Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
-		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
-		r.Get("/tasks", h.ListTasks)
-		// Scheduler UX 2.0 (#504): upcoming-runs timeline (computed from cron +
-		// scheduled_for). Static segment, registered with the other task reads.
-		r.Get("/tasks/upcoming", h.GetUpcomingRuns)
-		// /tasks/tags is registered before /tasks/{task_id} so the static segment
-		// wins over the wildcard (#212 tag catalogue). /tasks/export and
-		// /tasks/import are likewise static segments that must precede the
-		// {task_id} wildcard (#238).
-		r.Get("/tasks/tags", h.GetTagCatalogue)
-		// Same static-before-wildcard rule: the task form's recipient suggestions.
-		r.Get("/tasks/recipients", h.GetRecipientHistory)
-		r.Get("/tasks/export", h.HandleTaskExport)
-		// Import is a bulk create (the batch path's sibling), so it carries the
-		// same task-create rate limiter as /tasks, /tasks/batch and /upload.
-		r.With(h.SchedRateLimitMiddleware).Post("/tasks/import", h.HandleTaskImport)
-		r.Get("/tasks/{task_id}", h.GetTask)
-		r.Get("/tasks/{task_id}/output", h.GetTaskOutput)
-		r.Get("/tasks/{task_id}/error-analysis", h.GetTaskErrorAnalysis)
-		r.Get("/tasks/{task_id}/artifacts", h.GetTaskArtifacts)
-		r.Put("/tasks/{task_id}", h.UpdateTask)
-		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
-		// Admin reassignment of a task's owner (created_by), carried onto the
-		// rest of its recurrence chain that later runs continue from. Same
-		// placement rationale as /admin/budgets: PermissionAdmin is enforced
-		// in-handler.
-		r.Put("/tasks/{task_id}/owner", h.SetTaskOwner)
-		// Rerun/clone mint a new task each, so they are metered like POST /tasks.
-		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/rerun", h.RerunTask)
-		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/clone", h.CloneTask)
-		r.Delete("/tasks/{task_id}", h.CancelTask)
-		// Permanently remove a task. Deliberately NOT the same route as the
-		// cancel above: cancel stops a job and keeps the record, this destroys
-		// the record — and only this frees the task's name for reuse (#238's
-		// partial unique index outlives a cancelled row).
-		r.Delete("/tasks/{task_id}/permanent", h.DeleteTask)
-		// Self-improving memory (#516): feedback capture + versioned learned
-		// instructions (list / activate a version / deactivate).
-		r.Post("/tasks/{task_id}/feedback", h.SubmitFeedback)
-		r.Get("/tasks/{task_id}/learned-instructions", h.LearnedInstructions)
-		r.Post("/tasks/{task_id}/learned-instructions/{version}/activate", h.LearnedInstructions)
-		r.Delete("/tasks/{task_id}/learned-instructions/active", h.LearnedInstructions)
-		// ask/notify (#510): the "needs a human answer" queue + resume with an
-		// answer (re-queues the paused task). /tasks/paused is registered before
-		// /tasks/{task_id} static-vs-param, but chi routes them distinctly.
-		r.Get("/tasks/paused", h.ListPausedTasks)
-		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
-		// self-wake (docs/SELF-WAKE.md): fire a named event at a task parked
-		// by wake_on_event; the key must match what the task waits for.
-		r.Post("/tasks/{task_id}/wake", h.WakeTask)
-		r.Get("/logs/{task_id}", h.GetLogs)
-		// Per-attempt run log history: transcripts a retry / ask-resume /
-		// wake cycle superseded. Same auth/ownership gate as /logs/{task_id}.
-		r.Get("/logs/{task_id}/history", h.GetLogHistory)
-		r.Get("/logs/{task_id}/history/{entry_id}", h.GetLogHistoryEntry)
-		// Sub-agent child transcript (#1043): the sibling session log a spawned
-		// child wrote, gated by the same transcript gate PLUS a linkage check
-		// (the child id must appear in this task's persisted log).
-		r.Get("/logs/{task_id}/subagents/{child_session_id}", h.GetSubagentLog)
-		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
-		// replay of the persisted log once finished (#200). Same auth/ownership gate
-		// as /logs/{task_id}.
-		r.Get("/tasks/{task_id}/stream", h.StreamTaskLogs)
-		// Workspace file browser (#287): list + download artifacts the task's agent
-		// wrote into its per-run workspace. Stricter than the generic task gate —
-		// the handler restricts access to the admin or the task's creator and
-		// enforces the shared path-traversal guard on every file access.
-		r.Get("/tasks/{task_id}/workspace", h.TaskWorkspace)
-		r.Get("/tasks/{task_id}/workspace/*", h.TaskWorkspaceFile)
-		r.Get("/stats", h.GetDashboardStats)
-		r.Get("/api/me", h.GetCurrentUser)
-
-		// Optional-MCP catalog + credential-account seats for the task-form
-		// picker + admin table (read-only; never secret values). The web app
-		// proxies /api/orchestrator/mcp-servers + /mcp-accounts to these.
-		r.Get("/mcp-servers", h.GetMCPServers)
-		r.Get("/mcp-accounts", h.GetMCPAccounts)
-
-		// Read-only task-template catalog for the task-create UI's "new task from a
-		// template" affordance (#262). The web app proxies
-		// /api/orchestrator/task-templates to this. Never persists or creates a task.
-		r.Get("/task-templates", h.ListTaskTemplates)
-		r.Get("/prompts", h.PromptLibraryCollection)
-		r.Post("/prompts", h.PromptLibraryCollection)
-		r.Get("/prompts/export", h.ExportPromptLibrary)
-		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
-		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
-
-		// Notes reads (admin + scoped user).
-		r.Get("/notes", notes.ListNotes)
-		r.Get("/notes/{slug}", notes.GetNote)
-		r.Get("/notes/proposals", notes.ListProposals)
-		r.Get("/notes/proposals/{id}", notes.GetProposal)
-	})
-
-	// The two high-cost endpoints carry the sliding-window rate limiter
-	// (per-API-key + global), so a runaway key can't flood the task queue or
-	// drain the LLM budget. The admin key bypasses it (see SchedRateLimitMiddleware).
-	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
-	// Batch task submission (#227): accepts up to MaxBatchSize TaskCreate recipes
-	// in one call. Atomic mode wraps the insert in a single transaction; the
-	// default (non-atomic) is best-effort with a 207 Multi-Status. Same auth +
-	// rate limiter as POST /tasks; the handler additionally charges the scoped
-	// key's hourly cap for (N-1) extra tasks so a batch is never a rate-limit
-	// bypass.
-	r.With(h.SchedRateLimitMiddleware).Post("/tasks/batch", h.CreateTaskBatch)
-	// Pre-submission cost forecast (#233): same body, auth, and rate limiter as
-	// POST /tasks, but pure local computation — it creates nothing.
-	r.With(h.SchedRateLimitMiddleware).Post("/tasks/estimate", h.EstimateTask)
-	r.With(h.SchedRateLimitMiddleware).Post("/upload", h.HandleUpload)
-	r.Get("/files/{filename}", h.HandleDownload)
-
-	// A2A JSON-RPC endpoint (#1279): every A2A method multiplexes over this one
-	// POST (streaming methods answer with SSE), reachable as /v1/a2a via the
-	// apiversion wrapper. Outside every auth group — authentication is per
-	// JSON-RPC method inside the dispatcher (X-API-Key only, the credential the
-	// Agent Card declares), because HTTP-verb key scoping cannot see which
-	// method a JSON-RPC body carries. Same rate limiter as POST /tasks; answers
-	// 501 until FLEET_A2A_ENABLED wires SetA2A. CSRF-exempt by path
-	// (middleware.go): its auth never involves a browser-auto-sent credential.
-	r.With(h.SchedRateLimitMiddleware).Post("/a2a", h.A2ARPC)
-	// The trailing-slash twin is deliberate, not tidiness: A2A clients built
-	// on httpx (the official TCK included) resolve the Agent Card's interface
-	// URL as a base and POST to "<url>/", which arrives here as /v1/a2a/ —
-	// and chi's exact matching 404'd every such call until this route existed.
-	r.With(h.SchedRateLimitMiddleware).Post("/a2a/", h.A2ARPC)
-
-	// Webhook triggers (#177): authenticated by per-trigger HMAC-SHA256, NOT the
-	// admin API key, so external services (GitHub, Slack, CI) can fire tasks
-	// without admin credentials. Deliberately outside every auth group.
-	r.With(h.SchedRateLimitMiddleware).Post("/triggers/{slug}", h.HandleWebhookTrigger)
-	// Email triggers (#511): an email provider's inbound-parse webhook posts a
-	// normalized email to spawn a governed run. Same HMAC auth + per-slug rate
-	// limit as the webhook trigger; the email-kind security controls (approved
-	// senders, DKIM/SPF, attachments, dedup) run inside the handler.
-	r.With(h.SchedRateLimitMiddleware).Post("/triggers/email/{slug}", h.HandleEmailTrigger)
-	r.Post("/auth/login", h.Login)
-	r.Post("/auth/logout", h.ElcanoLogout)
-
-	return r
-}
-
 // ── DSN / addr resolution ──
 
-// chatDSN resolves the interactive chat Postgres DSN.
 // logCentralAuth says at boot what central Auth controls on this Fleet
 // (ADR-0095), so an operator reading the journal knows where accounts and
 // passwords are managed.
@@ -1901,6 +1363,7 @@ func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *ha
 	return datasetRunner
 }
 
+// chatDSN resolves the interactive chat Postgres DSN.
 func chatDSN(cfg *config.Config) string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_CHAT_DATABASE_URL")); v != "" {
 		return v
@@ -2280,24 +1743,6 @@ func dbIdentity(dsn string) string {
 	return u.Host + u.Path
 }
 
-func addrOr(addr, def string) string {
-	if strings.TrimSpace(addr) == "" {
-		return def
-	}
-	return addr
-}
-
-// orchestratorAddr resolves the orchestrator listener address. The default is
-// loopback-only, matching the chat listener (config.Load defaults Addr to
-// 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
-// fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
-// backends bind loopback and are only reached through the on-box web tier /
-// reverse proxy (which forwards the public /v1 API here with the web-tier
-// header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
-// interface and expose the orchestrator admin surface AND the header-trust
-// channel directly on hosts without a firewall. Multi-host topologies opt in
-// explicitly via FLEET_ORCHESTRATOR_ADDR; the Caddyfile renderer follows the
-// env-file value (scripts/lib/caddyfile.sh) when they do.
 // warnIfNoAdminKey logs a startup warning when ADMIN_API_KEY is unset. Since
 // verifyAdminKey now fails closed on an empty configured key (an empty key used
 // to match an empty header and silently authenticate admin routes), the admin
@@ -2312,60 +1757,36 @@ func warnIfNoAdminKey(adminKey string) {
 }
 
 // confineFileToolsToWorkspace registers the workspace root as the base for the
-// host-side file tools, resolved the SAME way the agent manager does
-// (cfg.WorkspaceRoot, else ./workspace). Without this their AllowedBaseDirs
-// falls back to the process cwd, which under systemd is the whole StateDirectory
-// (/var/lib/fleet) and would let an absolute path reach DataDir attachments/
-// uploads + api_keys.json that the sandbox never mounts. Extracted from run() to
-// keep it within the cyclomatic budget.
+// host-side file tools: the absolute cfg.WorkspaceRoot that PinWorkspaceRoot
+// resolved, the same value the agent manager reads. Without this their
+// AllowedBaseDirs falls back to the process cwd, which under systemd is the
+// whole StateDirectory (/var/lib/fleet) and would let an absolute path reach
+// DataDir attachments/uploads + api_keys.json that the sandbox never mounts.
+// The root is relative only when PinWorkspaceRoot could not read the cwd, where
+// filepath.Abs would fail too, so the IsAbs guard skips that case as before.
+// Extracted from run() to keep it within the cyclomatic budget.
 func confineFileToolsToWorkspace(workspaceRoot string) {
-	if abs, err := filepath.Abs(workspaceRootOrDefault(workspaceRoot)); err == nil {
-		tools.SetWorkspaceRoot(abs)
+	if filepath.IsAbs(workspaceRoot) {
+		tools.SetWorkspaceRoot(workspaceRoot)
 	}
 }
 
-// workspaceRootOrDefault resolves the workspace root the way the sandbox pool
-// does: FLEET_WORKSPACE_ROOT when set, ./workspace otherwise. One resolver so
-// the shared-file library, the file-tool confinement, and the bind mount can
-// never disagree about which tree they mean.
-func workspaceRootOrDefault(workspaceRoot string) string {
-	root := strings.TrimSpace(workspaceRoot)
-	if root == "" {
-		root = "workspace"
-	}
-	return root
-}
-
+// orchestratorAddr resolves the orchestrator listener address. The default is
+// loopback-only, matching the chat listener (config.Load defaults Addr to
+// 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
+// fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
+// backends bind loopback and are only reached through the on-box web tier /
+// reverse proxy (which forwards the public /v1 API here with the web-tier
+// header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
+// interface and expose the orchestrator admin surface AND the header-trust
+// channel directly on hosts without a firewall. Multi-host topologies opt in
+// explicitly via FLEET_ORCHESTRATOR_ADDR; the Caddyfile renderer follows the
+// env-file value (scripts/lib/caddyfile.sh) when they do.
 func orchestratorAddr() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); v != "" {
 		return v
 	}
 	return "127.0.0.1:8000"
-}
-
-// ── graceful shutdown helpers (#278) ──
-
-// resolveSandboxRuntimeInto resolves the sandbox OCI runtime (#217) into
-// cfg.SandboxRuntime with the SAME precedence as the image: an explicit
-// FLEET_SANDBOX_RUNTIME env (already in cfg.SandboxRuntime) wins, else the
-// bundle manifest's sandbox.runtime fills it. Both the env and the bundle are
-// operator-authored deployment config — the manifest already controls the
-// sandbox image and Containerfile — so selecting the runtime is a trusted
-// operator choice, not an untrusted downgrade. The friendly name "libkrun" is
-// normalized to podman's "krun" once, here, so every downstream consumer (pool,
-// preflight, readiness probe, validate-config) keys off the same value.
-// Extracted from run() to keep it within the cyclomatic budget.
-func resolveSandboxRuntimeInto(cfg *config.Config, bundle *clientconfig.Bundle) {
-	// One shared resolver (sandbox.ResolveRuntime) so boot, validate-config, and
-	// cutlass all apply the same env-wins-else-bundle precedence + normalization.
-	resolved := sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
-	if resolved != strings.TrimSpace(cfg.SandboxRuntime) && resolved != "" {
-		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
-		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", resolved)
-	}
-	// Always write back the normalized value so cfg carries the canonical name
-	// (also collapses whitespace-padded env values the loader didn't trim).
-	cfg.SandboxRuntime = resolved
 }
 
 // pruneOrphanedSandboxes reclaims sandboxes orphaned by a PRIOR crash,
@@ -2393,96 +1814,33 @@ func pruneOrphanedSandboxes(pool *sandbox.Pool) {
 	}
 }
 
-// resolveSandboxInto resolves the sandbox image, OCI runtime, and backend
-// from env + bundle, in that order. Extracted from run() to keep it within
-// the cyclomatic budget.
-//
-// The image is a per-client bundle artifact: the bundle manifest's
-// sandbox.image (the opt-in prebuilt/registry path — else sandbox.tag, the
-// build-on-box default) fills it when no explicit FLEET_SANDBOX_IMAGE /
-// CHAT_SANDBOX_IMAGE env is set (config.Load already populated
-// cfg.SandboxImage from those). fleet does NOT build the image here —
-// bootstrap / scripts/build-sandbox-image.sh does; this only feeds the
-// resolved ref to the consuming sandbox pool.
+// resolveSandboxInto applies the bundle's sandbox block to cfg through the one
+// shared resolver (agent.ApplyBundleSandbox: env wins, field by field;
+// fail-closed on an unrecognized backend) and logs what the bundle decided.
+// Extracted from run() to keep it within the cyclomatic budget.
 func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-			log.Printf("sandbox: image resolved from bundle = %s", ref)
-		}
-	}
-	resolveSandboxRuntimeInto(cfg, bundle)
-	return resolveSandboxBackendInto(cfg, bundle)
-}
-
-// resolveSandboxBackendInto resolves the sandbox backend (#989) into
-// cfg.SandboxBackend with the SAME env-wins-else-bundle precedence as the
-// image and runtime (sandbox.ResolveBackend is the one shared resolver, so
-// boot and validate-config cannot drift), then fills each kubernetes setting
-// from the bundle's sandbox.kubernetes block when the corresponding
-// FLEET_SANDBOX_K8S_* env var is empty. An unrecognized backend value is a
-// boot error, never a silent fallback to podman.
-func resolveSandboxBackendInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
-	sb := bundle.Sandbox()
-	resolved, err := sandbox.ResolveBackend(cfg.SandboxBackend, sb.Backend)
-	if err != nil {
+	envImage := strings.TrimSpace(cfg.SandboxImage)
+	envRuntime := strings.TrimSpace(cfg.SandboxRuntime)
+	if err := agent.ApplyBundleSandbox(cfg, bundle); err != nil {
 		return err
 	}
-	cfg.SandboxBackend = resolved
-	if resolved != sandbox.BackendKubernetes {
-		return nil
+	if envImage == "" && strings.TrimSpace(cfg.SandboxImage) != "" {
+		//nolint:gosec // G706: image ref is operator config (the bundle manifest's sandbox.image/tag) — not request input.
+		log.Printf("sandbox: image resolved from bundle = %s", cfg.SandboxImage)
 	}
-	fill := func(dst *string, bundleVal string) {
-		if strings.TrimSpace(*dst) == "" {
-			*dst = strings.TrimSpace(bundleVal)
-		}
+	if cfg.SandboxRuntime != envRuntime && cfg.SandboxRuntime != "" {
+		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
+		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", cfg.SandboxRuntime)
 	}
-	k := sb.Kubernetes
-	fill(&cfg.SandboxK8sNamespace, k.Namespace)
-	fill(&cfg.SandboxK8sWorkspaceClaim, k.WorkspaceClaim)
-	fill(&cfg.SandboxK8sServiceAccount, k.ServiceAccount)
-	fill(&cfg.SandboxK8sImagePullSecret, k.ImagePullSecret)
-	fill(&cfg.SandboxK8sRuntimeClass, k.RuntimeClass)
-	fill(&cfg.SandboxK8sSeccompProfile, k.SeccompProfile)
-	fill(&cfg.SandboxK8sKubeconfig, k.Kubeconfig)
-	fill(&cfg.SandboxK8sNetworkPolicy, k.NetworkPolicy)
-	// bundle_docs_in_image is a manifest bool and an env string; canonicalize
-	// to the env form so the pool build parses one source. Only a manifest
-	// TRUE needs carrying: false is already the empty-string default, and
-	// writing "false" here would make an unset env look explicitly disabled.
-	if strings.TrimSpace(cfg.SandboxK8sBundleDocsInImage) == "" && k.BundleDocsInImage {
-		cfg.SandboxK8sBundleDocsInImage = "true"
+	if cfg.SandboxBackend == sandbox.BackendKubernetes {
+		//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
+		log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
+			cfg.SandboxBackend, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	}
-	// The scheduling knobs are structured in the manifest; canonicalize them
-	// into the same string forms the env vars use so the pool build has ONE
-	// source to parse (env wins, like every other field).
-	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) == "" && len(k.NodeSelector) > 0 {
-		keys := make([]string, 0, len(k.NodeSelector))
-		for key := range k.NodeSelector {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		pairs := make([]string, 0, len(keys))
-		for _, key := range keys {
-			pairs = append(pairs, key+"="+k.NodeSelector[key])
-		}
-		cfg.SandboxK8sNodeSelector = strings.Join(pairs, ",")
-	}
-	if strings.TrimSpace(cfg.SandboxK8sTolerations) == "" && len(k.Tolerations) > 0 {
-		raw, err := json.Marshal(k.Tolerations)
-		if err != nil {
-			return fmt.Errorf("encode sandbox.kubernetes.tolerations: %w", err)
-		}
-		cfg.SandboxK8sTolerations = string(raw)
-	}
-	//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
-	log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
-		resolved, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	return nil
 }
 
-// defaultString returns v, or fallback when v is empty — a log-formatting
-// helper for resolveSandboxBackendInto.
+// defaultString returns v, or fallback when v is empty or whitespace.
 func defaultString(v, fallback string) string {
 	if strings.TrimSpace(v) == "" {
 		return fallback
@@ -2558,22 +1916,6 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 		//nolint:gosec // G706: numbers and an operator-configured path.
 		log.Printf("⚠ disk backpressure: only %.1f%% free on %s at boot — scheduled tasks are held back until space is reclaimed", st.FreePercent, cfg.DataDir)
 	}
-}
-
-// orchestratorMetricsMiddleware records per-request count + latency for the
-// Prometheus /metrics endpoint (#176), labeled by chi route pattern (so high-
-// cardinality path params don't explode the series), method, and status.
-func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		ww := httpmw.NewWrapResponseWriter(w, r.ProtoMajor)
-		next.ServeHTTP(ww, r)
-		route := chi.RouteContext(r.Context()).RoutePattern()
-		if route == "" {
-			route = "unmatched"
-		}
-		metrics.RecordHTTPRequest(route, r.Method, strconv.Itoa(ww.Status()), time.Since(start).Seconds())
-	})
 }
 
 // workerStatsProvider adapts the sched store's dashboard stats into the
@@ -2683,478 +2025,6 @@ func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
 		log.Printf("email trigger reply-back: enabled")
 	}
 	return n
-}
-
-// taskManagerProvider adapts the sched storage layer to the chat manage_tasks
-// seam (#1152): update or stop tasks that already exist.
-//
-// Chat gains no authority the same person lacks through the API. Every target
-// is resolved, then filtered to tasks the APPROVING user created — the same
-// ownership rule handlers.CancelTask applies to a non-admin stop — and anything
-// dropped is reported back by name with the reason rather than silently
-// omitted. A count without names is a bulk edit nobody can check.
-func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
-	return func(ctx context.Context, req httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
-		var owner *uuid.UUID
-		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
-			if u, err := schedStorage.GetUserByUsernameWithContext(ctx, email); err == nil && u != nil {
-				owner = &u.ID
-			}
-		}
-		if owner == nil {
-			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task on the Background tasks page instead", req.RequestedBy)
-		}
-
-		candidates, err := resolveManagedTasks(schedStorage, req, owner)
-		if err != nil {
-			return nil, err
-		}
-		res := &httpapi.TaskMutationResult{Matched: len(candidates)}
-		for _, t := range candidates {
-			label := taskMutationLabel(t)
-			// Ownership is re-checked per task, not just baked into the query,
-			// so an explicit task_ids list cannot reach somebody else's job.
-			if t.CreatedBy == nil || *t.CreatedBy != *owner {
-				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
-					ID: t.ID.String(), Label: label,
-					Detail: "you did not create this task; an admin can change it on the Background tasks page",
-				})
-				continue
-			}
-			if req.Action == tools.ManageTasksActionStop {
-				if t.Status.IsTerminal() {
-					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
-						ID: t.ID.String(), Label: label, Detail: "already " + string(t.Status) + "; nothing to stop",
-					})
-					continue
-				}
-				if _, err := schedStorage.CancelTaskAtomic(t.ID, "stopped from chat by "+req.RequestedBy); err != nil {
-					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
-					continue
-				}
-				res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: "stopped"})
-				continue
-			}
-			detail, err := applyTaskMutation(ctx, schedStorage, t, req)
-			if err != nil {
-				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
-				continue
-			}
-			res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: detail})
-		}
-		return res, nil
-	}
-}
-
-// resolveManagedTasks turns a mutation request's selector into concrete tasks.
-// An explicit id list is fetched one by one so a bad id is reported as a bad id;
-// a match runs through the same filter the task list uses, bounded so a mistyped
-// filter is refused with its own match count rather than executed.
-//
-// No context parameter: both reads it makes are the non-context storage
-// variants, and taking a ctx it cannot honor would advertise a cancellation
-// story that is not true.
-func resolveManagedTasks(schedStorage *storage.Storage, req httpapi.TaskMutationRequest, owner *uuid.UUID) ([]*schedmodels.Task, error) {
-	if len(req.TaskIDs) > 0 {
-		out := make([]*schedmodels.Task, 0, len(req.TaskIDs))
-		for _, raw := range req.TaskIDs {
-			id, err := uuid.Parse(strings.TrimSpace(raw))
-			if err != nil {
-				return nil, fmt.Errorf("%q is not a task id", raw)
-			}
-			t, err := schedStorage.GetTask(id)
-			if err != nil || t == nil {
-				return nil, fmt.Errorf("task %s not found", raw)
-			}
-			out = append(out, t)
-		}
-		return out, nil
-	}
-	if req.Match == nil {
-		return nil, fmt.Errorf("no tasks selected")
-	}
-	filter := scheddb.TaskFilter{VisibleToUserID: owner}
-	if q := strings.TrimSpace(req.Match.Query); q != "" {
-		filter.Query = &q
-	}
-	if tag := strings.TrimSpace(req.Match.Tag); tag != "" {
-		filter.Tags = []string{tag}
-	}
-	// One over the cap, so "you matched too many" is honest about there being
-	// more rather than reporting exactly the ceiling.
-	tasks, total, err := schedStorage.GetTasksFiltered(filter, tools.MaxManagedTasks+1, 0)
-	if err != nil {
-		return nil, err
-	}
-	if model := strings.TrimSpace(req.Match.Model); model != "" {
-		filtered := tasks[:0]
-		for _, t := range tasks {
-			if t.Model != nil && strings.EqualFold(strings.TrimSpace(*t.Model), model) {
-				filtered = append(filtered, t)
-			}
-		}
-		tasks = filtered
-		total = len(tasks)
-	}
-	if len(tasks) > tools.MaxManagedTasks {
-		return nil, fmt.Errorf("that selector matches %d tasks, above the %d-task limit for one approved change; narrow it (add a tag, or name the tasks explicitly)", total, tools.MaxManagedTasks)
-	}
-	return tasks, nil
-}
-
-// applyTaskMutation writes one task's field changes and returns a short
-// description of what actually changed, for the chat-visible report.
-//
-// The definition changes are overlaid on storage.TaskEditFromTask and written
-// through UpdateEditableTask — the same row-locked, still-editable-checked,
-// dispatch-state-recomputing path PUT /tasks/{id} uses — never through the
-// unlocked full-row UpdateTask upsert. That upsert wrote the status, lease and
-// result columns of the read above back over whatever the scheduler and runner
-// had done since (a running task rewound to pending and executed twice; a
-// finished one flipped back to non-terminal, its result erased — the #1104
-// shape). A task that was claimed or finished in the meantime is now refused
-// with a plain reason instead.
-func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *schedmodels.Task, req httpapi.TaskMutationRequest) (string, error) {
-	var changed []string
-	edit := storage.TaskEditFromTask(t)
-	if req.Prompt != "" && req.Prompt != t.Prompt {
-		edit.Prompt = req.Prompt
-		changed = append(changed, "prompt")
-	}
-	if req.Cron != "" && req.Cron != t.Recurrence {
-		// The API edit path validates the expression and refreshes the next
-		// fire from it (in the task's zone); an unparseable cron stored as-is
-		// would leave the row wedged as scheduled with a schedule the
-		// scheduler cannot evaluate.
-		loc, _ := storage.TaskLocation(t.Timezone, schedStorage.Location())
-		next, err := storage.NextRun(req.Cron, loc, time.Now())
-		if errors.Is(err, storage.ErrRecurrenceNeverFires) {
-			return "", fmt.Errorf("%q never fires", req.Cron)
-		}
-		if err != nil {
-			return "", fmt.Errorf("%q is not a standard 5-field cron expression", req.Cron)
-		}
-		edit.Recurrence = req.Cron
-		edit.ScheduledFor = &next
-		changed = append(changed, "schedule "+req.Cron)
-	}
-	if req.Model != "" && (t.Model == nil || *t.Model != req.Model) {
-		m := req.Model
-		edit.Model = &m
-		changed = append(changed, "model "+req.Model)
-	}
-	if req.MaxIterations > 0 && (t.MaxIterations == nil || *t.MaxIterations != req.MaxIterations) {
-		n := req.MaxIterations
-		edit.MaxIterations = &n
-		changed = append(changed, fmt.Sprintf("max_iterations %d", n))
-	}
-	if len(changed) > 0 {
-		if _, err := schedStorage.UpdateEditableTask(ctx, t.ID, edit); err != nil {
-			if errors.Is(err, storage.ErrTaskNotEditable) {
-				return "", fmt.Errorf("task is %s and can no longer be edited", t.Status)
-			}
-			return "", err
-		}
-	}
-	// Tags go through their own storage path (add/remove semantics), so they are
-	// applied separately and only when asked for.
-	if len(req.AddTags) > 0 || len(req.RemoveTags) > 0 {
-		if _, err := schedStorage.UpdateTaskTags(ctx, t.ID, req.AddTags, req.RemoveTags); err != nil {
-			return "", err
-		}
-		changed = append(changed, "tags")
-	}
-	if len(changed) == 0 {
-		return "already matched the requested values", nil
-	}
-	return strings.Join(changed, ", "), nil
-}
-
-// taskMutationLabel is the human name for a task in the report: its title, then
-// its name, then the first line of its prompt. A bare UUID tells the approving
-// user nothing about what they just changed.
-func taskMutationLabel(t *schedmodels.Task) string {
-	if t == nil {
-		return "(unknown task)"
-	}
-	for _, candidate := range []string{t.Title, t.Name, strings.SplitN(t.Prompt, "\n", 2)[0]} {
-		if s := strings.TrimSpace(candidate); s != "" {
-			if r := []rune(s); len(r) > 60 {
-				return string(r[:60]) + "…"
-			}
-			return s
-		}
-	}
-	return t.ID.String()
-}
-
-func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
-	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
-		// Per-principal rolling budget (#601 part 2): the chat path runs the
-		// SAME shared gate POST /tasks and /tasks/batch run, keyed on the
-		// approving user's email, BEFORE anything is created — an exhausted
-		// budget surfaces in chat as the schedule_task failure text.
-		if err := budgetGate.CheckCreate(ctx, schedmodels.BudgetPrincipals{User: req.RequestedBy}); err != nil {
-			return nil, err
-		}
-
-		tc := schedmodels.TaskCreate{
-			Title:        req.Title,
-			Prompt:       req.Prompt,
-			Recurrence:   req.Cron,
-			ScheduledFor: req.RunAt,
-			AllowNetwork: req.AllowNetwork,
-		}
-		if m := strings.TrimSpace(req.Model); m != "" {
-			tc.Model = &m
-		}
-		if req.MaxIterations > 0 {
-			iters := req.MaxIterations
-			tc.MaxIterations = &iters
-		}
-		tc.ThinkingBudgetTokens = req.ThinkingBudgetTokens
-		// The conversation's connector selection travels with the task
-		// (ADR-0068): a scheduled run binds only its saved mcp_selection plus
-		// the bundle's always-on servers, so without this a chat-created task
-		// in an all-optional bundle ran with no connectors at all.
-		for _, c := range req.Connectors {
-			if server := strings.TrimSpace(c.Server); server != "" {
-				tc.MCPSelection = append(tc.MCPSelection, schedmodels.MCPChoice{Server: server, Account: strings.TrimSpace(c.Account)})
-			}
-		}
-		// Tag chat-originated tasks for provenance so an operator can tell at a
-		// glance the task was created from a conversation rather than the API/CLI.
-		// EnqueueTask does NOT run the handler's tag normalization, so we apply the
-		// SAME NormalizeAndValidateTags the public POST /tasks path uses here —
-		// otherwise a chat-supplied tag could violate the documented #212 format
-		// (lowercase alphanumeric + '-'/'.', ≤20). The provenance tag uses a hyphen
-		// (not ':') to stay inside that allowed character set.
-		normalizedTags, err := schedmodels.NormalizeAndValidateTags(append(req.Tags, "source-chat"))
-		if err != nil {
-			return nil, err
-		}
-		tc.Tags = normalizedTags
-
-		// Attribute the task to the chat user who approved it (#980): run-log
-		// reads are creator-scoped, so a chat-scheduled task with no creator is
-		// one its own author cannot read the transcript of. The sched username IS
-		// the chat email for the elcano-auth tier — the same assumption the
-		// header-trust path and the push-audience resolver already make. A
-		// deployment whose chat users are not provisioned in sched simply falls
-		// through to an unattributed task, exactly as before.
-		var createdBy *uuid.UUID
-		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
-			if u, uerr := schedStorage.GetUserByUsernameWithContext(ctx, email); uerr == nil && u != nil {
-				createdBy = &u.ID
-			}
-		}
-
-		id, status, nextRunAt, err := schedStorage.EnqueueTaskAs(ctx, tc, createdBy)
-		if err != nil {
-			return nil, err
-		}
-		return &httpapi.TaskScheduleResult{
-			ID:      id.String(),
-			Status:  status,
-			NextRun: nextRunAt,
-		}, nil
-	}
-}
-
-// opsAdminsService adapts sched storage to httpapi's OpsAdmins seam so the
-// admin Users tab carries `fleet admin add`'s two-plane semantics: promoting a
-// chat user to admin ensures the Operations Center admin row (same idempotent
-// EnsureAdminUser the FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS boot seed uses),
-// demoting/deleting removes it, and the users list annotates who holds it.
-type opsAdminsService struct{ st *storage.Storage }
-
-func (o opsAdminsService) Ensure(ctx context.Context, email string) error {
-	return o.st.EnsureAdminUser(ctx, email)
-}
-
-// Remove deletes the sched-side row for email when it exists — Operations
-// Center access is revoked entirely, mirroring `fleet admin rm`. Emails are
-// matched as lowercased usernames (the #458 cookie-bridge convention). A
-// missing row is a no-op, so demoting a chat-only admin never errors.
-func (o opsAdminsService) Remove(ctx context.Context, email string) error {
-	u, err := o.st.GetUserByUsernameWithContext(ctx, strings.ToLower(strings.TrimSpace(email)))
-	if err != nil || u == nil {
-		return err
-	}
-	return o.st.DeleteUser(u.ID)
-}
-
-func (o opsAdminsService) List(ctx context.Context) ([]string, error) {
-	users, err := o.st.ListUsers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(users))
-	for _, u := range users {
-		if u.Role == "admin" {
-			out = append(out, u.Username)
-		}
-	}
-	return out, nil
-}
-
-// SetRole is the generalized grant: "none" removes the sched-side row
-// (mirroring Remove); any other role creates-or-re-roles the account via the
-// same primitive the bootstrap admin seed uses.
-func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error {
-	if role == "" || role == "none" {
-		return o.Remove(ctx, email)
-	}
-	return o.st.EnsureUserWithRole(ctx, email, role)
-}
-
-func (o opsAdminsService) SetEnabled(ctx context.Context, email string, enabled bool) error {
-	username := strings.ToLower(strings.TrimSpace(email))
-	u, err := o.st.GetAnyUserByUsernameWithContext(ctx, username)
-	if err != nil || u == nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	return o.st.SetUserEnabled(ctx, u.ID, enabled)
-}
-
-// Roles returns every sched-plane account's role keyed by lowercased email —
-// the batched lookup the admin users table renders from.
-func (o opsAdminsService) Roles(ctx context.Context) (map[string]string, error) {
-	users, err := o.st.ListUsers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(users))
-	for _, u := range users {
-		out[strings.ToLower(u.Username)] = u.Role
-	}
-	return out, nil
-}
-
-func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {
-	return func(context.Context) (*httpapi.WorkerStats, error) {
-		ds, err := schedStorage.GetDashboardStats()
-		if err != nil {
-			return nil, err
-		}
-		return &httpapi.WorkerStats{
-			QueuedTasks:    ds.PendingTasks,
-			RunningTasks:   ds.RunningTasks,
-			CompletedToday: ds.CompletedTasksToday,
-			FailedToday:    ds.FailedTasksToday,
-		}, nil
-	}
-}
-
-// installStoreCipher installs the at-rest secret cipher on the chat store
-// whenever FLEET_MCP_OAUTH_ENCRYPTION_KEY is set. Historically this happened
-// only inside setupRemoteMCP (which also requires FLEET_PUBLIC_BASE_URL), but
-// the cipher now also protects LLM provider keys and notification secrets —
-// features that must not silently require the remote-MCP feature to be on.
-// setupRemoteMCP re-installing the same cipher afterwards is harmless.
-func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
-	if len(cfg.MCPOAuthEncryptionKey) == 0 {
-		return
-	}
-	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
-	if err != nil {
-		// Config already validates the key length; degrade rather than crash.
-		log.Printf("store secret cipher: not installed — invalid encryption key: %v", err)
-		return
-	}
-	chatStore.SetTokenCipher(cipher)
-}
-
-// remoteMCPResolver adapts the service to the agent-side resolver interface,
-// returning a TRUE nil interface when the feature is off. setupRemoteMCP returns
-// a typed nil *Service in that case, and assigning that straight into the
-// interface field would make `opts.RemoteMCP != nil` true while every method
-// call nil-derefs.
-func remoteMCPResolver(svc *remotemcp.Service) agent.RemoteMCPResolver {
-	if svc == nil {
-		return nil
-	}
-	return svc
-}
-
-// setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
-// enabled only when an encryption key AND a public base URL are configured;
-// otherwise it fails closed (returns nil) and the endpoints report the
-// feature off. On enable it installs the token cipher on the chat store (secrets
-// encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
-// The returned Service backs explicit HTTP control-plane operations. Agent runs
-// bind their MCP tools through the child-owned broker scope, which is where the
-// credentialed MCP client lives; the Service is additionally handed to the agent
-// manager as a READ-side resolver so the parent can unseal one connector's
-// api_key for a host-side outbound call (browserbase_live_view, #987) — the same
-// thing the parent already does for the add-time probe.
-func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Service {
-	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
-		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
-		return nil
-	}
-	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
-	if err != nil {
-		// Config already validates the key length, so this is belt-and-suspenders:
-		// disable rather than crash the whole server on a bad key.
-		log.Printf("remote MCP OAuth: disabled — invalid encryption key: %v", err)
-		return nil
-	}
-	chatStore.SetTokenCipher(cipher)
-	svc := remotemcp.NewService(chatStore, remotemcp.Config{
-		PublicBaseURL:     cfg.PublicBaseURL,
-		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
-	})
-	// Same wiring the credential-owning child does (see mcp_broker.go, #1124),
-	// for this process's own redactor. The parent's control-plane service
-	// unseals per-user api_key secrets and mints/refreshes OAuth bearers —
-	// e.g. for browserbase_live_view — and those are acquired at RUNTIME, so
-	// the boot-time env snapshot cannot know them. Without this the parent's
-	// literal set never learned them, and a connector echoing its own bare
-	// token back was scrubbed only if it happened to match a shape pattern.
-	// The observer is scope-aware (#1274): each server row's rotations
-	// supersede that row's previous generation, so a long-running process
-	// plateaus instead of scanning for every token it has ever seen.
-	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
-	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
-	// runMaintenancePass), not by a daemon of their own. This used to be a
-	// `for range ticker.C` goroutine with a context.Background() per sweep —
-	// unreachable by the shutdown context, so it outlived the drain and could
-	// touch a closing store. Folding it into the one loop that already runs
-	// hourly fixed that and removed a redundant ticker.
-	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
-	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
-	return svc
-}
-
-func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productionMCPRuntime) agent.RemoteMCPOverlayOpener {
-	if svc == nil || runtime == nil {
-		return nil
-	}
-	return func(ctx context.Context, email string, shadowed map[string]bool, sel agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
-		overlay, err := runtime.openRemoteOverlay(ctx, email, shadowed, sel)
-		if err != nil || overlay == nil {
-			return overlay, err
-		}
-		// Seat attribution (#988): the child returns public registration names
-		// only. Map each back to its {connection, account} from the parent's own
-		// (control-plane) view of the user's seats so approval staging records
-		// the seat that actually mounted. Best-effort — an unmapped name keeps
-		// the pre-#988 default-seat record.
-		if conns, cerr := svc.ConnectedServersForUser(ctx, email); cerr == nil {
-			overlay.Seats = make(map[string]agentcore.MCPChoice, len(overlay.Servers))
-			for _, c := range conns {
-				reg := agentcore.RegisteredMCPName(c.Name, c.Account)
-				if overlay.Servers[reg] {
-					overlay.Seats[reg] = agentcore.MCPChoice{Server: c.Name, Account: c.Account}
-				}
-			}
-		}
-		return overlay, nil
-	}
 }
 
 // startMaintenanceLoop is the box's single reclamation driver: on a timer it
@@ -3301,29 +2171,6 @@ func mcpCatalogEntries(mgr *agent.Manager) []handlers.MCPServerCatalogEntry {
 	return out
 }
 
-// hostedConnectionsLister is the scheduled runner's read-only view of a task
-// owner's hosted connections (scheduledrun.Options.HostedConnections): the
-// service's ConnectedServersForUser, which lists rows and mints nothing. nil
-// when the feature is off — a typed-nil service's method value would
-// nil-deref on the first call.
-func hostedConnectionsLister(svc *remotemcp.Service) func(context.Context, string) ([]agent.RemoteMCPConn, error) {
-	if svc == nil {
-		return nil
-	}
-	return svc.ConnectedServersForUser
-}
-
-// wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
-// into the orchestrator handlers when the feature is on. A nil service (feature
-// disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
-// from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
-func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
-	if svc == nil {
-		return
-	}
-	h.SetRemoteMCPServersProvider(remoteMCPCatalogProvider(svc))
-}
-
 // chatUsageProvider adapts the chat store's turn_metrics roll-up into the
 // sched-side usage bucket shape (#601 part 1): GET /admin/usage merges the
 // sched DB's task_iterations roll-up with the chat store's, and the two live
@@ -3414,44 +2261,6 @@ func chatAccountsProvider(chatStore *store.Store) handlers.ChatAccountsProvider 
 	}
 }
 
-// remoteMCPCatalogProvider adapts the remotemcp Service into the orchestrator's
-// per-user remote-MCP catalog provider (#466): given the caller's email (the
-// orchestrator username for the elcano-auth tier; see ownerEmailResolver), it
-// returns that user's OAuth-connected hosted servers so GetMCPServers can surface
-// them in the task form — mirroring chat's GET /mcp-servers. Only CONNECTED
-// servers are returned, one entry per connection NAME (#988): its Accounts are
-// the labeled seats the task can pin, DefaultAccount the seat a run mounts
-// when the task pins none. Remote servers are auto-applied to ALL the owner's
-// runs by the run overlay, so the UI renders them connected/auto-available and
-// offers the seat pick rather than an on/off toggle. A lookup error is logged
-// and treated as "no remote servers" so it never breaks the bundle catalog.
-func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, string) []handlers.MCPServerCatalogEntry {
-	return func(ctx context.Context, email string) []handlers.MCPServerCatalogEntry {
-		conns, err := svc.ConnectedServersForUser(ctx, email)
-		if err != nil {
-			log.Printf("orchestrator mcp catalog: remote server lookup failed: %v", err)
-			return nil
-		}
-		out := make([]handlers.MCPServerCatalogEntry, 0, len(conns))
-		for _, g := range agent.GroupRemoteMCPSeats(conns) {
-			out = append(out, handlers.MCPServerCatalogEntry{
-				Name:           g.Name,
-				DisplayName:    g.Name,
-				Description:    "Remote MCP server you connected (" + g.URL + "). Auto-available to your scheduled tasks on its default seat unless the task pins another.",
-				Enabled:        true,
-				Accounts:       g.Accounts,
-				DefaultAccount: g.DefaultAccount,
-				Remote:         true,
-			})
-		}
-		return out
-	}
-}
-
-// ownerEmailResolver maps a scheduled task's creator UUID to the chat-side email
-// its remote-MCP OAuth tokens are keyed by (#443). The orchestrator username IS
-// that email for the elcano-auth tier. Returns "" (no error) when the user can't
-// be found, so a task created by a since-deleted user simply gets no overlay.
 // userSkillDocsProvider adapts the chat store's active builder skills into the
 // runner's inline-prompt shape.
 func userSkillDocsProvider(chatStore *store.Store) func(ctx context.Context, email string) ([]scheduledrun.UserSkillDoc, error) {
@@ -3488,71 +2297,6 @@ func (p scheduledSkillProposer) Propose(name, description, body, _ string) (stri
 		return "", err
 	}
 	return sk.ID, nil
-}
-
-func ownerEmailResolver(s *storage.Storage) func(context.Context, uuid.UUID) (string, error) {
-	return func(ctx context.Context, id uuid.UUID) (string, error) {
-		m, err := s.GetUsersByIDsWithContext(ctx, []uuid.UUID{id})
-		if err != nil {
-			return "", err
-		}
-		return m[id], nil
-	}
-}
-
-// shutdownGrace resolves the graceful-shutdown grace period from
-// FLEET_SHUTDOWN_GRACE_SECONDS (config default 30). A non-positive value means
-// "no wait" (force-cancel immediately) and is returned as 0.
-func shutdownGrace(cfg *config.Config) time.Duration {
-	if cfg == nil || cfg.ShutdownGraceSeconds <= 0 {
-		return 0
-	}
-	return time.Duration(cfg.ShutdownGraceSeconds) * time.Second
-}
-
-// closeServers shuts the HTTP listeners down in parallel, each with the full
-// grace budget (a hung one can't eat the other's time), so both drain their
-// already-finishing connections without one starving the other. A non-positive
-// budget falls back to 30s so Shutdown still has a bounded deadline.
-func closeServers(grace time.Duration, servers ...*http.Server) {
-	budget := grace
-	if budget <= 0 {
-		budget = 30 * time.Second
-	}
-	var wg sync.WaitGroup
-	for _, srv := range servers {
-		wg.Add(1)
-		go func(s *http.Server) {
-			defer wg.Done()
-			defer safe.Recover("cmd.closeServers", nil)
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), budget)
-			defer cancel()
-			_ = s.Shutdown(shutdownCtx)
-		}(srv)
-	}
-	wg.Wait()
-}
-
-// sdNotify sends one state line to systemd's notify socket (NOTIFY_SOCKET),
-// e.g. "READY=1" once listeners are bound and "STOPPING=1" when draining. It is
-// a no-op when the socket is unset (non-systemd / dev / tests) and best-effort
-// otherwise — no new dependency, errors are intentionally swallowed. Handles the
-// abstract-namespace form ('@' → leading NUL) systemd uses.
-func sdNotify(state string) {
-	sock := os.Getenv("NOTIFY_SOCKET")
-	if sock == "" {
-		return
-	}
-	name := sock
-	if strings.HasPrefix(name, "@") {
-		name = "\x00" + name[1:]
-	}
-	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: name, Net: "unixgram"})
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	_, _ = conn.Write([]byte(state))
 }
 
 // ── notes adapter: the sched-backed NotesProvider + NoteProposer ──

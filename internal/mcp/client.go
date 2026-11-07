@@ -89,7 +89,9 @@ type Server struct {
 
 	// def is the descriptor this server was built from, retained so a hot
 	// reload (#218) can diff the live server against a new manifest and decide
-	// unchanged / restart. Empty for the synthetic inline-http-tools server.
+	// unchanged / restart, and so a dead stdio server (def.Command set) can be
+	// respawned with the same command, args, env and dir. Empty for the
+	// synthetic inline-http-tools server.
 	def ServerDef
 
 	// retired is set under mu when a reload (#218) removes or replaces this
@@ -100,12 +102,6 @@ type Server struct {
 	// resurrect a killed stdio subprocess via the dead-transport restart path
 	// (which would leak an unreachable, credential-holding process).
 	retired bool
-
-	// Restart state for stdio servers (nil for HTTP servers).
-	stdioCommand string
-	stdioArgs    []string
-	stdioEnv     map[string]string
-	stdioDir     string // cwd the subprocess launches in (bundle root); "" = inherit
 }
 
 // Transport interface for different MCP connection types
@@ -430,25 +426,9 @@ func NewClient() *Client {
 // subprocess launches in (the client-config bundle root, so relative `mcp/*.py`
 // args resolve there); "" inherits the caller's cwd.
 func (c *Client) AddStdioServer(ctx context.Context, name, command string, args []string, env map[string]string, dir string) error {
-	transport, err := NewStdioTransportInDir(command, args, env, dir)
+	server, err := buildServer(ctx, ServerDef{Name: name, Command: command, Args: args, Env: env, Dir: dir}, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create stdio transport: %w", err)
-	}
-
-	server := &Server{
-		name:         name,
-		transport:    transport,
-		def:          ServerDef{Name: name, Command: command, Args: args, Env: env, Dir: dir},
-		stdioCommand: command,
-		stdioArgs:    args,
-		stdioEnv:     env,
-		stdioDir:     dir,
-	}
-
-	// Initialize the server and get tools
-	if err := server.initialize(ctx); err != nil {
-		_ = transport.Close()
-		return fmt.Errorf("failed to initialize server: %w", err)
+		return wrapBuildError(err, "failed to create stdio transport", "failed to initialize server")
 	}
 
 	c.mu.Lock()
@@ -478,40 +458,12 @@ type HTTPServerOptions struct {
 // AddHTTPServerWithOptions adds an HTTP-based MCP server with full control over
 // the headers and the underlying HTTP client.
 func (c *Client) AddHTTPServerWithOptions(ctx context.Context, name, url string, opts HTTPServerOptions) error {
-	transport := NewHTTPTransportWithHeaders(url, opts.Headers)
-	switch {
-	case opts.HTTPClient != nil:
-		// The caller fully owns the client (e.g. the SSRF-safe per-user client);
-		// TLS options, if any, are its responsibility, not ours.
-		transport.client = opts.HTTPClient
-	case opts.TLS != nil && !opts.TLS.IsZero():
-		// Fail closed: a TLSClientConfig is applied by http.Transport only to
-		// https requests, so requesting hardening for a plaintext url would
-		// silently connect unverified. Refuse to register rather than mislead.
-		if !strings.HasPrefix(strings.ToLower(url), "https://") {
-			return fmt.Errorf("mcp server %q: TLS hardening (tls) requires an https url, got %q", name, url)
-		}
-		tlsCfg, err := opts.TLS.build()
-		if err != nil {
-			return fmt.Errorf("mcp server %q: tls: %w", name, err)
-		}
-		if tlsCfg != nil {
-			transport.client = tlsHTTPClient(tlsCfg)
-		}
-	}
-
-	server := &Server{
-		name:      name,
-		transport: transport,
-		// Retain the operator-configured descriptor for hot-reload diffing
-		// (#218). The per-user SSRF client (opts.HTTPClient) case is never
-		// manifest-reloaded, so leaving its def http-shaped is harmless.
-		def: ServerDef{Name: name, URL: url, Headers: opts.Headers, TLS: opts.TLS},
-	}
-
-	// Initialize the server and get tools
-	if err := server.initialize(ctx); err != nil {
-		return fmt.Errorf("failed to initialize server: %w", err)
+	// The def is retained for hot-reload diffing (#218). The per-user SSRF
+	// client (opts.HTTPClient) case is never manifest-reloaded, so leaving its
+	// def http-shaped is harmless.
+	server, err := buildServer(ctx, ServerDef{Name: name, URL: url, Headers: opts.Headers, TLS: opts.TLS}, opts.HTTPClient)
+	if err != nil {
+		return wrapBuildError(err, "failed to create http transport", "failed to initialize server")
 	}
 
 	c.mu.Lock()
@@ -795,7 +747,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	if err != nil {
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
-		if s.stdioCommand != "" && isTransportDeadError(err) {
+		if s.def.Command != "" && isTransportDeadError(err) {
 			log.Printf("MCP server %s appears dead (%v), attempting restart...", s.name, err)
 			if restartErr := s.restartLocked(ctx); restartErr != nil {
 				return nil, fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr)
@@ -833,14 +785,14 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 // restartLocked closes the current transport and creates a new one.
 // Caller must hold s.mu.
 func (s *Server) restartLocked(ctx context.Context) error {
-	if s.stdioCommand == "" {
+	if s.def.Command == "" {
 		return fmt.Errorf("restart not supported for non-stdio servers")
 	}
 
 	// Close the old transport (ignore errors — it's already broken).
 	_ = s.transport.Close()
 
-	transport, err := NewStdioTransportInDir(s.stdioCommand, s.stdioArgs, s.stdioEnv, s.stdioDir)
+	transport, err := NewStdioTransportInDir(s.def.Command, s.def.Args, s.def.Env, s.def.Dir)
 	if err != nil {
 		return fmt.Errorf("failed to create new transport: %w", err)
 	}

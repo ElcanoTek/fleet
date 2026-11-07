@@ -63,8 +63,8 @@ func (e PodmanExec) argv(binary string, args ...string) []string {
 // ServiceStorePodmanExec builds the PodmanExec that probes as the fleet unit's
 // User=, plus a note naming whose store/context the verdict is actually about.
 // Pure, so every caller's table can pin it. THIS is the single copy of the
-// runuser/HOME/XDG_RUNTIME_DIR construction — admincli.ServiceStorePodmanArgv
-// (status probes) and `fleet validate-config` (preflights) both delegate here
+// runuser/HOME/XDG_RUNTIME_DIR construction — the admincli status probes and
+// `fleet validate-config` (preflights) both delegate here
 // rather than growing a second, drift-prone version.
 //
 // Rootless podman keeps one image store PER USER. The service runs as the

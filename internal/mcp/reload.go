@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"reflect"
 	"slices"
 	"sort"
@@ -61,27 +63,34 @@ func serverDefEqual(a, b ServerDef) bool {
 func eqStrings(a, b []string) bool { return slices.Equal(a, b) }
 
 // buildServer creates and initializes a Server from a def WITHOUT registering it
-// on the client (holds no lock). The caller inserts it under c.mu. Handles the
-// operator-configured stdio and HTTP (incl. #280 TLS hardening) shapes — the
-// per-user SSRF-client shape (AddHTTPServerWithOptions' HTTPClient override) is
-// never manifest-reloaded, so it is intentionally not covered here.
-func buildServer(ctx context.Context, def ServerDef) (*Server, error) {
+// on the client (holds no lock); the caller inserts it under c.mu. It is the one
+// constructor for every shape: Reload's manifest defs, AddStdioServer and
+// AddHTTPServerWithOptions. hc, when non-nil, overrides the HTTP client (the
+// per-user SSRF-safe client); that caller owns the full client, so def.TLS is
+// then not applied. Otherwise a non-zero def.TLS hardens the handshake (#280).
+//
+// A failure of the transport or initialize step comes back as a
+// *serverBuildError so each caller keeps its own wording (wrapBuildError).
+func buildServer(ctx context.Context, def ServerDef, hc *http.Client) (*Server, error) {
 	var transport Transport
 	switch {
 	case def.Command != "":
 		t, err := NewStdioTransportInDir(def.Command, def.Args, def.Env, def.Dir)
 		if err != nil {
-			return nil, fmt.Errorf("stdio transport: %w", err)
+			return nil, &serverBuildError{err: err}
 		}
 		transport = t
 	case def.URL != "":
 		t := NewHTTPTransportWithHeaders(def.URL, def.Headers)
-		if def.TLS != nil && !def.TLS.IsZero() {
-			// Fail closed, matching AddHTTPServerWithOptions: a TLSClientConfig
-			// only applies to https, so hardening a plaintext url would connect
-			// unverified.
+		switch {
+		case hc != nil:
+			t.client = hc
+		case def.TLS != nil && !def.TLS.IsZero():
+			// Fail closed: a TLSClientConfig is applied by http.Transport only to
+			// https requests, so requesting hardening for a plaintext url would
+			// silently connect unverified. Refuse to register rather than mislead.
 			if !strings.HasPrefix(strings.ToLower(def.URL), "https://") {
-				return nil, fmt.Errorf("mcp server %q: TLS hardening requires an https url, got %q", def.Name, def.URL)
+				return nil, fmt.Errorf("mcp server %q: TLS hardening (tls) requires an https url, got %q", def.Name, def.URL)
 			}
 			tlsCfg, err := def.TLS.build()
 			if err != nil {
@@ -97,19 +106,39 @@ func buildServer(ctx context.Context, def ServerDef) (*Server, error) {
 	}
 
 	s := &Server{
-		name:         def.Name,
-		transport:    transport,
-		def:          def,
-		stdioCommand: def.Command,
-		stdioArgs:    def.Args,
-		stdioEnv:     def.Env,
-		stdioDir:     def.Dir,
+		name:      def.Name,
+		transport: transport,
+		def:       def,
 	}
 	if err := s.initialize(ctx); err != nil {
 		_ = transport.Close()
-		return nil, fmt.Errorf("initialize server %q: %w", def.Name, err)
+		return nil, &serverBuildError{initialize: true, err: err}
 	}
 	return s, nil
+}
+
+// serverBuildError is a buildServer failure in its transport or initialize
+// step, carrying the bare cause so the caller can word it.
+type serverBuildError struct {
+	initialize bool // false = the transport step
+	err        error
+}
+
+func (e *serverBuildError) Error() string { return e.err.Error() }
+func (e *serverBuildError) Unwrap() error { return e.err }
+
+// wrapBuildError prefixes a buildServer step failure with the caller's wording
+// for that step (transportPrefix / initPrefix); any other error (the TLS
+// refusal, a def with neither shape) is already fully worded and passes through.
+func wrapBuildError(err error, transportPrefix, initPrefix string) error {
+	var be *serverBuildError
+	if !errors.As(err, &be) {
+		return err
+	}
+	if be.initialize {
+		return fmt.Errorf("%s: %w", initPrefix, be.err)
+	}
+	return fmt.Errorf("%s: %w", transportPrefix, be.err)
 }
 
 // drainAndClose retires an old server: it acquires Server.mu — which, because
@@ -210,9 +239,10 @@ func (c *Client) Reload(ctx context.Context, newServers []ServerDef) (*ReloadSum
 		}
 	}
 	for _, def := range append(append([]ServerDef{}, toAdd...), toRestart...) {
-		s, err := buildServer(ctx, def)
+		s, err := buildServer(ctx, def, nil)
 		if err != nil {
 			rollback()
+			err = wrapBuildError(err, "stdio transport", fmt.Sprintf("initialize server %q", def.Name))
 			return summary, fmt.Errorf("mcp reload: %w", err)
 		}
 		built[def.Name] = s

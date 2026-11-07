@@ -132,7 +132,7 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 		stop:      stop,
 		inventory: inventory,
 		catalog:   brokerToolCatalog(descriptors),
-		accounts:  cloneAccountInventory(accounts),
+		accounts:  cloneToolAllowlist(accounts),
 	}
 
 	if err := scrubParentConnectorState(bundle, cfg, resolvedSpecs); err != nil {
@@ -296,7 +296,7 @@ func (r *productionMCPRuntime) reload(ctx context.Context) (*agent.MCPReloadResu
 			Unchanged: append([]string(nil), result.Summary.Unchanged...),
 		},
 		Catalog:    brokerToolCatalog(result.Tools),
-		Accounts:   cloneAccountInventory(result.Accounts),
+		Accounts:   cloneToolAllowlist(result.Accounts),
 		Specs:      publicSpecsFromDescriptors(result.Servers),
 		Connectors: connectorMetaFromDescriptors(result.Connectors),
 	}, nil
@@ -388,14 +388,6 @@ func taskMCPInventoryFromResolvedSpecs(src map[string]agent.MCPServerSpec) map[s
 				ToolAllowlist: append([]string(nil), spec.ToolAllowlist...),
 			}
 		}
-	}
-	return out
-}
-
-func cloneAccountInventory(src map[string][]string) map[string][]string {
-	out := make(map[string][]string, len(src))
-	for server, accounts := range src {
-		out[server] = append([]string(nil), accounts...)
 	}
 	return out
 }

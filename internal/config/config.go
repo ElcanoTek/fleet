@@ -1861,7 +1861,7 @@ func Load(envFile string) (*Config, error) {
 		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
 		// Sandbox backend (#989). Lower-cased here; validated fail-closed at
-		// boot (resolveSandboxBackend in cmd/fleet) against the bundle value.
+		// boot (agent.ApplyBundleSandbox) against the bundle value.
 		SandboxBackend:                   strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
 		SandboxK8sNamespace:              strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
 		SandboxK8sWorkspaceClaim:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),
@@ -1979,7 +1979,7 @@ func Load(envFile string) (*Config, error) {
 	// SYSTEM_PROMPT (and FLEET_PERSONA_DEFAULT) to its bundle's own. FLEET_PERSONA
 	// names a FILE the drivers load by basename out of personas/; PERSONA_DEFAULT
 	// names a persona.
-	cfg.SystemPrompt = getEnvOrDefault("SYSTEM_PROMPT", "default.md")
+	cfg.SystemPrompt = getenvDefault("SYSTEM_PROMPT", "default.md")
 	if !hasKnownPromptExtension(cfg.SystemPrompt) {
 		cfg.SystemPrompt += ".md"
 	}
@@ -2379,14 +2379,6 @@ func getenvDefault(key, def string) string {
 	return def
 }
 
-// getEnvOrDefault is cutlass's quote-stripping default helper.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return creds.StripEnvQuotes(value)
-	}
-	return defaultValue
-}
-
 // ── FLEET_-prefixed env helpers with CHAT_/CUTLASS_ back-compat ──
 //
 // These try FLEET_<suffix> first, then each legacy prefix in order. The first
@@ -2406,17 +2398,11 @@ func lookupFleet(suffix string) (string, bool) {
 	return "", false
 }
 
-func getenvFleet(suffix string) string {
-	if v, ok := lookupFleet(suffix); ok {
-		return creds.StripEnvQuotes(v)
-	}
-	return ""
-}
+// getenvFleet is getenvFleetDefault with an empty default.
+func getenvFleet(suffix string) string { return getenvFleetDefault(suffix, "") }
 
 func getenvFleetDefault(suffix, def string) string {
 	if v, ok := lookupFleet(suffix); ok {
-		// Strip quotes like getenvFleet does: the same quoted value must
-		// resolve identically whichever helper reads it (#1119).
 		return creds.StripEnvQuotes(v)
 	}
 	return def
@@ -2428,12 +2414,12 @@ func getenvFleetDefault(suffix, def string) string {
 // deployments reading; the prefixed lookup is what makes the documented FLEET_
 // convention work at all — without it FLEET_PERSONA was silently ignored and the
 // built-in default applied (#956). Quotes are stripped from whichever spelling
-// wins, matching getEnvOrDefault.
+// wins, matching getenvDefault.
 func getenvFleetOrBare(suffix, def string) string {
 	if v, ok := lookupFleet(suffix); ok {
 		return creds.StripEnvQuotes(v)
 	}
-	return getEnvOrDefault(suffix, def)
+	return getenvDefault(suffix, def)
 }
 
 // EnvAliases returns every spelling the prefix alias machinery resolves for

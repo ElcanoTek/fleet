@@ -780,14 +780,14 @@ func TestLoadNonExistentFile(t *testing.T) {
 	}
 }
 
-func TestGetEnvOrDefault(t *testing.T) {
+func TestGetenvDefault(t *testing.T) {
 	os.Setenv("TEST_VAR", "test-value")
 	defer os.Unsetenv("TEST_VAR")
 
-	if val := getEnvOrDefault("TEST_VAR", "default"); val != "test-value" {
+	if val := getenvDefault("TEST_VAR", "default"); val != "test-value" {
 		t.Errorf("Expected test-value, got %s", val)
 	}
-	if val := getEnvOrDefault("NONEXISTENT_VAR", "default"); val != "default" {
+	if val := getenvDefault("NONEXISTENT_VAR", "default"); val != "default" {
 		t.Errorf("Expected default, got %s", val)
 	}
 }

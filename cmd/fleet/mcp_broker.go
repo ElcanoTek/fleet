@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -18,7 +19,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
-	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -82,15 +82,15 @@ func runMCPBroker() error {
 }
 
 func mcpBrokerRemoteConfigured() bool {
-	configured := func(suffix string) bool {
-		for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
-			if strings.TrimSpace(os.Getenv(prefix+suffix)) != "" {
+	configured := func(name string) bool {
+		for _, alias := range config.EnvAliases(name) {
+			if strings.TrimSpace(os.Getenv(alias)) != "" {
 				return true
 			}
 		}
 		return false
 	}
-	return configured("MCP_OAUTH_ENCRYPTION_KEY") && configured("PUBLIC_BASE_URL")
+	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
 }
 
 func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCPResolver, error) {
@@ -126,10 +126,6 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 		return nil, nil, errors.New("open broker remote MCP store")
 	}
 	st.SetTokenCipher(cipher)
-	svc := remotemcp.NewService(st, remotemcp.Config{
-		PublicBaseURL:     cfg.PublicBaseURL,
-		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
-	})
 	// Runtime-acquired credentials — per-user OAuth bearers, rotated refresh
 	// tokens, unsealed api_key secrets — join THIS process's literal redactor at
 	// acquisition time (#1124): boot-time RegisterEnvLiterals only knows env-file
@@ -137,7 +133,7 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 	// error string would reach the masked-error log unscrubbed. Rotations are
 	// scoped per server row (#1274), so this process's literal set plateaus
 	// instead of accumulating every token pair it has ever refreshed.
-	svc.SetSecretObserver(mcpbroker.RegisterSecretLiterals)
+	svc := newRemoteMCPService(cfg, st, mcpbroker.RegisterSecretLiterals)
 	if !svc.Enabled() {
 		_ = st.Close()
 		return nil, nil, errors.New("broker remote MCP service is not enabled")
@@ -280,7 +276,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	httpTools := append([]config.HTTPToolConfig(nil), b.httpTools...)
 	a2aPeers := append([]config.A2APeerConfig(nil), b.a2aPeers...)
 	bundleAllow := cloneToolAllowlist(b.bundleAllow)
-	enabled := cloneServerSet(b.enabled)
+	enabled := maps.Clone(b.enabled)
 	b.reloadMu.Unlock()
 	// Authorize the selection against the child's OWN enabled set before
 	// anything is spawned. The parent's claim about which servers exist is not
@@ -545,18 +541,12 @@ func (b *brokerBackend) CallMCP(ctx context.Context, server, tool string, args m
 	return b.MCPBroker.CallMCP(ctx, server, tool, args)
 }
 
+// cloneToolAllowlist deep-copies a server → names map (the tool allowlist and
+// the account inventory share the shape): a fresh map and fresh slices.
 func cloneToolAllowlist(src map[string][]string) map[string][]string {
 	dst := make(map[string][]string, len(src))
 	for name, list := range src {
 		dst[name] = append([]string(nil), list...)
-	}
-	return dst
-}
-
-func cloneServerSet(src map[string]bool) map[string]bool {
-	dst := make(map[string]bool, len(src))
-	for name, on := range src {
-		dst[name] = on
 	}
 	return dst
 }
@@ -597,22 +587,11 @@ func (b *brokerBackend) Close() error {
 func cloneMCPBases(src map[string]agentcore.MCPServerBase) map[string]agentcore.MCPServerBase {
 	dst := make(map[string]agentcore.MCPServerBase, len(src))
 	for name, base := range src {
-		base.BaseEnv = cloneStrings(base.BaseEnv)
-		base.HTTPHeaders = cloneStrings(base.HTTPHeaders)
+		base.BaseEnv = maps.Clone(base.BaseEnv)
+		base.HTTPHeaders = maps.Clone(base.HTTPHeaders)
 		base.Args = append([]string(nil), base.Args...)
 		base.IdentityEnv = append([]string(nil), base.IdentityEnv...)
 		dst[name] = base
-	}
-	return dst
-}
-
-func cloneStrings(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
 	}
 	return dst
 }
