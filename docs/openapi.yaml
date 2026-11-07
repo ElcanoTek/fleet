@@ -2965,10 +2965,12 @@ paths:
         "200": { description: Archived }
   /notes/proposals:
     get:
-      summary: List note proposals.
+      summary: List note proposals (admin).
+      description: Requires the admin permission (admin API key, a key carrying admin, or an admin-role user).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: OK }
+        "403": { $ref: "#/components/responses/Error" }
   /notes/proposals/{id}:
     parameters:
       - name: id
@@ -2976,10 +2978,12 @@ paths:
         required: true
         schema: { type: string }
     get:
-      summary: Get a note proposal.
+      summary: Get a note proposal (admin).
+      description: Requires the admin permission (admin API key, a key carrying admin, or an admin-role user).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: OK }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /notes/proposals/{id}/publish:
     parameters:

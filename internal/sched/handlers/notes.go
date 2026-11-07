@@ -10,12 +10,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 // Notes REST handlers (NOTES_WIKI_SPEC §6): admin-curated knowledge-base CRUD +
 // agent-proposal curation. Admin-gating is applied by the route groups in
 // cmd/fleet (CRUD + decisions under AdminAuthMiddleware; reads under
-// AdminOrUserAuthMiddleware), mirroring how /stats and /tasks are gated.
+// AdminOrUserAuthMiddleware), mirroring how /stats and /tasks are gated. The
+// proposal queue is part of curation, so its reads (ListProposals,
+// GetProposal) additionally require PermissionAdmin in-handler, the same
+// in-handler gate /admin/usage uses inside the AdminOrUserAuthMiddleware group.
 //
 // HTTP codes: 200/201/204 success · 400 validation · 404 not found · 409 slug
 // conflict · 500 operational.
@@ -136,8 +140,22 @@ func (n *NotesHandlers) ArchiveNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListProposals — GET /notes/proposals?status=pending
+// requireCurator reports whether the caller may read the proposal queue:
+// PermissionAdmin, the same grant that publishes and rejects proposals.
+// Returns false after writing the 403.
+func (n *NotesHandlers) requireCurator(w http.ResponseWriter, r *http.Request) bool {
+	if !n.h.principalFromRequest(r).hasPermission(models.PermissionAdmin) {
+		writeError(w, http.StatusForbidden, "Admin access required")
+		return false
+	}
+	return true
+}
+
+// ListProposals — GET /notes/proposals?status=pending (admin)
 func (n *NotesHandlers) ListProposals(w http.ResponseWriter, r *http.Request) {
+	if !n.requireCurator(w, r) {
+		return
+	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	props, err := n.store.ListProposals(r.Context(), status)
 	if err != nil {
@@ -147,8 +165,11 @@ func (n *NotesHandlers) ListProposals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"proposals": props})
 }
 
-// GetProposal — GET /notes/proposals/{id}
+// GetProposal — GET /notes/proposals/{id} (admin)
 func (n *NotesHandlers) GetProposal(w http.ResponseWriter, r *http.Request) {
+	if !n.requireCurator(w, r) {
+		return
+	}
 	id, ok := parseUUID(w, chi.URLParam(r, "id"))
 	if !ok {
 		return

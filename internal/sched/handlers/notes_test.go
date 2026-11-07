@@ -45,7 +45,7 @@ func setupNotesTest(t *testing.T) (*chi.Mux, *sched.Store, func()) {
 	}
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
-	h := New(Config{DefaultTaskModel: "test/model", Version: "test"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", Version: "test", AdminAPIKey: notesTestAdminKey}, store, keyMgr)
 	notesStore := sched.NewStore(store.DB())
 	nh := NewNotesHandlers(notesStore, h)
 
@@ -67,6 +67,11 @@ func setupNotesTest(t *testing.T) (*chi.Mux, *sched.Store, func()) {
 	return r, notesStore, cleanup
 }
 
+// notesTestAdminKey is the admin credential doJSON sends: in production the
+// curation routes are admin-gated (by route group, and the proposal reads
+// in-handler), so the handler tests act as an admin.
+const notesTestAdminKey = "notes-admin-key"
+
 func doJSON(t *testing.T, r http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var rdr *bytes.Reader
@@ -78,6 +83,7 @@ func doJSON(t *testing.T, r http.Handler, method, path string, body any) *httpte
 	}
 	req := httptest.NewRequest(method, path, rdr)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", notesTestAdminKey)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w

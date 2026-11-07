@@ -237,7 +237,8 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
 		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
 
-		// Notes reads (admin + scoped user).
+		// Notes reads (admin + scoped user). The proposal queue reads gate
+		// on PermissionAdmin in-handler, like /admin/usage above.
 		r.Get("/notes", notes.ListNotes)
 		r.Get("/notes/{slug}", notes.GetNote)
 		r.Get("/notes/proposals", notes.ListProposals)
