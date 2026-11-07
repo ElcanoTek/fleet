@@ -1,0 +1,12 @@
+# Python packages the generic sandbox image overlays on Fedora's RPMs (see the
+# Containerfile for why each is here). Compile the lock with:
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras requirements.in
+# Dependabot (pip, /config/default/sandbox) keeps requirements.txt current.
+pip
+pillow>=13.0.0
+pypdf
+python-docx
+python-pptx
+soupsieve
+pygments
+tornado>=6.5.8

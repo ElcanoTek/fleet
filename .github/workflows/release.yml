@@ -1,4 +1,5 @@
-# Automatic date-based release tagging (ADR-0059, docs/VERSIONING.md).
+# Automatic date-based releases with signed artifacts (ADR-0059, ADR-0100,
+# docs/VERSIONING.md, docs/RELEASE-ARTIFACTS.md).
 #
 # fleet ships from a rolling release train: every PR squash-merges into `main`
 # (the only branch, ADR-0062), and every commit on `main` is a shippable release.
@@ -8,9 +9,27 @@
 # Each release is `vYYYY.MM.DD.N` (UTC date, N counting that day's releases from
 # 1) — several a day is the normal case. scripts/version.sh owns the format and
 # derives N from the tags already on the repo; builds derive their own identity
-# from `git describe` against these tags, which is what makes the tag the only
-# artifact a release needs. The GitHub release OBJECT is a view of the newest
-# tag, and only the newest is kept; tags are permanent.
+# from `git describe` against these tags. Tags are permanent.
+#
+# Three jobs, split by privilege (ADR-0100):
+#
+#   tag      contents: write. Mints the tag on the certified SHA; runs only the
+#            default branch's scripts/version.sh.
+#   build    contents: read, nothing else. Per architecture (native amd64 and
+#            arm64 runners): the web bundle, the static fleet binary — asserted
+#            to carry no host executor and to embed the bundle — the
+#            fleet-sandbox and fleet images, an SPDX SBOM for each, the
+#            stamped Helm chart. The only job that runs the release's code.
+#   publish  packages/id-token/attestations/contents write. Scans the image
+#            archives with Grype (CI's pinned version and policy) BEFORE
+#            pushing anything, pushes the multi-arch images, signs them and
+#            the binaries + SHA256SUMS with keyless cosign, attaches SBOM
+#            attestations and SLSA provenance naming the release commit,
+#            writes release.json, and publishes the GitHub release with every
+#            file. Runs no code from the release.
+#
+# The release OBJECT carries the downloadable artifacts, so the newest ten are
+# kept (the rollback window); the GHCR images are kept for every tag.
 #
 # WHY `workflow_run` RATHER THAN A JOB IN ci.yml: a release job would have to
 # `needs: [ci-gate]`, and scripts/check_gate_needs_test.go requires every job in
@@ -61,7 +80,7 @@ jobs:
   tag:
     name: Tag the release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     # Only a GREEN CI run on a real push to main. `workflow_dispatch` runs of
     # ci.yml (which exist to re-produce the required check on a PR
     # whose webhook was dropped) carry a PR head ref and must not release.
@@ -70,7 +89,11 @@ jobs:
           && github.event.workflow_run.event == 'push'
           && github.event.workflow_run.head_branch == 'main' }}
     permissions:
-      contents: write # creates the tag and the GitHub release
+      contents: write # creates the tag; the release object is the publish job's
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      released: ${{ steps.tag.outputs.released }}
+      build: ${{ steps.state.outputs.build }}
     steps:
       # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
       #
@@ -142,10 +165,20 @@ jobs:
           fi
 
           # Retry loop for the one race the concurrency group cannot rule out:
-          # a tag pushed between our `next` computation and our push (a manual
-          # push, or a queued run that started before our fetch). Recompute the
-          # ordinal against the refreshed tags rather than forcing ours.
-          for attempt in 1 2 3; do
+          # a tag pushed between our `next` computation and our push (another
+          # commit's run — the group is per SHA, so any number of green pushes
+          # allocate concurrently — or a manual push). Recompute the ordinal
+          # against the refreshed tags rather than forcing ours, and keep going:
+          # a rejected push means SOMEONE took that ordinal, so every round
+          # makes progress, and a certified commit must not end up untagged
+          # because K other runs happened to land at once. The bound is a
+          # backstop against a push that fails for another reason (auth, a
+          # protected ref), not a limit on contention; the jittered backoff
+          # spreads the contenders out so they stop colliding.
+          MAX_ATTEMPTS="${TAG_MAX_ATTEMPTS:-40}"
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
             tag="$(scripts/version.sh next)"
             echo "attempt ${attempt}: tagging ${HEAD_SHA} as ${tag}"
 
@@ -160,96 +193,619 @@ jobs:
               exit 0
             fi
 
-            echo "::warning::pushing ${tag} was rejected; refetching tags and recomputing the ordinal"
             git tag -d "${tag}"
-            git fetch --force --tags origin
+            if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "::error::could not push a release tag after ${attempt} attempts; re-run this workflow to tag ${HEAD_SHA}."
+              exit 1
+            fi
+            backoff=$(( (attempt < 10 ? attempt : 10) + RANDOM % 5 ))
+            echo "::warning::pushing ${tag} was rejected (attempt ${attempt}/${MAX_ATTEMPTS}); refetching tags and retrying in ${backoff}s"
+            sleep "${backoff}"
+            git fetch --force --tags origin || echo "::warning::refetching tags failed; retrying"
+            # A tag on this very commit appearing meanwhile (a re-run that
+            # raced this one) is the answer, not a reason to mint a second.
+            if existing="$(scripts/version.sh released-at "${HEAD_SHA}")" && [ -n "${existing}" ]; then
+              echo "::notice::${HEAD_SHA} was tagged ${existing} meanwhile."
+              {
+                echo "tag=${existing}"
+                echo "released=true"
+              } >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
           done
-
-          echo "::error::could not push a release tag after 3 attempts."
-          exit 1
         id: tag
 
-      - name: Publish the GitHub release
+      # RELEASES ARE IMMUTABLE. A re-run of this workflow for a tag that
+      # already published must not rebuild it: the rebuild would produce
+      # different bytes (a newer base layer, a newer RPM, another timestamp)
+      # under the SAME tag, overwriting the binaries, checksums, signatures and
+      # image digests that boxes already verified and installed. So:
+      #   * a complete release (published, with SHA256SUMS) → nothing to do;
+      #   * anything partial (a draft, a release without SHA256SUMS, or GHCR
+      #     images under the tag with no complete release) → refuse loudly; a
+      #     human decides (delete the partial publish and re-run, or let the
+      #     next green push release instead);
+      #   * nothing yet → build.
+      - name: Releases are immutable — skip a published tag, refuse a partial one
+        id: state
         if: ${{ steps.tag.outputs.released == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # Idempotent by construction: this step also runs on a re-run for a
-          # commit that was already tagged (see the step above), which is what
-          # recovers a tag whose publication failed the first time. `gh release
-          # create` errors on an existing release, so ask first — and skip only
-          # the CREATION: the prune below still runs, so a re-run after a
-          # cancelled or failed prune also restores the "one release listed"
-          # property instead of leaving it to the next release.
-          #
-          # A re-run for a tag that a NEWER release has since superseded must
-          # not publish either: its release object was pruned on purpose, and
-          # re-creating it — with `--latest` — would point /releases/latest at
-          # an old tag until the next successful run. The newest release tag
-          # ON THE REMOTE decides — fetched right here, because two per-SHA
-          # jobs can tag concurrently: the one that won the push never
-          # refetched, so its checkout would still name its own tag as newest
-          # after the loser retried and pushed .N+1. On a normal run the
-          # newest is the tag this workflow just pushed.
-          git fetch --quiet --tags origin
-          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
-          if [ "${TAG}" != "${newest}" ]; then
-            echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
-          elif gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::notice::release ${TAG} is already published; skipping creation."
-          else
-            # The release notes are the released commit's message, then
-            # GitHub's generated list — the two-part shape openai/codex ships
-            # with (its release body is `git log -1 --format=%B` of the tagged
-            # commit).
-            #
-            # Every commit on main is a squash-merged PR, and its message is
-            # the text approved in the merge dialog: GitHub prefills it from
-            # the PR title and body, and whatever is in that box is exactly
-            # what ships here, verbatim. That is the whole contract — no PR
-            # lookup, no parsing, nothing to know about any tool's footer.
-            # Want something out of the release notes? Leave it out of the
-            # commit message when you merge. CONTRIBUTING.md "Releases" says
-            # how.
-            #
-            # `--generate-notes` with a body PRE-PENDS that body to GitHub's
-            # generated notes (the merged-PR list since the previous tag,
-            # contributors, compare link). The certified SHA is present as an
-            # object (fetch-depth 0) and the tag step proved it is on main.
-            notes="$(mktemp)"
-            git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
-
-            gh release create "${TAG}" \
-              --title "fleet ${TAG#v}" \
-              --notes-file "${notes}" \
-              --generate-notes \
-              --latest \
-              --verify-tag
-
-            # The newest-tag check above and this create are two steps, and
-            # a concurrent run for the next commit can tag AND publish .N+1
-            # between them; the `--latest` just passed would then have moved
-            # Latest back onto this older tag. Every tag is pushed before its
-            # release is created, so a fetch AFTER the create sees any
-            # release that beat this one, and clearing this one's mark is
-            # enough: the newer release asked for Latest itself. (The prune
-            # below removes this object anyway; this is for when it cannot.)
-            git fetch --quiet --tags origin
-            newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
-            if [ "${TAG}" != "${newest}" ]; then
-              echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
-              gh release edit "${TAG}" --latest=false \
-                || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
+          if info="$(gh release view "${TAG}" --json isDraft,assets 2>/dev/null)"; then
+            draft="$(printf '%s' "${info}" | jq -r '.isDraft')"
+            sums="$(printf '%s' "${info}" | jq -r '[.assets[].name] | index("SHA256SUMS") != null')"
+            if [ "${draft}" = "false" ] && [ "${sums}" = "true" ]; then
+              echo "::notice::${TAG} is already published with its artifacts; releases are immutable, so nothing is rebuilt."
+              echo "build=false" >> "${GITHUB_OUTPUT}"
+              exit 0
             fi
+            echo "::error::${TAG} has a partial GitHub release (draft=${draft}, SHA256SUMS present=${sums}). Releases are immutable: refusing to rebuild over it. Delete that release (and any ghcr.io/elcanotek/fleet{,-sandbox}:${TAG}* tags) and re-run, or let the next green push release."
+            exit 1
+          fi
+          for name in fleet fleet-sandbox; do
+            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
+              if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
+                echo "::error::ghcr.io/elcanotek/${name}:${ref} already exists but ${TAG} has no release. Releases are immutable: refusing to push different bytes under that tag. Delete the partial publish and re-run, or let the next green push release."
+                exit 1
+              fi
+            done
+          done
+          echo "build=true" >> "${GITHUB_OUTPUT}"
+
+  # ── build: one job per architecture, NO write permission of any kind ────────
+  #
+  # This is the only job that executes the released commit's code (npm ci, the
+  # Vite build, go build, podman build of the Containerfiles), so it holds the
+  # read-only token and nothing else: no packages, no id-token, no contents
+  # write. What it produces leaves through upload-artifact and is signed by the
+  # publish job below, which in turn never runs code from this checkout. That
+  # split is the reason the untrusted-checkout rule that shapes the tag job does
+  # not bite here: there is no privilege in this job to escalate to.
+  #
+  # Native runners for both architectures (ubuntu-24.04-arm for arm64), so each
+  # binary is EXECUTED on its own architecture for the --web / --build-info
+  # assertions, and each image is built without emulation.
+  build:
+    name: Build linux/${{ matrix.arch }}
+    needs: tag
+    if: ${{ needs.tag.outputs.released == 'true' && needs.tag.outputs.build == 'true' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      ARCH: ${{ matrix.arch }}
+      TAG: ${{ needs.tag.outputs.tag }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # The release TAG, which the tag job created on the certified SHA and
+      # proved is on main. fetch-depth 0 so scripts/version.sh can describe the
+      # build from the tags, exactly as `make bins` does.
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: The tag names the commit CI certified
+        run: |
+          set -euo pipefail
+          got="$(git rev-parse HEAD)"
+          if [ "${got}" != "${HEAD_SHA}" ]; then
+            echo "::error::${TAG} resolves to ${got}, but CI certified ${HEAD_SHA}. Refusing to build."
+            exit 1
           fi
 
-          # Keep only the newest release OBJECT. A rolling train tags several
-          # times a day, and a Releases page that lists every one of them is a
-          # feed nobody reads; the current release is the only entry that
-          # answers "what is fleet right now". What is lost is bounded and
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Build the web bundle
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      # Static (CGO_ENABLED=0), trimmed paths, version stamped from the tag the
+      # same way the Makefile's `bins` target does. Deliberately NO -tags: the
+      # unsandboxed host executor is fenced behind fleet_host_executor (#159),
+      # and the next step proves it stayed out.
+      - name: Build the static fleet binary
+        run: |
+          set -euo pipefail
+          version="$(scripts/version.sh describe)"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "::error::scripts/version.sh describes this tree as ${version}, not ${TAG#v}."
+            exit 1
+          fi
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath \
+            -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=${version}" \
+            -o "dist/fleet-linux-${ARCH}" ./cmd/fleet
+
+      # The invariant "the host executor cannot ship enabled in a production
+      # build" checked on the ARTIFACT, two independent ways: the toolchain's
+      # own record of the build settings, and the binary's compile-time marker.
+      # Either one failing fails the release.
+      - name: Assert the binary has no host executor, has the web bundle, and is static
+        run: |
+          set -euo pipefail
+          bin="dist/fleet-linux-${ARCH}"
+          settings="$(go version -m "${bin}")"
+          printf '%s\n' "${settings}"
+          if printf '%s\n' "${settings}" | grep -Eq '^[[:space:]]+build[[:space:]]+-tags=.*fleet_host_executor'; then
+            echo "::error::${bin} was built with -tags fleet_host_executor. A release must never carry the host executor."
+            exit 1
+          fi
+          printf '%s\n' "${settings}" | grep -Eq '^[[:space:]]+build[[:space:]]+CGO_ENABLED=0$' \
+            || { echo "::error::${bin} is not a static (CGO_ENABLED=0) build."; exit 1; }
+          info="$("${bin}" version --build-info)"
+          printf '%s\n' "${info}"
+          [ "$(printf '%s' "${info}" | jq -r '.host_executor')" = "false" ] \
+            || { echo "::error::${bin} reports host_executor != false."; exit 1; }
+          [ "$(printf '%s' "${info}" | jq -r '.goarch')" = "${ARCH}" ] \
+            || { echo "::error::${bin} is not a ${ARCH} binary."; exit 1; }
+          [ "$(printf '%s' "${info}" | jq -r '.version')" = "${TAG#v}" ] \
+            || { echo "::error::${bin} is not stamped ${TAG#v}."; exit 1; }
+          test "$("${bin}" version --web)" = "web bundle: $(cat internal/webui/bundle/dist/build-id.txt)"
+
+      - name: Build the sandbox image (generic bundle)
+        run: |
+          set -euo pipefail
+          IMAGE_NAME=localhost/fleet-sandbox scripts/build-sandbox-image.sh "build-${ARCH}"
+          podman save --format oci-archive -o "dist/fleet-sandbox-image-linux-${ARCH}.oci.tar" "localhost/fleet-sandbox:build-${ARCH}"
+
+      - name: Build the control-plane image (from the checked binary)
+        run: |
+          set -euo pipefail
+          podman build --pull=newer -f deploy/fleet.Containerfile \
+            --build-arg "FLEET_ARCH=${ARCH}" -t "localhost/fleet:build-${ARCH}" .
+          podman save --format oci-archive -o "dist/fleet-image-linux-${ARCH}.oci.tar" "localhost/fleet:build-${ARCH}"
+
+      # One SPDX SBOM per artifact: the binary (from its Go build info) and each
+      # image (from its layers). They ship as release assets, covered by the
+      # signed SHA256SUMS, and the image ones are also attached to the image
+      # digests as signed cosign attestations by the publish job.
+      - name: SBOM — binary
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          file: dist/fleet-linux-${{ matrix.arch }}
+          format: spdx-json
+          output-file: dist/fleet-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM — sandbox image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: oci-archive:dist/fleet-sandbox-image-linux-${{ matrix.arch }}.oci.tar
+          format: spdx-json
+          output-file: dist/fleet-sandbox-image-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM — control-plane image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: oci-archive:dist/fleet-image-linux-${{ matrix.arch }}.oci.tar
+          format: spdx-json
+          output-file: dist/fleet-image-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # The chart, stamped from the tags (appVersion = this release, so its
+      # image tags default to this release's images). Once, not per arch.
+      - name: Package the Helm chart
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/fleet --destination dist \
+            --version "$(scripts/version.sh semver)" \
+            --app-version "$(scripts/version.sh current)"
+
+      - name: Upload the build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-${{ matrix.arch }}
+          path: dist/
+          retention-days: 3
+          if-no-files-found: error
+
+  # ── publish: push, sign, attest, release — and run NO code from the release ─
+  #
+  # The privileged job. It checks out the DEFAULT BRANCH (trusted code, the
+  # same rule and reasoning as the tag job) only for scripts/version.sh and
+  # internal/release/cosign.lock, and otherwise handles the build job's outputs
+  # as data: load, push, hash, sign. Nothing from the released commit is
+  # executed here.
+  publish:
+    name: Sign + publish the release
+    needs: [tag, build]
+    if: ${{ needs.tag.outputs.released == 'true' && needs.tag.outputs.build == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write     # the GitHub release + its assets
+      packages: write     # push ghcr.io/elcanotek/fleet and fleet-sandbox
+      id-token: write     # keyless cosign signatures + provenance (GitHub OIDC)
+      attestations: write # SLSA build provenance in the attestations API
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+      FLEET_IMAGE: ghcr.io/elcanotek/fleet
+      SANDBOX_IMAGE: ghcr.io/elcanotek/fleet-sandbox
+      # The ONE identity every verifier pins (internal/release.SignerIdentity;
+      # scripts/check_release_artifacts_test.go keeps them equal). Verified
+      # below against what was just signed, so a drift between the signer and
+      # the verifiers fails the release instead of every box's next update.
+      SIGNER_IDENTITY: https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main
+      OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - name: Check out the default branch (trusted code) with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download the builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: build-*
+          path: dist
+          merge-multiple: true
+
+      # The archives below are what gets pushed and signed — not CI's local
+      # rebuilds — so they are scanned HERE, with the same pinned Grype and the
+      # same policy as CI's grype-scan job (scripts/check-grype-policy.sh: a
+      # fixable CRITICAL/HIGH Fedora RPM or /usr/local pip package fails), and
+      # a violation fails the release before anything is pushed or signed.
+      # The policy and .grype.yaml come from the default branch checkout.
+      - name: Install Grype
+        env:
+          # Keep GRYPE_VERSION + GRYPE_SHA256 equal to ci.yml's grype-scan job
+          # (scripts/update-pins.sh moves every workflow's pin together).
+          GRYPE_VERSION: '0.117.0'
+          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
+          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" grype
+          sudo install -m 0755 grype /usr/local/bin/grype
+          grype version
+
+      - name: Scan the release image archives (before anything is pushed or signed)
+        run: |
+          set -euo pipefail
+          for name in fleet-sandbox fleet; do
+            for arch in amd64 arm64; do
+              archive="dist/${name}-image-linux-${arch}.oci.tar"
+              [ -f "${archive}" ] || { echo "::error::the build produced no ${archive}"; exit 1; }
+              report="${RUNNER_TEMP}/grype-${name}-${arch}.json"
+              grype "oci-archive:${archive}" --output table --output "json=${report}"
+              scripts/check-grype-policy.sh "${report}" \
+                || { echo "::error::${archive} fails the Grype policy; refusing to publish ${TAG}"; exit 1; }
+            done
+          done
+
+      # The same cosign every box verifies with: version and digest from
+      # internal/release/cosign.lock, checked before it runs.
+      - name: Install the pinned cosign
+        run: |
+          set -euo pipefail
+          lock=internal/release/cosign.lock
+          ver="$(awk '$1=="version"{print $2}' "${lock}")"
+          want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
+          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+          printf '%s' "$GHCR_TOKEN" | cosign login ghcr.io --username "$GHCR_USER" --password-stdin
+          # gh attestation verify (below) reads the registry through docker's auth.
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      # Each architecture's image is pushed by digest, then one multi-arch
+      # index per repository is pushed under the release tag. The index digest
+      # is what release.json records and what is signed; a pull by that digest
+      # resolves the platform image through it, so the signature covers both.
+      - name: Push the multi-arch images
+        id: images
+        run: |
+          set -euo pipefail
+          # Immutable tags: never push over an existing one (see the tag job).
+          for name in fleet fleet-sandbox; do
+            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
+              if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
+                echo "::error::ghcr.io/elcanotek/${name}:${ref} appeared since the tag job checked; refusing to overwrite it."
+                exit 1
+              fi
+            done
+          done
+          for name in fleet fleet-sandbox; do
+            repo="ghcr.io/elcanotek/${name}"
+            key="${name//-/_}"
+            podman manifest rm "${repo}:${TAG}" >/dev/null 2>&1 || true
+            podman manifest create "${repo}:${TAG}"
+            for arch in amd64 arm64; do
+              # Straight from the build's OCI archive to the registry: no
+              # local store, no name to re-derive, the bytes the SBOM scanned.
+              skopeo copy --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
+                "oci-archive:dist/${name}-image-linux-${arch}.oci.tar" "docker://${repo}:${TAG}-${arch}"
+              digest="$(cat "${RUNNER_TEMP}/${name}-${arch}.digest")"
+              echo "${key}_${arch}=${repo}@${digest}" >> "${GITHUB_OUTPUT}"
+              podman manifest add "${repo}:${TAG}" "docker://${repo}@${digest}"
+            done
+            podman manifest push --all --digestfile "${RUNNER_TEMP}/${name}.digest" \
+              "${repo}:${TAG}" "docker://${repo}:${TAG}"
+            digest="$(cat "${RUNNER_TEMP}/${name}.digest")"
+            {
+              echo "${key}=${repo}@${digest}"
+              echo "${key}_digest=${digest}"
+            } >> "${GITHUB_OUTPUT}"
+          done
+
+      - name: Sign the images and attach their SBOMs
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          FLEET_AMD64: ${{ steps.images.outputs.fleet_amd64 }}
+          FLEET_ARM64: ${{ steps.images.outputs.fleet_arm64 }}
+          SANDBOX_AMD64: ${{ steps.images.outputs.fleet_sandbox_amd64 }}
+          SANDBOX_ARM64: ${{ steps.images.outputs.fleet_sandbox_arm64 }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${FLEET_REF}"
+          cosign sign --yes "${SANDBOX_REF}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
+          for ref in "${FLEET_REF}" "${SANDBOX_REF}"; do
+            cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
+          done
+
+      # SLSA provenance whose SOURCE is the release commit. The action's own
+      # predicate would take it from this job's OIDC token — under
+      # workflow_run, the default-branch head when the release ran, which can
+      # be a LATER commit than the one built — so the predicate is written
+      # explicitly (scripts/slsa-predicate.sh: resolvedDependencies[0] is the
+      # release tag at HEAD_SHA, the commit the build job checked out and
+      # checked) and the attestations are verified against it below.
+      - name: SLSA provenance predicate (source = the release commit)
+        run: |
+          set -euo pipefail
+          scripts/slsa-predicate.sh "${TAG}" "${HEAD_SHA}" > "${RUNNER_TEMP}/provenance-predicate.json"
+          jq . "${RUNNER_TEMP}/provenance-predicate.json"
+      - name: SLSA provenance — control-plane image
+        id: provenance_fleet
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet
+          subject-digest: ${{ steps.images.outputs.fleet_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+          push-to-registry: true
+      - name: SLSA provenance — sandbox image
+        id: provenance_sandbox
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet-sandbox
+          subject-digest: ${{ steps.images.outputs.fleet_sandbox_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+          push-to-registry: true
+      - name: SLSA provenance — binaries
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/fleet-linux-amd64
+            dist/fleet-linux-arm64
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+
+      # Verify every provenance attestation just made, as a consumer would —
+      # signature, signer identity, subject — and require its source to be the
+      # release commit. A predicate naming anything else fails the release
+      # before release.json, SHA256SUMS or the GitHub release exist.
+      - name: Verify the provenance names the release commit
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          BIN_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          FLEET_BUNDLE: ${{ steps.provenance_fleet.outputs.bundle-path }}
+          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          check() {
+            local subject="$1" bundle="$2" out
+            out="$(mktemp)"
+            gh attestation verify "${subject}" --bundle "${bundle}" --repo "${GITHUB_REPOSITORY}" \
+              --cert-identity "${SIGNER_IDENTITY}" --cert-oidc-issuer "${OIDC_ISSUER}" \
+              --predicate-type https://slsa.dev/provenance/v1 --format json > "${out}"
+            scripts/check-attested-commit.sh "${out}" "${HEAD_SHA}"
+          }
+          check dist/fleet-linux-amd64 "${BIN_BUNDLE}"
+          check dist/fleet-linux-arm64 "${BIN_BUNDLE}"
+          check "oci://${FLEET_REF}" "${FLEET_BUNDLE}"
+          check "oci://${SANDBOX_REF}" "${SANDBOX_BUNDLE}"
+
+      # The chart the build job packaged deploys these exact images: stamp
+      # the digests just pushed (and signed) into its values, so it renders
+      # repository@sha256:… and not a tag that could be moved. Data only: the
+      # script validates the digests and runs no release code.
+      - name: Stamp the Helm chart with the signed image digests
+        env:
+          FLEET_DIGEST: ${{ steps.images.outputs.fleet_digest }}
+          SANDBOX_DIGEST: ${{ steps.images.outputs.fleet_sandbox_digest }}
+        run: |
+          set -euo pipefail
+          chart="$(find dist -maxdepth 1 -name 'fleet-*.tgz' -print -quit)"
+          [ -n "${chart}" ] || { echo "::error::the build produced no Helm chart"; exit 1; }
+          scripts/helm-stamp-digests.sh "${chart}" "${FLEET_DIGEST}" "${SANDBOX_DIGEST}"
+
+      # release.json is the signed statement of what this release IS: its tag
+      # (the updater's replay check), its commit, and the image digests (what
+      # the updater pulls). SHA256SUMS then covers every published file, and
+      # its signature is the root a box verifies first.
+      - name: Write release.json and SHA256SUMS, and sign them
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f ./*.oci.tar
+          cp "${PROVENANCE}" fleet-linux.provenance.sigstore.json
+          jq -n --arg tag "${TAG}" --arg commit "${HEAD_SHA}" \
+                --arg fleet "${FLEET_REF}" --arg sandbox "${SANDBOX_REF}" \
+                --arg fimg "${FLEET_IMAGE}" --arg simg "${SANDBOX_IMAGE}" \
+            '{schema: 1, tag: $tag, commit: $commit, images: {($fimg): $fleet, ($simg): $sandbox}}' > release.json
+          sha256sum fleet-linux-amd64 fleet-linux-arm64 release.json ./*.spdx.json ./*.tgz \
+            fleet-linux.provenance.sigstore.json | sed 's#  \./#  #' > SHA256SUMS
+          cat SHA256SUMS
+          for f in SHA256SUMS fleet-linux-amd64 fleet-linux-arm64; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
+            # Verify exactly as a box will: a signer/verifier identity drift
+            # fails HERE, not on every box's next update.
+            cosign verify-blob --bundle "${f}.sigstore.json" \
+              --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${f}"
+          done
+          ls -la
+
+      - name: Publish the GitHub release
+        run: |
+          set -euo pipefail
+          # Every tag that built publishes — including one a NEWER tag
+          # overtook while it was building (two green pushes close together):
+          # its artifacts are built, signed and pushed, and skipping it would
+          # leave signed images in GHCR with no release that names them. The
+          # Latest mark and the retention prune below are what keep the order
+          # right. A release that already exists is not touched: the tag job
+          # skips a complete one and refuses a partial one (releases are
+          # immutable), so reaching here with one means a race — fail loudly.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::release ${TAG} appeared while this run was building; releases are immutable, so this run does not overwrite it."
+            exit 1
+          fi
+
+          # The release notes are the released commit's message, then
+          # GitHub's generated list — the two-part shape openai/codex ships
+          # with (its release body is `git log -1 --format=%B` of the tagged
+          # commit).
+          #
+          # Every commit on main is a squash-merged PR, and its message is
+          # the text approved in the merge dialog: GitHub prefills it from
+          # the PR title and body, and whatever is in that box is exactly
+          # what ships here, verbatim. That is the whole contract — no PR
+          # lookup, no parsing, nothing to know about any tool's footer.
+          # Want something out of the release notes? Leave it out of the
+          # commit message when you merge. CONTRIBUTING.md "Releases" says
+          # how.
+          #
+          # `--generate-notes` with a body PRE-PENDS that body to GitHub's
+          # generated notes (the merged-PR list since the previous tag,
+          # contributors, compare link). The certified SHA is present as an
+          # object (fetch-depth 0) and the tag step proved it is on main.
+          notes="$(mktemp)"
+          git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
+
+          # Latest only when no NEWER release is successfully PUBLISHED (a
+          # non-draft release with SHA256SUMS: scripts/release-newer-published.sh).
+          # Not "no newer tag": a newer tag whose build failed, or that is
+          # still building, has nothing a box can install, and must not keep
+          # this complete release from being Latest. When the releases cannot
+          # be listed, Latest is left alone (the next release sets it) — a
+          # failure here must not strand pushed, signed images without their
+          # release.
+          latest_flag="--latest=false"
+          if newer="$(scripts/release-newer-published.sh "${TAG}")"; then
+            [ -z "${newer}" ] && latest_flag="--latest"
+          else
+            echo "::warning::could not list the published releases; publishing ${TAG} without the Latest mark."
+          fi
+
+          # With files, gh creates the release as a draft, uploads every
+          # asset and only then publishes it — so /releases/latest, which is
+          # what `fleet update` asks, never names a release whose binaries
+          # are still uploading.
+          gh release create "${TAG}" \
+            --title "fleet ${TAG#v}" \
+            --notes-file "${notes}" \
+            --generate-notes \
+            "${latest_flag}" \
+            --verify-tag \
+            dist/*
+
+          # The check above and this create are two steps, and a concurrent
+          # run for a newer commit can PUBLISH .N+1 between them; a `--latest`
+          # just passed would then have moved Latest back onto this older
+          # release. So ask again AFTER the create, by the same rule — a newer
+          # successfully published release — and clear this one's mark if one
+          # appeared: that newer release asked for Latest itself.
+          if ! newer="$(scripts/release-newer-published.sh "${TAG}")"; then
+            echo "::warning::could not list the published releases after publishing ${TAG}; leaving its Latest mark as it is."
+          elif [ -n "${newer}" ]; then
+            if [ "${latest_flag}" = "--latest" ]; then
+              echo "::notice::${TAG} was superseded by $(printf '%s' "${newer}" | tail -n 1) while publishing; clearing its Latest mark."
+              gh release edit "${TAG}" --latest=false \
+                || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
+            else
+              echo "::notice::${TAG} published, not Latest: $(printf '%s' "${newer}" | tail -n 1) is newer and published."
+            fi
+          else
+            if [ "${latest_flag}" != "--latest" ]; then
+              # Created without the mark because the first listing failed.
+              gh release edit "${TAG}" --latest \
+                || echo "::warning::could not mark ${TAG} Latest; the next release sets it."
+            fi
+          fi
+          # The :latest image tags are NOT moved here: overlapping publish
+          # jobs would race them (an older digest last, or the two repos on
+          # different releases). The promote-latest job below owns them.
+
+          # Keep the newest RETAIN release OBJECTS — the rollback window for
+          # `fleet update --tag <older> --allow-downgrade` (ADR-0100). It was
+          # one: a rolling train tags several times a day, and a Releases page
+          # that lists every one of them is a feed nobody reads. Release
+          # objects now carry the signed binaries, so pruning one removes a
+          # downloadable release, and ten is a few days of the train — enough
+          # to step back past a bad day, short enough to stay readable. (Each
+          # box also keeps its previous binary as fleet.prev, and the GHCR
+          # images are kept for every tag.) What is lost is bounded and
           # reconstructible: an older release's prose is its commit message
           # (`git log -1 <tag>`), and the generated half — the merged-PR list
           # and compare link — is `git log <prev>..<tag>` and
@@ -270,15 +826,16 @@ jobs:
           # any failure here warns, it does not un-publish anything — and
           # every deletion's status is kept, so one that failed among several
           # cannot hide behind a later one that succeeded. Listing is paged
-          # (`--limit`), so list-and-delete repeats until a listing shows one
-          # release or nothing more can be deleted; a backlog larger than one
+          # (`--limit`), so list-and-delete repeats until a listing shows RETAIN
+          # releases or nothing more can be deleted; a backlog larger than one
           # page (a long run of failed prunes) is cleared in one run rather
           # than one page per release.
+          RETAIN=10
           prune_failed=0
           for _pass in 1 2 3 4 5; do
             if ! superseded="$(gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
-                                | scripts/version.sh filter | head -n -1)"; then
-              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than one entry."
+                                | scripts/version.sh filter | head -n "-${RETAIN}")"; then
+              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than ${RETAIN} entries."
               prune_failed=1
               break
             fi
@@ -293,5 +850,64 @@ jobs:
             [ "${deleted}" -eq 1 ] || break
           done
           if [ "${prune_failed}" -ne 0 ]; then
-            echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than one entry."
+            echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than ${RETAIN} entries."
           fi
+
+  # ── promote-latest: the ONLY writer of the :latest image tags ───────────────
+  #
+  # Overlapping publish jobs (two green pushes close together) must not race
+  # :latest: the slower one could move it back to an older digest, or leave
+  # fleet:latest and fleet-sandbox:latest on different releases. So promotion
+  # is one serialized job, and it never promotes "this run's" release: it
+  # recomputes the newest COMPLETE published release from the GitHub API,
+  # verifies that release's SHA256SUMS signature and its release.json against
+  # it, and points both repositories' :latest at the digests release.json
+  # records — fleet first, then the sandbox — skipping any already there
+  # (scripts/release-promote-latest.sh). The concurrency group queues runs
+  # without cancelling the running one; a newer queued run replacing an older
+  # pending one is exactly right, because whichever runs last recomputes the
+  # newest release anyway.
+  promote-latest:
+    name: Point :latest at the newest published release
+    needs: [tag, publish]
+    if: ${{ needs.publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: release-promote-latest
+      cancel-in-progress: false
+    permissions:
+      contents: read  # read releases and their release.json / SHA256SUMS
+      packages: write # retag ghcr.io/elcanotek/{fleet,fleet-sandbox}:latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FLEET_IMAGE: ghcr.io/elcanotek/fleet
+      SANDBOX_IMAGE: ghcr.io/elcanotek/fleet-sandbox
+      SIGNER_IDENTITY: https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main
+      OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      # Default branch only (trusted code, as in the tag and publish jobs).
+      - name: Check out the default branch (trusted code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned cosign
+        run: |
+          set -euo pipefail
+          lock=internal/release/cosign.lock
+          ver="$(awk '$1=="version"{print $2}' "${lock}")"
+          want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
+          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Point :latest at the newest complete published release
+        run: scripts/release-promote-latest.sh

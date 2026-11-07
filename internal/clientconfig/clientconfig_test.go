@@ -866,28 +866,55 @@ func TestSandboxOmittedBlockIsNotEnforced(t *testing.T) {
 	}
 }
 
-func TestSandboxDeclaredBlockRequiresContainerfile(t *testing.T) {
+func TestSandboxDeclaredBlockContainerfileRules(t *testing.T) {
+	write := func(t *testing.T, dir, name, body string) {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A declared block that names no Containerfile and ships none customizes
+	// nothing: it loads, keeping its tag (the release's generic image).
 	dir := t.TempDir()
-	// A DECLARED sandbox block (with no image override) enforces the Containerfile
-	// invariant: drop one at the conventional path and Load succeeds.
-	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("sandbox:\n  tag: localhost/x:latest\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(dir); err == nil {
-		t.Error("expected error: declared sandbox block, no image override, missing Containerfile")
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	write(t, dir, "manifest.yaml", "sandbox:\n  tag: localhost/x:latest\n")
 	b, err := Load(dir)
 	if err != nil {
-		t.Fatalf("load with default Containerfile: %v", err)
+		t.Fatalf("tag-only sandbox block without a Containerfile must load: %v", err)
 	}
 	if got := b.Sandbox().Tag; got != "localhost/x:latest" {
 		t.Errorf("Tag = %q, want localhost/x:latest", got)
+	}
+
+	// The conventional path, when present, must be a file.
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox", "Containerfile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Error("expected error: sandbox/Containerfile is a directory")
+	}
+	if err := os.Remove(filepath.Join(dir, "sandbox", "Containerfile")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "sandbox/Containerfile", "FROM scratch\n")
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("load with default Containerfile: %v", err)
+	}
+
+	// A NAMED Containerfile must exist: a broken bundle is never silently
+	// given the generic image.
+	named := t.TempDir()
+	write(t, named, "manifest.yaml", "sandbox:\n  tag: localhost/x:latest\n  containerfile: images/agent/Containerfile\n")
+	if _, err := Load(named); err == nil {
+		t.Error("expected error: named Containerfile is missing")
+	}
+	write(t, named, "images/agent/Containerfile", "FROM scratch\n")
+	if _, err := Load(named); err != nil {
+		t.Fatalf("load with the named Containerfile: %v", err)
 	}
 }
 

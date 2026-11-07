@@ -393,6 +393,51 @@ jobs:
           grep -q 'fleet-runner=true' <<<"$out"
           grep -q 'rack=12' <<<"$out"
 
+      - name: The chart defaults to the published release images
+        # ADR-0100: a chart packaged for a release (stamped appVersion, as
+        # release.yml attaches it) installs that release's GHCR images with no
+        # image values at all, and an unstamped checkout chart refuses to
+        # guess a release instead of rendering a tagless image.
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          helm package deploy/helm/fleet --destination "$tmp" --version 2026.1107.3 --app-version 2026.11.07.3
+          out=$(helm template ci "$tmp"/fleet-2026.1107.3.tgz --namespace fleet)
+          grep -q 'image: "ghcr.io/elcanotek/fleet:v2026.11.07.3"' <<<"$out"
+          grep -q 'value: "ghcr.io/elcanotek/fleet-sandbox:v2026.11.07.3"' <<<"$out"
+          kubeconform -strict -kubernetes-version 1.30.0 -summary <<<"$out"
+          # The chart a release attaches is stamped with the signed image
+          # digests (scripts/helm-stamp-digests.sh, release.yml) and must then
+          # deploy BY DIGEST, not by the movable tag.
+          fd="sha256:$(printf 'a%.0s' $(seq 64))"; sd="sha256:$(printf 'b%.0s' $(seq 64))"
+          scripts/helm-stamp-digests.sh "$tmp"/fleet-2026.1107.3.tgz "$fd" "$sd"
+          out=$(helm template ci "$tmp"/fleet-2026.1107.3.tgz --namespace fleet)
+          grep -q "image: \"ghcr.io/elcanotek/fleet@${fd}\"" <<<"$out"
+          grep -q "value: \"ghcr.io/elcanotek/fleet-sandbox@${sd}\"" <<<"$out"
+          if grep -q 'elcanotek/fleet:v2026.11.07.3\|elcanotek/fleet-sandbox:v2026.11.07.3\|unpinned-images' <<<"$out"; then
+            echo "::error::a digest-stamped chart still renders an image by tag"
+            exit 1
+          fi
+          # An overridden repository never inherits the official digest: its
+          # own digest when set, else the tag, flagged as unpinned.
+          out=$(helm template ci "$tmp"/fleet-2026.1107.3.tgz --namespace fleet --set image.repository=registry.invalid/custom --set sandbox.imageRepository=registry.invalid/sbx)
+          grep -q 'image: "registry.invalid/custom:v2026.11.07.3"' <<<"$out"
+          grep -q 'value: "registry.invalid/sbx:v2026.11.07.3"' <<<"$out"
+          grep -q 'unpinned-images: "registry.invalid/custom:v2026.11.07.3,registry.invalid/sbx:v2026.11.07.3"' <<<"$out"
+          if grep -q "registry.invalid/custom@${fd}\|registry.invalid/sbx@${sd}" <<<"$out"; then
+            echo "::error::an overridden repository inherited the official signed digest"
+            exit 1
+          fi
+          cd_="sha256:$(printf 'c%.0s' $(seq 64))"
+          out=$(helm template ci "$tmp"/fleet-2026.1107.3.tgz --namespace fleet --set image.repository=registry.invalid/custom --set image.digest="$cd_")
+          grep -q "image: \"registry.invalid/custom@${cd_}\"" <<<"$out"
+          kubeconform -strict -kubernetes-version 1.30.0 -summary <<<"$out"
+          if helm template ci deploy/helm/fleet --namespace fleet >/dev/null 2>"$tmp/err"; then
+            echo "::error::an unstamped chart rendered without image.tag"
+            exit 1
+          fi
+          grep -q 'image.tag is required' "$tmp/err"
+
   migrations:
     name: Migration DDL lint (#256)
     runs-on: ubuntu-latest
@@ -1583,12 +1628,12 @@ jobs:
             --output json=grype-results.json \
             --output sarif=grype-results.sarif
 
-      - name: Enforce actionable Fedora RPM policy
-        # The generic image follows Fedora latest. Block when a CRITICAL **or
-        # HIGH** RPM finding has a packaged fix (scripts/check-grype-policy.sh
-        # selects both severities — this comment said CRITICAL only, which
-        # understated the gate); report upstream language records but do not
-        # force hand-maintained overlay pins over distro-owned packages.
+      - name: Enforce actionable RPM and pip-package policy
+        # The generic image follows Fedora latest. Block when a CRITICAL or
+        # HIGH finding has a fix in an RPM or in a package the build
+        # pip-installs under /usr/local (scripts/check-grype-policy.sh);
+        # report the Python dist-info Fedora RPMs ship, but do not force
+        # hand-maintained overlay pins over distro-owned packages.
         run: scripts/check-grype-policy.sh grype-results.json
 
       - name: Upload Grype SARIF results to the GitHub Security tab
@@ -1603,6 +1648,52 @@ jobs:
         with:
           sarif_file: 'grype-results.sarif'
           category: 'grype-sandbox-image'
+
+      # The control-plane image release.yml publishes (ghcr.io/elcanotek/fleet)
+      # goes through the same gate: its RPMs and its hash-locked Python
+      # (deploy/python/requirements.txt). The fleet binary itself is NOT part
+      # of this scan — govulncheck gates its Go modules, reachability-aware —
+      # so a placeholder stands in for dist/fleet-linux-amd64 and the build
+      # needs no web bundle or Go toolchain.
+      - name: Build the control-plane image (placeholder binary) and export it
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          printf '#!/bin/sh\nexit 0\n' > dist/fleet-linux-amd64
+          chmod 0755 dist/fleet-linux-amd64
+          for attempt in 1 2; do
+            if podman build -f deploy/fleet.Containerfile --build-arg FLEET_ARCH=amd64 -t localhost/fleet:scan .; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then
+              echo "::error::the control-plane image build failed twice"
+              exit 1
+            fi
+            echo "::warning::control-plane image build failed (attempt ${attempt}/2); retrying in 20s"
+            sleep 20
+          done
+          podman save --format docker-archive -o fleet-image.tar localhost/fleet:scan
+
+      - name: Scan the control-plane image (report all findings)
+        if: ${{ !cancelled() && hashFiles('fleet-image.tar') != '' }}
+        run: |
+          set -euo pipefail
+          grype "docker-archive:fleet-image.tar" \
+            --exclude /usr/local/bin/fleet \
+            --output table \
+            --output json=grype-fleet-results.json \
+            --output sarif=grype-fleet-results.sarif
+
+      - name: Enforce actionable RPM and pip-package policy (control-plane image)
+        if: ${{ !cancelled() && hashFiles('grype-fleet-results.json') != '' }}
+        run: scripts/check-grype-policy.sh grype-fleet-results.json
+
+      - name: Upload control-plane Grype SARIF to the GitHub Security tab
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        if: ${{ !cancelled() && hashFiles('grype-fleet-results.sarif') != '' }}
+        with:
+          sarif_file: 'grype-fleet-results.sarif'
+          category: 'grype-fleet-image'
 
   ci-gate:
     # The SINGLE required status check on `main` (see .github/CODEOWNERS). It

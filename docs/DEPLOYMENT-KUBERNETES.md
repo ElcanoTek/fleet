@@ -72,72 +72,55 @@ Role needs `get` on `persistentvolumeclaims` and `networkpolicies` in that
 namespace, plus cluster-scoped `get runtimeclasses` when a RuntimeClass is
 configured. The chart grants all of these; a hand-written Role must too.
 
-## Build the two images
+## The two images
 
-fleet publishes no images — you build both and push them to a registry your
-nodes can pull from (ECR, GAR, ACR, GHCR, …). A `localhost/` build-on-box tag
-cannot work outside a single-node kind cluster.
+Every fleet release publishes both images to GHCR — multi-arch (amd64,
+arm64), signed with keyless cosign by the release workflow, with an SPDX SBOM
+attached as a signed attestation and SLSA build provenance
+([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0100):
 
-**Sandbox image** — the bundle artifact the sandboxes run, unchanged from the
-single-box install:
+| Image | What it is |
+| --- | --- |
+| `ghcr.io/elcanotek/fleet:<tag>` | the control plane: the release's static `fleet` binary (web UI embedded — ADR-0091), git, python3, chromium-headless and the postgres client, the generic bundle at `/opt/fleet/client`. Built from `deploy/fleet.Containerfile` around the SAME binary the release publishes for download. |
+| `ghcr.io/elcanotek/fleet-sandbox:<tag>` | the generic bundle's sandbox image (`config/default/sandbox/Containerfile`) |
+
+The chart defaults to both at one release tag. Verify them before you deploy
+— by digest, against the release workflow's identity:
 
 ```sh
-scripts/build-sandbox-image.sh
-podman tag localhost/fleet-sandbox:latest REGISTRY/fleet-sandbox:v1
-podman push REGISTRY/fleet-sandbox:v1
+for img in fleet fleet-sandbox; do
+  cosign verify ghcr.io/elcanotek/$img:v2026.11.07.3 \
+    --certificate-identity https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+done
+gh attestation verify oci://ghcr.io/elcanotek/fleet:v2026.11.07.3 --repo ElcanoTek/fleet   # SLSA provenance
 ```
 
-(Or let CI publish it — see `.github/workflows/publish-sandbox-image.yml`.)
-
-**Control-plane image** — the `fleet` binary (which serves the web UI too, from
-an embedded bundle — ADR-0091) plus your client bundle. A reproducible
-multi-stage Containerfile (build it from the repo root; the builder stage's Go
-minor is pinned to `go.mod` by `scripts/check_versions_test.go`, so a stale
-copy of this stage fails CI):
+**Your client bundle.** Build on the published images rather than from
+source, and push to a registry your nodes can pull from (ECR, GAR, ACR, GHCR,
+…; a `localhost/` tag cannot work outside a single-node kind cluster):
 
 ```dockerfile
-# ── web bundle stage (node major per web/.nvmrc) ──
-FROM docker.io/library/node:26 AS web
-WORKDIR /src/web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ ./
-# vite build writes ../internal/webui/bundle/dist
-RUN mkdir -p ../internal/webui/bundle && npm run build
-
-# ── build stage ──
-FROM docker.io/library/golang:1.27 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-# The web bundle the binary embeds (go:embed); without it pages answer 503.
-COPY --from=web /src/internal/webui/bundle/dist internal/webui/bundle/dist
-# The version stamp comes from the release tags via scripts/version.sh, so build
-# from a checkout WITH tags (`git clone` brings them; a `--depth`/`--no-tags`
-# clone or a source tarball stamps the honest `dev` sentinel instead). See
-# docs/VERSIONING.md.
-RUN CGO_ENABLED=0 go build -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=$(scripts/version.sh describe)" -o /out/fleet ./cmd/fleet
-# Refuse an image whose binary carries no web bundle.
-RUN /out/fleet version --web
-
-# ── runtime stage ──
-FROM registry.fedoraproject.org/fedora-minimal:latest
-RUN microdnf install -y git ca-certificates tzdata python3 python3-pip chromium-headless && \
-    pip3 install --no-cache-dir playwright && \
-    microdnf clean all
-COPY --from=build /out/fleet /usr/local/bin/fleet
-# Bake the client bundle in (the generic one here; substitute your own).
-COPY config/default /opt/fleet/client
-ENV FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client
-RUN mkdir -p /var/lib/fleet && chown 1000:1000 /var/lib/fleet
-USER 1000
-ENTRYPOINT ["/usr/local/bin/fleet"]
+# Control plane with your bundle baked in (or mount it from a volume at
+# FLEET_CLIENT_CONFIG_DIR instead — either satisfies ADR-0006).
+FROM ghcr.io/elcanotek/fleet:v2026.11.07.3
+COPY --chown=1000:1000 . /opt/fleet/client
 ```
 
-An out-of-repo client bundle can be baked into your image the same way, or
-mounted from a ConfigMap/volume at `FLEET_CLIENT_CONFIG_DIR` — either satisfies
-the engine/bundle split (ADR-0006).
+```sh
+# Sandbox: a bundle whose sandbox/Containerfile starts
+#   ARG FLEET_SANDBOX_BASE=ghcr.io/elcanotek/fleet-sandbox:latest
+#   FROM ${FLEET_SANDBOX_BASE}
+# layers its packages on the release image:
+FLEET_SANDBOX_BASE=ghcr.io/elcanotek/fleet-sandbox@sha256:<digest from release.json> \
+  FLEET_CLIENT_CONFIG_DIR=/path/to/bundle scripts/build-sandbox-image.sh
+podman tag localhost/fleet-sandbox-acme:latest REGISTRY/fleet-sandbox-acme:v1
+podman push REGISTRY/fleet-sandbox-acme:v1
+```
+
+(Or let CI publish a bundle's sandbox image — see
+`.github/workflows/publish-sandbox-image.yml`.) Set `image.repository` /
+`image.tag` and `sandbox.image` to your images.
 
 There is no separate web image any more: the chart exposes the fleet pod's web
 port (`FLEET_WEB_ADDR=0.0.0.0:3000`) and points the Ingress at it. Upgrading a
@@ -146,21 +129,14 @@ chart with a `web:` block" section.
 
 ## 15-minute path (kind)
 
-Prereqs: `kind`, `kubectl`, `helm`, `podman` or `docker` to build images, and
-an OpenRouter API key.
+Prereqs: `kind`, `kubectl`, `helm`, and an OpenRouter API key.
 
 ```sh
 # 1. A cluster.
 kind create cluster --name fleet
 
-# 2. Build both images and load them into kind. Save the control-plane
-#    Containerfile from "Build the two images" above as Containerfile.fleet.
-scripts/build-sandbox-image.sh
-podman save localhost/fleet-sandbox:latest -o /tmp/sandbox.tar
-kind load image-archive /tmp/sandbox.tar --name fleet
-podman build -t localhost/fleet:dev -f Containerfile.fleet .
-podman save localhost/fleet:dev -o /tmp/fleet.tar
-kind load image-archive /tmp/fleet.tar --name fleet
+# 2. Nothing to build: the chart pulls the release's published images.
+TAG=v2026.11.07.3   # the release to run — https://github.com/ElcanoTek/fleet/releases
 
 # 3. Secrets (the API key; DB URLs come from the chart's eval Postgres).
 kubectl create namespace fleet
@@ -170,9 +146,7 @@ kubectl -n fleet create secret generic fleet-secrets \
 # 4. Install. kind is single-node, so the default (ReadWriteOnce) storage
 #    class works for the shared workspace — every pod lands on the one node.
 helm install fleet deploy/helm/fleet --namespace fleet \
-  --set image.repository=localhost/fleet --set image.tag=dev \
-  --set image.pullPolicy=Never \
-  --set sandbox.image=localhost/fleet-sandbox:latest \
+  --set image.tag="$TAG" \
   --set 'workspace.accessModes={ReadWriteOnce}' \
   --set postgres.enabled=true \
   --set config.existingSecret=fleet-secrets
@@ -219,8 +193,11 @@ podman backend guarantees (#796).
    `blockedCIDRs` so an open sandbox can reach the internet but not your
    Services.
 5. **Registry, not build-on-box.** Both images in a registry the nodes pull
-   from; set `sandbox.kubernetes.imagePullSecret` for private registries (on
-   EKS, node-role ECR access covers sandbox pulls without a secret).
+   from — the published GHCR images by default (public, anonymous pulls);
+   set `sandbox.kubernetes.imagePullSecret` for your own private registry (on
+   EKS, node-role ECR access covers sandbox pulls without a secret). Verify
+   the images' signatures before rollout (above), and pin by release tag or
+   digest — never `:latest`.
 6. **Hypervisor isolation** (optional): install Kata Containers on the sandbox
    nodes, create a `kata` RuntimeClass, set
    `sandbox.kubernetes.runtimeClass=kata`. Preflighted fail-closed, mirroring
@@ -270,7 +247,7 @@ apply here ([TIMERS.md](TIMERS.md)). Their cluster equivalents:
 
 | Single-box | Kubernetes |
 | --- | --- |
-| `fleet update` | build + push a new control-plane image, `helm upgrade` (strategy Recreate = a brief restart; in-flight turns drain per `FLEET_SHUTDOWN_GRACE_SECONDS`, **bounded by the pod's `terminationGracePeriodSeconds`** — the chart sets 90s; raise both together for long turns, because raising only the fleet knob does nothing) |
+| `fleet update` | verify the new release's images (`cosign verify`, above), then `helm upgrade --set image.tag=<new tag>` (or install that release's chart) — a bundle image is rebuilt `FROM` the new tag first; rollback is `helm rollback` (strategy Recreate = a brief restart; in-flight turns drain per `FLEET_SHUTDOWN_GRACE_SECONDS`, **bounded by the pod's `terminationGracePeriodSeconds`** — the chart sets 90s; raise both together for long turns, because raising only the fleet knob does nothing) |
 | `fleet-backup.timer` | a CronJob running `fleet backup --db=all --prune` — or skip it entirely by using managed-database backups (RDS/Cloud SQL snapshots), the recommended posture |
 | `fleet-maintenance.timer` | **nothing to schedule.** `fleet cleanup` prunes dangling *podman* image layers and Go build caches; a control-plane pod has neither, so the job would print two disk lines and exit. Node-local image GC is the kubelet's job. fleet's own hourly maintenance loop (reclamation, disk backpressure, stuck-task backstops — [MAINTENANCE.md](MAINTENANCE.md)) runs **inside** the control plane on both paths |
 | journald | `kubectl logs` / your log stack; set `FLEET_LOG_FILE` only if you also mount somewhere rotatable |

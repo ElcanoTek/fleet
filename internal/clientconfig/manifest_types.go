@@ -135,6 +135,12 @@ type Bundle struct {
 	// being forced to ship a Containerfile).
 	sandboxDeclared bool
 
+	// sandboxContainerfileNamed reports whether the manifest NAMED a
+	// Containerfile (sandbox.containerfile). Only a named one must exist: a
+	// bundle that ships none and names none customizes nothing, and its
+	// sandbox is the release's generic image (docs/RELEASE-ARTIFACTS.md).
+	sandboxContainerfileNamed bool
+
 	// Resolved absolute directories inside the bundle. These are the
 	// same-path bind-mount sources and the source dirs the prompt/persona/
 	// protocol loaders read.

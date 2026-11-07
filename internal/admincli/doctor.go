@@ -14,20 +14,21 @@ import (
 )
 
 // cmdDoctor wraps scripts/doctor.sh — the box-level diagnose-AND-REPAIR pass.
-// It forwards every flag verbatim (--check / --no-restart / --node / --dry-run)
-// to the shell script, which owns the repairs: toolchain floors + fleet-critical
+// It forwards every flag verbatim (--check / --no-restart / --dry-run) to the
+// shell script, which owns the repairs: the runtime toolchain + fleet-critical
 // package currency, the service user's rootless-podman prerequisites
 // (subuid/subgid, dir ownership, containers.conf; a stale pause process is
 // reported with its manual repair, never reset — podman system migrate
 // deletes a live fleet's sandbox pool),
 // systemd unit drift vs deploy/, env-file shape/permissions, service health +
-// the /healthz + /readyz probes, and a sandbox smoke run as the fleet user.
+// the /healthz + /readyz probes, a sandbox smoke run as the fleet user, and the
+// installed release (no host executor, web bundle, newest published release).
 //
 // Division of labor: `fleet status` is the quick read-only in-process report
 // (safe anywhere, no root); `fleet doctor` is the deep box pass that FIXES
 // drift and therefore needs root (except --check, which only diagnoses, and
 // --dry-run, which prints the checklist). `fleet update` is still the only
-// thing that pulls or rebuilds — doctor reports staleness but never deploys.
+// thing that pulls or installs — doctor reports staleness but never deploys.
 //
 // On a packaged/binary install with no repo checkout the script cannot be
 // found; rather than failing uselessly we degrade to the in-process status

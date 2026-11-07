@@ -4,15 +4,17 @@
 # `fleet doctor` walks every box-level prerequisite fleet depends on and
 # FIXES what it can in place; `fleet doctor --check` reports without touching
 # anything. The goal is killing the version lottery: boxes provisioned at
-# different times drift apart (Node 20 vs 22, podman/crun versions with
-# different rootless behavior, stale systemd units, missing subuid ranges,
+# different times drift apart (podman/crun versions with different rootless
+# behavior, stale systemd units, missing subuid ranges,
 # root-owned podman dirs...) and each drift shows up later as a confusing
 # production-only bug. bootstrap.sh and update.sh carry their own inline
 # self-heals for the provision/deploy paths; doctor is the standalone,
 # run-anytime superset that also covers what those scripts assume is already
 # right.
 #
-# What it does NOT do: git pull or rebuild — that's `fleet update`'s job.
+# What it does NOT do: git pull or install a release — that's `fleet update`'s
+# job. There is no build toolchain to check: boxes install signed release
+# binaries (docs/RELEASE-ARTIFACTS.md), so Go and Node are not box dependencies.
 # Doctor makes the box the code lands on healthy; update lands the code.
 # (`fleet status` stays the quick read-only in-process report; doctor is the
 # deep box-level pass with repairs.)
@@ -21,23 +23,7 @@
 #   sudo fleet doctor              diagnose + fix + restart services if needed
 #   sudo fleet doctor --check      diagnose only, change nothing, exit 1 if anything is off
 #   sudo fleet doctor --no-restart fix but never restart services
-#   sudo fleet doctor --node       repair ONLY the node toolchain (step 1's node
-#                                  blocks: install nodejs<major> + -npm per
-#                                  web/.nvmrc, assert the resolved
-#                                  interpreter) and exit
-#   fleet doctor --node --check    read-only node readiness probe; no root needed
 #   fleet doctor --dry-run         print the checklist this box would be walked through; touch nothing
-#
-# Why --node exists: scripts/update.sh is an updater, not a provisioner, so it
-# must not grow its own `dnf install nodejs`. But an update that dies because
-# the box is a major behind sends the operator away to find the repair command
-# themselves. --node is the narrow seam between the two: update.sh calls THIS
-# code path (one implementation of the node install, the same one bootstrap and
-# a full doctor run use) instead of duplicating it, and gets back a box it can
-# build on. It is deliberately scoped to the node blocks — a full doctor run
-# from inside update would perform unit adoption, which `fleet update` gates
-# behind explicit consent (--adopt-units), so calling it would launder a
-# consent-gated write through an unrelated command.
 #
 # Exit codes: 0 = healthy (or everything fixed), 1 = problems remain.
 
@@ -71,15 +57,6 @@ BACKUP_TIMER="fleet-backup.timer"
 MAINT_SERVICE="fleet-maintenance.service"
 MAINT_TIMER="fleet-maintenance.timer"
 
-# Node floor: read from web/.nvmrc, the ONE place the target major is declared
-# (CI reads the same file via actions/setup-node's node-version-file). Hardcoding
-# it here is what let CI test '22' while this script's floor said 20 and the box
-# ran whatever `dnf install nodejs` meant. Doctor installs the versioned dnf
-# stream first; only when the distro has none for this major does it fetch the
-# signed nodejs.org release (fleet_node_tarball_install, ADR-0078). fleet does
-# not use NodeSource.
-# shellcheck source=lib/node-version.sh
-. "$SCRIPT_DIR/lib/node-version.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — shared with
 # bootstrap.sh (which writes it) and update.sh (which offers to adopt it).
 # shellcheck source=lib/caddyfile.sh
@@ -95,25 +72,14 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/web-tier.sh"
 ok()   { info "$@"; }
 warn() { advise "$@"; }
-NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
-if [[ -z "$NODE_FLOOR" ]]; then
-  # No silent default. A hardcoded fallback would point at whatever major was
-  # current when this line was written — i.e. it would rot into targeting the
-  # OLD node exactly when .nvmrc cannot be read. Better to say so: every node
-  # check below is skipped rather than run against a guess.
-  NODE_FLOOR=""
-fi
-
 CHECK_ONLY=0
 NO_RESTART=0
 DRY_RUN=0
-NODE_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --check)      CHECK_ONLY=1 ;;
     --no-restart) NO_RESTART=1 ;;
     --dry-run)    DRY_RUN=1 ;;
-    --node)       NODE_ONLY=1 ;;
     -h|--help)
       cat <<'EOF'
 fleet doctor — diagnose and repair this fleet box
@@ -122,12 +88,11 @@ USAGE
   sudo fleet doctor              diagnose + fix + restart services if needed
   sudo fleet doctor --check      diagnose only, change nothing, exit 1 if anything is off
   sudo fleet doctor --no-restart fix but never restart services
-  sudo fleet doctor --node       repair ONLY the node toolchain, then exit
-  fleet doctor --node --check    read-only node readiness probe (no root needed)
   fleet doctor --dry-run         print the checklist; touch nothing (no root needed)
 
-Checks + fixes: toolchain floors (node >= the major in web/.nvmrc — the ONE
-place it is declared, so this text cannot drift from it; go/git/podman/psql present),
+Checks + fixes: the runtime toolchain (git/curl/jq/podman/psql/python3 present —
+no Go or Node: boxes install signed release binaries), the installed binary's
+build (no host executor, web bundle embedded),
 fleet-critical package currency (podman/crun/passt/conmon/...), the rootless-
 podman prerequisites of the fleet service user (subuid/subgid, /var/lib/fleet
 ownership, containers.conf; a stale pause process is reported with its manual
@@ -142,7 +107,7 @@ retired Next.js fleet-web tier (retired when still installed), service health
 caddy, the scheduled-backup and host-maintenance
 timers, free disk on the data dir + image store, and a sandbox smoke (podman run
 as the fleet user). Reports when the source checkout is behind upstream but never
-pulls or rebuilds — that stays `fleet update`.
+pulls or installs — that stays `fleet update`.
 
 `fleet status` is the quick read-only in-process report; doctor is the deep
 box-level pass with repairs.
@@ -261,40 +226,22 @@ stale_pause_hint() {
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
 # found), so --dry-run enumerates the plan instead of half-executing it. This
 # is also the CI seam: the Go smoke test asserts the plan's load-bearing steps.
-if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
-  step "fleet doctor --node --dry-run (src=${SRC_DIR})"
-  if [[ -n "$NODE_FLOOR" ]]; then
-    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major; when the distro has no such stream, the signed upstream nodejs.org build into /usr/local/bin/node-${NODE_FLOOR}), and assert the RESOLVED interpreter (node builds the web bundle; nothing runs on it)"
-  else
-    # Naming "nodejs-npm" and calling it the versioned stream would be a lie in
-    # exactly the case where nothing can be resolved.
-    info "[dry-run] node: cannot read the major from ${SRC_DIR}/web/.nvmrc, so there is no versioned package to name — the real run reports that and changes nothing"
-  fi
-  info "[dry-run] nothing else — --node is scoped to the node toolchain; a full \`sudo fleet doctor\` walks all 9 steps"
-  exit 0
-fi
 if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
-  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major — else the signed upstream nodejs.org build); go/git/curl/jq/podman/psql/npm present (dnf install)"
-  info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
+  info "[dry-run] 1/9 Toolchain: git/curl/jq/podman/psql/python3 present (dnf install) — no Go or Node: the box installs signed release binaries"
+  info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
-  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), the retired Next.js tier (fleet-web.service, its drop-in, start shim and /opt/fleet/web — stopped, disabled and removed when present; ADR-0091), /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), the retired Next.js tier (fleet-web.service, its drop-in, start shim and /opt/fleet/web — stopped, disabled and removed when present; ADR-0091), /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, the binary present with no host executor and a web bundle (fleet version --build-info), fleet.prev kept for \`fleet release rollback\`"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; APP_SESSION_SECRET set (carried over from ${WEB_ENV_FILE}, else generated, when absent and the web UI is on); ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload) and FLEET_TRUSTED_PROXIES in ${ENV_FILE} (added as ${CADDY_TRUSTED_PROXIES} when absent behind that front and both backends are on loopback; an advisory otherwise; an operator's value is left alone); an operator-managed Caddyfile only gets an advisory when it routes no /v1; an advisory when sshd -T says passwordauthentication/permitrootlogin yes (never edits sshd)"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
-  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled as root by from-source builds, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
-  info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
+  info "[dry-run] 9/9 Release + checkout: the installed release vs the newest published one (fleet release latest), the checkout's release vs the installed binary's, and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or installs)"
   info "[dry-run] would restart ${SERVICE_NAME} after a package upgrade, an app-unit reinstall, the web-tier retirement or a new APP_SESSION_SECRET above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
 fi
 
-# `--node --check` is the one read-only path that must work unprivileged: it is
-# what `fleet update --check` calls, and that is documented as a dev-box probe
-# needing no root. It only resolves interpreters from PATH and the standard
-# install locations, none of which need privileges to read.
-if ! [[ "$NODE_ONLY" == "1" && "$CHECK_ONLY" == "1" ]]; then
-  [[ $EUID -eq 0 ]] || die "run as root: sudo fleet doctor (or --dry-run to preview)"
-fi
+[[ $EUID -eq 0 ]] || die "run as root: sudo fleet doctor (or --dry-run to preview)"
 [[ -x "$INSTALL_DIR/fleet" || -d "$SRC_DIR/.git" || -f "$SRC_DIR/go.mod" ]] \
   || die "no fleet install at $INSTALL_DIR and no checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
@@ -309,161 +256,22 @@ command -v dnf >/dev/null 2>&1 && HAVE_DNF=1
 DNF=(dnf --setopt='*.skip_if_unavailable=1')
 
 # ── 1. toolchain ─────────────────────────────────────────────────────────────
-if [[ "$NODE_ONLY" == "1" ]]; then
-  step "Toolchain — node only (--node)"
-else
-  step "1/9  Toolchain"
-fi
+# Runtime tools only. Go and Node are not box dependencies: fleet installs the
+# signed release binary (docs/RELEASE-ARTIFACTS.md); `fleet update --from-source`
+# on a development box brings its own toolchain.
+step "1/9  Toolchain"
 
-if [[ -z "$NODE_FLOOR" ]]; then
-  advise "cannot read the node major from ${SRC_DIR}/web/.nvmrc — skipping the node checks (no guessed default)"
-  node_bin=""
-else
-node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-if [[ -n "$node_bin" ]] && fleet_node_is_tarball_install "$node_bin" && [[ "$CHECK_ONLY" == "0" ]]; then
-  # An upstream-tarball node (below) gets no patch releases from dnf, so doctor
-  # is what keeps it current: re-run the signed install, which is a no-op when
-  # the newest v<major>.x is already unpacked. A failed refresh (offline box)
-  # leaves the working install in place and says so.
-  _nb_before="$("$node_bin" -v 2>/dev/null)"
-  if fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
-    hash -r
-    node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-    if [[ -n "$node_bin" && "$("$node_bin" -v 2>/dev/null)" != "$_nb_before" ]]; then
-      fixed "refreshed the upstream node at ${node_bin}: ${_nb_before} -> $("$node_bin" -v)"
-    else
-      pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc; upstream build, newest v${NODE_FLOOR}.x)"
-    fi
-  else
-    advise "node ${_nb_before} at ${node_bin} works, but refreshing it from nodejs.org failed (see above) — it stays on ${_nb_before}"
-  fi
-elif [[ -n "$node_bin" ]]; then
-  pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc)"
-elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
-  fail "no node >= $NODE_FLOOR (web/.nvmrc) — have $(node -v 2>/dev/null || echo none); building the web bundle (make build) needs it"
-else
-  # Install the VERSIONED package. `dnf upgrade nodejs` cannot cross a major
-  # stream — it keeps you on whatever `nodejs` resolves to, which is precisely
-  # why a box sat on 22 through repeated doctor runs. Streams are
-  # parallel-installable, so this adds the new major without removing the old.
-  # Both packages, always. On Fedora `nodejs<major>` does NOT pull npm, and the
-  # tool loop below only installs it when `command -v npm` FAILS — which it does
-  # not on the target box, because the OLD stream's npm is already on PATH and
-  # satisfies the check while belonging to the wrong interpreter. That is the
-  # same parallel-stream trap the versioned node install exists to dodge, and it
-  # left `--node` installing only half of what its own plan line, the header,
-  # DOCTOR.md and the CHANGELOG all said it installed. bootstrap.sh has asked
-  # for both since it learned about the versioned stream.
-  "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" "nodejs${NODE_FLOOR}-npm" >/dev/null 2>&1 \
-    || "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" >/dev/null 2>&1 || true
-  hash -r
-  node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-  if [[ -n "$node_bin" ]]; then
-    fixed "installed node $("$node_bin" -v) at ${node_bin}"
-  else
-    # Fall back to the unversioned package before giving up: a distro that does
-    # not carry a versioned stream may still ship a new enough default.
-    if rpm -q nodejs >/dev/null 2>&1; then
-      "${DNF[@]}" upgrade -y --quiet nodejs >/dev/null 2>&1 || true
-    else
-      "${DNF[@]}" install -y --quiet nodejs >/dev/null 2>&1 || true
-    fi
-    hash -r
-    node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-    if [[ -n "$node_bin" ]]; then
-      fixed "installed node $("$node_bin" -v) at ${node_bin}"
-    elif { command -v gpgv >/dev/null 2>&1 || "${DNF[@]}" install -y --quiet gnupg2 >/dev/null 2>&1; } \
-        && fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
-      # The distro has no nodejs${NODE_FLOOR} stream yet (node 26 on F44): fetch
-      # the signed upstream release instead — see fleet_node_tarball_install
-      # and ADR-0078. Its npm comes in the same tarball as npm-${NODE_FLOOR}.
-      # gnupg2 is installed first when missing: the fallback verifies node's
-      # signature with gpgv, and a box provisioned before this path existed
-      # may not have it (bootstrap only started asking for it with the
-      # fallback), which would otherwise strand `fleet update` here.
-      hash -r
-      node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-      if [[ -n "$node_bin" ]]; then
-        fixed "no nodejs${NODE_FLOOR} package in the distro repos — installed the signed upstream node $("$node_bin" -v) at ${node_bin}"
-      else
-        fail "installed the upstream node ${NODE_FLOOR} but no node >= ${NODE_FLOOR} resolves — inspect /usr/local/bin/node-${NODE_FLOOR}"
-      fi
-    else
-      fail "no node >= $NODE_FLOOR after installing nodejs${NODE_FLOOR}, nodejs, and the upstream nodejs.org build — inspect 'dnf list nodejs*' and the error above"
-    fi
-  fi
-fi
-
-fi
-
-# No interpreter stamp to check here any more: node is a BUILD dependency only
-# since ADR-0091 (`make build` compiles the Vite web bundle into the fleet
-# binary; nothing runs on node at runtime). The retired fleet-web tier's
-# FLEET_NODE_BIN stamp in fleet-web.env is not read by anything.
-
-# The npm that BELONGS to node_bin, checked separately from the `command -v npm`
-# probe in the tool loop below. That probe only asks whether SOME npm exists, and
-# on a box with parallel streams the one on PATH belongs to the OLD interpreter
-# — Fedora rewrites npm's shebang to an absolute `#!/usr/bin/node-<major>`, so it
-# stays on that major whatever PATH says. That is what built the web tier on
-# node 22 through an update whose own gate had resolved node 24, and it surfaced
-# only as npm's EBADENGINE warning mid-build. Same parallel-stream trap as the
-# versioned node install, one package over — and the tool loop cannot see it.
-if [[ -n "$node_bin" ]]; then
-  npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"
-  # Only a VERSIONED interpreter lets us name the exact package that is short.
-  # On a single-node layout (Debian/nodesource/nvm) an unresolvable npm-cli.js
-  # means npm is shipped in a shape this check cannot read, which is an
-  # observation, not a diagnosis — so it advises rather than failing.
-  node_bin_is_versioned=0
-  [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]] && node_bin_is_versioned=1
-  if [[ -n "$npm_cli" ]]; then
-    pass "npm for ${node_bin}: ${npm_cli} (the build pins this pair, not PATH)"
-  elif [[ "$node_bin_is_versioned" == "0" ]]; then
-    advise "cannot resolve an npm-cli.js for ${node_bin} — the web tier build will use \`npm\` from PATH ($(command -v npm 2>/dev/null || echo none))"
-  elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
-    fail "no npm belongs to ${node_bin} — install nodejs${NODE_FLOOR}-npm; until then the web tier builds on $(node -v 2>/dev/null || echo 'the default stream')"
-  else
-    "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}-npm" >/dev/null 2>&1 || true
-    hash -r
-    npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"
-    # No restart_needed=1: npm is a build dependency only, so this repair
-    # changes the next BUILD, not anything running.
-    if [[ -n "$npm_cli" ]]; then
-      fixed "installed the npm that belongs to ${node_bin} (${npm_cli})"
-    else
-      fail "no npm belongs to ${node_bin} after installing nodejs${NODE_FLOOR}-npm — inspect 'dnf list nodejs*'"
-    fi
-  fi
-fi
-
-doctor_tools=(go git curl jq podman psql npm python3)
-# --node covers the node TOOLCHAIN, and on Fedora npm is a separate package
-# (nodejs<major>-npm) — an update that resolves node 24 and then cannot run
-# `npm ci` is not a repaired box. The other entries are out of scope here.
-[[ "$NODE_ONLY" == "1" ]] && doctor_tools=(npm)
+doctor_tools=(git curl jq podman psql python3)
 for tool in "${doctor_tools[@]}"; do
   if command -v "$tool" >/dev/null 2>&1; then
     pass "$tool present"
-  elif [[ "$tool" == "npm" && -n "${npm_cli:-}" ]]; then
-    # No bare `npm` on PATH, but the npm that belongs to the resolved node is
-    # there (checked above) — the upstream-tarball install ships it as
-    # npm-<major> only, and the build pins that pair, never PATH's `npm`.
-    # Asking dnf for nodejs<major>-npm here would fail on exactly the distro
-    # the fallback exists for.
-    pass "npm present as ${npm_cli} (belongs to ${node_bin})"
   elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
     fail "$tool missing"
   else
     # Map command name -> Fedora package where they differ.
     pkg="$tool"
     case "$tool" in
-      go)   pkg=golang ;;
       psql) pkg=postgresql ;;
-      # NOT plain `nodejs`: that is the DEFAULT stream, so installing it to
-      # satisfy a missing npm drags the older interpreter back onto the box and
-      # re-points /usr/bin/node at it — undoing the versioned install above.
-      npm)  pkg="nodejs${NODE_FLOOR}-npm" ;;
     esac
     if "${DNF[@]}" install -y --quiet "$pkg" >/dev/null 2>&1; then
       fixed "$tool installed (dnf $pkg)"
@@ -473,50 +281,11 @@ for tool in "${doctor_tools[@]}"; do
   fi
 done
 
-# ── --node: scoped exit ──────────────────────────────────────────────────────
-# Everything above is the shared step-1 node code; nothing below it is in scope
-# for --node. The summary re-resolves from scratch instead of reporting the
-# variables set above: an install that "succeeded" but left no qualifying
-# interpreter on PATH must read as a failure here, not as a repair.
-if [[ "$NODE_ONLY" == "1" ]]; then
-  echo
-  if [[ -z "$NODE_FLOOR" ]]; then
-    printf '%s✗ doctor --node: cannot read the node major from %s/web/.nvmrc%s\n' \
-      "$c_red" "$SRC_DIR" "$c_reset"
-    exit 1
-  fi
-  _final_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-  if [[ -z "$_final_bin" ]]; then
-    printf '%s✗ doctor --node: no node >= %s on this box (have %s)%s\n' \
-      "$c_red" "$NODE_FLOOR" "$(node -v 2>/dev/null || echo none)" "$c_reset"
-    exit 1
-  fi
-  if [[ "$n_fail" -gt 0 ]]; then
-    printf '%s✗ doctor --node: node %s at %s, but %d problem(s) remain above%s\n' \
-      "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$n_fail" "$c_reset"
-    exit 1
-  fi
-  # Re-resolved from scratch for the same reason the interpreter is: `--node`
-  # advertises node AND its npm, `fleet update --check` turns this exit code
-  # into its own, and an npm that does not belong to _final_bin means the next
-  # update builds the tier on the old major. A versioned interpreter is the only
-  # case where the missing package is nameable; elsewhere the tool loop's plain
-  # `npm present` check is all this can honestly stand on.
-  if [[ "${_final_bin##*/}" =~ ^node-[0-9]+$ ]] && ! fleet_resolve_npm_cli "$_final_bin" >/dev/null 2>&1; then
-    printf '%s✗ doctor --node: node %s at %s, but no npm belongs to it (install nodejs%s-npm)%s\n' \
-      "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$c_reset"
-    exit 1
-  fi
-  printf '%s✓ doctor --node: node %s at %s (>= %s, per web/.nvmrc), %d fixed%s\n' \
-    "$c_green" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$n_fixed" "$c_reset"
-  exit 0
-fi
-
 # ── 2. fleet-critical packages current ───────────────────────────────────────
 step "2/9  Package currency (the version-lottery killer)"
 
 if [[ "$HAVE_DNF" == "0" ]]; then
-  advise "no dnf on this host — skipping repo health + package currency (keep podman/crun/nodejs current with your package manager)"
+  advise "no dnf on this host — skipping repo health + package currency (keep podman/crun current with your package manager)"
 else
   # Repo health first: a stale bystander repo can abort every plain dnf
   # transaction on strict dnf builds. Doctor's own calls tolerate it via the
@@ -557,12 +326,8 @@ else
   # podman behavior differs meaningfully across podman/crun/passt/conmon
   # releases (cgroup drivers, netns sysctl handling, userns setup). Rather than
   # debugging per-box combinations, hold the whole fleet at each box's
-  # repo-latest. golang/nodejs ride along because update.sh builds with the
-  # box's toolchain.
-  # nodejs${NODE_FLOOR} rides along with plain nodejs: on Fedora they are
-  # SEPARATE parallel-installable packages, so keeping `nodejs` current does
-  # nothing for the versioned stream the web tier actually runs.
-  CRITICAL_PKGS=(podman crun passt conmon containers-common golang nodejs "nodejs${NODE_FLOOR}" caddy)
+  # repo-latest. (Go and Node no longer ride along: nothing on the box builds.)
+  CRITICAL_PKGS=(podman crun passt conmon containers-common caddy)
   installed_pkgs=()
   for p in "${CRITICAL_PKGS[@]}"; do
     rpm -q "$p" >/dev/null 2>&1 && installed_pkgs+=("$p")
@@ -859,6 +624,24 @@ fi
 
 if [[ -x "$INSTALL_DIR/fleet" ]]; then
   pass "$INSTALL_DIR/fleet present"
+  # The two properties release.yml asserts before it publishes a binary, read
+  # back from the one actually installed (a hand-copied or locally built
+  # binary is where they would break).
+  if _bi="$("$INSTALL_DIR/fleet" version --build-info 2>/dev/null)"; then
+    if printf '%s' "$_bi" | grep -Eq '"host_executor":[[:space:]]*true'; then
+      fail "$INSTALL_DIR/fleet has the unsandboxed host executor compiled in (fleet_host_executor) — never a release build; reinstall: sudo fleet update --tag <release>"
+    else
+      pass "$INSTALL_DIR/fleet has no host executor compiled in"
+    fi
+    if printf '%s' "$_bi" | grep -Eq '"web_bundle":[[:space:]]*""'; then
+      fail "$INSTALL_DIR/fleet carries no web bundle (pages answer 503) — reinstall: sudo fleet update"
+    fi
+  else
+    advise "$INSTALL_DIR/fleet predates \`fleet version --build-info\` — the next \`sudo fleet update\` installs a signed release that has it"
+  fi
+  if [[ -x "$INSTALL_DIR/fleet.prev" ]]; then
+    pass "previous binary kept at $INSTALL_DIR/fleet.prev (\`sudo fleet release rollback\` restores it)"
+  fi
 else
   fail "$INSTALL_DIR/fleet missing — run: fleet update (or scripts/update.sh)"
 fi
@@ -1289,7 +1072,8 @@ fi
 #
 # They escape the maintenance timer for one reason: fleet-maintenance runs
 # `fleet cleanup` as the SERVICE user, so its `go clean` and `podman image
-# prune` sweep that user's caches — while `fleet update` builds as ROOT, so the
+# prune` sweep that user's caches — while a from-source build (`fleet update
+# --from-source`, and every update before signed releases) runs as ROOT, so the
 # Go build cache, the Go module cache and the npm cache it fills are root's, and
 # the service user cannot touch them. Doctor runs as root, so it is the pass
 # that can. Everything here is a cache or a log: the next `fleet update`
@@ -1307,7 +1091,7 @@ dir_bytes() {
 }
 
 # Root build caches. Reclaimed above a threshold rather than on every run: one
-# update re-creates ~2 GiB (Go build + module cache, npm), so a lower bar would
+# from-source update re-creates ~2 GiB (Go build + module cache, npm), so a lower bar would
 # just make every doctor run cost the next update a full re-download.
 ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))
 # measure_root_build_caches sets rc_total (bytes) and rc_summary for the caches
@@ -1351,7 +1135,7 @@ check_root_build_caches() {
     return 0
   fi
   if [[ "$CHECK_ONLY" == "1" ]]; then
-    advise "root build caches hold $(human_bytes "$rc_total") (${rc_summary}) — fleet update fills them as root and the maintenance timer (which runs as ${SERVICE_USER}) never reclaims them; a doctor run without --check does: go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+    advise "root build caches hold $(human_bytes "$rc_total") (${rc_summary}) — from-source builds (fleet update --from-source, and every update before signed releases) filled them as root and the maintenance timer (which runs as ${SERVICE_USER}) never reclaims them; a doctor run without --check does: go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
     return 0
   fi
   before="$rc_total" before_summary="$rc_summary"
@@ -1694,48 +1478,36 @@ else
 fi
 
 # ── 9. source freshness + build identity ─────────────────────────────────────
-step "9/9  Source freshness + build identity"
+step "9/9  Release + checkout"
 
-# Report-only in every mode: pulling and rebuilding is `fleet update`'s job,
-# and doctor silently kicking off a deploy would be a surprise.
-if [[ -e "$SRC_DIR/.git" ]]; then
-  git_trust_dir "$SRC_DIR"
-  # --tags because the build stamps its version from the release tags
-  # (docs/VERSIONING.md): a checkout holding the commits but not the tag would
-  # build — and the identity check below would compare against — `dev+g<sha>`.
-  if git -C "$SRC_DIR" fetch --quiet --tags 2>/dev/null; then
-    behind="$(git -C "$SRC_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
-    if [[ "${behind:-0}" -gt 0 ]]; then
-      advise "source checkout is $behind commit(s) behind — run: sudo fleet update"
+# Report-only in every mode: installing a release is `fleet update`'s job, and
+# doctor silently kicking off a deploy would be a surprise.
+installed_stamp=""
+if [[ -x "$INSTALL_DIR/fleet" ]]; then
+  # `fleet version` prints "fleet <version> (<revision>)" or, when the version
+  # already names the commit, "fleet <version>": word two either way.
+  installed_stamp="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}')"
+  if latest="$("$INSTALL_DIR/fleet" release latest 2>/dev/null)"; then
+    if [[ "v${installed_stamp}" == "$latest" ]]; then
+      pass "installed fleet is ${latest}, the newest published release"
     else
-      pass "source checkout is current with upstream"
+      advise "installed fleet is ${installed_stamp:-unknown}; ${latest} is published — run: sudo fleet update"
     fi
   else
-    advise "could not fetch $SRC_DIR — network or remote auth issue"
+    advise "could not ask GitHub for the newest release (offline, or ${INSTALL_DIR}/fleet predates \`fleet release\`)"
   fi
-
-  # The installed binary's stamp vs what this checkout would stamp into a build
-  # right now. The two drift apart in one ordinary way: `fleet update` ran
-  # before release.yml tagged the push. The tag is cut only AFTER CI goes green
-  # on main — minutes after the push an operator updated on — so the binary was
-  # stamped `dev+g<sha>` for a commit that IS a release. The fetch above brought
-  # the tag in; only a rebuild re-stamps, and that stays `fleet update`'s job.
-  # version.sh must run FROM the checkout: it refuses to read a repo discovered
-  # from some other cwd (it would stamp a stranger's tags otherwise).
-  if [[ -f "$SRC_DIR/scripts/version.sh" ]]; then
-    would_stamp="$(cd "$SRC_DIR" && bash scripts/version.sh describe 2>/dev/null || echo unknown)"
-    installed_stamp=""
-    if [[ -x "$INSTALL_DIR/fleet" ]]; then
-      # `fleet version` prints "fleet <version> (<revision>)" or, when the
-      # version already names the commit, "fleet <version>": word two either way.
-      installed_stamp="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}')"
-    fi
-    if [[ -z "$installed_stamp" ]]; then
-      advise "cannot read the installed binary's version (${INSTALL_DIR}/fleet version) — a build from this checkout would be ${would_stamp}"
-    elif [[ "$installed_stamp" == "$would_stamp" ]]; then
-      pass "installed fleet is ${installed_stamp} — what this checkout builds"
+fi
+if [[ -e "$SRC_DIR/.git" ]]; then
+  git_trust_dir "$SRC_DIR"
+  # The checkout carries the units, scripts and generic bundle the binary was
+  # released with; `fleet update` moves it to the release it installs. A
+  # mismatch means one of the two was changed by hand.
+  if [[ -f "$SRC_DIR/scripts/version.sh" && -n "$installed_stamp" ]]; then
+    checkout_release="$(cd "$SRC_DIR" && bash scripts/version.sh current 2>/dev/null || echo unknown)"
+    if [[ "$installed_stamp" == "$checkout_release" ]]; then
+      pass "checkout ${SRC_DIR} is at the installed release (${checkout_release})"
     else
-      advise "installed fleet reports ${installed_stamp} but this checkout now builds ${would_stamp} — run: sudo fleet update (a release tag that arrived after the last build is the usual cause)"
+      advise "installed fleet is ${installed_stamp} but ${SRC_DIR} is at release ${checkout_release} — run: sudo fleet update --no-pull (reinstalls the checkout's release) or sudo fleet update"
     fi
   fi
 
@@ -1749,9 +1521,9 @@ if [[ -e "$SRC_DIR/.git" ]]; then
     n_dirty="$(printf '%s\n' "$dirty_paths" | wc -l | tr -d ' ')"
     dirty_sample="$(printf '%s\n' "$dirty_paths" | head -3 | awk '{print $NF}' | paste -sd ' ' -)"
     [[ "$n_dirty" -gt 3 ]] && dirty_sample="${dirty_sample} …"
-    advise "source checkout has ${n_dirty} modified/untracked path(s) — builds from it stamp '.dirty': ${dirty_sample} (inspect: git -C ${SRC_DIR} status)"
+    advise "checkout has ${n_dirty} modified/untracked path(s) — the units, scripts and generic bundle it ships may not be the release's: ${dirty_sample} (inspect: git -C ${SRC_DIR} status)"
   else
-    pass "source checkout is clean — builds carry no '.dirty' stamp"
+    pass "checkout is clean"
   fi
 else
   advise "no git checkout at $SRC_DIR — 'fleet update' will not work on this box"

@@ -120,8 +120,10 @@ that Tier A would mean re-implementing by hand.
   `TestCachingPolicy` (internal/webui) pins all of this.
 - **Builds always carry the bundle.** `go build` / `go test` work without it
   (pages then answer 503), but `make build` runs `make web` first and ends with
-  `fleet version --web`, which fails on a binary without one — as do
-  `scripts/update.sh`, `bootstrap.sh`, `fleet-upgrade.sh` and the CI web job.
+  `fleet version --web`, which fails on a binary without one — as do the CI
+  web job, release.yml (which also refuses a binary built with
+  `fleet_host_executor`) and `fleet release fetch` on every box
+  ([ADR-0100](docs/adr/0100-signed-release-artifacts.md)).
 
 ## What fleet is (one paragraph)
 

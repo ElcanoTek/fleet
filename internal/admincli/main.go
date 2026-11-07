@@ -10,9 +10,10 @@
 // Subcommands (invoked as `fleet <verb>`):
 //
 //	fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-//	fleet update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
+//	fleet update    [--tag <vYYYY.MM.DD.N>] [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run] [--from-source]
+//	fleet release   latest | fetch | sandbox | install | rollback
 //	fleet status    [--service <name>] [--no-sandbox]
-//	fleet doctor    [--check] [--no-restart] [--node] [--dry-run]
+//	fleet doctor    [--check] [--no-restart] [--dry-run]
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
 //	fleet start|restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
@@ -78,6 +79,8 @@ func Run(argv []string) int {
 		return cmdBootstrap(argv[1:])
 	case "update":
 		return cmdUpdate(argv[1:])
+	case "release":
+		return cmdRelease(argv[1:])
 	case "cleanup":
 		return cmdCleanup(argv[1:])
 	case "status":
@@ -191,21 +194,24 @@ Preflight & diagnostics (in-binary; no server needed):
 
 Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-  fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--no-node-repair] [--wait] [--force] [--yes] [--dry-run]
-                                                             (--check: read-only "N commits behind upstream" + can this box build the
-                                                              web tier; mutates nothing, non-zero when the node floor is unmet;
+  fleet update    [--check] [--tag <vYYYY.MM.DD.N> [--allow-downgrade]] [--no-pull] [--client-config <dir>] [--service <name>]
+                  [--branch <name>] [--adopt-units] [--wait] [--force] [--yes] [--dry-run] [--from-source]
+                                                             (installs the newest signed release: verify, swap, restart, wait for
+                                                              /readyz, roll back automatically — no Go or Node on the box;
+                                                              --check: read-only "running vX, vY is published" + commits/bundle behind;
                                                               --adopt-units: adopt shipped systemd units that drifted, without the prompt;
-                                                              --no-node-repair: refuse instead of repairing a node shortfall in place;
-                                                              --wait: wait for running tasks/turns to finish; --force: update even if busy)
+                                                              --wait: wait for running tasks/turns to finish; --force: update even if busy;
+                                                              --from-source: development boxes only — make build on the box)
+  fleet release   latest | fetch | sandbox | install | rollback   (the signed-artifact steps fleet update runs — docs/RELEASE-ARTIFACTS.md;
+                                                              sudo fleet release rollback: put fleet.prev back, restart, wait for /readyz)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
   fleet status    [--service <name>] [--no-sandbox]    (quick read-only health report; non-zero exit if unhealthy)
   fleet cache-stats [--days 14] [--by all|day|user] [--json]  (prompt cache hit/miss report by date & user; alias: fleet usage)
   fleet usage     [--days 14] [--by all|day|user] [--json]    (alias for fleet cache-stats)
-  fleet doctor    [--check] [--no-restart] [--node] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
-                                                             podman prereqs, unit drift, env files, services, sandbox smoke.
-                                                             Needs root; --check only diagnoses; --dry-run prints the checklist;
-                                                             --node repairs ONLY the node toolchain and exits, and
-                                                             --node --check is a read-only probe that needs no root)
+  fleet doctor    [--check] [--no-restart] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
+                                                             podman prereqs, unit drift, env files, services, sandbox smoke,
+                                                             the installed release. Needs root; --check only diagnoses;
+                                                             --dry-run prints the checklist)
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
   fleet start     [--service <name>]                   (systemctl start; needs root/sudo — distinct from "fleet serve", which runs the daemon in the foreground)

@@ -36,14 +36,15 @@
 # its own base digest. This generic flavor is what fleet builds on-box when a
 # deployment uses the default bundle (or any bundle that doesn't override it).
 #
-# Base tracks fedora-minimal:latest, so every on-box rebuild picks up the current
-# upstream security patches with no manual digest bumps — the right default for a
-# self-hosted box you rebuild deliberately (bootstrap/update build this image).
-# If you instead want byte-for-byte reproducible, audit-stable builds, pin a
-# digest here (FROM registry.fedoraproject.org/fedora-minimal@sha256:<digest>);
-# each client bundle's own Containerfile can make that choice independently.
+# The base is pinned by tag AND digest, and Dependabot (docker,
+# /config/default/sandbox) moves both — the Fedora release and the digest —
+# monthly, in a reviewed PR. release.yml builds this image once per release
+# (ghcr.io/elcanotek/fleet-sandbox), and `microdnf upgrade` below still pulls
+# that day's package fixes on top of the pinned base; Grype gates the result.
+# A client bundle's own Containerfile makes its own choice, or layers on the
+# release image (ARG FLEET_SANDBOX_BASE — docs/RELEASE-ARTIFACTS.md).
 
-FROM registry.fedoraproject.org/fedora-minimal:latest
+FROM registry.fedoraproject.org/fedora-minimal:45@sha256:ef221f00e46f2e51c950188e6c64fdb45cfc375b0480f575be150ca0bda4c3cc
 
 # Python stack via Fedora RPMs rather than pip. Fedora rebuilds the
 # native packages against whatever python3 it ships, which sidesteps
@@ -111,14 +112,17 @@ RUN microdnf upgrade -y \
 # releases into /usr/local and remove the vulnerable RPM copies so neither the
 # runtime nor the CVE scan sees them. These packages ship prebuilt wheels (or
 # pure-Python wheels) for Fedora's Python, unlike the rest of the native data
-# stack kept on RPMs, and none of these pull in further dependencies. Unpinned
-# on purpose, same policy as the base image: every rebuild picks up the latest
-# upstream fixes. `rpm -e --nodeps` leaves dangling RPM-db requires
+# stack kept on RPMs. Every package — and every one of their dependencies — is
+# pinned with its hashes in requirements.txt (compiled from requirements.in;
+# Dependabot's pip entry keeps it current) and installed --require-hashes
+# --no-deps, so nothing unreviewed reaches the image. `rpm -e --nodeps` leaves dangling RPM-db requires
 # (beautifulsoup4 → soupsieve, ipython → pygments, matplotlib → pillow) —
 # harmless, the /usr/local copies satisfy the actual imports, and nothing runs
 # dnf inside the built image.
+COPY requirements.txt /tmp/fleet-sandbox-requirements.txt
 RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
-        pip "pillow>=13.0.0" pypdf python-docx python-pptx soupsieve pygments "tornado>=6.5.8" \
+        --require-hashes --no-deps -r /tmp/fleet-sandbox-requirements.txt \
+    && rm -f /tmp/fleet-sandbox-requirements.txt \
     && rpm -e --nodeps python3-pip python3-pillow python3-pypdf python3-soupsieve python3-pygments python3-tornado \
     && rm -rf /root/.cache/pip \
     && python3 -c "import sys, PIL, pip, pypdf, docx, pptx, soupsieve, pygments, tornado; \
