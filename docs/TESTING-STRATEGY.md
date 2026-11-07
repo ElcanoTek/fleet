@@ -167,13 +167,8 @@ Each rule comes from a real fleet test that once passed while proving nothing.
   rootless podman. The always-on lane that must run them (`e2e-live`) greps for
   `--- PASS` and fails on any `--- SKIP`. A new must-run test needs the same
   treatment.
-- **A Postgres-backed test gets its database from `internal/testdb`.**
-  `testdb.ChatDSN(t)` (`FLEET_TEST_DATABASE_URL`) and `testdb.SchedDB(t,
-  tables...)` (`DATABASE_URL`; serialized on advisory lock 1, the listed tables
-  wiped before and after) skip only when the variable is unset — any open,
-  migration or lock error fails the test. `scripts/go_test_script_test.go`
-  recognises those calls, so the package must sit in a DSN-serial group of
-  `scripts/go-test.sh`.
+- **A Postgres-backed test gets a database of its own — never a shared one**
+  (see [Database tests](#database-tests)).
 - **Don't hand-write the other side of a process boundary.** Use a contract
   recording. Where none exists yet, say so in the spec.
 
@@ -181,16 +176,48 @@ Each rule comes from a real fleet test that once passed while proving nothing.
 
 The critical path is the `-race` Go lane. What keeps it short:
 
-- `scripts/go-test.sh` runs packages that use no database at full
-  parallelism. It compiles the database-serial packages up front (`-p 1` would
-  otherwise compile them on one core too), and runs `internal/httpapi` on its
-  own database next to `internal/store`.
+- `scripts/go-test.sh` is one `go test` at full package parallelism: every
+  DB test has a database of its own, so no package waits for another, and DB
+  tests call `t.Parallel()` where they can.
 - Each Go lane keeps its own build cache, saved from `main`. A PR compiles
   only what it changed.
 - Heavy jobs run side by side, not chained. Grype builds its own image instead
   of waiting on `e2e-live`.
 
-Before adding a slow test, check which lane it lands in. A 5s test in the
-independent Go packages costs the gate nothing, because it runs in parallel. A
-5s test in a database-serial package adds to the slowest lane. So does a 5s
-step in `e2e-live`.
+Before adding a slow test, check which lane it lands in. A 5s parallel test
+costs the gate little. A 5s *serial* test (one that cannot call `t.Parallel()`:
+`t.Setenv`, a package-global override) adds to its package's critical path —
+`internal/httpapi` is the slowest package. So does a 5s step in `e2e-live`.
+
+## Database tests
+
+Every Postgres-backed test gets **a database of its own**, cloned from a
+migrated template and dropped when the test ends (`internal/testdb`, #2049 M2,
+[TEST-DATABASES.md](TEST-DATABASES.md)). Never share one: no package-level
+store, no fixture that wipes tables, no advisory lock to take turns.
+
+- **Use `internal/testdb/fleetdb`** — `fleetdb.New(t)` is a one-database fleet
+  (schemas `chat` and `sched`, the production layout); `.Chat(t)`,
+  `.SchedDB(t)`, `.ChatDSN()`, `.SchedDSN()` and `.DSN` (what `DATABASE_URL`
+  holds) open or name its stores. `fleetdb.Chat(t)` / `fleetdb.SchedDB(t)` are
+  the one-liners. Only `internal/store` and `internal/sched/db` — which
+  `fleetdb` imports — clone their own single-store templates with
+  `testdb.New`.
+- **Scratch databases:** `testdb.Empty(t)` (a migration-runner or
+  restore-target test), `testdb.LegacyPair(t)` (the legacy two-database layout,
+  until it is removed), `testdb.Reserve(t)` (a name the code under test
+  creates). Never `CREATE DATABASE` under a fixed name.
+- **The package's `TestMain` calls `testdb.Run(m)`** (clones made ahead,
+  drops off the critical path, nothing left behind); `scripts/` checks it.
+- **Call `t.Parallel()`** unless the test uses `t.Setenv`/`t.Chdir` or
+  overrides package-global state (a timing knob, `agentcore.Configure*`,
+  `log.SetOutput`). Go runs every serial test before the parallel ones, so a
+  serial test's override never leaks into a parallel one.
+- **Skips:** a DB test skips only when `FLEET_TEST_DATABASE_URL` is unset; any
+  connect, privilege, clone or migration error fails it (#2019).
+- **Do not read the DSN variables yourself.** `scripts/go_test_script_test.go`
+  fails a test file outside `internal/testdb` that reads `DATABASE_URL` or
+  `"FLEET_TEST_DATABASE_URL"`, takes `pg_advisory_lock(1)` or truncates. A CLI
+  verb that resolves the deployment's DSNs gets the fixture through the
+  environment (`t.Setenv("DATABASE_URL", d.DSN)`); one that takes a DSN flag
+  gets `d.ChatDSN()` / `d.SchedDSN()`.

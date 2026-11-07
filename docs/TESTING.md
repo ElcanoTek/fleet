@@ -130,7 +130,7 @@ make ci-e2e-mocked   # the 'playwright' job: the mocked Playwright project (in w
 make ci-local        # the fast PR gates: ci-go + ci-web (no browser/sandbox e2e)
 ```
 
-`make ci-go` requires the two Postgres test databases and the env vars below.
+`make ci-go` requires a Postgres test server and the env vars below.
 `make ci-e2e-mocked` requires the Playwright Chromium browser (see that section).
 The live and canary lanes are not wrapped in a `make` target because they boot a
 real stack (Postgres + both Go listeners + a ~1.3 GB rootless-Podman sandbox
@@ -227,8 +227,9 @@ image); run them via the `npm` scripts documented below.
   version, so that stays a single declaration too.
 - **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 26) — and npm, for the
   `web/` lanes. CI reads the same file via `node-version-file`.
-- **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
-  uses the `postgres:18` service container.
+- **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores, with
+  a role that can `CREATE DATABASE` (every DB test clones its own). CI starts a
+  `postgres:18` container with test-speed settings.
 - **Podman (rootless) + pasta** for the live e2e and sandbox-invariant tests.
   Most unit tests self-skip when podman is absent; `ci.yml`'s `go` job actively
   masks podman so the container-sandbox tests self-skip there (the real sandbox
@@ -257,49 +258,66 @@ the command.
 
 ## Go build / vet / lint / test — CI job `go`
 
-This is the largest lane. It runs against a `postgres:18` service container with
-two test databases. Locally the full sequence is wrapped by **`make ci-go`**.
-CI splits the race suite into a sibling `go-race` job so it overlaps this one.
+This is the largest lane. It runs against a Postgres 18 container started with
+test-speed settings (see below). Locally the full sequence is wrapped by
+**`make ci-go`**. CI splits the race suite into a sibling `go-race` job so it
+overlaps this one.
 
-### The two Postgres DSNs (required)
+### The test database server (one DSN)
 
-The chat suites (`internal/store`, `internal/httpapi`) and the scheduler suite
-(`internal/sched/*`, `internal/runner`) both manage a table named
-`schema_migrations` with **incompatible** schemas, so they must point at
-**separate** databases. Both suites auto-migrate from an empty database. CI
-creates both databases and sets these env vars:
+Every Postgres-backed test gets a **database of its own**: `internal/testdb`
+clones it (`CREATE DATABASE … TEMPLATE`) from a template that holds the fully
+migrated stores and drops it when the test ends (#2049 M2,
+[TEST-DATABASES.md](TEST-DATABASES.md)). No two tests share a database, so
+nothing is truncated between tests, no package waits for another, and the DB
+tests run in parallel like the rest. The suites need one variable:
 
 ```sh
-# Chat suites read FLEET_TEST_DATABASE_URL (internal/testdb.ChatDSN).
-export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable"
-# The sched suite reads DATABASE_URL — a DIFFERENT database.
-export DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable"
+# Any database on a server whose role can CREATE DATABASE. testdb only
+# creates and drops fleet_tmpl_* / fleet_t_* databases through it.
+export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/postgres?sslmode=disable"
 # Point the binaries at the in-repo default bundle.
 export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
 ```
 
-> **Parallel checkouts / agent worktrees:** the suites MIGRATE and TRUNCATE
-> their databases, so two workstreams sharing the default pair corrupt each
-> other — a checkout on an older migration set refuses to run against a DB a
-> newer branch migrated ("database is at schema version N+1 … refusing to
-> downgrade"), and concurrent truncates race. Give each workstream its own
-> pair with [`scripts/test-db-setup.sh`](../scripts/test-db-setup.sh):
->
-> ```sh
-> eval "$(scripts/test-db-setup.sh | tail -2)"   # suffix defaults to the branch name
-> make test
-> scripts/test-db-setup.sh --drop "$(git rev-parse --abbrev-ref HEAD)"   # when done
-> ```
+Unset, every DB test **skips** (a laptop without Postgres still passes
+`make test`); set, every connection, privilege, clone or migration problem is
+a **failure** — including a role without `CREATEDB`, which the failure names
+the fix for (`ALTER ROLE fleet CREATEDB`). `scripts/test-db-setup.sh` checks
+the server and the role and prints the export line.
 
-Adjust user/password/host to your local Postgres. To create the two databases
-(mirroring CI's "Create test databases" step) against a server where role
-`fleet` exists:
+- **Templates** are keyed by a hash of the embedded migration files
+  (`fleet_tmpl_<kind>_<hash>`), built once under an advisory lock and reused
+  across runs. Checkouts and agent worktrees on **different migration sets
+  share one server safely**: each gets its own template, and the newest three
+  of each kind are kept. There are no per-branch database pairs any more.
+- **Three kinds:** `fleet` — both stores in one database, the chat store in
+  schema `chat` and the scheduler in schema `sched`, the production layout
+  (ADR-0098), cloned through `internal/testdb/fleetdb`; and `chat` / `sched`,
+  one store each, for the stores' own internal tests (`internal/store`,
+  `internal/sched/db`), which cannot import `fleetdb`.
+- **Cleanup.** A test's database is dropped `WITH (FORCE)` when it ends. A DB
+  package's `TestMain` calls `testdb.Run`, which clones ahead and drops in the
+  background, and waits for every drop before the process exits, so a finished
+  run leaves nothing behind. A **killed** run's databases are dropped by the
+  next run (each test process holds an owner lock; a database whose owner is
+  gone is garbage), or by hand with `scripts/test-db-setup.sh --gc`
+  (`--templates` drops the templates too). Neither ever touches a database
+  that does not start with `fleet_t_` / `fleet_tmpl_`, or one a live run owns.
+- **The legacy two-database layout** is still tested where it matters — the
+  legacy DSN resolution and `fleet db consolidate` — on pairs of empty
+  databases from `testdb.LegacyPair` (LEGACY-DB-LAYOUT).
 
-```sh
-PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
-  -c 'CREATE DATABASE fleet_chat_test;' \
-  -c 'CREATE DATABASE fleet_sched_test;'
-```
+How to write a DB test is in
+[TESTING-STRATEGY.md](TESTING-STRATEGY.md#database-tests).
+
+**CI's server.** Not a `services:` container — a service cannot pass server
+flags — but `docker run … postgres:18 -c max_connections=300 -c fsync=off
+-c synchronous_commit=off -c full_page_writes=off`, started right after
+checkout. Dozens of tests and their pools run at once, and creating and
+dropping databases is most of a DB test's server cost; durability is pointless
+on a throwaway server. A local server works with its defaults (100
+connections is enough for one run); the same flags make it faster.
 
 ### The steps (and their local equivalents)
 
@@ -332,15 +350,9 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    ```
 
 4. **go test** — tagged, so the host-mode fixtures and MockMode tests compile.
-   Both CI and `make test` call `scripts/go-test.sh`, which keeps `-p 1` only
-   for packages that share a Postgres DSN (chat TRUNCATE vs sched advisory
-   lock) and runs everything else at Go's default package parallelism. The
-   chat-serial and sched-serial groups overlap: they point at different
-   databases (ADR-0005). The serial groups' test binaries are compiled first,
-   at full parallelism (`go test -c`), because `-p 1` serializes the build as
-   well as the runs; and when `HTTPAPI_TEST_DATABASE_URL` names a third
-   database (CI sets it), `internal/httpapi` runs on it alongside
-   `internal/store` instead of after it. Each Go CI lane (`go`, `go-race`)
+   Both CI and `make test` call `scripts/go-test.sh`: one `go test` over the
+   whole tree at Go's default package parallelism — every DB test has a
+   database of its own, so there are no serial groups. Each Go CI lane (`go`, `go-race`)
    keeps its own build cache, saved from `main` and restored by PRs, so a PR
    compiles only what changed. CI also adds `-count=1` to defeat the test cache and
    instruments this step with `-coverprofile=coverage.out -covermode=atomic`
@@ -416,10 +428,10 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
 
 5. **go test -race** — the race detector is the gate for fleet's in-process
    coordination (worker pool, SSE fan-out, single-owner DB leases, the admission
-   semaphore). Same DSNs and tag, but a **sibling CI job** (`go-race`) so the
+   semaphore). Same DSN and tag, but a **sibling CI job** (`go-race`) so the
    race suite overlaps the `go` job instead of running after it on the same
-   runner. Locally `make ci-go` still runs them sequentially: they share the
-   same two databases.
+   runner. Locally `make ci-go` runs them one after the other; running both at
+   once against one server is safe too (every test has its own database).
 
    ```sh
    scripts/go-test.sh --race --count=1   # or: make test-race
@@ -765,8 +777,8 @@ Design note: [`docs/MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md).
 
 - **Always:** `gitleaks dir . --redact --exit-code 1`.
 - **If you touched Go:** `make ci-go` (build, vet, lint, test, -race,
-  govulncheck) — with the two Postgres DSNs and `FLEET_CLIENT_CONFIG_DIR` set as
-  above.
+  govulncheck) — with `FLEET_TEST_DATABASE_URL` and `FLEET_CLIENT_CONFIG_DIR` set
+  as above.
 - **If you touched `web/`:** `make ci-web`, plus `make ci-e2e-mocked` if you
   changed UI behavior the mocked suite covers.
 - **Fast everything-but-e2e:** `make ci-local`.
