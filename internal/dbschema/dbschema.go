@@ -43,6 +43,15 @@ func Configured(ctx context.Context, db Execer) (string, error) {
 	return sp, nil
 }
 
+// PublicStoreSQL answers whether the database's public schema holds a fleet
+// store (a schema_migrations table) — a legacy two-database install's
+// database. It reads the catalogs, which every role may: to_regclass on
+// 'public.…' fails outright for a role without USAGE on public (a hardened
+// database), which would stop every store from opening.
+const PublicStoreSQL = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	WHERE n.nspname = 'public' AND c.relname = 'schema_migrations' AND c.relkind IN ('r', 'p'))`
+
 // lockKeyBase namespaces the transaction-level advisory lock Ensure takes so
 // two processes creating the same schema serialise rather than race into a
 // duplicate-key error on pg_namespace (CREATE SCHEMA IF NOT EXISTS is not
@@ -72,7 +81,7 @@ func Ensure(ctx context.Context, db Execer) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var legacy bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&legacy); err != nil {
+	if err := tx.QueryRowContext(ctx, PublicStoreSQL).Scan(&legacy); err != nil {
 		return fmt.Errorf("ensure schema %s: probe public: %w", schema, err)
 	}
 	if legacy {

@@ -1318,7 +1318,9 @@ pg_exists() {
 # re-using its password and converging the role is the normal idempotent path.
 env_file_records() {
   local url re
-  url="$(grep "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  # env_get, like env_dsn_password: the last assignment, quotes stripped —
+  # the value the service and the password read-back both see.
+  url="$(env_get "$1")"
   re="^postgres(ql)?://$2:[^@]*@[^/]+/$3(\?.*)?$"
   [[ "$url" =~ $re ]]
 }

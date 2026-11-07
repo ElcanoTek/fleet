@@ -43,6 +43,18 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil { // owned by the test superuser
 		t.Fatal(err)
 	}
+	// A hardened database: no USAGE on public for anyone. The readiness
+	// check must still work (it reads the catalogs; to_regclass on
+	// 'public.…' would fail for the role).
+	if h, err := sql.Open("pgx", withDBName(t, base, db)); err != nil {
+		t.Fatal(err)
+	} else {
+		_, err = h.ExecContext(ctx, "REVOKE ALL ON SCHEMA public FROM PUBLIC")
+		_ = h.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	u, _ := url.Parse(withDBName(t, base, db))
 	u.User = url.UserPassword(role, pw)
 	roleDSN := u.String()

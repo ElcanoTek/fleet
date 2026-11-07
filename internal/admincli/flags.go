@@ -14,6 +14,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
 
 // readStdinValue reads a secret/value from stdin (used when a flag is "-"),
@@ -148,7 +149,7 @@ var probePublicStore config.PublicStoreProbe = func(dsn string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var legacy bool
-	err = db.QueryRowContext(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&legacy)
+	err = db.QueryRowContext(ctx, dbschema.PublicStoreSQL).Scan(&legacy)
 	return legacy, err
 }
 

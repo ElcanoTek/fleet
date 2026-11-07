@@ -913,7 +913,10 @@ else
   # LEGACY-DB-LAYOUT: remove after consolidation — the per-store branch.
   if [[ -n "$(env_get FLEET_CHAT_DATABASE_URL)$(env_get FLEET_SCHED_DATABASE_URL)$(env_get SCHED_DATABASE_URL)" ]]; then
     _layout=""
-    [[ -x "${INSTALL_DIR:-/usr/local/bin}/fleet" ]] && _layout="$("${INSTALL_DIR:-/usr/local/bin}/fleet" db layout --env-file "$ENV_FILE" 2>/dev/null || true)"
+    _fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
+    [[ -x "$_fleet_bin" ]] || _fleet_bin="$(command -v fleet || true)"
+    [[ -n "$_fleet_bin" ]] && _layout="$("$_fleet_bin" db layout --env-file "$ENV_FILE" 2>/dev/null || true)"
+    unset _fleet_bin
     if [[ "$_layout" == "schemas" ]]; then
       advise "per-store DSN keys (FLEET_CHAT_/FLEET_SCHED_DATABASE_URL) name ONE database — fleet uses its schemas chat and sched; replace them with DATABASE_URL"
     else

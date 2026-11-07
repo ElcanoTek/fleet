@@ -79,7 +79,8 @@ SQL
 fleet_db_store_readiness() {
   local out
   out="$(psql -X -v ON_ERROR_STOP=1 -tAq -F '|' "$1" -c "SELECT
-      to_regclass('public.schema_migrations') IS NOT NULL,
+      EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace pn ON pn.oid = c.relnamespace
+              WHERE pn.nspname = 'public' AND c.relname = 'schema_migrations' AND c.relkind IN ('r', 'p')),
       bool_and(CASE WHEN n.oid IS NULL THEN has_database_privilege(current_database(), 'CREATE')
                     ELSE has_schema_privilege(n.oid, 'CREATE') AND has_schema_privilege(n.oid, 'USAGE') END)
     FROM (VALUES ('chat'), ('sched')) AS s(name)
