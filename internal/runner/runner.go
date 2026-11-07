@@ -781,10 +781,14 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	))
 	var runSpanErr error
 	defer func() { telemetry.End(runSpan, runSpanErr) }()
+	// A panic in the run or its bookkeeping is recovered by tryClaim's
+	// safe.Recover, after this function has returned and the span has ended.
+	// Record it on the span first, then re-panic so that handling (the
+	// errored task, the incident) is unchanged.
+	defer recordRunPanic(&runSpanErr)
 	// An early failure (worktree, sandbox or MCP-scope prep) returns no
 	// session; the synthetic one submitLog stores names this run and trace.
-	p.runIDs.Store(task.ID, runCorrelation{runID: token.String(), traceID: telemetry.TraceID(taskCtx)})
-	defer p.runIDs.Delete(task.ID)
+	defer p.untrackRun(task.ID, p.trackRun(taskCtx, task.ID, token))
 
 	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
 	// event in the Sentry UI shows what the runner did immediately before the
@@ -1746,6 +1750,35 @@ func (p *Pool) recordArtifactsForLease(taskID, leaseOwner uuid.UUID, manifest js
 	}); err != nil {
 		slog.Error("runner: task failed to persist artifacts", "task_id", taskID, "err", err)
 	}
+}
+
+// errTaskRunPanicked is the task.run span's error for a run that panicked;
+// only its class reaches the span.
+var errTaskRunPanicked = errors.New("task run panicked")
+
+// recordRunPanic, deferred inside the task.run span, marks the span failed
+// when the run panics and re-panics with the same value, so tryClaim's
+// recovery still handles it.
+func recordRunPanic(spanErr *error) {
+	if r := recover(); r != nil {
+		*spanErr = errTaskRunPanicked
+		panic(r)
+	}
+}
+
+// trackRun records this execution's correlation for submitLog and returns it
+// for untrackRun.
+func (p *Pool) trackRun(ctx context.Context, taskID, token uuid.UUID) runCorrelation {
+	corr := runCorrelation{runID: token.String(), traceID: telemetry.TraceID(ctx)}
+	p.runIDs.Store(taskID, corr)
+	return corr
+}
+
+// untrackRun drops this execution's entry — and only this execution's: after a
+// lease reclaim a fresh attempt of the same task may already have replaced it,
+// and a stale execution's late return must not remove the fresh one's ids.
+func (p *Pool) untrackRun(taskID uuid.UUID, corr runCorrelation) {
+	p.runIDs.CompareAndDelete(taskID, corr)
 }
 
 // runCorrelation is one in-flight run's ids (Pool.runIDs): the claim's lease

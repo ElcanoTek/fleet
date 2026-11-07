@@ -21,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
@@ -314,7 +315,14 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		"persona": conv.Persona,
 		"model":   conv.Model,
 	})
-	buf.Emit("turn.started", map[string]any{"turn_id": turnID, "persona": conv.Persona})
+	// The root span starts before turn.started (as on the /chat path), so the
+	// frame names the trace; runTurnAsync ends it.
+	turnCtx = startChatTurnSpan(turnCtx, conv.ID, turnID)
+	turnStarted := map[string]any{"turn_id": turnID, "persona": conv.Persona}
+	if traceID := telemetry.TraceID(turnCtx); traceID != "" {
+		turnStarted["trace_id"] = traceID
+	}
+	buf.Emit("turn.started", turnStarted)
 	buf.Emit("user.message", map[string]any{"text": prompt})
 
 	// Surface any files persisted from earlier turns (empty on this first

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os/signal"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
@@ -59,6 +61,13 @@ func mcpBrokerLogConfig() logging.Config {
 	}
 }
 
+// mcpBrokerServeContext is the broker's serve context: cancelled by SIGTERM,
+// so a signalled broker returns from Serve and runs its deferred shutdown
+// (backend close, bounded span flush) rather than dying mid-flush.
+func mcpBrokerServeContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGTERM)
+}
+
 func runMCPBroker() error {
 	// Same handler, redactor, format and level as the parent, so the
 	// broker's lines are not Go's default plaintext mixed into JSON.
@@ -73,12 +82,19 @@ func runMCPBroker() error {
 		shutdownTracing = func(context.Context) error { return nil }
 	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Bounded below the parent's SIGTERM-to-SIGKILL grace
+		// (mcpbroker.SpawnClient), so the flush finishes before a kill.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := shutdownTracing(ctx); err != nil {
 			slog.Warn("mcp-broker: otel shutdown error", "err", err)
 		}
 	}()
+	// SIGTERM (the parent's teardown, or a supervisor's) ends Serve like EOF
+	// does, so the deferred backend close and span flush run instead of the
+	// process dying mid-flush.
+	serveCtx, stopSignals := mcpBrokerServeContext()
+	defer stopSignals()
 	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
 		return err
@@ -116,7 +132,7 @@ func runMCPBroker() error {
 		remoteMCP:   remoteMCP,
 		remoteStore: remoteStore,
 	}
-	serveErr := mcpbroker.ServeStdio(context.Background(), backend)
+	serveErr := mcpbroker.ServeStdio(serveCtx, backend)
 	return errors.Join(serveErr, backend.Close())
 }
 

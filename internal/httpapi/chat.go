@@ -873,6 +873,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		"turn_id": turnID,
 		"persona": conv.Persona,
 	}
+	// The turn's root span starts here, before turn.started, so a turn with
+	// no request to continue (a queue drain) still publishes its trace. From
+	// here on the turn always launches; runTurnAsync ends the span.
+	turnCtx = startChatTurnSpan(turnCtx, conv.ID, turnID)
 	// The trace this turn's spans join (#2052), when tracing is on, so a
 	// client or an operator can go from the turn to its trace.
 	if traceID := telemetry.TraceID(turnCtx); traceID != "" {
@@ -1077,6 +1081,26 @@ func (s *Server) turnStore(buf *turnBuffer) chatStore {
 // optional title_updated event, and then finishes the buffer. Lives in
 // its own goroutine so the HTTP POST can disconnect without killing
 // generation.
+// chatTurnSpanKey carries a turn's chat.turn root span, started by the launch
+// path before turn.started and ended by runTurnAsync.
+type chatTurnSpanKey struct{}
+
+// startChatTurnSpan starts the turn's chat.turn root span under ctx (the
+// request's trace, when there is one) and returns ctx carrying it.
+func startChatTurnSpan(ctx context.Context, convID, turnID string) context.Context {
+	ctx, span := telemetry.Start(ctx, "chat.turn", trace.WithAttributes(
+		telemetry.AttrConvID.String(convID),
+		telemetry.AttrTurnID.String(turnID),
+	))
+	return context.WithValue(ctx, chatTurnSpanKey{}, span)
+}
+
+// chatTurnSpan returns the chat.turn span startChatTurnSpan put on ctx.
+func chatTurnSpan(ctx context.Context) (trace.Span, bool) {
+	span, ok := ctx.Value(chatTurnSpanKey{}).(trace.Span)
+	return span, ok
+}
+
 // turnContext gives a turn's detached context the identity of what started
 // it (#2052): the turn's context is detached from the request's lifetime, not
 // from its identity. Every log line of the turn carries conv_id, turn_id,
@@ -1126,13 +1150,16 @@ func (s *Server) runTurnAsync(
 	turnCtx = logging.WithTurn(turnCtx, conv.ID, buf.turnID)
 	turnCtx = logging.WithUser(turnCtx, user)
 	// The turn's root span (#2052): the agent loop, model, tool, sandbox,
-	// broker and DB spans of this turn are its descendants. Ended last (the
-	// first defer), so it covers the cleanup the deferred calls below do, and
-	// records the turn's failure (turnErr) — a user's Stop is not one.
-	turnCtx, turnSpan := telemetry.Start(turnCtx, "chat.turn", trace.WithAttributes(
-		telemetry.AttrConvID.String(conv.ID),
-		telemetry.AttrTurnID.String(buf.turnID),
-	))
+	// broker and DB spans of this turn are its descendants. The launch path
+	// started it before emitting turn.started (startChatTurnSpan); one that
+	// did not gets it here. Ended last (the first defer), so it covers the
+	// cleanup the deferred calls below do, and records the turn's failure
+	// (turnErr) — a user's Stop is not one.
+	turnSpan, ok := chatTurnSpan(turnCtx)
+	if !ok {
+		turnCtx = startChatTurnSpan(turnCtx, conv.ID, buf.turnID)
+		turnSpan, _ = chatTurnSpan(turnCtx)
+	}
 	var turnErr error
 	defer func() { telemetry.End(turnSpan, turnErr) }()
 	// Order matters: finishTurn must seal the buffer and schedule

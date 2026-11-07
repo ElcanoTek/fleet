@@ -23,6 +23,11 @@ func ServeStdio(ctx context.Context, backend Backend) error {
 // and it is SIGTERMed, before it is SIGKILLed.
 const teardownGrace = 3 * time.Second
 
+// eofExitGrace is how long stop waits for the child to exit on its own after
+// the pipe closes (EOF ends its Serve loop; it then closes its backends and
+// flushes its spans) before it signals. A var so tests can shorten it.
+var eofExitGrace = 2500 * time.Millisecond
+
 // stdioConn adapts a child process's stdout (read side) and stdin (write side) into
 // a single io.ReadWriteCloser — the connection the broker protocol rides over. The
 // broker child speaks frames on stdin/stdout and logs to stderr.
@@ -44,8 +49,11 @@ func (c *stdioConn) Close() error {
 
 // SpawnClient starts cmd as a broker child and returns a Client talking to it over
 // the child's stdio, plus a stop func that tears the child down: close the pipe
-// (EOF unblocks the child's Serve loop and fails outstanding calls), SIGTERM the
-// child's process GROUP, then SIGKILL after a grace period, and reap. The child is
+// (EOF unblocks the child's Serve loop and fails outstanding calls), give the
+// child a bounded grace (eofExitGrace) to exit on its own — its shutdown work,
+// the span flush included, runs after Serve returns — then SIGTERM the child's
+// process GROUP, SIGKILL after a further grace period, and reap. A hung child
+// therefore delays shutdown by at most eofExitGrace + teardownGrace. The child is
 // placed in its own process group so the signal also reaches any grandchildren —
 // e.g. the MCP server subprocesses the broker itself spawns.
 //
@@ -82,12 +90,22 @@ func SpawnClient(cmd *exec.Cmd) (*Client, func() error, error) {
 			// Close the connection first: the child's Serve loop sees EOF and
 			// returns, and any outstanding calls fail rather than hang.
 			_ = client.Close()
-			// Signal the whole group (negative pid), escalating to SIGKILL if the
-			// child does not exit within the grace window.
 			pgid := cmd.Process.Pid
-			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
+			// The EOF-driven exit first: signalling at once would kill the
+			// child before its deferred span flush ran.
+			select {
+			case stopErr = <-done:
+				// Reap any grandchild (an MCP server subprocess) the child
+				// left in its group; ESRCH when there is none.
+				_ = syscall.Kill(-pgid, syscall.SIGTERM)
+				return
+			case <-time.After(eofExitGrace):
+			}
+			// Signal the whole group (negative pid), escalating to SIGKILL if the
+			// child does not exit within the grace window.
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			select {
 			case stopErr = <-done:
 			case <-time.After(teardownGrace):
