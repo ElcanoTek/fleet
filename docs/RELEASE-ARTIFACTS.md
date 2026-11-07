@@ -116,7 +116,10 @@ What it does, in order (`scripts/update.sh`):
    refuses with uncommitted changes, or when moving back would strand commits
    origin does not have. `--no-pull --tag <other release>` refuses (it would
    pair that binary with this checkout's content). If GitHub names a release
-   the tag fetch just missed, tags are fetched once more;
+   the tag fetch just missed, tags are fetched once more. (The client-config
+   bundle is its own checkout and is not moved back on a downgrade.)
+   Only one update runs per box at a time (a lock under the state dir), and
+   earlier releases' staging dirs are removed before a download;
 3. pull the client-config bundle (unchanged);
 4. `fleet release fetch` — download and verify (above), using the
    **installed** fleet;

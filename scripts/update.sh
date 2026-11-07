@@ -419,6 +419,16 @@ unit_functional_body() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null || true;
 # the `git -C` operations below.
 [[ -e "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
+# One update at a time: two concurrent runs would race on the checkout, the
+# staging dir and the sandbox image. fd 9 is reopened (not inherited) by the
+# self-update re-exec below, which releases and retakes the same lock.
+if [[ "$DRY_RUN" != "1" ]] && command -v flock >/dev/null 2>&1; then
+  _lock_dir="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
+  mkdir -p "$_lock_dir"
+  exec 9>"$_lock_dir/update.lock"
+  flock -n 9 || die "another fleet update is running on this box (${_lock_dir}/update.lock) — wait for it to finish"
+fi
+
 if [[ "$REEXEC" == "1" ]]; then
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
 else
@@ -1116,6 +1126,12 @@ if [[ "$FROM_SOURCE" != "1" ]]; then
     info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
     info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
   else
+    # Only the release being installed is staged: earlier releases' staging
+    # dirs (~100 MB each) are dropped first — the previous binary lives on as
+    # fleet.prev in the install dir, which is all a rollback needs.
+    if [[ -d "${STATE_DIR}/release" ]]; then
+      find "${STATE_DIR}/release" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
+    fi
     rm -rf "$RELEASE_DIR"
     install -d -m 0700 "$RELEASE_DIR"
     if fleet_release_capable "$INSTALL_DIR/fleet"; then
