@@ -2020,8 +2020,8 @@ export function ChatExperience({
   // server and POSTs the FULL enabled set to the backend. The server is
   // the source of truth for which names are valid optional servers — we
   // just compute the new set from current state and send it. On failure
-  // we revert the local state so the UI doesn't claim a change the
-  // backend rejected.
+  // the picker re-reads the catalog so it doesn't claim a change the
+  // backend rejected (postMcpServerState).
   //
   // conversationId === null is the pre-chat case: no row exists yet, so
   // we skip the POST and keep the toggles in local state. They get
@@ -2072,7 +2072,7 @@ export function ChatExperience({
 
   // setMcpServerAccount records which credential seat (login) a server
   // should use in this conversation ("" = the user's default seat). Same
-  // optimistic-update + full-state POST + revert-on-failure shape as the
+  // optimistic-update + full-state POST + re-read-on-failure shape as the
   // toggle above; pre-chat the choice stays local and rides on the first
   // POST /chat body as `mcp_accounts`.
   const setMcpServerAccount = async (
@@ -2110,67 +2110,96 @@ export function ChatExperience({
   // Saves are chained per conversation (the autoApproveChainRef pattern,
   // #2046). Each POST replaces the whole selection, so two in flight at once
   // could land out of order — and the earlier one's response, applied last,
-  // turned off a connector the user had just turned on. A queued save sends
-  // the newest selection asked for (not its own click-time snapshot), and
-  // only the newest save's response reconciles the picker.
-  const mcpSaveChainRef = useRef<Map<string, Promise<void>>>(new Map());
+  // turned off a connector the user had just turned on.
+  //
+  // Each save sends exactly ITS edit: the rows that edit changed, laid over
+  // what the server holds after the save ahead of it in the chain (that
+  // save's persisted answer, or — if it failed — what it started from). So
+  // request N carries edit N and nothing later, and a failure tells us
+  // exactly which edit the server did not take.
+  //
+  // Only the newest save touches the picker: on success it reconciles the
+  // current rows with the persisted answer; on failure it re-reads the
+  // catalog rather than guessing which rows to put back. An older save's
+  // outcome is folded into the newer save's request and answer instead.
+  const mcpSaveChainRef = useRef<
+    Map<string, Promise<MCPServerInfo[] | null>>
+  >(new Map());
   const mcpSaveSeqRef = useRef<Map<string, number>>(new Map());
-  // The newest selection asked for per conversation: set when a save is
-  // queued, and kept in step with a failed save's revert so a queued save
-  // never resends rows the server just rejected.
-  const mcpSaveDesiredRef = useRef<Map<string, MCPServerInfo[]>>(new Map());
-  const postMcpServerState = (
+  const mcpSavePendingRef = useRef<Map<string, number>>(new Map());
+  const postMcpServerState = async (
     conversationId: string,
     next: MCPServerInfo[],
     prev: MCPServerInfo[],
   ): Promise<void> => {
     const seq = (mcpSaveSeqRef.current.get(conversationId) ?? 0) + 1;
     mcpSaveSeqRef.current.set(conversationId, seq);
-    mcpSaveDesiredRef.current.set(conversationId, next);
-    const queued = mcpSaveChainRef.current.get(conversationId) ?? Promise.resolve();
-    const run = queued.then(() =>
-      sendMcpServerState(conversationId, seq, next, prev),
-    );
+    const pending = mcpSavePendingRef.current.get(conversationId) ?? 0;
+    mcpSavePendingRef.current.set(conversationId, pending + 1);
+    // A chain whose saves have all settled starts over from the picker:
+    // its last answer may be older than a catalog read since.
+    const ahead =
+      pending > 0
+        ? (mcpSaveChainRef.current.get(conversationId) ??
+          Promise.resolve(null))
+        : Promise.resolve(null);
+    const run = ahead.then(async (held) => {
+      try {
+        return await sendMcpServerState(
+          conversationId,
+          seq,
+          next,
+          prev,
+          held,
+        );
+      } finally {
+        mcpSavePendingRef.current.set(
+          conversationId,
+          Math.max(0, (mcpSavePendingRef.current.get(conversationId) ?? 1) - 1),
+        );
+      }
+    });
     mcpSaveChainRef.current.set(conversationId, run);
-    return run;
+    await run;
   };
+  // Returns the rows the server holds after this save: the persisted answer,
+  // or the base it started from when the save failed.
   const sendMcpServerState = async (
     conversationId: string,
     seq: number,
     next: MCPServerInfo[],
     prev: MCPServerInfo[],
-  ) => {
-    const sent = mcpSaveDesiredRef.current.get(conversationId) ?? next;
-    const requested = enabledOptionalMcpServerNames(sent);
-    // A failed save reverts only the rows THIS request changed (switch and
-    // seat), so a catalog load or another toggle that landed meanwhile is
-    // kept — and only while the picker still shows this conversation.
+    held: MCPServerInfo[] | null,
+  ): Promise<MCPServerInfo[] | null> => {
+    // This edit: the rows whose switch or seat it changed.
     const before = new Map(prev.map((row) => [row.name, row]));
-    const changed = new Map<string, MCPServerInfo>();
+    const edited = new Set<string>();
     for (const row of next) {
       const old = before.get(row.name);
       if (old && (old.enabled !== row.enabled || old.account !== row.account)) {
-        changed.set(row.name, old);
+        edited.add(row.name);
       }
     }
+    // …laid over what the server holds now (the picker before this edit when
+    // no earlier save is in the chain).
+    const base = new Map((held ?? prev).map((row) => [row.name, row]));
+    const sent = next.map((row) => {
+      if (edited.has(row.name)) return row;
+      const b = base.get(row.name);
+      return b ? { ...row, enabled: b.enabled, account: b.account } : row;
+    });
+    const requested = enabledOptionalMcpServerNames(sent);
+    const baseRows = held ?? prev;
     const stillShown = () => activeConversationIdRef.current === conversationId;
     const isLatest = () => mcpSaveSeqRef.current.get(conversationId) === seq;
-    const revertRows = (rows: MCPServerInfo[]) =>
-      rows.map((row) => {
-        const old = changed.get(row.name);
-        return old ? { ...row, enabled: old.enabled, account: old.account } : row;
-      });
-    const revert = () => {
-      const desired = mcpSaveDesiredRef.current.get(conversationId);
-      if (desired) mcpSaveDesiredRef.current.set(conversationId, revertRows(desired));
-      if (!stillShown()) return;
-      setMcpServers(revertRows);
+    const failed = () => {
+      // Show what the server actually holds. A newer save queued behind this
+      // one is built on baseRows and reconciles the picker itself.
+      if (isLatest() && stillShown()) void loadMcpServerCatalog(conversationId);
+      return baseRows;
     };
     const url = conversationApiUrl(conversationId, "/mcp-servers");
-    if (!url) {
-      revert();
-      return;
-    }
+    if (!url) return failed();
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -2180,10 +2209,7 @@ export function ChatExperience({
           accounts: mcpAccountOverrides(sent),
         }),
       });
-      if (!response.ok) {
-        revert();
-        return;
-      }
+      if (!response.ok) return failed();
       const body = (await response.json()) as {
         enabled_optional?: unknown;
         accounts?: unknown;
@@ -2192,14 +2218,11 @@ export function ChatExperience({
         // No authoritative list came back (an older server, or a proxy that
         // rewrote the body). Leave the optimistic state alone rather than
         // clearing every toggle off a shape we did not understand.
-        return;
+        return sent;
       }
       const persisted = body.enabled_optional.filter(
         (n): n is string => typeof n === "string",
       );
-      // An older save's answer is superseded by the newer one queued behind
-      // it; reconciling the CURRENT rows (not this request's snapshot) keeps
-      // anything a catalog load or another save put there meanwhile.
       // Seats too: a catalog read (reopening the picker) that landed while
       // this save was in flight carries the seats from before it. The
       // response's `accounts` is what was persisted; an older server that
@@ -2212,6 +2235,8 @@ export function ChatExperience({
               ),
             )
           : mcpAccountOverrides(sent);
+      // Reconciling the CURRENT rows (not this request's snapshot) keeps
+      // anything a catalog load put there meanwhile.
       if (isLatest() && stillShown()) {
         setMcpServers((curr) =>
           reconcileMcpAccounts(
@@ -2231,8 +2256,12 @@ export function ChatExperience({
           dropped,
         );
       }
+      return reconcileMcpAccounts(
+        reconcileMcpSelection(sent, persisted),
+        persistedAccounts,
+      );
     } catch {
-      revert();
+      return failed();
     }
   };
 

@@ -293,4 +293,87 @@ describe("Tools picker connector saves", () => {
     });
     await waitFor(() => expect(screen.getByTestId("mcp-seat-gamma")).toHaveTextContent("personal"));
   });
+
+  it("after a failed save the picker shows what the server holds, and each save sent only its own edit", async () => {
+    // A stateful server: a POST it accepts replaces the selection; a failed
+    // POST leaves it alone. Catalog reads report what it holds.
+    let serverOn = new Set<string>();
+    const sentBodies: string[][] = [];
+    const queue: Array<{ body: string[]; answer: (ok: boolean) => void }> = [];
+    let catalogReads = 0;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const serverCatalog = () => ({
+      servers: Array.from({ length: 4 }, (_, i) => ({
+        name: `srv${i}`,
+        description: "",
+        tools: [],
+        tool_count: 1,
+        enabled: serverOn.has(`srv${i}`),
+      })),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
+          const body = (JSON.parse(String(init.body)) as { enabled_optional: string[] }).enabled_optional;
+          sentBodies.push(body);
+          return new Promise<Response>((resolve) => {
+            queue.push({
+              body,
+              answer: (ok) => {
+                if (!ok) return resolve(json({ error: "boom" }, 500));
+                serverOn = new Set(body);
+                resolve(json({ enabled_optional: body, accounts: {} }));
+              },
+            });
+          });
+        }
+        if (url === "/api/conversations/conv-a/mcp-servers") {
+          catalogReads++;
+          return json(serverCatalog());
+        }
+        if (url === "/api/mcp-servers") return json(serverCatalog());
+        if (url === "/api/conversations") return json({ conversations: CONVS });
+        if (url === "/api/conversations?archived=true") return json({ conversations: [] });
+        if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
+        if (/\/inflight$/.test(url)) return json({ inflight: false });
+        return json({}, 404);
+      }),
+    );
+    const answerNext = async (ok: boolean) => {
+      await waitFor(() => expect(queue.length).toBe(1));
+      const q = queue.shift()!;
+      await act(async () => {
+        q.answer(ok);
+      });
+    };
+    const checked = (name: string) => screen.getByRole("switch", { name }).getAttribute("aria-checked");
+
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    await waitFor(() => expect(catalogReads).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    await waitFor(() => expect(catalogReads).toBe(2));
+    await act(async () => {});
+
+    // Three quick edits; saves go one at a time.
+    fireEvent.click(screen.getByRole("switch", { name: "srv0" }));
+    fireEvent.click(screen.getByRole("switch", { name: "srv1" }));
+    fireEvent.click(screen.getByRole("switch", { name: "srv2" }));
+
+    await answerNext(true);
+    await answerNext(true);
+    await answerNext(false);
+    await waitFor(() => expect(catalogReads).toBe(3));
+
+    // Each request carried exactly its own edit on top of the one before.
+    expect(sentBodies).toEqual([["srv0"], ["srv0", "srv1"], ["srv0", "srv1", "srv2"]]);
+    // The picker shows the server's state: the third edit did not persist.
+    await waitFor(() => expect(checked("srv2")).toBe("false"));
+    expect(checked("srv0")).toBe("true");
+    expect(checked("srv1")).toBe("true");
+    expect(checked("srv3")).toBe("false");
+    expect([...serverOn].sort()).toEqual(["srv0", "srv1"]);
+  });
 });
