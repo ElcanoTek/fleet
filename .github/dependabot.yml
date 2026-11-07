@@ -96,12 +96,9 @@ version: 2
 #     lived ~7 months. nodejs/Release's schedule.json now gives v27 an `alpha`
 #     phase followed by a release in April 2027 that becomes LTS that October:
 #     from 27 on, node ships one major a year and every one becomes LTS.
-#   * The distro lag no longer strands a box. bootstrap.sh and doctor.sh still
-#     prefer the VERSIONED dnf stream (nodejs<major>, nodejs<major>-npm), but
-#     when Fedora has not packaged the new major yet (node 26 reached F45
-#     only), they install the signed nodejs.org release instead — the node
-#     analogue of GOTOOLCHAIN=auto. See fleet_node_tarball_install in
-#     scripts/lib/node-version.sh.
+#   * The distro lag cannot strand a box: no box has node any more. The web
+#     bundle is built in CI and release.yml (actions/setup-node reads
+#     web/.nvmrc) and ships embedded in the signed binary (ADR-0098).
 #
 # Deliberately NOT expressed as an `ignore` rule for major node bumps. Silencing
 # them would remove a signal that a new line exists, which is precisely how the

@@ -12,12 +12,12 @@
 # Go would otherwise do on its own.
 #
 # The env var takes precedence over that go.env default, so setting it here is
-# what makes `fleet update` work on a stock Fedora box. It belongs in the
+# what makes `fleet update --from-source` work on a stock Fedora dev box. It belongs in the
 # Makefile rather than in each caller because every build path funnels through
-# here — scripts/update.sh, scripts/fleet-upgrade.sh, bootstrap.sh, and CI all
-# shell out to `make build`. (bootstrap.sh already passed GOTOOLCHAIN=auto by
-# hand for exactly this reason; `fleet update` did not, so a box would install
-# fine and then fail every upgrade.)
+# here — CI, and the development-only `--from-source` paths of
+# scripts/update.sh and bootstrap.sh, all shell out to `make build`. (A release
+# box builds nothing: it installs the signed binary release.yml publishes —
+# ADR-0098.)
 #
 # `?=` so an operator who has deliberately chosen a value — an air-gapped host
 # pinned to `local`, or a specific `go1.27.0` — keeps it.

@@ -86,7 +86,8 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 		"Installing system dependencies",
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
-		"Building + installing the fleet binary", // the binary build+install step (#71)
+		"Fetching + verifying the fleet release", // the signed release, verified before use (ADR-0098)
+		"Installing the fleet binary",            // the binary install step (#71)
 		"would install fleet",
 		// A bare --enable-service install stages the in-repo default bundle
 		// where the service can relabel it (#1655).
@@ -543,27 +544,129 @@ func TestUpdateReconcilesRemoteMCPPublicOrigin(t *testing.T) {
 func TestUpdateDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull")
 	for _, want := range []string{
-		"make build",
-		"would install fleet", // the install-to-ExecStart step (#71)
+		"would install fleet",                      // the install-to-ExecStart step (#71)
 		"would remove a leftover fleet-admin shim", // the retired shim's eviction (ADR-0060)
 		"Restarting",
+		"fleet release install", // swap + restart + readiness gate + rollback (ADR-0098)
+		"roll back to fleet.prev automatically",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("update --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
 	}
-	// The sandbox gate must run BEFORE the install step: its fail-closed abort
-	// (missing image, failed build) has to leave the box coherent — old
-	// binaries on disk, old service running. With the old order the die fired
-	// AFTER the new binaries were installed, leaving new code on disk while
-	// the old service kept running and the message implied nothing changed.
-	sandboxAt := strings.Index(out, "Rebuilding the sandbox image")
-	buildAt := strings.Index(out, "Building the fleet binary (web bundle embedded)")
-	if sandboxAt < 0 || buildAt < 0 {
-		t.Fatalf("plan missing the sandbox (%d) or build (%d) step header\n--- output ---\n%s", sandboxAt, buildAt, out)
+	// The default path builds nothing on the box.
+	for _, bad := range []string{"make build", "node gate", "Node gate"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("the artifact update plan mentions %q — a release box has no build toolchain\n--- output ---\n%s", bad, out)
+		}
 	}
-	if sandboxAt > buildAt {
-		t.Errorf("sandbox gate (at %d) must run before the binary/web install step (at %d)\n--- output ---\n%s", sandboxAt, buildAt, out)
+	// Verify BEFORE anything is used, and the sandbox gate BEFORE the install:
+	// either abort must leave the box coherent — old binary, old service.
+	fetchAt := strings.Index(out, "Fetching + verifying release")
+	sandboxAt := strings.Index(out, "3/5  Sandbox image")
+	installAt := strings.Index(out, "Preparing the host for the new binary")
+	restartAt := strings.Index(out, "5/5  Restarting")
+	if fetchAt < 0 || sandboxAt < 0 || installAt < 0 || restartAt < 0 {
+		t.Fatalf("plan missing a step header (fetch %d, sandbox %d, prepare %d, restart %d)\n--- output ---\n%s", fetchAt, sandboxAt, installAt, restartAt, out)
+	}
+	if fetchAt >= sandboxAt || sandboxAt >= installAt || installAt >= restartAt {
+		t.Errorf("steps out of order: fetch %d, sandbox %d, prepare %d, restart %d — verification and the sandbox gate must both precede the install\n--- output ---\n%s", fetchAt, sandboxAt, installAt, restartAt, out)
+	}
+}
+
+// TestUpdateFromSourceIsIsolatedLegacy — the on-box build survives only behind
+// --from-source for development boxes, and every piece of it carries the
+// marker the owner asked for so it can be found and deleted in one pass.
+func TestUpdateFromSourceIsIsolatedLegacy(t *testing.T) {
+	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--from-source")
+	if !strings.Contains(out, "make build") || !strings.Contains(out, "systemctl restart") {
+		t.Errorf("--from-source plan must build on the box and restart\n--- output ---\n%s", out)
+	}
+	if strings.Contains(out, "fleet release install") {
+		t.Errorf("--from-source must not run the signed-artifact install\n--- output ---\n%s", out)
+	}
+	root := repoRootFromTest(t)
+	for _, script := range []string{"update.sh", "bootstrap.sh"} {
+		body, err := os.ReadFile(filepath.Join(root, "scripts", script))
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(body)
+		if !strings.Contains(src, "LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts") {
+			t.Errorf("%s: the from-source path must carry the LEGACY-BUILD-FROM-SOURCE marker", script)
+		}
+		// Every `make build` the script RUNS sits in a marked block.
+		runs := regexp.MustCompile(`&& (?:export [^)]*&& )?make build \)`).FindAllStringIndex(src, -1)
+		if len(runs) == 0 {
+			t.Errorf("%s: no from-source `make build` invocation found — the marker check is asserting nothing", script)
+		}
+		for _, m := range runs {
+			marker := strings.LastIndex(src[:m[0]], "LEGACY-BUILD-FROM-SOURCE")
+			if marker < 0 || m[0]-marker > 1500 {
+				t.Errorf("%s: `make build` at byte %d is not inside a LEGACY-BUILD-FROM-SOURCE block", script, m[0])
+			}
+		}
+		for _, gone := range []string{"node-version.sh", "fleet_resolve_node_bin", "fleet_node_tarball_install", "doctor.sh --node", "--no-node-repair"} {
+			if strings.Contains(src, gone) {
+				t.Errorf("%s still references %q — the box-side node toolchain is gone (ADR-0098)", script, gone)
+			}
+		}
+	}
+}
+
+// TestUpdateRefusesABadTag — --tag selects which signed release is fetched and
+// is checked against the signed release.json; anything that is not exactly a
+// release tag is refused before the update starts.
+func TestUpdateRefusesABadTag(t *testing.T) {
+	for _, args := range [][]string{
+		{"--dry-run", "--no-pull", "--tag", "main"},
+		{"--dry-run", "--no-pull", "--tag", "v2026.11.07.1;id"},
+		{"--dry-run", "--no-pull", "--tag", "v2026.11.07.3", "--from-source"},
+	} {
+		out, err := runScript(t, nil, "update.sh", args...)
+		if err == nil {
+			t.Errorf("update.sh %v was accepted\n--- output ---\n%s", args, out)
+		}
+	}
+	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--tag", "v2026.11.07.3")
+	if !strings.Contains(out, "release v2026.11.07.3") {
+		t.Errorf("an explicit --tag must be the release the plan installs\n--- output ---\n%s", out)
+	}
+}
+
+// TestUpdateCustomContainerfileLayersOnTheRelease — a bundle that ships its own
+// Containerfile is built on the box, and one that declares FLEET_SANDBOX_BASE
+// is told the release's verified image is its base; a bundle with no
+// Containerfile, or the generic one, pulls the release's signed image.
+func TestUpdateCustomContainerfileLayersOnTheRelease(t *testing.T) {
+	mk := func(containerfile string) string {
+		dir := t.TempDir()
+		_ = os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("sandbox:\n  tag: localhost/fleet-sandbox-acme:latest\n"), 0o644)
+		if containerfile != "" {
+			_ = os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755)
+			_ = os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte(containerfile), 0o644)
+		}
+		return dir
+	}
+	empty := filepath.Join(t.TempDir(), "fleet.env")
+	_ = os.WriteFile(empty, nil, 0o600)
+	plan := func(dir string) string {
+		out, err := runScript(t, []string{"FLEET_CLIENT_CONFIG_DIR=" + dir, "FLEET_ENV_FILE=" + empty}, "update.sh", "--dry-run", "--no-pull")
+		if err != nil {
+			t.Fatalf("update --dry-run: %v\n%s", err, out)
+		}
+		return out
+	}
+	if out := plan(mk("")); !strings.Contains(out, "fleet release sandbox") || !strings.Contains(out, "localhost/fleet-sandbox-acme:latest") {
+		t.Errorf("a bundle with no Containerfile must run the release's signed image under its own tag\n%s", out)
+	}
+	layered := plan(mk("ARG FLEET_SANDBOX_BASE=ghcr.io/elcanotek/fleet-sandbox:latest\nFROM ${FLEET_SANDBOX_BASE}\nRUN true\n"))
+	if !strings.Contains(layered, "build-sandbox-image.sh") || !strings.Contains(layered, "declares FLEET_SANDBOX_BASE") {
+		t.Errorf("a FLEET_SANDBOX_BASE Containerfile must build on the box, on the verified release image\n%s", layered)
+	}
+	own := plan(mk("FROM registry.fedoraproject.org/fedora-minimal:latest\n"))
+	if !strings.Contains(own, "build-sandbox-image.sh") || strings.Contains(own, "declares FLEET_SANDBOX_BASE") {
+		t.Errorf("a Containerfile with its own base builds on the box without the release base\n%s", own)
 	}
 }
 
@@ -712,8 +815,10 @@ func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
 	if strings.Contains(out, "sandbox.image=") {
 		t.Errorf("a shell-only FLEET_SANDBOX_IMAGE must not skip the sandbox gate (the service cannot see it)\n--- output ---\n%s", out)
 	}
-	if !strings.Contains(out, "build-sandbox-image.sh") {
-		t.Errorf("plan must keep the on-box sandbox build when the env file leaves the image unset\n--- output ---\n%s", out)
+	// With the image unset the generic bundle runs the release's signed sandbox
+	// image (ADR-0098) — verified and pulled, not skipped.
+	if !strings.Contains(out, "fleet release sandbox") {
+		t.Errorf("plan must pull the release's verified sandbox image when the env file leaves the image unset\n--- output ---\n%s", out)
 	}
 }
 
@@ -815,7 +920,16 @@ func TestUpdateSandboxFreshnessBackstop(t *testing.T) {
 
 	// The dry-run plan must surface the backstop with the effective threshold —
 	// --sandbox-max-age overrides the default.
-	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "3")
+	// (On-box builds only — a bundle with its own Containerfile; the generic
+	// one runs the release's image, which every release rebuilds.)
+	custom := t.TempDir()
+	_ = os.WriteFile(filepath.Join(custom, "manifest.yaml"), []byte("sandbox:\n  tag: localhost/fleet-sandbox-acme:latest\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(custom, "sandbox"), 0o755)
+	_ = os.WriteFile(filepath.Join(custom, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o644)
+	out, err := runScript(t, []string{"FLEET_CLIENT_CONFIG_DIR=" + custom}, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "3")
+	if err != nil {
+		t.Fatalf("update --dry-run: %v\n%s", err, out)
+	}
 	if !strings.Contains(out, "installed image is 3+ days old") {
 		t.Errorf("update --dry-run plan missing the freshness backstop with the flag's threshold\n--- output ---\n%s", out)
 	}
@@ -885,31 +999,6 @@ func TestUpdateOffersMissingTimers(t *testing.T) {
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)
-		}
-	}
-}
-
-// TestFleetUpgradeDryRunSmoke is the regression guard for #305 (drain-and-restart
-// upgrade): `fleet-upgrade.sh --dry-run --yes` must succeed and its plan must
-// include the load-bearing steps — build, back up the live binary (so rollback is
-// possible), restart (which sends SIGTERM → the binary's graceful drain), and gate
-// on the /readyz probe. --yes skips the confirm prompt; the script also guards the
-// prompt behind a TTY so the test (no TTY) never blocks regardless.
-func TestFleetUpgradeDryRunSmoke(t *testing.T) {
-	out := runScriptDryRun(t, "fleet-upgrade.sh", "--dry-run", "--yes")
-	for _, want := range []string{
-		"make build",
-		"Backing up the live binaries", // the rollback-backup step
-		"would install",                // the swap-in-new-binary step
-		// The step header is always printed; the literal "systemctl restart" line
-		// only renders on a systemd host, and CI may run without systemd (mirrors
-		// TestUpdateDryRunSmoke asserting "Restarting", not "systemctl restart").
-		"Restarting",
-		"/readyz",           // the readiness gate
-		"NOT zero-downtime", // honest brief-blip disclosure
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("fleet-upgrade --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
 	}
 }
@@ -1038,24 +1127,6 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 
 // ── the node handoff ────────────────────────────────────────────────────────
 
-// nodeStubDir writes a `node` shim reporting the given version and returns its
-// directory, for prepending to PATH. fleet_resolve_node_bin prefers a versioned
-// /usr/bin/node-NN and falls back to `node` on PATH, so a stub claiming a very
-// high major forces the "resolved" branch on ANY box — including one that has no
-// qualifying interpreter at all. That is what makes the pass-path assertions
-// below deterministic rather than a function of the runner's node version.
-func nodeStubDir(t *testing.T, version string) string {
-	t.Helper()
-	dir := t.TempDir()
-	// A very high major so it outranks anything the runner already has, in the
-	// PATH-fallback branch of fleet_resolve_node_bin.
-	shim := "#!/bin/sh\n[ \"$1\" = \"-v\" ] && { echo " + version + "; exit 0; }\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(dir, "node"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 // fakeSrcDir builds the minimum a script needs to accept a --src/SRC_DIR: a
 // go.mod (so the "is this a fleet checkout?" guard passes) and a web/.nvmrc
 // declaring the node major. It is the only deterministic lever on the *refusal*
@@ -1079,145 +1150,6 @@ func fakeSrcDir(t *testing.T, nvmrc string) string {
 	return dir
 }
 
-// hermeticNodeEnv points doctor.sh at a throwaway checkout AND a nonexistent
-// retired fleet-web.env, so a --node run depends on nothing but the node
-// interpreters actually installed and never reads this box's real files.
-func hermeticNodeEnv(t *testing.T, nvmrc string) []string {
-	t.Helper()
-	return []string{
-		"SRC_DIR=" + fakeSrcDir(t, nvmrc),
-		"FLEET_WEB_ENV_FILE=" + filepath.Join(t.TempDir(), "absent-fleet-web.env"),
-	}
-}
-
-// TestUpdateDryRunResolvesNodeRatherThanClaimingTo — `update --dry-run` is the
-// command an operator runs to ask "will this work on my box?", and the node gate
-// is what aborts the real run. The plan used to print
-// "would resolve node >= web/.nvmrc" WITHOUT ever calling the resolver, so on a
-// box the real run refuses it printed a clean checklist, a green
-// "fleet rebuilt at <sha>" banner, and exit 0.
-//
-// The pass path is forced with a node stub so this holds on any runner.
-func TestUpdateDryRunResolvesNodeRatherThanClaimingTo(t *testing.T) {
-	env := []string{"PATH=" + nodeStubDir(t, "v999.0.0") + string(os.PathListSeparator) + os.Getenv("PATH")}
-	out, err := runScript(t, env, "update.sh", "--dry-run", "--no-pull")
-	if err != nil {
-		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
-	}
-	if !strings.Contains(out, "node gate PASSES") {
-		t.Fatalf("a v999 node on PATH must satisfy the gate\n--- output ---\n%s", out)
-	}
-	// The resolved-value rule: the pass must name what it resolved, not what it
-	// wanted, and must not fall back to the old un-backed phrasing.
-	// Deliberately NOT asserting "v999.0.0": fleet_resolve_node_bin prefers a
-	// versioned /usr/bin/node-NN over `node` on PATH, so on a runner that has one
-	// the stub is outranked. The stub's job is only to guarantee that SOMETHING
-	// qualifies; what is asserted is that the pass names what it resolved.
-	if !strings.Contains(out, "resolved on this box, not assumed") {
-		t.Errorf("a passing node gate must report the RESOLVED interpreter\n--- output ---\n%s", out)
-	}
-	if strings.Contains(out, "would resolve node") {
-		t.Errorf("the plan still claims it \"would resolve node\" instead of resolving it\n--- output ---\n%s", out)
-	}
-	// A dry run built nothing, so it must not sign off with the real run's banner.
-	for _, bad := range []string{"fleet rebuilt at", "fleet updated "} {
-		if strings.Contains(out, bad) {
-			t.Errorf("dry-run banner claims %q — nothing was built\n--- output ---\n%s", bad, out)
-		}
-	}
-	if !strings.Contains(out, "dry run:") {
-		t.Errorf("dry-run must close with a banner saying so\n--- output ---\n%s", out)
-	}
-}
-
-// TestUpdateNodeGatePrecedesSandboxRebuild — the gate has to run before the first
-// expensive, destructive step. It used to sit inside step 4, i.e. AFTER step 3
-// could spend 2-3 minutes rebuilding the sandbox image and then prune the
-// superseded layers — while still telling the operator nothing had been built.
-// It cannot move above step 1 either: the floor is declared in the CHECKOUT's
-// web/.nvmrc, so a pre-pull gate would read the OLD major.
-func TestUpdateNodeGatePrecedesSandboxRebuild(t *testing.T) {
-	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull")
-	gateAt := strings.Index(out, "Node gate")
-	sandboxAt := strings.Index(out, "Rebuilding the sandbox image")
-	if gateAt < 0 || sandboxAt < 0 {
-		t.Fatalf("plan missing the node gate (%d) or sandbox (%d) step header\n--- output ---\n%s", gateAt, sandboxAt, out)
-	}
-	if gateAt > sandboxAt {
-		t.Errorf("the node gate (at %d) must run before the sandbox rebuild (at %d) — an abort after a multi-GB build is not a gate\n--- output ---\n%s", gateAt, sandboxAt, out)
-	}
-}
-
-// TestDoctorNodeOnlyIsScoped — `doctor.sh --node` exists so update.sh can hand a
-// node shortfall to the ONE implementation of the node install without invoking
-// a full doctor pass. A full pass adopts drifted units, a write `fleet update`
-// only performs behind explicit consent (--adopt-units) — so --node reaching the
-// other steps would launder a consent-gated write through the node repair.
-//
-// Both the plan AND a real (--check) run are asserted: the dry-run branch exits
-// early, so testing it alone would leave the scoping of the executing path
-// unguarded.
-func TestDoctorNodeOnlyIsScoped(t *testing.T) {
-	outOfScope := []string{"Rootless podman", "Sandbox smoke", "functional drift", "Package currency", "Source freshness"}
-
-	plan := runScriptDryRun(t, "doctor.sh", "--node", "--dry-run")
-	for _, want := range []string{"nodejs", "RESOLVED interpreter"} {
-		if !strings.Contains(plan, want) {
-			t.Errorf("--node plan must name %q\n--- output ---\n%s", want, plan)
-		}
-	}
-	for _, bad := range outOfScope {
-		if strings.Contains(plan, bad) {
-			t.Errorf("--node plan reaches out-of-scope step %q\n--- output ---\n%s", bad, plan)
-		}
-	}
-
-	// The executing path. --check so it installs nothing; SRC_DIR points at a
-	// checkout demanding node 1, so it passes on any runner and the run reaches
-	// its scoped exit rather than dying early.
-	run, err := runScript(t, hermeticNodeEnv(t, "1"), "doctor.sh", "--node", "--check")
-	if err != nil {
-		t.Fatalf("--node --check against a node-1 floor must succeed: %v\n--- output ---\n%s", err, run)
-	}
-	for _, bad := range outOfScope {
-		if strings.Contains(run, bad) {
-			t.Errorf("--node --check executed out-of-scope step %q — it must exit after the node blocks\n--- output ---\n%s", bad, run)
-		}
-	}
-}
-
-// TestDoctorNodeCheckIsUnprivilegedAndDecisive — `fleet update --check` shells out
-// to exactly this, and that command is documented as a dev-box probe needing no
-// root. It must run without the root refusal, and its exit code must track
-// whether a qualifying interpreter actually resolves — not merely whether the
-// script reached the end. Both outcomes are forced, so this holds on a runner
-// with node 24 and on one without.
-func TestDoctorNodeCheckIsUnprivilegedAndDecisive(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		nvmrc   string
-		wantErr bool
-	}{
-		{"floor this box always meets", "1", false},
-		{"floor no box can meet", "99", true},
-	} {
-		out, err := runScript(t, hermeticNodeEnv(t, tc.nvmrc), "doctor.sh", "--node", "--check")
-		// Note: this arm is only meaningful when the suite runs unprivileged (the
-		// usual case; CI runners are not root). Under uid 0 the root gate cannot
-		// fire either way, so the decisive-exit assertion below is what carries
-		// this test there.
-		if strings.Contains(out, "run as root") {
-			t.Fatalf("%s: --node --check must not demand root\n--- output ---\n%s", tc.name, out)
-		}
-		if !strings.Contains(out, "node only") {
-			t.Fatalf("%s: --node --check did not run the scoped toolchain step\n--- output ---\n%s", tc.name, out)
-		}
-		if (err != nil) != tc.wantErr {
-			t.Errorf("%s: wantErr=%v, got err=%v\n--- output ---\n%s", tc.name, tc.wantErr, err, out)
-		}
-	}
-}
-
 // TestScriptHelpPrintsTheWholeHeaderAndNoShell — bootstrap/update/fleet-upgrade
 // all rendered --help with a HARDCODED `sed -n '2,Np'` range, which rots the
 // moment the header grows: update.sh silently dropped its last paragraph and
@@ -1226,7 +1158,7 @@ func TestDoctorNodeCheckIsUnprivilegedAndDecisive(t *testing.T) {
 // this pins both ends of the derivation.
 func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {
 	root := repoRootFromTest(t)
-	for _, script := range []string{"bootstrap.sh", "update.sh", "fleet-upgrade.sh"} {
+	for _, script := range []string{"bootstrap.sh", "update.sh"} {
 		out, err := runScript(t, nil, script, "--help")
 		if err != nil {
 			t.Fatalf("%s --help exited non-zero: %v\n--- output ---\n%s", script, err, out)
@@ -1257,32 +1189,6 @@ func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {
 		if !strings.Contains(out, last) {
 			t.Errorf("%s --help is truncated: it omits the final header line %q\n--- output ---\n%s", script, last, out)
 		}
-	}
-}
-
-// TestFleetUpgradeRetiresTheWebTier — the fleet binary serves the web UI on
-// the port the retired Next.js unit (fleet-web) held (ADR-0091), so the
-// upgrade restart must retire that unit first or the new listener cannot bind
-// and fleet exits — which the readiness gate would then "fix" by rolling back.
-func TestFleetUpgradeRetiresTheWebTier(t *testing.T) {
-	out := runScriptDryRun(t, "fleet-upgrade.sh", "--dry-run")
-	if !strings.Contains(out, "would retire the Next.js web tier") {
-		t.Errorf("fleet-upgrade plan never mentions retiring the old web tier\n--- output ---\n%s", out)
-	}
-	root := repoRootFromTest(t)
-	body, err := os.ReadFile(filepath.Join(root, "scripts", "fleet-upgrade.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := string(body)
-	retire := strings.Index(script, "\n  fleet_stop_web_tier ")
-	restart := strings.Index(script, "\n  if ! restart_service; then")
-	if retire < 0 || restart < 0 || retire > restart {
-		t.Errorf("fleet_stop_web_tier (at %d) must run before the upgrade restart (at %d)", retire, restart)
-	}
-	// And the banner must not claim health the run never measured.
-	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {
-		t.Errorf("fleet-upgrade must track whether the readiness gate actually ran, and say so when it did not")
 	}
 }
 

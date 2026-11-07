@@ -104,9 +104,10 @@ fleet_web_tier_present() {
 #   fleet_remove_web_tier    delete the unit, drop-in, shim and Next build
 #   fleet_cutover_web_tier   stop, restart fleet, and remove only once fleet
 #                            is active — else restore; bootstrap and doctor
-# update.sh and fleet-upgrade.sh stop the tier before fleet restarts onto its
-# port, and remove it only once the new process is healthy; a failed restart
-# (and fleet-upgrade's rollback to the old binary) brings the old UI back.
+# update.sh stops the tier before fleet restarts onto its port, and removes it
+# only once the new process is healthy; after a failed restart (and `fleet
+# release install`'s rollback to the old binary) the tier stays stopped with
+# its files intact, and the operator is told how to bring the old UI back.
 # Nothing removes the tier before that point: there is deliberately no
 # stop-and-remove-in-one helper (#1838 — bootstrap used one after a restore and
 # deleted the tier it had just brought back).

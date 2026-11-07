@@ -302,9 +302,9 @@ self-migrates on start.
 
 | Verb | What it does |
 |---|---|
-| `fleet bootstrap` | provision a box (Postgres, build, install, systemd, optional web + TLS) |
-| `fleet update` | `git pull` + rebuild + reinstall the binaries in place |
-| `scripts/fleet-upgrade.sh` | drain, swap, health-gate, and auto-roll-back on failure |
+| `fleet bootstrap` | provision a box (Postgres, the signed release binary, systemd, optional web + TLS) — no Go or Node |
+| `fleet update` | install the newest signed release: verify, swap atomically, restart, health-gate, auto-roll-back on failure |
+| `fleet release rollback` | put the previous binary (`fleet.prev`) back, restart, health-gate |
 | `fleet status` / `fleet diagnose` | quick health report / redacted support bundle |
 | `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → System checks) |
 | `fleet restart` · `stop` · `logs` | service lifecycle |

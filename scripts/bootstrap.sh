@@ -46,10 +46,13 @@
 # Explicit flags always win — each prompt is asked only when its flag was not
 # given, and non-TTY runs skip every prompt (flag/default behavior unchanged).
 #
-# End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
-# in place (--client-config) → build the sandbox image from the bundle → provision
-# the role + database (local) or validate the DSN (external) → write DATABASE_URL
-# + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
+# End-to-end flow (every run): install the runtime packages (no Go, no Node) →
+# download + verify the signed fleet release (docs/RELEASE-ARTIFACTS.md) →
+# ensure 0600 env file → ensure the client bundle is in place (--client-config)
+# → the sandbox image (the release's signed image, or a custom bundle
+# Containerfile built on top of it) → provision the role + database (local) or
+# validate the DSN (external) → write DATABASE_URL + FLEET_CLIENT_CONFIG_DIR
+# into the env file → optionally enable +
 # start the systemd unit → install + enable the daily database-backup and
 # host-maintenance timers (--no-backup-timer / --no-maintenance-timer opt out).
 #
@@ -138,6 +141,16 @@
 #                              than truncating an existing Caddy config — except
 #                              the caddy package's untouched stock file, which
 #                              is replaced with a copy kept beside it (#1657).
+#   --tag <vYYYY.MM.DD.N>      install this signed release (default: the newest
+#                              release this checkout contains, else the newest
+#                              published one). It is verified before use:
+#                              signature by fleet's release workflow, checksums,
+#                              tag, architecture, no host executor.
+#   --from-source              DEVELOPMENT BOXES ONLY: build fleet here with
+#                              `make build` (Go + Node on PATH; bootstrap installs
+#                              neither) instead of installing the signed release.
+#                              LEGACY-BUILD-FROM-SOURCE: remove after boxes run
+#                              artifacts.
 #   --dry-run                  print the plan; touch nothing.
 #
 # With --enable-web --domain <fqdn>, bootstrap also names the box <fqdn> when
@@ -196,6 +209,10 @@ set -euo pipefail
 # from elsewhere). The DB/env/bundle steps still use repo-relative defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Signed-release download + verification: bootstrap has no fleet yet, so the
+# first binary is verified here (same pins as `fleet release`, ADR-0098).
+# shellcheck source=lib/release.sh
+. "$SCRIPT_DIR/lib/release.sh"
 # The fleet-managed Caddyfile: marker, renderer, foreign-file detection. ONE
 # implementation shared with update.sh + doctor.sh so the TLS front's routing
 # cannot drift between the script that writes it and the ones that check it.
@@ -262,6 +279,8 @@ CHAT_DB_NAME_ARG=""
 CHAT_DB_USER_ARG=""
 SCHED_DB_NAME_ARG=""
 SCHED_DB_USER_ARG=""
+RELEASE_TAG="${FLEET_RELEASE_TAG:-}"
+FROM_SOURCE="${FLEET_BOOTSTRAP_FROM_SOURCE:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -297,12 +316,16 @@ while [[ $# -gt 0 ]]; do
     --no-backup-timer)   ENABLE_BACKUP_TIMER=0 ;;
     --no-maintenance-timer) ENABLE_MAINTENANCE_TIMER=0 ;;
     --force-caddy)       FORCE_CADDY=1 ;;
+    --tag)               shift; [[ $# -gt 0 ]] || { echo "error: --tag needs a release tag" >&2; exit 1; }; RELEASE_TAG="$1" ;;
+    --tag=*)             RELEASE_TAG="${1#*=}" ;;
+    --from-source)       FROM_SOURCE=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
       # Derived, not a hardcoded range: print the header comment block and stop
       # at the first non-`#` line. A fixed range silently truncates the help the
       # moment the header grows — which had already dropped the last 6 lines
-      # here, and shipped raw shell code out of fleet-upgrade.sh's --help.
+      # here, and shipped raw shell code out of the (since removed)
+      # fleet-upgrade.sh's --help.
       awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -682,51 +705,18 @@ normalize_auth_pubkey() {
   printf '%s' "$v"
 }
 
-# build_fleet_binary — `make build` on the node web/.nvmrc names. The web UI is
-# a Vite bundle compiled INTO the fleet binary (ADR-0091), so the Go build now
-# needs node + npm too. Resolve the interpreter BEFORE building and fail loudly
-# rather than building on an unsupported node. Returns non-zero on any failure.
+# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+# build_fleet_binary — `make build` for --from-source (development boxes). The
+# toolchain is whatever is on PATH; bootstrap installs neither Go nor Node any
+# more. GOTOOLCHAIN=auto lets an older distro Go fetch go.mod's toolchain.
+# `make build` ends with `fleet version --web`, so success means the binary
+# really carries the web bundle.
 build_fleet_binary() {
-  local node_bin npm_cli build_path build_node
-  if ! node_bin="$(fleet_resolve_node_bin "$NODE_MAJOR")"; then
-    warn "no node >= $NODE_MAJOR found (web/.nvmrc) — the build needs one for the web bundle."
-    warn "  install it: sudo dnf install nodejs$NODE_MAJOR   (then re-run, or: sudo fleet doctor --node)"
+  command -v go >/dev/null 2>&1 && command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 || {
+    warn "--from-source needs go, node (>= web/.nvmrc) and npm on PATH — bootstrap no longer installs them"
     return 1
-  fi
-  # And the npm that belongs to it, separately: on Fedora npm is its own package
-  # and its shebang names its interpreter ABSOLUTELY, so a resolved node says
-  # nothing about which node `npm ci` will run under. A miss is fatal only for a
-  # VERSIONED interpreter (the parallel-stream case, where the bare `npm`
-  # provably belongs to another one); on a single-node layout the `node` pin in
-  # the build PATH is enough and the read-back below reports what npm ran under.
-  if npm_cli="$(fleet_resolve_npm_cli "$node_bin")"; then
-    ok "web bundle will build with ${npm_cli} — pinned to ${node_bin} ($("$node_bin" -v 2>/dev/null))"
-  elif [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]]; then
-    warn "no npm belongs to ${node_bin} — the bare \`npm\` on this box is the default stream's and its shebang pins it there."
-    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
-    return 1
-  fi
-  # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter picked
-  # above (a `node` symlink alone is not enough on Fedora — see
-  # scripts/lib/node-version.sh). Resolved once; its shim dir is cleaned up.
-  build_path="$(fleet_node_build_path "$node_bin")"
-  build_node="$(fleet_npm_node_version "$build_path" "$REPO_ROOT/web" || true)"
-  if [[ -n "$build_node" && "$(fleet_node_version_major "$build_node" || echo 0)" -lt "$NODE_MAJOR" ]]; then
-    fleet_node_build_path_cleanup "$build_path" "$node_bin"
-    warn "npm would build the web bundle on ${build_node}, below the ${NODE_MAJOR} declared in web/.nvmrc."
-    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
-    return 1
-  fi
-  # GOTOOLCHAIN=auto: Fedora's `golang` lags go.mod's pinned version, so let
-  # the toolchain fetch the required Go rather than failing an opaque build.
-  # `make build` ends with `fleet version --web`, so success means the binary
-  # really carries the bundle.
-  if ( cd "$REPO_ROOT" && export PATH="$build_path" GOTOOLCHAIN=auto && make build ); then
-    fleet_node_build_path_cleanup "$build_path" "$node_bin"
-    return 0
-  fi
-  fleet_node_build_path_cleanup "$build_path" "$node_bin"
-  return 1
+  }
+  ( cd "$REPO_ROOT" && export GOTOOLCHAIN=auto && make build )
 }
 
 # cutover_web_tier_or_die — fleet_cutover_web_tier (scripts/lib/web-tier.sh)
@@ -937,66 +927,67 @@ if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
   unset _apk_raw
 fi
 
-# ── system dependencies: the build + runtime + sandbox toolchain ──
+# ── system dependencies: the runtime + sandbox toolchain ──
 # So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
-# end (the chat/moc experience): Go (build the binary), Node (build/run the web
-# app), podman (the execution sandbox), python3 + pip (host-side Python MCP
-# servers), plus git/curl/jq/gcc. Postgres-server is installed per-mode below
-# (local only). Non-Fedora hosts: install these yourself, then re-run.
+# end: podman (the execution sandbox), python3 + pip (host-side Python MCP
+# servers), chromium-headless (built-in browser automation), plus
+# git/curl/jq/rsync/gcc. No Go and no Node: the fleet binary is a signed release
+# artifact with the web UI embedded (docs/RELEASE-ARTIFACTS.md, ADR-0098).
+# Postgres-server is installed per-mode below (local only). Non-Fedora hosts:
+# install these yourself, then re-run.
 #
 # slirp4netns is here because FLEET_DEFAULT_NETWORK_MODE=allowlisted requires
 # it: podman >= 5.0 defaults to pasta and a stock modern host ships pasta
 # WITHOUT slirp4netns, which makes every allowlisted container start fail
 # (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
 # to install unconditionally so the mode is available if an operator picks it.
-step "Installing system dependencies (build + runtime + sandbox toolchain)"
-# The node major is declared ONCE, in web/.nvmrc, and read here. CI reads the
-# same file via actions/setup-node's node-version-file, so the version the box
-# runs and the version CI tests cannot drift apart silently — which is exactly
-# what happened before: CI pinned '22' across six jobs in four workflow files
-# while the box took whatever `dnf install nodejs` happened to mean.
-# shellcheck source=lib/node-version.sh
-. "$SCRIPT_DIR/lib/node-version.sh"
-NODE_MAJOR="$(fleet_node_major_want "$REPO_ROOT" || true)"
-# No hardcoded fallback: .nvmrc can legitimately hold `lts/*` or `20.11.0`,
-# which actions/setup-node understands and a naive integer check does not — and
-# silently defaulting is how CI and the box diverge in the first place.
-[[ -n "$NODE_MAJOR" ]] || die "cannot read the node major from ${REPO_ROOT}/web/.nvmrc — expected something like '24'"
-# Ask for the VERSIONED package (nodejs24), not the unversioned `nodejs`.
-# Fedora's node streams are parallel-installable and `nodejs` resolves to
-# whichever the release designated default — so `dnf install nodejs` on F44
-# gives 22 and can never reach 24, however many times it is re-run.
-# nodejs${NODE_MAJOR}-npm, NOT bare `npm`: the unversioned npm package belongs
-# to the DEFAULT stream, so asking for it drags the older interpreter onto the
-# box and lets it own /usr/bin/npm — which is what would then build the app.
-FLEET_DEPS=(git curl jq rsync golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip chromium-headless gcc podman slirp4netns)
+step "Installing system dependencies (runtime + sandbox toolchain)"
+FLEET_DEPS=(git curl jq rsync python3 python3-pip chromium-headless gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
-  if ! run dnf install -y "${FLEET_DEPS[@]}"; then
-    # A distro without a versioned stream (or one that names it differently)
-    # should still get a working box; the floor is then doctor.sh's to report.
-    warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
-    warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
-    FLEET_DEPS=(git curl jq rsync golang nodejs npm gnupg2 python3 python3-pip chromium-headless gcc podman slirp4netns)  # unversioned fallback
-    run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
-    # The usual reason for that miss is a node major newer than the distro's
-    # streams (node 26 on Fedora 44). fleet tracks the latest major (ADR-0078),
-    # so instead of leaving the floor to doctor, fetch the signed nodejs.org
-    # release — the same install `fleet doctor --node` performs — unless the
-    # unversioned package happened to be new enough.
-    if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would install the signed upstream node ${NODE_MAJOR} from nodejs.org into /usr/local/bin/node-${NODE_MAJOR} if no node >= ${NODE_MAJOR} resolves"
-    elif ! fleet_resolve_node_bin "$NODE_MAJOR" >/dev/null; then
-      if tarball_node="$(fleet_node_tarball_install "$NODE_MAJOR")"; then
-        ok "no nodejs${NODE_MAJOR} package in the distro repos — installed the signed upstream node $("$tarball_node" -v) at ${tarball_node}"
-      else
-        warn "could not install node ${NODE_MAJOR} from nodejs.org either (see above); \`sudo fleet doctor --node\` retries it."
-      fi
-    fi
-  fi
+  run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
 else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
-  warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
+fi
+
+# ── the fleet release: download + verify BEFORE anything uses it ──
+# The binary every later step runs (`fleet release sandbox` below, the service
+# with --enable-service). Verified by scripts/lib/release.sh with the pinned
+# cosign: signature by fleet's release workflow on main, checksums, the
+# release tag, the architecture — and then by the binary's own build info (no
+# host executor, web bundle embedded). There is no unverified fallback.
+FLEET_RELEASE_BIN=""
+RELEASE_DIR=""
+if [[ "$FROM_SOURCE" == "1" ]]; then
+  [[ -z "$RELEASE_TAG" ]] || die "--tag selects a signed release; it cannot be combined with --from-source"
+  info "--from-source: no release is downloaded; fleet is built from ${REPO_ROOT} with --enable-service (LEGACY-BUILD-FROM-SOURCE)"
+else
+  if [[ -z "$RELEASE_TAG" ]]; then
+    # The release this checkout contains, so the units, scripts and generic
+    # bundle it ships match the binary; else the newest published one.
+    RELEASE_TAG="$(cd "$REPO_ROOT" && bash scripts/version.sh current 2>/dev/null || true)"
+    [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == v* ]] || RELEASE_TAG="v${RELEASE_TAG}"
+    [[ "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]] || RELEASE_TAG=""
+  fi
+  [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
+    || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
+  step "Fetching + verifying the fleet release ${RELEASE_TAG:-(newest published)}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest published release}, and verify them before use: the pinned cosign (internal/release/cosign.lock), the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, no host executor"
+  else
+    if [[ -z "$RELEASE_TAG" ]]; then
+      RELEASE_TAG="$(fleet_release_latest_tag)" \
+        || die "this checkout contains no release and GitHub could not be asked for the newest one — pass --tag vYYYY.MM.DD.N"
+    fi
+    RELEASE_DIR="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}/release/${RELEASE_TAG}"
+    rm -rf "$RELEASE_DIR"
+    FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}")" \
+      || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed. An old checkout's release may be past the retention window: git pull, or pass --tag."
+    "$FLEET_RELEASE_BIN" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
+      || die "the verified binary reports the host executor compiled in — refusing it"
+    "$FLEET_RELEASE_BIN" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
+    ok "verified ${RELEASE_TAG}: $("$FLEET_RELEASE_BIN" version)"
+  fi
 fi
 
 # The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
@@ -1239,39 +1230,73 @@ resolve_sandbox_image() {
   fi
 }
 
-# ── sandbox image (per-client bundle artifact; build-on-box default) ──
-# The execution sandbox is a per-client bundle artifact: the Containerfile lives
-# in the bundle at <bundle>/sandbox/Containerfile. DEFAULT = build it on this box
-# (auditable supply chain). REGISTRY PUBLISH is opt-in: a client sets
-# sandbox.image in its manifest to a prebuilt ref and fleet pulls/uses that
-# instead — in which case skip the on-box build here.
-step "Building the sandbox image from the bundle (build-on-box default)"
+# ── sandbox image ──
+# The release publishes the generic bundle's sandbox image, signed. A bundle
+# that ships no Containerfile, or the generic one unchanged, runs that image:
+# verified (`fleet release sandbox`), pulled BY DIGEST into the store the
+# service reads, tagged as the bundle's sandbox.tag. A bundle with its own
+# Containerfile is built here — layered on that verified image when it
+# declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md). A bundle that
+# names sandbox.image in its manifest uses that image; nothing happens here.
+step "Sandbox image"
 SANDBOX_CONTAINERFILE="${CLIENT_CONFIG_DIR}/sandbox/Containerfile"
 SANDBOX_IMAGE_REF="$(resolve_sandbox_image "${CLIENT_CONFIG_DIR}/manifest.yaml")"
-if [[ -n "$SANDBOX_IMAGE_REF" ]]; then
-  info "manifest resolves sandbox.image=${SANDBOX_IMAGE_REF} — using a prebuilt/registry image; skipping on-box build."
-elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR} scripts/build-sandbox-image.sh"
-elif [[ ! -f "$SANDBOX_CONTAINERFILE" ]]; then
-  warn "no ${SANDBOX_CONTAINERFILE} — bundle ships no sandbox Containerfile; set sandbox.image or add one."
-elif ! command -v podman >/dev/null 2>&1; then
-  warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
-elif [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
-  # systemd path: build INTO the service user's rootless image store, so the
-  # User=fleet unit finds the image (root's rootful store is a separate namespace).
-  SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
-  info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
-  # --pull=newer matches build-sandbox-image.sh: refresh an unpinned base from
-  # the registry when upstream published a newer one, instead of silently
-  # reusing whatever stale copy is already in the store (offline-safe — podman
-  # suppresses the pull error when a local copy of the base exists).
-  if runuser -u "$SERVICE_USER" -- sh -c "cd '${SERVICE_HOME}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' podman build --pull=newer -t '${SANDBOX_TAG}' -f '${SANDBOX_CONTAINERFILE}' '${CLIENT_CONFIG_DIR}/sandbox'"; then
-    ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
+SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
+sandbox_published=0
+if [[ "$FROM_SOURCE" != "1" ]] && { [[ ! -f "$SANDBOX_CONTAINERFILE" ]] || cmp -s "$SANDBOX_CONTAINERFILE" "$REPO_ROOT/config/default/sandbox/Containerfile"; }; then
+  sandbox_published=1
+fi
+# sandbox_podman CMD… — podman in the store the service reads: the service
+# user's rootless store on the --enable-service path, else the invoking user's.
+sandbox_podman() {
+  if [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
+    ( cd "$SERVICE_HOME" 2>/dev/null || cd /
+      runuser -u "$SERVICE_USER" -- env HOME="$SERVICE_HOME" XDG_RUNTIME_DIR="/run/${SERVICE_USER}" podman "$@" )
   else
-    warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
+    podman "$@"
+  fi
+}
+if [[ -n "$SANDBOX_IMAGE_REF" ]]; then
+  info "manifest resolves sandbox.image=${SANDBOX_IMAGE_REF} — using a prebuilt/registry image; nothing to pull or build here."
+elif [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "$sandbox_published" == "1" ]]; then
+    info "[dry-run] would verify the release's signed sandbox image (fleet release sandbox), pull it BY DIGEST and tag it ${SANDBOX_TAG}"
+  else
+    info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR} scripts/build-sandbox-image.sh (layered on the release's verified image when the Containerfile declares FLEET_SANDBOX_BASE)"
+  fi
+elif ! command -v podman >/dev/null 2>&1; then
+  warn "podman not found — no sandbox image (install podman, then run: sudo fleet update --no-pull)."
+elif [[ "$sandbox_published" == "1" ]]; then
+  if ! SANDBOX_PUB_REF="$("$FLEET_RELEASE_BIN" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")"; then
+    die "the release's sandbox image did not verify (above) — refusing to set up an unverified sandbox"
+  elif sandbox_podman pull "$SANDBOX_PUB_REF" && sandbox_podman tag "$SANDBOX_PUB_REF" "$SANDBOX_TAG"; then
+    STATE_DIR_B="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}"
+    mkdir -p "$STATE_DIR_B" && printf '%s\n' "$SANDBOX_PUB_REF" > "$STATE_DIR_B/sandbox-image.digest" \
+      && printf '%s\n' "$SANDBOX_TAG" > "$STATE_DIR_B/sandbox-image.ref" || true
+    ok "sandbox image ${SANDBOX_TAG} = ${SANDBOX_PUB_REF} (verified, pulled by digest)"
+  else
+    warn "pulling ${SANDBOX_PUB_REF} failed — fleet will have no runnable sandbox image; retry: sudo fleet update --no-pull"
   fi
 else
-  if FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" "$(dirname "$0")/build-sandbox-image.sh"; then
+  sandbox_base=""
+  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$SANDBOX_CONTAINERFILE"; then
+    sandbox_base="$("$FLEET_RELEASE_BIN" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
+      || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify (above)"
+    info "the bundle layers on the release's verified sandbox image ${sandbox_base}"
+  fi
+  # build-sandbox-image.sh builds as the unit's User= when the unit exists;
+  # before the unit is installed (a first bootstrap), build as the service user
+  # directly so the image lands in the store the service will read.
+  if [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
+    info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
+    _base_args=()
+    [[ -n "$sandbox_base" ]] && _base_args=(--build-arg "FLEET_SANDBOX_BASE=${sandbox_base}")
+    if sandbox_podman build --pull=newer "${_base_args[@]}" -t "$SANDBOX_TAG" -f "$SANDBOX_CONTAINERFILE" "${CLIENT_CONFIG_DIR}/sandbox"; then
+      ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
+    else
+      warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
+    fi
+  elif FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" FLEET_SANDBOX_BASE="$sandbox_base" "$(dirname "$0")/build-sandbox-image.sh"; then
     ok "sandbox image built from ${SANDBOX_CONTAINERFILE}"
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before starting fleet."
@@ -1731,16 +1756,18 @@ if [[ "$DRY_RUN" != "1" ]]; then
   info "if the bundle's default persona differs from 'assistant', set FLEET_PERSONA_DEFAULT=<name> and FLEET_PERSONA=personas/<name>.yaml in ${ENV_FILE}."
 fi
 
-# ── optionally build + install the binary + unit, then enable + start it ──
-# fleet bootstrap/update operate on a SOURCE CHECKOUT (this repo) and
-# install the built artifacts to FLEET_INSTALL_DIR (default /opt/fleet) — the
-# location deploy/fleet.service's ExecStart points at.
+# ── optionally install the binary + unit, then enable + start it ──
+# The verified release binary goes to FLEET_INSTALL_DIR (default /opt/fleet) —
+# the location deploy/fleet.service's ExecStart points at. The checkout still
+# supplies the units, scripts and the generic bundle.
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
-  step "Building + installing the fleet binary, then enabling ${SERVICE_NAME}"
+  step "Installing the fleet binary, then enabling ${SERVICE_NAME}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would run: (cd ${REPO_ROOT} && make build) on node >= ${NODE_MAJOR}  → fleet with the web UI embedded"
-    info "[dry-run] would install fleet → ${INSTALL_DIR}"
+    if [[ "$FROM_SOURCE" == "1" ]]; then
+      info "[dry-run] --from-source: would run (cd ${REPO_ROOT} && make build) with the go, node and npm on PATH → fleet with the web UI embedded"
+    fi
+    info "[dry-run] would install fleet ${RELEASE_TAG:-(built from source)} → ${INSTALL_DIR} (atomic rename; a binary already there is kept as fleet.prev)"
     info "[dry-run] would symlink /usr/local/bin/fleet → ${INSTALL_DIR} (operator PATH)"
     info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
     info "[dry-run] would install deploy/fleet.service → /etc/systemd/system"
@@ -1751,35 +1778,37 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
   elif ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — skipping --enable-service (no systemd on this box)."
   else
-    # 1. Build the deployable artifacts from this checkout (needs Go on the box).
-    #    The web UI is compiled into the binary (ADR-0091), so this needs node
-    #    + npm as well as Go — build_fleet_binary pins the interpreter.
-    if command -v go >/dev/null 2>&1 || command -v make >/dev/null 2>&1; then
-      if build_fleet_binary && [[ -x "$REPO_ROOT/fleet" ]]; then
-        install -D -m 0755 "$REPO_ROOT/fleet" "$INSTALL_DIR/fleet"
-        ok "installed fleet → ${INSTALL_DIR}"
-        # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
-        # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
-        # status` / `fleet update` / `fleet chat` needs it on PATH too — that gap
-        # was the "fleet isn't installed" symptom. Symlink (not copy) so a later
-        # update of $INSTALL_DIR/fleet is reflected with no second install.
-        if [[ -d /usr/local/bin ]] || install -d /usr/local/bin 2>/dev/null; then
-          ln -sf "$INSTALL_DIR/fleet" /usr/local/bin/fleet && info "linked /usr/local/bin/fleet → ${INSTALL_DIR}/fleet"
-        fi
-        # MOTD (#461): a login banner like the sibling chat repo's. profile.d runs
-        # `fleet motd` (version + service state + commands; no secrets) on an
-        # interactive login. Best-effort — never fail the install on it.
-        if [[ -d /etc/profile.d || -w /etc ]] && [[ -f "$REPO_ROOT/deploy/fleet-motd.sh" ]]; then
-          install -D -m 0644 "$REPO_ROOT/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh \
-            && info "installed /etc/profile.d/fleet-motd.sh (login banner)" || true
-        fi
-      else
-        die "make build failed or produced no artifacts — install Go and node >= ${NODE_MAJOR} (web/.nvmrc), then retry"
-      fi
-    elif [[ -x "$INSTALL_DIR/fleet" ]]; then
-      warn "no Go toolchain — using the existing ${INSTALL_DIR}/fleet (build + install manually to update it)."
-    else
-      die "no Go toolchain and no binary at ${INSTALL_DIR}/fleet — install Go (or pre-build) then re-run"
+    # 1. The binary: the verified release (default), or a from-source build.
+    _new_bin="$FLEET_RELEASE_BIN"
+    if [[ "$FROM_SOURCE" == "1" ]]; then
+      # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+      { build_fleet_binary && [[ -x "$REPO_ROOT/fleet" ]]; } \
+        || die "--from-source: make build failed or produced no binary (see above)"
+      _new_bin="$REPO_ROOT/fleet"
+    fi
+    [[ -x "$_new_bin" ]] \
+      || die "no verified fleet binary to install — re-run bootstrap (it downloads and verifies the release)"
+    # Atomic: stage beside the live binary, keep any existing one as
+    # fleet.prev (what `fleet release rollback` restores), rename over.
+    install -d -m 0755 "$INSTALL_DIR"
+    [[ -e "$INSTALL_DIR/fleet" ]] && ln -f "$INSTALL_DIR/fleet" "$INSTALL_DIR/fleet.prev"
+    install -m 0755 "$_new_bin" "$INSTALL_DIR/.fleet.new" && mv -f "$INSTALL_DIR/.fleet.new" "$INSTALL_DIR/fleet" \
+      || die "could not install fleet into ${INSTALL_DIR}"
+    ok "installed fleet ${RELEASE_TAG:-(from source)} → ${INSTALL_DIR}"
+    # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
+    # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
+    # status` / `fleet update` / `fleet chat` needs it on PATH too — that gap
+    # was the "fleet isn't installed" symptom. Symlink (not copy) so a later
+    # update of $INSTALL_DIR/fleet is reflected with no second install.
+    if [[ -d /usr/local/bin ]] || install -d /usr/local/bin 2>/dev/null; then
+      ln -sf "$INSTALL_DIR/fleet" /usr/local/bin/fleet && info "linked /usr/local/bin/fleet → ${INSTALL_DIR}/fleet"
+    fi
+    # MOTD (#461): a login banner like the sibling chat repo's. profile.d runs
+    # `fleet motd` (version + service state + commands; no secrets) on an
+    # interactive login. Best-effort — never fail the install on it.
+    if [[ -d /etc/profile.d || -w /etc ]] && [[ -f "$REPO_ROOT/deploy/fleet-motd.sh" ]]; then
+      install -D -m 0644 "$REPO_ROOT/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh \
+        && info "installed /etc/profile.d/fleet-motd.sh (login banner)" || true
     fi
     # 2. Install the unit file from this checkout if not already present.
     if [[ -f "$REPO_ROOT/deploy/fleet.service" ]] && ! systemctl cat fleet.service >/dev/null 2>&1; then
@@ -1993,5 +2022,6 @@ info "         not the loss of this host or volume, and it does not capture atta
 info "         files. Copy dumps offsite yourself — see docs/BACKUP_RESTORE.md."
 info "Set MCP account secrets post-bootstrap: fleet mcp account set <server> <account> --secret KEY=-"
 info "Check health any time:  fleet status     (also: fleet logs, fleet motd, fleet chat)"
-info "Update in place later:  fleet update      (--check for a read-only 'commits behind'; or scripts/update.sh)"
+info "Update in place later:  fleet update      (installs the newest signed release; --check is read-only)"
+info "Roll back an update:    fleet release rollback   (restores the previous binary, fleet.prev)"
 ok "bootstrap complete (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
