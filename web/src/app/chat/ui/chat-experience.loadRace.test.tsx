@@ -20,7 +20,7 @@ type Deferred = { url: string; resolve: () => void };
 let held: Deferred[] = [];
 let chatBodies: Array<Record<string, unknown>> = [];
 
-function mockBackend() {
+function mockBackend(heldConv = /^\/api\/conversations\/(conv-[bc])$/) {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -31,14 +31,14 @@ function mockBackend() {
     }
     if (url === "/api/conversations") return json({ conversations: CONVS });
     if (url === "/api/conversations?archived=true") return json({ conversations: [] });
-    if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
-    const m = /^\/api\/conversations\/(conv-[bc])$/.exec(url);
+    const m = heldConv.exec(url);
     if (m) {
       const conv = CONVS.find((c) => c.id === m[1]);
       return new Promise<Response>((resolve) => {
         held.push({ url, resolve: () => resolve(json({ conversation: conv, history: [] })) });
       });
     }
+    if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
     if (url === "/api/mcp-servers" || /\/mcp-servers$/.test(url)) return json({ servers: [] });
     if (/\/inflight$/.test(url)) return json({ inflight: false });
     return json({}, 404);
@@ -229,5 +229,23 @@ describe("loadConversation supersession (#2043)", () => {
     expect(headerTitle()).toHaveTextContent("Alpha chat");
     // Alpha reopened through the attached short-circuit: no history refetch.
     expect(alphaReads()).toBe(alphaReadsBefore);
+  });
+
+  it("the boot restore finishing does not clear the spinner of a chat opened meanwhile", async () => {
+    mockBackend(/^\/api\/conversations\/(conv-[ab])$/);
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    // Boot is restoring Alpha (held); the user opens Beta from the keyboard.
+    await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-a")).toBe(true));
+    key("j"); // Alpha
+    key("j"); // Beta
+    key("Enter");
+    await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-b")).toBe(true));
+
+    await release("/api/conversations/conv-a");
+    expect(screen.getByText("Loading conversation...")).toBeInTheDocument();
+
+    await release("/api/conversations/conv-b");
+    await waitFor(() => expect(screen.queryByText("Loading conversation...")).not.toBeInTheDocument());
+    expect(headerTitle()).toHaveTextContent("Beta chat");
   });
 });

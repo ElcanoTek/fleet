@@ -6111,7 +6111,16 @@ export function ChatExperience({
         await loadConversationRef.current(target, { restore: true });
       } finally {
         if (!cancelled) {
-          setIsLoadingHistory(false);
+          // The boot spinner is the bootstrap's only while no navigation has
+          // claimed it: a chat the user opened while the restore ran is still
+          // loading when the gens differ, and its own finally clears it.
+          // Clearing it here showed that chat's composer before its transcript.
+          if (
+            loadConversationGenRef.current ===
+            loadConversationSettledGenRef.current
+          ) {
+            setIsLoadingHistory(false);
+          }
           // Bootstrap done — start mirroring state into the module store so a
           // later navigation to /settings leaves a warm snapshot to return to.
           setBootstrapped(true);
