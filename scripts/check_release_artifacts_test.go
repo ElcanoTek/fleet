@@ -4,6 +4,8 @@
 package scripts
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -203,5 +205,50 @@ func TestShellVerifierPinsTheSameTrust(t *testing.T) {
 	}
 	if strings.Contains(sh, "certificate-identity-regexp") {
 		t.Error("scripts/lib/release.sh must match the signer identity exactly, not by regexp")
+	}
+}
+
+// TestStepsThatChangeDirectoryUseAbsoluteScriptPaths — a run block that `cd`s
+// somewhere and then calls `scripts/…` relatively runs a path that does not
+// exist there (exit 127). That is how v2026.11.07.20 failed at its very last
+// signing step (`cd dist` … `scripts/retry-transient.sh`). After a cd, repo
+// scripts must be called as "$GITHUB_WORKSPACE/scripts/…".
+func TestStepsThatChangeDirectoryUseAbsoluteScriptPaths(t *testing.T) {
+	root := repoRoot(t)
+	wfs, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	if err != nil || len(wfs) == 0 {
+		t.Fatalf("no workflows: %v", err)
+	}
+	cd := regexp.MustCompile(`(?m)^\s*cd\s+\S`)
+	relScript := regexp.MustCompile(`(?m)(?:^|[\s;&|(])(scripts/[A-Za-z0-9_./-]+)`)
+	for _, wf := range wfs {
+		var doc struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Name string `yaml:"name"`
+					Run  string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		raw, err := os.ReadFile(wf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", wf, err)
+		}
+		for job, j := range doc.Jobs {
+			for _, s := range j.Steps {
+				loc := cd.FindStringIndex(s.Run)
+				if loc == nil {
+					continue
+				}
+				// Only calls AFTER the first cd are affected.
+				for _, m := range relScript.FindAllStringSubmatch(s.Run[loc[0]:], -1) {
+					t.Errorf("%s job %s step %q calls %s relatively after a cd; use \"$GITHUB_WORKSPACE/%s\"",
+						filepath.Base(wf), job, s.Name, m[1], m[1])
+				}
+			}
+		}
 	}
 }

@@ -816,7 +816,7 @@ jobs:
             fleet-linux.provenance.sigstore.json | sed 's#  \./#  #' > SHA256SUMS
           cat SHA256SUMS
           for f in SHA256SUMS fleet-linux-amd64 fleet-linux-arm64; do
-            scripts/retry-transient.sh cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
+            "$GITHUB_WORKSPACE/scripts/retry-transient.sh" cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
             # Verify exactly as a box will: a signer/verifier identity drift
             # fails HERE, not on every box's next update.
             cosign verify-blob --bundle "${f}.sigstore.json" \
