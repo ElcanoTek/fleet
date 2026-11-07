@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"fmt"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -492,37 +491,6 @@ func TestHistoryCleanup(t *testing.T) {
 	// Cleanup should have deleted the task
 	if cleanupResp.DeletedCount != 1 {
 		t.Errorf("Expected 1 deleted task, got %d", cleanupResp.DeletedCount)
-	}
-}
-
-func TestRateLimiter_IncrementalCleanup(t *testing.T) {
-	// 1ms window to make things stale quickly
-	rl := newRateLimiter(10, time.Millisecond)
-
-	// Fill with stale items
-	staleCount := 200
-	cutoff := time.Now().Add(-time.Second) // definitely stale
-	for i := 0; i < staleCount; i++ {
-		ip := fmt.Sprintf("stale-%d", i)
-		rl.requests[ip] = []time.Time{cutoff}
-	}
-
-	// Verify initial state
-	if len(rl.requests) != staleCount {
-		t.Fatalf("Expected %d items, got %d", staleCount, len(rl.requests))
-	}
-
-	// Drive cleanup with a single active IP
-	// This will trigger the incremental cleanup logic repeatedly.
-	for i := 0; i < 1000; i++ {
-		rl.Allow("active-ip")
-	}
-
-	// Now map should contain "active-ip" + maybe some leftovers from 200 stale.
-	// We expect significant cleanup.
-
-	if len(rl.requests) > 120 {
-		t.Errorf("Rate limiter failed to cleanup. Size: %d", len(rl.requests))
 	}
 }
 

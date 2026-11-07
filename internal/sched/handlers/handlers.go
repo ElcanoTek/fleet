@@ -141,8 +141,9 @@ type Handlers struct {
 	storage *storage.Storage
 	apiKeys *apikeys.Manager
 
-	// Rate limiting for login
-	loginRateLimiter *rateLimiter
+	// loginRL throttles POST /login per client IP (20/minute) with the shared
+	// sliding-window limiter (internal/ratelimit).
+	loginRL *ratelimit.Limiter
 
 	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
 	// POST /upload), shared implementation with the chat server
@@ -151,11 +152,6 @@ type Handlers struct {
 	// ratelimit_middleware.go.
 	taskKeyRL    *ratelimit.Limiter
 	taskGlobalRL *ratelimit.Limiter
-	// taskRLCounter counts 429s emitted by SchedRateLimitMiddleware, by window
-	// ("global"|"minute"|"day"). Behind a pointer (like the caches above) so a
-	// Handlers value can still be copied. Surfaced via RateLimitExceededCounts; a
-	// Prometheus surface is deferred to the metrics issue (#176).
-	taskRLCounter *rateLimitCounter
 
 	// Cache for dashboard stats
 	statsCache *statsCache
@@ -303,80 +299,36 @@ func (h *Handlers) SetAgentPoolStats(active, slots func() int) {
 	h.agentPoolSlots = slots
 }
 
-// statsCache caches dashboard statistics.
+// statsCache is a one-slot cache of the dashboard statistics. There is one
+// task table and every permitted principal sees the same counts, so a single
+// value (and its expiry) is all it holds. Behind a pointer on Handlers so a
+// Handlers value can still be copied (govet copylocks).
 type statsCache struct {
 	mu    sync.RWMutex
-	store map[string]statsCacheEntry
+	stats *models.DashboardStats
+	until time.Time
 }
 
-type statsCacheEntry struct {
-	stats     *models.DashboardStats
-	expiresAt time.Time
-}
-
-func newStatsCache() *statsCache {
-	return &statsCache{
-		store: make(map[string]statsCacheEntry),
-	}
-}
-
-func (c *statsCache) Get(key string) (*models.DashboardStats, bool) {
+// Get returns the cached stats while they are fresh.
+func (c *statsCache) Get() (*models.DashboardStats, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	entry, ok := c.store[key]
-	if !ok {
+	if c.stats == nil || time.Now().After(c.until) {
 		return nil, false
 	}
-	if time.Now().After(entry.expiresAt) {
-		return nil, false
-	}
-	return entry.stats, true
+	return c.stats, true
 }
 
-func (c *statsCache) Set(key string, stats *models.DashboardStats, ttl time.Duration) {
+// Set stores stats for ttl.
+func (c *statsCache) Set(stats *models.DashboardStats, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// Prevent unbounded growth with a hard limit
-	const maxSize = 1000
-	if len(c.store) >= maxSize {
-		now := time.Now()
-		// First pass: try to evict expired items
-		// We limit the scan to avoid locking for too long
-		scanLimit := 100
-		scanned := 0
-		for k, v := range c.store {
-			if scanned >= scanLimit {
-				break
-			}
-			scanned++
-			if now.After(v.expiresAt) {
-				delete(c.store, k)
-			}
-		}
-
-		// If still full, evict a random item (the current one in iteration)
-		if len(c.store) >= maxSize {
-			for k := range c.store {
-				delete(c.store, k)
-				break
-			}
-		}
-	}
-
-	c.store[key] = statsCacheEntry{
-		stats:     stats,
-		expiresAt: time.Now().Add(ttl),
-	}
+	c.stats = stats
+	c.until = time.Now().Add(ttl)
 }
 
-// rateLimiter provides simple per-IP rate limiting.
-type rateLimiter struct {
-	mu       sync.Mutex
-	requests map[string][]time.Time
-	limit    int
-	window   time.Duration
-}
+// loginRateLimitPerMinute bounds password logins per client IP.
+const loginRateLimitPerMinute = 20
 
 const (
 	taskPromptMinLength = 3
@@ -397,66 +349,6 @@ const (
 	taskScheduleMaxYears = 5
 )
 
-func newRateLimiter(limit int, window time.Duration) *rateLimiter {
-	return &rateLimiter{
-		requests: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
-	}
-}
-
-func (rl *rateLimiter) Allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-rl.window)
-
-	// Clean old requests for this IP
-	times := rl.requests[ip]
-	recent := times[:0]
-	for _, t := range times {
-		if t.After(cutoff) {
-			recent = append(recent, t)
-		}
-	}
-	rl.requests[ip] = recent
-
-	// Incrementally clean up stale IPs to avoid O(N) spikes
-	// If the map is large, we check a few random entries on every request.
-	// We use a fixed sample size to ensure O(1) performance regardless of map size.
-	if len(rl.requests) > 100 {
-		// Sample a fixed number of entries (e.g. 50)
-		cleanupSamples := 50
-
-		checked := 0
-		for otherIP, times := range rl.requests {
-			if checked >= cleanupSamples {
-				break
-			}
-			checked++
-
-			// Skip the current IP (we just processed it)
-			if otherIP == ip {
-				continue
-			}
-
-			// Delete if empty or all requests are old
-			// Since times is sorted, checking the last element is sufficient
-			if len(times) == 0 || times[len(times)-1].Before(cutoff) {
-				delete(rl.requests, otherIP)
-			}
-		}
-	}
-
-	if len(recent) >= rl.limit {
-		return false
-	}
-
-	rl.requests[ip] = append(rl.requests[ip], now)
-	return true
-}
-
 // New creates a new Handlers instance. The sliding-window task limiters take
 // their bounds verbatim from cfg (0 disables a window) — cmd/fleet applies the
 // 60/min, 500/day, 200/min-global defaults when reading the env, so a zero here
@@ -467,14 +359,13 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 	// all construct tasks through it.
 	models.SetDefaultMaxRetries(cfg.DefaultMaxRetries)
 	return &Handlers{
-		config:           cfg,
-		storage:          store,
-		apiKeys:          keyMgr,
-		loginRateLimiter: newRateLimiter(20, time.Minute), // 20 logins per minute per IP
-		taskKeyRL:        ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
-		taskGlobalRL:     ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
-		taskRLCounter:    newRateLimitCounter(),
-		statsCache:       newStatsCache(),
+		config:       cfg,
+		storage:      store,
+		apiKeys:      keyMgr,
+		loginRL:      ratelimit.New(loginRateLimitPerMinute, 0),
+		taskKeyRL:    ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
+		taskGlobalRL: ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
+		statsCache:   &statsCache{},
 	}
 }
 
@@ -2404,9 +2295,8 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One box, one task table: every principal that clears the permission check
-	// above sees the same counts, so the stats are cached under a single key.
-	const cacheKey = "global"
-	if cached, ok := h.statsCache.Get(cacheKey); ok {
+	// above sees the same counts, so one cached value serves them all.
+	if cached, ok := h.statsCache.Get(); ok {
 		writeJSON(w, http.StatusOK, h.withAgentPool(cached))
 		return
 	}
@@ -2421,7 +2311,7 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	// 5s TTL: still collapses a burst of dashboard polls into one DB round of
 	// count queries, but no longer makes the stat cards lag the world by up to
 	// a minute — the web dashboard polls every 5s while work is in flight.
-	h.statsCache.Set(cacheKey, stats, 5*time.Second)
+	h.statsCache.Set(stats, 5*time.Second)
 
 	writeJSON(w, http.StatusOK, h.withAgentPool(stats))
 }
