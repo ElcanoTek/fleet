@@ -41,6 +41,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -133,7 +134,7 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 // provisioned box, else .env.local — the same order the operator CLI's
 // credential writers use, so the file `fleet config set-openrouter-key` just
 // wrote is the file `fleet validate-config` then checks. These verbs used to
-// pass a bare os.Getenv("FLEET_ENV_FILE") to config.Load: on a provisioned box
+// pass a bare envreg.Get("FLEET_ENV_FILE") to config.Load: on a provisioned box
 // the unit UnsetEnvironment=s that variable, so the empty path loaded nothing
 // and a healthy deployment preflighted as "OPENROUTER_API_KEY missing".
 //
@@ -156,7 +157,7 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 // because FLEET_SANDBOX_IMAGE arrives as a manifest default.
 func preflightEnvFile() string {
 	path := config.ResolveEnvFile("")
-	if strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")) == "" {
+	if strings.TrimSpace(envreg.Get("FLEET_ENV_FILE")) == "" {
 		_ = os.Setenv("FLEET_ENV_FILE", path)
 	}
 	pinBundleDirFromEnvFile(path)
@@ -176,7 +177,7 @@ func preflightEnvFile() string {
 // them here would turn a diagnostic that is supposed to name the REAL problem
 // into one that complains about its own bootstrap.
 func pinBundleDirFromEnvFile(path string) {
-	if strings.TrimSpace(os.Getenv(clientconfig.EnvDir)) != "" {
+	if strings.TrimSpace(envreg.Get(clientconfig.EnvDir)) != "" {
 		return
 	}
 	values, err := creds.ReadEnvValues(path, clientconfig.EnvDir)
@@ -1465,7 +1466,7 @@ func checkCredentials(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 func missingEnvNames(names []string) []string {
 	var missing []string
 	for _, n := range names {
-		if strings.TrimSpace(os.Getenv(n)) == "" {
+		if strings.TrimSpace(envreg.Unregistered(n)) == "" {
 			missing = append(missing, n)
 		}
 	}
@@ -1486,7 +1487,7 @@ func requiredGateVarsMissing(bundle *clientconfig.Bundle) []string {
 		if name == "" || seen[name] {
 			return
 		}
-		if strings.TrimSpace(os.Getenv(name)) == "" {
+		if strings.TrimSpace(envreg.Unregistered(name)) == "" {
 			seen[name] = true
 			missing = append(missing, name)
 		}
@@ -1659,7 +1660,7 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 	// It is read straight from the environment there — there is no config field for
 	// the podman profile — so mirror that rather than inventing one, otherwise
 	// validate-config reports OK on a config that cannot start.
-	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
 		res.Status = statusFail
 		res.Detail = fmt.Sprintf("FLEET_SANDBOX_SECCOMP_PROFILE=%q has no effect under the kubernetes backend — install the profile on the sandbox nodes and use FLEET_SANDBOX_K8S_SECCOMP_PROFILE", v)
 		return res
@@ -1841,7 +1842,7 @@ func checkModelAPI(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 // same origin the running server would. The fake-LLM seam serves this path
 // with the same auth contract, so the check stays meaningful in E2E ladders.
 func openRouterKeyEndpoint() string {
-	if override := strings.TrimSpace(os.Getenv("OPENROUTER_BASE_URL")); override != "" {
+	if override := strings.TrimSpace(envreg.Get("OPENROUTER_BASE_URL")); override != "" {
 		return strings.TrimRight(override, "/") + "/api/v1/key"
 	}
 	return "https://openrouter.ai/api/v1/key"

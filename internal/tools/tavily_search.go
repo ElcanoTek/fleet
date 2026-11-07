@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // TavilySearchTool performs web searches using Tavily API (designed for AI agents)
@@ -38,7 +39,7 @@ type TavilySearchResult struct {
 
 // NewTavilySearchTool creates a new Tavily search tool
 func NewTavilySearchTool() *TavilySearchTool {
-	apiKey := os.Getenv("TAVILY_API_KEY")
+	apiKey := envreg.Get("TAVILY_API_KEY")
 
 	return &TavilySearchTool{
 		apiKey: apiKey,

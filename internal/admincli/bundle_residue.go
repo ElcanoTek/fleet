@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // The client bundle checkout is the one tree on a fleet box that nothing
@@ -36,10 +38,10 @@ import (
 // the state dir. Mirrors scripts/update.sh's resolution order. Empty means no
 // client bundle is configured (the deployment runs the in-repo generic one).
 func resolveClientBundleDir() string {
-	if dir := strings.TrimSpace(os.Getenv("FLEET_CLIENT_CONFIG_DIR")); dir != "" {
+	if dir := strings.TrimSpace(envreg.Get("FLEET_CLIENT_CONFIG_DIR")); dir != "" {
 		return dir
 	}
-	stateDir := strings.TrimSpace(os.Getenv("FLEET_STATE_DIR"))
+	stateDir := strings.TrimSpace(envreg.Get("FLEET_STATE_DIR"))
 	if stateDir == "" && repoRoot() != "" {
 		stateDir = filepath.Join(repoRoot(), ".fleet-state")
 	}

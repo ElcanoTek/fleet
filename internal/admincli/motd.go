@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
@@ -29,7 +30,7 @@ func cmdMOTD(argv []string) int {
 		return 1
 	}
 
-	color := !*noColor && isTTY(os.Stdout) && os.Getenv("NO_COLOR") == ""
+	color := !*noColor && isTTY(os.Stdout) && envreg.Get("NO_COLOR") == ""
 	unit := serviceName(*service) + ".service"
 	fmt.Fprint(os.Stdout, renderMOTD(version.String(), unit, motdServiceState(unit), color))
 	return 0

@@ -3,10 +3,10 @@ package clientconfig
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -239,7 +239,7 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // The token is honoured only where the bundle itself writes it.
 func lookupNonEmpty(name string) (string, bool) {
 	name = strings.TrimSpace(name)
-	v := strings.TrimSpace(os.Getenv(name))
+	v := strings.TrimSpace(envreg.Unregistered(name))
 	if v == "" {
 		return "", false
 	}

@@ -61,6 +61,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -399,7 +400,7 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 		return nil, 5, fmt.Errorf("read env file %s: %w", o.envFile, err)
 	}
 	for _, k := range append(append([]string{"DATABASE_URL"}, legacyEnvKeys...), dbPartKeys...) {
-		if os.Getenv(k) != "" {
+		if envreg.Get(k) != "" {
 			fmt.Fprintf(d.out, "note: %s is set in this shell; ignored — consolidation reads only %s, which is what the service reads\n", k, o.envFile)
 		}
 	}
@@ -408,7 +409,7 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 	// the service's — and the client tools would read them too. Refused
 	// rather than mixed.
 	for _, k := range config.PGTargetEnv {
-		if os.Getenv(k) != "" {
+		if envreg.Get(k) != "" {
 			return nil, 1, fmt.Errorf("%s is set in this shell; it would change where the source DSNs connect from what the service sees — unset it and run again", k)
 		}
 	}

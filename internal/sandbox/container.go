@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -782,7 +783,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 func (c *containerImpl) startStatsCollector() {
 	interval := c.cfg.StatsInterval
 	if interval == 0 {
-		interval = resolveStatsInterval(os.Getenv("FLEET_SANDBOX_STATS_INTERVAL_SECONDS"))
+		interval = resolveStatsInterval(envreg.Get("FLEET_SANDBOX_STATS_INTERVAL_SECONDS"))
 	}
 	if interval <= 0 {
 		// Collection disabled (operator opt-out) — no goroutine, no rollup.

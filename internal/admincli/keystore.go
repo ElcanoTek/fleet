@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -80,9 +81,9 @@ func chooseKeyStore(in keyStoreInputs) keyStore {
 // resolveKeyStore gathers the inputs from the live box and decides.
 func resolveKeyStore() keyStore {
 	in := keyStoreInputs{}
-	in.explicit = strings.TrimSpace(os.Getenv("FLEET_DATA_DIR"))
+	in.explicit = strings.TrimSpace(envreg.Get("FLEET_DATA_DIR"))
 	if in.explicit == "" {
-		in.explicit = strings.TrimSpace(os.Getenv("DATA_DIR"))
+		in.explicit = strings.TrimSpace(envreg.Get("DATA_DIR"))
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		in.cwd = cwd

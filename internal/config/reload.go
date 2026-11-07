@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // ── Config hot-reload (#286) ──
@@ -267,11 +269,11 @@ var nonReloadableWatched = []watchedSetting{
 	{key: "FLEET_SERVER_TOKEN", reason: "shared-secret auth; rotating it mid-run would invalidate in-flight sessions; restart to apply",
 		lookup: func() (string, bool) { return lookupFleet("SERVER_TOKEN") }},
 	{key: "ADMIN_API_KEY", reason: "admin auth secret; restart to apply",
-		lookup: func() (string, bool) { v := os.Getenv("ADMIN_API_KEY"); return v, v != "" }},
+		lookup: func() (string, bool) { v := envreg.Get("ADMIN_API_KEY"); return v, v != "" }},
 	{key: "FLEET_MAX_CONCURRENT_AGENTS", reason: "sizes the admission semaphore + sandbox warm pool at startup; restart to resize",
 		lookup: func() (string, bool) { return lookupFleet("MAX_CONCURRENT_AGENTS") }},
 	{key: "FLEET_TLS_MODE", reason: "the TLS listener context is built at startup; restart to change",
-		lookup: func() (string, bool) { v := os.Getenv("FLEET_TLS_MODE"); return v, v != "" }},
+		lookup: func() (string, bool) { v := envreg.Get("FLEET_TLS_MODE"); return v, v != "" }},
 	// The effective decisions, not one variable: configuring Auth SSO and the
 	// break-glass both move them (Config.AccountsManagedByAuth,
 	// Config.PasswordLoginDisabled).
@@ -408,11 +410,11 @@ func reloadFleetFloat(result *ReloadResult, suffix string, cur float64, set func
 	k := envKnobByKey[key]
 	// Mirror loadParser.knob's split so a registry bug names its actual shape.
 	if k == nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec)"})
 		return
 	}
 	if k.kind != kindFloat {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads float); fix the entry in knobs.go", k.kind.label())})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads float); fix the entry in internal/config/envreg/table.go (its Knob spec)", k.kind.label())})
 		return
 	}
 	nv, isSet, err := k.parseFloat(raw)
@@ -437,11 +439,11 @@ func reloadFleetInt(result *ReloadResult, suffix string, cur int, set func(int))
 	k := envKnobByKey[key]
 	// Mirror loadParser.knob's split so a registry bug names its actual shape.
 	if k == nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec)"})
 		return
 	}
 	if k.kind != kindInt {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads int); fix the entry in knobs.go", k.kind.label())})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads int); fix the entry in internal/config/envreg/table.go (its Knob spec)", k.kind.label())})
 		return
 	}
 	nv, isSet, err := k.parseInt(raw)

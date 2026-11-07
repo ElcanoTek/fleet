@@ -1,6 +1,6 @@
 package tools
 
-import "os"
+import "github.com/ElcanoTek/fleet/internal/config/envreg"
 
 // fleetEnv reads the canonical FLEET_<name> environment variable,
 // falling back to the legacy CHAT_<name> alias for back-compat. During
@@ -11,8 +11,8 @@ import "os"
 // `name` is the suffix after the prefix, e.g. fleetEnv("WORKSPACE_ROOT")
 // reads FLEET_WORKSPACE_ROOT then CHAT_WORKSPACE_ROOT.
 func fleetEnv(name string) string {
-	if v := os.Getenv("FLEET_" + name); v != "" {
+	if v := envreg.Get("FLEET_" + name); v != "" {
 		return v
 	}
-	return os.Getenv("CHAT_" + name)
+	return envreg.Get("CHAT_" + name) // LEGACY-ENV-ALIAS: remove after migrate-env
 }

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // `fleet timers` manages the scheduled-maintenance systemd pairs fleet ships in
@@ -320,7 +322,7 @@ func findDeployDir(flagSrc string) string {
 	if src := strings.TrimSpace(flagSrc); src != "" {
 		candidates = append(candidates, filepath.Join(src, "deploy"))
 	} else {
-		if root := strings.TrimSpace(os.Getenv("FLEET_ROOT")); root != "" {
+		if root := strings.TrimSpace(envreg.Get("FLEET_ROOT")); root != "" {
 			candidates = append(candidates, filepath.Join(root, "deploy"))
 		}
 		candidates = append(candidates, "deploy")
@@ -331,7 +333,7 @@ func findDeployDir(flagSrc string) string {
 		}
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "fleet-backup.timer")); err == nil { //nolint:gosec // G703: candidate paths are operator-controlled (--src flag, FLEET_ROOT env, the literal "deploy", the binary's own dir), never request or LLM input — same rule as findScript.
+		if _, err := os.Stat(filepath.Join(c, "fleet-backup.timer")); err == nil {
 			return c
 		}
 	}

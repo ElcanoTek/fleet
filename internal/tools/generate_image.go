@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -140,7 +140,7 @@ func runGenerateImage(ctx context.Context, sb *sandbox.Sandbox, client *http.Cli
 	if strings.TrimSpace(params.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
-	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	apiKey := strings.TrimSpace(envreg.Get("OPENROUTER_API_KEY"))
 	if apiKey == "" {
 		return nil, errors.New("OPENROUTER_API_KEY is not set")
 	}
@@ -210,10 +210,10 @@ func runGenerateImage(ctx context.Context, sb *sandbox.Sandbox, client *http.Cli
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	if referer := strings.TrimSpace(os.Getenv("OPENROUTER_HTTP_REFERER")); referer != "" {
+	if referer := strings.TrimSpace(envreg.Get("OPENROUTER_HTTP_REFERER")); referer != "" {
 		req.Header.Set("HTTP-Referer", referer)
 	}
-	if title := strings.TrimSpace(os.Getenv("OPENROUTER_X_TITLE")); title != "" {
+	if title := strings.TrimSpace(envreg.Get("OPENROUTER_X_TITLE")); title != "" {
 		req.Header.Set("X-Title", title)
 	}
 

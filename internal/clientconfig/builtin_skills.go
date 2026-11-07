@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Fleet ships a small pack of generally-useful Agent Skills baked into the
@@ -96,10 +98,10 @@ func mergedSkillsBase() string { return fleetStateBase(mergedSkillsDirName) }
 // the operator's data dir first, then the user cache, then a uid-scoped temp
 // name — never a predictable shared /tmp path (#1121).
 func fleetStateBase(sub string) string {
-	if d := strings.TrimSpace(os.Getenv("FLEET_DATA_DIR")); d != "" {
+	if d := strings.TrimSpace(envreg.Get("FLEET_DATA_DIR")); d != "" {
 		return filepath.Join(d, sub)
 	}
-	if d := strings.TrimSpace(os.Getenv("CHAT_DATA_DIR")); d != "" {
+	if d := strings.TrimSpace(envreg.Get("CHAT_DATA_DIR")); d != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return filepath.Join(d, sub)
 	}
 	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {

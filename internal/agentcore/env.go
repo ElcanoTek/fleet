@@ -1,9 +1,10 @@
 package agentcore
 
 import (
-	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Env-var prefix handling.
@@ -13,7 +14,9 @@ import (
 // a canonical prefix — FLEET_ — but keeps the two legacy prefixes alive as
 // back-compat aliases so a deployment that still sets CHAT_DISABLE_PROMPT_CACHE
 // or CUTLASS_RETRY_MAX_ATTEMPTS keeps working, and so the lifted parity tests
-// (which set the legacy names) stay green.
+// (which set the legacy names) stay green. The legacy prefixes are deprecated
+// (ADR-0099) and the spellings come from the configuration registry
+// (envreg.ChainSpellings), so every suffix read here is a declared setting.
 //
 // Every env lookup goes through fleetEnv, which tries the canonical FLEET_
 // name first and then the legacy aliases. The prefix never varies by run
@@ -21,11 +24,6 @@ import (
 
 // CanonicalEnvPrefix is the default env-var prefix for the unified runtime.
 const CanonicalEnvPrefix = "FLEET"
-
-// legacyEnvPrefixes are the back-compat aliases tried after the canonical
-// prefix. Order is irrelevant: the first non-empty match wins, and the two
-// front-ends never set the same suffix to conflicting values.
-var legacyEnvPrefixes = []string{"CHAT", "CUTLASS"}
 
 // envReader reads agentcore's env knobs. It has no state: it exists so every
 // read is spelled fleetEnv.lookup(suffix) — the shape internal/config's knob
@@ -37,13 +35,12 @@ var fleetEnv envReader
 
 // lookup returns the value of FLEET_<suffix>, falling back to the legacy
 // CHAT_/CUTLASS_ aliases when it is unset. The first non-empty value wins.
+//
+// LEGACY-ENV-ALIAS: remove after migrate-env (read the canonical name alone).
 func (envReader) lookup(suffix string) string {
 	suffix = strings.TrimLeft(suffix, "_")
-	if v := strings.TrimSpace(os.Getenv(CanonicalEnvPrefix + "_" + suffix)); v != "" {
-		return v
-	}
-	for _, legacy := range legacyEnvPrefixes {
-		if v := strings.TrimSpace(os.Getenv(legacy + "_" + suffix)); v != "" {
+	for _, name := range envreg.ChainSpellings(CanonicalEnvPrefix + "_" + suffix) {
+		if v := strings.TrimSpace(envreg.Get(name)); v != "" {
 			return v
 		}
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -36,7 +37,6 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 				log.Printf("fleet: SIGINT received; shutting down immediately")
 				return false
 			case syscall.SIGUSR1:
-				//nolint:gosec // G706: only integer counters are formatted (%d) — no string from request input is logged, so no CR/LF log-line forgery is possible.
 				log.Printf("fleet: status — active_chat_turns=%d active_sched_tasks=%d admission_inflight=%d/%d",
 					chatSrv.ActiveTurns(), pool.ActiveTasks(), lim.InFlight(), lim.Total())
 			}
@@ -66,7 +66,6 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		if chatSrv.DrainTurns(graceCtx) {
 			log.Printf("fleet: all in-flight chat turns drained within grace")
 		} else {
-			//nolint:gosec // G706: grace is a time.Duration (digits+unit) and n is an int count — neither can forge a log line; values are operator-config-derived, not request input.
 			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
 		}
 		// An approved card's call can outlive its POST (a long deal write
@@ -75,7 +74,6 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		// still running when the process exits keeps its executing sentinel,
 		// which the next boot records as outcome unknown.
 		if !chatSrv.DrainApprovalRuns(graceCtx) {
-			//nolint:gosec // G706: grace is a time.Duration (digits+unit), operator-config-derived, not request input.
 			log.Printf("fleet: grace period (%s) expired with approved actions still executing; their outcome will be recorded as unknown at the next start", grace)
 		}
 		graceStop()
@@ -89,7 +87,6 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		cancel()
 		pool.ForceCancel()
 		if n := chatSrv.CancelInflightTurns(); n > 0 {
-			//nolint:gosec // G706: only an int count is formatted (%d) — no request-input string is logged, so no log-line forgery.
 			log.Printf("fleet: cancelled %d in-flight chat turn(s)", n)
 		}
 		// Cancels pending timers and waits only for background work already
@@ -160,7 +157,7 @@ func closeServers(grace time.Duration, servers ...*http.Server) {
 // otherwise — no new dependency, errors are intentionally swallowed. Handles the
 // abstract-namespace form ('@' → leading NUL) systemd uses.
 func sdNotify(state string) {
-	sock := os.Getenv("NOTIFY_SOCKET")
+	sock := envreg.Get("NOTIFY_SOCKET")
 	if sock == "" {
 		return
 	}

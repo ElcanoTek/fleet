@@ -471,6 +471,13 @@ sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bun
 
 ## Configuration reference
 
+Every environment variable — with its default, and which chart value sets it
+— is in [CONFIGURATION.md](CONFIGURATION.md); anything the chart does not set
+goes in `config.env` (or, for a secret, `config.existingSecret`). The chart's
+`values.schema.json` describes every known `config.env` key, generated from
+the same registry. This table adds what that page does not: the bundle
+manifest field each sandbox knob mirrors.
+
 Every knob can come from env (the chart sets these) or the bundle manifest's
 `sandbox:` block (env wins, field by field). `fleet serve`, `fleet task run`
 and `fleet validate-config` resolve them the same way:
