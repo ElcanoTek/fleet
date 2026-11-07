@@ -284,17 +284,22 @@ const schemaOptionPrefix = "-csearch_path="
 // gen_random_uuid and every built-in stay visible). schema must be a plain
 // lower-case identifier; the stores' migration runners create it
 // (internal/dbschema.Ensure).
+//
+// A URL DSN's query is edited in place — only the options parameter is
+// touched, the rest keeps its order and encoding — so the shell mirror
+// (fleet_dsn_with_schema in scripts/lib/idle.sh) produces the same bytes.
 func WithSchema(dsn, schema string) string {
 	dsn = stripSchemaOption(strings.TrimSpace(dsn))
 	opt := schemaOptionPrefix + schema
 	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
-		q := u.Query()
-		if prev := strings.TrimSpace(q.Get("options")); prev != "" {
-			opt = prev + " " + opt
-		}
-		q.Set("options", opt)
-		u.RawQuery = q.Encode()
-		return u.String()
+		return withRawQuery(dsn, func(q string) string {
+			return editRawOption(q, func(prev string) string {
+				if prev = strings.TrimSpace(prev); prev != "" {
+					return prev + " " + opt
+				}
+				return opt
+			})
+		})
 	}
 	kv, ok := parseKeywordDSN(dsn)
 	if !ok {
@@ -358,17 +363,10 @@ func stripSchemaOption(dsn string) string {
 		return dsn
 	}
 	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
-		q := u.Query()
-		if !strings.Contains(q.Get("options"), schemaOptionPrefix) {
+		if !strings.Contains(u.Query().Get("options"), schemaOptionPrefix) {
 			return dsn
 		}
-		if o := strip(q.Get("options")); o == "" {
-			q.Del("options")
-		} else {
-			q.Set("options", o)
-		}
-		u.RawQuery = q.Encode()
-		return u.String()
+		return withRawQuery(dsn, func(q string) string { return editRawOption(q, strip) })
 	}
 	kv, ok := parseKeywordDSN(dsn)
 	if !ok || !strings.Contains(kv.get("options"), schemaOptionPrefix) {
@@ -380,6 +378,59 @@ func stripSchemaOption(dsn string) string {
 		kv.set("options", o)
 	}
 	return kv.String()
+}
+
+// withRawQuery applies edit to a URL DSN's raw query text, leaving every
+// other byte of the DSN as written (a fragment is kept after the query).
+func withRawQuery(dsn string, edit func(string) string) string {
+	base, frag, hasFrag := strings.Cut(dsn, "#")
+	base, q, _ := strings.Cut(base, "?")
+	out := base
+	if q = edit(q); q != "" {
+		out += "?" + q
+	}
+	if hasFrag {
+		out += "#" + frag
+	}
+	return out
+}
+
+// editRawOption rewrites the options parameter of a raw URL query in place:
+// edit gets its decoded value ("" when absent) and returns the new one; an
+// empty result removes it, a new one is appended last. Every other parameter
+// keeps its position and its original encoding.
+func editRawOption(rawQuery string, edit func(string) string) string {
+	var pairs []string
+	if rawQuery != "" {
+		pairs = strings.Split(rawQuery, "&")
+	}
+	out := pairs[:0:0]
+	prev, at := "", -1
+	for _, p := range pairs {
+		k, v, _ := strings.Cut(p, "=")
+		if k == "options" {
+			if dv, err := url.QueryUnescape(v); err == nil {
+				prev = dv
+			}
+			if at < 0 {
+				at = len(out)
+				out = append(out, "")
+			}
+			continue
+		}
+		out = append(out, p)
+	}
+	next := edit(prev)
+	switch {
+	case next == "" && at >= 0:
+		out = append(out[:at], out[at+1:]...)
+	case next == "":
+	case at >= 0:
+		out[at] = "options=" + url.QueryEscape(next)
+	default:
+		out = append(out, "options="+url.QueryEscape(next))
+	}
+	return strings.Join(out, "&")
 }
 
 // PlainIdentifier reports whether s is a schema or database name fleet uses
