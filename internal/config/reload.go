@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // ── Config hot-reload (#286) ──
@@ -267,11 +269,11 @@ var nonReloadableWatched = []watchedSetting{
 	{key: "FLEET_SERVER_TOKEN", reason: "shared-secret auth; rotating it mid-run would invalidate in-flight sessions; restart to apply",
 		lookup: func() (string, bool) { return lookupFleet("SERVER_TOKEN") }},
 	{key: "ADMIN_API_KEY", reason: "admin auth secret; restart to apply",
-		lookup: func() (string, bool) { v := os.Getenv("ADMIN_API_KEY"); return v, v != "" }},
+		lookup: func() (string, bool) { v := envreg.Get("ADMIN_API_KEY"); return v, v != "" }},
 	{key: "FLEET_MAX_CONCURRENT_AGENTS", reason: "sizes the admission semaphore + sandbox warm pool at startup; restart to resize",
 		lookup: func() (string, bool) { return lookupFleet("MAX_CONCURRENT_AGENTS") }},
 	{key: "FLEET_TLS_MODE", reason: "the TLS listener context is built at startup; restart to change",
-		lookup: func() (string, bool) { v := os.Getenv("FLEET_TLS_MODE"); return v, v != "" }},
+		lookup: func() (string, bool) { v := envreg.Get("FLEET_TLS_MODE"); return v, v != "" }},
 	// The effective decisions, not one variable: configuring Auth SSO and the
 	// break-glass both move them (Config.AccountsManagedByAuth,
 	// Config.PasswordLoginDisabled).

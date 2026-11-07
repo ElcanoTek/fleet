@@ -781,13 +781,14 @@ func TestLoadNonExistentFile(t *testing.T) {
 }
 
 func TestGetenvDefault(t *testing.T) {
-	os.Setenv("TEST_VAR", "test-value")
-	defer os.Unsetenv("TEST_VAR")
+	t.Setenv("SYSTEM_PROMPT", "test-value")
+	t.Setenv("FLEET_TLS_KEY_FILE", "")
+	os.Unsetenv("FLEET_TLS_KEY_FILE")
 
-	if val := getenvDefault("TEST_VAR", "default"); val != "test-value" {
+	if val := getenvDefault("SYSTEM_PROMPT", "default"); val != "test-value" {
 		t.Errorf("Expected test-value, got %s", val)
 	}
-	if val := getenvDefault("NONEXISTENT_VAR", "default"); val != "default" {
+	if val := getenvDefault("FLEET_TLS_KEY_FILE", "default"); val != "default" {
 		t.Errorf("Expected default, got %s", val)
 	}
 }
