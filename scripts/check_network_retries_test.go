@@ -169,3 +169,63 @@ func TestRetryScript(t *testing.T) {
 		t.Fatal("missing command accepted")
 	}
 }
+
+// TestWorkflowInvokedScriptsAreExecutable — a workflow step that runs
+// "$GITHUB_WORKSPACE/scripts/x.sh" or scripts/x.sh directly (not through
+// bash) needs the executable bit in git, or the runner fails with
+// "Permission denied" (exit 126) before the step does anything. retry.sh
+// first shipped as 100644 and broke the Playwright install step that way.
+func TestWorkflowInvokedScriptsAreExecutable(t *testing.T) {
+	root := repoRoot(t)
+	out, err := exec.Command("git", "-C", root, "ls-files", "-s", "--", "scripts").Output()
+	if err != nil {
+		t.Skipf("git ls-files unavailable: %v", err)
+	}
+	mode := map[string]string{}
+	for _, ln := range strings.Split(string(out), "\n") {
+		f := strings.Fields(ln)
+		if len(f) == 4 {
+			mode[f[3]] = f[0]
+		}
+	}
+	direct := regexp.MustCompile(`(?:^|[\s;&|(])"?(?:\$GITHUB_WORKSPACE/|\./)?(scripts/[A-Za-z0-9_./-]+\.sh)"?`)
+	wfs, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	if err != nil || len(wfs) == 0 {
+		t.Fatalf("no workflows found: %v", err)
+	}
+	checked := 0
+	for _, wf := range wfs {
+		raw, err := os.ReadFile(wf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range workflowLogicalLines(string(raw)) {
+			trim := strings.TrimSpace(line)
+			// A bare path on its own line is a list entry (a sparse-checkout
+			// pattern, an artifact path), not an invocation.
+			if strings.HasPrefix(trim, "scripts/") && !strings.ContainsAny(trim, " \t") {
+				continue
+			}
+			// Run through an interpreter, or sourced: no executable bit needed.
+			if strings.HasPrefix(trim, "bash ") || strings.HasPrefix(trim, "sh ") ||
+				strings.HasPrefix(trim, ". ") || strings.HasPrefix(trim, "source ") {
+				continue
+			}
+			for _, m := range direct.FindAllStringSubmatch(line, -1) {
+				m[1] = strings.TrimPrefix(m[1], "./")
+				got, ok := mode[m[1]]
+				if !ok {
+					continue // a sparse-checkout path or a script from another repo
+				}
+				checked++
+				if got != "100755" {
+					t.Errorf("%s runs %s directly but git has it as %s; run `git update-index --chmod=+x %s`",
+						filepath.Base(wf), m[1], got, m[1])
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no directly invoked scripts/*.sh in any workflow; the pattern no longer matches — fix this test")
+	}
+}
