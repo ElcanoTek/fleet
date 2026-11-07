@@ -12,6 +12,8 @@ import (
 // message order, not by timestamp: a message sent while the card sat pending
 // does not count even when the answer lands in the same second.
 func TestCountUserMessagesAfterResolution_SameSecond(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@x.com"

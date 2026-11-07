@@ -109,6 +109,8 @@ func newPersonaServer() (*Server, *personasFakeStore) {
 }
 
 func TestUserPersonaEndpoints(t *testing.T) {
+	t.Parallel()
+
 	s, fs := newPersonaServer()
 
 	w := userSkillsReq(t, s, s.userPersonasCollection, http.MethodPost, "/user-personas",
@@ -161,6 +163,8 @@ func TestUserPersonaEndpoints(t *testing.T) {
 
 // A new conversation may only name one of the caller's ACTIVE personas.
 func TestCheckConversationPersona(t *testing.T) {
+	t.Parallel()
+
 	s, fs := newPersonaServer()
 	ctx := context.Background()
 	fs.add("u@x.com", store.UserPersonaInput{Name: "twin", Instructions: "x"}, store.UserPersonaStatusActive)
@@ -187,6 +191,8 @@ func TestCheckConversationPersona(t *testing.T) {
 // The turn runs a user persona as its bundle base plus the owner's layer, and
 // falls back to the default when the reference no longer resolves.
 func TestResolveTurnPersona(t *testing.T) {
+	t.Parallel()
+
 	s, fs := newPersonaServer()
 	ctx := context.Background()
 	fs.add("owner@x.com", store.UserPersonaInput{Name: "twin", DisplayName: "Twin", Instructions: "Be me.", BasePersona: "trader", Kind: "twin", Autonomy: "act"}, store.UserPersonaStatusActive)
@@ -214,6 +220,8 @@ func TestResolveTurnPersona(t *testing.T) {
 }
 
 func TestPersonaStudioHandler(t *testing.T) {
+	t.Parallel()
+
 	s, fs := newPersonaServer()
 	fs.digests = []store.ChatDigestConversation{{ID: "c1", Title: "Pacing", Messages: []string{"show pacing"}}}
 	h := s.newPersonaStudioHandler("u@x.com")

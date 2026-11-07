@@ -31,6 +31,8 @@ const goodCard = `{
 }`
 
 func TestParseApprovalCard(t *testing.T) {
+	t.Parallel()
+
 	card, canonical, err := parseApprovalCard([]byte(goodCard))
 	if err != nil {
 		t.Fatalf("a valid card was refused: %v", err)
@@ -185,6 +187,8 @@ const describedArgs = `{"deal_id":"PM-123","floor":2.5,"big":1234567890123456789
 // The happy path: the describer runs on the SAME server with the SAME args,
 // bounded, and its canonical card rides the approval row and the live event.
 func TestStage_DescriberCard(t *testing.T) {
+	t.Parallel()
+
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &cardStageStore{}
@@ -225,6 +229,8 @@ func TestStage_DescriberCard(t *testing.T) {
 // A named-account seat calls the describer on its own registered server, and
 // is accepted as a read through its base server's parallel-safe entry.
 func TestStage_DescriberOnNamedAccountSeat(t *testing.T) {
+	t.Parallel()
+
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &cardStageStore{}
@@ -292,6 +298,8 @@ func TestStage_DescriberFallbacks(t *testing.T) {
 // No describer is called when none is declared for the tool, or when the
 // declared one cannot be trusted as a read at call time.
 func TestStage_DescriberNotCalled(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	cases := []struct {
 		name     string
@@ -336,6 +344,8 @@ func TestStage_DescriberNotCalled(t *testing.T) {
 // The describer is resolved on the staged tool's own server: none there, or
 // several candidates, resolve to nothing.
 func TestResolveDescriber(t *testing.T) {
+	t.Parallel()
+
 	catalog := []mcp.ServerTool{
 		{ServerName: "a", Tool: mcp.Tool{Name: "ix_describe_change"}},
 		{ServerName: "b", Tool: mcp.Tool{Name: "describe_change"}},
@@ -388,6 +398,8 @@ func (s *cardGetStore) ListChatSchedules(context.Context, string, string, bool) 
 // pending_approvals and resolved_approvals carry the stored card; a row with
 // none, or with one that no longer validates, carries no card field.
 func TestConversationGet_ApprovalCards(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, _ := parseApprovalCard([]byte(goodCard))
 	st := &cardGetStore{
 		pending: []store.Approval{
@@ -433,6 +445,8 @@ func TestConversationGet_ApprovalCards(t *testing.T) {
 // The bounded one-card GET (?approval_id=) carries the card on a pending and
 // on a resolved row alike (Codex P2 on #1717: the resolved branch dropped it).
 func TestConversationApprovalGet_CarriesCard(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, _ := parseApprovalCard([]byte(goodCard))
 	for _, status := range []string{"pending", "rejected"} {
 		t.Run(status, func(t *testing.T) {
@@ -459,6 +473,8 @@ func TestConversationApprovalGet_CarriesCard(t *testing.T) {
 // a credential: the logged text is redacted (Codex P1 on #1717), and the flag
 // code error no longer echoes the value at all.
 func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
+	t.Parallel()
+
 	secret := "ghp_" + strings.Repeat("a1B2", 9)
 	_, _, err := parseApprovalCard([]byte(`{"title":"x","items":[{"label":"a","flags":[{"code":"` + secret + `","label":"l"}]}]}`))
 	if err == nil {
@@ -477,6 +493,8 @@ func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
 // (which this host-side call cannot run), skips the call and keeps the
 // generic card. A hook on another tool, or a persona that offers it, does not.
 func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
+	t.Parallel()
+
 	describerPolicy(t)
 	t.Cleanup(func() { agentcore.ConfigureLifecycleHooks(nil) })
 	cases := []struct {
@@ -522,6 +540,8 @@ func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
 // (agent_policy.interactive_hidden_tools) is not called either: the card is
 // staged by a chat turn, which could not call it.
 func TestStage_DescriberHiddenFromChatIsNotCalled(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"update_deal", "create_deal"},
@@ -558,6 +578,8 @@ func (s *supersedeOrderStore) SupersedePendingApprovals(context.Context, string,
 }
 
 func TestStage_DescribesBeforeSuperseding(t *testing.T) {
+	t.Parallel()
+
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &supersedeOrderStore{broker: broker}
@@ -573,6 +595,8 @@ func TestStage_DescribesBeforeSuperseding(t *testing.T) {
 // link_label names an item's link ("Open in Index Exchange"). It is optional,
 // text like any label, and only allowed with a link.
 func TestParseApprovalCard_LinkLabel(t *testing.T) {
+	t.Parallel()
+
 	with := `{"title":"t","items":[{"label":"A","link":"https://ssp.example.com/d/1","link_label":"Open in Index Exchange"}]}`
 	card, canonical, err := parseApprovalCard([]byte(with))
 	if err != nil || card.Items[0].LinkLabel != "Open in Index Exchange" || !strings.Contains(string(canonical), `"link_label":"Open in Index Exchange"`) {

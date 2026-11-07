@@ -9,6 +9,8 @@ import (
 // back on every approval read the web and the group endpoint use, and is
 // empty for a row that never joined one.
 func TestSetApprovalGroup(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)

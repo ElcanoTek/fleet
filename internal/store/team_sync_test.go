@@ -38,6 +38,8 @@ func strPtr(s string) *string { return &s }
 // A grant carrying a team moves the person with the same unsharing an admin
 // move does; a grant without one leaves the team alone; "" clears it.
 func TestApplyExternalAccessAppliesTeamWithUnsharing(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's shared chat")
 	if got, err := f.s.GetTeamVisibleConversation(f.ctx, "alice@x.com", c.ID); err != nil || got == nil {
@@ -78,6 +80,8 @@ func TestApplyExternalAccessAppliesTeamWithUnsharing(t *testing.T) {
 
 // A revoke never changes the team, even when it carries one.
 func TestApplyExternalAccessRevokeKeepsTeam(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	revoke := teamGrant("alice@x.com", "alice", 1, strPtr("ops"))
 	revoke.Allowed = false
@@ -93,6 +97,8 @@ func TestApplyExternalAccessRevokeKeepsTeam(t *testing.T) {
 // exactly, so rewriting the case would detach the person from their team's
 // shared projects.
 func TestApplyExternalAccessKeepsTeamThatDiffersOnlyInCase(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("alice@x.com", "alice", 1, strPtr("QUANT"))); err != nil {
 		t.Fatalf("grant: %v", err)
@@ -104,6 +110,8 @@ func TestApplyExternalAccessKeepsTeamThatDiffersOnlyInCase(t *testing.T) {
 
 // A newly provisioned account is created in the provider's team.
 func TestApplyExternalAccessCreatesAccountInTeam(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("erin@x.com", "erin", 1, strPtr("ops"))); err != nil {
 		t.Fatalf("grant: %v", err)
@@ -114,6 +122,8 @@ func TestApplyExternalAccessCreatesAccountInTeam(t *testing.T) {
 }
 
 func TestApplyExternalAccessRejectsInvalidTeam(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	for _, team := range []string{strings.Repeat("x", maxTeamNameLen+1), "bad\x07team"} {
 		if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("alice@x.com", "alice", 1, strPtr(team))); err == nil {
@@ -127,6 +137,8 @@ func TestApplyExternalAccessRejectsInvalidTeam(t *testing.T) {
 
 // The Chat membership read (`fleet account-events export`) reports the team.
 func TestAccountAccessCarriesTeam(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	a, ok, err := f.s.AccountAccess(f.ctx, "alice@x.com")
 	if err != nil || !ok || a.Team != "quant" {

@@ -16,6 +16,8 @@ import (
 // synthesized draft comes back as JSON for the client's review dialog, and
 // nothing is persisted server-side.
 func TestSuggestPrompt_ReturnsDraft(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
@@ -53,6 +55,8 @@ func TestSuggestPrompt_ReturnsDraft(t *testing.T) {
 
 // TestSuggestPrompt_EmptyConversation returns 422 when there's nothing to distill.
 func TestSuggestPrompt_EmptyConversation(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "carol@x.com"
 	conv, err := s.store.CreateConversation(context.Background(), user, "empty", "victoria", "openrouter/auto", false)
@@ -71,6 +75,8 @@ func TestSuggestPrompt_EmptyConversation(t *testing.T) {
 
 // TestSuggestPrompt_NotOwned returns 404 for a conversation the caller doesn't own.
 func TestSuggestPrompt_NotOwned(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv := seedConv(t, s, "owner@x.com")
 	s.agent = &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{Content: "x"}}
@@ -86,6 +92,8 @@ func TestSuggestPrompt_NotOwned(t *testing.T) {
 // TestSuggestPrompt_SynthesisFailure returns 502 when the model call fails, so
 // the UI can show a retryable error instead of an empty dialog.
 func TestSuggestPrompt_SynthesisFailure(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "dave@x.com"
 	conv := seedConv(t, s, user)
@@ -104,6 +112,8 @@ func TestSuggestPrompt_SynthesisFailure(t *testing.T) {
 // Feeding it the text turns alone (what promote-to-task does, correctly, for
 // its own purpose) asks it to describe a method it cannot observe.
 func TestSuggestPrompt_FeedsTheWorkflowNotJustTheText(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConvWithToolCall(t, s, user)

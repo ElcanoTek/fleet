@@ -106,6 +106,8 @@ func newRouteProbeConversation(t *testing.T, h http.Handler) string {
 }
 
 func TestConversationSubrouteTable(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	// The Tools-picker pairs (mcp-servers GET/POST) read the Optional-server
 	// catalog through the engine seam; the fake answers an empty catalog.
@@ -164,6 +166,8 @@ func TestConversationSubrouteTable(t *testing.T) {
 // five branches answer "not found", cancel answers "conversation not found",
 // and the model route goes through http.NotFound ("404 page not found").
 func TestConversationSubroute404Bodies(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeEngine{}
 	h := s.Routes()
@@ -236,6 +240,8 @@ func TestConversationSubroute404Bodies(t *testing.T) {
 // switch's default case produced — for both an unknown sub and a known sub
 // probed with the wrong method.
 func TestConversationSubrouteUnmatched405(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "router@x.com"
@@ -267,6 +273,8 @@ func TestConversationSubrouteUnmatched405(t *testing.T) {
 // multi-byte character in half; Postgres rejects the invalid byte sequence
 // and the user got a 500 for renaming a chat to a long non-ASCII title.
 func TestConversationRenameCapsAtRuneBoundary(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "router@x.com"
@@ -297,6 +305,8 @@ func TestConversationRenameCapsAtRuneBoundary(t *testing.T) {
 // (would un-share), branch (would report "must be a positive message id"),
 // summarize (would silently ignore the model override).
 func TestOptionalBodyMalformedIs400(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeEngine{}
 	h := s.Routes()
@@ -344,6 +354,8 @@ func (failingGetStore) Get(context.Context, string, string) (*store.Conversation
 // failing store is a 500, not the 404 it used to collapse into (which read
 // a Postgres blip as "this transcript is gone").
 func TestSubagentLogStoreErrorIs500(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{store: failingGetStore{}}
 	req := httptest.NewRequest(http.MethodGet, "/conversations/"+uuid.NewString()+"/subagents/"+agentSubagentProbeID, nil)
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "router@x.com"))

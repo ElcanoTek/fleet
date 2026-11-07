@@ -148,6 +148,8 @@ func postNarrowApproval(t *testing.T, s *Server, body string) *httptest.Response
 // staged (a large integer included), and the server is told what was staged.
 // The claim records the narrowing, and the result names what was left out.
 func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	st := &narrowStore{approval: narrowApprovalRow()}
 	child := &narrowChild{}
@@ -194,6 +196,8 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 // Approving every staged value is an ordinary whole approval: the plain claim,
 // the staged arguments, no `_meta`, no record.
 func TestHandleApproval_ApprovingEveryValueIsAWholeApproval(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	st := &narrowStore{approval: narrowApprovalRow()}
 	child := &narrowChild{}
@@ -213,6 +217,8 @@ func TestHandleApproval_ApprovingEveryValueIsAWholeApproval(t *testing.T) {
 // Every malformed narrowing is refused before a claim: the card stays
 // pending and nothing runs.
 func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, body, args string
 		policy           bool
@@ -267,6 +273,8 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 // Execution re-checks the record against the staged call: one that does not
 // match refuses the run instead of running the whole staged list.
 func TestApprovalExecutionArgs_RefusesAMismatchedRecord(t *testing.T) {
+	t.Parallel()
+
 	a := narrowApprovalRow()
 	a.NarrowedJSON = `{"arg":"deal_ids","staged":["a","b","c"],"approved":["c"]}`
 	args, n, err := approvalExecutionArgs(&a)
@@ -297,6 +305,8 @@ func TestApprovalExecutionArgs_RefusesAMismatchedRecord(t *testing.T) {
 // whose staged value is a list of distinct strings; a settled card carries
 // what was approved.
 func TestNarrowingPayloads(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	pending := narrowApprovalRow()
 	fields := withApprovalNarrowable(map[string]any{}, &pending)
@@ -333,6 +343,8 @@ func TestNarrowingPayloads(t *testing.T) {
 // A describer card row may name a staged value with `key`; keys are unique
 // and bounded like labels.
 func TestParseApprovalCard_Keys(t *testing.T) {
+	t.Parallel()
+
 	if _, canonical, err := parseApprovalCard([]byte(`{"title":"t","items":[{"key":"a","label":"A"},{"label":"B"}]}`)); err != nil || !strings.Contains(string(canonical), `"key":"a"`) {
 		t.Fatalf("a keyed row: %s, %v", canonical, err)
 	}
@@ -351,6 +363,8 @@ func TestParseApprovalCard_Keys(t *testing.T) {
 // A grouped decision narrows one card and approves another whole; a bad
 // narrowing refuses the whole decision before any claim.
 func TestApprovalGroup_Narrowing(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"execute_plan"},
@@ -610,6 +624,8 @@ func TestHandleApproval_EarlyExecutingAnswerCarriesTheNarrowing(t *testing.T) {
 
 // The audit line names staged positions, never the left-out values.
 func TestApprovalNarrowing_LeftOutPositions(t *testing.T) {
+	t.Parallel()
+
 	n := &approvalNarrowing{Arg: "deal_ids", Staged: []string{"a", "secret-b", "c", "d", "e"}, Approved: []string{"a", "e"}}
 	if got := n.leftOutPositions(); got != "2-4" {
 		t.Fatalf("leftOutPositions = %q, want 2-4", got)
@@ -626,6 +642,8 @@ func (f *failingResultNarrowStore) SetApprovalResult(context.Context, string, st
 // An outcome that could not be recorded still answers what was approved, so
 // the card keeps its narrowing.
 func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	st := &failingResultNarrowStore{narrowStore: &narrowStore{approval: narrowApprovalRow()}}
 	s := narrowServer(t, st, &narrowChild{})
@@ -641,6 +659,8 @@ func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
 // dropped at boot, and the run-time predicate refuses one too (defence in
 // depth, should a later policy path let such a key through).
 func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"mail_send_email"},
@@ -671,6 +691,8 @@ func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 // only, so the endpoint would never receive the staged list in
 // `_meta["fleet/narrowed"]`.
 func TestStagedNarrowable_NeverASyntheticTransportTool(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"execute_plan"},
@@ -702,6 +724,8 @@ func TestStagedNarrowable_NeverASyntheticTransportTool(t *testing.T) {
 // pending card offers nor what its decision narrows, and a card staged with
 // nothing frozen is never narrowed whatever the policy says now.
 func TestNarrowing_UsesTheArgumentFrozenAtStaging(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"execute_plan"},
@@ -743,6 +767,8 @@ func (s *narrowStageStore) SetApprovalNarrowableArg(_ context.Context, _, _, arg
 // Staging freezes the policy's argument on the row and the live card carries
 // it; a call whose staged value is not a narrowable list freezes nothing.
 func TestStage_FreezesTheNarrowableArgument(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	st := &narrowStageStore{}
 	sink := &eventSink{}
@@ -771,6 +797,8 @@ func TestStage_FreezesTheNarrowableArgument(t *testing.T) {
 // before anything is sized by it (a body can hold hundreds of thousands of
 // short repeats).
 func TestNarrowApproval_RefusesMoreValuesThanStagedByLength(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	row := narrowApprovalRow()
 	huge := make([]string, 200000)
@@ -786,6 +814,8 @@ func TestNarrowApproval_RefusesMoreValuesThanStagedByLength(t *testing.T) {
 // A grouped decision gets its own body cap, not the global 1 MiB JSON cap;
 // every other POST keeps the global one.
 func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
+	t.Parallel()
+
 	big := strings.Repeat("x", maxJSONBodyBytes+10)
 	read := func(path string) error {
 		var err error
@@ -810,6 +840,8 @@ func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
 // The group cap holds the largest decision the endpoint accepts, written in
 // the most expensive JSON escaping (a surrogate pair per character).
 func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	t.Parallel()
+
 	perValue := maxNarrowableValueRunes*12 + 3        // two six-byte escapes per rune, quotes, comma
 	ids := maxApprovalGroupDecisions * (200 + 64 + 8) // ids, keys and brackets, generously; a narrow_args name (64) each
 	if need := maxApprovalGroupNarrowedValues*perValue + ids; need > maxApprovalGroupBody {
@@ -820,6 +852,8 @@ func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
 // The single-card cap holds the largest narrowing it accepts, in the most
 // expensive JSON escaping.
 func TestMaxApprovalBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	t.Parallel()
+
 	if need := maxNarrowableValues*(maxNarrowableValueRunes*12+3) + 1024; need > maxApprovalBody {
 		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalBody)
 	}
@@ -830,6 +864,8 @@ func TestMaxApprovalBody_HoldsTheWorstCaseEscaping(t *testing.T) {
 // A value that is merely unknown is quoted, cut to a bounded length; so is a
 // huge echoed argument name.
 func TestNarrowApproval_ErrorsNeverEchoAHugeValue(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	row := narrowApprovalRow()
 	huge := strings.Repeat("é", 2<<20)
@@ -849,6 +885,8 @@ func TestNarrowApproval_ErrorsNeverEchoAHugeValue(t *testing.T) {
 }
 
 func TestQuoteClientValue(t *testing.T) {
+	t.Parallel()
+
 	if got := quoteClientValue("ap-1"); got != `"ap-1"` {
 		t.Fatalf("short = %s", got)
 	}
@@ -933,6 +971,8 @@ func TestApprovalRecoveryText_FitsTheMinimumOutputLimit(t *testing.T) {
 // 400 KiB here), so the terminal can approve it too. Only arguments past
 // approvalArgsMaxDecodeBytes approve whole.
 func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
+	t.Parallel()
+
 	narrowPolicy(t)
 	var b strings.Builder
 	b.WriteString(`{"deal_ids":[`)

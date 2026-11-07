@@ -7,6 +7,8 @@ import (
 )
 
 func TestLLMUsageSince(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

@@ -10,6 +10,8 @@ import (
 // its own limiter: per attempted email (online brute force of one account)
 // and global (email rotation as a CPU DoS).
 func TestVerifyLimiter_PerEmailAndGlobal(t *testing.T) {
+	t.Parallel()
+
 	var l verifyLimiter
 	now := time.Unix(1_000_000, 0)
 
@@ -44,6 +46,8 @@ func TestVerifyLimiter_PerEmailAndGlobal(t *testing.T) {
 // through the web tier (which limits each address first) leave it open for
 // everyone else.
 func TestVerifyLimiter_GlobalLeavesRoomAfterOneSourcesAttempts(t *testing.T) {
+	t.Parallel()
+
 	var l verifyLimiter
 	now := time.Unix(2_000_000, 0)
 	for i := 0; i < 31; i++ {

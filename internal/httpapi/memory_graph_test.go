@@ -32,6 +32,8 @@ func seedGraphMemory(t *testing.T, s *Server, user, content string, g store.Grap
 }
 
 func TestMemoryGraphEndpoint(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "graph@x.com"
@@ -127,6 +129,8 @@ func TestMemoryGraphEndpoint(t *testing.T) {
 }
 
 func TestMemoriesListAsOf(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "graph@x.com"
@@ -161,6 +165,8 @@ func TestMemoriesListAsOf(t *testing.T) {
 }
 
 func TestMemoryExtractGraphEndpoint(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "graph@x.com"
 	m, err := s.store.CreateMemory(context.Background(), user, "Ada works at Elcano Corp", "manual", "fact")
@@ -239,6 +245,8 @@ func TestMemoryExtractGraphEndpoint(t *testing.T) {
 // flag unset (or no extractor wired) maybeExtractMemoryGraph is a pure no-op,
 // so create/accept behavior is byte-for-byte unchanged.
 func TestMaybeExtractMemoryGraphGate(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.memoryGraphExtractor = func(context.Context, string) (*agent.ExtractedGraph, error) {
 		t.Error("extractor must not fire while the flag is off")

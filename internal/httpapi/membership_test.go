@@ -29,6 +29,8 @@ func memberFixture(t *testing.T, members ...string) *Server {
 }
 
 func TestMembership_KnownUserReaches200(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 
 	w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "u@x.com")
@@ -41,6 +43,8 @@ func TestMembership_KnownUserReaches200(t *testing.T) {
 }
 
 func TestMembership_UnknownUserRejected(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com") // stranger@x.com is deliberately not seeded
 
 	w := do(t, s.Routes(), http.MethodGet, "/auth/membership", nil, "stranger@x.com")
@@ -53,6 +57,8 @@ func TestMembership_UnknownUserRejected(t *testing.T) {
 }
 
 func TestMembership_GatesDataEndpoints(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 
 	// An unknown but validly-authenticated user can't list conversations.
@@ -73,6 +79,8 @@ func TestMembership_GatesDataEndpoints(t *testing.T) {
 // gate, so an unknown email reaches the handler (and gets its generic
 // "invalid credentials" answer) rather than a 403 that reveals non-membership.
 func TestMembership_VerifyStaysOpen(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 
 	w := do(t, s.Routes(), http.MethodPost, "/auth/verify",

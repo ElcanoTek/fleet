@@ -27,6 +27,8 @@ func decodeMe(t *testing.T, body []byte) meResponse {
 // attempt that admin made to set their OWN team — leaving the box with no way
 // to create a team at all, and "Share with my team" permanently broken.
 func TestEnvAdminCanSetOwnTeam(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	s.cfg.AdminEmails = []string{"boss@x.com"} // admin by env only; DB role stays member
 	h := s.Routes()
@@ -52,6 +54,8 @@ func TestEnvAdminCanSetOwnTeam(t *testing.T) {
 // admin with an empty ADMIN_EMAILS cannot clear its own only grant, but the
 // same request that leaves the role alone goes through.
 func TestSelfDemoteStillRefused(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes()
@@ -77,6 +81,8 @@ func TestSelfDemoteStillRefused(t *testing.T) {
 // one, get 409 trying to walk into someone else's, leave yours, and (as an
 // admin) join an existing one.
 func TestSelfServeTeam(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "ann@x.com", "bo@x.com", "root@x.com")
 	setRole(t, s, "root@x.com", "admin", "")
 	h := s.Routes()
@@ -139,6 +145,8 @@ func TestSelfServeTeam(t *testing.T) {
 // TestViewerCannotSetOwnTeam keeps the read-only role read-only: /me/team sits
 // behind rejectViewerWrites, so a viewer reads its team but cannot change it.
 func TestViewerCannotSetOwnTeam(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "eyes@x.com")
 	setRole(t, s, "eyes@x.com", "viewer", "audit")
 	h := s.Routes()
@@ -160,6 +168,8 @@ func TestViewerCannotSetOwnTeam(t *testing.T) {
 // "Share with my team" project write that 400s for a teamless caller succeeds
 // once they have created a team themselves.
 func TestProjectSharingAfterSelfServeTeam(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "ann@x.com")
 	h := s.Routes()
 

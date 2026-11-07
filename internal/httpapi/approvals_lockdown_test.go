@@ -73,6 +73,8 @@ func (r *recordingBashTaker) EgressDefault() (string, []string) {
 //   - non-lockdown → the warm Pool.Take (no --network flag, default rootless
 //     slirp4netns egress) — pre-#562 behavior, unchanged.
 func TestTakeStagedBashSandboxMatchesTurnPath(t *testing.T) {
+	t.Parallel()
+
 	t.Run("lockdown uses the sealed TakeContainer", func(t *testing.T) {
 		rt := &recordingBashTaker{}
 		if _, _, err := takeStagedBashSandbox(context.Background(), rt, true); err != nil {
@@ -101,6 +103,8 @@ func TestTakeStagedBashSandboxMatchesTurnPath(t *testing.T) {
 // approval path and `allowlisted` skipped the proxy entirely — while the ADRs
 // claimed the setting "genuinely applies fleet-wide".
 func TestTakeStagedBashSandboxHonorsFleetWideMode(t *testing.T) {
+	t.Parallel()
+
 	t.Run("fleet-wide lockdown seals a non-lockdown conversation", func(t *testing.T) {
 		rt := &recordingBashTaker{mode: sandbox.NetworkModeLockdown}
 		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err != nil {
@@ -161,6 +165,8 @@ func TestTakeStagedBashSandboxHonorsFleetWideMode(t *testing.T) {
 // host executor to fall back to, #159) — which mirrors
 // takeTurnSandboxFrom exactly, so approvals and turns behave identically.
 func TestTakeStagedBashSandboxFleetWideFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	t.Run("lockdown mode surfaces a real cold-start error", func(t *testing.T) {
 		rt := &recordingBashTaker{mode: sandbox.NetworkModeLockdown, takeContainerErr: errors.New("podman exploded")}
 		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err == nil {
@@ -209,6 +215,8 @@ func TestTakeStagedBashSandboxFleetWideFailsClosed(t *testing.T) {
 // ErrContainerUnavailable, the image-less test/mock pool signal), the error is
 // surfaced and the network-enabled warm Take is NOT attempted as a fallback.
 func TestTakeStagedBashSandboxLockdownFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	rt := &recordingBashTaker{takeContainerErr: sandbox.ErrContainerUnavailable}
 	_, _, err := takeStagedBashSandbox(context.Background(), rt, true)
 	if !errors.Is(err, sandbox.ErrContainerUnavailable) {
@@ -226,6 +234,8 @@ func TestTakeStagedBashSandboxLockdownFailsClosed(t *testing.T) {
 // CHAT_LOCKDOWN_ONLY switch (the same disjunction postChat applies), failing
 // CLOSED when the conversation can't be resolved.
 func TestStagedBashLockdownResolution(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name         string
 		convLockdown bool

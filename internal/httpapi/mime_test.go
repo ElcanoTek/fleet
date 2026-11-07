@@ -12,6 +12,8 @@ import (
 // fall back to application/zip sniffing on hosts that don't ship
 // /etc/mime.types (minimal containers, alpine).
 func TestOfficeMimeTypes_Registered(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		ext      string
 		wantPart string // a substring the registered Content-Type must contain

@@ -14,6 +14,8 @@ import (
 // On a Fleet that signs in through central Auth only, chat-server checks no
 // password (even a correct one, from a caller that skipped the gateway).
 func TestPasswordLoginDisabledRefusesPasswordVerify(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "carol@x.com")
 	h := s.Routes()
 	verify := func() (int, string) {
@@ -35,6 +37,8 @@ func TestPasswordLoginDisabledRefusesPasswordVerify(t *testing.T) {
 // person's own team. That holds in ordinary SSO operation and with the
 // break-glass on (passwords back) alike. Reads still work.
 func TestAccountsManagedByAuthRefuseAccountWrites(t *testing.T) {
+	t.Parallel()
+
 	for _, breakGlass := range []bool{false, true} {
 		t.Run(map[bool]string{false: "sso", true: "break-glass"}[breakGlass], func(t *testing.T) {
 			testAccountWritesRefused(t, breakGlass)
@@ -102,6 +106,8 @@ func testAccountWritesRefused(t *testing.T, breakGlass bool) {
 // Where Auth manages accounts, Fleet Admin comes from Auth alone: an
 // ADMIN_EMAILS entry grants nothing.
 func TestAccountsManagedByAuthIgnoreAdminEmails(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "carol@x.com")
 	s.cfg.AdminEmails = []string{"carol@x.com"}
 	h := s.Routes()
@@ -118,6 +124,8 @@ func TestAccountsManagedByAuthIgnoreAdminEmails(t *testing.T) {
 // person: 204 once applied (and again for a redelivery, which changes
 // nothing), 400 for a malformed one, 403 without the secret.
 func TestExternalTeamRenameRoute(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "ann@x.com", "ben@x.com")
 	setRole(t, s, "ann@x.com", "member", "Trading")
 	setRole(t, s, "ben@x.com", "member", "Ops")
@@ -152,6 +160,8 @@ func TestExternalTeamRenameRoute(t *testing.T) {
 // A push may carry the provider's last team rename next to the team; it must
 // be a non-negative number, and only ever next to a team.
 func TestExternalAccessTeamRenameSetting(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "ann@x.com")
 	h := s.Routes()
 	push := func(version int, settings map[string]string) int {

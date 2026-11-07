@@ -40,6 +40,8 @@ func TestGovernApprovalResultBoundsApprovedBashBeforePersistence(t *testing.T) {
 // "APPROVAL_REQUIRED..." after reload because the failure result
 // was orphaned under the approval id.
 func TestResolutionCallID(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   *store.Approval
@@ -92,6 +94,8 @@ var sendgridApprovalCatalog = []mcp.ServerTool{
 }
 
 func TestPrevalidateEmailRejectsBrokenHTML(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		ctx:        context.Background(),
 		mcpBroker:  &fakeMCPBroker{text: `{"valid":false,"errors":["Unclosed tag: <td>","Unresolved token: {{cta_text}}"],"warnings":[]}`},
@@ -107,6 +111,8 @@ func TestPrevalidateEmailRejectsBrokenHTML(t *testing.T) {
 }
 
 func TestPrevalidateEmailAcceptsValidHTML(t *testing.T) {
+	t.Parallel()
+
 	broker := &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":[]}`}
 	stager := &approvalStager{
 		ctx:        context.Background(),
@@ -123,6 +129,8 @@ func TestPrevalidateEmailAcceptsValidHTML(t *testing.T) {
 }
 
 func TestPrevalidateNativePreviewUsesFirstValidationServer(t *testing.T) {
+	t.Parallel()
+
 	broker := &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":[]}`}
 	stager := &approvalStager{
 		ctx:       context.Background(),
@@ -141,6 +149,8 @@ func TestPrevalidateNativePreviewUsesFirstValidationServer(t *testing.T) {
 }
 
 func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		ctx: context.Background(),
 		mcpBroker: &fakeMCPBroker{
@@ -161,6 +171,8 @@ func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
 // is best-effort, so the email stages unvalidated rather than being refused.
 // A member naming another server's validator does not hide this one.
 func TestPrevalidateEmailSkipsInteractiveHiddenValidator(t *testing.T) {
+	t.Parallel()
+
 	broken := `{"valid":false,"errors":["Unclosed tag: <td>"],"warnings":[]}`
 	cases := []struct {
 		name       string
@@ -197,6 +209,8 @@ func TestPrevalidateEmailSkipsInteractiveHiddenValidator(t *testing.T) {
 }
 
 func TestPrevalidateEmailSkippedForNonJSON(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		ctx:       context.Background(),
 		mcpBroker: &fakeMCPBroker{},
@@ -208,6 +222,8 @@ func TestPrevalidateEmailSkippedForNonJSON(t *testing.T) {
 }
 
 func TestPrevalidateEmailSkippedWhenNoContent(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		ctx:       context.Background(),
 		mcpBroker: &fakeMCPBroker{},
@@ -219,6 +235,8 @@ func TestPrevalidateEmailSkippedWhenNoContent(t *testing.T) {
 }
 
 func TestPrevalidateEmailAllowsTemplateExampleDataAsWarning(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		ctx:        context.Background(),
 		mcpBroker:  &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":["Template example data detected: Amazon US OLV, $589,075.45"]}`},
@@ -231,6 +249,8 @@ func TestPrevalidateEmailAllowsTemplateExampleDataAsWarning(t *testing.T) {
 }
 
 func TestResolveMCPToolUsesExactCatalogIdentity(t *testing.T) {
+	t.Parallel()
+
 	catalog := []mcp.ServerTool{
 		{ServerName: "mail", Tool: mcp.Tool{Name: "service_send_email"}},
 		{ServerName: "mail_service", Tool: mcp.Tool{Name: "send_email"}},
@@ -261,6 +281,8 @@ func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSele
 }
 
 func TestRunStagedToolUsesBrokerSeam(t *testing.T) {
+	t.Parallel()
+
 	broker := &fakeMCPBroker{text: "sent"}
 	clientConn, serverConn := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -302,6 +324,8 @@ func (b *approvalWireBackend) CallMCP(ctx context.Context, server, tool string, 
 }
 
 func TestRunStagedToolPropagatesMCPToolError(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{agent: &approvalEngine{
 		fakeEngine: &fakeEngine{},
 		broker:     &fakeMCPBroker{text: "rejected", isError: true},
@@ -323,6 +347,8 @@ func TestRunStagedToolPropagatesMCPToolError(t *testing.T) {
 // gets a clear retry signal instead. See logs/Email-Report-Analysis
 // for the failure mode.
 func TestValidateEmailHasContent_RejectsMissingBody(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		raw  string
@@ -349,6 +375,8 @@ func TestValidateEmailHasContent_RejectsMissingBody(t *testing.T) {
 }
 
 func TestValidateEmailHasContent_AcceptsRealBody(t *testing.T) {
+	t.Parallel()
+
 	// content set inline (the post-materialize state for both
 	// content-was-passed-inline and content_file-was-inlined cases).
 	err := validateEmailHasContent("preview_email", `{"to_email":"a@b.com","subject":"hi","content":"<p>real body</p>"}`)
@@ -366,6 +394,8 @@ func TestValidateEmailHasContent_AcceptsRealBody(t *testing.T) {
 }
 
 func TestValidateEmailHasContent_NoopForNonJSON(t *testing.T) {
+	t.Parallel()
+
 	// If somehow we get a non-JSON payload (shouldn't in production —
 	// fantasy serializes args itself), don't block on parse failure.
 	// Mirrors prevalidateEmail's "let downstream handle" stance.
@@ -464,6 +494,8 @@ func TestExpandCidImagesToDataURLs_MultipleRefsSinglePass(t *testing.T) {
 // A cid: ref without a matching inline_attachments entry stays as-is
 // (we don't synthesize a data URL from thin air).
 func TestExpandCidImagesToDataURLs_LeavesUnmatchedCidsAlone(t *testing.T) {
+	t.Parallel()
+
 	html := `<img src="cid:does_not_exist">`
 	out := expandCidImagesToDataURLs(html, map[string]any{}, "conv-x")
 	if out != html {

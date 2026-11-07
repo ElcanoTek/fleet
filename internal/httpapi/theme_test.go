@@ -15,6 +15,8 @@ import (
 )
 
 func TestRenderThemeCSS_EmitsValidTokensInStableOrder(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{
 		Dark: map[string]string{
 			"accent":     "#9da7ef",
@@ -38,6 +40,8 @@ func TestRenderThemeCSS_EmitsValidTokensInStableOrder(t *testing.T) {
 }
 
 func TestRenderThemeCSS_DropsInvalidAndUnknown(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{
 		Light: map[string]string{
 			"primary":     "#7272ab",                  // valid hex
@@ -69,6 +73,8 @@ func TestRenderThemeCSS_DropsInvalidAndUnknown(t *testing.T) {
 // validator feeds <meta name="theme-color"> and the PWA manifest, where an
 // invalid value ships as-is — so the regex itself must reject odd lengths.
 func TestRenderThemeCSS_RejectsOddHexLengths(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{
 		Dark: map[string]string{
 			"primary":   "#12345",    // 5 digits — invalid
@@ -89,6 +95,8 @@ func TestRenderThemeCSS_RejectsOddHexLengths(t *testing.T) {
 }
 
 func TestRenderThemeCSS_EmptyPaletteEmitsNoRules(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{})
 	if strings.Contains(css, "{") {
 		t.Errorf("expected no rules for empty palette, got %q", css)
@@ -96,6 +104,8 @@ func TestRenderThemeCSS_EmptyPaletteEmitsNoRules(t *testing.T) {
 }
 
 func TestThemeCSS_TokenGatedButIdentityless(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{sharedToken: "topsecret"}
 	h := s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS))
 
@@ -121,6 +131,8 @@ func TestThemeCSS_TokenGatedButIdentityless(t *testing.T) {
 }
 
 func TestThemeCSS_ServesBundlePalette(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		sharedToken: "topsecret",
 		clientConfig: &clientconfig.Bundle{
@@ -173,6 +185,8 @@ func getLogo(t *testing.T, s *Server) *httptest.ResponseRecorder {
 }
 
 func TestBrandLogo_ServesBundleFileWithHardenedHeaders(t *testing.T) {
+	t.Parallel()
+
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"></svg>`)
 	w := getLogo(t, newLogoServer(t, "mark.svg", svg))
 	if w.Code != http.StatusOK {
@@ -195,6 +209,8 @@ func TestBrandLogo_ServesBundleFileWithHardenedHeaders(t *testing.T) {
 }
 
 func TestBrandLogo_404WithoutBundleOrLogo(t *testing.T) {
+	t.Parallel()
+
 	for name, s := range map[string]*Server{
 		"no bundle": {sharedToken: "topsecret"},
 		"bundle without a logo": {
@@ -211,6 +227,8 @@ func TestBrandLogo_404WithoutBundleOrLogo(t *testing.T) {
 // A file that vanished under a running process must not 500 — the rail just
 // falls back, because a missing mark is never worth failing a page over.
 func TestBrandLogo_404WhenFileDisappeared(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "mark.png", []byte("\x89PNG\r\n\x1a\n"))
 	if err := os.Remove(s.clientConfig.BrandLogoPath); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -221,6 +239,8 @@ func TestBrandLogo_404WhenFileDisappeared(t *testing.T) {
 }
 
 func TestBrandLogo_404OverCap(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "huge.png", make([]byte, brandLogoMaxBytes+1))
 	if w := getLogo(t, s); w.Code != http.StatusNotFound {
 		t.Errorf("status %d want 404 — an oversize mark should degrade, not ship megabytes per page", w.Code)
@@ -228,6 +248,8 @@ func TestBrandLogo_404OverCap(t *testing.T) {
 }
 
 func TestBrandLogo_TokenGated(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/logo", nil)
 	w := httptest.NewRecorder()
@@ -240,6 +262,8 @@ func TestBrandLogo_TokenGated(t *testing.T) {
 // The logo is advertised on /client-config only when a file actually backed it,
 // so the web never points an <img> at a route that 404s.
 func TestClientConfig_AdvertisesLogoOnlyWhenResolved(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
 	w := httptest.NewRecorder()
@@ -257,6 +281,8 @@ func TestClientConfig_AdvertisesLogoOnlyWhenResolved(t *testing.T) {
 }
 
 func TestClientConfig_CarriesSupportContact(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
 
@@ -337,6 +363,8 @@ func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
 // verbatim, and omits the key entirely when none are configured so an older web
 // build sees the payload it always saw.
 func TestClientConfig_CarriesPinnedModels(t *testing.T) {
+	t.Parallel()
+
 	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
 	if s.cfg == nil {
 		s.cfg = &config.Config{}
@@ -364,6 +392,8 @@ func TestClientConfig_CarriesPinnedModels(t *testing.T) {
 // A rebranded palette repaints the Tools picker's tokens from its own colors
 // (Reklaim's picker was fleet purple), and a pinned picker token wins.
 func TestRenderThemeCSS_PickerTokensFollowPalette(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{
 		Dark: map[string]string{
 			"primary":       "#FFDF03",
@@ -404,6 +434,8 @@ func TestRenderThemeCSS_PickerTokensFollowPalette(t *testing.T) {
 // on_primary alone repaints the picker's foregrounds, and a malformed picker
 // pin falls back to its default instead of being replaced by a derived value.
 func TestRenderThemeCSS_PickerDerivationEdges(t *testing.T) {
+	t.Parallel()
+
 	css := renderThemeCSS(clientconfig.BrandColors{
 		Dark: map[string]string{"on_primary": "#0C0A09"},
 		Light: map[string]string{

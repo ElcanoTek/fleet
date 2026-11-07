@@ -15,6 +15,8 @@ import (
 // validation rejects junk before SQL, and keyed writes fail closed without a
 // cipher.
 func TestNotifySettingsCRUDAndSecretSealing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 
@@ -100,6 +102,8 @@ func TestNotifySettingsCRUDAndSecretSealing(t *testing.T) {
 // TestNotifySettingsSecretsFailClosedWithoutCipher: a keyed write without the
 // store cipher is rejected with an actionable error; secret-free writes work.
 func TestNotifySettingsSecretsFailClosedWithoutCipher(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t) // no cipher installed
 	ctx := context.Background()
 
@@ -118,6 +122,8 @@ func TestNotifySettingsSecretsFailClosedWithoutCipher(t *testing.T) {
 // TestNotifySettingsNormalizeAcceptsBlocked: "blocked" is a notify_on value
 // the panel may save (ADR-0092); unknown values are still refused.
 func TestNotifySettingsNormalizeAcceptsBlocked(t *testing.T) {
+	t.Parallel()
+
 	in := NotifySettingsInput{NotifyOn: " Blocked,failure "}
 	if err := in.Normalize(); err != nil {
 		t.Fatalf("Normalize(blocked,failure): %v", err)
@@ -135,6 +141,8 @@ func TestNotifySettingsNormalizeAcceptsBlocked(t *testing.T) {
 // default to off at 13:00 UTC, round-trip through the row, and an hour
 // outside 0-23 is refused before anything persists.
 func TestNotifySettingsOwnerDigestFields(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -179,6 +187,8 @@ func TestNotifySettingsOwnerDigestFields(t *testing.T) {
 // every later one — another replica, or this process after a restart — loses;
 // a new day can be claimed again. Concurrent claimers race to one winner.
 func TestClaimOwnerDigestDayOncePerDay(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	day := time.Date(2026, 10, 23, 13, 5, 0, 0, time.UTC)

@@ -728,6 +728,8 @@ func TestApprovalResume_ReplayedAnswerKeepsTheResumeFlag(t *testing.T) {
 // Promote-to-task and save-as-workflow transcripts leave fleet's resume input
 // out: it is not something the user asked for.
 func TestApprovalResume_TranscriptsSkipTheResumeInput(t *testing.T) {
+	t.Parallel()
+
 	hist := []agent.HistoryEntry{
 		histEntry("user", "text", agent.TextContent{Text: "update the deal"}),
 		histEntry("user", "text", agent.TextContent{Text: "[Approval resolved] mcp_deals_update_deal approval_id=x outcome=approved.", Kind: agent.InputKindApprovalResume}),

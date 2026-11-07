@@ -8,6 +8,8 @@ import (
 )
 
 func TestAdminGuardrailProbe(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com", "user@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	s.guardrailProbe = func(context.Context) GuardrailProbeResult {
@@ -31,6 +33,8 @@ func TestAdminGuardrailProbe(t *testing.T) {
 }
 
 func TestAdminGuardrailProbeUnwired(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	if w := do(t, s.Routes(), http.MethodPost, "/admin/guardrail/test", nil, "boss@x.com"); w.Code != http.StatusNotImplemented {

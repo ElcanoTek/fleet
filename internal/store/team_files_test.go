@@ -12,6 +12,8 @@ import (
 // independent of whether the chat is shared — they survive stop sharing,
 // sharing again, archive and unarchive (ADR-0079).
 func TestOutputExclusionsSurviveSharingChanges(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Q3")
 
@@ -119,6 +121,8 @@ func TestOutputExclusionsSurviveSharingChanges(t *testing.T) {
 // Moving a shared chat between two projects shared with the SAME team keeps
 // it shared (and its file choices with it); moving it anywhere else unshares.
 func TestMoveBetweenSameTeamProjectsKeepsSharing(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Q3")
 	other, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "bob@x.com", Name: "Quant 2", TeamID: "quant"})
@@ -152,6 +156,8 @@ func TestMoveBetweenSameTeamProjectsKeepsSharing(t *testing.T) {
 // A teammate branch records where it came from; the viewer listing finds the
 // most recent live branch and says whether the source gained messages since.
 func TestBranchOriginAndViewerBranches(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -244,6 +250,8 @@ func TestBranchOriginAndViewerBranches(t *testing.T) {
 
 // The team link reveals only what routing needs.
 func TestResolveTeamLink(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 
@@ -287,6 +295,8 @@ func TestResolveTeamLink(t *testing.T) {
 }
 
 func TestProjectUserState(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c1 := f.sharedChat(t, "alice@x.com", f.project.ID, "One")
 	c2 := f.sharedChat(t, "bob@x.com", f.project.ID, "Two")
@@ -332,6 +342,8 @@ func TestProjectUserState(t *testing.T) {
 // the row lock, so a kept_personal write and a sources_open write never
 // overwrite each other with a stale read.
 func TestProjectUserStateConcurrentPartialUpdates(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	const n = 8
 	chats := make([]*Conversation, n)
@@ -380,6 +392,8 @@ func TestProjectUserStateConcurrentPartialUpdates(t *testing.T) {
 // the project or were deleted are pruned, and if it is still over the cap the
 // untouched stored keys are evicted — the key being written always lands.
 func TestProjectUserStateSourcesOpenCap(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	gone := f.sharedChat(t, "bob@x.com", f.project.ID, "gone")
 	kept := f.sharedChat(t, "bob@x.com", f.project.ID, "kept")
@@ -443,6 +457,8 @@ func TestProjectUserStateSourcesOpenCap(t *testing.T) {
 // Deleting a user removes their per-project UI state — including in projects
 // they did not own, which the project cascade never reaches.
 func TestDeleteUserRemovesProjectUserState(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	yes := true
 	if _, err := f.s.UpdateProjectUserState(f.ctx, f.project.ID, "bob@x.com", &yes, nil); err != nil {
@@ -484,6 +500,8 @@ func TestDeleteUserRemovesProjectUserState(t *testing.T) {
 // (a share stored before the archived refusal existed). Without both, "share
 // while archived, then unarchive" re-exposed the chat with no share action.
 func TestArchivedChatCannotBeSharedAndUnarchiveStaysPrivate(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	if err := f.s.SetArchived(f.ctx, "alice@x.com", c.ID, true); err != nil {
@@ -533,6 +551,8 @@ func TestArchivedChatCannotBeSharedAndUnarchiveStaysPrivate(t *testing.T) {
 // the branch's copy and the origin write is not in the branch, so it must
 // report changed_since.
 func TestBranchOriginHighWaterIsNotReadAfterCopy(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	var hw int64
@@ -569,6 +589,8 @@ func TestBranchOriginHighWaterIsNotReadAfterCopy(t *testing.T) {
 // last visible text id; a completed turn persists a turn_summary (and other
 // non-text rows) after it, which must not make a fresh branch read "changed".
 func TestViewerBranchesIgnoresInvisibleRows(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -620,6 +642,8 @@ func TestViewerBranchesIgnoresInvisibleRows(t *testing.T) {
 // (ids below the branch's recorded high-water mark) do not count. The
 // truncation flag round-trips with the origin.
 func TestBranchFilesNoteDueUntilAUserTurnCommits(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -668,6 +692,8 @@ func TestBranchFilesNoteDueUntilAUserTurnCommits(t *testing.T) {
 // recording order (seq) breaks the tie — for ViewerBranches and for the
 // team-view version that feeds the conditional poll alike.
 func TestViewerBranchesSameSecondUsesRecordingOrder(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -708,6 +734,8 @@ func TestViewerBranchesSameSecondUsesRecordingOrder(t *testing.T) {
 // The exclusion fingerprint is unambiguous: two different sets whose paths
 // join to the same newline-separated string still version differently.
 func TestTeamViewVersionExclusionSetsDoNotCollide(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	version := func(paths ...string) string {
@@ -737,6 +765,8 @@ func TestTeamViewVersionExclusionSetsDoNotCollide(t *testing.T) {
 // maxExclusionsPerConversation is refused whole (nothing inserted), and
 // re-sharing — a delete — still works at the cap. Nothing is pruned.
 func TestExclusionsCappedPerConversation(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	if _, err := f.s.db.ExecContext(f.ctx, `
@@ -778,6 +808,8 @@ func TestExclusionsCappedPerConversation(t *testing.T) {
 // in the project is dropped exactly like a deleted one, so the returned map
 // never tells a member that private chat still exists here.
 func TestSourcesOpenKeepsOnlyVisibleChats(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	shared := f.sharedChat(t, "alice@x.com", f.project.ID, "Shared")
 	private, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Private", "victoria", "", false)
@@ -817,6 +849,8 @@ func TestSourcesOpenKeepsOnlyVisibleChats(t *testing.T) {
 // is written — the one that actually hosts the share — not a project read
 // before a racing refile. A chat that is no longer shared credits nothing.
 func TestMarkProjectSharedChatCreditsTheChatsCurrentProject(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Moving")
 	second, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Second", TeamID: "quant"})

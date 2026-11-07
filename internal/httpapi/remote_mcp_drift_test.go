@@ -15,6 +15,8 @@ import (
 // each with the directory's current value, and an entry that cannot be
 // compared (a tenant placeholder) reports nothing.
 func TestDriftFromCatalog(t *testing.T) {
+	t.Parallel()
+
 	catalog := []clientconfig.RemoteMCPCatalogEntry{
 		{Name: "moved", URL: "https://mcp.moved.example.com/mcp", Auth: "oauth"},
 		{Name: "same", URL: "https://MCP.Same.example.com:443/mcp", Auth: "oauth"},
@@ -76,6 +78,8 @@ func TestDriftFromCatalog(t *testing.T) {
 // directory entry moved carries catalog_drift; the same row seen by a user
 // it is shared with does not.
 func TestRemoteMCPServersListReportsCatalogDrift(t *testing.T) {
+	t.Parallel()
+
 	srv, _, row, user := remoteMCPFixture(t)
 	srv.clientConfig = &clientconfig.Bundle{RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
 		{Name: row.Name, URL: "https://mcp.github.example.com/v2", Auth: "oauth"},

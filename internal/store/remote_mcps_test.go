@@ -43,6 +43,8 @@ func sampleServerInput(email string) RemoteMCPServerInput {
 }
 
 func TestRemoteMCPCreateListGetDelete(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const email = "Brad@Elcano.com"
@@ -95,6 +97,8 @@ func TestRemoteMCPCreateListGetDelete(t *testing.T) {
 }
 
 func TestRemoteMCPTokenLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, err := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -151,6 +155,8 @@ func TestRemoteMCPTokenLifecycle(t *testing.T) {
 }
 
 func TestEnsureFreshTokenNeedsReauth(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -176,6 +182,8 @@ func TestEnsureFreshTokenNeedsReauth(t *testing.T) {
 // so the connections UI names the real cause instead of claiming expiry for a
 // client-registration problem.
 func TestEnsureFreshTokenNeedsReauthCarriesDetail(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -203,6 +211,8 @@ func TestEnsureFreshTokenNeedsReauthCarriesDetail(t *testing.T) {
 // the server (#1006). The refresh callback is never invoked and the failure
 // counter stays put: no refresh was attempted.
 func TestEnsureFreshTokenNoRefreshTokenMarksNeedsReauth(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -233,6 +243,8 @@ func TestEnsureFreshTokenNoRefreshTokenMarksNeedsReauth(t *testing.T) {
 }
 
 func TestEnsureFreshTokenNoExpiryUsable(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -255,6 +267,8 @@ func TestEnsureFreshTokenNoExpiryUsable(t *testing.T) {
 }
 
 func TestEnsureFreshTokenNeverAuthorized(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -268,6 +282,8 @@ func TestEnsureFreshTokenNeverAuthorized(t *testing.T) {
 }
 
 func TestOAuthFlowSingleUse(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -289,6 +305,8 @@ func TestOAuthFlowSingleUse(t *testing.T) {
 }
 
 func TestOAuthFlowExpiry(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
@@ -305,6 +323,8 @@ func TestOAuthFlowExpiry(t *testing.T) {
 }
 
 func TestRemoteMCPNoCipherFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t) // no cipher set
 	if s.RemoteMCPEncryptionEnabled() {
 		t.Fatal("expected encryption disabled without a cipher")
@@ -320,6 +340,8 @@ func TestRemoteMCPNoCipherFailsClosed(t *testing.T) {
 // manual OAuth app registration depends on — must survive so Reconnect works
 // without re-entering credentials.
 func TestClearOAuthTokensKeepsRegistration(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const email = "user@elcano.com"
@@ -366,6 +388,8 @@ func TestClearOAuthTokensKeepsRegistration(t *testing.T) {
 // a row created without one reads back ” (= "same as URL"), which is what
 // every pre-057 row means.
 func TestRemoteMCPResourceIndicatorPersists(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	in := sampleServerInput("u@x.com")

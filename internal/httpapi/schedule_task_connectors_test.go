@@ -18,6 +18,8 @@ import (
 )
 
 func TestAttachTaskConnectors(t *testing.T) {
+	t.Parallel()
+
 	raw := `{"name":"Daily scan","prompt":"scan all SSPs","cron":"0 9 * * *","connectors":[{"server":"model-invented"}]}`
 
 	t.Run("snapshots the conversation's selection and overrides anything the model supplied", func(t *testing.T) {
@@ -102,6 +104,8 @@ func TestAttachTaskConnectors(t *testing.T) {
 }
 
 func TestDescribeTaskConnectors(t *testing.T) {
+	t.Parallel()
+
 	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, []string{"mailbox"}); got != "Connectors: email, gamma (work) (plus always-on: mailbox)" {
 		t.Errorf("selected + always-on: %q", got)
 	}
@@ -120,6 +124,8 @@ func TestDescribeTaskConnectors(t *testing.T) {
 }
 
 func TestScheduleTaskMultipleCardsDoNotSupersedeEachOther(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	fs := newEnableMCPTestStore()
 	const user = "jeanne@elcanotek.com"
@@ -178,6 +184,8 @@ type alwaysOnFakeEngine struct {
 func (e *alwaysOnFakeEngine) AlwaysOnMCPServerCatalog() []agent.AlwaysOnServerInfo { return e.alwaysOn }
 
 func TestChatTaskConnectorsFor(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	fs := newFakeChatStore()
 	const user = "kartik@reklaim.example"

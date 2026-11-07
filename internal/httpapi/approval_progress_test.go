@@ -99,6 +99,8 @@ func (c *progressChild) CallMCP(ctx context.Context, _, _ string, _ map[string]a
 // protocol, and the update the server sent is stored on the executing row
 // before the call returns.
 func TestRunStagedTool_ProgressCrossesTheBrokerAndIsStored(t *testing.T) {
+	t.Parallel()
+
 	useProgressPolicy(t)
 	st := &progressStore{wrote: make(chan struct{}, 1)}
 	child := &progressChild{stored: st.wrote}
@@ -131,6 +133,8 @@ func TestRunStagedTool_ProgressCrossesTheBrokerAndIsStored(t *testing.T) {
 // A tool that did not opt in asks for nothing: the call crosses exactly as
 // before and nothing is written.
 func TestRunStagedTool_NoProgressForOtherTools(t *testing.T) {
+	t.Parallel()
+
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"create_deal"}})
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	st := &progressStore{}
@@ -185,6 +189,8 @@ func waitWrites(t *testing.T, st *progressStore, n int) {
 // A progress message is plain, bounded text: control and bidi characters
 // become spaces, a long one is cut, and one carrying a secret is dropped.
 func TestProgressMessage(t *testing.T) {
+	t.Parallel()
+
 	if got := progressMessage("deal\u202e 12\n\tof 24"); got != "deal 12 of 24" {
 		t.Errorf("sanitized = %q", got)
 	}
@@ -203,6 +209,8 @@ func TestProgressMessage(t *testing.T) {
 // its latest progress when there is one; the pending card of such a tool
 // carries the flag too, and nothing else changes.
 func TestWithApprovalProgress(t *testing.T) {
+	t.Parallel()
+
 	useProgressPolicy(t)
 	s := &Server{}
 	stored := `{"progress":12,"total":24,"message":"creating deal 12","updated_at":5}`
@@ -235,6 +243,8 @@ func TestWithApprovalProgress(t *testing.T) {
 // A push names the call by its readable card title when there is one, else
 // by the tool, and never by its arguments.
 func TestApprovalPushLabel(t *testing.T) {
+	t.Parallel()
+
 	withCard := &store.Approval{ToolName: "mcp_deals_create_deal", ArgsJSON: `{"secret_arg":"x"}`, CardJSON: `{"title":"Create 24 deals on PubMatic","items":[]}`}
 	if got := approvalPushLabel(withCard); got != "Create 24 deals on PubMatic" {
 		t.Fatalf("label = %q", got)
@@ -305,6 +315,8 @@ func newPushRelay(t *testing.T) (*pushRelay, *webpush.Service) {
 // The owner gets a normal-urgency push once an opted-in approved call has
 // recorded its outcome; a call of any other tool sends none.
 func TestExecuteClaimedApproval_PushesWhenAnOptedInCallFinishes(t *testing.T) {
+	t.Parallel()
+
 	useProgressPolicy(t)
 	relay, svc := newPushRelay(t)
 	st := newGroupStore(
@@ -344,6 +356,8 @@ func (r resumeSkipStore) HasArmedApprovals(context.Context, string) (bool, error
 // A resume blocked by the hourly cap (or a full queue) tells the owner with a
 // high-urgency push: the task now waits for them. A deleted conversation does not.
 func TestDecideApprovalResume_PushesWhenTheContinueIsSkipped(t *testing.T) {
+	t.Parallel()
+
 	for skipped, want := range map[string]int{
 		store.ApprovalResumeSkipRateLimited:      1,
 		store.ApprovalResumeSkipQueueFull:        1,

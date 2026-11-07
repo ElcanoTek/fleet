@@ -11,6 +11,8 @@ import (
 // file of the right type with a recognizable name — the browser's Save dialog
 // is the whole UI here, so the headers ARE the user experience.
 func TestConversationExport_Formats(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user) // "failed tasks": one user turn, one assistant turn
@@ -80,6 +82,8 @@ func TestConversationExport_Formats(t *testing.T) {
 // work" checkbox reaches the renderer, and that leaving it off is what gives a
 // reader the short, readable document.
 func TestConversationExport_IncludeScope(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConvWithToolCall(t, s, user)

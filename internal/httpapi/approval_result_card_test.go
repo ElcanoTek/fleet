@@ -61,6 +61,8 @@ func envelopeWith(card string) string {
 }
 
 func TestParseApprovalResultCard_AcceptsTheSchema(t *testing.T) {
+	t.Parallel()
+
 	for name, raw := range map[string]string{"done": goodResultCard, "partial with retry": failedResultCard} {
 		card, canonical, err := parseApprovalResultCard([]byte(raw))
 		if err != nil {
@@ -76,6 +78,8 @@ func TestParseApprovalResultCard_AcceptsTheSchema(t *testing.T) {
 }
 
 func TestParseApprovalResultCard_Refusals(t *testing.T) {
+	t.Parallel()
+
 	item := func(extra string) string {
 		return `{"outcome":"partial","title":"t","items":[{"key":"A","label":"A","status":"done"},{"key":"B","label":"B","status":"failed"}` + extra + `]}`
 	}
@@ -142,6 +146,8 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 }
 
 func TestExtractResultCard(t *testing.T) {
+	t.Parallel()
+
 	if card, ok, reason := extractResultCard(envelopeWith(goodResultCard)); !ok || reason != "" || !strings.Contains(string(card), "IX151710246087067804") {
 		t.Fatalf("envelope: ok=%v reason=%q card=%s", ok, reason, card)
 	}
@@ -177,6 +183,8 @@ func TestExtractResultCard(t *testing.T) {
 // End to end through the governance the approval path applies: a secret in
 // the card is scrubbed by the redactor, and the scrubbed card is not stored.
 func TestExecuteClaimedApproval_RedactedCardIsNotStored(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	secret := strings.Replace(goodResultCard, "Verified: the deal reads back as created.", "token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB", 1)
 	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel})}
@@ -231,6 +239,8 @@ func resultCardServer(st chatStore, text string, isErr bool) *Server {
 // An approved call of an opted-in tool: its result's card is stored on the
 // row before the outcome, rides the reply, and is served on every read.
 func TestExecuteClaimedApproval_StoresTheResultCard(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel})}
 	s := resultCardServer(st, envelopeWith(goodResultCard), false)
@@ -259,6 +269,8 @@ func TestExecuteClaimedApproval_StoresTheResultCard(t *testing.T) {
 // A tool that did not opt in, an errored call, and a result without a card
 // all settle exactly as before: no write, no result_card key.
 func TestExecuteClaimedApproval_NoResultCardOtherwise(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	cases := []struct {
 		name, tool, text string
@@ -289,6 +301,8 @@ func TestExecuteClaimedApproval_NoResultCardOtherwise(t *testing.T) {
 // A failed store write never fails the approval: the outcome is recorded and
 // the reply carries no card.
 func TestExecuteClaimedApproval_ResultCardStoreErrorKeepsTheOutcome(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel}), err: sql.ErrConnDone}
 	s := resultCardServer(st, envelopeWith(goodResultCard), false)
@@ -302,6 +316,8 @@ func TestExecuteClaimedApproval_ResultCardStoreErrorKeepsTheOutcome(t *testing.T
 // The stored card is served only on a success fleet recorded, and is
 // re-validated on every read.
 func TestApprovalResultCardPayload_OnlyOnARecordedSuccess(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, err := parseApprovalResultCard([]byte(goodResultCard))
 	if err != nil {
 		t.Fatal(err)
@@ -361,6 +377,8 @@ func (s *recordStageStore) SetApprovalResultCard(_ context.Context, _, id, card 
 // card. A failed call, an undeclared tool or an unknown call id changes
 // nothing.
 func TestRecordActionResult_StoresTheRecordsCard(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	allocated := `{"campaign_id": "ELC07375", "result_card": {"outcome": "done", "title": "Campaign ID ELC07375 allocated", "items": []}}`
 
@@ -412,6 +430,8 @@ func TestRecordActionResult_StoresTheRecordsCard(t *testing.T) {
 // "Retry failed": the retry is left out when the record stores its card, and
 // a stored record card with a retry is not served (Codex P1 on #1722).
 func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
+	t.Parallel()
+
 	useResultCardPolicy(t)
 	withRetry := `{"ok": false, "result_card": {"outcome": "partial", "title": "1 of 2 allocated", "items": [` +
 		`{"key": "a", "label": "A", "status": "done"}, {"key": "b", "label": "B", "status": "failed"}], "retry": {"keys": ["b"]}}}`
@@ -443,6 +463,8 @@ func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
 // unchanged (and then ignored by extractResultCard), never re-wrapped into a
 // small card that would slip past the bound (Codex on #1722).
 func TestWithoutRetry_KeepsTheScanBound(t *testing.T) {
+	t.Parallel()
+
 	big := `{"pad": "` + strings.Repeat("x", approvalResultMaxScanBytes) + `", "result_card": ` + failedResultCard + `}`
 	if got := withoutRetry(big); got != big {
 		t.Fatal("an oversized result must come back unchanged")

@@ -25,6 +25,8 @@ func createNConvs(t *testing.T, s *Store, userEmail string, n int) []string {
 // TestDeleteByIDs_TargetedHardDelete proves the happy path: exactly the supplied
 // IDs are hard-deleted and the returned count matches.
 func TestDeleteByIDs_TargetedHardDelete(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 3)
@@ -48,6 +50,8 @@ func TestDeleteByIDs_TargetedHardDelete(t *testing.T) {
 // ID the caller doesn't own (foreign user's row, or a non-existent ID) aborts
 // the whole request with ErrForeignConversation and leaves every row intact.
 func TestDeleteByIDs_ForeignIDRejected(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		ids  func(ownerIDs, otherIDs []string) []string
@@ -97,6 +101,8 @@ func TestDeleteByIDs_ForeignIDRejected(t *testing.T) {
 // tombstoned (deleted_at set) rather than removed, and are hidden from List
 // and Get while still present in the DB.
 func TestDeleteByIDs_SoftDelete(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	s.SetSoftDelete(true)
 	ctx := context.Background()
@@ -140,6 +146,8 @@ func TestDeleteByIDs_SoftDelete(t *testing.T) {
 // TestBulkPatch_AdditiveFields proves each changes field is written when
 // supplied, and that the mutation lands on every supplied ID in one round-trip.
 func TestBulkPatch_AdditiveFields(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 3)
@@ -167,6 +175,8 @@ func TestBulkPatch_AdditiveFields(t *testing.T) {
 // TestBulkPatch_NilFieldsUntouched proves a nil pointer leaves the stored
 // value alone (additive semantics) — only supplied fields are written.
 func TestBulkPatch_NilFieldsUntouched(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 1)
@@ -193,6 +203,8 @@ func TestBulkPatch_NilFieldsUntouched(t *testing.T) {
 // TestBulkPatch_ForeignIDRejected proves the ownership pre-check: a foreign
 // ID aborts the transaction so no row is mutated.
 func TestBulkPatch_ForeignIDRejected(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	ownerIDs := createNConvs(t, s, "owner@x.com", 1)
@@ -220,6 +232,8 @@ func TestBulkPatch_ForeignIDRejected(t *testing.T) {
 // TestDeleteAllMatching_Label proves filter-based bulk delete respects the
 // optional label param and leaves non-matching rows alone.
 func TestDeleteAllMatching_Label(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -256,6 +270,8 @@ func TestDeleteAllMatching_Label(t *testing.T) {
 // TTL sweep tombstones (not hard-deletes), and the 30-day purge step
 // permanently removes rows whose deleted_at fell out of window.
 func TestSweepExpired_SoftDeletePurge(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	s.SetSoftDelete(true)
 	ctx := context.Background()

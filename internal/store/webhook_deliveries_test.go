@@ -49,6 +49,8 @@ func conversationExists(t *testing.T, s *Store, id string) bool {
 }
 
 func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -143,6 +145,8 @@ func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 // delivery over under a new token and starts afresh — the dead request's empty
 // conversation is deleted, and its token can do nothing more.
 func TestWebhookDeliveryTakeoverStartsAfresh(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	orig, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
@@ -185,6 +189,8 @@ func TestWebhookDeliveryTakeoverStartsAfresh(t *testing.T) {
 // running (a live, slow claimant), and deletes it once that turn is finished
 // with no saved input — the dead claimant's turn after startup recovery.
 func TestWebhookDeliveryTakeoverKeepsALiveTurnDropsAFinishedOne(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -216,6 +222,8 @@ func TestWebhookDeliveryTakeoverKeepsALiveTurnDropsAFinishedOne(t *testing.T) {
 // Abandon deletes the conversation only while it is empty: no messages and
 // no turns other than the abandoning request's own.
 func TestWebhookAbandonDeletesOnlyEmptyConversations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -270,6 +278,8 @@ func countConversations(t *testing.T, s *Store, user string) int {
 }
 
 func TestWebhookDeliveryExpiry(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
@@ -317,6 +327,8 @@ func TestWebhookDeliveryExpiry(t *testing.T) {
 
 // Concurrent repeats of one delivery: exactly one claims it.
 func TestWebhookDeliveryConcurrentClaims(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const n = 8

@@ -8,15 +8,19 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-// openRawDB opens a raw pgx connection bypassing applyMigrations so a
-// test can inspect schema_migrations directly or seed weird state.
-func openRawDB(t *testing.T) *sql.DB {
+// openRawDB opens a raw pgx connection, bypassing applyMigrations, on a
+// fresh migrated database of the test's own (dsn), so a test can inspect
+// schema_migrations directly or seed weird state.
+func openRawDB(t *testing.T) (db *sql.DB, dsn string) {
 	t.Helper()
-	dsn := testdb.ChatDSN(t)
+	dsn = newTestDSN(t)
+	return openRaw(t, dsn), dsn
+}
+
+func openRaw(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -42,6 +46,8 @@ func maxAppliedVersion(t *testing.T, db *sql.DB) int {
 }
 
 func TestMigrations_FreshDBGetsEverything(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 
 	// Store is usable — pick a table from 001_initial and write to it.
@@ -56,11 +62,12 @@ func TestMigrations_FreshDBGetsEverything(t *testing.T) {
 }
 
 func TestMigrations_IdempotentReopen(t *testing.T) {
+	t.Parallel()
+
 	// First open runs migrations; second should be a no-op.
-	s1 := newTestStore(t)
+	s1, dsn := newTestStoreDSN(t)
 	v1 := maxAppliedVersion(t, s1.db)
 
-	dsn := testdb.ChatDSN(t)
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("second open: %v", err)
@@ -74,7 +81,10 @@ func TestMigrations_IdempotentReopen(t *testing.T) {
 }
 
 func TestMigrations_SingleConnectionPool(t *testing.T) {
-	raw := openRawDB(t)
+	t.Parallel()
+
+	// An empty database: the whole migration set on one connection.
+	raw := openRaw(t, emptyTestDSN(t))
 	raw.SetMaxOpenConns(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -88,10 +98,12 @@ func TestMigrations_SingleConnectionPool(t *testing.T) {
 }
 
 func TestMigrations_RefusesNewerDB(t *testing.T) {
+	t.Parallel()
+
 	// Poison schema_migrations with a version beyond what the binary knows
 	// about — Open must refuse rather than silently run older-schema code
 	// against newer data.
-	raw := openRawDB(t)
+	raw, dsn := openRawDB(t)
 	ctx := context.Background()
 	if err := ensureSchemaMigrationsTable(ctx, raw); err != nil {
 		t.Fatalf("ensure table: %v", err)
@@ -103,29 +115,25 @@ func TestMigrations_RefusesNewerDB(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed version: %v", err)
 	}
-	t.Cleanup(func() {
-		// Clean up the poisoned row so subsequent tests can Open normally.
-		_, _ = raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 999`)
-	})
-
-	if _, err := Open(testdb.ChatDSN(t), DefaultPoolConfig()); err == nil {
+	if _, err := Open(dsn, testPool()); err == nil {
 		t.Fatal("Open should reject a DB with a future schema version")
 	}
 }
 
 func TestMigrations_PreservesExistingData(t *testing.T) {
+	t.Parallel()
+
 	// A real upgrade scenario: data exists; a future migration runs; data
-	// survives. Since our helper truncates on open, we use a single Store
-	// and verify data persists across Close/Open cycles.
-	s := newTestStore(t)
+	// survives. We use a single Store and verify data persists across
+	// Close/Open cycles.
+	s, dsn := newTestStoreDSN(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "bob@example.com", "password123"); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
 
-	// Reopen WITHOUT truncating, to confirm Open itself is non-destructive.
-	dsn := testdb.ChatDSN(t)
+	// Reopen, to confirm Open itself is non-destructive.
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +149,8 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 }
 
 func TestMigrationStatusDB(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t) // opens + runs every migration
 	ctx := context.Background()
 
@@ -200,6 +210,8 @@ func TestMigrationStatusDB(t *testing.T) {
 }
 
 func TestMigrations_LoadOrderAndDedup(t *testing.T) {
+	t.Parallel()
+
 	ms, err := loadMigrations()
 	if err != nil {
 		t.Fatalf("loadMigrations: %v", err)
@@ -217,6 +229,8 @@ func TestMigrations_LoadOrderAndDedup(t *testing.T) {
 }
 
 func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "u@example.com", "", "assistant", "", false)
@@ -337,7 +351,7 @@ func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
 // session and asserts applyMigrations gives up with a bounded error instead
 // of blocking forever (#2022).
 func TestMigrations_LockWaitIsBounded(t *testing.T) {
-	raw := openRawDB(t)
+	raw, _ := openRawDB(t)
 	ctx := context.Background()
 	holder, err := raw.Conn(ctx)
 	if err != nil {

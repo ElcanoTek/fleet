@@ -31,6 +31,8 @@ func measuredRatio(t *testing.T, textHex, fillHex string) float64 {
 }
 
 func TestDerivePrimaryFill_Cases(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, primary, onPrimary string
 		fill, hover              string
@@ -65,6 +67,8 @@ func TestDerivePrimaryFill_Cases(t *testing.T) {
 // The guarantee: for ANY palette the fill reaches AA, measured from the hex
 // it emits (8-bit, as the browser paints it), and the hover never lowers it.
 func TestDerivePrimaryFill_AnyPaletteReachesAA(t *testing.T) {
+	t.Parallel()
+
 	rng := rand.New(rand.NewPCG(1815, 4))
 	randomHex := func() string { return fmt.Sprintf("#%06x", rng.IntN(1<<24)) }
 	pairs := make([][2]string, 0, 20008)
@@ -97,6 +101,8 @@ func TestDerivePrimaryFill_AnyPaletteReachesAA(t *testing.T) {
 // A value fleet cannot read falls back to fleet's own for that color, and
 // a translucent label is painted solid, so the pair is always measured.
 func TestDerivePrimaryFill_FallsBackAndPaintsTheLabelSolid(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct{ primary, onPrimary, fill, text string }{
 		{"rgb(foo, bar, baz)", "#ffffff", "#7171a9", "#ffffff"},
 		{"rgb(1 2 3 4)", "#ffffff", "#7171a9", "#ffffff"},
@@ -118,6 +124,8 @@ func TestDerivePrimaryFill_FallsBackAndPaintsTheLabelSolid(t *testing.T) {
 }
 
 func TestParseCSSColor(t *testing.T) {
+	t.Parallel()
+
 	for in, want := range map[string]string{
 		"#abc":                        "#aabbcc",
 		"#AABBCC":                     "#aabbcc",
@@ -140,6 +148,8 @@ func TestParseCSSColor(t *testing.T) {
 // unparseable bundle primary still gets a fill in its own hue). Its mix must
 // be exactly what derivePrimaryFill computes for fleet's pair, in both themes.
 func TestPrimaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "app", "globals.css"))
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +201,8 @@ func TestPrimaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
 }
 
 func TestRenderThemeCSS_EmitsPrimaryFill(t *testing.T) {
+	t.Parallel()
+
 	t.Run("primary only: measured against fleet's on_primary", func(t *testing.T) {
 		css := renderThemeCSS(clientconfig.BrandColors{Light: map[string]string{"primary": "#ffdf03"}})
 		if !strings.Contains(css, "--color-primary-fill:#877602;--color-primary-fill-hover:#6e6001;--color-on-primary-fill:#ffffff;") {
@@ -230,6 +242,8 @@ func TestRenderThemeCSS_EmitsPrimaryFill(t *testing.T) {
 //
 //	go test ./internal/httpapi -run TestPrimaryFillContract -update
 func TestPrimaryFillContract(t *testing.T) {
+	t.Parallel()
+
 	type entry struct {
 		Name      string `json:"name"`
 		Primary   string `json:"primary"`
@@ -303,6 +317,8 @@ func TestPrimaryFillContract(t *testing.T) {
 // the secondary hover) clears AA under the label, re-measured from the hex the
 // derivation emits.
 func TestDeriveSecondaryFill_AnyPaletteBlendReachesAA(t *testing.T) {
+	t.Parallel()
+
 	rng := rand.New(rand.NewPCG(1830, 7))
 	randomHex := func() string { return fmt.Sprintf("#%06x", rng.IntN(1<<24)) }
 	for range 1000 {
@@ -324,6 +340,8 @@ func TestDeriveSecondaryFill_AnyPaletteBlendReachesAA(t *testing.T) {
 // red #ee0000 and green #008844 under black are 4.6:1 each, and their sRGB
 // blend falls to about 2.6:1 mid-way. The end is pushed until the blend holds.
 func TestDeriveSecondaryFill_MeasuresTheBlendNotJustTheEnds(t *testing.T) {
+	t.Parallel()
+
 	f := derivePrimaryFill("#ee0000", "#000000")
 	text, _ := parseCSSColor(f.text)
 	fill, _ := parseCSSColor(f.fill)
@@ -344,6 +362,8 @@ func TestDeriveSecondaryFill_MeasuresTheBlendNotJustTheEnds(t *testing.T) {
 // declares the fill as the secondary itself and the hover as a mix toward
 // black. Both must be what deriveSecondaryFill computes for fleet's palette.
 func TestSecondaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "app", "globals.css"))
 	if err != nil {
 		t.Fatal(err)
@@ -376,6 +396,8 @@ func TestSecondaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
 }
 
 func TestRenderThemeCSS_EmitsSecondaryFill(t *testing.T) {
+	t.Parallel()
+
 	t.Run("secondary only: measured on fleet's primary pair, which stays the default", func(t *testing.T) {
 		css := renderThemeCSS(clientconfig.BrandColors{Dark: map[string]string{"secondary": "#c8e6f5"}})
 		if strings.Contains(css, "primary-fill") || !strings.Contains(css, "--color-secondary-fill:#") {
@@ -415,6 +437,8 @@ func blendScan(text, a, b rgba, steps int) (float64, rgba) {
 // pixels fall, not the worst of a few samples: it is never above a
 // brute-force scan 10,000 steps fine over random blends.
 func TestBlendMinContrast_FindsEveryPaintedColor(t *testing.T) {
+	t.Parallel()
+
 	rng := rand.New(rand.NewPCG(1830, 11))
 	randomColor := func() rgba {
 		return rgba{float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, 1}
@@ -431,6 +455,8 @@ func TestBlendMinContrast_FindsEveryPaintedColor(t *testing.T) {
 // Codex review (#1830): with 65 fixed samples this palette's gradient
 // measured 4.5000:1 while a painted color between two samples was 4.477:1.
 func TestDeriveSecondaryFill_NoPaintedColorBetweenSamplesFallsUnderAA(t *testing.T) {
+	t.Parallel()
+
 	f := derivePrimaryFill("#920a39", "#360a91")
 	g := deriveSecondaryFill(f, "#08c1e4")
 	text, _ := parseCSSColor(f.text)

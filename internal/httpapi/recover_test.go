@@ -9,6 +9,8 @@ import (
 // TestRecoverMiddleware_PanicReturns500 asserts a panic in a synchronous chat
 // handler is converted into a 500 rather than crashing the single-host process.
 func TestRecoverMiddleware_PanicReturns500(t *testing.T) {
+	t.Parallel()
+
 	h := recoverMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	}))
@@ -22,6 +24,8 @@ func TestRecoverMiddleware_PanicReturns500(t *testing.T) {
 // TestRecoverMiddleware_PassesThroughOK confirms the middleware is transparent
 // for a normal handler.
 func TestRecoverMiddleware_PassesThroughOK(t *testing.T) {
+	t.Parallel()
+
 	h := recoverMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))

@@ -215,6 +215,8 @@ func (e *patrolRecordingEngine) RunTurn(ctx context.Context, in TurnInput, sink 
 }
 
 func TestChatScheduleRoutes_AndPatrolDrain(t *testing.T) {
+	t.Parallel()
+
 	st := newScheduleFakeStore()
 	eng := &patrolRecordingEngine{}
 	srv := newDefaultChatServer(t, eng, st)
@@ -299,6 +301,8 @@ func TestChatScheduleRoutes_AndPatrolDrain(t *testing.T) {
 }
 
 func TestChatPatrolTool_InvokedInsideTurn(t *testing.T) {
+	t.Parallel()
+
 	st := newScheduleFakeStore()
 	eng := &patrolRecordingEngine{invokeTool: true}
 	srv := newDefaultChatServer(t, eng, st)

@@ -9,6 +9,8 @@ import (
 )
 
 func TestExternalAccessProvisioningDefaultsMemberAndIgnoresStaleVersions(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t)
 	ops := &fakeOpsAdmins{}
 	WithOpsAdmins(ops)(s)
@@ -58,6 +60,8 @@ func TestExternalAccessProvisioningDefaultsMemberAndIgnoresStaleVersions(t *test
 }
 
 func TestExternalAccessProvisioningRejectsSplitAdminPermissions(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t)
 	h := s.Routes()
 	body := map[string]any{
@@ -73,6 +77,8 @@ func TestExternalAccessProvisioningRejectsSplitAdminPermissions(t *testing.T) {
 }
 
 func TestExternalAccessProvisioningAppliesSelectedChatAndOpsRoles(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t)
 	ops := &fakeOpsAdmins{}
 	WithOpsAdmins(ops)(s)
@@ -107,6 +113,8 @@ func TestExternalAccessProvisioningAppliesSelectedChatAndOpsRoles(t *testing.T) 
 }
 
 func TestExternalAccessProvisioningReconcilesNewerStateAfterOpsWrite(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t)
 	st := s.concreteStore(t)
 	ops := &fakeOpsAdmins{}

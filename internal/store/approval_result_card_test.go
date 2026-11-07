@@ -10,6 +10,8 @@ import (
 // notify-mode record. A pending, declined or settled row, another user's row,
 // or a second write is refused; the reads the web uses return it.
 func TestSetApprovalResultCard(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user, card = "alice@example.com", `{"outcome":"done","title":"Created 1 deal","items":[]}`

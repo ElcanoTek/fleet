@@ -3,14 +3,14 @@ package store
 import (
 	"testing"
 	"time"
-
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestOpen_AppliesPoolConfig proves the PoolConfig passed to Open is actually
 // applied to the underlying *sql.DB (#276), not silently ignored.
 func TestOpen_AppliesPoolConfig(t *testing.T) {
-	dsn := testdb.ChatDSN(t)
+	t.Parallel()
+
+	dsn := newTestDSN(t)
 	s, err := Open(dsn, PoolConfig{
 		MaxOpenConns:    7,
 		MaxIdleConns:    2,

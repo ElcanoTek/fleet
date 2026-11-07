@@ -11,6 +11,8 @@ import (
 )
 
 func TestSearch_DisabledReturns404(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{SearchEnabled: false}, &fakeEngine{}, nil)
 	rr := httptest.NewRecorder()
 	s.search(rr, httptest.NewRequest(http.MethodGet, "/search?q=hello", nil))
@@ -20,6 +22,8 @@ func TestSearch_DisabledReturns404(t *testing.T) {
 }
 
 func TestSearch_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{SearchEnabled: true}, &fakeEngine{}, nil)
 	rr := httptest.NewRecorder()
 	s.search(rr, httptest.NewRequest(http.MethodPost, "/search", nil))
@@ -29,6 +33,8 @@ func TestSearch_MethodNotAllowed(t *testing.T) {
 }
 
 func TestSearch_EmptyQueryReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
 	// Empty q short-circuits before touching the store, so a nil store is fine.
 	s := New(&config.Config{SearchEnabled: true}, &fakeEngine{}, nil)
 	rr := httptest.NewRecorder()
@@ -49,6 +55,8 @@ func TestSearch_EmptyQueryReturnsEmpty(t *testing.T) {
 }
 
 func TestSearch_UnknownTypeRejected(t *testing.T) {
+	t.Parallel()
+
 	// Search is conversations-only. The retired "tasks" stub (and its "all"
 	// alias) used to answer 200 with a lying empty set (#1076); any type other
 	// than "conversations" must now be an honest 400.
@@ -74,6 +82,8 @@ func TestSearch_UnknownTypeRejected(t *testing.T) {
 // well-formed and in range, else an error naming the range. The old clamp
 // answered `?limit=abc` with the default page and `?limit=999` with 100 rows.
 func TestParseSearchLimit(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		raw     string
 		want    int
@@ -106,6 +116,8 @@ func TestParseSearchLimit(t *testing.T) {
 }
 
 func TestParseSearchOffset(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		raw     string
 		want    int
@@ -132,6 +144,8 @@ func TestParseSearchOffset(t *testing.T) {
 // Over the wire: a malformed page parameter is a 400 that names the range,
 // never a 200 with a page the client did not ask for.
 func TestSearch_BadPagingIs400(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{SearchEnabled: true}, &fakeEngine{}, nil)
 	for _, target := range []string{
 		"/search?q=x&limit=abc", "/search?q=x&limit=0", "/search?q=x&limit=101",

@@ -15,6 +15,8 @@ import (
 // affected → "not found" / ErrTitleLocked) on a soft-deleted row while still
 // working on a live one.
 func TestConversationMutators_SoftDeletedNotMutable(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	s.SetSoftDelete(true)
 	ctx := context.Background()
@@ -84,6 +86,8 @@ func TestConversationMutators_SoftDeletedNotMutable(t *testing.T) {
 // last_activity (Delete bumps updated_at, so an unfiltered MAX would report
 // the deletion itself as recent activity).
 func TestAdminStats_ExcludesSoftDeleted(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	s.SetSoftDelete(true)
 	ctx := context.Background()

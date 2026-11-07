@@ -10,6 +10,8 @@ import (
 // Postgres, mirroring the existing store test pattern (newTestStore skips when no
 // test DB is configured).
 func TestToolCallLog(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -120,6 +122,8 @@ func TestToolCallLog(t *testing.T) {
 // TestToolCallLogCascade confirms deleting a conversation removes its audit rows
 // (the FK ON DELETE CASCADE, matching messages / turn_metrics).
 func TestToolCallLogCascade(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

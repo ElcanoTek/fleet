@@ -9,6 +9,8 @@ import (
 )
 
 func TestParseClientCapabilities(t *testing.T) {
+	t.Parallel()
+
 	// Absent / malformed → nil (no filter), preserving backward compatibility.
 	for _, hdr := range []string{"", "   ", "not json", "{}", `"text"`, "[1,2,3"} {
 		if got := parseClientCapabilities(hdr); got != nil {
@@ -44,6 +46,8 @@ func TestParseClientCapabilities(t *testing.T) {
 }
 
 func TestShouldEmit(t *testing.T) {
+	t.Parallel()
+
 	// nil caps = no filter: everything emits.
 	for _, ev := range []string{"text.delta", "tool.call", "turn.completed", "anything"} {
 		if !shouldEmit(nil, ev) {
@@ -80,6 +84,8 @@ func TestShouldEmit(t *testing.T) {
 }
 
 func TestSupportedCapabilitiesJSON(t *testing.T) {
+	t.Parallel()
+
 	var got []string
 	if err := json.Unmarshal([]byte(supportedCapabilitiesJSON()), &got); err != nil {
 		t.Fatalf("supported header is not valid JSON: %v", err)
@@ -106,6 +112,8 @@ func TestSupportedCapabilitiesJSON(t *testing.T) {
 // not declare are suppressed while lifecycle events and the synthetic
 // capabilities frame always flow.
 func TestAttach_FiltersByDeclaredCapabilities(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	buf.Emit("turn.started", map[string]any{})
 	buf.Emit("text.delta", map[string]any{"t": "hi"})
@@ -147,6 +155,8 @@ func TestAttach_FiltersByDeclaredCapabilities(t *testing.T) {
 // TestAttach_NilCapsEmitsEverything is the backward-compat guard: a client that
 // sends no capability header gets the full stream, including governed events.
 func TestAttach_NilCapsEmitsEverything(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	buf.Emit("text.delta", map[string]any{"t": "hi"})
 	buf.Emit("tool.call", map[string]any{"name": "bash"})
@@ -173,6 +183,8 @@ func TestAttach_NilCapsEmitsEverything(t *testing.T) {
 // silence past a few intervals is proof of death even while the agent sits in
 // a long tool call emitting no events. See docs/CHAT-STREAM-RECOVERY.md.
 func TestAttach_AdvertisesHeartbeatInterval(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-hb", "turn-hb")
 	buf.Emit("turn.started", map[string]any{})
 	buf.Finish()

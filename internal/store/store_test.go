@@ -22,6 +22,8 @@ func summaryEntry(text string) agent.HistoryEntry {
 }
 
 func TestCreateAndGetConversation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -49,6 +51,8 @@ func TestCreateAndGetConversation(t *testing.T) {
 }
 
 func TestGet_WrongUserReturnsNil(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
@@ -63,6 +67,8 @@ func TestGet_WrongUserReturnsNil(t *testing.T) {
 }
 
 func TestList_PinnedFirstThenRecent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -101,6 +107,8 @@ func TestList_PinnedFirstThenRecent(t *testing.T) {
 }
 
 func TestAppendAndLoadHistory(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -131,6 +139,8 @@ func TestAppendAndLoadHistory(t *testing.T) {
 }
 
 func TestContainedPanicPair_DBAppendLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	const (
 		callID = "db-panic-call"
 		secret = "Authorization: Bearer fake-db-panic-secret"
@@ -191,6 +201,8 @@ func TestContainedPanicPair_DBAppendLoadRoundTrip(t *testing.T) {
 }
 
 func TestDelete_CascadesMessages(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -210,6 +222,8 @@ func TestDelete_CascadesMessages(t *testing.T) {
 }
 
 func TestSweep_TTL(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -235,6 +249,8 @@ func TestSweep_TTL(t *testing.T) {
 }
 
 func TestSweep_TTLRespectsPin(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -259,6 +275,8 @@ func TestSweep_TTLRespectsPin(t *testing.T) {
 }
 
 func TestSweep_UnpinnedCap(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -297,6 +315,8 @@ func TestSweep_UnpinnedCap(t *testing.T) {
 // shape ran one DELETE per overflowing user, so per-user independence was
 // structural; with ROW_NUMBER() it is the partition clause's job.)
 func TestSweep_UnpinnedCapPerUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -352,6 +372,8 @@ func TestSweep_UnpinnedCapPerUser(t *testing.T) {
 }
 
 func TestSetPinned_WrongUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
@@ -366,6 +388,8 @@ func TestSetPinned_WrongUser(t *testing.T) {
 // deletes the prior summary and inserts the new one. Replace
 // semantics keep summary-of-summary chains from accumulating.
 func TestReplaceSummary_HappyPath(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -419,6 +443,8 @@ func TestReplaceSummary_HappyPath(t *testing.T) {
 // caller from using ReplaceSummary as a backdoor delete-by-type for
 // other entry kinds.
 func TestReplaceSummary_RejectsWrongType(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -431,6 +457,8 @@ func TestReplaceSummary_RejectsWrongType(t *testing.T) {
 
 // TestReplaceSummary_WrongUser — owner-scoped check.
 func TestReplaceSummary_WrongUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
@@ -447,6 +475,8 @@ func TestReplaceSummary_WrongUser(t *testing.T) {
 // with ErrSummaryStale and writes nothing; a summary saved first leaves a
 // later message after the marker, where replay keeps it.
 func TestReplaceSummary_RefusesWhenHistoryMovedOn(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -507,6 +537,8 @@ func countByType(entries []agent.HistoryEntry, typ string) int {
 // for it (the conversation-row lock both sides take) and then see its rows,
 // rather than commit first and leave them before the summary marker.
 func TestReplaceSummary_WaitsOutAnOpenAppend(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -550,6 +582,8 @@ func TestReplaceSummary_WaitsOutAnOpenAppend(t *testing.T) {
 // the summary text still describes without adding a newer id; the count half
 // of the snapshot catches it and nothing is written.
 func TestReplaceSummary_RefusesAfterTruncate(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -582,6 +616,8 @@ func TestReplaceSummary_RefusesAfterTruncate(t *testing.T) {
 // TruncateAfter takes the conversation row lock, so a summary being saved
 // waits for an open truncate and then sees it.
 func TestReplaceSummary_WaitsOutAnOpenTruncate(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)

@@ -11,6 +11,8 @@ import (
 // locks the title; after that UpdateTitle is a no-op returning ErrTitleLocked,
 // while a further manual rename still wins.
 func TestTitleLocking(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "initial", "victoria", "", false)

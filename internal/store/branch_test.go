@@ -54,6 +54,8 @@ func seedBranchConv(t *testing.T, s *Store, owner string) *Conversation {
 // [1..2] into an independent conversation that records its lineage, leaves the
 // parent untouched, and stays independent when the branch is continued (#454).
 func TestBranchConversation_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@example.com"
@@ -120,6 +122,8 @@ func TestBranchConversation_RoundTrip(t *testing.T) {
 // parent not owned by the caller is not found. A failed attempt never leaves a
 // branch conversation behind.
 func TestBranchConversation_Errors(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@example.com"
@@ -169,6 +173,8 @@ func TestBranchConversation_Errors(t *testing.T) {
 // transaction, so when the copy fails nothing is committed — no empty branch
 // shell in the sidebar, with or without a compensating delete.
 func TestBranchConversation_AtomicOnCopyFailure(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@example.com"

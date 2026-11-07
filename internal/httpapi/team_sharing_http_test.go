@@ -88,6 +88,8 @@ func projectSub(t *testing.T, srv *Server, method, user, path, body string) *htt
 // GET /conversations/{id}/team-view is the one conversation route a non-owner
 // may reach, and only through both gates.
 func TestConversationTeamView(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 
 	w := convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", "")
@@ -139,6 +141,8 @@ func TestConversationTeamView(t *testing.T) {
 // A teammate branches a shared chat into their own; the fork lands in the same
 // project and belongs to them.
 func TestBranchTeamSharedConversationOverHTTP(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	msgs, err := f.st.LoadHistory(f.ctx, f.chat.ID)
 	if err != nil || len(msgs) == 0 {
@@ -167,6 +171,8 @@ func TestBranchTeamSharedConversationOverHTTP(t *testing.T) {
 
 // The project home's Team section and the delete-impact counts.
 func TestProjectTeamConversationsAndImpact(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	if _, err := f.st.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "quote in bps", "fact"); err != nil {
 		t.Fatal(err)
@@ -215,6 +221,8 @@ func TestProjectTeamConversationsAndImpact(t *testing.T) {
 // author's or the project owner's — a shared store where anybody can rewrite
 // anybody is not a record a team can trust.
 func TestProjectMemoryPermissions(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 
 	// Bob (a member, not the owner) writes one.
@@ -276,6 +284,8 @@ func TestProjectMemoryPermissions(t *testing.T) {
 // Promotion (D5) and the destination choice on the approval card (D1), over
 // the endpoints the UI actually calls.
 func TestPromoteAndAcceptIntoProject(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 
 	personal, err := f.st.CreateMemory(f.ctx, "bob@x.com", "the desk closes at 16:00", "manual", "fact")
@@ -409,6 +419,8 @@ func TestProjectFilesExcludesBundleSymlinks(t *testing.T) {
 // GET /me/team carries what LEAVING would cost, so the confirm can state it
 // before acting instead of reporting it afterwards.
 func TestMyTeamReportsLeaveImpact(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	// A team-shared project bob does NOT own, plus his own shared chat.
 	bobChat, err := f.st.CreateConversation(f.ctx, "bob@x.com", "Bob's", "victoria", "", false)
@@ -446,6 +458,8 @@ func TestMyTeamReportsLeaveImpact(t *testing.T) {
 // and an ADMIN, because the case it exists for is an owner who has left and
 // cannot click anything. Everyone else gets the same 404 a non-member gets.
 func TestProjectTransferOwnership(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	body := `{"to_email":"bob@x.com"}`
 
@@ -485,6 +499,8 @@ func TestProjectTransferOwnership(t *testing.T) {
 
 // The admin path: a departed owner cannot act, so an admin must be able to.
 func TestProjectTransferByAdmin(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	// serverFixture's config has no ADMIN_EMAILS, so the admin arrives the
 	// other way the middleware supplies: the request's resolved role.
@@ -506,6 +522,8 @@ func TestProjectTransferByAdmin(t *testing.T) {
 // GET /projects/{id}/members backs the transfer picker — and only the people
 // who can transfer may read it.
 func TestProjectMembersEndpoint(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	w := projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/members", "")
 	if w.Code != 200 {
@@ -562,6 +580,8 @@ func TestProjectMembersEndpoint(t *testing.T) {
 // support ticket. Before this the delete succeeded and took the team's project
 // and every learning in it.
 func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	if _, err := f.st.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "a learning", "fact"); err != nil {
 		t.Fatal(err)
@@ -632,6 +652,8 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 // no trace. Same defect migration 054 fixed for conversations, still live for
 // the project.
 func TestPatchDoesNotRepointAnAlreadySharedProject(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	st := f.srv.store.(*store.Store)
 
@@ -681,6 +703,8 @@ func TestPatchDoesNotRepointAnAlreadySharedProject(t *testing.T) {
 // for — and refuses, rather than silently doing nothing, when the chat has no
 // audience or no home (ADR-0057).
 func TestShareWithTeamReportsWhatItStored(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	st := f.srv.store.(*store.Store)
 
@@ -729,6 +753,8 @@ func TestShareWithTeamReportsWhatItStored(t *testing.T) {
 // the viewer can see — so their own conversations disappeared from Projects,
 // Temporary and Archived alike, with nothing deleted and nothing said.
 func TestUntickingTeamSharingUnfilesTeammateChats(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	// Bob's own chat, filed in Alice's team-shared project (a branch of hers is
 	// how this normally happens) and shared back with the team.

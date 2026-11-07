@@ -12,6 +12,8 @@ import (
 // on a conversation title AND on message content, scoped to the owner, with a
 // <mark>-highlighted preview.
 func TestSearchConversations_TitleAndContent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -55,6 +57,8 @@ func TestSearchConversations_TitleAndContent(t *testing.T) {
 // TestSearchConversations_ScopedByUser ensures a user never sees another user's
 // conversations in search results.
 func TestSearchConversations_ScopedByUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -77,6 +81,8 @@ func TestSearchConversations_ScopedByUser(t *testing.T) {
 
 // TestSearchConversations_EmptyQuery returns nothing rather than every row.
 func TestSearchConversations_EmptyQuery(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateConversation(ctx, "a@e.com", "anything", "assistant", "", false); err != nil {
@@ -95,6 +101,8 @@ func TestSearchConversations_EmptyQuery(t *testing.T) {
 // predate FTS — simulated by deleting the rows AppendHistory wrote, then
 // re-running the backfill.
 func TestBackfillSearchContent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -140,6 +148,8 @@ func TestBackfillSearchContent(t *testing.T) {
 // TestSearchDisabledSkipsIndexing verifies SetSearchEnabled(false) stops
 // AppendHistory from populating the search table and no-ops the backfill.
 func TestSearchDisabledSkipsIndexing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	s.SetSearchEnabled(false)
 	ctx := context.Background()

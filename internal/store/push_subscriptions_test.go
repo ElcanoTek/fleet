@@ -9,6 +9,8 @@ import (
 // (user-scoped, newest first), the endpoint-keyed upsert refreshing keys +
 // last_active_at without duplicating rows, and both delete flavors.
 func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -93,6 +95,8 @@ func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
 // TestPushSubscriptions_UpsertValidation rejects rows missing any required
 // field — the HTTP layer relies on the store as the final gate.
 func TestPushSubscriptions_UpsertValidation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	cases := []struct{ user, endpoint, auth, p256dh string }{
@@ -112,6 +116,8 @@ func TestPushSubscriptions_UpsertValidation(t *testing.T) {
 // re-subscribe that hands the endpoint to another account, and is
 // case-insensitive on the email like every other push query.
 func TestPushSubscriptions_HasUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const ep = "https://push.example/held"
@@ -149,6 +155,8 @@ func TestPushSubscriptions_HasUser(t *testing.T) {
 // subscription after a VAPID key rotation, refuses any other account, and is
 // idempotent when a second tab already renewed.
 func TestPushSubscriptions_Renew(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const oldEP, newEP = "https://push.example/old-key", "https://push.example/new-key"
@@ -194,6 +202,8 @@ func TestPushSubscriptions_Renew(t *testing.T) {
 // impossible. The renewal still succeeds by retiring the old row; for another
 // account's row it changes nothing.
 func TestPushSubscriptions_RenewOntoAStoredEndpoint(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const oldEP, newEP, othersEP = "https://push.example/r-old", "https://push.example/r-new", "https://push.example/r-others"

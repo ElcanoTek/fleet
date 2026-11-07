@@ -320,6 +320,8 @@ func (s *enableMCPTestStore) ClaimNextInput(_ context.Context, _ string) (*store
 }
 
 func TestValidateEnableMCPConnectors(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	st.prefs = map[string]store.ConnectorPref{
 		store.ConnectorPrefKey(store.ConnectorKindBundled, "disabled_by_user"): {
@@ -440,6 +442,8 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 }
 
 func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
 	conv.OptionalMCPServersEnabled = []string{"existing_srv"}
@@ -526,6 +530,8 @@ func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
 }
 
 func TestEnableMCPConnectorsHandler_AutoApprove(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
 
@@ -584,6 +590,8 @@ func TestEnableMCPConnectorsHandler_AutoApprove(t *testing.T) {
 }
 
 func TestEnableMCPConnectorsHandler_AutoApproveFailsClosedOnResumePersistenceError(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	st.failArmResume = true
 	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
@@ -635,6 +643,8 @@ func TestEnableMCPConnectorsHandler_AutoApproveFailsClosedOnResumePersistenceErr
 }
 
 func TestEnableMCPConnectors_SkippedResumeDoesNotStopTurnAndEnforces25Cap(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	st.skipResume = true
 	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
@@ -699,6 +709,8 @@ func TestEnableMCPConnectors_SkippedResumeDoesNotStopTurnAndEnforces25Cap(t *tes
 }
 
 func TestEnableMCPConnectorsHandler_MockModeApprovalUpdatesConversation(t *testing.T) {
+	t.Parallel()
+
 	st := newEnableMCPTestStore()
 	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
 

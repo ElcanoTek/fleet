@@ -215,6 +215,8 @@ func TestApprovalStop_StopsARunningCallAndRecordsIt(t *testing.T) {
 
 // A Stop pressed after the claim but before the call is sent runs nothing.
 func TestRunStagedTool_StoppedBeforeSendRunsNothing(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	child := &stopChild{}
 	s := stopServerFor(t, &stopStore{}, child)
@@ -239,6 +241,8 @@ func TestRunStagedTool_StoppedBeforeSendRunsNothing(t *testing.T) {
 // for a pending card, and for another conversation; a settled card's outcome
 // without a mark; a second Stop records nothing new.
 func TestHandleApprovalStop_Refusals(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	cases := []struct {
 		name string
@@ -299,6 +303,8 @@ func TestHandleApprovalStop_Refusals(t *testing.T) {
 
 // The pending card offers Stop only for an opted-in tool.
 func TestApprovalStopPayloads(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	if approvalClientFields("mcp_ix_execute_plan", `{}`, "c1")["stoppable"] != true {
 		t.Fatal("an opted-in tool's pending card must say it can be stopped")
@@ -312,6 +318,8 @@ func TestApprovalStopPayloads(t *testing.T) {
 // Stop, whatever key matches it: its transport cannot cancel, so the card
 // carries no stoppable key and the stop route refuses and records nothing.
 func TestApprovalStop_NeverASyntheticTransportTool(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	for _, tool := range []string{
 		"mcp_" + mcp.HTTPToolServerName + "_execute_plan",
@@ -356,6 +364,8 @@ func (a *armCheckStore) ClaimApproval(ctx context.Context, user, id, status, tex
 // The stop signal is armed before the claim makes the row executing, and a
 // request that loses the claim drops only its own reference.
 func TestApprovalStop_ArmedBeforeTheClaim(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	inner := &stopStore{approval: stopRow(), resulted: make(chan struct{})}
 	st := &armCheckStore{stopStore: inner}
@@ -396,6 +406,8 @@ func (c *claimLosingStore) ClaimApproval(context.Context, string, string, string
 // The registry shares one signal between references and forgets it with the
 // last one.
 func TestApprovalStopRegistry_RefCounts(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	a := s.armApprovalStop("x")
 	if b := s.armApprovalStop("x"); a != b {
@@ -417,6 +429,8 @@ func TestApprovalStopRegistry_RefCounts(t *testing.T) {
 // and nothing is marked, so the row and the outcome's stop line agree. A
 // running row with no armed signal is past finalizing too.
 func TestApprovalStop_OrderedAgainstTheOutcome(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	running := func() *stopStore {
 		a := stopRow()
@@ -455,6 +469,8 @@ func TestApprovalStop_OrderedAgainstTheOutcome(t *testing.T) {
 // A settled stop stays visible after the tool leaves critical_tool_stop: it
 // is history on the row. Offering Stop follows the current policy.
 func TestWithApprovalStop_SettledStopOutlivesThePolicy(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"execute_plan"}})
 	a := stopRow()
@@ -472,6 +488,8 @@ func TestWithApprovalStop_SettledStopOutlivesThePolicy(t *testing.T) {
 // A call stopped before it was sent is recorded with the before-send line,
 // never the line that says the call ran and its server was asked to stop.
 func TestExecuteClaimedApproval_StoppedBeforeSendSaysNothingRan(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	a := stopRow()
 	a.Status, a.ResultText = "approved", approvalExecutingSentinel
@@ -623,6 +641,8 @@ func (e *closeHookEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSel
 // approvalScopeCloseTimeout) is refused and never marked, so the outcome
 // never claims a stop that no transport was listening for.
 func TestRunStagedTool_ClosesTheStopWindowBeforeTheScope(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	a := stopRow()
 	a.MCPServer = "ix"
@@ -689,6 +709,8 @@ func (e *openHookEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSele
 // never that the server was asked to stop. Without a Stop the setup failure
 // reads as before.
 func TestExecuteClaimedApproval_SetupFailureAfterStopSaysNothingRan(t *testing.T) {
+	t.Parallel()
+
 	stopPolicy(t)
 	for name, openErr := range map[string]error{
 		"the scope does not open":      errors.New("seat revoked"),
@@ -730,6 +752,8 @@ func TestExecuteClaimedApproval_SetupFailureAfterStopSaysNothingRan(t *testing.T
 // it without sending one), so the running-call line never claims delivery
 // outright. The trailer reserve still covers it.
 func TestApprovalStopNote_DoesNotClaimDelivery(t *testing.T) {
+	t.Parallel()
+
 	if strings.Contains(approvalStopNote, "Its server was asked") || !strings.Contains(approvalStopNote, "Unless the call had already finished, its server was asked to stop") {
 		t.Fatalf("stop line = %q, want the cancellation claimed only for a call that had not finished", approvalStopNote)
 	}

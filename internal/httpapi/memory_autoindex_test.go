@@ -18,6 +18,8 @@ func (c *captureSink) Emit(event string, _ any) { c.events = append(c.events, ev
 // case/space-insensitively) are dropped, and only genuinely-new facts become
 // memory PROPOSALS (nothing is written live). Skips without a test DB.
 func TestAutoIndexMemories_DedupAndPropose(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const user = "alice@x.com"
@@ -80,6 +82,8 @@ func TestAutoIndexMemories_DedupAndPropose(t *testing.T) {
 // #515: memoryContents must exclude retired + proposed rows and annotate
 // non-fact kinds / validity windows for explainability.
 func TestMemoryContentsTypedFiltering(t *testing.T) {
+	t.Parallel()
+
 	from := int64(1719878400) // 2024-07-02 UTC
 	retiredAt := int64(1719878400)
 	memories := []store.Memory{
@@ -109,6 +113,8 @@ func TestMemoryContentsTypedFiltering(t *testing.T) {
 // memory id + content-hash at proposal time; pinned targets drop the claim;
 // accepting the proposal retires the target with retired_by provenance.
 func TestAutoIndexMemories_SupersedeCandidate(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const user = "bob@x.com"

@@ -10,6 +10,8 @@ import (
 // User-skill CRUD: validation, per-user name uniqueness, ownership scoping,
 // status transitions, and the rendered SKILL.md contract.
 func TestUserSkills(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "me@elcano.com"
@@ -86,6 +88,8 @@ func TestUserSkills(t *testing.T) {
 
 // Agent proposals stage inert and activate only on the owner's approval.
 func TestUserSkillProposalFlow(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "proposer@elcano.com"
@@ -169,6 +173,8 @@ func TestUserSkillProposalFlow(t *testing.T) {
 }
 
 func TestUserSkillsWorkspaceSharing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const author = "author@elcano.com"

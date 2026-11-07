@@ -12,6 +12,8 @@ import (
 // The card is the safety mechanism, so what it says has to be exactly what the
 // approved call will do (#1152).
 func TestSummarizeManageTasksInput(t *testing.T) {
+	t.Parallel()
+
 	update := summarizeManageTasksInput(tools.ManageTasksToolName,
 		`{"action":"update","match":{"tag":"pages"},"cron":"0 7 * * *","model":"x-ai/grok-4.6"}`)
 	if update["action"] != "update" {
@@ -60,6 +62,8 @@ func TestSummarizeManageTasksInput(t *testing.T) {
 // The args sat in a row while a human read a card, so every rule that does not
 // need storage is re-checked at execution rather than trusted from staging.
 func TestRunStagedManageTasksRevalidates(t *testing.T) {
+	t.Parallel()
+
 	called := false
 	s := &Server{manageTasks: func(context.Context, TaskMutationRequest) (*TaskMutationResult, error) {
 		called = true
@@ -81,6 +85,8 @@ func TestRunStagedManageTasksRevalidates(t *testing.T) {
 // An unconfigured deployment says so rather than reporting a change it did not
 // make.
 func TestRunStagedManageTasksUnconfigured(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	_, err := s.runStagedManageTasks(context.Background(), &store.Approval{
 		ToolName: tools.ManageTasksToolName,
@@ -95,6 +101,8 @@ func TestRunStagedManageTasksUnconfigured(t *testing.T) {
 // the operator asking for this was fixing jobs that had drifted, so "which
 // ones" is the whole question.
 func TestFormatTaskMutationReportNamesEveryTask(t *testing.T) {
+	t.Parallel()
+
 	report := formatTaskMutationReport("update", &TaskMutationResult{
 		Matched: 3,
 		Changed: []TaskMutationEntry{

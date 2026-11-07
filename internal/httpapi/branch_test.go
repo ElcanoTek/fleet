@@ -14,6 +14,8 @@ import (
 // chosen message, and the new conversation is an independent fork carrying the
 // copied prefix + lineage. Ownership and a bad branch point are enforced.
 func TestConversationBranch_EndToEnd(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	st := s.concreteStore(t)
 	ctx := context.Background()

@@ -209,6 +209,8 @@ func TestOutputStatsAndWalkAreAbandonedAtDeadline(t *testing.T) {
 // mount), output resolution and the walk fail fast instead of starting more
 // workers, and Sources reports that as a cut, not an error.
 func TestFilesystemWorkersAreCapped(t *testing.T) {
+	t.Parallel()
+
 	for range maxFSWorkers {
 		fsWorkerSlots <- struct{}{}
 	}

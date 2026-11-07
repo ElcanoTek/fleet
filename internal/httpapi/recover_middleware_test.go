@@ -47,6 +47,8 @@ func TestRecoverMiddleware_PanicReturnsJSON500(t *testing.T) {
 // TestRecoverMiddleware_AbortHandlerPropagates verifies a deliberate
 // http.ErrAbortHandler is re-panicked (the server's to handle), not swallowed.
 func TestRecoverMiddleware_AbortHandlerPropagates(t *testing.T) {
+	t.Parallel()
+
 	h := recoverMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))

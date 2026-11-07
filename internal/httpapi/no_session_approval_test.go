@@ -36,6 +36,8 @@ func postScope(s *Server, scope string) *httptest.ResponseRecorder {
 // with a 400 that says why, and claims nothing: the card stays pending for a
 // per-call decision. A tool without the rule still takes the scope.
 func TestHandleApproval_RefusesSessionScopeForNoSessionTool(t *testing.T) {
+	t.Parallel()
+
 	noSessionPolicy(t)
 	for _, scope := range []string{"session", "pattern", "pattern:deal_name=*", " session "} {
 		t.Run(scope, func(t *testing.T) {
@@ -70,6 +72,8 @@ func TestHandleApproval_RefusesSessionScopeForNoSessionTool(t *testing.T) {
 // A settled card still answers its recorded outcome (idempotent), whatever
 // scope a retry sends: the refusal only guards a pending decision.
 func TestHandleApproval_NoSessionRefusalKeepsSettledOutcome(t *testing.T) {
+	t.Parallel()
+
 	noSessionPolicy(t)
 	st := &claimStore{approval: store.Approval{ID: "ap1", ConversationID: "c1", UserEmail: "u@example.com",
 		ToolName: "mcp_deals_create_deal", Status: "rejected", ResultText: "User declined this action."}}
@@ -82,6 +86,8 @@ func TestHandleApproval_NoSessionRefusalKeepsSettledOutcome(t *testing.T) {
 // Defense in depth: maybeRegisterSessionPolicy never records a policy for a
 // no-session tool, and still does for any other.
 func TestMaybeRegisterSessionPolicy_SkipsNoSessionTool(t *testing.T) {
+	t.Parallel()
+
 	noSessionPolicy(t)
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_deals_create_deal", approvalRequest{Approved: true, Scope: "session"})
@@ -124,6 +130,8 @@ func (e *eventSink) Emit(name string, payload any) {
 // the call stages its own card, and the card says apply-all is off. Another
 // tool's session policy still short-circuits as before.
 func TestStage_IgnoresSessionPolicyForNoSessionTool(t *testing.T) {
+	t.Parallel()
+
 	noSessionPolicy(t)
 	reg := NewSessionApprovalRegistry()
 	reg.Register("c1", "mcp_deals_create_deal", SessionApprovalPolicy{Mode: "approve"})
@@ -153,6 +161,8 @@ func TestStage_IgnoresSessionPolicyForNoSessionTool(t *testing.T) {
 // pending_approvals and the live event share approvalClientFields, so both
 // carry the flag: true only for a matching tool.
 func TestApprovalClientFields_NoSessionApproval(t *testing.T) {
+	t.Parallel()
+
 	noSessionPolicy(t)
 	if got := approvalClientFields("mcp_deals_create_deal", `{}`, "c1")["no_session_approval"]; got != true {
 		t.Errorf("create_deal no_session_approval = %v, want true", got)

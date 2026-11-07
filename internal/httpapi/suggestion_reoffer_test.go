@@ -45,6 +45,8 @@ func (s *reofferStore) CreateApproval(ctx context.Context, conv, user, tool, cal
 // they can be offered it again. While still on it, or inside the cooldown,
 // they are not.
 func TestSuggestionReofferedAfterSwitchingBack(t *testing.T) {
+	t.Parallel()
+
 	adv := agentcore.CurrentAdvancedModel()
 	cases := []struct {
 		name      string
@@ -81,6 +83,8 @@ func TestSuggestionReofferedAfterSwitchingBack(t *testing.T) {
 // since it appeared: a card left pending for a while must not have its
 // cooldown already spent when it is answered.
 func TestSuggestionCooldownCountsFromResolution(t *testing.T) {
+	t.Parallel()
+
 	st := &reofferStore{prior: &store.Approval{ID: "ap", ToolCallID: "call_1", Status: "approved", CreatedAt: 100, ResolvedAt: 900}, convModel: "fast/model"}
 	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{}}
 	if _, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil {
@@ -110,6 +114,8 @@ func (s *lockdownStore) Get(context.Context, string, string) (*store.Conversatio
 // excludes, from any source: accepting would pin a slug the next turn
 // refuses.
 func TestSuggestionRespectsLockdownAllowList(t *testing.T) {
+	t.Parallel()
+
 	for _, allowed := range []bool{false, true} {
 		st := &lockdownStore{}
 		a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{},

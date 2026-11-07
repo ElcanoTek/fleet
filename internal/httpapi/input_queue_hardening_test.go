@@ -21,6 +21,8 @@ import (
 // queued, a fresh submission is refused (429) while an idempotent replay of an
 // already-accepted input still answers 200.
 func TestQueue_DepthCapRejectsOverflowButAllowsReplay(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "cap@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -69,6 +71,8 @@ func TestQueue_DepthCapRejectsOverflowButAllowsReplay(t *testing.T) {
 // runs, and the generation it carries is the one the Stop bumped, so a further
 // Stop refuses it at registration.
 func TestQueue_StopGateIsExact(t *testing.T) {
+	t.Parallel()
+
 	st := &fakeChatStore{}
 	s := &Server{store: st}
 	if gen, stopped := s.stopGateForRow("conv-1", 1); stopped || gen != 0 {
@@ -112,6 +116,8 @@ func TestQueue_StopGateIsExact(t *testing.T) {
 // message_preview must clamp on a rune boundary — a raw byte slice of a
 // multi-byte message emits invalid UTF-8 into every queue snapshot.
 func TestQueueItemsPayloadRuneSafePreview(t *testing.T) {
+	t.Parallel()
+
 	items := []store.InputQueueRow{{ID: "i1", Message: strings.Repeat("中", 60)}} // 180 bytes; byte 160 splits a rune
 	payload := queueItemsPayload(items)
 	preview, _ := payload[0]["message_preview"].(string)
@@ -128,6 +134,8 @@ func TestQueueItemsPayloadRuneSafePreview(t *testing.T) {
 // committed), so without the replay branch completing them they stay
 // 'injected' in every queue snapshot until the next boot recovery.
 func TestQueue_ReplayCommitCompletesInjectedRows(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const user = "replay@x.com"

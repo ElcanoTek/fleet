@@ -22,6 +22,8 @@ func intPtr(n int) *int { return &n }
 // per-tool manifest override > per-conversation override > global env default >
 // hardcoded default.
 func TestResolveTimeoutSeconds(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolTimeouts: map[string]int{"send_email": 60},
@@ -61,6 +63,8 @@ func TestResolveTimeoutSeconds(t *testing.T) {
 // who names a task tool in the bundle's critical_tool_timeouts keeps that
 // window — the day-long default only replaces the global layers.
 func TestResolveTimeoutSeconds_StagedTaskCardHonorsPerToolManifest(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolTimeouts: map[string]int{"manage_tasks": 600},
@@ -82,6 +86,8 @@ func TestResolveTimeoutSeconds_StagedTaskCardHonorsPerToolManifest(t *testing.T)
 // tool.auto_resolved event WITHOUT creating an approval row (a nil store would
 // panic if it tried), so the gate is bypassed only when explicitly enabled.
 func TestStage_AutoApproveInTest(t *testing.T) {
+	t.Parallel()
+
 	sink := &recordingSink{}
 	a := &approvalStager{
 		ctx:               context.Background(),
@@ -108,6 +114,8 @@ func TestStage_AutoApproveInTest(t *testing.T) {
 // when FLEET_AUTO_APPROVE_IN_TEST is on: that would skip the real schedule
 // handler and invent a success without creating a task.
 func TestAutoApproveInTestStillValidatesScheduledCard(t *testing.T) {
+	t.Parallel()
+
 	a := &approvalStager{
 		ctx:               context.Background(),
 		conversationID:    "c1",
@@ -127,6 +135,8 @@ func TestAutoApproveInTestStillValidatesScheduledCard(t *testing.T) {
 // A handler-only tool must never receive the executable-tool sentinel: that
 // produces a binary-looking approval id without creating the requested task.
 func TestSessionPolicyStillValidatesScheduledCard(t *testing.T) {
+	t.Parallel()
+
 	r := NewSessionApprovalRegistry()
 	r.Register("c1", "schedule_task", SessionApprovalPolicy{Mode: "approve"})
 	a := &approvalStager{ctx: context.Background(), conversationID: "c1", userEmail: "alice@example.com", sink: &recordingSink{}, sessionRegistry: r}
@@ -169,6 +179,8 @@ func (f *sweepFakeStore) AppendHistory(_ context.Context, convID string, _ []age
 // only, and lets a lost claim (user resolved before the deadline, or a
 // concurrent sweep) pass through untouched.
 func TestSweepExpiredApprovals_ClaimsAndAppends(t *testing.T) {
+	t.Parallel()
+
 	fake := &sweepFakeStore{
 		expired: []store.Approval{
 			{ID: "a1", UserEmail: "u", ConversationID: "c1", ToolName: "bash", ToolCallID: "tc1", ExpiresAt: 1},
@@ -197,6 +209,8 @@ func TestSweepExpiredApprovals_ClaimsAndAppends(t *testing.T) {
 // before claiming any row once the context is done, so a near-deadline tick
 // never leaves a row claimed-rejected without its history breadcrumb (#225).
 func TestSweepExpiredApprovals_StopsOnCancelledContext(t *testing.T) {
+	t.Parallel()
+
 	fake := &sweepFakeStore{
 		expired: []store.Approval{
 			{ID: "a1", UserEmail: "u", ConversationID: "c1", ToolName: "bash", ExpiresAt: 1},
@@ -220,6 +234,8 @@ func TestSweepExpiredApprovals_StopsOnCancelledContext(t *testing.T) {
 }
 
 func TestStage_ConversationAutoApprove(t *testing.T) {
+	t.Parallel()
+
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolNoSessionApproval: []string{"mcp_prod_drop_table"},

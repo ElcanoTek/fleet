@@ -38,6 +38,8 @@ func doAuthedJSONRequest(t *testing.T, srv *Server, method, path, userEmail stri
 }
 
 func TestMultiplayer_DefaultOn(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	st.users["alice@reklaim.com"] = &store.User{Email: "alice@reklaim.com", TeamID: "reklaim"}
@@ -96,6 +98,8 @@ func TestMultiplayer_DefaultOn(t *testing.T) {
 }
 
 func TestMultiplayer_PerChatToggleAndTurnIdentity(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, engine, st)

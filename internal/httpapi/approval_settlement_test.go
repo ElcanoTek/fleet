@@ -35,6 +35,8 @@ func (s *settlementStore) GetApproval(_ context.Context, user, id string) (*stor
 }
 
 func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
+	t.Parallel()
+
 	st := &settlementStore{pending: []store.Approval{{ID: "small", ConversationID: "c", UserEmail: "u", Status: "pending", ToolName: "bash", ArgsJSON: `{"command":"echo hi"}`}}}
 	for range 3 {
 		st.pending = append(st.pending, store.Approval{ToolName: "mcp_sendgrid_send_email", ArgsJSON: `{"content":"` + strings.Repeat("<", 900<<10) + `"}`})
@@ -80,6 +82,8 @@ func (s *failedOutcomeStore) SetApprovalResult(context.Context, string, string, 
 }
 
 func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{cfg: &config.Config{MockMode: true}, store: &failedOutcomeStore{&expiredClickFakeStore{approval: store.Approval{ID: "a", ConversationID: "c", ToolName: "bash", Status: "pending"}}}}
 	req := httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
@@ -107,6 +111,8 @@ func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
 }
 
 func TestWebReloadIncludesExecutingRowsOutsideResolvedLimit(t *testing.T) {
+	t.Parallel()
+
 	st := &settlementStore{}
 	for range 100 {
 		st.resolved = append(st.resolved, store.Approval{ID: "completed", Status: "approved"})
@@ -135,6 +141,8 @@ func (s *settlementStore) ListChatSchedules(context.Context, string, string, boo
 }
 
 func TestTerminalSettlementExcludesLargeResolvedCards(t *testing.T) {
+	t.Parallel()
+
 	st := &settlementStore{}
 	for range 40 {
 		st.resolved = append(st.resolved, store.Approval{ToolName: "mcp_sendgrid_send_email", Status: "approved", ArgsJSON: `{"content":"` + strings.Repeat("x", 1<<20) + `"}`})
@@ -165,6 +173,8 @@ func (s *suggestionReplayStore) Get(context.Context, string, string) (*store.Con
 }
 
 func TestSuggestionReplayReturnsPinnedModel(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{store: &suggestionReplayStore{&expiredClickFakeStore{approval: store.Approval{
 		ID: "a", ConversationID: "c", ToolName: "suggest_advanced_model", Status: "approved",
 	}}}}
