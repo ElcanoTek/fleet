@@ -164,8 +164,9 @@ type Deps struct {
 	// the call. The interactive driver binds it to the conversation's
 	// workspace (tools.SnapshotEmailAttachments), the same step an approved
 	// staged email takes, so a call that runs without a card (session
-	// pre-approval, auto-approve, a patrol email) is held to the same rule.
-	// nil = no rewrite.
+	// pre-approval, auto-approve, a patrol email) is held to the same rule;
+	// the scheduled driver binds it to the run's working directory
+	// (tools.SnapshotEmailAttachmentsInDir). nil = no rewrite.
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 
 	// Model + FallbackModel are the resolved fantasy language models.

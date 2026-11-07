@@ -185,9 +185,16 @@ the chat driver binds to the conversation). A sub-agent spawned from a chat
 turn carries the same step. A path outside the conversation's workspace and
 the shared library refuses the send.
 
-Scheduled task runs do not set that seam: their email arguments go to the
-connector as written, as before. Those runs have no conversation workspace to
-anchor to, and their sandbox mounts only the job's own directory (ADR-0097).
+Scheduled task runs take the same step, anchored to the run's working
+directory instead of a conversation (`SnapshotEmailAttachmentsInDir`, bound in
+`internal/scheduledrun`): the job's own directory (`tasks/<lineage>/`, the only
+part of the workspace root its sandbox mounts, ADR-0097) or the shared-file
+library, which that sandbox also mounts and reaches through the job
+directory's `shared` link. Sub-agents of a scheduled run carry it. Two
+settings widen the working directory, and the attachment rule with it,
+exactly as they widen the sandbox: a worktree run anchors to its worktree,
+and under `FLEET_SCHEDULED_SHARED_WORKSPACE=1` (or when the job directory
+could not be created) the run works in the workspace root itself.
 
 The content is copied when the email is sent, so a file changed between
 staging a card and approving it is sent as it is at approval time. The card

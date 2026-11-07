@@ -279,10 +279,11 @@ type Options struct {
 	// interactive spawn host sets it, so a sub-agent spawned from chat cannot
 	// reach what the chat turn could not; scheduled drivers leave it nil.
 	HiddenToolSuffixes []string
-	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments. Only
-	// the interactive spawn host sets it (and every child copies it), so a
-	// sub-agent spawned from chat sends email attachments under the chat
-	// turn's rule; scheduled drivers leave it nil.
+	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments. The
+	// scheduled driver binds it to the run's working directory, the
+	// interactive spawn host to the chat turn's conversation, and every child
+	// copies it, so a sub-agent sends email attachments under its root run's
+	// rule. nil = no rewrite.
 	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 	// AuditProtocolRef is the workspace-relative self-audit protocol path the
 	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
@@ -1388,7 +1389,8 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		Policy:            inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:          NewSandboxExecutor(a.sb),
 		ReadWorkspaceFile: tools.WorkspaceFileReader(a.sb),
-		// nil for a scheduled task; a chat turn's sub-agent carries the turn's.
+		// The run's own (scheduledrun binds it to the job's working
+		// directory); a chat turn's sub-agent carries the turn's.
 		PrepareEmailAttachments: a.prepareEmailAttachments,
 		Model:                   a.model,
 		FallbackModel:           a.fallbackModel,

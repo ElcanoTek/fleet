@@ -1173,14 +1173,18 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		TaskMemoryConfig:    r.taskMemoryConfig,
 		LearnedInstruction:  learnedInstruction,
 		CredentialAllowlist: taskCredentialAllowlist(task),
-		MCPRosterNarrowing:  rosterNarrowing,
-		ThinkingBudget:      task.ThinkingBudgetTokens,
-		PersonaPolicy:       r.personaPolicy(taskPersona),
-		OutputSchema:        task.OutputSchema,
-		Overlay:             remoteOverlay,
-		PhoneAFriendEnabled: phoneAFriend,
-		ReviewerModel:       reviewer,
-		VerifierModel:       verifier,
+		// Every email dispatch in this run (and its sub-agents) sends checked
+		// private copies of its attachments from the run's own working
+		// directory or the shared library, as a chat turn does.
+		PrepareEmailAttachments: scheduledEmailAttachmentSnapshotter(r.workspaceRoot(), toolRoot, r.cfg.EmailAttachmentDir),
+		MCPRosterNarrowing:      rosterNarrowing,
+		ThinkingBudget:          task.ThinkingBudgetTokens,
+		PersonaPolicy:           r.personaPolicy(taskPersona),
+		OutputSchema:            task.OutputSchema,
+		Overlay:                 remoteOverlay,
+		PhoneAFriendEnabled:     phoneAFriend,
+		ReviewerModel:           reviewer,
+		VerifierModel:           verifier,
 		// Deterministic completion predicate (#1602): the producer-declared
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.
@@ -2157,4 +2161,15 @@ func derefInt(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// scheduledEmailAttachmentSnapshotter binds tools.SnapshotEmailAttachmentsInDir
+// to one scheduled run: workDir is the run's effective working directory (the
+// one configureRunWorkspace bound, which its sandbox mounts), and the copies
+// are staged under the host-side outbound attachment directory.
+func scheduledEmailAttachmentSnapshotter(workspaceRoot, workDir, emailAttachmentDir string) func(map[string]any) (func(), error) {
+	staging := tools.OutboundAttachmentStagingDir(emailAttachmentDir)
+	return func(args map[string]any) (func(), error) {
+		return tools.SnapshotEmailAttachmentsInDir(workspaceRoot, workDir, args, staging)
+	}
 }

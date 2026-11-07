@@ -207,13 +207,16 @@ func forEachAttachmentPath(args map[string]any, fn func(path string) (string, er
 }
 
 // attachmentBases are the two directories an attachment may come from, both
-// absolute: the conversation's own workspace directory and the staged
-// shared-file library (reachable from a conversation through its `shared`
-// link). The library is a legitimate source because the shared-files prompt
-// block tells agents to use `shared/<name>`.
+// absolute: the run's own working directory (a conversation's workspace, or a
+// scheduled job's) and the staged shared-file library (reachable through the
+// `shared` link and mounted into both kinds of sandbox). The library is a
+// legitimate source because the shared-files prompt block tells agents to use
+// `shared/<name>`. root is the workspace root they live under, which the
+// attachment copies must stay out of.
 type attachmentBases struct {
 	conv   string
 	shared string
+	root   string
 }
 
 func attachmentBasesFor(convID string) (attachmentBases, error) {
@@ -225,7 +228,26 @@ func attachmentBasesFor(convID string) (attachmentBases, error) {
 		return attachmentBases{}, fmt.Errorf("resolve conversation workspace for attachments: %w", err)
 	}
 	shared := SharedFilesDir(workspaceRootForContainment())
-	return attachmentBases{conv: filepath.Clean(conv), shared: filepath.Clean(shared)}, nil
+	conv = filepath.Clean(conv)
+	return attachmentBases{conv: conv, shared: filepath.Clean(shared), root: filepath.Dir(conv)}, nil
+}
+
+// attachmentBasesForDir is attachmentBases for a run whose working directory
+// is workDir under workspaceRoot (a scheduled job's directory, a worktree, or
+// the root itself when the operator chose the shared workspace).
+func attachmentBasesForDir(workspaceRoot, workDir string) (attachmentBases, error) {
+	if strings.TrimSpace(workDir) == "" || strings.TrimSpace(workspaceRoot) == "" {
+		return attachmentBases{}, errors.New("attachments need the run's workspace directory")
+	}
+	dir, err := filepath.Abs(workDir)
+	if err != nil {
+		return attachmentBases{}, fmt.Errorf("resolve run workspace for attachments: %w", err)
+	}
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return attachmentBases{}, fmt.Errorf("resolve workspace root for attachments: %w", err)
+	}
+	return attachmentBases{conv: filepath.Clean(dir), shared: filepath.Clean(SharedFilesDir(root)), root: filepath.Clean(root)}, nil
 }
 
 // lexical anchors a model-authored path: relative paths are joined onto the
@@ -244,7 +266,7 @@ func within(dir, path string) bool {
 }
 
 func outsideErr(path string) error {
-	return fmt.Errorf("attachment path %q is outside this conversation's workspace — attach files the agent wrote to its workspace (or shared files) instead", path)
+	return fmt.Errorf("attachment path %q is outside this run's workspace — attach files the agent wrote to its workspace (or shared files) instead", path)
 }
 
 // checkStaged is the staging-time check: lexical containment always, and for
@@ -337,16 +359,39 @@ const MaxEmailAttachmentBytes = 30 << 20
 // between this check and the send. The returned cleanup removes the copies; it
 // is non-nil whenever err is nil.
 func SnapshotEmailAttachments(convID string, args map[string]any, stagingParent string) (cleanup func(), err error) {
-	noop := func() {}
-	_, hasA := args["attachments"].([]any)
-	_, hasI := args["inline_attachments"].([]any)
-	if !hasA && !hasI {
-		return noop, nil
+	if !hasAttachmentLists(args) {
+		return func() {}, nil
 	}
 	bases, err := attachmentBasesFor(convID)
 	if err != nil {
 		return nil, err
 	}
+	return snapshotAttachments(bases, args, stagingParent)
+}
+
+// SnapshotEmailAttachmentsInDir is SnapshotEmailAttachments for a run that
+// has no conversation: a scheduled task run, whose working directory workDir
+// (its job directory, a worktree, or the root under the shared-workspace
+// setting) is the directory its sandbox mounts. Attachments must resolve
+// inside workDir or the shared-file library under workspaceRoot.
+func SnapshotEmailAttachmentsInDir(workspaceRoot, workDir string, args map[string]any, stagingParent string) (cleanup func(), err error) {
+	if !hasAttachmentLists(args) {
+		return func() {}, nil
+	}
+	bases, err := attachmentBasesForDir(workspaceRoot, workDir)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotAttachments(bases, args, stagingParent)
+}
+
+func hasAttachmentLists(args map[string]any) bool {
+	_, hasA := args["attachments"].([]any)
+	_, hasI := args["inline_attachments"].([]any)
+	return hasA || hasI
+}
+
+func snapshotAttachments(bases attachmentBases, args map[string]any, stagingParent string) (cleanup func(), err error) {
 	if stagingParent == "" {
 		stagingParent = os.TempDir()
 	}
@@ -359,7 +404,7 @@ func SnapshotEmailAttachments(convID string, args map[string]any, stagingParent 
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	// The staging directory must not be somewhere a sandbox can see.
-	if dirAbs, aerr := filepath.Abs(dir); aerr != nil || within(filepath.Dir(bases.conv), dirAbs) {
+	if dirAbs, aerr := filepath.Abs(dir); aerr != nil || within(bases.root, dirAbs) || within(bases.conv, dirAbs) || within(bases.shared, dirAbs) {
 		cleanup()
 		return nil, errors.New("attachment staging directory must be outside the workspace root")
 	}

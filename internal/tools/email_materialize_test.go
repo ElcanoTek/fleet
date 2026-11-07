@@ -512,3 +512,72 @@ func TestSnapshotEmailAttachmentsSizeBound(t *testing.T) {
 		t.Fatalf("an over-limit attachment must be refused, got %v", err)
 	}
 }
+
+// A scheduled run's attachments resolve through its own working directory
+// and the shared-file library (reached through the job directory's `shared`
+// link, as the scheduled sandbox mounts it): another job's or a
+// conversation's file, a link out of the job directory, and an absolute path
+// elsewhere are refused; a job file and a shared file are copied.
+func TestSnapshotEmailAttachmentsInDir(t *testing.T) {
+	wsRoot := t.TempDir()
+	job := filepath.Join(wsRoot, "tasks", "job-a")
+	for _, d := range []string{job, filepath.Join(wsRoot, "tasks", "job-b"), filepath.Join(wsRoot, "conv-1"), filepath.Join(wsRoot, "shared")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(job, "out.csv"), "job")
+	write(filepath.Join(wsRoot, "tasks", "job-b", "b.csv"), "b")
+	write(filepath.Join(wsRoot, "conv-1", "c.txt"), "c")
+	write(filepath.Join(wsRoot, "shared", "lib.pdf"), "lib")
+	if err := os.Symlink(filepath.Join(wsRoot, "shared"), filepath.Join(job, "shared")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(wsRoot, "conv-1", "c.txt"), filepath.Join(job, "c-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "o.txt")
+	write(outside, "o")
+	staging := filepath.Join(t.TempDir(), "outbound")
+	args := func(path string) map[string]any {
+		return map[string]any{"attachments": []any{map[string]any{"path": path}}}
+	}
+
+	for _, p := range []string{"../job-b/b.csv", filepath.Join(wsRoot, "conv-1", "c.txt"), "c-link.txt", outside} {
+		if _, err := SnapshotEmailAttachmentsInDir(wsRoot, job, args(p), staging); err == nil {
+			t.Fatalf("%s: accepted", p)
+		}
+	}
+	for p, want := range map[string]string{"out.csv": "job", "shared/lib.pdf": "lib"} {
+		a := args(p)
+		cleanup, err := SnapshotEmailAttachmentsInDir(wsRoot, job, a, staging)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		got := a["attachments"].([]any)[0].(map[string]any)["path"].(string)
+		if data, err := os.ReadFile(got); err != nil || string(data) != want || !strings.HasPrefix(got, staging) {
+			t.Fatalf("%s: copy %q content %q err %v", p, got, data, err)
+		}
+		cleanup()
+		if _, err := os.Stat(got); !os.IsNotExist(err) {
+			t.Fatalf("%s: copy not removed", p)
+		}
+	}
+	// A staging directory inside the workspace root is refused.
+	if _, err := SnapshotEmailAttachmentsInDir(wsRoot, job, args("out.csv"), filepath.Join(wsRoot, "outbound")); err == nil {
+		t.Fatal("staging inside the workspace root was accepted")
+	}
+	// No working directory: attachments are refused, a plain email passes.
+	if _, err := SnapshotEmailAttachmentsInDir(wsRoot, "", args("out.csv"), staging); err == nil {
+		t.Fatal("attachments accepted with no working directory")
+	}
+	if _, err := SnapshotEmailAttachmentsInDir(wsRoot, "", map[string]any{"subject": "s"}, staging); err != nil {
+		t.Fatalf("plain email: %v", err)
+	}
+}
