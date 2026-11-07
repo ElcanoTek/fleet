@@ -12,7 +12,7 @@
 // (#4-run-states)") land on the right section.
 
 import type { ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { slugify } from "../headings";
 
@@ -25,39 +25,43 @@ function textOf(children: ReactNode): string {
   return "";
 }
 
+// Hoisted to module scope (they close over nothing), so react-markdown sees
+// the same plugin list and component types on every render — the pattern
+// chat's AssistantContent follows.
+const REMARK_PLUGINS = [remarkGfm];
+
+const COMPONENTS: Components = {
+  // h1 is the guide's own title, already rendered by the page header,
+  // so the body's first line is dropped rather than repeated.
+  h1: () => null,
+  h2: ({ children }) => <h2 id={slugify(textOf(children))}>{children}</h2>,
+  h3: ({ children }) => <h3 id={slugify(textOf(children))}>{children}</h3>,
+  // Tables are the guides' workhorse (every control list is one) and
+  // are the one element that can exceed a narrow viewport, so each gets
+  // its own horizontal scroller instead of widening the page.
+  table: ({ children }) => (
+    <div className="guide-table-shell">
+      <table>{children}</table>
+    </div>
+  ),
+  a: ({ href, children }) => {
+    const target = typeof href === "string" ? href : "";
+    const external = /^https?:\/\//i.test(target);
+    return (
+      <a
+        href={target}
+        {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})}
+      >
+        {children}
+      </a>
+    );
+  },
+};
+
 export function GuideMarkdown({ content }: { content: string }) {
   return (
     <div className="guide-prose" data-testid="guide-prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          // h1 is the guide's own title, already rendered by the page header,
-          // so the body's first line is dropped rather than repeated.
-          h1: () => null,
-          h2: ({ children }) => <h2 id={slugify(textOf(children))}>{children}</h2>,
-          h3: ({ children }) => <h3 id={slugify(textOf(children))}>{children}</h3>,
-          // Tables are the guides' workhorse (every control list is one) and
-          // are the one element that can exceed a narrow viewport, so each gets
-          // its own horizontal scroller instead of widening the page.
-          table: ({ children }) => (
-            <div className="guide-table-shell">
-              <table>{children}</table>
-            </div>
-          ),
-          a: ({ href, children }) => {
-            const target = typeof href === "string" ? href : "";
-            const external = /^https?:\/\//i.test(target);
-            return (
-              <a
-                href={target}
-                {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})}
-              >
-                {children}
-              </a>
-            );
-          },
-        }}
-      >
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
         {content}
       </ReactMarkdown>
     </div>
