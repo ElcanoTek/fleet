@@ -167,3 +167,23 @@ func TestReleaseProvenanceAndScanOrder(t *testing.T) {
 		t.Errorf("release.yml's Grype pin %v differs from ci.yml's %v", a, b)
 	}
 }
+
+// TestRetriedProvenanceBundleIsSelectedByOutcome — actions/attest sets its
+// bundle-path output before it creates the attestation and writes the file
+// only on success, so a failed first attempt leaves a non-empty path to a
+// missing file. Every `first || retry` bundle choice must therefore gate the
+// first attempt on its outcome, or a successful retry is silently ignored.
+func TestRetriedProvenanceBundleIsSelectedByOutcome(t *testing.T) {
+	raw, _ := releaseWorkflow(t)
+	re := regexp.MustCompile(`\$\{\{([^}]*)steps\.([a-z_]+)\.outputs\.bundle-path \|\| steps\.([a-z_]+)_retry\.outputs\.bundle-path`)
+	matches := re.FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		t.Fatal("no first||retry bundle-path selections found; the workflow changed shape — update this test")
+	}
+	for _, m := range matches {
+		guard := "steps." + m[2] + ".outcome == 'success' && "
+		if !strings.HasSuffix(strings.TrimLeft(m[1], " "), guard) {
+			t.Errorf("bundle-path selection for %s does not gate the first attempt on its outcome: %q", m[2], m[0])
+		}
+	}
+}

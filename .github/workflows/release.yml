@@ -761,9 +761,9 @@ jobs:
         env:
           FLEET_REF: ${{ steps.images.outputs.fleet }}
           SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
-          BIN_BUNDLE: ${{ steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
-          FLEET_BUNDLE: ${{ steps.provenance_fleet.outputs.bundle-path || steps.provenance_fleet_retry.outputs.bundle-path }}
-          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outputs.bundle-path || steps.provenance_sandbox_retry.outputs.bundle-path }}
+          BIN_BUNDLE: ${{ steps.provenance.outcome == 'success' && steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
+          FLEET_BUNDLE: ${{ steps.provenance_fleet.outcome == 'success' && steps.provenance_fleet.outputs.bundle-path || steps.provenance_fleet_retry.outputs.bundle-path }}
+          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outcome == 'success' && steps.provenance_sandbox.outputs.bundle-path || steps.provenance_sandbox_retry.outputs.bundle-path }}
         run: |
           set -euo pipefail
           check() {
@@ -801,7 +801,7 @@ jobs:
         env:
           FLEET_REF: ${{ steps.images.outputs.fleet }}
           SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
-          PROVENANCE: ${{ steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
+          PROVENANCE: ${{ steps.provenance.outcome == 'success' && steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
         run: |
           set -euo pipefail
           cd dist
