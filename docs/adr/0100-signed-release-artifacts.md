@@ -9,6 +9,9 @@
 - **Amends:** [ADR-0078](0078-track-the-latest-node-major.md) (the node major is
   a CI/release concern only; no box installs, repairs or runs node)
 - **Issue:** #2051
+- **Amended by:** [ADR-0101](0101-remove-the-on-box-build.md) (2026-11-07: the
+  `--from-source` path decision 9 kept is removed, with the shell verifier's
+  first-update fallback; boxes need a published release)
 
 ## Context
 
@@ -62,8 +65,9 @@ demand.** `internal/release/cosign.lock` pins the cosign version and its
 SHA-256 per architecture (taken from cosign's own signed checksums). fleet
 downloads it on first use, re-hashes it before every run, and refuses any other
 bytes; `FLEET_COSIGN_BIN` may point at a local copy, which must hash the same.
-The same lock is read by `scripts/lib/release.sh` (bootstrap, and the first
-artifact update of a box whose fleet predates `fleet release`) and by
+The same lock is read by `scripts/lib/release.sh` (bootstrap, and — until
+ADR-0101 removed it — the first artifact update of a box whose fleet predates
+`fleet release`) and by
 release.yml (the signer), so signer and every verifier run identical bytes.
 
 **5. What a box checks, in order, before anything uses a release:** the
@@ -104,9 +108,10 @@ permanent.
 **9. Toolchains leave the box.** bootstrap installs no Go and no Node; update
 no longer resolves, repairs or builds with them; `scripts/lib/node-version.sh`,
 the vendored node keyring, `doctor --node` and `scripts/fleet-upgrade.sh` are
-deleted. `--from-source` remains on `update` and `bootstrap` for development
-boxes, using whatever toolchain is on PATH, and every piece of it is marked
-`LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts`.
+deleted. `--from-source` remained on `update` and `bootstrap` for development
+boxes, using whatever toolchain is on PATH, with every piece of it marked for
+removal once boxes ran artifacts. *(2026-11-07: removed by
+[ADR-0101](0101-remove-the-on-box-build.md).)*
 
 **10. Helm defaults to the published images** at `image.tag`, which defaults to
 `v` + the chart's `appVersion` (stamped on the chart each release attaches); an
@@ -190,4 +195,4 @@ unstamped checkout chart requires `image.tag`.
   few packages, and building `FROM` the verified base on the box costs little.
 - **Keeping the from-source update as the default.** It is exactly what the
   issue set out to remove; it stays only behind `--from-source`, marked for
-  deletion.
+  deletion (deleted by ADR-0101).

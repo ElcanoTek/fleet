@@ -258,9 +258,10 @@ each piece yourself):
    ```
 
    Everything about trust, the files, bundles and rollback is in
-   [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md). A development box can still
-   build from source: `scripts/bootstrap.sh --from-source` / `fleet update
-   --from-source` run `make build` with the Go and Node on PATH.
+   [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md). Nothing builds fleet on the
+   box: bootstrap and update need a published release, and stop with a message
+   when none is reachable ([ADR-0101](adr/0101-remove-the-on-box-build.md)).
+   Build unreleased code on a development machine with `make build`.
 
    Registry publish stays **opt-in per client**: a client may set
    `sandbox.image` in its `manifest.yaml` to a prebuilt ref it

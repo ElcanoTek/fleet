@@ -114,6 +114,12 @@ download size-capped, no partial files left behind), installs it to
 `/opt/fleet/fleet`, and sets up the sandbox image as described below. It needs outbound HTTPS to
 github.com, ghcr.io and Sigstore's TUF CDN.
 
+**A published release is required.** Nothing builds fleet on a box any more
+([ADR-0101](adr/0101-remove-the-on-box-build.md)). A box with no network, or
+with no published release to install, stops with a message naming that and
+installs nothing; there is no build fallback. `--from-source` and
+`FLEET_BOOTSTRAP_FROM_SOURCE=1` are refused with the same explanation.
+
 ## Update
 
 ```sh
@@ -194,7 +200,8 @@ What it does, in order (`scripts/update.sh`):
    waits at most 30 seconds, so a stalled holder cannot block the start. The stop error is printed with the result. If the install is
    SIGKILLed between the steps, the update's exit trap still
    clears the marker, and fleet ignores one older than 15 minutes in any case.
-   `--from-source` restarts the same way (stop, clear, start).
+   (There is no other restart path: the on-box `--from-source` build that
+   restarted itself was removed by ADR-0101.)
 
 **No systemd, or no fleet unit (a custom supervisor).** Update still installs
 the verified binary — the same atomic swap, `fleet.prev` kept — but cannot
@@ -308,14 +315,21 @@ and `update` share. A manifest that names a Containerfile which does not exist
 stops the run; the generic image is never used in its place.
 
 A bundle that customizes nothing should ship **no** Containerfile and name
-none, keeping only `sandbox.tag`. If such a box ever builds the sandbox
-locally (`--from-source`, or the release image is unreachable),
-`build-sandbox-image.sh` builds fleet's own `config/default` Containerfile
-under the bundle's `sandbox.tag` — the same generic image, built here. A copy
-of the generic Containerfile that has drifted from fleet's (an old
-boilerplate) counts as a custom image and is built on the box, so delete it
-rather than keeping it in sync. Remove it only once the box runs a release
-with artifact-based updates; an older `update.sh` still requires the file.
+none, keeping only `sandbox.tag`; every fleet box's bundle now does. `update`
+and `bootstrap` never build such a bundle's sandbox: they pull the release
+image. When it cannot be pulled, `update` keeps the image already in the
+service user's store, or stops before installing when there is none, and
+`bootstrap` warns that the box has no runnable sandbox image. Only a by-hand
+`scripts/build-sandbox-image.sh` run — CI, release.yml, or an operator
+rebuilding on purpose — builds fleet's own `config/default` Containerfile
+under the bundle's `sandbox.tag`. A copy of the generic Containerfile that has
+drifted from fleet's (an old boilerplate) counts as a custom image and is
+built on the box, so delete it rather than keeping it in sync.
+
+A bundle that **does** ship its own Containerfile is still a supported
+feature, and it is still built on the box (layered on the release image when
+it declares `ARG FLEET_SANDBOX_BASE`). That build is of the bundle's sandbox
+image, not of fleet, and needs only podman; ADR-0101 left it in place.
 
 A bundle Containerfile that only adds packages should become:
 
@@ -433,15 +447,31 @@ the publish job runs the same pinned Grype and policy over all four
 `*.oci.tar` archives (both images, amd64 and arm64) before anything is pushed
 or signed, and a violation fails the release.
 
-## Development boxes: `--from-source`
+## No on-box build (2026-11-07, ADR-0101)
 
-`fleet update --from-source` and `bootstrap.sh --from-source` keep the old
-on-box `make build`, for development boxes only. They use whatever Go, Node and
-npm are on PATH — nothing installs or repairs them any more — and update from
-the branch tip, not a release. They restart without the readiness gate or
-rollback. Every piece of this path is marked
-`LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts` so it can be found
-and deleted in one pass.
+The `--from-source` path this design first kept for development boxes is gone.
+Once all twelve fleet boxes ran signed release v2026.11.07.21 with
+artifact-based updates, and Go, Node and their caches had been removed from
+every box, [ADR-0101](adr/0101-remove-the-on-box-build.md) deleted it:
+
+- `update.sh --from-source`, `bootstrap.sh --from-source`,
+  `FLEET_UPDATE_FROM_SOURCE=1` and `FLEET_BOOTSTRAP_FROM_SOURCE=1` stop with a
+  message that names the removal. `FLEET_UPDATE_FROM_SOURCE=0` is still
+  accepted, because an `update.sh` from before the removal forwards it when it
+  re-executes the new copy. Both variables are listed as retired in
+  [CONFIGURATION.md](CONFIGURATION.md).
+- `update.sh` no longer verifies a first release with the shell verifier when
+  the installed fleet predates `fleet release`. Such a box (a from-source
+  install that never took a release) is told to re-run `bootstrap.sh
+  --enable-service` with its original flags; bootstrap is idempotent and
+  installs the release over the existing install.
+- An update that cannot reach origin or GitHub, or finds no published
+  release, stops and changes nothing; it has no build to fall back to.
+- Doctor's root-cache reclaim covers the dnf cache only; the Go and npm caches
+  it also swept came from on-box builds.
+
+`make build` and `make web` are unchanged developer and CI targets. To run
+unreleased code, build it on a development machine.
 
 ## What shipped
 

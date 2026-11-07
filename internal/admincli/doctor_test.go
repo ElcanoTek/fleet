@@ -36,7 +36,7 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		// has. Both are new enough that a silent regression is plausible.
 		"fleet-maintenance.timer",
 		"free space on the data dir",
-		"root build caches",
+		"root package cache",
 		"60-fleet-journal-cap.conf",
 		"Sandbox smoke",
 		"Release + checkout",
@@ -157,14 +157,14 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// scheduled work, which is a different statement to an operator.
 		"FLEET_DISK_MIN_FREE_PERCENT",
 		"HOLDING BACK scheduled tasks",
-		// Disk hygiene: fleet update fills ROOT's build caches while the
-		// maintenance timer runs as the service user, so doctor (root) is the
-		// only pass that can reclaim them — above a threshold, so a run does
-		// not cost the next update a full re-download. The journal cap yields
+		// Disk hygiene: dnf fills ROOT's package cache while the maintenance
+		// timer runs as the service user, so doctor (root) is the only pass
+		// that can reclaim it — above a threshold, so a run does not cost the
+		// next dnf transaction a full re-download. The journal cap yields
 		// to an operator's own SystemMaxUse, and root's podman store is only
 		// ever reported: an image with no container is not proof it is unwanted.
-		"ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))",
-		"go clean -cache -testcache -modcache",
+		"ROOT_CACHE_RECLAIM_BYTES=$((1024 * 1024 * 1024))",
+		"dnf clean all >/dev/null 2>&1 || true",
 		// The operator's limit is read from journald's MERGED config, so a
 		// shadowed vendor drop-in is not mistaken for an active setting.
 		"systemd-analyze cat-config systemd/journald.conf",
@@ -191,7 +191,7 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// is verdicted on a re-measure rather than exit codes, and hygiene
 		// runs before the headroom verdict so a reclaimed box is not failed.
 		`removed ${dst} so the explicit limit in ${operator} applies`,
-		"root build cache reclaim left",
+		"root package cache reclaim left",
 		"{{.Store.GraphRoot}}",
 		// Build leftovers are often intermediate images, hidden without -a.
 		`podman images -a -q`,

@@ -12,12 +12,11 @@
 # Go would otherwise do on its own.
 #
 # The env var takes precedence over that go.env default, so setting it here is
-# what makes `fleet update --from-source` work on a stock Fedora dev box. It belongs in the
+# what makes `make build` work on a stock Fedora dev machine. It belongs in the
 # Makefile rather than in each caller because every build path funnels through
-# here — CI, and the development-only `--from-source` paths of
-# scripts/update.sh and bootstrap.sh, all shell out to `make build`. (A release
-# box builds nothing: it installs the signed binary release.yml publishes —
-# ADR-0100.)
+# here — CI, release.yml and developer machines. (A box builds nothing: it
+# installs the signed binary release.yml publishes — ADR-0100; the on-box
+# `--from-source` path was removed in ADR-0101.)
 #
 # `?=` so an operator who has deliberately chosen a value — an air-gapped host
 # pinned to `local`, or a specific `go1.27.0` — keeps it.
