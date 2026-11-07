@@ -198,24 +198,26 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 ## When something fails
 
 Read `fleet.log` first (one structured line per event — JSON by default; every
-line of a turn carries its `conv_id`, `turn_id` and `trace_id`). The lines that matter, by message:
+line of a chat turn carries its `conv_id` and `turn_id`, every line of a
+scheduled run its `task_id` and `run_id`, and both carry `trace_id` when
+tracing is on). The lines that matter, by message:
 
-- `remote-mcp: skipping server for — token unavailable` (`reg_name`, `email`) —
+- `remote-mcp: skipping server — token unavailable` (`reg_name`, `user`) —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
   marked *Sign-in needed* (`needs_reauth`); have the owner click Sign in. For
   transient network errors or vendor 5xx, the same line is logged but the
   connection stays connected and the next call retries automatically.
-- `remote-mcp: skipping server for — failed to connect` with
-  `connect_failure_reason` … `HTTP 404` —
+- `remote-mcp: skipping server — failed to connect` with
+  `reason` … `HTTP 404` —
   the vendor rejected the tools handshake; usually a wrong URL (check the
   vendor's documented MCP path), not a credential problem. The model is told
   the connector "did not respond this turn" and not to ask for a reconnect;
   only a 401 at mount, or a dead refresh token, is announced as needing one,
   and a failure fleet cannot classify (a credential it could not read) is
-  announced as exactly that (F10). `RunTurn: remote MCP server(s) not
-  mounted` (`user_email`, `skipped` = `<name> (<reason>)`) carries the class
+  announced as exactly that (F10). `RunTurn: remote MCP servers not
+  mounted` (`user`, `skipped` = `<name> (<reason>)`) carries the class
   per connector.
-- `mcpbroker: call failed (passed to the caller as told)` with `op="tool call"`,
+- `mcpbroker: call failed (passed to the caller with a safe message)` with `op="tool call"`,
   `told="…"` and an `err` quoting … `HTTP 422` …
   — the vendor refused the tool arguments, and since F8 the model was told
   the vendor's 4xx or JSON-RPC answer, bounded and scrubbed (`the server
@@ -225,8 +227,8 @@ line of a turn carries its `conv_id`, `turn_id` and `trace_id`). The lines that 
 - `mcpbroker: call failed (masked to the caller)` with `op="tool call"` — a 5xx, a
   transport failure, or any error of a bundle server: the model saw only
   `credential-owner call failed`; the real text is in its `err`.
-- `scheduled task: wired remote MCP server(s)` (`task_id`, `servers_count`,
-  `email`) / `scheduled task: skipped remote MCP server(s)` (`skipped`) —
+- `scheduled task: wired remote MCP servers` (`task_id`, `servers`,
+  `user`) / `scheduled task: skipped remote MCP servers` (`skipped`) —
   what a scheduled run mounted and what it could not, with the reason class
   per connector.
 - `Fantasy tools registered; MCP tools DEFERRED behind tool_search/describe/call (#506)`

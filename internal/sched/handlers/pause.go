@@ -78,7 +78,7 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "task is no longer paused")
 		return
 	}
-	logging.From(r.Context()).Info("Task resumed", "task_id", safe.LogSafe(task.ID.String()), "stop_label", safe.LogSafe(p.stopLabel()))
+	logging.From(r.Context()).Info("Task resumed", "task_id", safe.LogSafe(task.ID.String()), "by", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
@@ -127,7 +127,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "task is not waiting for that event")
 		return
 	}
-	logging.From(r.Context()).Info("Task woken by event (event)", "task_id", safe.LogSafe(task.ID.String()), "event", safe.LogSafe(event), "stop_label", safe.LogSafe(p.stopLabel()))
+	logging.From(r.Context()).Info("Task woken by event", "task_id", safe.LogSafe(task.ID.String()), "event", safe.LogSafe(event), "by", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }

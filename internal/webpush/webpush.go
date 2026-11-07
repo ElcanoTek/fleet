@@ -395,7 +395,7 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 	// gate. It can never be delivered, so it is retired like an endpoint the
 	// relay reported gone rather than refused again on every send.
 	if err := ValidateEndpoint(sub.Endpoint); err != nil {
-		s.log().Warn("webpush: retiring a subscription", "user_email", sub.UserEmail, "err", err)
+		s.log().Warn("webpush: retiring a subscription", "user", sub.UserEmail, "err", err)
 		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
 			s.log().Error("webpush: delete refused subscription failed", "err", err)
 		}

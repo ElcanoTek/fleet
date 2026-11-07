@@ -97,7 +97,7 @@ func startRedirectServer(addr string, m *autocert.Manager) {
 	}
 	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("TLS redirect listener", "addr", addr, "err", err)
+		slog.Error("TLS redirect listener failed", "addr", addr, "err", err)
 	}
 }
 
@@ -132,7 +132,7 @@ func warnIfPrivateDomain(domain string) {
 	}
 	for _, a := range addrs {
 		if ip := net.ParseIP(a); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
-			logging.From(ctx).Warn("warn: FLEET_TLS_MODE=auto but DNS resolves (private/loopback); the ACME HTTP-01 challenge will likely fail — use FLEET_TLS_MODE=manual for internal deployments", "domain", domain, "detail", a)
+			logging.From(ctx).Warn("tls: FLEET_TLS_MODE=auto but the domain resolves to a private/loopback address; the ACME HTTP-01 challenge will likely fail — use FLEET_TLS_MODE=manual for internal deployments", "domain", domain, "resolved", a)
 			return
 		}
 	}

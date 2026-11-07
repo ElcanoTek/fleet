@@ -198,7 +198,7 @@ func (s *Server) writeApprovalProgress(user, approvalID string, u mcp.ProgressUp
 	ctx, cancel := context.WithTimeout(context.Background(), approvalProgressWriteTimeout)
 	defer cancel()
 	if _, err := s.store.SetApprovalProgress(ctx, user, approvalID, string(raw)); err != nil {
-		logging.From(ctx).Error("approval progress: store", "approval_id", safe.LogSafe(approvalID), "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("approval progress: store failed", "approval_id", safe.LogSafe(approvalID), "err", safe.LogSafe(err.Error()))
 	}
 }
 
@@ -229,7 +229,7 @@ func (s *Server) notifyApprovalFinished(user, convID string, approval *store.App
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalFinished(ctx, user, convID, label, failed); err != nil {
-			logging.From(ctx).Error("push: approval finished", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("push: approval-finished notification failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	})
 }
@@ -245,7 +245,7 @@ func (s *Server) notifyResumeSkipped(owner, convID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyResumeSkipped(ctx, owner, convID); err != nil {
-			logging.From(ctx).Error("push: resume skipped", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("push: resume-skipped notification failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	})
 }

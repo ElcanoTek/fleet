@@ -279,7 +279,7 @@ func (s *Server) serveBrandImage(w http.ResponseWriter, r *http.Request, path, f
 		return
 	}
 	if info.Size() > maxBytes {
-		logging.From(r.Context()).Info("httpapi is bytes (cap); serving fleet's default asset instead", "field", field, "path", path, "size", info.Size(), "max_bytes", maxBytes)
+		logging.From(r.Context()).Info("httpapi: theme asset exceeds the size cap; serving fleet's default asset instead", "field", field, "path", path, "size_bytes", info.Size(), "max_bytes", maxBytes)
 		http.NotFound(w, r)
 		return
 	}

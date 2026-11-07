@@ -198,7 +198,7 @@ func logCircuitOpen(slug string, c *modelCircuit) {
 		return
 	}
 	c.openLogged = true
-	slog.Warn("circuit_open", "event", "circuit_open", "model", slug, "recent_errors", len(c.errorTimes), "last_error", c.lastError)
+	slog.Warn("circuit breaker: circuit open", "event", "circuit_open", "model", slug, "recent_errors", len(c.errorTimes), "last_error", c.lastError)
 }
 
 // Snapshot returns a point-in-time copy of every tracked model's health,

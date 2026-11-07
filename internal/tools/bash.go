@@ -696,7 +696,7 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 			if wdErr != nil {
 				return "", fmt.Errorf("error getting current directory: %w", wdErr)
 			}
-			logging.From(ctx).Error("workspace ensure failed for conv; using cwd", "conv_id", convID, "err", err, "cwd", wd)
+			logging.From(ctx).Error("workspace ensure failed; using cwd", "conv_id", convID, "err", err, "cwd", wd)
 			return wd, nil
 		}
 		if abs, absErr := filepath.Abs(dir); absErr == nil {

@@ -438,7 +438,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	logging.From(r.Context()).Info("projects transferred project", "user", user, "project_id", projectID, "owner_email", updated.OwnerEmail)
+	logging.From(r.Context()).Info("projects: project transferred", "user", user, "project_id", projectID, "to", updated.OwnerEmail)
 	writeJSON(w, updated)
 }
 

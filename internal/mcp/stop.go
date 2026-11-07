@@ -114,7 +114,7 @@ func (t *HTTPTransport) notifyStopHTTP(ctx context.Context, stop, wrote, done <-
 		err := t.Notify(nctx, "notifications/cancelled", map[string]any{"requestId": id, "reason": StopReasonByUser})
 		cancel()
 		if err != nil {
-			logging.From(ctx).Error("MCP http: could not send the stop for request", "request", id, "err", err)
+			logging.From(ctx).Error("MCP http: could not send the stop for request", "request_id", id, "err", err)
 		}
 		timer := time.NewTimer(wait)
 		select {

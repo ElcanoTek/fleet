@@ -79,7 +79,7 @@ func writeValidatedLogFile(path string, data []byte) error {
 // longer reachable (error analysis, recurring-task synthesis) have only this
 // line — see docs/AUX-MODEL-CALL-METERING.md.
 func logAuxUsage(rec agentcore.AuxUsageRecord) {
-	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt", rec.PromptTokens, "completion", rec.CompletionTokens, "cost", fmt.Sprintf("%.4f", rec.CostUSD))
+	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
 }
 
 // oneShotCall is one auxiliary, tool-less model call: a system prompt, a single
@@ -220,7 +220,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 			continue
 		}
 		if len(data) <= maxSize {
-			slog.Info("Truncated log messages (kept first + last, skipped)", "msgs_count", len(msgs), "end_count", endCount, "skipped", len(original)-endCount-1)
+			slog.Info("Truncated session log (kept the first and last messages)", "messages", len(msgs), "kept_last", endCount, "skipped", len(original)-endCount-1)
 			return data
 		}
 	}
@@ -236,7 +236,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 		original[len(original)-1],
 	})
 	data, _ := marshalLogSession(minimal)
-	slog.Info("Truncated log to minimal (first + last message only, skipped)", "skipped", len(original)-2)
+	slog.Info("Truncated session log to the first and last message only", "skipped", len(original)-2)
 	return data
 }
 
@@ -261,15 +261,15 @@ func writeLogFile(session *LogSession, logFile string) {
 		return
 	}
 	if len(data) > maxSessionLogFileSize {
-		slog.Info("Log size (bytes) exceeds limit (bytes), truncating middle messages...", "data_count", len(data), "max_session_log_file_size", maxSessionLogFileSize)
+		slog.Info("Session log exceeds the size limit; truncating middle messages", "size_bytes", len(data), "limit_bytes", maxSessionLogFileSize)
 		data = truncateLogSession(redacted, maxSessionLogFileSize)
 	}
 	if err := writeValidatedLogFile(logFile, data); err != nil {
 		slog.Warn("Warning: Failed to write log file", "err", err)
 		return
 	}
-	slog.Info("Session summary", "prompt_tokens", session.PromptTokens, "completion_tokens", session.CompletionTokens, "cost", fmt.Sprintf("%.4f", session.Cost), "cached_tokens", session.CachedTokens, "cache_creation_tokens", session.CacheCreationTokens, "cumulative_cache_hit_rate_pct", fmt.Sprintf("%.1f", session.CumulativeCacheHitRate()))
-	slog.Info("Session log written (bytes)", "log_file", logFile, "data_count", len(data))
+	slog.Info("Session summary", "prompt_tokens", session.PromptTokens, "completion_tokens", session.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", session.Cost), "cached_tokens", session.CachedTokens, "cache_creation_tokens", session.CacheCreationTokens, "cache_hit_pct", fmt.Sprintf("%.1f", session.CumulativeCacheHitRate()))
+	slog.Info("Session log written", "path", logFile, "size_bytes", len(data))
 }
 
 // summarizeForConsole clamps text to a single-line preview (verifier logging).

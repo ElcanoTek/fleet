@@ -221,7 +221,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 		ok, err := stager.StageHostSuggestion(source, reason)
 		if err != nil {
-			logging.From(ctx).Error("escalation: stage suggestion", "source", source, "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("escalation: stage suggestion failed", "suggestion_source", source, "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 		staged = ok
 		return ok
@@ -240,7 +240,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 			Suggested:      suggested,
 		})
 		if err != nil {
-			logging.From(ctx).Error("escalation: record event", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("escalation: record event failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 	}
 
@@ -353,7 +353,7 @@ func countClassifierCheck(c *struggleCheck) (agentcore.StruggleVerdict, bool) {
 	switch {
 	case err != nil:
 		metrics.RecordEscalationClassifierCheck(c.mode, "error")
-		slog.Error("escalation: classifier", "err", safe.LogSafe(err.Error()))
+		slog.Error("escalation: classifier failed", "err", safe.LogSafe(err.Error()))
 		return v, false
 	case v.Probability >= c.threshold:
 		metrics.RecordEscalationClassifierCheck(c.mode, "pushback")

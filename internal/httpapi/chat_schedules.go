@@ -22,7 +22,7 @@ func (s *Server) SweepDueChatSchedules(ctx context.Context) (int, error) {
 	}
 	claimed, err := s.store.ClaimDueChatSchedules(ctx, time.Now(), maxPendingInputs)
 	for _, item := range claimed {
-		logging.From(ctx).Info("audit: chat schedule (run #) queued for conversation as input", "schedule_id", item.Schedule.ID, "run_count", item.Schedule.RunCount, "conv_id", item.Schedule.ConversationID, "input_id", item.Input.ID)
+		logging.From(ctx).Info("audit: chat schedule queued", "schedule_id", item.Schedule.ID, "run", item.Schedule.RunCount, "conv_id", item.Schedule.ConversationID, "input_id", item.Input.ID)
 		s.emitQueueUpdate(ctx, item.Input.UserEmail, item.Schedule.ConversationID)
 		s.maybeDrainQueue(item.Schedule.ConversationID)
 		autoApprove := false
@@ -62,7 +62,7 @@ func (s *Server) armShortScheduleTimer(nextRunAt int64) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if _, err := s.SweepDueChatSchedules(ctx); err != nil {
-			logging.From(ctx).Error("chat schedule timer sweep", "err", err)
+			logging.From(ctx).Error("chat schedule timer sweep failed", "err", err)
 		}
 	})
 }

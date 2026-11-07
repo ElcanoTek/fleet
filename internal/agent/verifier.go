@@ -379,7 +379,7 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w (raw=%q)", errVerifierMalformedVerdict, err, summarizeForConsole(raw, 200))
 	}
-	logging.From(ctx).Info("Verifier", "missing", parsed.Missing, "reasoning", summarizeForConsole(parsed.Reasoning, 200))
+	logging.From(ctx).Info("Verifier: result", "missing", parsed.Missing, "reasoning", summarizeForConsole(parsed.Reasoning, 200))
 	return parsed.Missing, nil
 }
 

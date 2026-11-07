@@ -1320,7 +1320,7 @@ func (s *Service) tryRevoke(ctx context.Context, server *store.RemoteMCPServer) 
 		// that rode the request masked in case an AS or transport error text
 		// echoes them (an *OAuthError never does; a *url.Error can carry the
 		// request URL, which never holds them either — belt and braces).
-		logging.From(ctx).Error("remotemcp: token revocation for server failed (local record still removed; the refresh token may remain live at the authorization server)", "server_id", server.ID, "mask_secrets", maskSecrets(err.Error(), clientSecret, tokens.RefreshToken))
+		logging.From(ctx).Error("remotemcp: token revocation for server failed (local record still removed; the refresh token may remain live at the authorization server)", "server_id", server.ID, "err", maskSecrets(err.Error(), clientSecret, tokens.RefreshToken))
 	}
 }
 

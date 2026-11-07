@@ -325,7 +325,7 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 	}
 	personaFile := filepath.Base(override) + ".yaml"
 	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
-		slog.Info("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "override", override)
+		slog.Info("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "persona", override)
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	return r.composeSystemPrompt(personaFile), personaFile
@@ -421,7 +421,7 @@ func applyUnattendedBuiltinPolicy(in []fantasy.AgentTool, task *models.Task, egr
 	for _, t := range in {
 		name := t.Info().Name
 		if agentcore.UnattendedToolDisabled(name) {
-			slog.Info("scheduled task removed by agent_policy.unattended_disabled_tools", "task_id", task.ID, "name", name)
+			slog.Info("scheduled task: tool removed by agent_policy.unattended_disabled_tools", "task_id", task.ID, "tool", name)
 			continue
 		}
 		if name == tools.WebFetchToolName {
@@ -952,7 +952,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	ctx = artifactCtx
 	defer releaseArtifacts()
 	if wtPath != "" {
-		logging.From(ctx).Info("scheduled task: git worktree isolation active; tool calls scoped", "task_id", task.ID, "tool_root", toolRoot)
+		logging.From(ctx).Info("scheduled task: git worktree isolation active; tool calls scoped to the worktree", "task_id", task.ID, "tool_root", toolRoot)
 	}
 
 	// nil Browserbase resolver: a scheduled run has no per-user connector key
@@ -1290,7 +1290,7 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	slog.Info("scheduled task: skipped remote MCP server(s)", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
+	slog.Info("scheduled task: skipped remote MCP servers", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.
@@ -1414,7 +1414,7 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 		return nil, unknownMCPSelectionError(unknown)
 	}
 	if overlay.Active() {
-		logging.From(ctx).Info("scheduled task: wired remote MCP server(s)", "task_id", task.ID, "servers_count", len(overlay.Servers), "email", email)
+		logging.From(ctx).Info("scheduled task: wired remote MCP servers", "task_id", task.ID, "servers", len(overlay.Servers), "user", email)
 	}
 	return overlay, nil
 }
@@ -1668,7 +1668,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		closeCtx, cancel := context.WithTimeout(context.Background(), taskMCPScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
-			logging.From(ctx).Error("scheduled task: close MCP scope", "task_id", task.ID, "err", closeErr)
+			logging.From(ctx).Error("scheduled task: close MCP scope failed", "task_id", task.ID, "err", closeErr)
 		}
 	}
 	if scope.Broker == nil {
@@ -1876,7 +1876,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		// is the default the call context normally overrides anyway.
 		agent.RegisterA2APeers(client, r.cfg.A2APeers, task.A2ADelegationDepth)
 	}
-	logging.From(ctx).Info("scheduled task: bound MCP server(s) on per-run client", "task_id", task.ID, "registered_count", len(registered), "registered", registered)
+	logging.From(ctx).Info("scheduled task: bound MCP servers on per-run client", "task_id", task.ID, "count", len(registered), "servers", registered)
 	return client, cleanup, workdir, failed, nil
 }
 

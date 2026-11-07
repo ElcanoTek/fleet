@@ -122,7 +122,7 @@ func (o *orchestrationState) checkBrowserSafety(toolName, toolCallID, rawInput s
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		slog.Error("approval stage failed", "tool_name", toolName, "err", err)
+		slog.Error("approval stage failed", "tool", toolName, "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
 	switch id {
@@ -182,7 +182,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify {
 		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
 			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
-				slog.Warn("notify-mode record failed — falling back to a blocking approval", "tool_name", toolName, "err", err)
+				slog.Warn("notify-mode record failed — falling back to a blocking approval", "tool", toolName, "err", err)
 			} else {
 				// A tool in critical_tool_result_cards: its record waits for the
 				// call's result, to show the outcome card it carries
@@ -193,7 +193,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 				return false, ""
 			}
 		} else {
-			slog.Warn("notify-mode configured but this transport cannot record actions — falling back to a blocking approval", "tool_name", toolName)
+			slog.Warn("notify-mode configured but this transport cannot record actions — falling back to a blocking approval", "tool", toolName)
 		}
 	}
 	if pending, ok := o.pendingApprovalOnSameServer(toolName); ok {
@@ -206,7 +206,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		slog.Error("approval stage failed", "tool_name", toolName, "err", err)
+		slog.Error("approval stage failed", "tool", toolName, "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action. Could not stage it for user approval (%v). Ask the user what to do.", toolName, err)
 	}
 	switch id {

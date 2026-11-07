@@ -269,7 +269,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := g.sessions.HMAC.Mint(email, epoch)
 	if err != nil {
-		logging.From(r.Context()).Error("webui: login", "err", err)
+		logging.From(r.Context()).Error("webui: login failed", "err", err)
 		back("server")
 		return
 	}

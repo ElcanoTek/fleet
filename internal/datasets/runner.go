@@ -196,13 +196,13 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 		delete(r.cancels, d.ID)
 		r.mu.Unlock()
 		if _, err := r.store.UpdateDatasetStatus(context.WithoutCancel(ctx), d.ID, []string{models.DatasetStatusRunning}, to); err != nil {
-			logging.From(ctx).Error("dataset: park status", "dataset", d.ID, "status", to, "err", err)
+			logging.From(ctx).Error("dataset: park status failed", "dataset", d.ID, "status", to, "err", err)
 		}
 	}()
 
 	schema, err := OutputSchema(d.Columns)
 	if err != nil {
-		logging.From(ctx).Error("dataset: output schema", "dataset", d.ID, "err", err)
+		logging.From(ctx).Error("dataset: output schema error", "dataset", d.ID, "err", err)
 		return
 	}
 
@@ -233,7 +233,7 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 				row, err := r.store.ClaimNextDatasetRow(ctx, d.ID)
 				if err != nil {
 					if ctx.Err() == nil {
-						logging.From(ctx).Error("dataset: claim", "dataset", d.ID, "err", err)
+						logging.From(ctx).Error("dataset: claim failed", "dataset", d.ID, "err", err)
 					}
 					return
 				}
@@ -267,7 +267,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	defer safe.Recover("datasets.runRow", func(v any) {
 		msg := clamp("row run panicked: "+safe.PanicClass(v), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", msg, 0); ferr != nil {
-			logging.From(ctx).Error("dataset row: record panic", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
+			logging.From(ctx).Error("dataset row: could not record panic", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 	})
 	prompt, err := RowPrompt(d, row)
@@ -293,12 +293,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// persistent the re-run records it as failed properly.
 		if ctx.Err() != nil {
 			if rerr := r.store.RequeueDatasetRow(wctx, row.ID); rerr != nil {
-				logging.From(ctx).Error("dataset row: requeue after pause", "dataset", d.ID, "row_index", row.RowIndex, "err", rerr)
+				logging.From(ctx).Error("dataset row: requeue after pause failed", "dataset", d.ID, "row", row.RowIndex, "err", rerr)
 			}
 			return
 		}
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", clamp(err.Error(), maxNoteChars), 0); ferr != nil {
-			logging.From(ctx).Error("dataset row: record failure", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
+			logging.From(ctx).Error("dataset row: could not record failure", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -307,7 +307,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// A (nil, nil) from the turn runner is a contract violation, not a
 		// row outcome to dereference: fail the row explicitly.
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", "turn runner returned no result", 0); ferr != nil {
-			logging.From(ctx).Error("dataset row: record missing result", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
+			logging.From(ctx).Error("dataset row: could not record missing result", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -318,12 +318,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// cell mutation. The row fails with the answer preserved for review.
 		note := clamp(strings.TrimSpace(turn.FinalText), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, note, "output did not conform to the dataset schema: "+clamp(verr.Error(), 500), turn.CostUSD); ferr != nil {
-			logging.From(ctx).Error("dataset row: record nonconforming", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
+			logging.From(ctx).Error("dataset row: could not record nonconforming result", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
 	if ferr := r.store.FinishDatasetRow(wctx, row.ID, proposed, "", "", turn.CostUSD); ferr != nil {
-		logging.From(ctx).Error("dataset row: record proposal", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
+		logging.From(ctx).Error("dataset row: could not record proposal", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 	}
 }
 

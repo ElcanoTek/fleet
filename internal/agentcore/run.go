@@ -656,7 +656,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if deps.ClearMCPDirty != nil {
 				deps.ClearMCPDirty()
 			}
-			logging.From(ctx).Info("🔌 MCP loaded-server set changed; fantasy agent rebuilt for round", "round", round+1)
+			logging.From(ctx).Info("🔌 MCP loaded-server set changed; fantasy agent rebuilt", "round", round+1)
 		}
 
 		// Context-window pressure check (#209): warn — and, above the higher

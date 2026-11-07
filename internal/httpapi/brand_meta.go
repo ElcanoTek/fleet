@@ -126,6 +126,6 @@ func (s *Server) brandMeta(w http.ResponseWriter, r *http.Request) {
 	// process on top, so a page render does not pay a round trip per request.
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		logging.From(r.Context()).Error("httpapi: encode /brand/meta", "err", err)
+		logging.From(r.Context()).Error("httpapi: encode /brand/meta failed", "err", err)
 	}
 }

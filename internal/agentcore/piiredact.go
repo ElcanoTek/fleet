@@ -50,7 +50,7 @@ func redactPII(toolName, text string) (out string, blocked bool) {
 	}
 	res := r.Redact(text)
 	if res.Found() {
-		slog.Info("piiredact output", "tool_name", toolName, "summary", res.Summary(), "mode", r.Mode())
+		slog.Info("piiredact: tool output redacted", "tool", toolName, "summary", res.Summary(), "mode", r.Mode())
 	}
 	return res.Text, res.Blocked
 }

@@ -62,7 +62,7 @@ func runMCPBroker() error {
 	// the parent fleet process (only public tool descriptors + rendered text do).
 	specs := agent.BuildMCPSpecs(cfg)
 	client := agent.BuildMCPClient(specs, cfg.HTTPTools, cfg.A2APeers)
-	slog.Info("mcp-broker: serving MCP tools over stdio", "get_all_tools_count", len(client.GetAllTools()))
+	slog.Info("mcp-broker: serving MCP tools over stdio", "tools", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
 		MCPBroker:   agentcore.NewLocalMCPBroker(client),

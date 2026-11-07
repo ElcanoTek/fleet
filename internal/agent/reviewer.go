@@ -171,7 +171,7 @@ func (a *Agent) runPhoneAFriendReview(ctx context.Context, reviewer fantasy.Lang
 		// malformed verdict cannot flood the host log with the full response.
 		return nil, fmt.Errorf("reviewer output parse: %w (raw=%q)", err, summarizeForConsole(raw, reviewerRawPreviewChars))
 	}
-	logging.From(ctx).Info("phone_a_friend", "needs_revision", parsed.NeedsRevision, "issues", parsed.Issues, "reasoning", summarizeForConsole(parsed.Reasoning, reviewerReasoningPreviewChars))
+	logging.From(ctx).Info("phone_a_friend: review result", "needs_revision", parsed.NeedsRevision, "issues", parsed.Issues, "reasoning", summarizeForConsole(parsed.Reasoning, reviewerReasoningPreviewChars))
 	if !parsed.NeedsRevision {
 		return nil, nil
 	}

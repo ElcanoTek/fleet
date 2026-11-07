@@ -137,7 +137,7 @@ func (db *Database) Conn() *sql.DB {
 func marshalJSON(v interface{}) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		slog.Warn("Warning: failed to marshal JSON (value type)", "err", err, "value", fmt.Sprintf("%T", v))
+		slog.Warn("Warning: failed to marshal JSON", "err", err, "value_type", fmt.Sprintf("%T", v))
 		return "[]"
 	}
 	return string(b)
@@ -149,7 +149,7 @@ func unmarshalStringSlice(s string) []string {
 	}
 	var result []string
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal string slice (input)", "err", err, "detail", fmt.Sprintf("%.100s", s))
+		slog.Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return []string{}
 	}
 	if result == nil {
@@ -164,7 +164,7 @@ func unmarshalMCPSelection(s string) models.MCPSelection {
 	}
 	var result models.MCPSelection
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal mcp_selection (input)", "err", err, "detail", fmt.Sprintf("%.100s", s))
+		slog.Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return models.MCPSelection{}
 	}
 	if result == nil {

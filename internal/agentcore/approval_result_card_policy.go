@@ -49,7 +49,7 @@ func buildResultCardSet(members []string, critical map[string]bool) (map[string]
 func installResultCardSet(members []string, critical map[string]bool) map[string]bool {
 	set, problems := buildResultCardSet(members, critical)
 	for _, problem := range problems {
-		slog.Info("agent_policy", "problem", problem)
+		slog.Info("agent_policy: config problem", "problem", problem)
 	}
 	return set
 }

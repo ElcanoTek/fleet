@@ -213,7 +213,7 @@ func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, statu
 		n, inLine, err := s.store.InputsAhead(ctx, row.ID)
 		switch {
 		case err != nil:
-			logging.From(ctx).Error("queue ack: count inputs ahead", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("queue ack: count inputs ahead failed", "conv_id", convID, "err", err)
 		case inLine:
 			input["ahead"] = n
 		}
@@ -322,7 +322,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		}
 		if rerr != nil {
 			// The mark still refuses the launch while it lives.
-			logging.From(r.Context()).Error("withdraw stopped input", "conv_id", conv.ID, "err", rerr)
+			logging.From(r.Context()).Error("withdraw stopped input failed", "conv_id", conv.ID, "err", rerr)
 		} else {
 			row.State = store.InputStateCancelled
 		}
@@ -487,7 +487,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
-		slog.Error("input queue claim", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		slog.Error("input queue claim failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		return
 	}
 	if row == nil {
@@ -499,7 +499,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 		// covers a winner whose tail already ran before our un-claim landed.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
-			slog.Error("input queue unclaim", "conv_id", safe.LogSafe(convID), "input", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
+			slog.Error("input queue unclaim failed", "conv_id", safe.LogSafe(convID), "input_id", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
 		}
 		rcancel()
 		s.rekickDrainAfter(convID, 2*time.Second)
@@ -751,7 +751,7 @@ func (s *Server) settleUnqueuedInput(user, convID, key string) {
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
 		}); err != nil {
-			logging.From(ctx).Error("settle unqueued input", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("settle unqueued input failed", "conv_id", convID, "err", err)
 			return false
 		}
 		return true

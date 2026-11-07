@@ -297,7 +297,7 @@ func (s *Server) claimApproved(ctx context.Context, user, convID string, a *stor
 		// Counts and staged positions only: the values are model-authored and
 		// may carry anything, so they never reach the log. The exact record is
 		// on the row (narrowed_json).
-		logging.From(ctx).Info("audit approved of approval in conversation; left out staged positions", "user", user, "approved_count", len(n.Approved), "staged_count", len(n.Staged), "detail", n.Arg, "approval", a.ID, "tool_name", a.ToolName, "conv_id", convID, "left_out_positions", n.leftOutPositions())
+		logging.From(ctx).Info("audit: approval narrowed", "user", user, "approved", len(n.Approved), "staged", len(n.Staged), "arg", n.Arg, "approval_id", a.ID, "tool", a.ToolName, "conv_id", convID, "left_out_positions", n.leftOutPositions())
 	}
 	return claimed, err
 }

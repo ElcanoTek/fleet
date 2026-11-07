@@ -248,7 +248,7 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		return
 	}
 	if marked {
-		logging.From(r.Context()).Info("audit stopped running approval in conversation", "user", user, "approval_id", approvalID, "tool_name", a.ToolName, "conv_id", convID)
+		logging.From(r.Context()).Info("audit: running approval stopped", "user", user, "approval_id", approvalID, "tool", a.ToolName, "conv_id", convID)
 	}
 	if !accepted {
 		// The call finished first: its outcome is being recorded without a

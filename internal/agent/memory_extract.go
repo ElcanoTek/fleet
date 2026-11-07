@@ -80,7 +80,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	}
 	model, err := m.modelResolver().Resolve(ctx, m.config.MemoryModel)
 	if err != nil {
-		logging.From(ctx).Error("ExtractMemories: resolve memory model", "memory_model", m.config.MemoryModel, "err", err)
+		logging.From(ctx).Error("ExtractMemories: resolve memory model failed", "memory_model", m.config.MemoryModel, "err", err)
 		return nil
 	}
 
@@ -118,7 +118,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		Timeout:     25 * time.Second,
 	})
 	if err != nil {
-		logging.From(ctx).Error("ExtractMemories", "err", err)
+		logging.From(ctx).Error("ExtractMemories: failed", "err", err)
 		return nil
 	}
 

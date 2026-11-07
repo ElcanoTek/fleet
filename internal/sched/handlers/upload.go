@@ -168,7 +168,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		logging.From(r.Context()).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 	}
 
-	logging.From(r.Context()).Info("File uploaded (size, checksum)", "filename", safe.LogSafe(filename), "size", size, "checksum", checksum)
+	logging.From(r.Context()).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", checksum)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
@@ -263,7 +263,7 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	// see.
 	if _, err := os.Stat(tempDir); err != nil {
 		if !os.IsNotExist(err) {
-			slog.Error("Error accessing temp uploads dir", "temp_dir", tempDir, "err", err)
+			slog.Error("Error accessing temp uploads dir", "dir", tempDir, "err", err)
 		}
 		return
 	}

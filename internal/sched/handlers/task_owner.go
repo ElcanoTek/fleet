@@ -139,7 +139,7 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	logging.From(ctx).Info("Task owner set (row(s) of its chain)", "task_id", taskID, "username", safe.LogSafe(owner.Username), "stop_label", safe.LogSafe(p.stopLabel()), "updated_count", len(updated))
+	logging.From(ctx).Info("Task owner set", "task_id", taskID, "owner", safe.LogSafe(owner.Username), "by", safe.LogSafe(p.stopLabel()), "chain_rows", len(updated))
 
 	task, err = h.storage.GetTask(taskID)
 	if err != nil || task == nil {

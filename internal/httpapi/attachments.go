@@ -134,7 +134,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
-			logging.From(r.Context()).Error("saveUpload", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))
+			logging.From(r.Context()).Error("saveUpload failed", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))
 			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -373,7 +373,7 @@ func (s *Server) validateAttachments(userEmail string, atts []chatAttachment) []
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
 			// %q for the same reason as above: still the pre-validation client string.
-			slog.Error("attachment rejected (stat)", "path", a.Path, "err", err)
+			slog.Error("attachment rejected (stat failed)", "path", a.Path, "err", err)
 			continue
 		}
 		a.Path = filepath.ToSlash(abs)
@@ -463,13 +463,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	}
 	root, err := filepath.Abs(uploadsRoot)
 	if err != nil {
-		slog.Error("attachment staging: resolve uploads root (attachments keep uploads paths)", "err", err)
+		slog.Error("attachment staging: resolve uploads root failed (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	root = filepath.Clean(root)
 	convDir, err := tools.EnsureWorkspaceDir(convID)
 	if err != nil {
-		slog.Error("attachment staging: workspace dir (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
+		slog.Error("attachment staging: workspace dir failed (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
 		return atts
 	}
 	// The sandbox can replace any child of its workspace with a symlink.
@@ -477,14 +477,14 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	// staging into another conversation or host files (including during copy).
 	workspace, err := os.OpenRoot(convDir)
 	if err != nil {
-		slog.Error("attachment staging: open workspace (attachments keep uploads paths)", "err", err)
+		slog.Error("attachment staging: open workspace failed (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	defer workspace.Close()
 	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
 	if err := workspace.MkdirAll(dir, 0o755); err != nil {
-		slog.Error("attachment staging: mkdir (attachments keep uploads paths)", "dir", dir, "err", err)
+		slog.Error("attachment staging: mkdir failed (attachments keep uploads paths)", "dir", dir, "err", err)
 		return atts
 	}
 	out := make([]chatAttachment, 0, len(atts))
@@ -493,13 +493,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 		if !ok {
 			// %q + CR/LF strip: on this branch Path is by definition a value
 			// that failed containment, so treat it as hostile in the log too.
-			slog.Info("attachment staging is outside the uploads root (kept unstaged)", "path", safe.LogSafe(a.Path))
+			slog.Info("attachment staging: attachment is outside the uploads root (kept unstaged)", "path", safe.LogSafe(a.Path))
 			out = append(out, a)
 			continue
 		}
 		dst, err := stageOneAttachment(workspace, dir, root, src, a)
 		if err != nil {
-			slog.Error("attachment staging (this attachment keeps its uploads path)", "name", safe.LogSafe(a.Name), "err", err)
+			slog.Error("attachment staging: staging failed (this attachment keeps its uploads path)", "name", safe.LogSafe(a.Name), "err", err)
 			out = append(out, a)
 			continue
 		}

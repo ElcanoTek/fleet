@@ -79,7 +79,7 @@ func (s *Server) rollbackCreatedConversation(user, convID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.Delete(ctx, user, convID); err != nil {
-		logging.From(ctx).Error("rollback created conversation", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("rollback created conversation failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 	}
 }
 

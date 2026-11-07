@@ -193,13 +193,13 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	var outsTruncated, discoveryFailed bool
 	if err != nil {
 		discoveryFailed = true
-		logging.From(ctx).Error("branch files: history", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("branch files: history failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(err.Error()))
 	} else {
 		var outs []outputFile
 		outs, outsTruncated, err = s.outputsFromHistory(copyCtx, src.ID, history)
 		if err != nil {
 			discoveryFailed = true
-			logging.From(ctx).Error("branch files: outputs", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("branch files: outputs failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(err.Error()))
 		} else {
 			// Re-checked before every file: the copy can take a while, and
 			// an owner who stops sharing (or archives) mid-copy has closed
@@ -217,14 +217,14 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 					}
 				}
 				if gerr != nil {
-					logging.From(ctx).Info("branch files: re-check", "src_id", safe.LogSafe(src.ID), "gerr", safe.LogSafe(gerr.Error()))
+					logging.From(ctx).Info("branch files: re-check failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
 				}
 				if gerr != nil || !ok {
 					return branchCopyClosed
 				}
 				excluded, gerr := s.store.ListOutputExclusions(copyCtx, src.ID)
 				if gerr != nil {
-					logging.From(ctx).Info("branch files: re-check exclusions", "src_id", safe.LogSafe(src.ID), "gerr", safe.LogSafe(gerr.Error()))
+					logging.From(ctx).Info("branch files: re-check exclusions failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
 					return branchCopyClosed
 				}
 				if excluded[p] {
@@ -243,7 +243,7 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), branchOriginRecordTimeout)
 	defer cancel()
 	if err := s.store.RecordBranchOrigin(recordCtx, branch.ID, origin); err != nil {
-		logging.From(ctx).Error("branch files: record origin", "branch_id", safe.LogSafe(branch.ID), "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("branch files: record origin failed", "branch_id", safe.LogSafe(branch.ID), "err", safe.LogSafe(err.Error()))
 	}
 	return &origin
 }

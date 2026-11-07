@@ -114,7 +114,7 @@ func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool)
 	if !changed {
 		return nil, false
 	}
-	slog.Info("agentcore: replaying tool call with a normalized input: the model's arguments were not a JSON object", "tool_call_id", tc.ToolCallID, "tool_name", tc.ToolName)
+	slog.Info("agentcore: replaying tool call with a normalized input: the model's arguments were not a JSON object", "tool_call_id", tc.ToolCallID, "tool", tc.ToolName)
 	tc.Input = normalized
 	return tc, true
 }

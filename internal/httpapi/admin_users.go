@@ -140,7 +140,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		s.setOpsRole(r, u.Email, *body.OpsRole)
 	}
 	// %q escapes CR/LF, so request-supplied values cannot forge a log line.
-	logging.From(r.Context()).Info("admin users: created", "email", u.Email, "role", u.Role, "context", userFromCtx(r.Context()))
+	logging.From(r.Context()).Info("admin users: created", "email", u.Email, "role", u.Role, "actor", userFromCtx(r.Context()))
 	writeJSONStatus(w, http.StatusCreated, s.toAdminUserAnnotated(r, *u))
 }
 
@@ -219,7 +219,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		}
 		return
 	}
-	logging.From(r.Context()).Info("admin users: password reset", "email", safe.LogSafe(email), "context", safe.LogSafe(userFromCtx(r.Context())))
+	logging.From(r.Context()).Info("admin users: password reset", "email", safe.LogSafe(email), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -312,6 +312,6 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	logging.From(r.Context()).Info("admin teams: renamed (users, projects)", "from", body.From, "detail", body.To, "users_n", usersN, "projects_n", projectsN, "context", userFromCtx(r.Context()))
+	logging.From(r.Context()).Info("admin teams: team renamed", "from", body.From, "to", body.To, "users", usersN, "projects", projectsN, "actor", userFromCtx(r.Context()))
 	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

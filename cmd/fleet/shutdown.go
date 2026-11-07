@@ -37,7 +37,7 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 				slog.Info("fleet: SIGINT received; shutting down immediately")
 				return false
 			case syscall.SIGUSR1:
-				slog.Info("fleet: status", "active_chat_turns", chatSrv.ActiveTurns(), "active_sched_tasks", pool.ActiveTasks(), "admission_inflight", lim.InFlight(), "total", lim.Total())
+				slog.Info("fleet: status", "active_chat_turns", chatSrv.ActiveTurns(), "active_sched_tasks", pool.ActiveTasks(), "admission_inflight", lim.InFlight(), "admission_total", lim.Total())
 			}
 		case err := <-errCh:
 			slog.Error("fleet: listener error; shutting down", "err", err)
@@ -65,7 +65,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		if chatSrv.DrainTurns(graceCtx) {
 			slog.Info("fleet: all in-flight chat turns drained within grace")
 		} else {
-			slog.Info("fleet: grace period expired; force-cancelled in-flight chat turn(s)", "grace", grace, "cancel_inflight_turns", chatSrv.CancelInflightTurns())
+			slog.Info("fleet: grace period expired; force-cancelled in-flight chat turns", "grace", grace, "cancelled", chatSrv.CancelInflightTurns())
 		}
 		// An approved card's call can outlive its POST (a long deal write
 		// answers "executing" and finishes detached), so the HTTP handler
@@ -86,7 +86,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		cancel()
 		pool.ForceCancel()
 		if n := chatSrv.CancelInflightTurns(); n > 0 {
-			slog.Info("fleet: cancelled in-flight chat turn(s)", "cancelled", n)
+			slog.Info("fleet: cancelled in-flight chat turns", "cancelled", n)
 		}
 		// Cancels pending timers and waits only for background work already
 		// running, so this stays an immediate path.

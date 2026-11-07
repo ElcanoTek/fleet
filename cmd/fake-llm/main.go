@@ -33,13 +33,13 @@ func main() {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", *addr)
 	if err != nil {
-		logging.Fatal("fake-llm: listen", "addr", *addr, "err", err)
+		logging.Fatal("fake-llm: listen failed", "addr", *addr, "err", err)
 	}
-	slog.Info("fake-llm: listening on http:// (chat-completions + models)", "addr", ln.Addr())
+	slog.Info("fake-llm: listening (chat-completions + models)", "addr", ln.Addr())
 
 	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 30 * time.Second}
 	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		logging.Fatal("fake-llm: serve", "err", err)
+		logging.Fatal("fake-llm: serve failed", "err", err)
 	}
 }
 

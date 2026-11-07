@@ -259,7 +259,7 @@ func warnUserTokenFromEnv(name string) {
 	if _, seen := userTokenEnvWarned.LoadOrStore(name, true); seen {
 		return
 	}
-	slog.Warn("clientconfig: warning: the process env value names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so is treated as unset (see docs/MCP-BUNDLE-ENV.md)", "name", name)
+	slog.Warn("clientconfig: warning: a process env value names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so the variable is treated as unset (see docs/MCP-BUNDLE-ENV.md)", "name", name)
 }
 
 // matchBrace returns the index of the '}' that closes the '{' at position open

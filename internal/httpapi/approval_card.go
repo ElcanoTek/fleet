@@ -317,12 +317,12 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	server, _, err := resolveMCPTool(catalog, toolName)
 	if err != nil {
-		slog.Error("approval card: resolve", "tool_name", toolName, "err", redactedForLog(err))
+		slog.Error("approval card: resolve failed", "tool", toolName, "err", redactedForLog(err))
 		return "", cardFallbackUnresolved
 	}
 	describer, ok := resolveDescriber(catalog, server, suffix)
 	if !ok {
-		slog.Info("approval card: no single describer on server", "suffix", suffix, "server", server, "tool_name", toolName)
+		slog.Info("approval card: no single describer found on the server", "suffix", suffix, "server", server, "tool", toolName)
 		return "", cardFallbackUnresolved
 	}
 	// Re-check the describer's identity at call time, under the one policy
@@ -335,7 +335,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 		readOnly = agentcore.IsParallelSafeTool("mcp_" + seat.Server + "_" + describer)
 	}
 	if agentcore.IsCriticalTool(full) || !readOnly {
-		slog.Info("approval card: describer is critical or not parallel-safe; not called", "full", full)
+		slog.Info("approval card: describer is critical or not parallel-safe; not called", "describer", full)
 		return "", cardFallbackUnresolved
 	}
 	// The loop's other per-call gates apply too. A persona that does not
@@ -349,7 +349,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	persona := a.personaPolicy
 	a.mcpMu.RUnlock()
 	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) || agentcore.InteractiveHiddenTool(full) {
-		slog.Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "full", full)
+		slog.Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", full)
 		return "", cardFallbackGated
 	}
 	var args map[string]any
@@ -361,22 +361,22 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	text, isErr, err := broker.CallMCP(ctx, server, describer, args)
 	switch {
 	case err != nil && (errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil):
-		logging.From(ctx).Info("approval card: describer timed out after", "full", full, "approval_card_describer_timeout", approvalCardDescriberTimeout)
+		logging.From(ctx).Info("approval card: describer timed out", "describer", full, "timeout", approvalCardDescriberTimeout)
 		return "", cardFallbackTimeout
 	case err != nil:
-		logging.From(ctx).Error("approval card: describer", "full", full, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval card: describer failed", "describer", full, "err", redactedForLog(err))
 		return "", cardFallbackError
 	case isErr:
-		logging.From(ctx).Error("approval card: describer reported an error", "full", full)
+		logging.From(ctx).Error("approval card: describer reported an error", "describer", full)
 		return "", cardFallbackError
 	}
 	_, canonical, err := parseApprovalCard([]byte(strings.TrimSpace(text)))
 	if err != nil {
-		logging.From(ctx).Error("approval card: describer output refused", "full", full, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval card: describer output refused", "describer", full, "err", redactedForLog(err))
 		return "", cardFallbackInvalid
 	}
 	if tools.RedactionWouldAlter(canonical) {
-		logging.From(ctx).Info("approval card: describer output carries a secret-like value; card withheld", "full", full)
+		logging.From(ctx).Info("approval card: describer output carries a secret-like value; card withheld", "describer", full)
 		return "", cardFallbackRedacted
 	}
 	return string(canonical), ""

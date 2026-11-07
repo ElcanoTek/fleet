@@ -438,7 +438,7 @@ func removeTopLevelSpecialFiles(run *os.Root) error {
 		if err := run.Remove(e.Name()); err != nil {
 			return fmt.Errorf("remove planted %s %s: %w", e.Type(), e.Name(), err)
 		}
-		slog.Info("mcp workspace: removed planted", "type", e.Type(), "name", e.Name(), "run", run.Name())
+		slog.Info("mcp workspace: removed planted entry", "type", e.Type(), "name", e.Name(), "run", run.Name())
 	}
 	return nil
 }

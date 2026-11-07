@@ -89,7 +89,7 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 	if err := ensureWorktreeExcluded(workspaceRoot); err != nil {
 		// Non-fatal: a polluted `git status` in the main tree is cosmetic, not a
 		// correctness problem. Log and continue.
-		logging.From(ctx).Error("scheduled worktree: could not add to git exclude", "worktree_subdir", worktreeSubdir, "err", err)
+		logging.From(ctx).Error("scheduled worktree: could not add to git exclude", "path", worktreeSubdir, "err", err)
 	}
 	wtPath = filepath.Join(parent, fmt.Sprintf("%s-%s", task.ID, runID))
 
@@ -109,7 +109,7 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitCmdTimeout)
 		defer cancel()
 		if out, rErr := runGit(cctx, workspaceRoot, "worktree", "remove", "--force", wtPath); rErr != nil {
-			logging.From(ctx).Error("scheduled worktree: remove failed", "wt_path", wtPath, "err", rErr, "detail", out)
+			logging.From(ctx).Error("scheduled worktree: remove failed", "path", wtPath, "err", rErr, "output", out)
 			// Fall through to branch deletion anyway; a leftover dir is reclaimed
 			// later by the server's maintenance loop (or `fleet worktree prune`).
 		}
@@ -117,7 +117,7 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 		// run away, so leaving one branch per run would accumulate ref litter.
 		// Operators who want to keep the work set auto_cleanup:false instead.
 		if out, bErr := runGit(cctx, workspaceRoot, "branch", "-D", branch); bErr != nil {
-			logging.From(ctx).Error("scheduled worktree: delete branch failed", "branch", branch, "err", bErr, "detail", out)
+			logging.From(ctx).Error("scheduled worktree: delete branch failed", "branch", branch, "err", bErr, "output", out)
 		}
 	}
 	return wtPath, branch, cleanup, nil

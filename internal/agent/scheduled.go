@@ -867,7 +867,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// run has a different one, so an outage of the judging model does
 			// not decide the run (endOfRunVerifierRetryModel).
 			retryModel := p.agent.endOfRunVerifierRetryModel()
-			logging.From(ctx).Warn("verifier failed, retrying once", "verifier_retry_delay", verifierRetryDelay, "model", retryModel.Model(), "err", err)
+			logging.From(ctx).Warn("verifier failed, retrying once", "retry_in", verifierRetryDelay, "model", retryModel.Model(), "err", err)
 			firstOutage := !errors.Is(err, errVerifierMalformedVerdict) && ctx.Err() == nil
 			if sleepCtx(ctx, verifierRetryDelay) {
 				missing, err = p.agent.runEndOfRunVerifierWith(ctx, retryModel, p.task, p.latestRunText(), records)
@@ -955,7 +955,7 @@ func (p *scheduledPolicy) completionPredicateTool() string {
 // the fleet.completion_predicate event for the tool that satisfied the
 // predicate.
 func (p *scheduledPolicy) recordCompletionPredicate(tool string) {
-	slog.Warn("Completion predicate satisfied; skipping the end-of-run verifier and phone-a-friend review", "tool", tool)
+	slog.Info("Completion predicate satisfied; skipping the end-of-run verifier and phone-a-friend review", "tool", tool)
 	t := messageTypeCompletionPredicate
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
 		"[completion_predicate] satisfied by %s — the task's EXECUTION REQUIREMENTS completion clause lists it and it executed successfully, so the end-of-run verifier and the phone-a-friend review were skipped",
@@ -1214,7 +1214,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 			// persisted and operator-visible, so it is the larger half.
 			msg := agentcore.RedactSecrets(retErr.Error())
 			a.logSession.AddMessageWithMetadata(roleUser, "[fatal] "+msg, nil, nil, &t, nil, nil, "")
-			logging.From(ctx).Error("Execute returning error", "detail", msg)
+			logging.From(ctx).Error("Execute returning error", "err", msg)
 		}
 	}()
 

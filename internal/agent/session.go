@@ -642,26 +642,26 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 			// echoed chatAttachment field and is never sanitized —
 			// sanitizeFilename runs at upload time, but /chat re-accepts the
 			// client's own JSON and re-validates only Path. %q escapes CR/LF.
-			slog.Warn("loadImageAttachments: skipping (over cap)", "name", safe.LogSafe(a.Name), "max_images", maxImages)
+			slog.Warn("loadImageAttachments: skipping attachment (over the image cap)", "name", safe.LogSafe(a.Name), "max_images", maxImages)
 			continue
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, a.Path)
 		if !ok {
-			slog.Info("loadImageAttachments is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
+			slog.Info("loadImageAttachments: attachment is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			slog.Error("loadImageAttachments: stat", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
+			slog.Error("loadImageAttachments: stat failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Info("loadImageAttachments is bytes (> cap)", "path", safe.LogSafe(a.Path), "size", info.Size(), "max_bytes_per_file", maxBytesPerFile)
+			slog.Info("loadImageAttachments: attachment exceeds the size cap", "path", safe.LogSafe(a.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			slog.Error("loadImageAttachments: read", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
+			slog.Error("loadImageAttachments: read failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
 			continue
 		}
 		mt := strings.TrimSpace(a.MediaType)
@@ -698,21 +698,21 @@ func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.Fi
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, r.Path)
 		if !ok {
-			slog.Info("loadHistoryImageParts is outside the uploads root (image dropped from replay)", "path", safe.LogSafe(r.Path))
+			slog.Info("loadHistoryImageParts: image is outside the uploads root (dropped from replay)", "path", safe.LogSafe(r.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			slog.Error("loadHistoryImageParts: stat (image dropped from replay)", "path", safe.LogSafe(r.Path), "err", err)
+			slog.Error("loadHistoryImageParts: stat failed (image dropped from replay)", "path", safe.LogSafe(r.Path), "err", err)
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Info("loadHistoryImageParts is bytes (> cap)", "path", safe.LogSafe(r.Path), "size", info.Size(), "max_bytes_per_file", maxBytesPerFile)
+			slog.Info("loadHistoryImageParts: image exceeds the size cap", "path", safe.LogSafe(r.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			slog.Error("loadHistoryImageParts: read", "path", safe.LogSafe(r.Path), "err", err)
+			slog.Error("loadHistoryImageParts: read failed", "path", safe.LogSafe(r.Path), "err", err)
 			continue
 		}
 		mt := strings.TrimSpace(r.MediaType)

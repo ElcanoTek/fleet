@@ -602,7 +602,7 @@ var taskColumnRegistry = []taskColumn{
 				if sid, perr := uuid.Parse(b.sourceTaskID.String); perr == nil {
 					t.SourceTaskID = &sid
 				} else {
-					slog.Warn("Warning: invalid source_task_id", "string", b.sourceTaskID.String, "err", perr)
+					slog.Warn("Warning: invalid source_task_id", "value", b.sourceTaskID.String, "err", perr)
 				}
 			}
 		},
@@ -651,7 +651,7 @@ var taskColumnRegistry = []taskColumn{
 				if cid, perr := uuid.Parse(b.createdByTaskID.String); perr == nil {
 					t.CreatedByTaskID = &cid
 				} else {
-					slog.Warn("Warning: invalid created_by_task_id", "string", b.createdByTaskID.String, "err", perr)
+					slog.Warn("Warning: invalid created_by_task_id", "value", b.createdByTaskID.String, "err", perr)
 				}
 			}
 		},
@@ -1077,7 +1077,7 @@ var taskColumnRegistry = []taskColumn{
 				if pid, perr := uuid.Parse(b.previousOccurrenceID.String); perr == nil {
 					t.PreviousOccurrenceID = &pid
 				} else {
-					slog.Warn("Warning: invalid previous_occurrence_id", "string", b.previousOccurrenceID.String, "err", perr)
+					slog.Warn("Warning: invalid previous_occurrence_id", "value", b.previousOccurrenceID.String, "err", perr)
 				}
 			}
 		},

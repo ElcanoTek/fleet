@@ -54,7 +54,7 @@ func logPassed(op, detail string, err error, told string) {
 		return
 	}
 	scrubbed := brokerRedactor().Redact(err.Error())
-	slog.Warn("mcpbroker: call failed (passed to the caller as told)", "op", op, "told", told, "detail", detail, "err", scrubbed)
+	slog.Warn("mcpbroker: call failed (passed to the caller with a safe message)", "op", op, "told", told, "detail", detail, "err", scrubbed)
 }
 
 // RegisterSecretLiteral adds a runtime-acquired secret — a per-user OAuth

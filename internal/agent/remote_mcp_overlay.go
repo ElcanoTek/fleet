@@ -827,7 +827,7 @@ func (o *RemoteMCPOverlay) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), remoteMCPOverlayCloseTimeout)
 		defer cancel()
 		if err := o.CloseScope(ctx); err != nil {
-			logging.From(ctx).Error("remote-mcp: close overlay scope", "err", err)
+			logging.From(ctx).Error("remote-mcp: close overlay scope failed", "err", err)
 		}
 	}
 	if o.Client != nil {
@@ -868,7 +868,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		// A pinned seat that is not connected: never fall back to another
 		// account under the same name — surface it so the owner can connect
 		// (or re-pin) it.
-		logging.From(ctx).Warn("remote-mcp: skipping — the pinned seat is not connected", "name", name, "email", email)
+		logging.From(ctx).Warn("remote-mcp: skipping server — the pinned seat is not connected", "reg_name", name, "user", email)
 		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0
@@ -886,7 +886,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// Past the cap: record every one (the notice names them, and a
 			// pinned name here is "left out", not "unknown"), log once.
 			if !capLogged {
-				logging.From(ctx).Warn("remote-mcp: overlay cap reached — skipping and every further server", "max_overlay_servers", maxOverlayServers, "email", email, "reg_name", regName)
+				logging.From(ctx).Warn("remote-mcp: overlay cap reached — skipping this and every further server", "max_servers", maxOverlayServers, "user", email, "reg_name", regName)
 				capLogged = true
 			}
 			overlay.skipConn(conn, SkipReasonOverlayCap)
@@ -895,19 +895,19 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		if conn.Owner != "" {
 			// Attribution for shared connections: the run belongs to email, but
 			// tool calls authenticate with the OWNER's token host-side.
-			logging.From(ctx).Info("remote-mcp: run uses shared server owned", "email", email, "reg_name", regName, "owner", conn.Owner)
+			logging.From(ctx).Info("remote-mcp: run uses a shared server", "user", email, "reg_name", regName, "owner", conn.Owner)
 		}
 		bearer, terr := resolver.AcquireTokenByID(ctx, email, conn.ID)
 		if terr != nil {
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
-			logging.From(ctx).Warn("remote-mcp: skipping server — token unavailable", "reg_name", regName, "email", email)
+			logging.From(ctx).Warn("remote-mcp: skipping server — token unavailable", "reg_name", regName, "user", email)
 			overlay.skipConn(conn, tokenSkipReason(terr))
 			continue
 		}
 		if conn.Transport == "http_tools" || conn.Transport == "playwright" {
 			if cerr := mountCustomRemoteConnector(client, regName, conn, bearer, httpClient); cerr != nil {
-				logging.From(ctx).Warn("remote-mcp: skipping custom connector", "reg_name", regName, "email", email, "connect_failure_reason", connectFailureReason(bearer, cerr))
+				logging.From(ctx).Warn("remote-mcp: skipping custom connector", "reg_name", regName, "user", email, "reason", connectFailureReason(bearer, cerr))
 				overlay.skipConn(conn, SkipReasonUnknown)
 				continue
 			}
@@ -946,7 +946,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// "failed to connect" left the GitHub verification in #1006 blind
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
-			logging.From(ctx).Warn("remote-mcp: skipping server — failed to connect", "reg_name", regName, "email", email, "connect_failure_reason", connectFailureReason(bearer, aerr))
+			logging.From(ctx).Warn("remote-mcp: skipping server — failed to connect", "reg_name", regName, "user", email, "reason", connectFailureReason(bearer, aerr))
 			overlay.skipConn(conn, connectSkipReason(aerr))
 			failure := agentcore.NewMCPConnectFailure(regName, aerr)
 			// The summary never quotes a URL or body, but a vendor's own

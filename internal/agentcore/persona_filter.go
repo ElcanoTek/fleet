@@ -87,7 +87,7 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 		}
 		out = append(out, t)
 	}
-	slog.Info("persona tool policy tools offered (blocked)", "persona", persona, "out_count", len(out), "all_count", len(all), "blocked", blocked)
+	slog.Info("persona tool policy applied", "persona", persona, "offered", len(out), "total", len(all), "blocked", blocked)
 	return out
 }
 

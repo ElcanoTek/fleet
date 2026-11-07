@@ -134,7 +134,7 @@ func mcpReloadHandler(mgr *agent.Manager) http.HandlerFunc {
 // logMCPReload logs the outcome of a SIGHUP-triggered MCP reload.
 func logMCPReload(summary *mcp.ReloadSummary, err error) {
 	if err != nil {
-		slog.Error("mcp reload (SIGHUP): error", "err", err)
+		slog.Error("mcp reload (SIGHUP): failed", "err", err)
 		return
 	}
 	slog.Info("mcp reload (SIGHUP)", "added", len(summary.Added), "removed", len(summary.Removed), "restarted", len(summary.Restarted), "unchanged", len(summary.Unchanged))
@@ -143,11 +143,14 @@ func logMCPReload(summary *mcp.ReloadSummary, err error) {
 // logConfigReload logs the outcome of a SIGUSR2-triggered reload.
 func logConfigReload(result config.ReloadResult, err error) {
 	if err != nil {
-		slog.Error("config reload (SIGUSR2): error", "err", err)
+		slog.Error("config reload (SIGUSR2): failed", "err", err)
 		return
 	}
-	slog.Error("config reload (SIGUSR2) changed, skipped, error(s)", "changed_count", len(result.Changed), "skipped_count", len(result.Skipped), "errors_count", len(result.Errors))
+	slog.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
 	for _, ch := range result.Changed {
-		slog.Info("config reload", "key", ch.Key, "old", ch.Old, "new", ch.New)
+		slog.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
+	}
+	for _, e := range result.Errors {
+		slog.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
 	}
 }

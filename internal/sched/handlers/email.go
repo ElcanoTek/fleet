@@ -86,7 +86,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 	if triggerSlugShape.MatchString(slug) {
 		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-			logging.From(r.Context()).Error("email trigger lookup error for slug", "slug", safe.LogSafe(slug), "err", lookupErr)
+			logging.From(r.Context()).Error("email trigger lookup error", "slug", safe.LogSafe(slug), "err", lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

@@ -390,13 +390,13 @@ func storeApprovalResultCard(ctx context.Context, st chatStore, user, approvalID
 	card, ok, reason := extractResultCard(governed)
 	if !ok {
 		if reason != "" {
-			logging.From(ctx).Error("approval result card result card refused", "tool_name", toolName, "reason", reason)
+			logging.From(ctx).Error("approval result card: refused", "tool", toolName, "reason", reason)
 		}
 		return nil
 	}
 	stored, err := st.SetApprovalResultCard(ctx, user, approvalID, string(card))
 	if err != nil || !stored {
-		logging.From(ctx).Error("approval result card: not stored", "tool_name", toolName, "stored", stored, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval result card: not stored", "tool", toolName, "stored", stored, "err", redactedForLog(err))
 		return nil
 	}
 	return card

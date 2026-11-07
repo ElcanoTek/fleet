@@ -139,7 +139,7 @@ func main() {
 		// the connector secrets + MCP subprocesses and serves delegated MCP calls
 		// back to a parent fleet process. No HTTP servers / scheduler.
 		if err := runMCPBroker(); err != nil {
-			logging.Fatal("fleet mcp-broker", "err", err)
+			logging.Fatal("fleet mcp-broker: failed", "err", err)
 		}
 	case invokeValidateConfig:
 		// Preflight checks (#248) against the SAME loaders the server boots through;
@@ -173,7 +173,7 @@ func main() {
 			os.Exit(code)
 		}
 		if err := run(); err != nil {
-			logging.Fatal("fleet", "err", err)
+			logging.Fatal("fleet: failed", "err", err)
 		}
 	default: // invokeAdmin
 		// The admin CLI builds tasks through models.NewTask in a process that
@@ -372,10 +372,10 @@ func run() error {
 	}
 	if logCloser != nil {
 		defer logCloser.Close()
-		slog.Info("logging: file sink enabled", "file", cfg.Log.File, "max_size_mb", cfg.Log.MaxSizeMB, "max_age_d", cfg.Log.MaxAgeDays, "max_backups", cfg.Log.MaxBackups, "compress", cfg.Log.Compress)
+		slog.Info("logging: file sink enabled", "file", cfg.Log.File, "max_size_mb", cfg.Log.MaxSizeMB, "max_age_days", cfg.Log.MaxAgeDays, "max_backups", cfg.Log.MaxBackups, "compress", cfg.Log.Compress)
 	}
 
-	slog.Info("client config", "bundle", bundle.Dir, "app", bundle.Branding.AppName, "mcp_catalog", len(bundle.MCPCatalog))
+	slog.Info("client config: loaded", "bundle", bundle.Dir, "app", bundle.Branding.AppName, "mcp_catalog", len(bundle.MCPCatalog))
 	// The MCP catalog comes from the bundle manifest, gated on the now-loaded
 	// process env.
 	cfg.MCPServers = bundle.MCPServerConfigs()
@@ -478,7 +478,7 @@ func run() error {
 	// cap is genuinely box-wide.
 	agentLimiter := admission.New(cfg.MaxConcurrentAgents, admission.DefaultReserved(cfg.MaxConcurrentAgents))
 	// Args are ints (%d) from operator-set FLEET_MAX_CONCURRENT_AGENTS — no CR/LF, no log-injection vector.
-	slog.Info("admission", "total", agentLimiter.Total(), "scheduled_max", agentLimiter.SchedulableSlots(), "interactive_reserved", agentLimiter.Total()-agentLimiter.SchedulableSlots())
+	slog.Info("admission: limits set", "total", agentLimiter.Total(), "scheduled_max", agentLimiter.SchedulableSlots(), "interactive_reserved", agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
 	// ── DB pools (both self-migrate on open) ──
 	// cfg's DSNs come from config.ResolveDSNs: one database, the chat store
@@ -523,9 +523,9 @@ func run() error {
 			n, err := chatStore.BackfillSearchContent(bfCtx)
 			switch {
 			case err != nil:
-				slog.Error("search backfill (after rows)", "err", err, "count", n)
+				slog.Error("search backfill: failed", "err", err, "indexed", n)
 			case n > 0:
-				slog.Info("search backfill: indexed pre-existing message(s)", "indexed", n)
+				slog.Info("search backfill: indexed pre-existing messages", "indexed", n)
 			}
 		})
 	} else {
@@ -741,7 +741,7 @@ func run() error {
 	// boot instead of waiting an hour for the maintenance pass. Best-effort:
 	// a degraded library must not brick boot — Sync runs again every pass.
 	if err := chatSrv.SyncSharedFiles(context.Background()); err != nil {
-		slog.Warn("shared files: boot sync (the hourly maintenance pass will retry)", "err", err)
+		slog.Warn("shared files: boot sync failed (the hourly maintenance pass will retry)", "err", err)
 	}
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
@@ -923,7 +923,7 @@ func run() error {
 		SharedFilesPrompt: func(ctx context.Context) string {
 			files, err := chatStore.ListSharedFiles(ctx)
 			if err != nil {
-				logging.From(ctx).Error("shared files: list for scheduled prompt block", "err", err)
+				logging.From(ctx).Error("shared files: list for scheduled prompt block failed", "err", err)
 				return ""
 			}
 			return sharedfiles.PromptBlock(files)
@@ -985,7 +985,7 @@ func run() error {
 		// unattended runs, and chat is how an operator fixes it.
 		AdmitScheduled: diskAdmissionGate(diskGuard),
 	})
-	slog.Info("worker pool: scheduled (shared box-wide limiter)", "cap", pool.Cap())
+	slog.Info("worker pool: scheduled task cap set (shared box-wide limiter)", "cap", pool.Cap())
 
 	// Wire the live SSE run-log stream (#200): GET /tasks/{id}/stream attaches a
 	// client to the pool's per-task event buffer for an in-progress task. The two
@@ -1136,9 +1136,9 @@ func run() error {
 			case <-ticker.C:
 				sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				if n, err := chatSrv.SweepExpiredApprovals(sweepCtx); err != nil {
-					logging.From(ctx).Error("approval expiry sweep", "err", err)
+					logging.From(ctx).Error("approval expiry sweep: failed", "err", err)
 				} else if n > 0 {
-					logging.From(ctx).Info("approval expiry sweep: auto-denied timed-out approval(s)", "auto_denied", n)
+					logging.From(ctx).Info("approval expiry sweep: auto-denied timed-out approvals", "auto_denied", n)
 				}
 				cancel()
 			}
@@ -1159,7 +1159,7 @@ func run() error {
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
 	grace := shutdownGrace(cfg)
-	logging.From(ctx).Info("fleet: shutdown grace (FLEET_SHUTDOWN_GRACE_SECONDS)", "grace", grace)
+	logging.From(ctx).Info("fleet: shutdown grace configured (FLEET_SHUTDOWN_GRACE_SECONDS)", "grace", grace)
 	sdNotify("READY=1")
 
 	// Block until a terminal signal / listener error decides graceful vs immediate,
@@ -1181,7 +1181,7 @@ func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
 			case <-ticker.C:
 				sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				if _, err := chatSrv.SweepDueChatSchedules(sweepCtx); err != nil {
-					logging.From(ctx).Error("chat schedule sweep", "err", err)
+					logging.From(ctx).Error("chat schedule sweep: failed", "err", err)
 				}
 				cancel()
 			}
@@ -1356,7 +1356,7 @@ func toDBPoolStats(s sql.DBStats) metrics.DBPoolStats {
 // cancels active runs; in-flight rows persist their outcome best-effort.
 func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *handlers.Handlers) *datasets.Runner {
 	if err := schedStorage.ResetStaleRunningDatasets(context.Background()); err != nil {
-		slog.Error("dataset boot sweep", "err", err)
+		slog.Error("dataset boot sweep: failed", "err", err)
 	}
 	datasetRunner := datasets.New(schedStorage, mgr)
 	datasetRunner.SetDrainCheck(httpapi.UpdateDrainActive)
@@ -1398,7 +1398,7 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 	// Where central Auth manages accounts it alone grants the Ops role; seeding
 	// at every boot would restore access Auth took away (ADR-0095).
 	if managedByAuth {
-		slog.Warn("orchestrator bootstrap admins ignored: accounts are managed in central Auth (configured; grant Fleet Admin there instead)", "admins_count", len(admins))
+		slog.Warn("orchestrator bootstrap admins ignored: accounts are managed in central Auth; grant Fleet Admin there instead", "configured", len(admins))
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1408,7 +1408,7 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
 		}
 	}
-	logging.From(ctx).Info("orchestrator bootstrap admin(s) ensured", "admins_count", len(admins))
+	logging.From(ctx).Info("orchestrator bootstrap admins ensured", "count", len(admins))
 	return nil
 }
 
@@ -1553,7 +1553,7 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 				// as a 401 on the first turn. Names the provider only: nothing
 				// read through APIKeyEnv reaches a log line, so the variable's
 				// name (in the manifest entry) is not printed either.
-				slog.Warn("WARNING: bundle provider: its api_key_env variable is unset or empty, so it has no API key", "provider", strings.TrimSpace(p.Name))
+				slog.Warn("WARNING: bundle provider has no API key: its api_key_env variable is unset or empty", "provider", strings.TrimSpace(p.Name))
 			}
 		}
 		warnUndeclaredContextWindow("bundle", strings.TrimSpace(p.Name), strings.TrimSpace(p.Type), p.ContextWindowTokens,
@@ -1671,7 +1671,7 @@ func warnUndeclaredContextWindow(source, name, typ string, window int, fix strin
 	if window > 0 || agentcore.ProviderType(typ) == agentcore.ProviderTypeOpenRouter {
 		return
 	}
-	slog.Warn("WARNING: provider declares no context window, so it runs on the conservative fallback (32,000 tokens; 4,096 for Ollama), which is below what a turn reserves with the default tool set: its chat turns will fail before sending", "source", source, "provider", name, "type", typ, "fix", fix)
+	slog.Warn("WARNING: provider declares no context window, so it runs on the conservative fallback (32,000 tokens; 4,096 for Ollama), which is below what a turn reserves with the default tool set: its chat turns will fail before sending", "config_source", source, "provider", name, "type", typ, "fix", fix)
 }
 
 // personaKey normalizes a persona reference to its bare basename — stripping any
@@ -1745,16 +1745,16 @@ func pruneOrphanedSandboxes(pool *sandbox.Pool) {
 	if kb := pool.KubernetesBackend(); kb != nil {
 		// Kubernetes backend (#989): orphans are pods, not podman containers.
 		if n, err := kb.PruneOrphanedPods(pruneCtx); err != nil {
-			slog.Error("startup: prune orphaned sandbox pods", "err", err)
+			slog.Error("startup: prune orphaned sandbox pods failed", "err", err)
 		} else if n > 0 {
-			slog.Info("startup: pruned orphaned sandbox pod(s) from a prior run", "pruned", n)
+			slog.Info("startup: pruned orphaned sandbox pods from a prior run", "pruned", n)
 		}
 		return
 	}
 	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
-		slog.Error("startup: prune orphaned sandbox containers", "err", err)
+		slog.Error("startup: prune orphaned sandbox containers failed", "err", err)
 	} else if n > 0 {
-		slog.Info("startup: pruned orphaned sandbox container(s) from a prior run", "pruned", n)
+		slog.Info("startup: pruned orphaned sandbox containers from a prior run", "pruned", n)
 	}
 }
 
@@ -1775,7 +1775,7 @@ func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
 		slog.Info("sandbox: runtime resolved (podman OCI runtime name)", "sandbox_runtime", cfg.SandboxRuntime)
 	}
 	if cfg.SandboxBackend == sandbox.BackendKubernetes {
-		slog.Info("sandbox: backend resolved (control plane and runners split — pods in namespace)", "sandbox_backend", cfg.SandboxBackend, "default_string", defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
+		slog.Info("sandbox: backend resolved (control plane and runners split)", "sandbox_backend", cfg.SandboxBackend, "namespace", defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	}
 	return nil
 }
@@ -1845,12 +1845,12 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 		return
 	}
 	st := guard.Sample()
-	slog.Info("disk backpressure: ON (floor free; scheduled work pauses below it, chat is never gated)", "disk_min_free_percent_pct", cfg.DiskMinFreePercent, "data_dir", cfg.DataDir)
+	slog.Info("disk backpressure: ON (scheduled work pauses below the free-space floor; chat is never gated)", "min_free_pct", cfg.DiskMinFreePercent, "data_dir", cfg.DataDir)
 	switch {
 	case !st.Available:
-		slog.Error("⚠ disk backpressure: cannot measure — failing OPEN, scheduled work will not be held back", "data_dir", cfg.DataDir, "err", st.Err)
+		slog.Error("⚠ disk backpressure: cannot measure free space — failing OPEN, scheduled work will not be held back", "data_dir", cfg.DataDir, "err", st.Err)
 	case st.Shedding:
-		slog.Info("⚠ disk backpressure: only free at boot — scheduled tasks are held back until space is reclaimed", "free_percent_pct", fmt.Sprintf("%.1f", st.FreePercent), "data_dir", cfg.DataDir)
+		slog.Warn("⚠ disk backpressure: low free space at boot — scheduled tasks are held back until space is reclaimed", "free_pct", fmt.Sprintf("%.1f", st.FreePercent), "data_dir", cfg.DataDir)
 	}
 }
 
@@ -2011,14 +2011,14 @@ func pruneStaleWorktrees(ctx context.Context, cfg *config.Config) {
 	root := worktree.ResolveWorkspaceRoot(cfg.WorkspaceRoot)
 	res, err := worktree.PruneStale(ctx, root, cfg.WorktreePruneAge, false)
 	for _, w := range res.Warnings {
-		logging.From(ctx).Info("maintenance: worktree prune", "detail", w)
+		logging.From(ctx).Warn("maintenance: worktree prune warning", "warning", w)
 	}
 	if err != nil {
-		logging.From(ctx).Error("maintenance: worktree prune", "err", err)
+		logging.From(ctx).Error("maintenance: worktree prune failed", "err", err)
 		return
 	}
 	if n := res.Count(); n > 0 {
-		logging.From(ctx).Info("maintenance: reclaimed stale worktree dir(s) older", "reclaimed", n, "worktree_prune_age", cfg.WorktreePruneAge)
+		logging.From(ctx).Info("maintenance: reclaimed stale worktree dirs", "reclaimed", n, "older_than", cfg.WorktreePruneAge)
 	}
 }
 
@@ -2043,9 +2043,9 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 	} else if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
 		// No chat plane to run the full pass: the attachment tree is still
 		// shared with the orchestrator upload path, so sweep it directly.
-		logging.From(ctx).Error("maintenance: attachments", "err", err)
+		logging.From(ctx).Error("maintenance: attachment sweep failed", "err", err)
 	} else if n > 0 {
-		logging.From(ctx).Info("maintenance: removed expired attachment file(s)", "removed", n)
+		logging.From(ctx).Info("maintenance: removed expired attachment files", "removed", n)
 	}
 
 	// Orchestrator temp_uploads — the sched plane's own upload staging area,
@@ -2057,7 +2057,7 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 	// rows so the table does not grow forever on a box with many connectors.
 	if chatStore != nil {
 		if _, err := chatStore.SweepExpiredOAuthFlows(passCtx); err != nil {
-			logging.From(ctx).Error("maintenance: remote-mcp oauth flow sweep", "err", err)
+			logging.From(ctx).Error("maintenance: remote-mcp oauth flow sweep failed", "err", err)
 		}
 	}
 
@@ -2303,18 +2303,18 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
 	if err != nil {
-		slog.Error("stranded-turn recovery (recovered before failing)", "err", err, "recovered_count", len(recovered))
+		slog.Error("stranded-turn recovery: failed", "err", err, "recovered", len(recovered))
 	}
 	for _, r := range recovered {
-		slog.Info("stranded-turn recovery: turn (conv) projected entries, unknown-outcome tool calls", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "synthesized", r.Synthesized)
+		slog.Info("stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
 	}
 	// Outcomes must follow recovered calls. The store excludes conversations
 	// still containing running turns, so one failed recovery cannot strand
 	// otherwise-safe approvals in unrelated conversations.
 	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
-		slog.Error("stranded-approval recovery", "err", err)
+		slog.Error("stranded-approval recovery: failed", "err", err)
 	} else if count > 0 {
-		slog.Info("stranded-approval recovery unknown outcomes", "count", count)
+		slog.Info("stranded-approval recovery: recorded unknown outcomes", "count", count)
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,
@@ -2324,9 +2324,9 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	// restart must not start unattended LLM spend).
 	requeued, completed, cancelled, qerr := chatStore.RecoverInputQueue(recCtx)
 	if qerr != nil {
-		slog.Error("input-queue recovery", "err", qerr)
+		slog.Error("input-queue recovery: failed", "err", qerr)
 	} else if requeued+completed+cancelled > 0 {
-		slog.Info("input-queue recovery input(s) re-queued, completed, cancelled (post-injection side effects; not re-run)", "requeued", requeued, "completed", completed, "cancelled", cancelled)
+		slog.Info("input-queue recovery: inputs resolved (completed and cancelled ones had post-injection side effects; not re-run)", "requeued", requeued, "completed", completed, "cancelled", cancelled)
 	}
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): a resume that was
 	// due but had not started when the last process stopped is DROPPED, with a
@@ -2339,18 +2339,18 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	// server also refuses to launch a 'resume' row from an earlier process.
 	noted, err := dropApprovalResumesAtBoot(chatStore)
 	if err != nil {
-		slog.Error("approval-resume recovery (any stale resume row is still refused at launch)", "err", err)
+		slog.Error("approval-resume recovery: failed (any stale resume row is still refused at launch)", "err", err)
 	} else if noted > 0 {
-		slog.Info("approval-resume recovery: dropped the pending automatic resume conversation(s), with a note in each", "noted", noted)
+		slog.Info("approval-resume recovery: dropped pending automatic resumes, with a note in each conversation", "conversations", noted)
 	}
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
 	// considered; non-terminal rows are never eligible for deletion.
 	if purged, err := chatStore.PurgeTerminalInputs(recCtx,
 		time.Duration(inputQueueRetentionDays)*24*time.Hour); err != nil {
-		slog.Error("input-queue startup purge", "err", err)
+		slog.Error("input-queue startup purge: failed", "err", err)
 	} else if purged > 0 {
-		slog.Info("input-queue startup purge: removed terminal row(s)", "purged", purged)
+		slog.Info("input-queue startup purge: removed terminal rows", "purged", purged)
 	}
 }
 
@@ -2374,6 +2374,6 @@ func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
 // category, so they get tagged; they show under Misc Tools meanwhile.
 func warnUncategorizedConnectors(bundle *clientconfig.Bundle) {
 	if untagged := bundle.UncategorizedConnectors(); len(untagged) > 0 {
-		slog.Warn("warning: client config connector(s) have no category and show under Misc Tools in the Tools picker; add category: to their mcp_servers entry", "untagged_count", len(untagged), "untagged", strings.Join(untagged, ", "))
+		slog.Warn("warning: client config: connectors have no category and show under Misc Tools in the Tools picker; add category: to their mcp_servers entry", "count", len(untagged), "connectors", strings.Join(untagged, ", "))
 	}
 }

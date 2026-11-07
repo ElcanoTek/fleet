@@ -268,7 +268,7 @@ func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope)
 	if logged {
 		return
 	}
-	slog.Info("MCP http: server answered HTTP with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
+	slog.Info("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
 }
 
 // headCapture is an io.Writer that keeps only the first max bytes written
@@ -602,7 +602,7 @@ func (s *Server) initialize(ctx context.Context) error {
 	}
 	if err := json.Unmarshal(result, &initResult); err == nil &&
 		initResult.ProtocolVersion != "" && initResult.ProtocolVersion != mcpProtocolVersion {
-		logging.From(ctx).Info("MCP: server negotiated protocolVersion; client pinned", "name", s.name, "protocol_version", initResult.ProtocolVersion, "mcp_protocol_version", mcpProtocolVersion)
+		logging.From(ctx).Info("MCP: server negotiated a protocolVersion other than the one the client pinned", "name", s.name, "negotiated", initResult.ProtocolVersion, "pinned", mcpProtocolVersion)
 	}
 
 	// MCP lifecycle: the client MUST send notifications/initialized after the
@@ -750,7 +750,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
 		if s.def.Command != "" && isTransportDeadError(err) {
-			logging.From(ctx).Error("MCP server appears dead, attempting restart...", "name", s.name, "err", err)
+			logging.From(ctx).Error("MCP server appears dead; attempting restart", "name", s.name, "err", err)
 			if restartErr := s.restartLocked(ctx); restartErr != nil {
 				return nil, fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr)
 			}
@@ -805,7 +805,7 @@ func (s *Server) restartLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to reinitialize server: %w", err)
 	}
 
-	logging.From(ctx).Info("MCP server restarted and reinitialized (tools)", "name", s.name, "tools_snapshot_count", len(s.toolsSnapshot()))
+	logging.From(ctx).Info("MCP server restarted and reinitialized", "name", s.name, "tools", len(s.toolsSnapshot()))
 	return nil
 }
 
@@ -1121,7 +1121,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 			case <-stop:
 				stop = nil
 				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
-					logging.From(ctx).Error("MCP stdio: could not send the stop for request", "request", id, "err", err)
+					logging.From(ctx).Error("MCP stdio: could not send the stop for request", "request_id", id, "err", err)
 				}
 			case res = <-resultChan:
 				got = true
@@ -1169,7 +1169,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		// A response for a different request id — stale leftover or a
 		// misbehaving server. Never hand it to this caller.
 		if !response.ID.matchesInt(id) {
-			logging.From(ctx).Info("MCP stdio: discarding response with id while waiting", "response_id", response.ID.String(), "count", id)
+			logging.From(ctx).Info("MCP stdio: discarding response for another request id", "response_id", response.ID.String(), "want_id", id)
 			continue
 		}
 
@@ -1701,7 +1701,7 @@ func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (jso
 	// Never hand this caller a response for a different request — checked
 	// before the error branch so a stale error isn't returned as this call's.
 	if !response.ID.matchesInt(wantID) {
-		slog.Info("MCP http: discarding SSE response with id while waiting", "response_id", response.ID.String(), "want_id", wantID)
+		slog.Info("MCP http: discarding SSE response for another request id", "response_id", response.ID.String(), "want_id", wantID)
 		return nil, fmt.Errorf("JSON-RPC response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 

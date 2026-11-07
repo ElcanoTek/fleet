@@ -244,7 +244,7 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request, perm 
 		}
 		// from the path (its String() is hex + dashes), and it is passed
 		// through safe.LogSafe as well — it cannot carry CR/LF to forge a log line.
-		logging.From(r.Context()).Error("dataset: load", "dataset", safe.LogSafe(id.String()), "err", err)
+		logging.From(r.Context()).Error("dataset: load failed", "dataset", safe.LogSafe(id.String()), "err", err)
 		writeError(w, http.StatusInternalServerError, "Failed to load dataset")
 		return nil, false
 	}
@@ -566,7 +566,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 	for offset := 0; ; offset += page {
 		rows, err := h.storage.ListDatasetRows(r.Context(), d.ID, "", page, offset)
 		if err != nil {
-			logging.From(r.Context()).Error("dataset export", "export", safe.LogSafe(d.ID.String()), "err", err)
+			logging.From(r.Context()).Error("dataset export failed", "dataset", safe.LogSafe(d.ID.String()), "err", err)
 			panic(http.ErrAbortHandler)
 		}
 		for _, row := range rows {
@@ -581,7 +581,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 		}
 		writer.Flush()
 		if err := writer.Error(); err != nil {
-			logging.From(r.Context()).Error("dataset export: write", "export", safe.LogSafe(d.ID.String()), "err", err)
+			logging.From(r.Context()).Error("dataset export: write failed", "dataset", safe.LogSafe(d.ID.String()), "err", err)
 			panic(http.ErrAbortHandler)
 		}
 		if len(rows) < page {

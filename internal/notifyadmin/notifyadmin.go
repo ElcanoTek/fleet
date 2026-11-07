@@ -199,7 +199,7 @@ func (s *Service) ApplyBoot(ctx context.Context) error {
 		return err
 	}
 	s.notifier.SetConfig(s.rowConfig(row))
-	logging.From(ctx).Info("notify settings: admin config in effect (set)", "updated_by", row.UpdatedBy)
+	logging.From(ctx).Info("notify settings: admin config in effect", "updated_by", row.UpdatedBy)
 	return nil
 }
 

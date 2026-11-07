@@ -491,7 +491,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.From(r.Context()).Info("Task created (prompt...)", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
+	logging.From(r.Context()).Info("Task created", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1571,7 +1571,7 @@ func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.From(r.Context()).Info("Cleaned up tasks older days", "deleted", deleted, "days", days)
+	logging.From(r.Context()).Info("Cleaned up old tasks", "deleted", deleted, "older_than_days", days)
 	writeJSON(w, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
 }
 
@@ -1648,7 +1648,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 			fbLog = *fallback
 		}
 	}
-	logging.From(ctx).Info("Bulk re-assigned scheduled task(s)", "model", safe.LogSafe(req.Model), "fallback", safe.LogSafe(fbLog), "from", safe.LogSafe(req.FromModel), "updated", updated)
+	logging.From(ctx).Info("Bulk re-assigned the model on scheduled tasks", "model", safe.LogSafe(req.Model), "fallback", safe.LogSafe(fbLog), "from", safe.LogSafe(req.FromModel), "updated", updated)
 	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 
@@ -1710,9 +1710,9 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// running nowhere (pending) or in a prior process's orphaned lease simply
 	// stays cancelled in the DB, exactly as before.
 	if h.taskStopper != nil && h.taskStopper(taskID, who) {
-		logging.From(r.Context()).Info("Task cancelled (live run interrupted, stopped)", "task_id", taskID, "who", safe.LogSafe(who))
+		logging.From(r.Context()).Info("Task cancelled (live run interrupted)", "task_id", taskID, "stopped_by", safe.LogSafe(who))
 	} else {
-		logging.From(r.Context()).Info("Task cancelled (stopped)", "task_id", taskID, "who", safe.LogSafe(who))
+		logging.From(r.Context()).Info("Task cancelled", "task_id", taskID, "stopped_by", safe.LogSafe(who))
 	}
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1786,7 +1786,7 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	logging.From(r.Context()).Info("Task deleted", "task_id", taskID, "stop_label", safe.LogSafe(p.stopLabel()))
+	logging.From(r.Context()).Info("Task deleted", "task_id", taskID, "by", safe.LogSafe(p.stopLabel()))
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
 }
 
@@ -2049,7 +2049,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.From(r.Context()).Info("Task updated (prompt...)", "updated_id", updated.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(updated.Prompt)))
+	logging.From(r.Context()).Info("Task updated", "task_id", updated.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(updated.Prompt)))
 	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
 }

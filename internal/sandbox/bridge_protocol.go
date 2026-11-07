@@ -93,7 +93,7 @@ func parseBridgeResponse(data []byte) (PythonResult, error) {
 		if len(preview) > 240 {
 			preview = preview[:240] + "..."
 		}
-		slog.Error("sandbox: bridge response not JSON (preview)", "err", err, "preview", preview)
+		slog.Error("sandbox: bridge response not JSON", "err", err, "preview", preview)
 		return PythonResult{}, fmt.Errorf("parse bridge response: %w", err)
 	}
 	return PythonResult(resp), nil

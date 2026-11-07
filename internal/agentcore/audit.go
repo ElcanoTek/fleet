@@ -211,12 +211,12 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 			if isEmailLastSuffix(suffix) {
 				o.emailLastAttempted = true
 			}
-			slog.Info("Enforcement: registered committed critical action; outstanding", "suffix", suffix, "decl", decl, "committed_critical_actions", o.committedCriticalActions[suffix])
+			slog.Info("Enforcement: registered committed critical action", "suffix", suffix, "decl", decl, "outstanding", o.committedCriticalActions[suffix])
 			registered++
 		}
 	}
 	if len(declared) > 0 && registered == 0 {
-		slog.Warn("WARNING: confirm_audit supplied critical-action declaration(s) but NONE matched a known critical-tool suffix. The audit token will consume on the first critical execution and any trailing critical call will be blocked. Likely cause: paraphrased declarations instead of literal tool names. Use the typed `critical_actions` field with the exact tool name (e.g. \"mcp_myserver_create_record\").", "declared_count", len(declared), "audit_protocol_clause", o.auditProtocolClause())
+		slog.Warn("WARNING: confirm_audit supplied critical-action declarations but NONE matched a known critical-tool suffix. The audit token will consume on the first critical execution and any trailing critical call will be blocked. Likely cause: paraphrased declarations instead of literal tool names. Use the typed `critical_actions` field with the exact tool name (e.g. \"mcp_myserver_create_record\").", "declarations", len(declared), "audit_protocol_clause", o.auditProtocolClause())
 	}
 }
 
@@ -253,7 +253,7 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest,
 	// Pass 2: direct legacy suffix match within headroom.
 	if o.legacyHeadroomFor(executedSuffix) > 0 {
 		o.committedCriticalActions[executedSuffix]--
-		slog.Info("Enforcement: committed discharged (remaining)", "executed_suffix", executedSuffix, "tool_name", toolName, "committed_critical_actions", o.committedCriticalActions[executedSuffix])
+		slog.Info("Enforcement: commitment discharged", "suffix", executedSuffix, "tool", toolName, "remaining", o.committedCriticalActions[executedSuffix])
 		return
 	}
 	// Pass 3: discharge a legacy substitute if the executed tool is an
@@ -262,12 +262,12 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest,
 	for suffix := range o.committedCriticalActions {
 		if criticalSuffixCovers(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
 			o.committedCriticalActions[suffix]--
-			slog.Info("Enforcement: committed discharged via substitute or alias (remaining)", "suffix", suffix, "tool_name", toolName, "committed_critical_actions", o.committedCriticalActions[suffix])
+			slog.Info("Enforcement: commitment discharged via substitute or alias", "suffix", suffix, "tool", toolName, "remaining", o.committedCriticalActions[suffix])
 			return
 		}
 	}
 	if len(o.typedCommitments) > 0 && !o.allCommitmentsExhausted() {
-		slog.Error("Enforcement: REFUSED to discharge any commitment (record) — no outstanding commitment matches this server/variant/record; cross-server discharge is not allowed (#715)", "tool_name", toolName, "deal_id", dealID)
+		slog.Error("Enforcement: REFUSED to discharge any commitment — no outstanding commitment matches this server/variant/record; cross-server discharge is not allowed (#715)", "tool", toolName, "record", dealID)
 	}
 }
 
@@ -319,7 +319,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	defer o.mu.Unlock()
 
 	if isEmailTool(toolName) && o.sendEmailSuccessCount >= maxSendEmailCallsPerTask {
-		slog.Info("Enforcement: Blocking send_email — limit reached", "send_email_success_count", o.sendEmailSuccessCount, "max_send_email_calls_per_task", maxSendEmailCallsPerTask)
+		slog.Info("Enforcement: Blocking send_email — limit reached", "sent", o.sendEmailSuccessCount, "limit", maxSendEmailCallsPerTask)
 		return true, fmt.Sprintf("Safety Limit: send_email already executed %d times. Further calls blocked.", maxSendEmailCallsPerTask)
 	}
 
@@ -367,7 +367,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	if o.isRunCriticalTool(toolName) {
 		key := retryBudgetKey(toolName, hashString(rawInput))
 		if attempts := o.criticalToolFailureAttempts[key]; attempts >= maxAttemptsPerCriticalAction {
-			slog.Warn("Enforcement: Blocking — retry budget exhausted (failed attempts with identical args)", "tool_name", toolName, "attempts", attempts, "max_attempts_per_critical_action", maxAttemptsPerCriticalAction)
+			slog.Warn("Enforcement: Blocking tool — retry budget exhausted (failed attempts with identical args)", "tool", toolName, "attempts", attempts, "max_attempts", maxAttemptsPerCriticalAction)
 			return true, fmt.Sprintf("Safety Limit: '%s' has failed %d times with identical args (cap: %d). "+
 				"Further retries with the same args are blocked. Either change the args (e.g. fix the failing field) "+
 				"or call confirm_audit(success=false, user_visible_summary=...) to abort the task.",
@@ -379,7 +379,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	// live audit (abortEmailAllowed): the abort cleared auditConfirmed, and
 	// without the allowance a failed batch reached its reader as silence.
 	if o.isRunCriticalTool(toolName) && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
-		slog.Info("Enforcement: Blocking — audit not confirmed", "tool_name", toolName)
+		slog.Info("Enforcement: Blocking tool — audit not confirmed", "tool", toolName)
 		argsHash := hashString(rawInput)
 		alreadyPending := false
 		for _, p := range o.pendingCriticalActions {
@@ -622,14 +622,14 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		for _, p := range o.pendingCriticalActions {
 			names = append(names, p.toolName)
 		}
-		slog.Info("Enforcement pending critical action(s). Rejecting finish.", "pending_critical_actions_count", len(o.pendingCriticalActions))
+		slog.Info("Enforcement: pending critical actions. Rejecting finish.", "pending", len(o.pendingCriticalActions))
 		return false, []string{fmt.Sprintf("Audit passed. Execute pending action(s): %v. Then finish.", names)}
 	}
 
 	// finishOwed drops settled-failed creates once the summary email has
 	// recorded them (audit_email_last.go).
 	if missing, outstanding := o.finishOwed(); len(missing) > 0 {
-		slog.Info("Enforcement committed critical action(s) not yet executed. Rejecting finish.", "missing_count", len(missing), "outstanding", outstanding)
+		slog.Info("Enforcement: committed critical actions not yet executed. Rejecting finish.", "missing", len(missing), "outstanding", outstanding)
 		if o.typedAuditActive && len(outstanding) > 0 {
 			// A typed declaration carries the full tool name and its record
 			// binding; the nudge used to name the bare suffix and the
@@ -690,7 +690,7 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 			orch.mu.Lock()
 			defer orch.mu.Unlock()
 
-			slog.Info("Tool (ID)", "tool_name_confirm_audit", toolNameConfirmAudit, "call_id", call.ID)
+			slog.Info("Tool call", "tool", toolNameConfirmAudit, "call_id", call.ID)
 
 			argsJSON, _ := json.Marshal(input)
 			var args map[string]any

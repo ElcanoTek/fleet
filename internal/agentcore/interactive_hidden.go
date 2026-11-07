@@ -79,7 +79,7 @@ func buildInteractiveHiddenList(members []string) ([]string, []string) {
 func installInteractiveHiddenList(members []string) []string {
 	list, problems := buildInteractiveHiddenList(members)
 	for _, problem := range problems {
-		slog.Info("agent_policy", "problem", problem)
+		slog.Info("agent_policy: config problem", "problem", problem)
 	}
 	return list
 }

@@ -108,7 +108,7 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 
 	cutoff := time.Now().AddDate(0, 0, -storageCleanupDefaultDays)
 	if stats, err := s.store.StorageConversationStats(r.Context(), cutoff); err != nil {
-		logging.From(ctx).Error("admin storage: conversation stats", "err", err)
+		logging.From(ctx).Error("admin storage: conversation stats failed", "err", err)
 	} else {
 		resp.ConversationsTotal = stats.Total
 		resp.ConversationsPinned = stats.Pinned
@@ -182,7 +182,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		// action so the operator sees the space come back immediately.
 		removed, err := s.store.SweepOrphanWorkspaces(r.Context(), workspaceRoot)
 		if err != nil {
-			logging.From(ctx).Error("admin storage cleanup: workspace sweep", "err", err)
+			logging.From(ctx).Error("admin storage cleanup: workspace sweep failed", "err", err)
 		}
 		s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 		resp.RemovedWorkspaces = removed
@@ -190,7 +190,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 
 	if req.SweepFiles {
 		if n, err := store.SweepAttachments(uploadsDir, age); err != nil {
-			logging.From(ctx).Error("admin storage cleanup: attachment sweep", "err", err)
+			logging.From(ctx).Error("admin storage cleanup: attachment sweep failed", "err", err)
 		} else {
 			resp.RemovedUploadFiles = n
 		}
@@ -204,7 +204,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		resp.BytesFreed = freed
 	}
 
-	logging.From(ctx).Info("admin storage cleanup conversations, workspaces, upload files, temp files removed (bytes freed)", "deleted_conversations", resp.DeletedConversations, "removed_workspaces", resp.RemovedWorkspaces, "removed_upload_files", resp.RemovedUploadFiles, "removed_temp_files", resp.RemovedTempFiles, "bytes_freed", resp.BytesFreed)
+	logging.From(ctx).Info("admin storage cleanup: done", "deleted_conversations", resp.DeletedConversations, "removed_workspaces", resp.RemovedWorkspaces, "removed_upload_files", resp.RemovedUploadFiles, "removed_temp_files", resp.RemovedTempFiles, "bytes_freed", resp.BytesFreed)
 	writeJSON(w, resp)
 }
 
@@ -255,7 +255,7 @@ func (s *Server) workspaceUsage(r *http.Request, root string, n int) (storageTre
 	}
 	meta, err := s.store.ConversationStorageMetaByIDs(ctx, ids)
 	if err != nil {
-		logging.From(ctx).Error("admin storage: workspace meta", "err", err)
+		logging.From(ctx).Error("admin storage: workspace meta failed", "err", err)
 		return total, rows
 	}
 	for i := range rows {
