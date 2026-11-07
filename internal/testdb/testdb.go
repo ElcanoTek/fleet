@@ -69,6 +69,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"regexp"
@@ -243,9 +244,9 @@ func (s *server) init(ctx context.Context) error {
 		if _, err := rand.Read(b[:]); err != nil {
 			return err
 		}
-		owner := binary.BigEndian.Uint32(b[:])
+		owner := binary.BigEndian.Uint32(b[:]) & math.MaxInt32
+		key, _ := ownerLockKey(uint64(owner))
 		var got bool
-		key := int32(owner) //nolint:gosec // the int4 half of an advisory-lock key; wrap-around is intended
 		if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1::int4, $2::int4)`, lockNSOwner, key).Scan(&got); err != nil {
 			return fmt.Errorf("owner lock: %w", err)
 		}
@@ -259,6 +260,16 @@ func (s *server) init(ctx context.Context) error {
 		}
 	}
 	return errors.New("could not take a free owner lock")
+}
+
+// ownerLockKey is the int4 half of an owner's advisory-lock key. Owner ids
+// are drawn as 31-bit values, so the key is the id itself; anything larger is
+// not an owner this package created.
+func ownerLockKey(id uint64) (int32, bool) {
+	if id > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(id), true
 }
 
 func (s *server) ownerHex() string { return fmt.Sprintf("%08x", s.owner) }
@@ -347,7 +358,10 @@ func (s *server) collectOwner(ctx context.Context, owner string, dbs []string, l
 		if err != nil {
 			return nil
 		}
-		key := int32(uint32(id)) //nolint:gosec // the int4 half of an advisory-lock key; wrap-around is intended
+		key, ok := ownerLockKey(id)
+		if !ok {
+			return nil // not an id this package draws (owners are 31-bit)
+		}
 		var free bool
 		if err := s.lockConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1::int4, $2::int4)`, lockNSOwner, key).Scan(&free); err != nil {
 			return fmt.Errorf("probe owner %s: %w", owner, err)
