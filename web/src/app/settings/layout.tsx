@@ -15,7 +15,8 @@
 // .set-section content.
 
 import { signOut } from "@/app/shared/signOut";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { useSessionEmail } from "@/app/shared/hooks/useSessionEmail";
 import { usePathname } from "@/app/lib/navigation";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
@@ -27,29 +28,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const collapse = useRailCollapse();
   const { branding } = useClientConfig();
-  const [email, setEmail] = useState("");
-
-  useEffect(() => {
-    let stale = false;
-    void (async () => {
-      try {
-        const res = await fetch("/api/session", { cache: "no-store" });
-        if (res.status === 401) {
-          window.location.href = "/login";
-          return;
-        }
-        if (!res.ok) return;
-        const data = (await res.json()) as { email?: string };
-        if (!stale && data.email) setEmail(data.email);
-      } catch {
-        // Transient failure: the account button shows its loading state; every
-        // page-level fetch still handles its own auth redirects.
-      }
-    })();
-    return () => {
-      stale = true;
-    };
-  }, []);
+  const email = useSessionEmail();
 
   return (
     <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]">
