@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -103,11 +104,14 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
 	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}
-	// In the one-database layout the DSN names the store's schema: dump only
-	// that schema, so a chat dump holds the chat store and nothing else.
-	if schema := config.DSNSchema(dsn); schema != "" {
-		args = append(args, "-n", schema)
+	// A store's dump is its schema and nothing else: the DSN's schema in the
+	// one-database layout, public in the legacy one (a legacy database may
+	// hold other schemas of its own, which are not fleet's to back up).
+	schema := config.DSNSchema(dsn)
+	if schema == "" {
+		schema = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation
 	}
+	args = append(args, "-n", schema)
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
 	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = c.env()
@@ -131,12 +135,13 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 // A restore of one store must never touch the other one, which in the
 // one-database layout lives in the same database:
 //
-//   - The archive's schema is established from its table of contents (its
-//     SCHEMA entries and the schemas of its TABLE entries) and must be exactly
+//   - The archive's schemas are established from its table of contents (its
+//     SCHEMA entries and the schemas of its TABLE entries) and must include
 //     the schema the store uses (its DSN's schema, public in the legacy
 //     layout). A dump of the other store, a legacy public-schema dump into
-//     the one database, or an archive whose schema cannot be determined (no
-//     SCHEMA or TABLE entry) is refused before anything is dropped.
+//     the one database, or an archive whose schemas cannot be determined (no
+//     SCHEMA or TABLE entry) is refused before anything is dropped. Other
+//     schemas in the archive are simply not restored.
 //   - pg_restore runs with -n <schema>, so only that schema's entries are
 //     restored, and --clean can drop only objects in that schema (the SCHEMA
 //     entry itself is not selected, so the schema is never dropped). The
@@ -157,9 +162,12 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	switch {
 	case len(got) == 0:
 		return fmt.Errorf("cannot tell which store %s holds: its table of contents has no schema or table entry; refusing to restore it", inPath)
-	case len(got) != 1 || got[0] != want:
+	case !slices.Contains(got, want):
 		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a dump of the legacy two-database layout restores into a legacy box (restore it there, then run `fleet db consolidate`), and a chat dump restores only with --db=chat", strings.Join(got, ", "), want)
 	}
+	// Other schemas in the archive (a whole-database dump of a legacy store
+	// with schemas of its own, or of a one-database install) are left out by
+	// -n below: only the store's schema is restored.
 	if want != config.PublicSchema {
 		if err := ensureRestoreSchema(ctx, dsn, want); err != nil {
 			return err
