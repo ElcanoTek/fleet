@@ -40,6 +40,8 @@ import {
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson, redirectToLogin } from "@/app/settings/lib/getGated";
 
 type ResolvedSetting = {
   key: string;
@@ -263,26 +265,14 @@ const GROUPS: { title: string; keys: string[] }[] = [
 const GUARDRAIL_ACTIONS_SEARCH_TEXT = "guardrail test prompt-injection detector probe";
 
 async function fetchSettings(): Promise<ResolvedSetting[] | null> {
-  const response = await fetch("/api/admin/settings", { cache: "no-store" });
-  if (response.status === 401) {
-    // location.assign() rather than a location.href write: identical navigation
-    // (full document load, one history entry), stated as a call instead of a
-    // mutation of a global — the same form used in write() below, whose comment
-    // says it mirrors this one.
-    window.location.assign("/login");
-    return null;
-  }
-  if (response.status === 403) {
-    throw new Error("You are not on the admin allowlist.");
-  }
-  if (response.status === 501) {
-    throw new Error("Workspace settings are not available on this deployment.");
-  }
-  if (!response.ok) {
-    throw new Error(`Settings request failed: ${response.status}`);
-  }
-  const data = (await response.json()) as { settings: ResolvedSetting[] };
-  return data.settings ?? [];
+  const data = await getGatedJson<{ settings: ResolvedSetting[] }>("/api/admin/settings", {
+    label: "Settings",
+    statusText: {
+      403: "You are not on the admin allowlist.",
+      501: "Workspace settings are not available on this deployment.",
+    },
+  });
+  return data ? (data.settings ?? []) : null;
 }
 
 function metaFor(key: string): SettingMeta {
@@ -339,7 +329,7 @@ function FeaturesAdmin() {
       if (response.status === 401) {
         // Session expired mid-edit: re-authenticate instead of surfacing a raw
         // 401 body as a row error (mirrors fetchSettings).
-        window.location.assign("/login");
+        redirectToLogin();
         return;
       }
       if (!response.ok) {
@@ -356,7 +346,7 @@ function FeaturesAdmin() {
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
-        [key]: err instanceof Error ? err.message : "Failed to save.",
+        [key]: errorMessage(err, "Failed to save."),
       }));
     } finally {
       setSaving((prev) => {
@@ -901,7 +891,7 @@ function GuardrailActions() {
         mode: "",
         profile: "",
         flagged: false,
-        detail: err instanceof Error ? err.message : "Probe failed.",
+        detail: errorMessage(err, "Probe failed."),
         latency_ms: 0,
       });
     }

@@ -33,7 +33,7 @@ type Opts = {
   subscribeStatus?: number;
   // The body of a refused store; the default is a plain-text server error.
   subscribeBody?: string;
-  // The signed-in account's role from GET /api/me/team ("member" by default),
+  // The signed-in account's role from GET /api/me ("member" by default),
   // or an HTTP status for a read that fails. With roleGate, the read answers
   // only once the gate resolves.
   role?: string | number;
@@ -98,7 +98,7 @@ function stubBrowser(opts: Opts = {}) {
           ? new Response(JSON.stringify({ error: "push_disabled" }), { status: opts.vapidStatus })
           : Response.json({ key: KEY });
       }
-      if (url === "/api/me/team") {
+      if (url === "/api/me") {
         await opts.roleGate;
         const role = opts.role ?? "member";
         return typeof role === "number"

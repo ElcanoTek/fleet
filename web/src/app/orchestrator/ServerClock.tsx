@@ -66,7 +66,7 @@ export function ServerClock() {
   }, []);
 
   const { data: config } = useCancellableFetch(
-    useCallback(() => orchestratorApi.config(), []),
+    useCallback((signal: AbortSignal) => orchestratorApi.config(signal), []),
     [resyncNonce],
   );
   const serverTime = config?.server_time;

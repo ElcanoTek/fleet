@@ -40,7 +40,7 @@ function stubBrowser(opts: {
     vi.fn(async (url: string, init?: RequestInit) => {
       requests.push(`${init?.method ?? "GET"} ${url}${init?.body ? ` ${String(init.body)}` : ""}`);
       if (url === "/api/push/vapid-public-key") return Response.json({ key: "BKEY" });
-      if (url === "/api/me/team") return Response.json({ role: opts.role ?? "member" });
+      if (url === "/api/me") return Response.json({ role: opts.role ?? "member" });
       if (opts.role === "viewer" && VIEWER_REFUSED.has(url)) {
         return Response.json({ error: "read_only" }, { status: 403 });
       }

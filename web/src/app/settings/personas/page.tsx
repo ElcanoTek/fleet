@@ -27,6 +27,7 @@ import {
   type PersonaPatrol,
 } from "./personaTemplates";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Personas (Settings → Personas, docs/USER-PERSONAS.md). A persona is how the
 // assistant thinks, writes and patrols in chats you start with it. Three
@@ -132,7 +133,7 @@ export default function PersonasPage() {
       })
       .catch((e: unknown) => {
         setPersonas((prev) => prev ?? []);
-        setError(e instanceof Error ? e.message : "Failed to load your personas.");
+        setError(errorMessage(e, "Failed to load your personas."));
       });
 
   useEffect(() => {
@@ -160,7 +161,7 @@ export default function PersonasPage() {
     try {
       await fn();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : `${label} failed.`);
+      setError(errorMessage(e, `${label} failed.`));
     } finally {
       setBusy(false);
     }

@@ -4,6 +4,7 @@ import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { plural } from "./plural";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // UpcomingPanel — the Operations Center "Upcoming" tab (Scheduler UX 2.0, #504):
 // a forward-looking timeline of the next scheduled runs, grouped by calendar
@@ -65,10 +66,11 @@ export function UpcomingPanel() {
     // to cap recurring tasks at their next 5 occurrences, which made a weekly
     // task look like it "ended" after five weeks).
     useCallback(
-      () =>
+      (signal: AbortSignal) =>
         orchestratorApi.upcomingRuns(
           500,
           new Date(Date.now() + HORIZON_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+          signal,
         ),
       [],
     ),
@@ -80,23 +82,15 @@ export function UpcomingPanel() {
   // panel only mounts on a post-hydration tab click.
   const [view, setView] = useState<UpcomingView>(() => {
     if (typeof window === "undefined") return "list";
-    // Guarded like the write below: the accessor itself throws where site
-    // data is blocked (Safari private mode, a locked-down browser), and an
+    // readPref never throws: the accessor itself throws where site data is
+    // blocked (Safari private mode, a locked-down browser), and an
     // initializer that throws unmounts the whole tab.
-    try {
-      const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
-      return saved === "week" ? "week" : "list";
-    } catch {
-      return "list";
-    }
+    return readPref(VIEW_STORAGE_KEY) === "week" ? "week" : "list";
   });
   const changeView = (v: UpcomingView) => {
     setView(v);
-    try {
-      window.localStorage.setItem(VIEW_STORAGE_KEY, v);
-    } catch {
-      /* storage full/blocked — the toggle still works for this session */
-    }
+    // Storage full/blocked: the toggle still works for this session.
+    writePref(VIEW_STORAGE_KEY, v);
   };
 
   const runs = data?.upcoming ?? [];

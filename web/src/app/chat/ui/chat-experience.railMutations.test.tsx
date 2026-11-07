@@ -260,3 +260,51 @@ describe("creating a share link against a failing backend", () => {
     expect(within(dialog).getByRole("button", { name: "Create public link" })).toBeEnabled();
   });
 });
+
+describe("bulk-pinning chats against a failing backend", () => {
+  // patchConversationIds used to throw on a non-2xx from a `void` call site,
+  // so a refused pin or label was an unhandled rejection: nothing said why
+  // and the user could not tell it had failed (#1998).
+  async function bulkPinBeta() {
+    await pickRowAction("Beta chat", "Select…");
+    fireEvent.click(await screen.findByRole("button", { name: "Pin selected" }));
+  }
+
+  it("says why on a non-2xx and leaves the chat unpinned", async () => {
+    const fetchMock = mockBackend((url) =>
+      url === "/api/conversations/bulk" ? new Response("nope", { status: 500 }) : new Response("{}"),
+    );
+    await mountChat();
+
+    await bulkPinBeta();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't update the chat (HTTP 500).");
+    expect(
+      fetchMock.mock.calls.filter(([url, init]) => url === "/api/conversations/bulk" && init?.method === "PATCH"),
+    ).toHaveLength(1);
+    // No local state moved: there is still nothing pinned.
+    expect(screen.queryByText("Pinned")).not.toBeInTheDocument();
+  });
+
+  it("reports a network failure the same way", async () => {
+    mockBackend((url) =>
+      url === "/api/conversations/bulk" ? new TypeError("Failed to fetch") : new Response("{}"),
+    );
+    await mountChat();
+
+    await bulkPinBeta();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't update the chat — network error.");
+  });
+
+  it("pins the chat when the server agrees", async () => {
+    mockBackend(() => new Response("{}", { status: 200 }));
+    await mountChat();
+
+    await bulkPinBeta();
+
+    // The rail grows its Pinned section once the server has agreed.
+    expect(await screen.findByText("Pinned")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

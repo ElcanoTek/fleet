@@ -3,14 +3,8 @@ import { AUTO_RELOAD_WINDOW_MS, claimChunkAutoReload, isChunkLoadError } from ".
 
 describe("isChunkLoadError", () => {
   it("recognizes a failed chunk or dynamic import in every shape it arrives in", () => {
-    const named = new Error("Failed to load chunk /_next/static/chunks/abc.js from runtime");
-    named.name = "ChunkLoadError";
-    expect(isChunkLoadError(named)).toBe(true);
     for (const message of [
-      "Failed to load chunk /_next/static/chunks/abc.js",
-      "Loading chunk 123 failed.",
-      "Loading CSS chunk app-layout failed",
-      "Failed to fetch dynamically imported module: https://x/_next/static/chunks/a.js",
+      "Failed to fetch dynamically imported module: https://x/assets/chat-abc123.js",
       "Importing a module script failed.",
       "error loading dynamically imported module: https://x/a.js",
     ]) {
@@ -23,6 +17,10 @@ describe("isChunkLoadError", () => {
     expect(isChunkLoadError(new Error("Load failed"))).toBe(false);
     expect(isChunkLoadError("Loading chunk 1 failed")).toBe(false);
     expect(isChunkLoadError(null)).toBe(false);
+    // The bundler shapes Next.js produced are not this app's any more.
+    const named = new Error("Loading chunk 123 failed.");
+    named.name = "ChunkLoadError";
+    expect(isChunkLoadError(named)).toBe(false);
   });
 });
 

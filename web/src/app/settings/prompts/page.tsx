@@ -28,6 +28,8 @@ import {
   DirSearch,
   SetSection,
 } from "../ui/panels";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 const ROW =
   "grid gap-[0.45rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-3 last:border-b-0";
@@ -68,7 +70,7 @@ export default function PromptsPage() {
       setItems(next);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not load prompt library.",
+        errorMessage(err, "Could not load prompt library."),
       );
       setItems((cur) => cur ?? []);
     }
@@ -80,19 +82,12 @@ export default function PromptsPage() {
       if (!cancelled) void loadPrompts();
     });
     void (async () => {
-      let chatViewer = false;
-      try {
-        const res = await fetch("/api/me/team", { cache: "no-store" });
-        if (res.ok) {
-          const data = (await res.json()) as { role?: string };
-          if (data.role && data.role !== "viewer") {
-            return;
-          }
-          chatViewer = data.role === "viewer";
-        }
-      } catch {
-        // Optional viewer-role check.
+      // Optional viewer-role check (shared/lib/account).
+      const account = await fetchMe();
+      if (account?.role && account.role !== "viewer") {
+        return;
       }
+      const chatViewer = account?.role === "viewer";
       try {
         const me = await orchestratorApi.me();
         if (cancelled) return;
@@ -181,7 +176,7 @@ export default function PromptsPage() {
       setDraft(null);
       await loadPrompts();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save prompt.");
+      setError(errorMessage(err, "Could not save prompt."));
     } finally {
       setBusy(false);
     }
@@ -197,7 +192,7 @@ export default function PromptsPage() {
       setNotice(`Deleted “${item.name}”.`);
       await loadPrompts();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete prompt.");
+      setError(errorMessage(err, "Could not delete prompt."));
     }
   };
 

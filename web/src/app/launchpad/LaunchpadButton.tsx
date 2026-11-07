@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { formatCompactCronCadence } from "@/app/shared/lib/patrolSchedule";
 import { Icon } from "@/app/shared/ui/Icon";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
+import { writePref } from "@/app/shared/lib/storage";
 
 // LaunchpadButton — the rail's "Patrols" item (NavRail), between Chat and
 // Background tasks: a patrol is a chat that checks in on a schedule.
@@ -163,11 +164,8 @@ export function LaunchpadButton({
   // Opened (by click or deep link) counts as seen: the dot is for discovery.
   useEffect(() => {
     if (!wizardOpen && !menuOpen) return;
-    try {
-      window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
-    } catch {
-      // Storage unavailable: the dot simply stays.
-    }
+    // Storage unavailable: the dot simply stays.
+    writePref(LAUNCHPAD_SEEN_ITEM, "1");
   }, [wizardOpen, menuOpen]);
 
   const openWizard = useCallback(() => {

@@ -36,6 +36,8 @@ import {
 } from "./Checklist";
 import { ToolStepCard, TranscriptTimeline } from "./LogTimeline";
 import { formatDuration, unwrapDeferredCall } from "./logTimeline";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { saveBlob } from "@/app/shared/lib/downloadFile";
 
 // The transcript itself — tool steps, events, the prompt, filters — renders in
 // LogTimeline.tsx; this file owns the modal around it. The ReactMarkdown
@@ -679,7 +681,7 @@ function LiveTaskView({
           if (ac.signal.aborted) return;
           failures += 1;
           setStreamError(
-            `${err instanceof Error ? err.message : "stream failed"}; reconnecting…`,
+            `${errorMessage(err, "stream failed")}; reconnecting…`,
           );
           await new Promise((resolve) =>
             window.setTimeout(
@@ -706,7 +708,7 @@ function LiveTaskView({
       await orchestratorApi.cancelTask(task.id);
       // The terminal "stopped" frame arrives on the stream; nothing else to do.
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : "stop failed");
+      setStreamError(errorMessage(err, "stop failed"));
       setStopping(false);
     }
   };
@@ -897,11 +899,11 @@ function LogViewerBody({
     error,
   } = useCancellableFetch(
     useCallback(
-      () =>
+      (signal: AbortSignal) =>
         absent404(
           attemptId === null
-            ? orchestratorApi.taskLogs(task.id)
-            : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
+            ? orchestratorApi.taskLogs(task.id, signal)
+            : orchestratorApi.taskLogHistoryEntry(task.id, attemptId, signal),
         ),
       [absent404, task.id, attemptId],
     ),
@@ -911,7 +913,10 @@ function LogViewerBody({
   // none, in which case the picker never renders. Same 404 contract as the
   // transcript itself: never-run and not-readable are one response.
   const { data: attemptHistory } = useCancellableFetch(
-    useCallback(() => absent404(orchestratorApi.taskLogHistory(task.id)), [absent404, task.id]),
+    useCallback(
+      (signal: AbortSignal) => absent404(orchestratorApi.taskLogHistory(task.id, signal)),
+      [absent404, task.id],
+    ),
     [task.id],
   );
   const attempts = attemptHistory?.entries ?? [];
@@ -941,7 +946,7 @@ function LogViewerBody({
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `${actionLabel} failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `${actionLabel} failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -956,14 +961,7 @@ function LogViewerBody({
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `fleet-task-${task.id.slice(0, 8)}-logs.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `fleet-task-${task.id.slice(0, 8)}-logs.json`);
   };
 
   const canResubmit = RUNNABLE.has(task.status ?? "");
@@ -982,7 +980,7 @@ function LogViewerBody({
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `Fire event failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Fire event failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -1012,7 +1010,7 @@ function LogViewerBody({
       window.location.href = `/chat?c=${encodeURIComponent(conversation_id)}`;
     } catch (err) {
       showToast(
-        `Discuss failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Discuss failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
       setDiscussing(false);
@@ -1211,14 +1209,14 @@ function TaskRunHistory({
     loading,
     error,
   } = useCancellableFetch(
-    useCallback(() => {
+    useCallback((signal: AbortSignal) => {
       const p = new URLSearchParams();
       // The first 120 chars keep the query URL sane for very long prompts;
       // the exact-equality filter below does the real matching.
       p.set("q", prompt.slice(0, 120));
       p.set("limit", "50");
       // orchestratorApi.tasks prepends the "?" itself.
-      return orchestratorApi.tasks(p.toString());
+      return orchestratorApi.tasks(p.toString(), signal);
     }, [prompt]),
     [prompt],
   );
@@ -1446,7 +1444,7 @@ function SelfImprovePanel({
       );
       if (open) await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -1458,7 +1456,7 @@ function SelfImprovePanel({
       await orchestratorApi.activateLearnedInstruction(task.id, version);
       await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -1470,7 +1468,7 @@ function SelfImprovePanel({
       await orchestratorApi.deactivateLearnedInstruction(task.id);
       await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }

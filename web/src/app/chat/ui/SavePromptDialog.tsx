@@ -9,6 +9,7 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // SavePromptDialog — "Save as workflow…". It asks the server to turn the
 // WHOLE conversation into a reusable workflow template (a host-side model
@@ -114,9 +115,7 @@ export function SavePromptDialog({
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
         setError(
-          err instanceof Error
-            ? err.message
-            : "Could not build a workflow from this conversation",
+          errorMessage(err, "Could not build a workflow from this conversation"),
         );
         setPhase("edit");
       }
@@ -157,7 +156,7 @@ export function SavePromptDialog({
       }
       setPhase("saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save workflow");
+      setError(errorMessage(err, "Could not save workflow"));
     } finally {
       setSaving(false);
     }

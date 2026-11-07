@@ -34,6 +34,8 @@ import {
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson, redirectToLogin } from "@/app/settings/lib/getGated";
 
 type NotifySettings = {
   notify_on: string;
@@ -114,21 +116,13 @@ function draftFrom(view: View): Draft {
 }
 
 async function fetchView(): Promise<View | null> {
-  const response = await fetch("/api/admin/notify-settings", { cache: "no-store" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return null;
-  }
-  if (response.status === 403) {
-    throw new Error("You are not on the admin allowlist.");
-  }
-  if (response.status === 501) {
-    throw new Error("Notification settings are not available on this deployment.");
-  }
-  if (!response.ok) {
-    throw new Error(`Notification settings request failed: ${response.status}`);
-  }
-  return (await response.json()) as View;
+  return getGatedJson<View>("/api/admin/notify-settings", {
+    label: "Notification settings",
+    statusText: {
+      403: "You are not on the admin allowlist.",
+      501: "Notification settings are not available on this deployment.",
+    },
+  });
 }
 
 // "blocked" is a run that finished but recorded a blocked outcome (it did not
@@ -223,7 +217,7 @@ function NotificationsAdmin() {
         body: JSON.stringify(body),
       });
       if (response.status === 401) {
-        window.location.href = "/login";
+        redirectToLogin();
         return;
       }
       if (!response.ok) {
@@ -236,7 +230,7 @@ function NotificationsAdmin() {
       flashTimer.current = setTimeout(() => setSavedFlash(false), 1400);
       await reload();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save.");
+      setSaveError(errorMessage(err, "Failed to save."));
     } finally {
       setBusy(false);
     }
@@ -256,7 +250,7 @@ function NotificationsAdmin() {
       setEdits(null);
       await reload();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to revert.");
+      setSaveError(errorMessage(err, "Failed to revert."));
     } finally {
       setBusy(false);
     }
@@ -280,7 +274,7 @@ function NotificationsAdmin() {
         ...prev,
         [channel]: {
           ok: false,
-          detail: err instanceof Error ? err.message : "Test failed.",
+          detail: errorMessage(err, "Test failed."),
           latency_ms: 0,
         },
       }));

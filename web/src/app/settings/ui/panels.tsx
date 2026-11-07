@@ -6,6 +6,7 @@
 
 import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 /* ── Section frame (.set-section / .set-head) ── */
 
@@ -314,11 +315,10 @@ export function CopyChip({ name }: { name: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const copy = () => {
-    // Clipboard denial rejects the PROMISE (permissions, non-secure context,
-    // headless) — a try/catch around the call would miss it and surface an
-    // unhandled rejection. The visual state still confirms the intent.
-    navigator.clipboard?.writeText(`/${name}`).catch(() => {});
+  const copy = async () => {
+    // Clipboard denial (permissions, non-secure context, headless) shows no
+    // "Copied": the check and the announcement confirm only a real copy.
+    if (!(await copyText(`/${name}`))) return;
     setCopied(true);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), 1400);
@@ -329,7 +329,7 @@ export function CopyChip({ name }: { name: string }) {
       <button
         type="button"
         aria-label={`Copy /${name} to clipboard`}
-        onClick={copy}
+        onClick={() => void copy()}
         className={[
           "inline-flex items-center gap-[0.4rem] rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium text-[var(--color-text-primary)] transition [overflow-wrap:anywhere]",
           "hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",

@@ -121,13 +121,17 @@ describe("UsagePanel (#601)", () => {
     await waitFor(() => expect(usage).toHaveBeenCalled());
     expect(usage).toHaveBeenLastCalledWith(
       expect.objectContaining({ groupBy: "user", from: expect.any(String) }),
+      expect.any(AbortSignal),
     );
 
     fireEvent.change(screen.getByLabelText("Usage grouping dimension"), {
       target: { value: "model" },
     });
     await waitFor(() =>
-      expect(usage).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: "model" })),
+      expect(usage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ groupBy: "model" }),
+        expect.any(AbortSignal),
+      ),
     );
   });
 

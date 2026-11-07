@@ -66,6 +66,22 @@ export function parseSseChunk(chunk: string) {
   return { events, remainder };
 }
 
+// createSSEParser returns a chunk-feeder that assembles SSE frames across
+// arbitrary chunk boundaries and hands each complete event to onEvent. Frame
+// assembly is parseSseChunk's (#589): CRLF delimiters, multi-line `data:`
+// joined with "\n", heartbeat/comment frames dropped. It is the one parser for
+// every SSE consumer that reads a fetch body itself — the orchestrator's live
+// task activity (orchestratorApi.createTaskFrameParser) and chat's "Summarize
+// earlier messages" stream (#1999). What a frame's data means is the caller's.
+export function createSSEParser(onEvent: (event: ServerEvent) => void): (chunk: string) => void {
+  let buffer = "";
+  return (chunk: string) => {
+    const { events, remainder } = parseSseChunk(buffer + chunk);
+    buffer = remainder;
+    for (const ev of events) onEvent(ev);
+  };
+}
+
 // StreamDedupState is the per-conversation idempotency state the SSE pump
 // carries across events: the highest event id applied for the current turn and
 // the id of that turn. It is the ref-free, independently-testable core of the

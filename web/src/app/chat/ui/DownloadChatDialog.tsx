@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "@/app/shared/ui/Icon";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // DownloadChatDialog — "Download chat…" from a conversation's kebab menu.
 //
@@ -89,7 +90,7 @@ export function DownloadChatDialog({
       onClose();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not download this chat",
+        errorMessage(err, "Could not download this chat"),
       );
       setBusy(false);
     }

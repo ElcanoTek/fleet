@@ -12,12 +12,12 @@ import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
 import { SetSection } from "./ui/panels";
 import { useTheme, type ThemePreference } from "@/app/shared/hooks/useTheme";
+import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
 
 // The composer's send-key preference key (chat/ui/Composer.tsx keeps the
 // constant private to avoid pulling the composer into this bundle — the
 // literal and its values are a shared contract: "enter" | "ctrl+enter",
 // absent = "enter").
-const SEND_KEY_STORAGE = "fleet.sendKey";
 
 const THEME_OPTIONS = [
   { value: "system", label: "System" },
@@ -26,25 +26,14 @@ const THEME_OPTIONS = [
 ] as const satisfies readonly { value: ThemePreference; label: string }[];
 
 function SendOnEnterRow() {
-  // Same lazy-initializer read the composer uses: SSR (no window) and
-  // private-browsing storage failures both fall back to the "enter" default.
-  const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      return (localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter";
-    } catch {
-      return true;
-    }
-  });
+  // Same read the composer uses: a storage failure falls back to the
+  // "enter" default, and a failed write leaves the choice page-only.
+  const [sendOnEnter, setSendOnEnter] = useState<boolean>(readSendOnEnter);
 
   const toggle = () => {
     const next = !sendOnEnter;
     setSendOnEnter(next);
-    try {
-      localStorage.setItem(SEND_KEY_STORAGE, next ? "enter" : "ctrl+enter");
-    } catch {
-      // Storage unavailable: the choice applies to this page's state only.
-    }
+    writeSendOnEnter(next);
   };
 
   return (

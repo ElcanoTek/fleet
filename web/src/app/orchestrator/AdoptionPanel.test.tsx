@@ -177,6 +177,7 @@ describe("AdoptionPanel", () => {
     await waitFor(() => expect(adoption).toHaveBeenCalled());
     expect(adoption).toHaveBeenLastCalledWith(
       expect.objectContaining({ from: expect.any(String) }),
+      expect.any(AbortSignal),
     );
     fireEvent.change(screen.getByLabelText("Adoption window in days"), {
       target: { value: "90" },

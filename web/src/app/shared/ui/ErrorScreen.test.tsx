@@ -28,13 +28,9 @@ describe("ErrorScreen", () => {
     vi.restoreAllMocks();
   });
 
-  it("offers a reload and a way home, and shows the server's reference", () => {
-    const error = Object.assign(new Error("An error occurred in the Server Components render."), {
-      digest: "1234567890",
-    });
-    render(<RouteError error={error} />);
+  it("offers a reload and a way home", () => {
+    render(<RouteError error={new Error("boom")} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Something went wrong");
-    expect(screen.getByText("Reference: 1234567890")).toBeInTheDocument();
     expect(reload).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
@@ -44,8 +40,9 @@ describe("ErrorScreen", () => {
   });
 
   it("reloads by itself once for a failed chunk load, then waits for the reader", () => {
-    const chunkError = new Error("Failed to load chunk /_next/static/chunks/old.js");
-    chunkError.name = "ChunkLoadError";
+    const chunkError = new TypeError(
+      "Failed to fetch dynamically imported module: https://x/assets/chat-old.js",
+    );
     const first = render(<ErrorScreen error={chunkError} />);
     expect(reload).toHaveBeenCalledTimes(1);
     first.unmount();

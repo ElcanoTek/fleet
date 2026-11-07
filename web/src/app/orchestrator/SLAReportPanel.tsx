@@ -19,7 +19,7 @@ export function SLAReportPanel() {
     error,
     reload,
   } = useCancellableFetch(
-    useCallback(() => orchestratorApi.slaReport(days), [days]),
+    useCallback((signal: AbortSignal) => orchestratorApi.slaReport(days, signal), [days]),
     [days],
   );
 

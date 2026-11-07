@@ -8,8 +8,9 @@ import {
   type UsageReport,
 } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
-import { downloadFile } from "./downloadFile";
+import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "./plural";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // UsagePanel — the Operations Center Usage tab (#601 part 1): cost/token
 // roll-ups over the persisted metering (task iterations + chat turns), grouped
@@ -99,11 +100,11 @@ export function UsagePanel() {
   } = useCancellableFetch(
     // `from` is computed inside the fetcher (an effect-driven callback, where
     // reading the clock is fine) rather than in render, keeping render pure.
-    useCallback(() => {
+    useCallback((signal: AbortSignal) => {
       const from = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000)
         .toISOString()
         .slice(0, 10);
-      return orchestratorApi.usage({ groupBy, from });
+      return orchestratorApi.usage({ groupBy, from }, signal);
     }, [groupBy, rangeDays]),
     [groupBy, rangeDays],
   );
@@ -166,7 +167,7 @@ export function UsagePanel() {
               // Fetch-then-save (downloadFile) instead of navigating: a 401/500
               // used to replace the dashboard with the server's error body.
               void downloadFile(`/api/orchestrator/admin/usage?${qs.toString()}`, `usage-${groupBy}-${from}.csv`).catch(
-                (err: unknown) => setDownloadError(err instanceof Error ? err.message : "download failed"),
+                (err: unknown) => setDownloadError(errorMessage(err, "download failed")),
               );
             }}
           >
@@ -218,7 +219,7 @@ export function UsagePanel() {
 // be created.
 function BudgetsSection() {
   const { data, error, reload } = useCancellableFetch(
-    useCallback(() => orchestratorApi.budgets(), []),
+    useCallback((signal: AbortSignal) => orchestratorApi.budgets(signal), []),
     [],
   );
   const [scope, setScope] = useState<BudgetCreate["scope"]>("user");
@@ -271,7 +272,7 @@ function BudgetsSection() {
       setHardTokens("");
       await reload();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save budget");
+      setFormError(errorMessage(err, "Failed to save budget"));
     } finally {
       setSaving(false);
     }
@@ -285,7 +286,7 @@ function BudgetsSection() {
       await orchestratorApi.deleteBudget(id);
       await reload();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to delete budget");
+      setFormError(errorMessage(err, "Failed to delete budget"));
     } finally {
       setDeleting(null);
     }

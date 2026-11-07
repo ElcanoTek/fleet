@@ -26,6 +26,7 @@ import { AdoptionPanel } from "./AdoptionPanel";
 import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
 import { taskRunLabel } from "./taskDisplay";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -275,7 +276,7 @@ function OrchestratorInner({
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Run now failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Run now failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -295,7 +296,7 @@ function OrchestratorInner({
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Stop failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Stop failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -314,7 +315,7 @@ function OrchestratorInner({
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Delete failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Delete failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {

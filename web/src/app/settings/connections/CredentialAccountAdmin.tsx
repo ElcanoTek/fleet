@@ -20,6 +20,7 @@ import {
   ConnRows,
   SecretsFieldset,
 } from "../ui/panels";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // CredentialAccountAdmin — manage MCP credential accounts per server
 // (the "Accounts" panel under Settings → Connections → Credential accounts).
@@ -104,7 +105,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
       setOpen(false);
       onChanged?.();
     } catch (err) {
-      setStatus({ state: "err", msg: `Failed to save account: ${(err as Error).message}` });
+      setStatus({ state: "err", msg: `Failed to save account: ${errorMessage(err, "unknown error")}` });
     } finally {
       setSubmitting(false);
     }
@@ -118,7 +119,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
       setStatus({ state: "ok", msg: `Removed account "${acct}" from ${srv}` });
       onChanged?.();
     } catch (err) {
-      setStatus({ state: "err", msg: `Failed to remove account: ${(err as Error).message}` });
+      setStatus({ state: "err", msg: `Failed to remove account: ${errorMessage(err, "unknown error")}` });
     } finally {
       setSubmitting(false);
     }

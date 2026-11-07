@@ -55,6 +55,7 @@ import {
   type Tone,
   type Values,
 } from "./model";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // ───────────────────────── context ─────────────────────────
 
@@ -1136,23 +1137,16 @@ function CardBody({
         return;
       }
       setNotice(null);
-      const write = navigator.clipboard?.writeText;
-      if (typeof write !== "function") {
-        setCopiedId(null);
-        setNotice("Could not copy. Try again.");
-        return;
-      }
-      void Promise.resolve()
-        .then(() => write.call(navigator.clipboard, text))
-        .then(() => {
-          setCopiedId(action.id);
-          if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-          copyTimerRef.current = window.setTimeout(() => setCopiedId((cur) => (cur === action.id ? null : cur)), 2000);
-        })
-        .catch(() => {
+      void copyText(text).then((ok) => {
+        if (!ok) {
           setCopiedId(null);
           setNotice("Could not copy. Try again.");
-        });
+          return;
+        }
+        setCopiedId(action.id);
+        if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = window.setTimeout(() => setCopiedId((cur) => (cur === action.id ? null : cur)), 2000);
+      });
       return;
     }
     void send(action);

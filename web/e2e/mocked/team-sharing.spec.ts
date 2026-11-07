@@ -34,7 +34,7 @@ const PERSONAL_PROJECT = {
 
 async function mockProjects(page: Page, projects: unknown[]) {
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects } }));
-  await page.route("**/api/me/team", (r: Route) =>
+  await page.route("**/api/me", (r: Route) =>
     r.fulfill({
       json: { email: "e2e@example.com", role: "member", team_id: "quant", admin: false },
     }),

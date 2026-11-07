@@ -11,7 +11,7 @@ import { ProjectsModal } from "./ProjectsModal";
 
 // Projects modal, team-sharing path (#1157, narrowed by ADR-0057). "Share with
 // my team" is a dead end for a caller with no team — the write 400s upstream —
-// so the modal reads /api/me/team. It used to offer to CREATE a team inline,
+// so the modal reads /api/me. It used to offer to CREATE a team inline,
 // with copy telling teammates to "join the same name", which the server
 // refuses (409, joining is admin-granted). The teamless state is now
 // display-only and points at whichever surface actually applies to the caller:
@@ -71,7 +71,7 @@ describe("ProjectsModal team sharing", () => {
   it("never invites a teamless member to type a team name", async () => {
     const puts: string[] = [];
     mockFetch((url, init) => {
-      if (url === "/api/me/team") {
+      if (url === "/api/me") {
         if (init?.method === "PUT") puts.push(String(init.body));
         return meBody("");
       }
@@ -91,7 +91,7 @@ describe("ProjectsModal team sharing", () => {
   });
 
   it("sends a teamless ADMIN to the surfaces they can actually use", async () => {
-    mockFetch((url) => (url === "/api/me/team" ? meBody("", true) : noProjects()));
+    mockFetch((url) => (url === "/api/me" ? meBody("", true) : noProjects()));
 
     renderModal();
 
@@ -105,7 +105,7 @@ describe("ProjectsModal team sharing", () => {
   });
 
   it("shows the named share checkbox straight away for a user with a team", async () => {
-    mockFetch((url) => (url === "/api/me/team" ? meBody("platform") : noProjects()));
+    mockFetch((url) => (url === "/api/me" ? meBody("platform") : noProjects()));
 
     renderModal();
 
@@ -124,7 +124,7 @@ describe("ProjectsModal confirms", () => {
   it("asks in the app before deleting a project, and only then deletes", async () => {
     const calls: string[] = [];
     mockFetch((url, init) => {
-      if (url === "/api/me/team") return meBody("platform");
+      if (url === "/api/me") return meBody("platform");
       if (init?.method === "DELETE") {
         calls.push(url);
         return new Response("{}", { status: 200 });
@@ -146,7 +146,7 @@ describe("ProjectsModal confirms", () => {
   it("keeps the project when the delete confirm is cancelled", async () => {
     const calls: string[] = [];
     mockFetch((url, init) => {
-      if (url === "/api/me/team") return meBody("platform");
+      if (url === "/api/me") return meBody("platform");
       if (init?.method === "DELETE") {
         calls.push(url);
         return new Response("{}", { status: 200 });
@@ -169,7 +169,7 @@ describe("ProjectsModal confirms", () => {
   it("asks before a save that stops sharing the project with the team", async () => {
     const patches: string[] = [];
     mockFetch((url, init) => {
-      if (url === "/api/me/team") return meBody("platform");
+      if (url === "/api/me") return meBody("platform");
       if (init?.method === "PATCH") {
         patches.push(String(init.body));
         return new Response(JSON.stringify(PROJECT), { status: 200 });

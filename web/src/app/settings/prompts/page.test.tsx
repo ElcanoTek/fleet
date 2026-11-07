@@ -110,7 +110,7 @@ describe("Settings → Prompts page", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/me/team") {
+        if (url === "/api/me") {
           return new Response(JSON.stringify({ role: "viewer" }), { status: 200 });
         }
         if (url === "/api/orchestrator/me") {

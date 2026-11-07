@@ -11,6 +11,7 @@ import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { formatBytes } from "../lib";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type StorageTree = { path: string; bytes: number; files: number };
 
@@ -82,7 +83,7 @@ export function StoragePanel() {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!isStale()) setError(err instanceof Error ? err.message : "storage stats unavailable");
+        if (!isStale()) setError(errorMessage(err, "storage stats unavailable"));
       });
 
   useEffect(() => {
@@ -120,7 +121,7 @@ export function StoragePanel() {
       );
       void load(() => false);
     } catch (err) {
-      setCleanupError(err instanceof Error ? err.message : "cleanup failed");
+      setCleanupError(errorMessage(err, "cleanup failed"));
     } finally {
       setCleaning(false);
     }

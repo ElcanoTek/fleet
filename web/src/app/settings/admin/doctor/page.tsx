@@ -15,6 +15,7 @@ import { ConnGroup, SetSection } from "../../ui/panels";
 import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type DoctorStatus = "ok" | "warn" | "fail" | "skip";
 
@@ -76,7 +77,7 @@ export default function AdminDoctorPage() {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!staleRef.current) setError(err instanceof Error ? err.message : "doctor report unavailable");
+        if (!staleRef.current) setError(errorMessage(err, "doctor report unavailable"));
       })
       .finally(() => {
         if (!staleRef.current) setRunning(null);

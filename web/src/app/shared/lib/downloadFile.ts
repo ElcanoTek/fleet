@@ -1,5 +1,12 @@
+// Saving a file from the page (#2006).
+//
+// saveBlob hands a Blob to the browser as a download: an object URL clicked
+// through a throwaway anchor, revoked straight after. Every client-built
+// download (a task's log JSON, the prompt-library export) and every fetched
+// one goes through it.
+//
 // downloadFile fetches a report and hands it to the browser as a file, for the
-// admin CSV exports (Usage, Adoption).
+// admin CSV exports (Usage, Adoption, a dataset).
 //
 // Those buttons used to set window.location.href to the CSV endpoint. That
 // works only when the response is a 200 with a Content-Disposition attachment;
@@ -18,11 +25,16 @@ export async function downloadFile(url: string, fallbackName: string): Promise<v
     throw new Error(await describeFailure(res));
   }
   const blob = await res.blob();
+  saveBlob(blob, filenameFrom(res.headers.get("content-disposition")) ?? fallbackName);
+}
+
+/** Hands `blob` to the browser as a download named `name`. */
+export function saveBlob(blob: Blob, name: string): void {
   const objectUrl = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
     a.href = objectUrl;
-    a.download = filenameFrom(res.headers.get("content-disposition")) ?? fallbackName;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -40,7 +52,12 @@ async function describeFailure(res: Response): Promise<string> {
   return `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
 }
 
-function filenameFrom(disposition: string | null): string | null {
+/**
+ * The filename a Content-Disposition header names, or null. The RFC 5987
+ * `filename*=` form wins (it carries non-ASCII names); then the plain quoted
+ * or unquoted `filename=`.
+ */
+export function filenameFrom(disposition: string | null): string | null {
   if (!disposition) return null;
   // filename*= (RFC 5987) first, then the plain quoted/unquoted form.
   const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(disposition);

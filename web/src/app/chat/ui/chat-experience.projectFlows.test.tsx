@@ -98,7 +98,7 @@ function mockBackend() {
       return json({ conversation: CONVS[1], history: [] });
     if (url === "/api/conversations/conv-s/inflight") return json({ inflight: false });
     if (url === "/api/projects") return json({ projects });
-    if (url === "/api/me/team")
+    if (url === "/api/me")
       return json({ email: "user@example.com", role: "member", team_id: "Elcano", admin: false });
     if (url === "/api/conversations/conv-s/outputs")
       return json({ outputs: [], total: 3, shared_count: 3, team_visible: true });

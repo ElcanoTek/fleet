@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadFile } from "./downloadFile";
+import { downloadFile, filenameFrom, saveBlob } from "./downloadFile";
 
 // downloadFile is the fetch-first replacement for `window.location.href =
 // <csv endpoint>`: a non-2xx must surface as an error the caller can show,
@@ -72,5 +72,40 @@ describe("downloadFile", () => {
       new Response("<html>Bad Gateway</html>", { status: 502, statusText: "Bad Gateway" }),
     );
     await expect(downloadFile("/x.csv", "x.csv")).rejects.toThrow("HTTP 502 Bad Gateway");
+  });
+});
+
+describe("saveBlob", () => {
+  it("clicks a download anchor with the given name and revokes the URL", () => {
+    saveBlob(new Blob(["{}"], { type: "application/json" }), "logs.json");
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0].download).toBe("logs.json");
+    expect(clicked[0].href).toBe("blob:fleet/report");
+    expect(clicked[0].isConnected).toBe(false);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fleet/report");
+  });
+});
+
+describe("filenameFrom", () => {
+  it("reads the quoted and unquoted plain forms", () => {
+    expect(filenameFrom('attachment; filename="report.csv"')).toBe("report.csv");
+    expect(filenameFrom("attachment; filename=report.csv")).toBe("report.csv");
+    expect(filenameFrom('attachment; filename="My chat (1).md"; size=10')).toBe("My chat (1).md");
+  });
+
+  it("prefers the RFC 5987 form and decodes it", () => {
+    expect(
+      filenameFrom(`attachment; filename="fallback.md"; filename*=UTF-8''Caf%C3%A9%20notes.md`),
+    ).toBe("Café notes.md");
+  });
+
+  it("falls back to the plain form when the encoded one does not decode", () => {
+    expect(filenameFrom(`attachment; filename*=UTF-8''bad%E0%A4; filename="plain.md"`)).toBe("plain.md");
+  });
+
+  it("answers null without a usable name", () => {
+    expect(filenameFrom(null)).toBeNull();
+    expect(filenameFrom("")).toBeNull();
+    expect(filenameFrom("attachment")).toBeNull();
   });
 });

@@ -39,6 +39,7 @@ import {
   type OutputFile,
   type ViewerBranch,
 } from "./teamSharing";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
 // The assistant markdown pipeline is lazy-loaded here for the same reason the
 // live transcript lazy-loads it (react-markdown + micromark, ~43 KiB): this
@@ -180,28 +181,24 @@ export function TeamChatViewer({
     [conversationId],
   );
 
+  // The poll's cancellation check: the current chat's load effect's, so a
+  // poll answer for a chat the viewer has left is dropped.
+  const pollCancelled = useRef<() => boolean>(() => true);
   useEffect(() => {
     let cancelled = false;
     const isCancelled = () => cancelled;
+    pollCancelled.current = isCancelled;
     // A different chat (or a remount) starts unconditional.
     etagRef.current = null;
     hasSnapshot.current = false;
     queueMicrotask(() => void load(false, isCancelled));
-    const visible = () =>
-      typeof document === "undefined" || document.visibilityState === "visible";
-    const timer = window.setInterval(() => {
-      if (visible()) void load(true, isCancelled);
-    }, TEAM_VIEW_POLL_MS);
-    const onVisibility = () => {
-      if (visible()) void load(true, isCancelled);
-    };
-    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [load]);
+  // Conditional re-reads while the tab is visible, and one as it comes back
+  // into view (#2004).
+  useVisibleInterval(() => void load(true, pollCancelled.current), TEAM_VIEW_POLL_MS);
 
   const bubbles = snapshot ? toBubbles(snapshot.messages) : [];
   // Branch from the LAST message: "continue from here" is what the CTA

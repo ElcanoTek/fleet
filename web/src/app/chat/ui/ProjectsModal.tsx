@@ -5,6 +5,8 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe, type Me } from "@/app/shared/lib/account";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -28,7 +30,7 @@ export type Project = {
   updated_at: number;
 };
 
-// The caller's own team, from /api/me/team (#1157). "Share with my team" is
+// The caller's own team, from /api/me (#1157, shared/lib/account). "Share with my team" is
 // meaningless without one, so the teamless state says where teams are managed
 // instead of rendering a control that could only 400.
 //
@@ -39,12 +41,6 @@ export type Project = {
 // for your own, Settings → Admin → Users for anyone's); this modal is now
 // display-only about teams, so there is nothing here to type and nothing to
 // get wrong.
-type Me = {
-  email: string;
-  role: string;
-  team_id: string;
-  admin: boolean;
-};
 
 type ProjectMemory = {
   id: string;
@@ -110,18 +106,15 @@ export function ProjectsModal({
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load projects.");
+      setError(errorMessage(err, "Unable to load projects."));
     }
   }, []);
 
+  // Non-fatal: an unreadable record leaves `me` null, and the modal still
+  // works with the neutral copy, minus the team hint.
   const loadMe = useCallback(async () => {
-    try {
-      const res = await fetch("/api/me/team", { cache: "no-store" });
-      if (!res.ok) return; // non-fatal: the modal still works, minus the team hint
-      setMe((await res.json()) as Me);
-    } catch {
-      // Offline / transient: leave `me` null and fall back to the neutral copy.
-    }
+    const record = await fetchMe();
+    if (record) setMe(record);
   }, []);
 
   const loadMemories = useCallback(async (id: string) => {
@@ -208,7 +201,7 @@ export function ProjectsModal({
       setSelectedId(p.id);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save project.");
+      setError(errorMessage(err, "Unable to save project."));
     } finally {
       setBusy(false);
     }
@@ -221,7 +214,7 @@ export function ProjectsModal({
       setSelectedId(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to delete project.");
+      setError(errorMessage(err, "Unable to delete project."));
     }
   };
 
@@ -238,7 +231,7 @@ export function ProjectsModal({
       setMemoryDraft("");
       await loadMemories(selectedId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to add memory.");
+      setError(errorMessage(err, "Unable to add memory."));
     }
   };
 
@@ -249,7 +242,7 @@ export function ProjectsModal({
       if (!res.ok) throw new Error(await responseErrorText(res, "Unable to remove memory"));
       await loadMemories(selectedId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to remove memory.");
+      setError(errorMessage(err, "Unable to remove memory."));
     }
   };
 

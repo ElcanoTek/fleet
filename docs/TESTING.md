@@ -198,7 +198,9 @@ image); run them via the `npm` scripts documented below.
     is now `error`; `npm run lint` runs `oxlint --deny-warnings`, so a rule
     re-introduced at `warn` fails the build rather than quietly re-opening the
     backlog. The PR that landed the fixes (in the repository history) records
-    what they actually changed.
+    what they actually changed. It also passes
+    `--report-unused-disable-directives`, so a disable comment that no longer
+    silences anything fails the build too instead of lingering.
 
     Two things worth knowing when reading `.oxlintrc.json`:
 

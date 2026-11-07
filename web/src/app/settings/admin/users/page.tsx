@@ -35,6 +35,8 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson } from "@/app/settings/lib/getGated";
 
 export type AdminUser = {
   email: string;
@@ -355,19 +357,11 @@ function generatePassword(): string {
 }
 
 async function fetchUsers(): Promise<AdminUser[] | null> {
-  const response = await fetch("/api/admin/users", { cache: "no-store" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return null;
-  }
-  if (response.status === 403) {
-    throw new Error("You are not an admin.");
-  }
-  if (!response.ok) {
-    throw new Error(`Users request failed: ${response.status}`);
-  }
-  const data = (await response.json()) as { users?: AdminUser[] };
-  return data.users ?? [];
+  const data = await getGatedJson<{ users?: AdminUser[] }>("/api/admin/users", {
+    label: "Users",
+    statusText: { 403: "You are not an admin." },
+  });
+  return data ? (data.users ?? []) : null;
 }
 
 // One table row: the union of a provisioned account and its usage stats,
@@ -536,7 +530,7 @@ export default function AdminUsersPage() {
       })
       .catch((err: unknown) => {
         if (stale) return;
-        setError(err instanceof Error ? err.message : "Failed to load.");
+        setError(errorMessage(err, "Failed to load."));
       })
       .finally(() => {
         if (stale) return;
@@ -671,7 +665,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: err instanceof Error ? err.message : "Save failed.",
+        [u.email]: errorMessage(err, "Save failed."),
       }));
     }
   };
@@ -734,7 +728,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setDeleteError({
         email: u.email,
-        message: err instanceof Error ? err.message : "Delete failed.",
+        message: errorMessage(err, "Delete failed."),
       });
     } finally {
       setDeleting(null);
@@ -763,7 +757,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: err instanceof Error ? err.message : "Reset failed.",
+        [u.email]: errorMessage(err, "Reset failed."),
       }));
     }
   };
@@ -816,7 +810,7 @@ export default function AdminUsersPage() {
       setAddStatus(null);
       setAddOpen(false);
     } catch (err) {
-      setAddStatus(err instanceof Error ? err.message : "Create failed.");
+      setAddStatus(errorMessage(err, "Create failed."));
     }
   };
 
@@ -850,7 +844,7 @@ export default function AdminUsersPage() {
       const rows = await fetchUsers();
       if (rows !== null) setUsers(rows);
     } catch (err) {
-      setRenameStatus(err instanceof Error ? err.message : "Rename failed.");
+      setRenameStatus(errorMessage(err, "Rename failed."));
     }
   };
 

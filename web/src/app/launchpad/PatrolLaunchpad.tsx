@@ -39,6 +39,9 @@ import {
   type PatrolMode,
 } from "./launchpadModel";
 import { responseErrorText } from "@/app/lib/responseError";
+import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -231,7 +234,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       // may be stale (a tool connected or removed in the other tab), so launch
       // must not replace the server's connector seed with it.
       setCatalogLoaded(false);
-      setLoadError(e instanceof Error ? e.message : "Could not load your connectors.");
+      setLoadError(errorMessage(e, "Could not load your connectors."));
     }
   }, []);
 
@@ -263,23 +266,18 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       void loadConnectors();
       void loadMemories();
     });
-    void (async () => {
-      try {
-        const res = await fetch("/api/me", { cache: "no-store" });
-        if (!res.ok) return;
-        const me = (await res.json()) as { role?: string };
-        if (me.role === "viewer") {
-          setReadOnly(true);
-          // A viewer sees only the preamble, even with progress saved on a
-          // later step from before their role changed (or after a quick Next
-          // while this read was in flight). The server still refuses every
-          // write a viewer attempts; this keeps the screen honest.
-          setState((cur) => (cur.step === "why" ? cur : { ...cur, step: "why" }));
-        }
-      } catch {
-        // Unknown role: the server still refuses what a viewer cannot do.
+    // Unknown role (an unreadable record): the server still refuses what a
+    // viewer cannot do.
+    void fetchMe().then((me) => {
+      if (me?.role === "viewer") {
+        setReadOnly(true);
+        // A viewer sees only the preamble, even with progress saved on a
+        // later step from before their role changed (or after a quick Next
+        // while this read was in flight). The server still refuses every
+        // write a viewer attempts; this keeps the screen honest.
+        setState((cur) => (cur.step === "why" ? cur : { ...cur, step: "why" }));
       }
-    })();
+    });
     void (async () => {
       try {
         const res = await fetch("/api/personas", { cache: "no-store" });
@@ -401,11 +399,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   };
   useEffect(() => {
     if (launch) return;
-    try {
-      window.sessionStorage.setItem(progressItem(), JSON.stringify(state));
-    } catch {
-      // Private mode: progress just is not remembered.
-    }
+    // Private mode: progress just is not remembered.
+    writePref(progressItem(), JSON.stringify(state), "session");
   }, [state, launch]);
 
   // The person's optional choices, plus every usable always-on connector the
@@ -542,18 +537,15 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         }).catch(() => null);
         firstRun = runRes === null ? "unknown" : runRes.ok ? "running" : "refused";
       }
-      try {
-        window.sessionStorage.removeItem(progressItem());
-        window.localStorage.setItem(LAUNCHPAD_LAUNCHED_ITEM, "1");
-      } catch {
-        // Storage unavailable: nothing to clean up.
-      }
+      // Storage unavailable: nothing to clean up.
+      removePref(progressItem(), "session");
+      writePref(LAUNCHPAD_LAUNCHED_ITEM, "1");
       setCreated({ conversationId: "", scheduleId: "" });
       setLaunch({ phase: "done", conversationId, firstRun });
     } catch (e) {
       setLaunch({
         phase,
-        error: e instanceof Error ? e.message : "Launch failed.",
+        error: errorMessage(e, "Launch failed."),
         conversationId: created.current.conversationId || undefined,
       });
     }
@@ -832,11 +824,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 }
 
 function launchedBefore(): boolean {
-  try {
-    return window.localStorage.getItem(LAUNCHPAD_LAUNCHED_ITEM) === "1";
-  } catch {
-    return false;
-  }
+  return readPref(LAUNCHPAD_LAUNCHED_ITEM) === "1";
 }
 
 function personaName(ref: string, fallback: string, users: UserPersona[]): string {
@@ -1376,7 +1364,7 @@ function RulesStep({
       }
       onMemoriesChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save that.");
+      setError(errorMessage(e, "Could not save that."));
     } finally {
       setBusy(false);
     }
@@ -1773,7 +1761,7 @@ function LaunchStep({
       onDrafted({ title: d.title?.trim() || title, prompt: d.prompt.trim(), summary: d.summary?.trim() ?? "" });
     } catch (e) {
       setDraftError(
-        `${e instanceof Error ? e.message : "The assistant could not draft this patrol"}. Your template draft is still here — it works as-is.`,
+        `${errorMessage(e, "The assistant could not draft this patrol")}. Your template draft is still here — it works as-is.`,
       );
     } finally {
       setDrafting(false);

@@ -15,13 +15,11 @@ export const AUTO_RELOAD_WINDOW_MS = 2 * 60 * 1000;
 
 const STORAGE_KEY = "fleet-chunk-reload-at";
 
-// The ways a failed chunk or dynamic import surfaces across bundlers and
-// browsers. Turbopack and webpack name their error ChunkLoadError ("Failed to
-// load chunk …" / "Loading chunk … failed"); a native dynamic import() that
-// fails is a plain TypeError whose message is per-browser.
+// The ways a failed lazy chunk surfaces. Vite code-splits with native dynamic
+// import(), and one that fails is a plain TypeError whose message is
+// per-browser. (The webpack/Turbopack ChunkLoadError shapes went with
+// Next.js.)
 const CHUNK_ERROR_MESSAGES = [
-  /failed to load chunk/i,
-  /loading (?:css )?chunk [^ ]+ failed/i,
   /failed to fetch dynamically imported module/i, // Chromium
   /importing a module script failed/i, // WebKit (Safari, every iOS browser)
   /error loading dynamically imported module/i, // Firefox
@@ -30,7 +28,6 @@ const CHUNK_ERROR_MESSAGES = [
 // isChunkLoadError reports whether an error is a failed chunk or dynamic import.
 export function isChunkLoadError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  if (error.name === "ChunkLoadError") return true;
   return CHUNK_ERROR_MESSAGES.some((re) => re.test(error.message));
 }
 

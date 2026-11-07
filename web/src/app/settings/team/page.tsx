@@ -24,7 +24,7 @@
 // team-shared chat cannot outlive the place teammates would find it
 // (ADR-0057).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 
@@ -33,6 +33,10 @@ import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { invalidateMe } from "@/app/shared/lib/account";
+import { redirectToLogin } from "@/app/settings/lib/getGated";
 
 export type Me = {
   email: string;
@@ -52,12 +56,11 @@ export type Me = {
 };
 
 export default function TeamSettingsPage() {
-  const [me, setMe] = useState<Me | null>(null);
   const [draft, setDraft] = useState("");
+  // Write failures; a load failure is the fetch hook's own error below.
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(true);
   // Set when central Auth manages this Fleet's teams (team sync): Auth sends
   // each person's team, so this page shows it but cannot change it (the
   // server refuses PUT /api/me/team there too).
@@ -66,34 +69,31 @@ export default function TeamSettingsPage() {
   // it unshares chats. true = the confirm is open.
   const [confirmLeave, setConfirmLeave] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/me/team", { cache: "no-store" });
+  // The account and its leave impact, read through useCancellableFetch
+  // (#2009): leaving the page aborts a read still in flight. A 401 goes to
+  // sign-in and leaves the record empty.
+  const {
+    data: me,
+    setData: setMe,
+    loading: reading,
+    error: loadError,
+    reload: load,
+  } = useCancellableFetch(
+    useCallback(async (signal: AbortSignal): Promise<Me | null> => {
+      const res = await fetch("/api/me/team", { cache: "no-store", signal });
       if (res.status === 401) {
-        window.location.href = "/login";
-        return;
+        redirectToLogin();
+        return null;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Request failed"));
-      setMe((await res.json()) as Me);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to read your team.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // queueMicrotask keeps the first setState out of the effect body itself
-    // (react-hooks/set-state-in-effect), the same shape the projects modal uses.
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+      return (await res.json()) as Me;
+    }, []),
+    [],
+  );
+  // Only the first read shows the loading state; the re-read after a save
+  // keeps the form on screen.
+  const loading = reading && me === null;
+  const shownError = error ?? loadError;
 
   const write = async (teamID: string) => {
     setBusy(true);
@@ -109,7 +109,7 @@ export default function TeamSettingsPage() {
         // The session lapsed between the read and the write: the load path
         // redirects, so this one does too rather than rendering "Save failed
         // (401)" over a form that can no longer save anything.
-        window.location.href = "/login";
+        redirectToLogin();
         return;
       }
       if (res.status === 409) {
@@ -123,6 +123,9 @@ export default function TeamSettingsPage() {
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
       const updated = (await res.json()) as Me;
+      // Every other reader shares one cached account record; it now names
+      // the old team.
+      invalidateMe();
       setMe(updated);
       setDraft("");
       setNotice(
@@ -135,7 +138,7 @@ export default function TeamSettingsPage() {
       // counts instead of degrading to "we couldn't work out the numbers".
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save your team.");
+      setError(errorMessage(err, "Unable to save your team."));
     } finally {
       setBusy(false);
     }
@@ -146,9 +149,9 @@ export default function TeamSettingsPage() {
       title="Team"
       intro="A team is the trust group that shared projects and shared conversations travel in. Everyone with the same team name can open the projects shared with it."
     >
-      {error ? (
+      {shownError ? (
         <NoticeBanner tone="danger" className="mb-[0.85rem]">
-          {error}
+          {shownError}
         </NoticeBanner>
       ) : null}
       {notice ? (

@@ -86,12 +86,10 @@ export const test = base.extend<
       }
     });
     // Playwright fixture-setup callback, not the React `use` hook.
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(page);
   },
 
   login: async ({ page, authenticatedCookies }, use) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(async () => {
       await page.context().addCookies(authenticatedCookies);
       await page.goto("/");

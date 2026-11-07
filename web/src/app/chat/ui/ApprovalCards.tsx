@@ -51,6 +51,7 @@ import { ApprovalResultCardView } from "./ApprovalResultCard";
 import { conversationApiPath, conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -607,7 +608,7 @@ export function ApprovalCard({
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
       setSubmitError(
-        `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
+        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
       );
     } finally {
       setSubmitting(null);
@@ -655,7 +656,7 @@ export function ApprovalCard({
         stopped: data.stopped === true || undefined,
       });
     } catch (err) {
-      setSubmitError(`Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`);
+      setSubmitError(`Couldn't reach the server (${errorMessage(err, "request failed")}).`);
     } finally {
       setSubmitting(null);
     }
@@ -2156,7 +2157,7 @@ function SuggestAdvancedModelCard({
       }
     } catch (err) {
       setSubmitError(
-        `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
+        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
       );
     } finally {
       setPending(null);

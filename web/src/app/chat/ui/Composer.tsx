@@ -52,6 +52,7 @@ import { ToolsPopover } from "./ToolsPopover";
 import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
 import { Link } from "@/app/lib/Link";
 import {
   formatBundlePersona,
@@ -94,11 +95,6 @@ function looksLikeCode(text: string): boolean {
   );
 }
 
-// localStorage key for the "Send on Enter" vs "Send on Ctrl/Cmd+Enter"
-// preference. Read once at composer mount; written whenever the toggle
-// pill next to the Send button is clicked. Defaults to "enter" (the
-// muscle-memory default for every major chat UI).
-const SEND_KEY_STORAGE = "fleet.sendKey";
 const CODE_NUDGE_TIMEOUT_MS = 6000;
 
 // ── Design toolbar building blocks (unified shell .composer-toolbar) ────────
@@ -407,14 +403,9 @@ export function Composer({
     !skillPopoverDismissed &&
     !isStreaming &&
     !shareBusy;
-  const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      return (localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter";
-    } catch {
-      return true;
-    }
-  });
+  // The send-key preference (shared/lib/storage): read once at composer
+  // mount, written whenever the toggle pill next to Send is clicked.
+  const [sendOnEnter, setSendOnEnter] = useState<boolean>(readSendOnEnter);
   // Keyboard support for the model listbox (the design's .composer-pop):
   // ArrowUp/Down move this highlight from the search field, Enter picks it,
   // Escape closes and returns focus to the chip. Clamped at use so a
@@ -456,18 +447,10 @@ export function Composer({
     if (returnFocus) modelChipRef.current?.focus();
   };
 
-  // Persist the send-key preference whenever it changes. Wrapped in a
-  // try/catch because localStorage can throw in private-browsing modes
-  // (Safari) and we don't want a settings toggle to take down the chat.
+  // Persist the send-key preference whenever it changes. The write never
+  // throws: in private mode or over quota the preference stays page-only.
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        SEND_KEY_STORAGE,
-        sendOnEnter ? "enter" : "ctrl+enter",
-      );
-    } catch {
-      /* private mode / quota — preference stays session-only, which is fine */
-    }
+    writeSendOnEnter(sendOnEnter);
   }, [sendOnEnter]);
 
   // Auto-dismiss the code-paste nudge after CODE_NUDGE_TIMEOUT_MS. Each

@@ -10,7 +10,7 @@
 // /settings); authorization stays server-side — both endpoints independently
 // 403 non-admins, and those error paths render below.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@/app/lib/navigation";
 
 import {
@@ -28,6 +28,8 @@ import { useIsAdmin } from "../useIsAdmin";
 import { AdminGateFallback } from "../AdminGateFallback";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
 type HealthSummary = {
   fleet_version: string;
@@ -148,7 +150,7 @@ export default function AdminOverviewPage() {
       })
       .catch((e: unknown) => {
         if (isStale()) return;
-        setHealthErr(e instanceof Error ? e.message : "failed to load health");
+        setHealthErr(errorMessage(e, "failed to load health"));
       });
 
   const applyStats = (isStale: () => boolean) =>
@@ -161,21 +163,25 @@ export default function AdminOverviewPage() {
       })
       .catch((err: unknown) => {
         if (isStale()) return;
-        setStatsErr(err instanceof Error ? err.message : "Failed to load.");
+        setStatsErr(errorMessage(err, "Failed to load."));
       });
 
+  // The poll's staleness check: the current load effect's, so a poll that
+  // resolves after an unmount is dropped like the first load.
+  const pollStale = useRef<() => boolean>(() => true);
   useEffect(() => {
     if (admin !== "admin") return;
     let stale = false;
     const isStale = () => stale;
+    pollStale.current = isStale;
     void applyHealth(isStale);
     void applyStats(isStale);
-    const id = setInterval(() => void applyHealth(isStale), REFRESH_MS);
     return () => {
       stale = true;
-      clearInterval(id);
     };
   }, [admin]);
+  // Health re-polls silently, resting while the tab is hidden (#2004).
+  useVisibleInterval(() => void applyHealth(pollStale.current), REFRESH_MS, admin === "admin");
 
   if (admin !== "admin") return <AdminGateFallback state={admin} />;
 

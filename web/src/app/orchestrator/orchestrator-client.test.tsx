@@ -193,7 +193,7 @@ describe("a record open when its live run ends", () => {
     expect(screen.queryByRole("dialog", { name: "Live task activity" })).toBeNull();
     expect(task).toHaveBeenCalledTimes(2);
     expect(task).toHaveBeenLastCalledWith(TASK_ID);
-    expect(taskLogs).toHaveBeenCalledWith(TASK_ID);
+    expect(taskLogs).toHaveBeenCalledWith(TASK_ID, expect.any(AbortSignal));
   });
 
   it("swaps a row that left the board's page while it ran", async () => {

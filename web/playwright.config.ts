@@ -3,18 +3,19 @@ import { getTestAuthKey } from "./e2e/test-auth-key";
 
 // Playwright config for the unified Fleet frontend.
 //
-// The CI suite is MOCKED-ONLY and deterministic: it drives the real browser
+// The default (mocked) suite is deterministic: it drives the real browser
 // tier (the Go gateway serving the built SPA) but every backend call is
 // replaced by Playwright route interception. No live OpenRouter, no Podman, no database —
 // so the suite is fully reproducible on a clean ubuntu-latest runner.
 //
-//   testDir: ./e2e/mocked   → the deterministic, CI-runnable suite.
+//   testDir: ./e2e/mocked   → the deterministic suite (CI: `npx playwright test`).
 //
-// The LIVE specs at the top level of e2e/ (auth.spec.ts, chat.spec.ts, …) drive
-// a REAL booted fleet (chat-server + orchestrator in CHAT_MOCK_MODE, started by
-// scripts/e2e-boot-server.sh). They are intentionally NOT part of the default
-// testDir and never run in CI — see web/e2e/README.md for how to run them
-// locally against a live stack.
+// The LIVE specs in e2e/live/ (auth.spec.ts, turn-lifecycle.spec.ts, …) drive
+// a REAL booted fleet (the fleet binary with Postgres and the sandbox, the
+// LLM stubbed by cmd/fake-llm, started by scripts/e2e-boot-server.sh). They
+// are the "live" project, present only with E2E_LIVE=1, and CI runs them in
+// the e2e-live job with `--project=live` — see web/e2e/README.md for running
+// them locally.
 
 // The browser tier's port (FLEET_WEB_ADDR) for both lanes.
 const WEB_PORT = Number(process.env.WEB_PORT ?? 3100);
@@ -35,8 +36,8 @@ const TEST_SESSION_SECRET = "e2e-session-secret-0123456789abcdef";
 // processes (which both re-load this config) read the SAME material:
 //   - the PUBLIC key is exported to the gateway via AUTH_SIGNING_PUBKEY
 //     (standard base64 of the raw 32-byte key, matching auth-admin keygen and
-//     home/server.js's `Buffer.from(AUTH_SIGNING_PUBKEY, "base64")`), so the
-//     real verifier (verifyElcanoToken) trusts tokens signed by this keypair.
+//     internal/websession's ParseElcanoPubKey), so the real verifier
+//     (websession.VerifyElcanoToken) trusts tokens signed by this keypair.
 //   - the matching PRIVATE key (PKCS8 PEM) is read by the mocked test helper
 //     (e2e/mocked/_session.ts) so a spec can mint a valid elcano_auth cookie the
 //     way the real auth service would.

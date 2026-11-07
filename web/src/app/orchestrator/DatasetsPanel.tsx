@@ -10,8 +10,10 @@ import { RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
-import { downloadFile } from "./downloadFile";
+import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "./plural";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
 // rows (CSV), run the agent over pending rows, review PROPOSED write-backs
@@ -68,7 +70,7 @@ export function DatasetsPanel() {
       const res = await orchestratorApi.datasets();
       setDatasets(res.datasets ?? []);
     } catch (err) {
-      showToast(`Failed to load datasets: ${(err as Error).message}`, "error");
+      showToast(`Failed to load datasets: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setListLoaded(true);
     }
@@ -104,7 +106,7 @@ export function DatasetsPanel() {
       if (page > rowsPagesRef.current) setRowsPage(rowsPagesRef.current);
     } catch (err) {
       if (runId !== rowsRunRef.current) return;
-      showToast(`Failed to load rows: ${(err as Error).message}`, "error");
+      showToast(`Failed to load rows: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       if (runId === rowsRunRef.current) setRowsLoading(false);
     }
@@ -150,15 +152,16 @@ export function DatasetsPanel() {
     };
   }, [reloadRows]);
 
-  // Poll while the selected dataset is running so statuses tick over.
-  useEffect(() => {
-    if (selected?.status !== "running") return;
-    const id = setInterval(() => {
+  // Poll while the selected dataset is running so statuses tick over; the
+  // poll rests while the tab is hidden (#2004).
+  useVisibleInterval(
+    () => {
       void reloadList();
       void reloadRows();
-    }, 5000);
-    return () => clearInterval(id);
-  }, [selected?.status, reloadList, reloadRows]);
+    },
+    5000,
+    selected?.status === "running",
+  );
 
   const act = async (label: string, fn: () => Promise<unknown>) => {
     if (busy) return;
@@ -168,7 +171,7 @@ export function DatasetsPanel() {
       await reloadList();
       await reloadRows();
     } catch (err) {
-      showToast(`${label} failed: ${(err as Error).message}`, "error");
+      showToast(`${label} failed: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setBusy(false);
     }
@@ -192,7 +195,7 @@ export function DatasetsPanel() {
       `/api/orchestrator/datasets/${encodeURIComponent(selected.id)}/export`,
       `${selected.name || "dataset"}.csv`,
     ).catch((err: unknown) =>
-      showToast(`Export failed: ${err instanceof Error ? err.message : "download failed"}`, "error"),
+      showToast(`Export failed: ${errorMessage(err, "download failed")}`, "error"),
     );
   };
 
@@ -499,7 +502,7 @@ function DatasetCreateModal({
       });
       onCreated(d);
     } catch (err) {
-      showToast(`Create failed: ${(err as Error).message}`, "error");
+      showToast(`Create failed: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setSaving(false);
     }

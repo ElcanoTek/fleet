@@ -28,6 +28,8 @@ import {
   type TeamChatEntry,
 } from "./ProjectChatSections";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { isAbortError, useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 
 // Project home (#509 follow-up): the page a project's rail row opens — title,
 // this member's chats in the project, the TEAM's shared chats beside them, a
@@ -427,7 +429,7 @@ export function ProjectHome({
       } catch (err) {
         notify({
           message: `Couldn’t share “${title || "Untitled"}” with ${team}. ${
-            err instanceof Error ? err.message : ""
+            errorMessage(err, "")
           }`.trim(),
         });
         return false;
@@ -468,7 +470,7 @@ export function ProjectHome({
     } catch (err) {
       notify({
         message: `Couldn’t stop sharing “${title}”. ${
-          err instanceof Error ? err.message : ""
+          errorMessage(err, "")
         }`.trim(),
       });
     }
@@ -493,7 +495,7 @@ export function ProjectHome({
       } catch (err) {
         notify({
           message: `Couldn’t share the new chat with ${team}. ${
-            err instanceof Error ? err.message : ""
+            errorMessage(err, "")
           }`.trim(),
         });
       }
@@ -914,41 +916,46 @@ export function TeamLearningsPanel({
   userEmail: string;
   teamShared: boolean;
 }) {
-  const [entries, setEntries] = useState<TeamLearning[] | null>(null);
+  // Write failures; a load failure is the fetch hook's own error below.
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/projects/${encodeURIComponent(projectId)}/memories`,
-        { cache: "no-store" },
-      );
-      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t load team learnings"));
-      const data = (await res.json()) as { memories?: TeamLearning[] };
-      setEntries(data.memories ?? []);
-      setError(null);
-    } catch {
-      // entries stays NULL, not []: an empty array renders "No team learnings
-      // yet. Save one from any chat in this project" underneath the error,
-      // which is a claim about the project we just failed to read.
-      setEntries(null);
-      setError("Couldn’t load team learnings.");
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+  // The list, read through useCancellableFetch (#2009): switching projects
+  // aborts the read for the one left behind, so its late answer can never
+  // land under the new project's heading.
+  const {
+    data: loaded,
+    error: loadError,
+    reload: load,
+  } = useCancellableFetch(
+    useCallback(
+      async (signal: AbortSignal) => {
+        let res: Response;
+        try {
+          res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/memories`, {
+            cache: "no-store",
+            signal,
+          });
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          throw new Error("Couldn’t load team learnings.");
+        }
+        if (!res.ok) throw new Error("Couldn’t load team learnings.");
+        const data = (await res.json()) as { memories?: TeamLearning[] };
+        return data.memories ?? [];
+      },
+      [projectId],
+    ),
+    [projectId],
+  );
+  // entries is NULL, not [], after a failed read: an empty array renders "No
+  // team learnings yet. Save one from any chat in this project" underneath
+  // the error, which is a claim about the project we just failed to read.
+  const entries = loadError ? null : loaded;
+  const shownError = error ?? loadError;
 
   const [savingEdit, setSavingEdit] = useState(false);
   // The entry a delete confirm is up for. A DIALOG, not an inline "Delete for
@@ -981,7 +988,7 @@ export function TeamLearningsPanel({
       setDraft("");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t save that learning.");
+      setError(errorMessage(err, "Couldn’t save that learning."));
     } finally {
       setBusy(false);
     }
@@ -1007,7 +1014,7 @@ export function TeamLearningsPanel({
       await load();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t update that learning.");
+      setError(errorMessage(err, "Couldn’t update that learning."));
       return false;
     }
   };
@@ -1023,7 +1030,7 @@ export function TeamLearningsPanel({
       if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t delete that learning"));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t delete that learning.");
+      setError(errorMessage(err, "Couldn’t delete that learning."));
     }
   };
 
@@ -1050,12 +1057,12 @@ export function TeamLearningsPanel({
         <Icon name="brain" className="size-3.5 shrink-0" />
         Team learnings
       </h2>
-      {error ? (
-        <p className="mb-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
+      {shownError ? (
+        <p className="mb-2 text-[0.72rem] text-[var(--color-danger)]">{shownError}</p>
       ) : null}
       {entries === null ? (
         <p className="text-[0.8rem] text-[var(--color-text-muted)]">
-          {error ? "" : "Loading…"}
+          {shownError ? "" : "Loading…"}
         </p>
       ) : entries.length === 0 ? (
         <p className="text-[0.8rem] leading-[1.5] text-[var(--color-text-muted)]">
