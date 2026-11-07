@@ -8,16 +8,15 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // openRawDB opens a raw pgx connection bypassing applyMigrations so a
 // test can inspect schema_migrations directly or seed weird state.
 func openRawDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -61,7 +60,7 @@ func TestMigrations_IdempotentReopen(t *testing.T) {
 	s1 := newTestStore(t)
 	v1 := maxAppliedVersion(t, s1.db)
 
-	dsn := testDSN()
+	dsn := testdb.ChatDSN(t)
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("second open: %v", err)
@@ -109,7 +108,7 @@ func TestMigrations_RefusesNewerDB(t *testing.T) {
 		_, _ = raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 999`)
 	})
 
-	if _, err := Open(testDSN(), DefaultPoolConfig()); err == nil {
+	if _, err := Open(testdb.ChatDSN(t), DefaultPoolConfig()); err == nil {
 		t.Fatal("Open should reject a DB with a future schema version")
 	}
 }
@@ -126,7 +125,7 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 	_ = s.Close()
 
 	// Reopen WITHOUT truncating, to confirm Open itself is non-destructive.
-	dsn := testDSN()
+	dsn := testdb.ChatDSN(t)
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -331,5 +330,38 @@ func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
 		 VALUES ('terminal-position', $1, 'u@example.com', 'terminal-position', '', '[]',
 		         'queued', 'completed', 1, 200, 200)`, conv.ID); err != nil {
 		t.Fatalf("terminal duplicate position should remain allowed: %v", err)
+	}
+}
+
+// TestMigrations_LockWaitIsBounded holds the chat migration lock on another
+// session and asserts applyMigrations gives up with a bounded error instead
+// of blocking forever (#2022).
+func TestMigrations_LockWaitIsBounded(t *testing.T) {
+	raw := openRawDB(t)
+	ctx := context.Background()
+	holder, err := raw.Conn(ctx)
+	if err != nil {
+		t.Fatalf("holder conn: %v", err)
+	}
+	defer holder.Close()
+	// pg_try_advisory_lock, not the blocking form: scripts/go_test_script_test.go
+	// classifies a test file naming the blocking call as a sched-DSN user.
+	var held bool
+	if err := holder.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, migrationLockKey).Scan(&held); err != nil || !held {
+		t.Fatalf("hold lock: held=%v err=%v", held, err)
+	}
+	defer func() { _, _ = holder.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey) }()
+
+	oldTimeout, oldPoll := migrationLockTimeout, migrationLockPollInterval
+	migrationLockTimeout, migrationLockPollInterval = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { migrationLockTimeout, migrationLockPollInterval = oldTimeout, oldPoll })
+
+	start := time.Now()
+	err = applyMigrations(ctx, raw)
+	if err == nil || !strings.Contains(err.Error(), "waiting for chat migration lock") {
+		t.Fatalf("applyMigrations with lock held = %v, want bounded lock-wait error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("lock wait took %s, want ~%s", elapsed, migrationLockTimeout)
 	}
 }

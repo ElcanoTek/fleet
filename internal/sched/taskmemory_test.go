@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // newSelfImproveStore mirrors newNotesStore but also cleans the self-improvement
@@ -19,30 +20,7 @@ import (
 // notes tests use (the sched suite runs -p 1).
 func newSelfImproveStore(t *testing.T) (*Store, *db.Database) {
 	t.Helper()
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("Skipping self-improve test because DB init failed: %v", err)
-	}
-	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("get DB connection for lock: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("acquire test lock: %v", err)
-	}
-	clean := func() {
-		database.Conn().ExecContext(ctx, "DELETE FROM task_memories")
-		database.Conn().ExecContext(ctx, "DELETE FROM tasks")
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
-		conn.Close()
-		database.Close()
-	})
+	database := testdb.SchedDB(t, "task_memories", "tasks")
 	return NewStore(database), database
 }
 

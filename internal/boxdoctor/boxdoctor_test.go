@@ -87,10 +87,14 @@ func TestCheckDBs(t *testing.T) {
 		t.Errorf("failing ping: got %s fix=%q, want fail with a fix", c.Status, c.Fix)
 	}
 
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "")
-	t.Setenv("DATABASE_URL", "")
-	if c := checkSchedDB(ctx, ""); c.Status != StatusFail {
-		t.Errorf("no DSN: got %s (%s), want fail", c.Status, c.Detail)
+	if c := checkSchedDB(ctx, nil); c.Status != StatusSkip {
+		t.Errorf("nil sched ping: got %s, want skip", c.Status)
+	}
+	if c := checkSchedDB(ctx, func(context.Context) error { return nil }); c.Status != StatusOK {
+		t.Errorf("ok sched ping: got %s, want ok", c.Status)
+	}
+	if c := checkSchedDB(ctx, func(context.Context) error { return errors.New("boom") }); c.Status != StatusFail || c.Fix == "" {
+		t.Errorf("failing sched ping: got %s fix=%q, want fail with a fix", c.Status, c.Fix)
 	}
 }
 

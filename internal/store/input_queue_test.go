@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func enqueue(t *testing.T, s *Store, convID, clientID, msg, mode string) InputQueueRow {
@@ -445,7 +447,7 @@ func TestAcceptedInputSeq_SeededFromTableAtOpen(t *testing.T) {
 		`UPDATE chat_input_queue SET accepted_seq = $2 WHERE id = $1`, last.ID, last.AcceptedSeq+1000); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := Open(testDSN(), DefaultPoolConfig())
+	restarted, err := Open(testdb.ChatDSN(t), DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -11,7 +11,7 @@
 #
 # Usage:
 #   scripts/test-db-setup.sh [suffix]      # default suffix: current branch name
-#   eval "$(scripts/test-db-setup.sh mybranch | tail -3)"   # apply the exports
+#   eval "$(scripts/test-db-setup.sh mybranch | tail -2)"   # apply the exports
 #   scripts/test-db-setup.sh --drop <suffix>                # clean up after
 #
 # Requires a local Postgres where role `fleet` (password `fleet`) can create
@@ -47,7 +47,6 @@ for db in "$chat_db" "$sched_db"; do
     fi
 done
 
-# The last three lines are the eval-able payload (see usage above).
+# The last two lines are the eval-able payload (see usage above).
 echo "export FLEET_TEST_DATABASE_URL='postgres://fleet:fleet@localhost:5432/${chat_db}?sslmode=disable'"
-echo "export CHAT_TEST_DATABASE_URL='postgres://fleet:fleet@localhost:5432/${chat_db}?sslmode=disable'"
 echo "export DATABASE_URL='postgres://fleet:fleet@localhost:5432/${sched_db}?sslmode=disable'"

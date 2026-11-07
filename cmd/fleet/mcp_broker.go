@@ -100,8 +100,8 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 	if err != nil {
 		return nil, nil, fmt.Errorf("configure broker remote MCP cipher: %w", err)
 	}
-	chatDB := chatDSN(cfg)
-	if err := ensureDistinctDatabases(chatDB, schedDSN()); err != nil {
+	chatDB := cfg.DatabaseURL
+	if err := config.EnsureDistinctDatabases(chatDB, cfg.SchedDatabaseURL); err != nil {
 		return nil, nil, err
 	}
 	maxOpen := min(cfg.ChatDBPool.MaxOpenConns, mcpBrokerRemoteDBMaxOpen)

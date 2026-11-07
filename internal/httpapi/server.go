@@ -219,6 +219,8 @@ type Server struct {
 	startTime   time.Time
 	version     string
 	workerStats func(context.Context) (*WorkerStats, error)
+	// schedPing (optional) pings the sched DB for the admin doctor.
+	schedPing func(context.Context) error
 	// hostStats is the dependency-free procfs/statfs collector behind the
 	// admin-only Server settings page. It retains only the previous counters
 	// needed to calculate CPU/network rates.
@@ -538,6 +540,13 @@ func WithVersion(v string) Option {
 // not stop serving. nil leaves the disk section absent and /healthz unchanged.
 func WithDiskGuard(g *diskguard.Guard) Option {
 	return func(s *Server) { s.diskGuard = g }
+}
+
+// WithSchedPing injects a ping of the orchestrator (sched) DB through the
+// server's already-open pool, so the admin doctor's sched check probes the
+// database the process actually uses (#2018). nil leaves that check skipped.
+func WithSchedPing(fn func(context.Context) error) Option {
+	return func(s *Server) { s.schedPing = fn }
 }
 
 // WithWorkerStats injects a provider for scheduler worker/task counts (from the

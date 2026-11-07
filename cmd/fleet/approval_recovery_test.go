@@ -3,20 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestBootRecoveryOrdersApprovalOutcomeAfterOriginatingTurn(t *testing.T) {
-	dsn := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL not set")
-	}
+	dsn := testdb.ChatDSN(t)
 	st, err := store.Open(dsn, store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1})
 	if err != nil {
 		t.Fatal(err)

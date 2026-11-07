@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -205,16 +206,20 @@ func cmdImport(argv []string) int {
 	// single run, or via the documented runbook's two single-section bundles
 	// across two runs (#714). Refuse both shapes. For a single-section bundle
 	// the guard fires only when that section's DSN came from the generic
-	// fallback: an explicit --*-database-url flag or FLEET_*_DATABASE_URL var
-	// names the target unambiguously and is honored (a genuinely sched-only
-	// deployment may point DATABASE_URL at its one database).
+	// fallback: an explicit --*-database-url flag or store-specific
+	// FLEET_*_DATABASE_URL / SCHED_DATABASE_URL var names the target
+	// unambiguously and is honored (a genuinely sched-only deployment may point
+	// DATABASE_URL at its one database). "Same database" compares host:port/db
+	// (config.EnsureDistinctDatabases), so a DB_*-parts setup — whose chat and
+	// sched DSNs differ only in the default user — is caught too.
 	{
 		cdsn, cerr := chatDSN(*chatDB)
 		sdsn, serr := schedDSN(*schedDB)
-		if cerr == nil && serr == nil && cdsn == sdsn {
+		if cerr == nil && serr == nil && config.EnsureDistinctDatabases(cdsn, sdsn) != nil {
+			d := resolvedDSNs()
 			sameDB := (bundle.Chat != nil && bundle.Sched != nil) ||
-				(bundle.Chat != nil && dsnFromGenericFallback(*chatDB, "FLEET_CHAT_DATABASE_URL")) ||
-				(bundle.Sched != nil && dsnFromGenericFallback(*schedDB, "FLEET_SCHED_DATABASE_URL"))
+				(bundle.Chat != nil && strings.TrimSpace(*chatDB) == "" && d.ChatFromGeneric()) ||
+				(bundle.Sched != nil && strings.TrimSpace(*schedDB) == "" && d.SchedFromGeneric())
 			if sameDB {
 				return errf(1, "chat and sched DSNs resolve to the same database, which would mix the two stores' schemas in one DB — set FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL (or the --*-database-url flags) to distinct databases")
 			}
@@ -264,15 +269,6 @@ func cmdImport(argv []string) int {
 		return 3
 	}
 	return 0
-}
-
-// dsnFromGenericFallback reports whether a section's DSN resolution reached the
-// generic DATABASE_URL fallback: no explicit --*-database-url flag and no
-// section-specific FLEET_*_DATABASE_URL var. Used by the same-DSN guard — a
-// fallback-resolved target is ambiguous between the two stores, an explicit
-// one is operator intent.
-func dsnFromGenericFallback(explicit, sectionEnv string) bool {
-	return strings.TrimSpace(explicit) == "" && strings.TrimSpace(os.Getenv(sectionEnv)) == ""
 }
 
 // chatCatalog is the loaded client-config bundle's MCP-server and persona name

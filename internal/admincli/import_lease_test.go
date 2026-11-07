@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestImportBundle_SchedOverwriteRefusesLiveLease seeds a row that is running
@@ -23,36 +23,8 @@ import (
 // reported as an error (exit 3), and --dry-run must refuse identically because
 // the check is a read.
 func TestImportBundle_SchedOverwriteRefusesLiveLease(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set — skipping sched-DB import test")
-	}
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(5)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			if _, err := database.Conn().ExecContext(ctx, q); err != nil {
-				t.Fatalf("clean %q: %v", q, err)
-			}
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(5)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)

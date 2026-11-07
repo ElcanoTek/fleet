@@ -37,6 +37,13 @@ type Scheduler struct {
 	location *time.Location
 	stop     chan struct{}
 
+	// ctx is the scheduler's lifetime context: every storage sweep runs under
+	// a child of it (bounded by sweepTimeout), and Stop cancels it so a sweep
+	// stuck on the database is released at shutdown instead of holding the
+	// loop — and with it Stop's loop-exit wait — hostage (#2021).
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// loopDone is closed by runLoop on return; loopStarted records whether
 	// Start actually launched it. Stop must wait for the loop to exit before
 	// draining gateWG: a tick already inside the loop body when stop closes
@@ -214,10 +221,13 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		log.Printf("Warning: Invalid timezone '%s', defaulting to UTC: %v", timezone, err)
 		loc = time.UTC
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		storage:            store,
 		location:           loc,
 		stop:               make(chan struct{}),
+		ctx:                ctx,
+		cancel:             cancel,
 		loopDone:           make(chan struct{}),
 		scheduledBatchSize: defaultScheduledBatchSize,
 		tickInterval:       defaultTickInterval,
@@ -254,6 +264,8 @@ const gateDrainTimeout = 5 * time.Second
 // shutdown race in the common case, never to let a slow gate extend shutdown.
 func (s *Scheduler) Stop() {
 	close(s.stop)
+	// Release any sweep blocked on the database so runLoop can observe stop.
+	s.cancel()
 	settled := make(chan struct{})
 	go func() {
 		// Tests may drive ticks directly without Start; only a started loop
@@ -343,75 +355,95 @@ func (s *Scheduler) runLoop() {
 	}
 }
 
+// sweepTimeout bounds one per-tick storage sweep (lease recovery, starvation,
+// paused/stranded expiry, wake and recurrence). Generous on purpose — each is
+// an indexed UPDATE that normally finishes in milliseconds, and a timed-out
+// sweep simply retries on the next tick — but bounded, so a wedged connection
+// or a lock queue can no longer stall the tick (and with it lease recovery)
+// forever (#2021).
+const sweepTimeout = 60 * time.Second
+
+// dailySweepTimeout bounds each daily maintenance pass (retention prune, log
+// archival). Longer than sweepTimeout because those walk the whole history in
+// chunks — a first archival pass over a large backlog legitimately runs for
+// minutes — and every chunk commits, so a pass cut off here keeps its
+// progress and the next day's pass resumes where it stopped.
+const dailySweepTimeout = 30 * time.Minute
+
+// sweep runs one per-tick storage sweep; see sweepWithin.
+func (s *Scheduler) sweep(name string, fn func(ctx context.Context) (int, error), onCount func(n int)) {
+	s.sweepWithin(sweepTimeout, name, fn, onCount)
+}
+
+// sweepWithin runs one storage sweep under the scheduler's lifetime context
+// (cancelled by Stop) bounded by timeout. A failure is logged as "scheduler: <name> failed: …" and
+// never fatal — the next tick (or daily timer) retries. onCount is called only
+// when the sweep touched at least one row, so a quiet queue stays quiet in the
+// logs; it owns the success log line and metrics.
+func (s *Scheduler) sweepWithin(timeout time.Duration, name string, fn func(ctx context.Context) (int, error), onCount func(n int)) {
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
+	defer cancel()
+	n, err := fn(ctx)
+	if err != nil {
+		log.Printf("scheduler: %s failed: %v", name, err)
+		return
+	}
+	if n > 0 && onCount != nil {
+		onCount(n)
+	}
+}
+
 // runStarvationPromotion performs one anti-starvation sweep (#230): it promotes
 // pending tasks that have waited past the window up to the starvation floor.
-// No-op when disabled. Logs only when it actually promotes something, so a quiet
-// queue stays quiet in the logs; a failure is logged but never fatal — the next
-// tick retries.
+// No-op when disabled.
 func (s *Scheduler) runStarvationPromotion() {
 	if s.starvationWindowMin <= 0 {
 		return
 	}
-	n, err := s.storage.PromoteStarvedTasks(context.Background(), s.starvationWindowMin)
-	if err != nil {
-		log.Printf("scheduler: starvation promotion failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweep("starvation promotion", func(ctx context.Context) (int, error) {
+		n, err := s.storage.PromoteStarvedTasks(ctx, s.starvationWindowMin)
+		return int(n), err
+	}, func(n int) {
 		log.Printf("scheduler: promoted %d starving task(s) to priority %d (waited > %dm)",
 			n, models.StarvationFloorPriority, s.starvationWindowMin)
-	}
+	})
 }
 
 // runPausedExpiry performs one paused-task expiry sweep (#510): it fails tasks
-// that have awaited input past the window. No-op when disabled. Logs only when
-// it expires something; a failure is logged but never fatal — the next tick
-// retries.
+// that have awaited input past the window. No-op when disabled.
 func (s *Scheduler) runPausedExpiry() {
 	if s.pausedExpiryMin <= 0 {
 		return
 	}
-	n, err := s.storage.ExpirePausedTasks(context.Background(), s.pausedExpiryMin)
-	if err != nil {
-		log.Printf("scheduler: paused-task expiry failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweep("paused-task expiry", func(ctx context.Context) (int, error) {
+		n, err := s.storage.ExpirePausedTasks(ctx, s.pausedExpiryMin)
+		return int(n), err
+	}, func(n int) {
 		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
-	}
+	})
 }
 
 // runStrandedWakeExpiry fails tasks parked in paused_awaiting_wake that no wake
 // can ever reach. Unlike runPausedExpiry this has NO disable knob and is always
 // on: an unreachable parked row is a broken row, not an operator policy choice,
 // and the alternative is a task that waits forever with no terminal record.
-// Logs only when it expires something; a failure is logged but never fatal —
-// the next tick retries.
 func (s *Scheduler) runStrandedWakeExpiry() {
-	n, err := s.storage.ExpireStrandedWakeTasks(context.Background(), db.StrandedWakeGrace)
-	if err != nil {
-		log.Printf("scheduler: stranded-wake expiry failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweep("stranded-wake expiry", func(ctx context.Context) (int, error) {
+		n, err := s.storage.ExpireStrandedWakeTasks(ctx, db.StrandedWakeGrace)
+		return int(n), err
+	}, func(n int) {
 		log.Printf("scheduler: expired %d task(s) parked awaiting a wake that can no longer arrive (> %s past the deadline)", n, db.StrandedWakeGrace)
-	}
+	})
 }
 
 // runWakeSweep performs one self-wake sweep (docs/SELF-WAKE.md): it re-queues
 // parked tasks whose wake deadline has passed. Always on — a wake is core
 // task lifecycle, not a tunable policy — and data-driven: with no parked
-// tasks the sweep is one cheap indexed query. Logs only when it wakes
-// something; a failure is logged but never fatal — the next tick retries.
+// tasks the sweep is one cheap indexed query.
 func (s *Scheduler) runWakeSweep() {
-	n, err := s.storage.WakeDueTasks(context.Background())
-	if err != nil {
-		log.Printf("scheduler: wake sweep failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweep("wake sweep", s.storage.WakeDueTasks, func(n int) {
 		log.Printf("scheduler: woke %d task(s) whose wake deadline passed", n)
-	}
+	})
 }
 
 // runRecurrenceReconciliation performs one recurrence-chain repair sweep
@@ -420,31 +452,22 @@ func (s *Scheduler) runWakeSweep() {
 // that used to end a schedule forever with nothing but a log line. Always on —
 // like the wake sweep, chain continuity is core task lifecycle, not a tunable
 // policy — and data-driven: with no orphaned chains it is one cheap indexed
-// probe (idx_tasks_recurrence_unspawned). Logs + counts only when it repairs
-// something; a failure is logged but never fatal — the next tick retries.
+// probe (idx_tasks_recurrence_unspawned).
 func (s *Scheduler) runRecurrenceReconciliation() {
-	n, err := s.storage.ReconcileRecurrences(context.Background())
-	if err != nil {
-		log.Printf("scheduler: recurrence reconciliation failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweep("recurrence reconciliation", s.storage.ReconcileRecurrences, func(n int) {
 		log.Printf("scheduler: reconciled %d recurring schedule(s) whose post-completion spawn never landed", n)
 		metrics.RecordRecurrencesReconciled(n)
-	}
+	})
 }
 
 // runCleanup performs one retention sweep, logging + counting what it pruned.
 func (s *Scheduler) runCleanup() {
-	n, err := s.storage.CleanupOldRuns(context.Background(), s.retentionDays, s.keepPerTask)
-	if err != nil {
-		log.Printf("scheduler: run-history cleanup failed: %v", err)
-		return
-	}
-	if n > 0 {
+	s.sweepWithin(dailySweepTimeout, "run-history cleanup", func(ctx context.Context) (int, error) {
+		return s.storage.CleanupOldRuns(ctx, s.retentionDays, s.keepPerTask)
+	}, func(n int) {
 		log.Printf("scheduler: pruned %d old task run(s) (retention=%dd, keep=%d/task)", n, s.retentionDays, s.keepPerTask)
 		metrics.RecordRunsPruned(n)
-	}
+	})
 }
 
 // runLogArchival performs one log-archival pass (#272), compressing (optionally
@@ -455,16 +478,18 @@ func (s *Scheduler) runLogArchival() {
 	if s.archiveAfterDays <= 0 {
 		return
 	}
-	n, bytesSaved, err := s.storage.ArchiveOldLogs(context.Background(), s.archiveAfterDays)
-	if err != nil {
-		log.Printf("scheduler: log archival failed: %v", err)
-		metrics.RecordLogsArchived("error", 0, 0)
-		return
-	}
-	if n > 0 {
+	var bytesSaved int64
+	s.sweepWithin(dailySweepTimeout, "log archival", func(ctx context.Context) (int, error) {
+		n, saved, err := s.storage.ArchiveOldLogs(ctx, s.archiveAfterDays)
+		if err != nil {
+			metrics.RecordLogsArchived("error", 0, 0)
+		}
+		bytesSaved = saved
+		return n, err
+	}, func(n int) {
 		log.Printf("scheduler: archived %d task log(s), saved %d bytes (archive after %dd)", n, bytesSaved, s.archiveAfterDays)
 		metrics.RecordLogsArchived("ok", n, bytesSaved)
-	}
+	})
 }
 
 // durationUntilHour returns the time from `now` until the next occurrence of
@@ -481,8 +506,14 @@ func durationUntilHour(now time.Time, hour int) time.Duration {
 // RecoverExpiredLeases re-queues tasks whose lease expired (crash recovery).
 // Tasks already past their retry budget are dead-lettered by the storage layer
 // instead (#1116, the crash-loop bound) and are not in the count logged here.
+//
+// Bounded like every other sweep (sweepTimeout, cancelled by Stop), but it
+// keeps its historical log lines rather than sweep's, so existing alerting on
+// "Error recovering expired leases" still matches.
 func (s *Scheduler) RecoverExpiredLeases() {
-	count, err := s.storage.RecoverExpiredLeases()
+	ctx, cancel := context.WithTimeout(s.ctx, sweepTimeout)
+	defer cancel()
+	count, err := s.storage.RecoverExpiredLeasesWithContext(ctx)
 	if err != nil {
 		log.Printf("Error recovering expired leases: %v", err)
 		return

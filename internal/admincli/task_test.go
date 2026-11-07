@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // fakeDefinitionStore is an in-memory definitionStore for DB-free tests of the
@@ -236,31 +236,8 @@ func TestImportTaskDefinitions_RejectsIntraBatchDupe(t *testing.T) {
 // TestExportImportDefinitions_DB is the end-to-end proof against the real sched
 // DB (gated on DATABASE_URL — the sched-suite convention; skips when absent).
 func TestExportImportDefinitions_DB(t *testing.T) {
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(2)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			database.Conn().ExecContext(ctx, q)
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(2)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)
@@ -280,7 +257,7 @@ func TestExportImportDefinitions_DB(t *testing.T) {
 	}
 
 	// Wipe, then import the export back.
-	clean()
+	testdb.DeleteRows(t, database, "logs", "tasks", "users")
 	resp, err := importTaskDefinitions(ctx, st, bytes.NewReader(buf.Bytes()), "", false, models.TaskImportConflictError)
 	if err != nil {
 		t.Fatalf("import: %v", err)

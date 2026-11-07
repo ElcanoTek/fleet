@@ -5,7 +5,7 @@ package main
 // after `systemctl start fleet` — a missing MCP executable, an unset credential
 // gate, a wrong DATABASE_URL, podman absent. It reuses the SAME loaders the
 // server boots through (clientconfig.Load, config.Load + cfg.Validate, the
-// chatDSN/schedDSN/ensureDistinctDatabases logic) rather than reinventing them,
+// config.ResolveDSNs/EnsureDistinctDatabases logic) rather than reinventing them,
 // so a green run here means the real boot path will get past these gates.
 //
 // It is a read-only diagnostic: it never starts the servers, never runs
@@ -1295,7 +1295,7 @@ func interactiveHiddenServerPinned(bundle *clientconfig.Bundle, members []string
 
 // checkDatabase validates the chat + sched DSNs and (unless --skip-network-checks)
 // runs a SELECT 1 against each within a 5s budget. It reuses the SAME DSN
-// resolution and the ensureDistinctDatabases invariant the server boots through,
+// resolution and the EnsureDistinctDatabases invariant the server boots through,
 // but does NOT run migrations — it is a read-only probe. The DB is BLOCKING (the
 // issue lists it so); --skip-network-checks keeps it blocking but skips only the
 // live probe, still validating the DSNs + the distinct-databases invariant.
@@ -1306,14 +1306,18 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		res.Detail = "config not loaded"
 		return res
 	}
-	chat := chatDSN(cfg)
-	sched := schedDSN()
-	if strings.TrimSpace(chat) == "" {
+	chat, sched := strings.TrimSpace(cfg.DatabaseURL), strings.TrimSpace(cfg.SchedDatabaseURL)
+	if chat == "" {
 		res.Status = statusFail
-		res.Detail = "chat DSN is empty (set DATABASE_URL or FLEET_CHAT_DATABASE_URL)"
+		res.Detail = "chat DSN is empty (set FLEET_CHAT_DATABASE_URL or DATABASE_URL)"
 		return res
 	}
-	if err := ensureDistinctDatabases(chat, sched); err != nil {
+	if sched == "" {
+		res.Status = statusFail
+		res.Detail = "sched DSN is empty (set FLEET_SCHED_DATABASE_URL or DATABASE_URL)"
+		return res
+	}
+	if err := config.EnsureDistinctDatabases(chat, sched); err != nil {
 		res.Status = statusFail
 		res.Detail = err.Error()
 		return res
@@ -1323,22 +1327,19 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		res.Detail = "DSNs valid + distinct (live probe skipped)"
 		return res
 	}
-	// schedDSN may be empty (the sched layer then reads DATABASE_URL itself).
-	effectiveSched := sched
-	if strings.TrimSpace(effectiveSched) == "" {
-		effectiveSched = strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	}
+	// Both DSNs always resolve (config.ResolveDSNs falls back to the DB_*
+	// parts and their localhost defaults, exactly as boot does), so both are
+	// always probed — a sched DB reachable only by a DSN the server never uses
+	// can no longer report "reachable".
 	if err := probeDB(ctx, chat); err != nil {
 		res.Status = statusFail
 		res.Detail = "chat DB: " + err.Error()
 		return res
 	}
-	if strings.TrimSpace(effectiveSched) != "" {
-		if err := probeDB(ctx, effectiveSched); err != nil {
-			res.Status = statusFail
-			res.Detail = "sched DB: " + err.Error()
-			return res
-		}
+	if err := probeDB(ctx, sched); err != nil {
+		res.Status = statusFail
+		res.Detail = "sched DB: " + err.Error()
+		return res
 	}
 	res.Status = statusOK
 	res.Detail = "chat + sched DB reachable (SELECT 1)"

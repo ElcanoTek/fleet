@@ -286,8 +286,8 @@ clean:
 # These delegate to the EXACT commands .github/workflows/ci.yml runs so a
 # contributor can reproduce "the same thing CI runs" locally. docs/TESTING.md
 # documents each CI lane and how these targets map onto it, including the two
-# Postgres DSNs the Go suites require (FLEET_TEST_DATABASE_URL /
-# CHAT_TEST_DATABASE_URL for the chat suites, DATABASE_URL for the sched suite)
+# Postgres DSNs the Go suites require (FLEET_TEST_DATABASE_URL for the chat
+# suites, DATABASE_URL for the sched suite)
 # and FLEET_CLIENT_CONFIG_DIR=config/default. Set those in your environment
 # before `make ci-go` / `make ci-local`; see docs/TESTING.md for the values.
 # ---------------------------------------------------------------------------

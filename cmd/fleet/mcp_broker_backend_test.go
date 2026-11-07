@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 const brokerScopeServerScript = `
@@ -347,13 +347,7 @@ func TestOpenMCPBrokerRemoteStore(t *testing.T) {
 		}
 	})
 
-	dsn := strings.TrimSpace(os.Getenv("FLEET_TEST_DATABASE_URL"))
-	if dsn == "" {
-		dsn = strings.TrimSpace(os.Getenv("CHAT_TEST_DATABASE_URL"))
-	}
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL/CHAT_TEST_DATABASE_URL not set")
-	}
+	dsn := testdb.ChatDSN(t)
 	pool := config.DBPoolConfig{
 		MaxOpenConns:    2,
 		MaxIdleConns:    1,

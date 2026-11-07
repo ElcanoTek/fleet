@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // writeBundle marshals a bundle to a temp file and returns its path.
@@ -67,24 +67,12 @@ func TestImportBundle_Validation(t *testing.T) {
 	}
 }
 
-// chatTestDSN mirrors internal/store's test gate (FLEET_TEST_DATABASE_URL,
-// legacy CHAT_TEST_DATABASE_URL fallback).
-func chatTestDSN() string {
-	if v := os.Getenv("FLEET_TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return os.Getenv("CHAT_TEST_DATABASE_URL")
-}
-
 // TestImportBundle_ChatSection proves a chat bundle lands with identity
 // preserved — users keep their bcrypt hash, conversations keep ids /
 // pinned flags / timestamps, messages keep content + timing, memories keep
 // ids — and that a re-run skips everything instead of duplicating.
 func TestImportBundle_ChatSection(t *testing.T) {
-	dsn := chatTestDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	ctx := context.Background()
 	s, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
@@ -172,36 +160,8 @@ func TestImportBundle_ChatSection(t *testing.T) {
 // re-run skips already-present rows instead of duplicating (state-preservation
 // is covered by TestImportBundle_SchedRerunPreservesLiveState).
 func TestImportBundle_SchedSection(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set — skipping sched-DB import test")
-	}
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(3)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			if _, err := database.Conn().ExecContext(ctx, q); err != nil {
-				t.Fatalf("clean %q: %v", q, err)
-			}
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(3)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)
@@ -359,36 +319,8 @@ func TestImportBundle_SingleSectionSameDSNGuard(t *testing.T) {
 // terminal status/result and fleet's log must survive. --overwrite restores
 // the old upsert for the restore use case.
 func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set — skipping sched-DB import test")
-	}
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(3)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			if _, err := database.Conn().ExecContext(ctx, q); err != nil {
-				t.Fatalf("clean %q: %v", q, err)
-			}
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(3)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)
@@ -487,36 +419,8 @@ func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
 // TestImportBundle_SchedLiveOnly proves --live-only skips terminal tasks and
 // logs but still imports live definitions.
 func TestImportBundle_SchedLiveOnly(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set — skipping sched-DB import test")
-	}
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(3)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			if _, err := database.Conn().ExecContext(ctx, q); err != nil {
-				t.Fatalf("clean %q: %v", q, err)
-			}
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(3)")
-		conn.Close()
-		database.Close()
-	})
 
 	liveID, doneID := uuid.New(), uuid.New()
 	now := time.Now().UTC()

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,31 +14,18 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
-
-// testDSN returns the Postgres DSN for httpapi tests. It reads the canonical
-// FLEET_TEST_DATABASE_URL first, falling back to the legacy
-// CHAT_TEST_DATABASE_URL so existing .env files keep working during the fleet
-// monorepo migration. Empty means no test database is configured.
-func testDSN() string {
-	if v := os.Getenv("FLEET_TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return os.Getenv("CHAT_TEST_DATABASE_URL")
-}
 
 // serverFixture wires a Server around a fresh Postgres store + nil Manager.
 // Handlers that don't invoke the agent (list/create/get/delete/pin) work
 // with a nil manager; /chat is covered by live smoke tests, not this suite.
 //
-// Skips when the test DSN (see testDSN) is unset so laptops without a running
+// Skips when the test DSN (testdb.ChatDSN) is unset so laptops without a running
 // Postgres still pass `go test ./...`.
 func serverFixture(t *testing.T) *Server {
 	t.Helper()
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("open store: %v", err)

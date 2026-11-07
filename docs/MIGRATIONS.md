@@ -22,8 +22,11 @@ lock-heavy migration from stalling *this* box's restart.
 - Migration files are `migrations/NNN_name.sql`, run in ascending numeric order,
   each inside its own transaction, exactly once per database.
 - The applied `(version, name, applied_at)` is recorded in `schema_migrations`.
-- A `pg_advisory_lock` serializes concurrent boots so two processes can't race
-  the same `CREATE TABLE`.
+- A session advisory lock serializes concurrent boots so two processes can't
+  race the same `CREATE TABLE`. A boot polls `pg_try_advisory_lock`, logs
+  `waiting for chat migration lock` every 10 seconds while another process
+  holds it, and fails after 5 minutes rather than hanging silently; a failed
+  unlock is reported as a startup error.
 - The lock and every migration query/transaction share one dedicated database
   connection. This preserves the serialization boundary and allows an operator
   to configure a one-connection chat pool without deadlocking startup.

@@ -313,8 +313,8 @@ Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)
 
 Connection:
-  Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL
-  Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / DATABASE_URL
+  Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL / DB_* parts
+  Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / SCHED_DATABASE_URL / DATABASE_URL / DB_* parts
   Env file: --env-file, else FLEET_ENV_FILE, else /etc/fleet/fleet.env when /etc/fleet exists, else .env.local
             (one resolution for config set-*, env, mcp account, and the validate-config/eval/mcp test preflights)
 

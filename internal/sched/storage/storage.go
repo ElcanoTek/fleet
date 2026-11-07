@@ -161,9 +161,11 @@ func (s *Storage) resolveTaskTimezone(tc *models.TaskCreate) *time.Location {
 // Location returns the configured timezone location for scheduling.
 func (s *Storage) Location() *time.Location { return s.location }
 
-// Initialize initializes the persistent storage with the given pool tuning (#276).
-func (s *Storage) Initialize(dbPath string, pool db.PoolConfig) error {
-	return s.db.Init(dbPath, pool)
+// Initialize opens the sched database at dsn with the given pool tuning (#276).
+// The DSN is resolved by the caller (config.ResolveDSNs in production); an
+// empty one is refused with db.ErrEmptyDSN.
+func (s *Storage) Initialize(dsn string, pool db.PoolConfig) error {
+	return s.db.Init(dsn, pool)
 }
 
 // DefaultPoolConfig re-exports db.DefaultPoolConfig so callers that only import

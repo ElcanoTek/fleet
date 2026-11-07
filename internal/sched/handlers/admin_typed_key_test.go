@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -30,7 +31,7 @@ func setupAdminAuthz(t *testing.T) (*apikeys.Manager, *chi.Mux) {
 	tmpDir := t.TempDir()
 
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)
 		}

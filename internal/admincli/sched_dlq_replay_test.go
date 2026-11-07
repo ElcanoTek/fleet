@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // `fleet sched dlq replay` refuses a prompt with a malformed EXECUTION
@@ -19,27 +19,8 @@ import (
 // replays the same row with a corrected prompt (ADR-0073). Gated on
 // DATABASE_URL, the sched-suite convention.
 func TestSchedDLQReplayRefusesMalformedAndTakesAPromptFile_DB(t *testing.T) {
-	database := scheddb.New()
-	if err := database.Init("", scheddb.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "tasks")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() { database.Conn().ExecContext(ctx, "DELETE FROM tasks") }
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)

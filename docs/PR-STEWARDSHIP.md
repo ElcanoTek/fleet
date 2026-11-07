@@ -91,9 +91,12 @@ Re-request the reviewer after pushing for a changes-requested review.
   Postgres DSN — a global `-p 1 ./...` is the slow path this script exists to
   avoid.
 - **Integration tests skip silently.** The scheduler packages
-  (`internal/sched/...`) call `t.Skip` when `DATABASE_URL` is unset or
-  unreachable; the chat store (`internal/store`, and the HTTP API tests on it)
-  does the same for `FLEET_TEST_DATABASE_URL`. `ci.yml`'s `go` job sets both
+  (`internal/sched/...`) call `t.Skip` when `DATABASE_URL` is unset; the chat
+  store (`internal/store`, and the HTTP API tests on it) does the same for
+  `FLEET_TEST_DATABASE_URL`. The shared `internal/testdb` helpers skip only on
+  an unset variable and fail on an unreachable or broken database (a few
+  older helpers — `internal/sched/handlers`, `internal/sched/db` — still skip
+  when the server refuses the connection). `ci.yml`'s `go` job sets both
   against a Postgres service; set them the same way locally. At least two past
   sessions reported green suites that had not run.
 - **golangci-lint**: CI pins **v2.14.0**, and a binary built with an older Go

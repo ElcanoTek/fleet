@@ -6,37 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func newNotesStore(t *testing.T) *Store {
 	t.Helper()
-	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
-		t.Skipf("Skipping notes test because DB init failed: %v", err)
-	}
-
-	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get DB connection for lock: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("Failed to acquire test lock: %v", err)
-	}
-	cleanup := func() {
-		database.Conn().ExecContext(ctx, "DELETE FROM agent_note_proposals")
-		database.Conn().ExecContext(ctx, "DELETE FROM agent_notes")
-	}
-	cleanup()
-	t.Cleanup(func() {
-		cleanup()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
-		conn.Close()
-		database.Close()
-	})
-	return NewStore(database)
+	return NewStore(testdb.SchedDB(t, "agent_note_proposals", "agent_notes"))
 }
 
 func TestNoteCRUD(t *testing.T) {

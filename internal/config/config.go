@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -790,8 +789,11 @@ type Config struct {
 	// change for existing deployments).
 	ConversationSoftDelete bool
 
-	// DatabaseURL is the Postgres DSN. URL-form (url.UserPassword) DSN builder.
-	DatabaseURL string
+	// DatabaseURL is the chat Postgres DSN and SchedDatabaseURL the
+	// orchestrator (sched) one, both resolved by ResolveDSNs — the one
+	// precedence every DSN consumer shares (#2018).
+	DatabaseURL      string
+	SchedDatabaseURL string
 
 	// ── DB connection pools (#276) ──
 	// Per-pool tuning for the two Postgres handles fleet opens (chat + sched).
@@ -1690,6 +1692,7 @@ func Load(envFile string) (*Config, error) {
 	// even on a box without SSO.
 	generic := lp.getenvBool("FLEET_OIDC_GENERIC", false)
 	centralAuth := OIDCConfigured() && !generic
+	dsns := ResolveDSNs(ProcessEnv)
 
 	cfg := &Config{
 		MCPServers: make(map[string]MCPServerConfig),
@@ -1718,7 +1721,8 @@ func Load(envFile string) (*Config, error) {
 		AutoArchiveAfterDays:    lp.getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
 		SearchEnabled:           lp.getenvBool("FLEET_SEARCH_ENABLED", true),
 		ConversationSoftDelete:  lp.getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
-		DatabaseURL:             buildDatabaseURL(),
+		DatabaseURL:             dsns.Chat,
+		SchedDatabaseURL:        dsns.Sched,
 
 		// DB connection pools (#276) — defaults reproduce the historical
 		// hard-coded behavior exactly: 25 open / 5 idle, idle-time reaping OFF
@@ -2121,7 +2125,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("FLEET_UPLOAD_MAX_BYTES must be positive")
 	}
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
+		return fmt.Errorf("FLEET_CHAT_DATABASE_URL / DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
 	}
 	if err := c.validateTLS(); err != nil {
 		return err
@@ -2147,27 +2151,6 @@ func (c *Config) validateTLS() error {
 	default:
 		return fmt.Errorf("FLEET_TLS_MODE=%q is invalid (want off|manual|auto)", c.TLSMode)
 	}
-}
-
-// buildDatabaseURL returns the Postgres DSN. chat's URL-form builder is the
-// standard. Precedence: DATABASE_URL, else the DB_* parts with localhost
-// defaults.
-func buildDatabaseURL() string {
-	if v := os.Getenv("DATABASE_URL"); v != "" {
-		return v
-	}
-	host := getenvDefault("DB_HOST", "localhost")
-	port := getenvDefault("DB_PORT", "5432")
-	user := getenvDefault("DB_USER", "chat")
-	pass := os.Getenv("DB_PASSWORD")
-	name := getenvDefault("DB_NAME", "chat")
-	ssl := getenvDefault("DB_SSLMODE", "disable")
-
-	auth := url.User(user).String()
-	if pass != "" {
-		auth = url.UserPassword(user, pass).String()
-	}
-	return fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=%s", auth, host, port, name, ssl)
 }
 
 // splitLockdownModels parses the operator's lockdown allow-list. Empty input

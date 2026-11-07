@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"log"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestToAgentcoreProviders covers the #289 bundle→resolver translation: nil/empty
@@ -90,10 +90,7 @@ func TestToAgentcoreProviders(t *testing.T) {
 // Without it every non-OpenRouter admin row ran on the resolver's fallback,
 // below a turn's fixed reserve.
 func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
-	chatDsn := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if chatDsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL is required; skipping Postgres-backed test")
-	}
+	chatDsn := testdb.ChatDSN(t)
 	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -151,10 +148,7 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 // TestLoadDBLLMProvidersCarriesTheRegion: a bedrock row's Region (migration
 // 092) reaches the routing table, where it picks the endpoint the row calls.
 func TestLoadDBLLMProvidersCarriesTheRegion(t *testing.T) {
-	chatDsn := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if chatDsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL is required; skipping Postgres-backed test")
-	}
+	chatDsn := testdb.ChatDSN(t)
 	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)

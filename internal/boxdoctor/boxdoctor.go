@@ -24,7 +24,6 @@ package boxdoctor
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net"
 	"os"
@@ -33,8 +32,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/systemd"
@@ -84,9 +81,10 @@ type Options struct {
 	// ChatPing pings the chat DB through the server's own pool (the store),
 	// so the check reflects the connection the app actually uses.
 	ChatPing func(context.Context) error
-	// SchedDSN is the orchestrator DB DSN; empty resolves from
-	// FLEET_SCHED_DATABASE_URL / DATABASE_URL like the rest of the process.
-	SchedDSN string
+	// SchedPing pings the orchestrator (sched) DB through the server's own
+	// already-open pool, like ChatPing — so the check reflects the database
+	// the process actually uses rather than a DSN re-derived here (#2018).
+	SchedPing func(context.Context) error
 	// SandboxImage is the resolved sandbox image ref (config/bundle); empty
 	// falls back to the FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE env vars.
 	SandboxImage string
@@ -124,7 +122,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	}
 
 	add(checkChatDB(ctx, opts.ChatPing))
-	add(checkSchedDB(ctx, opts.SchedDSN))
+	add(checkSchedDB(ctx, opts.SchedPing))
 	add(checkModelKey())
 	add(checkDisk("disk: data dir", dataDir(opts.DataDir)))
 	add(checkDisk("disk: podman image store", podmanStoreDir()))
@@ -182,32 +180,19 @@ func checkChatDB(ctx context.Context, ping func(context.Context) error) Check {
 	return c
 }
 
-func checkSchedDB(ctx context.Context, dsn string) Check {
+func checkSchedDB(ctx context.Context, ping func(context.Context) error) Check {
 	c := Check{Name: "sched database"}
-	dsn = strings.TrimSpace(dsn)
-	if dsn == "" {
-		dsn = strings.TrimSpace(os.Getenv("FLEET_SCHED_DATABASE_URL"))
-	}
-	if dsn == "" {
-		dsn = strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	}
-	if dsn == "" {
-		c.Status, c.Detail, c.Fix = StatusFail, "no DSN resolved (FLEET_SCHED_DATABASE_URL unset)", sudoDoctorFix
+	if ping == nil {
+		c.Status, c.Detail = StatusSkip, "no sched store wired"
 		return c
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		c.Status, c.Detail, c.Fix = StatusFail, "open: "+err.Error(), sudoDoctorFix
-		return c
-	}
-	defer func() { _ = db.Close() }()
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := db.PingContext(pctx); err != nil {
+	if err := ping(pctx); err != nil {
 		c.Status, c.Detail, c.Fix = StatusFail, "ping failed: "+err.Error(), sudoDoctorFix+" (checks postgresql + DSNs)"
 		return c
 	}
-	c.Status, c.Detail = StatusOK, "reachable"
+	c.Status, c.Detail = StatusOK, "reachable via the server pool"
 	return c
 }
 
