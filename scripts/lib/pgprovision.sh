@@ -43,6 +43,16 @@ fleet_dsn_role_db() {
   printf '%s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]}"
 }
 
+# fleet_dsn_is_local_default DSN — true when a postgres:// URL DSN names the
+# local cluster bootstrap provisions: loopback or the default socket, port
+# 5432 (or none), no host/port query override.
+fleet_dsn_is_local_default() {
+  local re='^postgres(ql)?://[^@/?#]*@(127\.0\.0\.1|localhost|\[::1\])?(:5432)?/[^?#]*([?#].*)?$'
+  [[ "$1" =~ $re ]] || return 1
+  [[ "$1" != *[?\&]host=* && "$1" != *[?\&]hostaddr=* ]] || return 1
+  [[ "$1" != *[?\&]port=* || "$1" == *[?\&]port=5432* ]]
+}
+
 # fleet_external_db_sql ROLE DATABASE — the superuser SQL external mode runs
 # with FLEET_DB_SUPERUSER_URL: create the database when missing, and grant
 # the role CONNECT + CREATE on it, so it can create the chat and sched

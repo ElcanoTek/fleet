@@ -421,6 +421,27 @@ if [[ "$DB_LAYOUT" == "legacy" && ( -n "$DB_NAME_ARG" || -n "$DB_USER_ARG" || "$
 fi
 FLEET_DB_NAME="${DB_NAME_ARG:-fleet}"
 FLEET_DB_USER="${DB_USER_ARG:-fleet}"
+# A re-run converges on the database a previous run recorded: the role and
+# database come from the env file's DATABASE_URL, never reset to the
+# defaults, and that DSN is kept as written. A --db-name/--db-user that
+# disagrees with it is refused rather than silently switching databases.
+RECORDED_DB_URL=""
+if [[ "$DB_LAYOUT" == "one" && "$POSTGRES_MODE" == "local" && "$ADOPT_DB" != "1" ]]; then
+  RECORDED_DB_URL="$(env_get DATABASE_URL)"
+fi
+if [[ -n "$RECORDED_DB_URL" ]]; then
+  _rd="$(fleet_dsn_role_db "$RECORDED_DB_URL")" \
+    || die "cannot tell the role and database from the DATABASE_URL in ${ENV_FILE} (want postgres://<role>:<password>@127.0.0.1:5432/<database> with lower-case names); fix it there, or use --adopt-existing-db to keep it as it is"
+  fleet_dsn_is_local_default "$RECORDED_DB_URL" \
+    || die "the DATABASE_URL in ${ENV_FILE} does not name the local cluster on port 5432, which --postgres=local provisions; use --postgres=external (or --adopt-existing-db) for it"
+  [[ -z "$DB_USER_ARG" || "$DB_USER_ARG" == "${_rd%% *}" ]] \
+    || die "--db-user ${DB_USER_ARG} conflicts with role '${_rd%% *}' in the DATABASE_URL recorded in ${ENV_FILE}; bootstrap does not switch an installed box to another role — drop the flag, or change DATABASE_URL yourself"
+  [[ -z "$DB_NAME_ARG" || "$DB_NAME_ARG" == "${_rd#* }" ]] \
+    || die "--db-name ${DB_NAME_ARG} conflicts with database '${_rd#* }' in the DATABASE_URL recorded in ${ENV_FILE}; bootstrap does not switch an installed box to another database — drop the flag, or change DATABASE_URL yourself"
+  FLEET_DB_USER="${_rd%% *}"
+  FLEET_DB_NAME="${_rd#* }"
+  unset _rd
+fi
 # Lower-case only: the names go unquoted into the provisioning SQL, where
 # Postgres folds them to lower case — "Fleet" would create role/db "fleet"
 # while the DSN written below says "Fleet", which then fails to connect.
@@ -1262,9 +1283,12 @@ fi
 # rejects — the "idempotent re-run" broke DB auth on the next restart.
 env_dsn_password() {
   local url
-  url="$(grep "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  url="$(env_get "$1")"
   if [[ "$url" =~ ^postgres(ql)?://[^:/@]+:([^@/]+)@ ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
+    # The DSN carries the password percent-encoded; the role gets it decoded,
+    # exactly as the driver will send it.
+    local pw="${BASH_REMATCH[2]}"
+    printf '%b' "${pw//%/\\x}"
   fi
 }
 
@@ -1438,7 +1462,11 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
       printf '%s\n' "$PSQL_SQL" | fleet_psql_provision_one "$FLEET_DB_PASSWORD" \
         || die "role/database provisioning failed"
     fi
-    DB_URL="postgres://${FLEET_DB_USER}:${FLEET_DB_PASSWORD}@127.0.0.1:5432/${FLEET_DB_NAME}?sslmode=${SSLMODE}"
+    if [[ -n "$RECORDED_DB_URL" && -n "$(env_dsn_password DATABASE_URL)" ]]; then
+      DB_URL="$RECORDED_DB_URL" # a re-run keeps the recorded DSN as written; the role was converged to its password
+    else
+      DB_URL="postgres://${FLEET_DB_USER}:${FLEET_DB_PASSWORD}@127.0.0.1:5432/${FLEET_DB_NAME}?sslmode=${SSLMODE}"
+    fi
     ok "database: ${FLEET_DB_NAME} (owner ${FLEET_DB_USER}), sslmode=${SSLMODE}"
   fi
   else # LEGACY-DB-LAYOUT: remove after consolidation — this whole branch.

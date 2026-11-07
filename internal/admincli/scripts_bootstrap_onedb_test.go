@@ -57,6 +57,52 @@ func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
 	}
 }
 
+// TestBootstrapRerunKeepsTheRecordedDatabase (#2055 review): a re-run takes
+// the role and database from the DATABASE_URL a previous run recorded —
+// never the defaults — and refuses flags or a DSN it cannot honour.
+func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	write := func(dsn string) {
+		t.Helper()
+		if err := os.WriteFile(envFile, []byte("DATABASE_URL="+dsn+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) (string, error) {
+		return runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", append([]string{"--dry-run", "--postgres=local"}, args...)...)
+	}
+
+	write("postgres://myapp:placeholder-not-a-secret@127.0.0.1:5432/mydb?sslmode=disable")
+	for _, args := range [][]string{nil, {"--db-name", "mydb", "--db-user", "myapp"}} {
+		out, err := run(args...)
+		if err != nil || !strings.Contains(out, "CREATE DATABASE mydb OWNER myapp") || strings.Contains(out, "CREATE DATABASE fleet") {
+			t.Errorf("re-run %v did not keep mydb/myapp: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "placeholder-not-a-secret") {
+			t.Errorf("re-run printed the password\n%s", out)
+		}
+	}
+	for flag, want := range map[string]string{"--db-name": "conflicts with database 'mydb'", "--db-user": "conflicts with role 'myapp'"} {
+		if out, err := run(flag, "other"); err == nil || !strings.Contains(out, want) {
+			t.Errorf("%s other on a box recorded as mydb/myapp: %v\n%s", flag, err, out)
+		}
+	}
+
+	write("postgres://myapp:x@127.0.0.1:5433/mydb")
+	if out, err := run(); err == nil || !strings.Contains(out, "does not name the local cluster on port 5432") {
+		t.Errorf("a recorded non-default port was not refused: %v\n%s", err, out)
+	}
+	write("postgres://MyApp:x@127.0.0.1/mydb")
+	if out, err := run(); err == nil || !strings.Contains(out, "cannot tell the role and database") {
+		t.Errorf("an unparseable recorded DSN was not refused: %v\n%s", err, out)
+	}
+	// --adopt-existing-db keeps any DSN as it is.
+	write("postgres://myapp:x@127.0.0.1:5433/mydb")
+	if out, err := run("--adopt-existing-db"); err != nil {
+		t.Errorf("--adopt-existing-db refused a recorded DSN: %v\n%s", err, out)
+	}
+}
+
 // TestBootstrapOneDatabaseRejectsMixedCaseNames (#2055 review): the names go
 // unquoted into SQL, where Postgres folds them to lower case, so a mixed-case
 // --db-name/--db-user would provision one name and write another into the
