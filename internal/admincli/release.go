@@ -76,11 +76,12 @@ const releaseUsage = `fleet release — signed release artifacts (docs/RELEASE-A
   fleet release sandbox --tag <tag> --dir <dir>
       verify the release's sandbox image signature; prints its digest reference
   fleet release install --tag <tag> --dir <dir> [--install-dir /opt/fleet] [--service fleet]
-                        [--health-url <url> | --server-addr <host:port>] [--health-timeout 90s] [--no-rollback]
+                        [--health-url <url> | --server-addr <host:port>] [--health-timeout 90s] [--no-rollback] [--no-restart]
       atomically swap the verified binary in (the old one is kept as fleet.prev),
       restart the service (it migrates on start), wait for /readyz, and roll back
-      automatically when it does not become ready
-  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>]
+      automatically when it does not become ready. Reinstalling the live binary
+      swaps nothing. --no-restart swaps only (fleet not run by systemd).
+  fleet release rollback [--install-dir /opt/fleet] [--service fleet] [--health-url <url> | --server-addr <addr>] [--no-restart]
       put fleet.prev back as the live binary, restart and wait for /readyz
 
 Shared: --cache-dir <dir> (the pinned cosign; default /var/cache/fleet as root),
@@ -270,25 +271,39 @@ func releaseSandbox(ctx context.Context, argv []string) int {
 type installFlags struct {
 	installDir, service, healthURL, serverAddr string
 	healthTimeout                              time.Duration
-	noRollback                                 bool
+	noRollback, noRestart                      bool
 }
 
 func (i *installFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&i.installDir, "install-dir", "/opt/fleet", "directory holding the live fleet binary")
 	fs.StringVar(&i.service, "service", "fleet", "systemd unit to restart")
 	fs.StringVar(&i.healthURL, "health-url", "", "readiness URL to gate on (default: derived from --server-addr)")
-	fs.StringVar(&i.serverAddr, "server-addr", "", "FLEET_SERVER_ADDR, to derive the readiness URL")
+	fs.StringVar(&i.serverAddr, "server-addr", "", "the chat listener (default: FLEET_SERVER_ADDR from the environment or the server env file)")
 	fs.DurationVar(&i.healthTimeout, "health-timeout", 90*time.Second, "how long to wait for readiness")
+	fs.BoolVar(&i.noRestart, "no-restart", false, "swap the binary only: no restart, no readiness gate (a fleet not run by systemd)")
+}
+
+// healthURL is the readiness URL to gate on: --health-url, else the address
+// the deployment ACTUALLY serves on — --server-addr, else FLEET_SERVER_ADDR
+// from the environment or the server env file (envOrFile, the lookup every
+// other verb uses) — with https when FLEET_TLS_MODE has the chat listener
+// terminate TLS. Probing a default 127.0.0.1:8080 on a box that listens
+// elsewhere would roll back a healthy release.
+func (i *installFlags) resolvedHealthURL() string {
+	if i.healthURL != "" {
+		return i.healthURL
+	}
+	addr := i.serverAddr
+	if addr == "" {
+		addr = envOrFile("FLEET_SERVER_ADDR")
+	}
+	return release.HealthURL(addr, envOrFile("FLEET_TLS_MODE"))
 }
 
 func (i *installFlags) options(w io.Writer) release.InstallOptions {
-	url := i.healthURL
-	if url == "" {
-		url = release.HealthURLFromAddr(i.serverAddr)
-	}
 	return release.InstallOptions{
-		InstallDir: i.installDir, Service: i.service, HealthURL: url,
-		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback,
+		InstallDir: i.installDir, Service: i.service, HealthURL: i.resolvedHealthURL(),
+		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback, NoRestart: i.noRestart,
 		Restarter: installRestarter, Prober: installProber, Log: w,
 	}
 }
@@ -322,12 +337,22 @@ func releaseInstall(ctx context.Context, argv []string) int {
 	o.Binary = got.Binary
 	res, err := release.Install(ctx, o)
 	if err != nil {
-		if errors.Is(err, release.ErrRolledBack) {
+		switch {
+		case errors.Is(err, release.ErrRolledBack):
 			return errf(4, "%v — the previous binary is live again; the failed one is kept as %s", err, filepath.Join(inf.installDir, "fleet.failed"))
+		case errors.Is(err, release.ErrBusy):
+			return errf(6, "install %s: %v", tag, err)
 		}
 		return errf(5, "install %s: %v", tag, err)
 	}
-	fmt.Fprintf(os.Stderr, "fleet %s is live at %s and ready (%s); previous binary kept as %s\n", tag, res.Live, o.HealthURL, res.Previous)
+	switch {
+	case inf.noRestart:
+		fmt.Fprintf(os.Stderr, "fleet %s is installed at %s (previous binary: %s) but NOT restarted (--no-restart): restart it with your supervisor; if it does not come up, `fleet release rollback --no-restart` puts the previous one back\n", tag, res.Live, orNone(res.Previous))
+	case res.Unchanged:
+		fmt.Fprintf(os.Stderr, "fleet %s was already live at %s; restarted and ready (%s); previous binary unchanged (%s)\n", tag, res.Live, o.HealthURL, orNone(res.Previous))
+	default:
+		fmt.Fprintf(os.Stderr, "fleet %s is live at %s and ready (%s); previous binary kept as %s\n", tag, res.Live, o.HealthURL, orNone(res.Previous))
+	}
 	return 0
 }
 
@@ -338,10 +363,27 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
+	if fs.NArg() > 0 {
+		return errf(2, "unexpected argument %q", fs.Arg(0))
+	}
 	o := inf.options(os.Stderr)
 	if err := release.Rollback(ctx, o); err != nil {
+		if errors.Is(err, release.ErrBusy) {
+			return errf(6, "rollback: %v", err)
+		}
 		return errf(5, "rollback: %v", err)
+	}
+	if inf.noRestart {
+		fmt.Fprintf(os.Stderr, "rolled back: %s is the previous binary again — NOT restarted (--no-restart); restart it with your supervisor\n", filepath.Join(inf.installDir, "fleet"))
+		return 0
 	}
 	fmt.Fprintf(os.Stderr, "rolled back: %s is the previous binary again and ready (%s); the one it replaced is now fleet.prev\n", filepath.Join(inf.installDir, "fleet"), o.HealthURL)
 	return 0
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }

@@ -5,15 +5,18 @@ package release
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -50,9 +53,19 @@ type InstallOptions struct {
 	HealthTimeout time.Duration
 	// NoRollback leaves a failed binary in place for debugging.
 	NoRollback bool
-	Restarter  Restarter
-	Prober     Prober
-	Log        io.Writer
+	// NoRestart swaps the binary and stops there: no restart, no readiness
+	// gate, no automatic rollback. For a box whose fleet is not a systemd
+	// unit (a custom supervisor) — its operator restarts it, and rolls back
+	// with `fleet release rollback --no-restart` if it does not come up.
+	NoRestart bool
+	// RollbackTimeout bounds the rollback's restart + readiness wait. The
+	// rollback runs under its OWN context, derived from the caller's but not
+	// cancelled with it: a SIGINT/SIGTERM that interrupted the health gate must
+	// not also abort the restore. Default: HealthTimeout + 2 minutes.
+	RollbackTimeout time.Duration
+	Restarter       Restarter
+	Prober          Prober
+	Log             io.Writer
 }
 
 // InstallResult says what happened.
@@ -60,11 +73,23 @@ type InstallResult struct {
 	Live       string
 	Previous   string // empty when there was no binary to keep
 	RolledBack bool
+	// Unchanged: the live binary already was this exact binary, so nothing
+	// was swapped and fleet.prev was left alone.
+	Unchanged bool
+	// Restarted: the service was restarted and passed its readiness gate.
+	Restarted bool
 }
 
 // ErrRolledBack wraps a failed install that was rolled back successfully: the
 // box is running the previous binary again.
 var ErrRolledBack = errors.New("the new binary did not become ready; rolled back to the previous one")
+
+// ErrBusy is returned when another install or rollback holds the install dir.
+var ErrBusy = errors.New("another fleet install or rollback is running on this install dir")
+
+// freeSpaceMargin is kept free on the install filesystem beyond the staged
+// copy, so an install never fills the disk the service writes to.
+const freeSpaceMargin = 64 << 20
 
 func (o *InstallOptions) logf(format string, a ...any) {
 	if o.Log != nil {
@@ -74,15 +99,20 @@ func (o *InstallOptions) logf(format string, a ...any) {
 
 // Install swaps the verified binary in and gates on readiness:
 //
-//  1. copy it to <dir>/.fleet.new (same filesystem) and fsync it;
-//  2. keep the running binary as <dir>/fleet.prev (a hard link, so it is the
+//  0. take the install dir's lock (one install or rollback at a time) and
+//     check there is room for the staged copy;
+//  1. if the live binary already IS this binary (a reinstall), swap nothing
+//     and keep fleet.prev — it still names the release before this one;
+//  2. copy it to <dir>/.fleet.new (same filesystem) and fsync it;
+//  3. keep the running binary as <dir>/fleet.prev (a hard link, so it is the
 //     exact inode that was running, not a copy that could differ);
-//  3. rename .fleet.new over <dir>/fleet — atomic: the path names the old or
+//  4. rename .fleet.new over <dir>/fleet — atomic: the path names the old or
 //     the new binary, never a partial one;
-//  4. restart the service (which migrates on start) and wait for HealthURL;
-//  5. on a failed restart or health gate, rename fleet.prev's bytes back,
-//     restart, and re-check — the box ends on a binary that answered ready,
-//     or the error says plainly that neither did.
+//  5. restart the service (which migrates on start) and wait for HealthURL;
+//  6. on a failed restart or health gate, rename fleet.prev's bytes back,
+//     restart, and re-check — under a fresh context, so an interrupted gate
+//     still rolls back — and the box ends on a binary that answered ready, or
+//     the error says plainly that neither did.
 func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	live := filepath.Join(o.InstallDir, liveName)
 	prev := filepath.Join(o.InstallDir, prevName)
@@ -90,8 +120,38 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	if err := os.MkdirAll(o.InstallDir, 0o755); err != nil { //nolint:gosec // G301: the install dir holds a world-executable binary.
 		return res, err
 	}
+	unlock, err := lockDir(o.InstallDir)
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+
+	same, err := sameFile(o.Binary, live)
+	if err != nil {
+		return res, err
+	}
+	if same {
+		res.Unchanged = true
+		if _, err := os.Stat(prev); err == nil {
+			res.Previous = prev
+		}
+		o.logf("%s already is this binary — nothing to swap; %s left as it was", live, prev)
+		if o.NoRestart {
+			return res, nil
+		}
+		if err := restartAndProbe(ctx, o); err != nil {
+			return res, fmt.Errorf("%w (the live binary already was this release, so there is nothing to roll back to here — see `fleet release rollback`)", err)
+		}
+		res.Restarted = true
+		return res, nil
+	}
+
+	if err := checkFreeSpace(o.InstallDir, o.Binary); err != nil {
+		return res, err
+	}
 	staging := filepath.Join(o.InstallDir, stagingName)
 	if err := copyFileSync(o.Binary, staging); err != nil {
+		_ = os.Remove(staging)
 		return res, fmt.Errorf("stage the new binary: %w", err)
 	}
 	if _, err := os.Stat(live); err == nil {
@@ -107,9 +167,13 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	}
 	syncDir(o.InstallDir)
 	o.logf("installed %s (previous kept as %s)", live, prev)
+	if o.NoRestart {
+		return res, nil
+	}
 
 	gateErr := restartAndProbe(ctx, o)
 	if gateErr == nil {
+		res.Restarted = true
 		return res, nil
 	}
 	if o.NoRollback || res.Previous == "" {
@@ -120,28 +184,56 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 		return res, fmt.Errorf("%w (not rolled back: %s)", gateErr, why)
 	}
 	o.logf("the new binary failed its gate (%v) — rolling back to %s", gateErr, prev)
+	rbCtx, cancel := o.rollbackContext(ctx)
+	defer cancel()
 	_ = replaceLink(live, filepath.Join(o.InstallDir, failedName))
 	if err := restorePrevious(o.InstallDir); err != nil {
 		return res, fmt.Errorf("%w; and the rollback could not restore %s: %w", gateErr, prev, err)
 	}
-	if err := restartAndProbe(ctx, o); err != nil {
+	if err := restartAndProbe(rbCtx, o); err != nil {
 		return res, fmt.Errorf("%w; rolled back to %s, but it did not become ready either: %w", gateErr, prev, err)
 	}
 	res.RolledBack = true
 	return res, fmt.Errorf("%w: %w", ErrRolledBack, gateErr)
 }
 
+// rollbackContext is the bounded context a rollback runs under: it keeps the
+// caller's values but not its cancellation (context.WithoutCancel), because
+// the usual reason the gate failed early IS that cancellation.
+func (o *InstallOptions) rollbackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := o.RollbackTimeout
+	if budget <= 0 {
+		budget = o.HealthTimeout
+		if budget <= 0 {
+			budget = 90 * time.Second
+		}
+		budget += 2 * time.Minute
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), budget)
+}
+
 // Rollback puts fleet.prev back as the live binary on purpose (`fleet release
 // rollback`), restarts and gates on readiness. The binary it replaces becomes
-// the new fleet.prev, so a second rollback undoes the first.
+// the new fleet.prev, so a second rollback undoes the first. The restart runs
+// under its own bounded context: interrupting the command after the swap must
+// not leave the service unrestarted on a binary nobody checked.
 func Rollback(ctx context.Context, o InstallOptions) error {
 	live := filepath.Join(o.InstallDir, liveName)
 	prev := filepath.Join(o.InstallDir, prevName)
 	if _, err := os.Stat(prev); err != nil {
 		return fmt.Errorf("no previous binary at %s to roll back to", prev)
 	}
+	unlock, err := lockDir(o.InstallDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := checkFreeSpace(o.InstallDir, prev); err != nil {
+		return err
+	}
 	staging := filepath.Join(o.InstallDir, rollbackName)
 	if err := copyFileSync(prev, staging); err != nil {
+		_ = os.Remove(staging)
 		return err
 	}
 	if _, err := os.Stat(live); err == nil {
@@ -155,7 +247,67 @@ func Rollback(ctx context.Context, o InstallOptions) error {
 		return err
 	}
 	syncDir(o.InstallDir)
-	return restartAndProbe(ctx, o)
+	if o.NoRestart {
+		return nil
+	}
+	rbCtx, cancel := o.rollbackContext(ctx)
+	defer cancel()
+	return restartAndProbe(rbCtx, o)
+}
+
+// lockDir takes an exclusive, non-blocking flock on <dir>/.fleet.lock. Two
+// installs racing on one dir would each keep the other's binary as fleet.prev.
+func lockDir(dir string) (func(), error) {
+	f, err := os.OpenFile(filepath.Join(dir, ".fleet.lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: a fixed name in the install dir.
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, ErrBusy
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// sameFile reports whether a and b exist and have identical bytes.
+func sameFile(a, b string) (bool, error) {
+	if _, err := os.Stat(b); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	ha, err := fileSHA256(a)
+	if err != nil {
+		return false, err
+	}
+	hb, err := fileSHA256(b)
+	if err != nil {
+		return false, err
+	}
+	return ha == hb, nil
+}
+
+// checkFreeSpace refuses to stage src into dir unless its filesystem has room
+// for the copy plus freeSpaceMargin. (fleet.prev is a hard link: free.)
+var checkFreeSpace = func(dir, src string) error {
+	fi, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return fmt.Errorf("free space on %s: %w", dir, err)
+	}
+	free := uint64(st.Bavail) * uint64(st.Bsize) //nolint:gosec // G115: block counts and sizes are non-negative.
+	need := uint64(fi.Size()) + freeSpaceMargin  //nolint:gosec // G115: a file size is non-negative.
+	if free < need {
+		return fmt.Errorf("%s has %d MiB free; staging the binary needs %d MiB — nothing was changed", dir, free>>20, need>>20)
+	}
+	return nil
 }
 
 func restorePrevious(dir string) error {
@@ -260,6 +412,12 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 	client := p.Client
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
+		if loopbackHTTPS(url) {
+			// The box probing its OWN listener over loopback: the certificate
+			// names the public domain (manual/ACME), never 127.0.0.1, and the
+			// probe asks only "did it start" — nothing secret crosses it.
+			client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}} //nolint:gosec // G402: loopback self-probe only (loopbackHTTPS).
+		}
 	}
 	interval := p.Interval
 	if interval <= 0 {
@@ -295,18 +453,40 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 // HealthURLFromAddr derives the readiness URL from FLEET_SERVER_ADDR the way
 // the server binds it: the chat listener serves /readyz (default
 // 127.0.0.1:8080), and an all-interfaces bind is probed on loopback.
-func HealthURLFromAddr(addr string) string {
+func HealthURLFromAddr(addr string) string { return HealthURL(addr, "") }
+
+// HealthURL is HealthURLFromAddr for a chat listener that may terminate TLS
+// itself (FLEET_TLS_MODE=manual|auto → https).
+func HealthURL(addr, tlsMode string) string {
+	scheme := "http"
+	if m := strings.ToLower(strings.TrimSpace(tlsMode)); m == "manual" || m == "auto" {
+		scheme = "https"
+	}
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "http://" + addr + "/readyz"
+		return scheme + "://" + addr + "/readyz"
 	}
 	switch host {
 	case "", "0.0.0.0", "::":
 		host = "127.0.0.1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/readyz"
+	return scheme + "://" + net.JoinHostPort(host, port) + "/readyz"
+}
+
+// loopbackHTTPS reports whether raw is an https URL to a loopback address.
+func loopbackHTTPS(raw string) bool {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
