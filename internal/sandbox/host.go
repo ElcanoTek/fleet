@@ -299,10 +299,8 @@ func (h *hostImpl) ensureBridge() error {
 	h.bridgeStdin = stdin
 	h.bridgeStdout = bufio.NewReader(stdout)
 	h.bridgeStarted = true
-
-	// Tiny grace period so the bridge has time to set up its stdin reader
-	// before we shove a request at it. Matches legacy timing.
-	time.Sleep(100 * time.Millisecond)
+	// No settle delay: a request written before the bridge reads stdin waits
+	// in the pipe until it does.
 	return nil
 }
 

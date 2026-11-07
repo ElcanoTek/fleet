@@ -87,7 +87,7 @@ mcp_servers:
 }
 
 func TestConnectorCategoriesMiscLast(t *testing.T) {
-	cats := ConnectorCategories()
+	cats := connectorCategoriesNamed("")
 	if cats[len(cats)-1].ID != MiscConnectorCategory {
 		t.Errorf("last category = %q, want misc", cats[len(cats)-1].ID)
 	}
@@ -115,7 +115,7 @@ func TestBundleNamesTheHouseCategory(t *testing.T) {
 	}
 	// The package list is never renamed by a bundle.
 	_ = (&Bundle{Branding: Branding{HouseToolsName: "Elcano Tools"}}).ConnectorCategories()
-	if ConnectorCategories()[0].Name != "House Tools" {
+	if connectorCategoriesNamed("")[0].Name != "House Tools" {
 		t.Error("Bundle.ConnectorCategories must not mutate the shared list")
 	}
 }

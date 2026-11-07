@@ -12,9 +12,7 @@
 // surfaces as a contained failure, not a silent swallow.
 //
 // Every recovered panic is emitted as a STRUCTURED JSON event (queryable by a
-// log aggregator), counted in-memory (PanicCounts, for an operator probe — a
-// Prometheus surface is deferred to #176), and fanned out to optional legacy
-// and structured hooks. cmd/fleet registers the structured Sentry and
+// log aggregator) and fanned out to optional legacy and structured hooks. cmd/fleet registers the structured Sentry and
 // panic-events adapters; internal/safe imports neither an SDK nor a database.
 package safe
 
@@ -27,7 +25,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -66,11 +63,7 @@ var (
 	StructuredPanicEventWriter func(event PanicEvent)
 )
 
-var (
-	panicCountMu sync.Mutex
-	panicStats   = map[string]PanicStat{}
-	incidentSeq  atomic.Uint64
-)
+var incidentSeq atomic.Uint64
 
 // PanicMetadata is safe, non-secret attribution attached by a recovery
 // boundary. Identifiers are opaque database IDs already present in Fleet; tool
@@ -95,40 +88,7 @@ type PanicEvent struct {
 	Class string
 }
 
-// PanicStat is the low-cardinality counter and most recent attribution for one
-// recovery location. Counts remain keyed only by location so call/task IDs do
-// not create an unbounded metrics cardinality surface.
-type PanicStat struct {
-	Count int64
-	Last  PanicMetadata
-}
-
-// PanicCounts returns a snapshot of recovered-panic counts by goroutine location.
-func PanicCounts() map[string]int64 {
-	panicCountMu.Lock()
-	defer panicCountMu.Unlock()
-	out := make(map[string]int64, len(panicStats))
-	for k, v := range panicStats {
-		out[k] = v.Count
-	}
-	return out
-}
-
-// PanicStats returns a snapshot of counts plus the last structured attribution
-// observed at each location. Unlike PanicCounts it is intended for diagnostics,
-// not a metrics label set.
-func PanicStats() map[string]PanicStat {
-	panicCountMu.Lock()
-	defer panicCountMu.Unlock()
-	out := make(map[string]PanicStat, len(panicStats))
-	for k, v := range panicStats {
-		out[k] = v
-	}
-	return out
-}
-
-// EmitPanic logs a recovered panic in structured form, increments the location
-// counter, and fans out to the Sentry hook + panic-event writer. Exported so the
+// EmitPanic logs a recovered panic in structured form and fans out to the Sentry hook + panic-event writer. Exported so the
 // HTTP recovery middleware reuses the exact same emission. It does NOT run an
 // onPanic callback — Recover owns that.
 func EmitPanic(location string, v any, stack []byte) {
@@ -160,13 +120,6 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 		"conversation_id", LogSafe(meta.ConversationID),
 		"panic_class", class,
 	)
-
-	panicCountMu.Lock()
-	stat := panicStats[meta.Location]
-	stat.Count++
-	stat.Last = meta
-	panicStats[meta.Location] = stat
-	panicCountMu.Unlock()
 
 	if SentryHook != nil {
 		callReportingHook("SentryHook", func() { SentryHook(meta.Location, class, nil) })

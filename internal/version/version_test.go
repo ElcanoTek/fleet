@@ -15,20 +15,17 @@ func TestVersionDefault(t *testing.T) {
 	}
 }
 
-// TestRevisionShape: Revision is either "unknown" or a short hex revision,
-// optionally with a "+dirty" suffix, and is never longer than 12 hex digits plus
-// that suffix. It must not panic regardless of build-info availability.
+// TestRevisionShape: the build-info revision is either absent or a short hex
+// revision of at most 12 digits. It must not panic regardless of build-info
+// availability.
 func TestRevisionShape(t *testing.T) {
-	rev := Revision()
+	rev, _ := vcsRevision()
 	if rev == "" {
-		t.Fatal("Revision() = empty, want non-empty")
-	}
-	if rev == "unknown" {
 		return
 	}
-	shape := regexp.MustCompile(`^[0-9a-f]{1,12}(\+dirty)?$`)
+	shape := regexp.MustCompile(`^[0-9a-f]{1,12}$`)
 	if !shape.MatchString(rev) {
-		t.Errorf("Revision() = %q, want short-hex or short-hex+dirty", rev)
+		t.Errorf("vcsRevision() = %q, want short hex", rev)
 	}
 }
 
@@ -37,12 +34,15 @@ func TestRevisionShape(t *testing.T) {
 // never a fabricated placeholder.
 func TestString(t *testing.T) {
 	s := String()
-	rev := Revision()
-	if rev == "unknown" {
+	rev, dirty := vcsRevision()
+	if rev == "" {
 		if s != "dev" {
 			t.Errorf("String() = %q, want %q when no VCS info is available", s, "dev")
 		}
 		return
+	}
+	if dirty {
+		rev += "+dirty"
 	}
 	if want := "dev (" + rev + ")"; s != want {
 		t.Errorf("String() = %q, want %q", s, want)

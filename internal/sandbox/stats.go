@@ -77,20 +77,18 @@ type PodmanStatSample struct {
 }
 
 // ResourceUsageSummary is the per-run rollup the collector produces from the
-// stream of samples: averages plus high-water marks for the metrics that have a
-// meaningful peak, and the last-seen value for the cumulative I/O counters.
+// stream of samples: high-water marks for the metrics that have a meaningful
+// peak, and the last-seen value for the cumulative I/O counters.
 type ResourceUsageSummary struct {
 	Samples int `json:"samples"`
 
-	CPUPercentAvg  float64 `json:"cpu_percent_avg"`
 	CPUPercentPeak float64 `json:"cpu_percent_peak"`
 
-	MemUsageBytesAvg  uint64 `json:"mem_usage_bytes_avg"`
 	MemUsageBytesPeak uint64 `json:"mem_usage_bytes_peak"`
 	MemLimitBytes     uint64 `json:"mem_limit_bytes"`
 
 	// BlockInputBytes / BlockOutputBytes / Net* are cumulative counters, so the
-	// summary carries the last-seen (highest) value rather than an average.
+	// summary carries the last-seen (highest) value.
 	BlockInputBytes  uint64 `json:"block_input_bytes"`
 	BlockOutputBytes uint64 `json:"block_output_bytes"`
 
@@ -110,10 +108,8 @@ type ResourceUsageSummary struct {
 type statsAggregator struct {
 	count int
 
-	cpuSum  float64
 	cpuPeak float64
 
-	memSum   float64 // float to avoid uint64 overflow across many large samples
 	memPeak  uint64
 	memLast  uint64
 	memLimit uint64
@@ -131,12 +127,10 @@ type statsAggregator struct {
 func (a *statsAggregator) add(s PodmanStatSample) {
 	a.count++
 
-	a.cpuSum += s.CPUPercent
 	if s.CPUPercent > a.cpuPeak {
 		a.cpuPeak = s.CPUPercent
 	}
 
-	a.memSum += float64(s.MemUsageBytes)
 	if s.MemUsageBytes > a.memPeak {
 		a.memPeak = s.MemUsageBytes
 	}
@@ -173,9 +167,7 @@ func (a *statsAggregator) summary(netReported bool) ResourceUsageSummary {
 	}
 	sum := ResourceUsageSummary{
 		Samples:           a.count,
-		CPUPercentAvg:     a.cpuSum / float64(a.count),
 		CPUPercentPeak:    a.cpuPeak,
-		MemUsageBytesAvg:  uint64(a.memSum / float64(a.count)),
 		MemUsageBytesPeak: a.memPeak,
 		MemLimitBytes:     a.memLimit,
 		BlockInputBytes:   a.blockIn,

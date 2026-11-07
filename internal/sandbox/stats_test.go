@@ -6,8 +6,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
 // Podman 5.x stats output: snake_case fields, human-readable string values.
@@ -157,7 +161,7 @@ func TestParsePercent(t *testing.T) {
 	}
 }
 
-func TestStatsAggregator_AvgAndPeak(t *testing.T) {
+func TestStatsAggregator_Peaks(t *testing.T) {
 	agg := &statsAggregator{}
 	agg.add(PodmanStatSample{CPUPercent: 10, MemUsageBytes: 100, MemLimitBytes: 1000, PidsCurrent: 2, BlockInputBytes: 5, BlockOutputBytes: 7})
 	agg.add(PodmanStatSample{CPUPercent: 30, MemUsageBytes: 300, MemLimitBytes: 1000, PidsCurrent: 5, BlockInputBytes: 9, BlockOutputBytes: 11})
@@ -167,14 +171,8 @@ func TestStatsAggregator_AvgAndPeak(t *testing.T) {
 	if sum.Samples != 3 {
 		t.Errorf("samples: want 3, got %d", sum.Samples)
 	}
-	if sum.CPUPercentAvg != 20 {
-		t.Errorf("cpu avg: want 20, got %v", sum.CPUPercentAvg)
-	}
 	if sum.CPUPercentPeak != 30 {
 		t.Errorf("cpu peak: want 30, got %v", sum.CPUPercentPeak)
-	}
-	if sum.MemUsageBytesAvg != 200 {
-		t.Errorf("mem avg: want 200, got %d", sum.MemUsageBytesAvg)
 	}
 	if sum.MemUsageBytesPeak != 300 {
 		t.Errorf("mem peak: want 300, got %d", sum.MemUsageBytesPeak)
@@ -277,7 +275,7 @@ func TestResolveStatsInterval(t *testing.T) {
 // TestContainerResourceUsage_E2E is a podman-gated integration test for the live
 // collector path (#263): it spins a real container with a short stats interval,
 // runs a small workload, closes it, and asserts non-empty telemetry was rolled
-// up and exposed via Sandbox.ResourceUsage. Skipped without linux+podman.
+// up and published to /metrics. Skipped without linux+podman.
 func TestContainerResourceUsage_E2E(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("container backend tested on linux only")
@@ -290,6 +288,7 @@ func TestContainerResourceUsage_E2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	runsBefore := renderedMetric(metrics.Render(), "fleet_sandbox_runs_observed_total")
 	sb, err := NewContainer(ctx, ContainerConfig{
 		Image:            image,
 		WorkspaceHostDir: tmp,
@@ -313,19 +312,32 @@ func TestContainerResourceUsage_E2E(t *testing.T) {
 	// Close finalizes telemetry (the poller publishes its rollup on teardown).
 	sb.Close()
 
-	summary, ok := sb.impl.(*containerImpl).resourceUsage()
-	if !ok {
+	// The rollup's only consumer is /metrics: a collected run bumps the
+	// runs-observed counter and publishes its peaks as gauges.
+	if after := renderedMetric(metrics.Render(), "fleet_sandbox_runs_observed_total"); after <= runsBefore {
 		t.Skip("no stats samples collected (host podman may restrict `podman stats` for rootless cgroupv1) — collection degraded gracefully, which is the intended fallback")
 	}
-	if summary.Samples == 0 {
-		t.Fatalf("ResourceUsage ok=true but Samples=0")
+	out := metrics.Render()
+	if v := renderedMetric(out, "fleet_sandbox_memory_usage_bytes"); v == 0 {
+		t.Errorf("expected non-zero peak memory gauge, got metrics:\n%s", out)
 	}
-	if summary.MemUsageBytesPeak == 0 {
-		t.Errorf("expected non-zero peak memory, got summary %+v", summary)
+	if v := renderedMetric(out, "fleet_sandbox_pids_peak"); v == 0 {
+		t.Errorf("expected non-zero peak pids gauge, got metrics:\n%s", out)
 	}
-	if summary.PidsPeak == 0 {
-		t.Errorf("expected non-zero peak pids, got summary %+v", summary)
+}
+
+// renderedMetric returns the value of an unlabelled series in a /metrics
+// exposition, or 0 when it is absent or unparsable.
+func renderedMetric(exposition, name string) float64 {
+	for line := range strings.Lines(exposition) {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), name+" ")
+		if !ok {
+			continue
+		}
+		v, _ := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+		return v
 	}
+	return 0
 }
 
 // TestStatsPollWaitDelayIsBounded pins the two properties that keep telemetry

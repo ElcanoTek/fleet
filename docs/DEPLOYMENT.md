@@ -108,7 +108,7 @@ lowers the host's base footprint.
 
 > **Per-task resource telemetry.** To help right-size those caps, fleet samples
 > `podman stats` read-only over each sandbox container's lifetime and records the
-> run's peak/average CPU and memory plus cumulative I/O and peak PID count. This
+> run's peak CPU and memory plus cumulative I/O and peak PID count. This
 > is **observability only** — it never changes the container's isolation or
 > limits. The peaks of the most recently finished run are exported on `/metrics`
 > as `fleet_sandbox_cpu_usage_percent`, `fleet_sandbox_memory_usage_bytes`,

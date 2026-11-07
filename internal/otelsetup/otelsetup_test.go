@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,7 +182,7 @@ func TestInitNoopWhenEndpointUnset(t *testing.T) {
 	}
 	// The W3C propagator must still be installed so inbound context flows.
 	fields := otel.GetTextMapPropagator().Fields()
-	if !contains(fields, "traceparent") {
+	if !slices.Contains(fields, "traceparent") {
 		t.Errorf("propagator fields = %v, want traceparent", fields)
 	}
 }
@@ -232,13 +233,4 @@ func TestSamplerFromEnv(t *testing.T) {
 			}
 		})
 	}
-}
-
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }

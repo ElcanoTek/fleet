@@ -60,11 +60,11 @@ func TestRedactor_ScopedRotationPlateaus(t *testing.T) {
 	for gen := 1; gen <= rotations; gen++ {
 		access, refresh := rotationFixtures(gen)
 		if prevRefresh == "" {
-			r.AddScopedLiterals(scope, clientSecret)
+			r.RegisterSecrets(scope, false, clientSecret)
 		} else {
-			r.AddScopedLiterals(scope, clientSecret, prevRefresh)
+			r.RegisterSecrets(scope, false, clientSecret, prevRefresh)
 		}
-		r.RotateScopedLiterals(scope, clientSecret, access, refresh)
+		r.RegisterSecrets(scope, true, clientSecret, access, refresh)
 
 		// The live generation is always scrubbed.
 		for _, live := range []string{clientSecret, access, refresh} {
@@ -124,12 +124,12 @@ func TestRedactor_RetirementIsScopedAndSparesPermanentLiterals(t *testing.T) {
 	const scopeA, scopeB = "remotemcp:server-a", "remotemcp:server-b"
 	accessA1, refreshA1 := rotationFixtures(1)
 	accessB1, refreshB1 := "placeholder-access-value-server-b", "placeholder-refresh-value-server-b"
-	r.RotateScopedLiterals(scopeA, accessA1, refreshA1, shared)
-	r.RotateScopedLiterals(scopeB, accessB1, refreshB1)
+	r.RegisterSecrets(scopeA, true, accessA1, refreshA1, shared)
+	r.RegisterSecrets(scopeB, true, accessB1, refreshB1)
 
 	// Server A rotates; server B does not.
 	accessA2, refreshA2 := rotationFixtures(2)
-	r.RotateScopedLiterals(scopeA, accessA2, refreshA2, shared)
+	r.RegisterSecrets(scopeA, true, accessA2, refreshA2, shared)
 	clock.advance(literalRetireGrace + time.Minute)
 
 	for _, keep := range []string{bootSecret, shared, accessA2, refreshA2, accessB1, refreshB1} {
@@ -157,7 +157,7 @@ func TestRedactor_FastRotationHitsGenerationCap(t *testing.T) {
 	var access, refresh string
 	for gen := 1; gen <= rotations; gen++ {
 		access, refresh = rotationFixtures(gen)
-		r.RotateScopedLiterals(scope, access, refresh)
+		r.RegisterSecrets(scope, true, access, refresh)
 		clock.advance(time.Second) // 900x faster than literalRetireGrace
 	}
 	if n := r.LiteralCount(); n > 2*maxScopeGenerations {
@@ -195,8 +195,8 @@ func TestRedactor_ConcurrentRotationRedact(t *testing.T) {
 			scope := fmt.Sprintf("remotemcp:server-%d", s)
 			for gen := 1; gen <= rounds; gen++ {
 				access, refresh := fixture(s, gen)
-				r.AddScopedLiterals(scope, access)
-				r.RotateScopedLiterals(scope, access, refresh)
+				r.RegisterSecrets(scope, false, access)
+				r.RegisterSecrets(scope, true, access, refresh)
 			}
 		}(s)
 		go func(s int) {

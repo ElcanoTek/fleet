@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -64,7 +65,7 @@ func TestRunConfig_MCPBinding_NamedAccount(t *testing.T) {
 		if err == nil {
 			t.Fatalf("named account with zero overrides must be refused, got name=%q env=%v", name, env)
 		}
-		if !contains(err.Error(), "refusing to spawn") {
+		if !strings.Contains(err.Error(), "refusing to spawn") {
 			t.Errorf("refusal error should explain the refusal, got: %v", err)
 		}
 	})
@@ -114,13 +115,4 @@ func TestMCPSelection_OptInSet(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("OptInSet = %v, want %v", got, want)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

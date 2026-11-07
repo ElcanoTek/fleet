@@ -3,7 +3,10 @@
 
 package clientconfig
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateHooks(t *testing.T) {
 	good := &HooksConfig{Version: 1, Entries: []HookDef{
@@ -50,7 +53,7 @@ func TestValidateHooks(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.want)
 			}
-			if !contains(err.Error(), tc.want) {
+			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not contain %q", err.Error(), tc.want)
 			}
 		})
@@ -79,17 +82,4 @@ func TestBundleHooksAccessor(t *testing.T) {
 	if (&Bundle{}).Hooks() != nil {
 		t.Error("nil hooks bundle should return nil")
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

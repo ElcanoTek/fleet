@@ -1270,18 +1270,9 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 }
 
 // ensureBridge starts the bridge exec session on first use, mirroring
-// containerImpl.ensureBridge (including the post-start settle delay outside
-// the lock).
+// containerImpl.ensureBridge: a request written before the bridge reads stdin
+// waits in the stream until it does, so no post-start settle delay is needed.
 func (k *k8sImpl) ensureBridge() error {
-	started, err := k.startBridgeIfNeeded()
-	if err != nil || !started {
-		return err
-	}
-	time.Sleep(100 * time.Millisecond)
-	return nil
-}
-
-func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -1291,13 +1282,13 @@ func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 			// Session ended behind our back (pod-side exit) — fall through and
 			// start a fresh one.
 		default:
-			return false, nil
+			return nil
 		}
 	}
 
 	podName := k.currentPodName()
 	if podName == "" {
-		return false, fmt.Errorf("start bridge: %w", ErrClosed)
+		return fmt.Errorf("start bridge: %w", ErrClosed)
 	}
 
 	// The bridge reads JSON-per-line from stdin and writes JSON-per-line to
@@ -1312,7 +1303,7 @@ func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 	if err != nil {
 		_ = pw.Close()
 		_ = pr.Close()
-		return false, fmt.Errorf("start bridge exec: %w", err)
+		return fmt.Errorf("start bridge exec: %w", err)
 	}
 	// Unblock any reader waiting on the pipe once the session ends — the
 	// demux loop does not own the pipe writer.
@@ -1325,7 +1316,7 @@ func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 	k.bridgeStdoutPipe = pr
 	k.bridgeStderr = stderrBuf
 	k.bridgeStarted = true
-	return true, nil
+	return nil
 }
 
 // terminateBridgeLocked tears the bridge session down and clears the state so

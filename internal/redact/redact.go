@@ -12,7 +12,7 @@
 //
 // Literals come in two flavors. A PERMANENT literal (AddLiteral) lives for the
 // process lifetime: a boot-time env secret, a static connector API key. A
-// SCOPED literal (AddScopedLiterals / RotateScopedLiterals) belongs to a named
+// SCOPED literal (RegisterSecrets with a scope) belongs to a named
 // rotating credential set — one hosted-MCP server row, whose OAuth access +
 // refresh pair is replaced wholesale on every refresh. Each rotation opens a new
 // generation for that scope and retires the previous one after a grace window,
@@ -99,8 +99,8 @@ type literal struct {
 
 // Redactor applies a prioritized list of patterns + registered literals to a
 // string. Safe for concurrent use after construction: the patterns are fixed
-// at NewRedactor, and the literal set is guarded by an RWMutex so AddLiteral,
-// AddScopedLiterals and RotateScopedLiterals may be called at any time —
+// at NewRedactor, and the literal set is guarded by an RWMutex so AddLiteral
+// and RegisterSecrets may be called at any time —
 // including for secrets acquired at RUNTIME (e.g. a refreshed OAuth bearer,
 // #1124) — while Redact runs on other goroutines.
 type Redactor struct {
@@ -189,40 +189,32 @@ func NewRedactor(extraPatterns []string) *Redactor {
 // strings; duplicates are ignored so re-registering the same value on every
 // acquisition cannot grow the scan list. Safe to call concurrently with Redact.
 //
-// Use AddScopedLiterals/RotateScopedLiterals instead for a credential set that
-// rotates (an OAuth access+refresh pair): those retire superseded generations,
-// which a permanent literal by definition never does.
+// Use RegisterSecrets with a scope instead for a credential set that rotates
+// (an OAuth access+refresh pair): a scoped rotation retires superseded
+// generations, which a permanent literal by definition never does.
 func (r *Redactor) AddLiteral(value string) {
 	r.addLiterals("", false, value)
-}
-
-// AddScopedLiterals registers values as part of scope's CURRENT generation
-// without superseding anything: the credential is one the scope is using right
-// now (the stored refresh token about to ride a token request, the client
-// secret authenticating it, the bearer an acquisition returned unchanged).
-// Nothing is retired, so this can never shorten a live secret's coverage. An
-// empty scope degrades to AddLiteral.
-func (r *Redactor) AddScopedLiterals(scope string, values ...string) {
-	r.addLiterals(scope, false, values...)
-}
-
-// RotateScopedLiterals opens a NEW generation for scope with values as its
-// complete live set, and marks the scope's previous generations for retirement
-// literalRetireGrace from now. Call it exactly when a rotation has SUCCEEDED
-// and pass every secret that is live afterwards (the fresh access token, the
-// fresh refresh token, and the client secret that still authenticates the
-// connection) — a value re-offered here is revived into the new generation, so
-// listing a still-live secret keeps it, while omitting one starts its grace
-// clock. An empty scope degrades to AddLiteral (nothing is retired).
-func (r *Redactor) RotateScopedLiterals(scope string, values ...string) {
-	r.addLiterals(scope, true, values...)
 }
 
 // RegisterSecrets is the single entry point the host processes wire their
 // runtime secret-acquisition observer to (see agentcore.RegisterSecretLiterals
 // and mcpbroker.RegisterSecretLiterals): it maps the observer's (scope,
 // rotated) shape onto the three registration modes so the rotation semantics
-// live here and not in each caller.
+// live here and not in each caller:
+//
+//   - scope == "": a PERMANENT literal, exactly AddLiteral.
+//   - rotated == false: values join scope's CURRENT generation without
+//     superseding anything — a credential the scope is using right now (the
+//     stored refresh token about to ride a token request, the client secret
+//     authenticating it, a bearer an acquisition returned unchanged). Nothing
+//     is retired, so this can never shorten a live secret's coverage.
+//   - rotated == true: a NEW generation for scope with values as its complete
+//     live set; the previous generations retire literalRetireGrace from now.
+//     Call it exactly when a rotation has SUCCEEDED and pass every secret that
+//     is live afterwards (the fresh access token, the fresh refresh token, the
+//     client secret that still authenticates the connection) — a value
+//     re-offered here is revived into the new generation, so listing a
+//     still-live secret keeps it, while omitting one starts its grace clock.
 func (r *Redactor) RegisterSecrets(scope string, rotated bool, values ...string) {
 	r.addLiterals(scope, rotated, values...)
 }
@@ -374,19 +366,6 @@ func (r *Redactor) nowNano() int64 {
 		return r.now().UnixNano()
 	}
 	return time.Now().UnixNano()
-}
-
-// LiteralCount reports how many literal VALUES are currently scanned for. It
-// exposes the count only, never a value — it is the diagnostic that lets the
-// rotation tests assert the scan set plateaus (#1274).
-func (r *Redactor) LiteralCount() int {
-	if r == nil {
-		return 0
-	}
-	r.sweepDue()
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.literals)
 }
 
 // Redact returns input with every matched secret replaced. Literals run first

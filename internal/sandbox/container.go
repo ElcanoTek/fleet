@@ -63,12 +63,11 @@ type containerImpl struct {
 	bridgeScriptPath string // host-side temp file (bind-mounted into container)
 
 	// Resource-telemetry collector (#263). statsCancel stops the polling
-	// goroutine; statsDone is closed when it has returned with its rollup,
-	// which is then published into statsSummary. All read-only sampling —
-	// never affects isolation. nil when collection is disabled.
-	statsCancel  context.CancelFunc
-	statsDone    chan struct{}
-	statsSummary ResourceUsageSummary
+	// goroutine; statsDone is closed once it has published its rollup to
+	// /metrics. All read-only sampling — never affects isolation. nil when
+	// collection is disabled.
+	statsCancel context.CancelFunc
+	statsDone   chan struct{}
 
 	// execPoisoned latches when a cancelled/timed-out bash invocation's
 	// in-container process tree could NOT be proved dead (#796). A poisoned
@@ -807,9 +806,6 @@ func (c *containerImpl) startStatsCollector() {
 	safe.Go("sandbox.stats.collect", func() {
 		defer close(done)
 		summary := collectStats(statsCtx, podman, containerID, interval, netReported, onBreach)
-		c.mu.Lock()
-		c.statsSummary = summary
-		c.mu.Unlock()
 		if summary.Samples > 0 {
 			// Publish the run's peaks to /metrics (#263). Last-write-wins
 			// gauges, no per-task label — see metrics.RecordSandboxResourceUsage.
@@ -1457,45 +1453,23 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 	return " (bridge stderr: " + stderr + ")"
 }
 
-// ensureBridge starts the bridge inside the container on first call.
-// Subsequent calls are a no-op as long as the exec session is still
-// healthy.
+// ensureBridge starts the bridge exec session under c.mu when it is not
+// already running and healthy. There is no post-start settle delay: a request
+// written before the bridge reads stdin just sits in the exec client's pipe
+// until it does, and the first ReadBytes waits for the reply either way.
 func (c *containerImpl) ensureBridge() error {
-	started, err := c.startBridgeIfNeeded()
-	if err != nil || !started {
-		return err
-	}
-	// Match legacy timing — the bridge sets up its kernel asynchronously
-	// after we send the first request, but the stdin reader has to be
-	// up before we can write. 100ms covers the common case; if the
-	// bridge isn't ready, the first ReadBytes will just wait. The pause
-	// deliberately runs AFTER c.mu is released (#1124): holding the lock
-	// through it stalled every concurrent operation on this container
-	// (close, resource telemetry, a racing runPython) behind a fixed
-	// 100ms sleep, and the lock protects the bridge FIELDS, not this
-	// settle window — a request written before the bridge reads stdin
-	// just sits in the exec client's pipe until it does.
-	time.Sleep(100 * time.Millisecond)
-	return nil
-}
-
-// startBridgeIfNeeded starts the bridge exec session under c.mu when it is not
-// already running and healthy, reporting whether THIS call started it (so
-// ensureBridge applies the post-start settle delay only to a fresh start, and
-// outside the lock).
-func (c *containerImpl) startBridgeIfNeeded() (started bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.bridgeStarted && c.bridgeCmd != nil && c.bridgeCmd.ProcessState == nil {
-		return false, nil
+		return nil
 	}
 
 	// Snapshot the id (close() clears the field concurrently under idMu) and
 	// refuse to start a bridge in a container that is already torn down.
 	containerID := c.currentContainerID()
 	if containerID == "" {
-		return false, fmt.Errorf("start bridge: %w", ErrClosed)
+		return fmt.Errorf("start bridge: %w", ErrClosed)
 	}
 
 	// `podman exec -i` keeps stdin open; the bridge reads JSON-per-line
@@ -1519,23 +1493,23 @@ func (c *containerImpl) startBridgeIfNeeded() (started bool, err error) {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return false, fmt.Errorf("stdin pipe: %w", err)
+		return fmt.Errorf("stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return false, fmt.Errorf("stdout pipe: %w", err)
+		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		return false, fmt.Errorf("start bridge exec: %w", err)
+		return fmt.Errorf("start bridge exec: %w", err)
 	}
 	c.bridgeCmd = cmd
 	c.bridgeStdin = stdin
 	c.bridgeStdout = bufio.NewReader(stdout)
 	c.bridgeStderr = stderrBuf
 	c.bridgeStarted = true
-	return true, nil
+	return nil
 }
 
 func (c *containerImpl) close() {
@@ -1602,15 +1576,6 @@ func (c *containerImpl) close() {
 	if scriptPath != "" {
 		_ = os.Remove(scriptPath)
 	}
-}
-
-// resourceUsage returns the telemetry rollup published by the stats poller on
-// close (#263), and whether any samples were collected. Reading before close
-// returns the zero summary (the poller publishes only on teardown).
-func (c *containerImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.statsSummary, c.statsSummary.Samples > 0
 }
 
 // containerNamePrefix is the shared prefix for every sandbox container name. It
