@@ -181,22 +181,35 @@ func TestWebhookDeliveryTakeoverStartsAfresh(t *testing.T) {
 	}
 }
 
-// A takeover leaves the dead request's conversation alone when it is not
-// empty (here: the dead request's turn row).
-func TestWebhookDeliveryTakeoverKeepsANonEmptyConversation(t *testing.T) {
+// A takeover keeps the earlier conversation while it has a turn that is still
+// running (a live, slow claimant), and deletes it once that turn is finished
+// with no saved input — the dead claimant's turn after startup recovery.
+func TestWebhookDeliveryTakeoverKeepsALiveTurnDropsAFinishedOne(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	orig, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:dead-turn")
-	dead := bindWebhook(t, s, "github:dead-turn", orig.Token)
-	if err := s.CreateTurn(ctx, "dead-turn", dead.ID, time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-	ageWebhook(t, s, "github:dead-turn", 2*webhookClaimStaleAfter)
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:dead-turn"); !c.Claimed {
-		t.Fatalf("takeover refused: %+v", c)
-	}
-	if !conversationExists(t, s, dead.ID) {
-		t.Fatal("a takeover deleted a conversation that has a turn")
+	for _, tc := range []struct {
+		name     string
+		finished bool
+	}{{"live", false}, {"recovered", true}} {
+		key := "github:dead-turn-" + tc.name
+		orig, _ := s.ClaimWebhookDelivery(ctx, "gh", key)
+		dead := bindWebhook(t, s, key, orig.Token)
+		turnID := "dead-turn-" + tc.name
+		if err := s.CreateTurn(ctx, turnID, dead.ID, time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+		if tc.finished {
+			if err := s.FinishTurn(ctx, turnID, TurnStatusError, time.Now().Unix(), false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ageWebhook(t, s, key, 2*webhookClaimStaleAfter)
+		if c, _ := s.ClaimWebhookDelivery(ctx, "gh", key); !c.Claimed {
+			t.Fatalf("%s: takeover refused: %+v", tc.name, c)
+		}
+		if got, want := conversationExists(t, s, dead.ID), !tc.finished; got != want {
+			t.Fatalf("%s: conversation kept = %v, want %v", tc.name, got, want)
+		}
 	}
 }
 

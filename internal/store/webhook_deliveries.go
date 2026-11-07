@@ -129,7 +129,11 @@ func (s *Store) claimWebhookDeliveryOnce(ctx context.Context, slug, deliveryKey,
 		return WebhookClaim{}, false, err
 	}
 	if !completed && convID != "" {
-		if err := discardEmptyConversation(ctx, tx, convID, ""); err != nil {
+		// The stale claimant's own turn row, if any, no longer counts: a
+		// claimant that crashed left it 'running' only until startup
+		// recovery finished it, and that runs before traffic. A turn that is
+		// still running belongs to a live owner and keeps the conversation.
+		if err := discardEmptyConversation(ctx, tx, convID, "", true); err != nil {
 			return WebhookClaim{}, false, err
 		}
 	}
@@ -260,7 +264,7 @@ func (s *Store) AbandonWebhookConversation(ctx context.Context, slug, deliveryKe
 		return false, err
 	}
 	if convID != "" {
-		if err := discardEmptyConversation(ctx, tx, convID, ownTurnID); err != nil {
+		if err := discardEmptyConversation(ctx, tx, convID, ownTurnID, false); err != nil {
 			return false, err
 		}
 	}
@@ -268,10 +272,12 @@ func (s *Store) AbandonWebhookConversation(ctx context.Context, slug, deliveryKe
 }
 
 // discardEmptyConversation deletes convID inside tx only while it has no
-// messages and no turns other than exceptTurnID. The conversation row is
+// messages and no turns other than exceptTurnID (and, when ignoreFinished is
+// set, other than turns that already reached a terminal status — a dead
+// claimant's turn with no saved input). The conversation row is
 // locked first, as every history writer locks it (lockConversationForAppend),
 // so the emptiness check cannot race a write.
-func discardEmptyConversation(ctx context.Context, tx *sql.Tx, convID, exceptTurnID string) error {
+func discardEmptyConversation(ctx context.Context, tx *sql.Tx, convID, exceptTurnID string, ignoreFinished bool) error {
 	if _, err := tx.ExecContext(ctx,
 		`SELECT 1 FROM conversations WHERE id = $1 FOR UPDATE`, convID); err != nil {
 		return err
@@ -280,8 +286,9 @@ func discardEmptyConversation(ctx context.Context, tx *sql.Tx, convID, exceptTur
 		`DELETE FROM conversations c
 		  WHERE c.id = $1
 		    AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
-		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.turn_id <> $2)`,
-		convID, exceptTurnID)
+		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.turn_id <> $2
+		                      AND (NOT $3 OR t.status = 'running'))`,
+		convID, exceptTurnID, ignoreFinished)
 	return err
 }
 

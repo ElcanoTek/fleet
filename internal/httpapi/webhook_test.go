@@ -773,8 +773,9 @@ func countUserTexts(h []agent.HistoryEntry) int {
 // A process that bound the delivery's conversation, created its turn row and
 // then died before the turn's input was saved leaves the delivery unfinished.
 // A repeat inside the stale window is told to retry; one after it takes the
-// delivery over and starts afresh in a new conversation (the dead one, not
-// empty because of its turn row, is left alone) — exactly one turn runs.
+// delivery over and starts afresh in a new conversation (the dead one's turn
+// row is still 'running' here — no startup recovery in this test — so it is
+// left alone) — exactly one turn runs.
 func TestWebhookCrashAfterBindRetryRunsOnceFresh(t *testing.T) {
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
@@ -826,7 +827,7 @@ func TestWebhookCrashAfterBindRetryRunsOnceFresh(t *testing.T) {
 			turns, countUserTexts(st.history[fresh]), len(st.history[dead.ID]))
 	}
 	if _, ok := st.convs[dead.ID]; !ok {
-		t.Fatal("the dead conversation (it has a turn row) was deleted")
+		t.Fatal("the dead conversation (its turn row is still running) was deleted")
 	}
 }
 
