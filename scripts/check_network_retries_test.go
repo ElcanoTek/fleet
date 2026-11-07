@@ -4,6 +4,7 @@
 package scripts
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,7 +152,8 @@ func TestRetryScript(t *testing.T) {
 	_ = os.Remove(counter)
 	cmd := exec.Command("bash", script, "--attempts", "3", "--delay", "0", "--what", "the thing", "--", "bash", "-c", `n=$(cat "$1" 2>/dev/null || echo 0); echo $((n+1)) > "$1"; exit 7`, "_", counter)
 	out, err = cmd.CombinedOutput()
-	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 7 {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
 		t.Fatalf("want exit 7, got %v\n%s", err, out)
 	}
 	if n, _ := os.ReadFile(counter); strings.TrimSpace(string(n)) != "3" {
