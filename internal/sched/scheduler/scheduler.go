@@ -104,6 +104,13 @@ type Scheduler struct {
 	gateMu       sync.Mutex
 	gateInFlight map[uuid.UUID]struct{}
 	gateWG       sync.WaitGroup
+
+	// Chat schedules (#2049 M5, ADR-0104): the chat server that delivers
+	// their fires (nil leaves them unfired), and the wake-up requests that
+	// let a schedule due before the next tick fire on time. See
+	// chat_schedules.go.
+	chatDeliverer ChatScheduleDeliverer
+	chatWake      chan time.Time
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -233,6 +240,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		tickInterval:       defaultTickInterval,
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
 		gateInFlight:       make(map[uuid.UUID]struct{}),
+		chatWake:           make(chan time.Time, 16),
 	}
 }
 
@@ -316,6 +324,12 @@ func (s *Scheduler) runLoop() {
 		log.Printf("scheduler: paused-task expiry ON (fail tasks awaiting input > %dm)", s.pausedExpiryMin)
 	}
 
+	// Chat schedule wake-ups (ADR-0104): between ticks, a pass runs at the
+	// earliest time a chat schedule is due — armed by the tick itself and by
+	// the chat server when a schedule is created or edited.
+	var chatWake chatWakeTimer
+	defer chatWake.stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -341,11 +355,21 @@ func (s *Scheduler) runLoop() {
 				s.runStrandedWakeExpiry()
 				s.runRecurrenceReconciliation()
 				s.ProcessScheduledTasks()
+				s.runChatSchedules()
+			}()
+		case t := <-s.chatWake:
+			chatWake.request(t)
+		case <-chatWake.c():
+			chatWake.fired()
+			func() {
+				defer safe.Recover("scheduler.chat-schedules", nil)
+				s.runChatSchedules()
 			}()
 		case <-cleanupC:
 			func() {
 				defer safe.Recover("scheduler.cleanup", nil)
 				s.runCleanup()
+				s.runChatScheduleCleanup()
 				s.runLogArchival()
 			}()
 			cleanupTimer.Reset(24 * time.Hour)
