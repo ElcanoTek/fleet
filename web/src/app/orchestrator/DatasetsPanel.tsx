@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   orchestratorApi,
   type Dataset,
@@ -112,6 +112,15 @@ export function DatasetsPanel() {
     }
   }, [selectedId, statusFilter, rowsPage, showToast]);
 
+  // The CURRENT reloadRows, for callers that await something first (act): the
+  // closure captured at click time names the old selection, filter and page,
+  // and — since every call claims the newest runId — its stale response would
+  // win over the new selection's (#2045).
+  const reloadRowsRef = useRef(reloadRows);
+  useLayoutEffect(() => {
+    reloadRowsRef.current = reloadRows;
+  }, [reloadRows]);
+
   // selectDataset swaps the selection and drops the OLD dataset's rows at once,
   // so they are never shown under the new heading while its fetch runs.
   const selectDataset = (id: string | null) => {
@@ -169,7 +178,7 @@ export function DatasetsPanel() {
     try {
       await fn();
       await reloadList();
-      await reloadRows();
+      await reloadRowsRef.current();
     } catch (err) {
       showToast(`${label} failed: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
