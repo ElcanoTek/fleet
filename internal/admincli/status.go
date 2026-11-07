@@ -54,11 +54,7 @@ func cmdStatus(argv []string) int {
 	// 3. both databases reachable + active work summary + prompt cache health.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
-	if resolvedDSNs().Layout == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
-		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
-	} else {
-		r.pass("database layout", "one database, schemas chat + sched")
-	}
+	checkLayout(r, *chatURL, *schedURL)
 	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
 	checkPromptCache(r, *chatURL)
 
@@ -141,6 +137,35 @@ func checkEnv(r *report) {
 // checkDB pings a database with a short timeout. It opens a bare pgx connection
 // (NOT store.Open / storage.Initialize, which run migrations) so the check is
 // read-only and fast.
+// checkLayout reports the layout of the DSNs the checks above actually used —
+// the --*-database-url overrides when given (their layout decided by
+// config.DSNs.OverrideFor), else the deployment's — never the environment's
+// layout for overrides that point elsewhere.
+func checkLayout(r *report, chatFlag, schedFlag string) {
+	c, cerr := chatDSN(chatFlag)
+	s, serr := schedDSN(schedFlag)
+	if cerr != nil || serr != nil {
+		r.skip("database layout", "DSN unresolved")
+		return
+	}
+	cs, ss := config.DSNSchema(c), config.DSNSchema(s)
+	switch {
+	case cs == config.ChatSchema && ss == config.SchedSchema:
+		r.pass("database layout", "one database, schemas chat + sched")
+	case cs == "" && ss == "": // LEGACY-DB-LAYOUT: remove after consolidation
+		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
+	default:
+		r.warnLine("database layout", fmt.Sprintf("unusual: chat in schema %q, sched in schema %q", orPublic(cs), orPublic(ss)))
+	}
+}
+
+func orPublic(s string) string {
+	if s == "" {
+		return config.PublicSchema
+	}
+	return s
+}
+
 func checkDB(r *report, label, flagURL string, resolve func(string) (string, error)) {
 	dsn, err := resolve(flagURL)
 	if err != nil {
