@@ -329,8 +329,19 @@ cosign verify-attestation --type https://github.com/ElcanoTek/fleet/sbom-referen
   --certificate-identity https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   | jq -r '.payload | @base64d | fromjson | .predicate.sbom'   # names the SBOM asset and its SHA-256
-# the SBOM itself: fleet-sandbox-image-linux-<arch>.spdx.json, checked by sha256sum -c above
+# The SBOM itself: download the named asset, then check its hash against BOTH
+# the signed SHA256SUMS and the attested digest (sha256sum -c above skipped it
+# with --ignore-missing because it was not downloaded yet).
+SBOM=fleet-sandbox-image-linux-amd64.spdx.json   # the asset the attestation names
+curl -fsSLO "https://github.com/ElcanoTek/fleet/releases/download/$TAG/$SBOM"
+grep " ${SBOM}\$" SHA256SUMS | sha256sum -c -                # matches the signed sums
+sha256sum "$SBOM"                                               # compare with .predicate.sbom's sha256
 ```
+
+The SBOM files are release assets, so they share the release's retention:
+when an old release is pruned, its SBOM URLs stop resolving, while its GHCR
+images and their attestations remain (the attested SHA-256 still identifies
+the SBOM if you kept a copy).
 
 ## Knobs
 
