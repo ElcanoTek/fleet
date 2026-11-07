@@ -1,0 +1,133 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ChatExperience, type ConversationSummary } from "./chat-experience";
+import { clearChatSession } from "./chatSessionStore";
+
+// Opening one chat and then another before the first has loaded (#2043): the
+// load that started LAST owns the view. The older response used to switch the
+// active chat back to itself when it arrived late, and its `finally` cleared
+// the newer load's spinner. Chats are opened with the rail's keyboard cursor
+// (j/Enter), the path that stays usable while the rail shows its loading row.
+
+const CONVS: ConversationSummary[] = [
+  { id: "conv-a", title: "Alpha chat", persona: "default", model: "vendor/one", pinned: false, updated_at: 1767225600 },
+  { id: "conv-b", title: "Beta chat", persona: "default", model: "vendor/two", pinned: false, updated_at: 1767225500 },
+  { id: "conv-c", title: "Gamma chat", persona: "default", model: "vendor/three", pinned: false, updated_at: 1767225400 },
+];
+
+type Deferred = { url: string; resolve: () => void };
+
+let held: Deferred[] = [];
+let chatBodies: Array<Record<string, unknown>> = [];
+
+function mockBackend() {
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (method === "POST" && url === "/api/chat") {
+      chatBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response("", { status: 500 });
+    }
+    if (url === "/api/conversations") return json({ conversations: CONVS });
+    if (url === "/api/conversations?archived=true") return json({ conversations: [] });
+    if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
+    const m = /^\/api\/conversations\/(conv-[bc])$/.exec(url);
+    if (m) {
+      const conv = CONVS.find((c) => c.id === m[1]);
+      return new Promise<Response>((resolve) => {
+        held.push({ url, resolve: () => resolve(json({ conversation: conv, history: [] })) });
+      });
+    }
+    if (url === "/api/mcp-servers" || /\/mcp-servers$/.test(url)) return json({ servers: [] });
+    if (/\/inflight$/.test(url)) return json({ inflight: false });
+    return json({}, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+}
+
+async function release(url: string) {
+  await waitFor(() => expect(held.some((d) => d.url === url)).toBe(true));
+  const i = held.findIndex((d) => d.url === url);
+  const [d] = held.splice(i, 1);
+  await act(async () => {
+    d.resolve();
+  });
+}
+
+const headerTitle = () => screen.getByTitle("Click to rename");
+const key = (k: string) => fireEvent.keyDown(window, { key: k });
+
+// Boot opens Alpha; then B (held) and C (held) are opened in that order.
+async function openBThenC() {
+  render(<ChatExperience initialUserEmail="user@example.com" />);
+  await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+  key("j"); // cursor on Alpha
+  key("j"); // Beta
+  key("Enter");
+  await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-b")).toBe(true));
+  key("j"); // Gamma
+  key("Enter");
+  await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-c")).toBe(true));
+}
+
+beforeEach(() => {
+  held = [];
+  chatBodies = [];
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    })),
+  );
+  Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  clearChatSession();
+});
+
+describe("loadConversation supersession (#2043)", () => {
+  it("keeps the newer chat open when the older chat's load lands last", async () => {
+    mockBackend();
+    await openBThenC();
+
+    await release("/api/conversations/conv-c");
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Gamma chat"));
+
+    // B answers last: it must not pull the view back to B.
+    await release("/api/conversations/conv-b");
+    expect(headerTitle()).toHaveTextContent("Gamma chat");
+
+    // …and the composer still sends to the chat on screen.
+    const composer = await screen.findByRole("textbox", { name: /message/i });
+    fireEvent.change(composer, { target: { value: "hello" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(chatBodies.length).toBe(1));
+    expect(chatBodies[0].conversation_id).toBe("conv-c");
+  });
+
+  it("leaves the spinner up while the newer load is still in flight", async () => {
+    mockBackend();
+    await openBThenC();
+    expect(screen.getByText("Loading conversation...")).toBeInTheDocument();
+
+    // The superseded load finishing first neither opens B nor clears the
+    // spinner that belongs to C's load.
+    await release("/api/conversations/conv-b");
+    expect(screen.getByText("Loading conversation...")).toBeInTheDocument();
+    expect(headerTitle()).not.toHaveTextContent("Beta chat");
+
+    await release("/api/conversations/conv-c");
+    await waitFor(() => expect(screen.queryByText("Loading conversation...")).not.toBeInTheDocument());
+    expect(headerTitle()).toHaveTextContent("Gamma chat");
+  });
+});

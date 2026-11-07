@@ -922,6 +922,13 @@ export function ChatExperience({
     [],
   );
   const newChatDraftGenRef = useRef(0);
+  // Bumped by every foreground (non-background, non-adopt) loadConversation:
+  // the load that started LAST owns the view. Opening A (slow) and then B used
+  // to let A's late response switch the active chat back to A — persona,
+  // model and Tools catalog with it — and A's `finally` cleared B's loading
+  // spinner (#2043). A superseded load still merges its transcript and rail
+  // row; only the view-moving half is gated on this.
+  const loadConversationGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -2327,6 +2334,16 @@ export function ChatExperience({
     // tab-return staleness refetch) — otherwise the boot load resolving a
     // beat after the user opens a project home would silently close it.
     const prevProjectHome = projectHome;
+    // Claimed before the attach short-circuit below, which switches the view
+    // synchronously: an older load still in flight must not move it back.
+    // Background and adopt loads never move the user on their own, so they
+    // only read the generation — any foreground load after them wins.
+    if (!options.background && !options.adopt) {
+      loadConversationGenRef.current += 1;
+    }
+    const loadGenAtStart = loadConversationGenRef.current;
+    const isCurrentLoad = () =>
+      loadConversationGenRef.current === loadGenAtStart;
     if (!options.background && !options.restore) {
       setProjectHome(null);
       // The team-chat viewer is a full-page overlay too, and it hid the chat
@@ -2401,6 +2418,8 @@ export function ChatExperience({
           options.fallbackToTeamChatView &&
           (response.status === 404 || response.status === 403)
         ) {
+          // The viewer is a view switch too: a superseded load opens nothing.
+          if (!isCurrentLoad()) return;
           if (prevProjectHome) setProjectHome(prevProjectHome);
           setTeamChatView(conversationId);
           return;
@@ -2495,6 +2514,7 @@ export function ChatExperience({
         ? { ...data.conversation, persona: effectiveConvPersona }
         : data.conversation;
       const movesTheUser =
+        isCurrentLoad() &&
         newChatDraftGenRef.current === draftGenAtStart &&
         (!options.background ||
           activeConversationIdRef.current === conversationId);
@@ -2709,7 +2729,7 @@ export function ChatExperience({
       // via visibilitychange), the user is already in the chat and may
       // have been reading older messages — preserve their scroll
       // position instead of yanking them to the latest reply.
-      if (!options.preserveScroll) {
+      if (!options.preserveScroll && isCurrentLoad()) {
         pendingHistoryScrollRef.current = data.conversation.id;
       }
       setConvMessages(data.conversation.id, next);
@@ -2717,7 +2737,8 @@ export function ChatExperience({
       // the reader opened while that request was in flight.
       if (!options.background && !options.restore) setSidebarOpen(false);
     } finally {
-      if (!options.background) setIsLoadingHistory(false);
+      // A superseded load leaves the spinner to the load that replaced it.
+      if (!options.background && isCurrentLoad()) setIsLoadingHistory(false);
     }
 
     // Pull the authoritative pending-input snapshot (#785). Queue chips only
