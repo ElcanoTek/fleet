@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // CaddyMarker is line 1 of every Caddyfile scripts/bootstrap.sh has ever
@@ -20,7 +22,7 @@ const CaddyMarker = "# Managed by fleet (scripts/bootstrap.sh) — re-runs overw
 // caddyfilePath is the installed Caddyfile; FLEET_CADDYFILE overrides it
 // (doctor.sh honours the same knob, and tests point it at a temp file).
 func caddyfilePath() string {
-	if p := strings.TrimSpace(os.Getenv("FLEET_CADDYFILE")); p != "" {
+	if p := strings.TrimSpace(envreg.Get("FLEET_CADDYFILE")); p != "" {
 		return p
 	}
 	return "/etc/caddy/Caddyfile"
@@ -29,7 +31,7 @@ func caddyfilePath() string {
 // orchestratorAddr mirrors cmd/fleet's resolver: FLEET_ORCHESTRATOR_ADDR,
 // else the loopback default the deploy docs promise.
 func orchestratorAddr() string {
-	if a := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); a != "" {
+	if a := strings.TrimSpace(envreg.Get("FLEET_ORCHESTRATOR_ADDR")); a != "" {
 		return a
 	}
 	return "127.0.0.1:8000"
@@ -38,7 +40,7 @@ func orchestratorAddr() string {
 // chatAddr mirrors config.Load's FLEET_SERVER_ADDR default, the chat
 // listener the Caddyfile renderer sends /webhooks/* to.
 func chatAddr() string {
-	if a := strings.TrimSpace(os.Getenv("FLEET_SERVER_ADDR")); a != "" {
+	if a := strings.TrimSpace(envreg.Get("FLEET_SERVER_ADDR")); a != "" {
 		return a
 	}
 	return "127.0.0.1:8080"
@@ -104,7 +106,7 @@ func checkCaddyfile(path, orchAddr string) Check {
 // already refuses to boot on one, so this path only ever sees valid input.
 func trustedProxiesFromEnv() []net.IP {
 	var out []net.IP
-	for _, p := range strings.Split(os.Getenv("FLEET_TRUSTED_PROXIES"), ",") {
+	for _, p := range strings.Split(envreg.Get("FLEET_TRUSTED_PROXIES"), ",") {
 		if ip := net.ParseIP(strings.TrimSpace(p)); ip != nil {
 			out = append(out, ip)
 		}

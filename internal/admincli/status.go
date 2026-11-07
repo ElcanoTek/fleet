@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -99,7 +100,7 @@ func checkBundle(r *report, dir string) *clientconfig.Bundle {
 // flag the credentials the env file must carry. OPENROUTER_API_KEY is treated as
 // required unless mock mode is on (matching config.Validate).
 func checkEnv(r *report) {
-	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE"))
+	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 	type envCheck struct {
 		name     string
 		required bool
@@ -121,7 +122,7 @@ func checkEnv(r *report) {
 	}
 	// At least one DSN source must resolve; the per-DB checks below report the
 	// detail, so here we only note the env file the deployment reads.
-	if ef := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); ef != "" {
+	if ef := strings.TrimSpace(envreg.Get("FLEET_ENV_FILE")); ef != "" {
 		r.pass("env FLEET_ENV_FILE", ef)
 	} else if f := serverEnvFile(""); f != ".env.local" {
 		// The shipped unit deliberately UnsetEnvironment=FLEET_ENV_FILE and
@@ -296,7 +297,7 @@ func sandboxImageEnv() string {
 	if ref := strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE")); ref != "" {
 		return ref
 	}
-	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
+	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 }
 
 // ServiceUserAndHome is the exported companion of
@@ -439,7 +440,7 @@ func serviceName(flag string) string {
 	if v := strings.TrimSpace(flag); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SERVICE_NAME")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SERVICE_NAME")); v != "" {
 		return v
 	}
 	return "fleet"

@@ -30,6 +30,10 @@ hold the slugs, plus data that has to be checked by hand:
    checks both guides.
 7. **Docs**: a row in the table below, plus the pools in
    [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
+8. **Configuration registry**: `FLEET_TITLE_MODEL`'s `Default` in
+   `internal/config/envreg/table.go` is the everyday tier's slug. Update it,
+   then `make config-docs`. `TestTitleModelDefaultIsTheCoreModel` fails
+   until the two match.
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.

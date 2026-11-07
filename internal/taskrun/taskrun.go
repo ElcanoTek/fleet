@@ -52,6 +52,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -115,7 +116,7 @@ func run(argv []string, progName string) error {
 	}
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
 
-	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
+	cfg, err := config.Load(envreg.Get("FLEET_ENV_FILE"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -291,7 +292,6 @@ func resolveWorkspace(override string, cfg *config.Config) (string, error) {
 		return abs, nil
 	}
 	base := firstNonEmpty(cfg.WorkspaceRoot, cfg.DataDir, os.TempDir())
-	//nolint:gosec // G703: base is operator config (FLEET_WORKSPACE_ROOT / DataDir / temp), not request/LLM input.
 	if err := os.MkdirAll(base, 0o750); err != nil {
 		return "", fmt.Errorf("create workspace base %s: %w", base, err)
 	}

@@ -422,7 +422,7 @@ start_fleet() {
   AUTH_SIGNING_PUBKEY="$AUTH_SIGNING_PUBKEY" \
   FLEET_DEFAULT_MODEL="$chat_model" \
   FLEET_TITLE_MODEL="$default_model" \
-  CUTLASS_TASK_MODEL="$default_model" \
+  FLEET_TASK_MODEL="$default_model" \
   FLEET_TIMEZONE="UTC" \
     "$BIN_DIR/fleet" >"$LOG_DIR/fleet.log" 2>&1 &
   PIDS+=("$!")

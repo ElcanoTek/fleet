@@ -327,6 +327,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/VERSIONING.md`](docs/VERSIONING.md) | Releases: date-based (`vYYYY.MM.DD.N`), tagged automatically on every green push to `main`, nobody types a version |
 | [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) | Kubernetes as a first-class path — the Helm chart, the `kubernetes` sandbox backend (agent sandboxes as ephemeral pods), kind walkthrough + production checklist |
 | [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Every environment variable — type, default, secret or not — generated from the configuration registry; `fleet config explain` shows a box's values |
 | [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |
 | [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md) | Sandbox OCI runtimes — `runc` / Kata / libkrun isolation tiers |
 | [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) | Disaster recovery — backup + restore of both stores |

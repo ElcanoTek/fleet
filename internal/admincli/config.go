@@ -23,9 +23,13 @@ import (
 // interactive prompts call the same underlying writes.
 func cmdConfig(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key | set-env <KEY> | unset-env <KEY>")
+		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key | set-env <KEY> | unset-env <KEY> | explain [KEY...] | migrate-env [--write]")
 	}
 	switch argv[0] {
+	case "explain":
+		return configExplain(argv[1:])
+	case "migrate-env": // LEGACY-ENV-ALIAS: remove after migrate-env
+		return configMigrateEnv(argv[1:])
 	case "set-env":
 		return configSetEnv(argv[1:])
 	case "unset-env":

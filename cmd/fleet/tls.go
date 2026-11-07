@@ -64,7 +64,6 @@ func serveChat(server *http.Server, cfg *config.Config) error {
 		return server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 	case "auto":
 		warnIfPrivateDomain(cfg.TLSDomain)
-		//nolint:gosec // G703: TLSACMEDir is operator-set config (FLEET_TLS_ACME_DIR), not request input.
 		if err := os.MkdirAll(cfg.TLSACMEDir, 0o700); err != nil {
 			return fmt.Errorf("TLS auto: create acme cache dir %q: %w", cfg.TLSACMEDir, err)
 		}
@@ -77,7 +76,7 @@ func serveChat(server *http.Server, cfg *config.Config) error {
 		server.TLSConfig = m.TLSConfig()
 		// :80 serves the ACME HTTP-01 challenge AND redirects everything else.
 		go startRedirectServer(cfg.TLSHTTPAddr, m)
-		log.Printf("chat-server listening on %s (TLS auto, domain=%s)", server.Addr, cfg.TLSDomain) //nolint:gosec // G706: operator config.
+		log.Printf("chat-server listening on %s (TLS auto, domain=%s)", server.Addr, cfg.TLSDomain)
 		return server.ListenAndServeTLS("", "")
 	default: // off
 		log.Printf("chat-server listening on %s", server.Addr)
@@ -97,7 +96,6 @@ func startRedirectServer(addr string, m *autocert.Manager) {
 	}
 	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		//nolint:gosec // G706: addr is operator config (FLEET_TLS_HTTP_ADDR), not request input.
 		log.Printf("TLS redirect listener (%s): %v", addr, err)
 	}
 }
@@ -133,7 +131,6 @@ func warnIfPrivateDomain(domain string) {
 	}
 	for _, a := range addrs {
 		if ip := net.ParseIP(a); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
-			//nolint:gosec // G706: domain is operator config and a is a resolved IP string, not request input.
 			log.Printf("warn: FLEET_TLS_MODE=auto but DNS for %q resolves to %s (private/loopback); the ACME HTTP-01 challenge will likely fail — use FLEET_TLS_MODE=manual for internal deployments", domain, a)
 			return
 		}

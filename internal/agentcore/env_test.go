@@ -6,8 +6,8 @@ import (
 )
 
 func TestFleetEnv_lookupFloatDefault(t *testing.T) {
-	suffix := "TEST_FLOAT_DEFAULT_123"
-	envKey := "FLEET_TEST_FLOAT_DEFAULT_123"
+	suffix := "CONTEXT_COMPACTION_THRESHOLD"
+	envKey := "FLEET_CONTEXT_COMPACTION_THRESHOLD"
 	defVal := 3.14
 
 	tests := []struct {
@@ -17,8 +17,9 @@ func TestFleetEnv_lookupFloatDefault(t *testing.T) {
 	}{
 		{
 			name: "unset returns default",
-			setup: func(_ *testing.T) {
+			setup: func(t *testing.T) {
 				// Explicitly unset to ensure it's not present
+				t.Setenv(envKey, "")
 				os.Unsetenv(envKey)
 			},
 			expected: defVal,
@@ -66,13 +67,13 @@ func TestFleetEnv_lookupFloatDefault(t *testing.T) {
 // TestFleetEnv_legacyAlias pins that a CHAT_/CUTLASS_ alias is still honored
 // when the FLEET_ name is unset, and that FLEET_ wins when both are set.
 func TestFleetEnv_legacyAlias(t *testing.T) {
-	t.Setenv("FLEET_TEST_ALIAS_KNOB", "")
-	t.Setenv("CUTLASS_TEST_ALIAS_KNOB", "legacy")
-	if got := fleetEnv.lookup("TEST_ALIAS_KNOB"); got != "legacy" {
+	t.Setenv("FLEET_GUARDRAIL_PROFILE", "")
+	t.Setenv("CUTLASS_GUARDRAIL_PROFILE", "legacy")
+	if got := fleetEnv.lookup("GUARDRAIL_PROFILE"); got != "legacy" {
 		t.Fatalf("lookup with only the CUTLASS_ alias set = %q, want %q", got, "legacy")
 	}
-	t.Setenv("FLEET_TEST_ALIAS_KNOB", "canonical")
-	if got := fleetEnv.lookup("TEST_ALIAS_KNOB"); got != "canonical" {
+	t.Setenv("FLEET_GUARDRAIL_PROFILE", "canonical")
+	if got := fleetEnv.lookup("GUARDRAIL_PROFILE"); got != "canonical" {
 		t.Fatalf("lookup with both set = %q, want the FLEET_ value", got)
 	}
 }

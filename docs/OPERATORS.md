@@ -96,6 +96,35 @@ fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
 
 ## The env file (the one source of credentials)
 
+**Every variable fleet reads is listed in [CONFIGURATION.md](CONFIGURATION.md)**
+— its type, default, which section it belongs to, whether it is a secret,
+and whether fleet's own env-file loader admits it. That page is generated from
+the configuration registry ([CONFIG-REGISTRY.md](CONFIG-REGISTRY.md)), so it
+cannot fall behind the code; this section covers how the file is used.
+
+On a box, `fleet config explain [KEY…]` reports each setting's *configured*
+value and its source. It draws from the sources it can see:
+- the systemd unit's own environment, which outranks your shell
+  (`--no-unit` leaves it out);
+- your shell's environment;
+- the env file;
+- alias spellings;
+- defaults, including one inherited from another setting.
+
+It is not the running server's in-memory configuration: admin overrides made
+in the app and values not yet reloaded are not shown. Secrets are always
+redacted. With no KEY it lists every setting that is set or carries a note,
+and `--all` lists every one, with its default.
+
+**The legacy `CHAT_`/`CUTLASS_` spellings are deprecated**
+([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)). They still
+work, but `fleet doctor` warns about each one it finds, and
+`fleet config migrate-env` rewrites the env file to the canonical `FLEET_`
+names: it prints the plan by default, and with `--write` it backs the file up
+to `<file>.bak-<UTC timestamp>` first, changes only the key on each line
+(comments, order and values stay as they are), refuses when two spellings of
+one setting disagree, and never prints a value.
+
 A single **0600** env file (`FLEET_ENV_FILE`, default `.env.local`; on a box
 typically `/etc/fleet/fleet.env`) carries every secret and connection string.
 `deploy/fleet.service` `EnvironmentFile`s it, `fleet` parses the same file via
@@ -159,7 +188,7 @@ breakpoints are only ever emitted for `anthropic/`- and `google/`-prefixed model
 slugs — other providers are unaffected by the setting. Cache efficiency is
 visible per user in `/admin/stats` (`total_cached_tokens`,
 `total_cache_creation_tokens`, `cache_hit_rate_pct`). The legacy
-`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work.
+`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work (deprecated, ADR-0099).
 
 **Value parsing rules.** Env-file values follow standard dotenv semantics: an
 `export ` prefix is tolerated; an **unquoted** value ends at the first ` #`
@@ -219,22 +248,10 @@ as root. Without both of those, a healthy
 box preflighted as two blocking failures — a bundle that "does not exist" and a
 sandbox image that was present all along.
 
-**Less-travelled knobs** the loader reads that have no page of their own
-(every one is optional; the default is what an unset value means):
-
-| Variable | Default | What it does |
-| --- | --- | --- |
-| `FLEET_TURN_TIMEOUT_SECONDS` | `14400` | Hard deadline on one interactive chat turn (legacy alias `CHAT_TURN_TIMEOUT_SECONDS`). |
-| `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | `0` (off) | Auto-archive a conversation this many days after its last activity; `0` leaves archiving to the user. |
-| `CONVERSATION_TTL_DAYS` | `14` | Retention of unpinned conversations before the maintenance sweep deletes them (no `FLEET_` prefix). |
-| `FLEET_CHAT_DB_MAX_CONNS` / `_MIN_CONNS` / `_MAX_CONN_IDLE_TIME` / `_MAX_CONN_LIFETIME` | pgx defaults | Chat-store connection-pool sizing; the `FLEET_SCHED_DB_*` quartet is the same for the scheduler DB. Durations take Go syntax. |
-| `FLEET_TLS_HTTP_ADDR` | `:80` | The HTTP→HTTPS redirect + ACME challenge listener when fleet terminates TLS itself. |
-| `FLEET_LOCKDOWN_ALLOWED_MODELS` | (empty = the live model tiers) | Comma-separated model slugs (or `*` globs) a lockdown-mode conversation may run on; the first literal (non-glob) entry is the lockdown default. Unset, the list is the workspace's current default and advanced models (the admin `default_model` / `advanced_model` settings, else `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`), so lockdown follows a tier change live. A lockdown conversation whose model is no longer listed is moved to that lockdown default on its next turn; a list made only of globs has no literal slug to move to, so no migration happens and that conversation stays refused (the lockdown picker offers the list entries as written, so a glob is not something a user can pick) — give the list a literal first entry. |
-| `FLEET_KEEP_RUNS_PER_TASK` | `10` | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. |
-| `FLEET_TASK_FALLBACK_MODEL` | (empty) | Model the scheduler falls back to when a task's own model is unavailable. |
-| `FLEET_VERIFIER_MODEL` | (empty = the run's own model) | Dedicated model for the scheduled end-of-run completeness verifier. Unset, each run is verified by its own model; the fallback model only retries a verifier call that produced no verdict. The verifier runs when a fallback model (the task's or `FLEET_TASK_FALLBACK_MODEL`) or this variable is set. A slug that does not resolve is logged and the run's own model verifies. |
-| `FLEET_PINNED_MODELS` | (empty) | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, each with an optional display label, a tag pill (e.g. `alpha`), and a displayed price (`free`, or USD per million tokens). This changes the display only; the real slug is still sent and recorded, and spend is still metered at the provider's real price. Bad values stop boot. See [PINNED-MODELS.md](PINNED-MODELS.md). |
-| `FLEET_SENTRY_DSN` | (empty) | Optional Sentry-protocol endpoint for error reporting; unset disables it. |
+**Less-travelled knobs** — the turn timeout, conversation retention, the
+connection-pool sizing, the lockdown model list, the verifier and pinned
+models and the rest — are in [CONFIGURATION.md](CONFIGURATION.md) with their
+defaults; every one is optional, and the default is what an unset value means.
 
 ## The client-config checkout
 

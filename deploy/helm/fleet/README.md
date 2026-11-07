@@ -46,6 +46,9 @@ helm install fleet deploy/helm/fleet \
   --set config.existingSecret=fleet-secrets
 ```
 
+Every `config.env` key is described in `values.schema.json` (generated from
+the configuration registry — see docs/CONFIGURATION.md).
+
 You build both images yourself — fleet publishes none. See the deployment
 guide for the two Containerfiles.
 

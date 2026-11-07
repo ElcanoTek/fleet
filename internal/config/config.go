@@ -30,30 +30,20 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
-// Canonical + legacy env prefixes. FLEET_ wins; the two legacy prefixes are
-// tried in order for back-compat. The two front-ends never set the same suffix
-// to conflicting values, so order between the legacy prefixes is irrelevant.
-const (
-	canonicalPrefix = "FLEET_"
-)
+// Canonical + legacy env prefixes, owned by the configuration registry
+// (internal/config/envreg). FLEET_ wins; the legacy prefixes are tried in order
+// for back-compat until they are removed (ADR-0099).
+const canonicalPrefix = envreg.CanonicalPrefix
 
-var legacyPrefixes = []string{"CHAT_", "CUTLASS_"}
-
-// Environment-variable names shared by the allowlist and the loader for the
-// generic email/SendGrid infrastructure fleet ships with. Client-specific MCP
-// connector credentials are NOT enumerated here — the MCP catalog now lives in
-// the client bundle's manifest (internal/clientconfig), which references its own
-// env-var names; cmd/fleet registers those names via RegisterAllowedEnvVars.
-const (
-	envSendGridAPIKey    = "SENDGRID_API_KEY"    //nolint:gosec // G101: env var name, not a credential value
-	envSendGridFromEmail = "SENDGRID_FROM_EMAIL" //nolint:gosec // G101: env var name, not a credential value
-	envEmailS3Bucket     = "EMAIL_S3_BUCKET"
-	envEmailS3Prefix     = "EMAIL_S3_PREFIX"
-)
+// legacyPrefixes is the registry's deprecated prefix list.
+//
+// LEGACY-ENV-ALIAS: remove after migrate-env
+var legacyPrefixes = envreg.LegacyPrefixes
 
 // Escalation classifier modes and default (docs/CHAT-ESCALATION.md).
 const (
@@ -93,458 +83,24 @@ const (
 // file. Anything else in the file is ignored. The process environment wins
 // over the file so operators can override individual values per invocation.
 //
-// Every env var the loader reads MUST be listed here, or an env-file-only
-// value is silently dropped — a bug class that has now recurred three times
-// (the per-store DSNs, the boot-read operator keys below, and ~20 loader
-// knobs in #1107). TestEnvFileAllowlistCoversLoaderReads mechanically
-// cross-checks this map against every literal env read in internal/config
-// and cmd/fleet, so a new read fails the suite until its key lands here.
-var allowedEnvVars = map[string]bool{
-	// ── chat transport / data ──
-	"CHAT_SERVER_ADDR":                 true,
-	"CHAT_SERVER_TOKEN":                true,
-	"CHAT_DATA_DIR":                    true,
-	"CONVERSATION_TTL_DAYS":            true,
-	"CONVERSATION_UNPINNED_CAP":        true,
-	"FLEET_AUTO_ARCHIVE_AFTER_DAYS":    true,
-	"FLEET_INPUT_QUEUE_RETENTION_DAYS": true,
-	"FLEET_TURN_EVENT_RETENTION_DAYS":  true,
-	"FLEET_UPLOAD_MAX_BYTES":           true,
-	"FLEET_SHARED_FILES_MAX_TOTAL_MB":  true,
-
-	// ── fleet transport / data (canonical) ──
-	"FLEET_SERVER_ADDR":  true,
-	"FLEET_SERVER_TOKEN": true,
-	"FLEET_DATA_DIR":     true,
-
-	// ── IP access control (network-level allow/deny + trusted proxies) ──
-	"FLEET_IP_ALLOWLIST":    true,
-	"FLEET_IP_DENYLIST":     true,
-	"FLEET_TRUSTED_PROXIES": true,
-
-	// ── TLS termination (chat server) ──
-	"FLEET_TLS_MODE":       true,
-	"FLEET_TLS_CERT_FILE":  true,
-	"FLEET_TLS_KEY_FILE":   true,
-	"FLEET_TLS_DOMAIN":     true,
-	"FLEET_TLS_ACME_DIR":   true,
-	"FLEET_TLS_ACME_EMAIL": true,
-	"FLEET_TLS_HTTP_ADDR":  true,
-
-	// ── database (chat) ──
-	"DATABASE_URL": true,
-	// Explicit per-store DSNs (read by cmd/fleet main; deploy/fleet.service
-	// documents them as env-file keys). Missing from the allowlist they were
-	// silently dropped when supplied via FLEET_ENV_FILE — boot then failed
-	// with an empty-DSN error despite a correct env file.
-	"FLEET_CHAT_DATABASE_URL":  true,
-	"FLEET_SCHED_DATABASE_URL": true,
-	// Legacy bare spelling schedDSN still reads as a fallback.
-	"SCHED_DATABASE_URL": true,
-	// Other keys boot reads via os.Getenv that predated this allowlist (an
-	// env-file value was silently ignored; only the process env worked).
-	"ADMIN_API_KEY":                        true,
-	"CUTLASS_LOG_FILE":                     true,
-	"FLEET_BACKUP_DIR":                     true,
-	"FLEET_BACKUP_RETENTION_DAYS":          true,
-	"FLEET_DEFAULT_TIMEZONE":               true,
-	"FLEET_TIMEZONE":                       true,
-	"FLEET_ORCHESTRATOR_ADDR":              true,
-	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS":  true,
-	"FLEET_OTEL_ENDPOINT":                  true,
-	"FLEET_OTEL_SAMPLE_RATIO":              true,
-	"FLEET_SERVICE_NAME":                   true,
-	"FLEET_SANDBOX_STATS_INTERVAL_SECONDS": true,
-	"FLEET_TOOL_DISCLOSURE_THRESHOLD":      true,
-	"FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES":   true,
-	// DB connection-pool tuning (#276), per pool.
-	"FLEET_CHAT_DB_MAX_CONNS":           true,
-	"FLEET_CHAT_DB_MIN_CONNS":           true,
-	"FLEET_CHAT_DB_MAX_CONN_IDLE_TIME":  true,
-	"FLEET_CHAT_DB_MAX_CONN_LIFETIME":   true,
-	"FLEET_CHAT_DB_CONNECT_TIMEOUT":     true,
-	"FLEET_SCHED_DB_MAX_CONNS":          true,
-	"FLEET_SCHED_DB_MIN_CONNS":          true,
-	"FLEET_SCHED_DB_MAX_CONN_IDLE_TIME": true,
-	"FLEET_SCHED_DB_MAX_CONN_LIFETIME":  true,
-	"FLEET_SCHED_DB_CONNECT_TIMEOUT":    true,
-	"FLEET_SCHED_TICK_SECONDS":          true,
-	"DB_HOST":                           true,
-	"DB_PORT":                           true,
-	"DB_USER":                           true,
-	"DB_PASSWORD":                       true,
-	"DB_NAME":                           true,
-	"DB_SSLMODE":                        true,
-
-	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":                             true,
-	"OPENROUTER_BASE_URL":                            true,
-	"FLEET_OPENROUTER_BASE_URL":                      true,
-	"CHAT_MAX_ITERATIONS":                            true,
-	"CHAT_MAX_COST_USD":                              true,
-	"CHAT_MAX_TOTAL_TOKENS":                          true,
-	"CHAT_TURN_TIMEOUT_SECONDS":                      true,
-	"FLEET_TURN_TIMEOUT_SECONDS":                     true,
-	"FLEET_SHUTDOWN_GRACE_SECONDS":                   true,
-	"CHAT_TEMPERATURE":                               true,
-	"CHAT_TITLE_MODEL":                               true,
-	"CHAT_METADATA_MODEL":                            true,
-	"FLEET_DEFAULT_THINKING_BUDGET_TOKENS":           true,
-	"FLEET_MAX_ITERATIONS":                           true,
-	"FLEET_MAX_COST_USD":                             true,
-	"FLEET_MAX_TOTAL_TOKENS":                         true,
-	"FLEET_TASK_DEFAULT_MAX_RETRIES":                 true,
-	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS":     true,
-	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS": true,
-	"FLEET_TEMPERATURE":                              true,
-	"FLEET_TITLE_MODEL":                              true,
-	"FLEET_METADATA_MODEL":                           true,
-	"FLEET_ERROR_ANALYSIS_MODEL":                     true,
-	"FLEET_ERROR_ANALYSIS_ENABLED":                   true,
-	"FLEET_ESCALATION_SIGNALS_ENABLED":               true,
-	"FLEET_ESCALATION_CLASSIFIER_MODE":               true,
-	"FLEET_ESCALATION_CLASSIFIER_MODEL":              true,
-	"FLEET_ESCALATION_CLASSIFIER_THRESHOLD":          true,
-	"FLEET_SELF_IMPROVE_ENABLED":                     true,
-	"FLEET_AUTO_TITLE":                               true,
-	"FLEET_MEMORY_MODEL":                             true,
-	"FLEET_MEMORY_AUTOINDEX_ENABLED":                 true,
-	"FLEET_MEMORY_GRAPH_MODEL":                       true,
-	"FLEET_MEMORY_GRAPH_ENABLED":                     true,
-	"FLEET_RECURRING_TASK_MODEL":                     true,
-	"FLEET_LIBRARY_PROMPT_MODEL":                     true,
-	"FLEET_APPROVAL_TIMEOUT_SECONDS":                 true,
-	"FLEET_AUTO_APPROVE_IN_TEST":                     true,
-	"FLEET_MAX_CONCURRENT_AGENTS":                    true,
-	"FLEET_TASK_WALL_TIMEOUT":                        true,
-	"FLEET_RUN_LOG_RETENTION_DAYS":                   true,
-	"FLEET_WORKTREE_PRUNE_AGE":                       true,
-	"FLEET_DISK_MIN_FREE_PERCENT":                    true,
-	// Read by internal/httpapi directly (not the loader), but listed so an
-	// operator can set it in FLEET_ENV_FILE like every other knob.
-	"FLEET_MAINTENANCE_MIN_INTERVAL":    true,
-	"FLEET_KEEP_RUNS_PER_TASK":          true,
-	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
-	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
-	"FLEET_CLEANUP_HOUR":                true,
-	"LLM_MAX_TOKENS":                    true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
-
-	// ── knobs parsed at their point of use, not by the loader (#1273) ──
-	// These are scopeExternal rows in the env-knob registry (knobs.go): the
-	// boot gate and `fleet validate-config` validate them from that table, but
-	// both read the PROCESS env — so a knob missing from this allowlist would
-	// be dropped when set only in FLEET_ENV_FILE and neither would ever see
-	// the operator's value. FLEET_DISABLE_PROMPT_CACHE in particular has been
-	// documented as an env-file knob in docs/OPERATORS.md all along while
-	// being silently dropped from the file (the #1107 bug class).
-	// TestEnvKnobsAreEnvFileSettable keeps the two tables paired.
-	"FLEET_DISABLE_PROMPT_CACHE":            true,
-	"FLEET_DISABLE_OPENROUTER_MODELS":       true,
-	"FLEET_SCHEDULED_AUTO_COMPACT":          true,
-	"FLEET_SCHEDULED_SHARED_WORKSPACE":      true,
-	"FLEET_MODEL_CACHE_TTL_MINUTES":         true,
-	"FLEET_RETRY_MAX_ATTEMPTS":              true,
-	"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD": true,
-	"FLEET_CONTEXT_COMPACTION_THRESHOLD":    true,
-	"FLEET_CONTEXT_RESEND_BUDGET_TOKENS":    true,
-	"FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY":    true,
-	"FLEET_BUDGET_WINDDOWN_FRACTION":        true,
-	"FLEET_SSE_BUFFER_DURATION":             true,
-	"FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN":   true,
-	"FLEET_SSE_HEARTBEAT_INTERVAL":          true,
-	"FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE":   true,
-	"FLEET_UPDATE_WAIT_SECONDS":             true,
-	"FLEET_UPDATE_DRAIN_FILE":               true,
-	"FLEET_DRAIN_FILE":                      true,
-
-	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
-	"FLEET_LOG_FILE":         true,
-	"FLEET_LOG_MAX_SIZE_MB":  true,
-	"FLEET_LOG_MAX_AGE_DAYS": true,
-	"FLEET_LOG_MAX_BACKUPS":  true,
-	"FLEET_LOG_FORMAT":       true,
-	"FLEET_LOG_LEVEL":        true,
-	"FLEET_LOG_COMPRESS":     true,
-
-	// ── log archival (#272) ── the AES key is a SECRET held host-side; it is
-	// decoded in-process and never logged or shipped into the sandbox.
-	"FLEET_LOG_ARCHIVE_AFTER_DAYS":     true,
-	"FLEET_LOG_ARCHIVE_ENCRYPTION_KEY": true,
-
-	// ── remote MCP OAuth (#443) ── the AES key is a SECRET held host-side; it
-	// is decoded in-process and never logged or shipped into the sandbox.
-	"FLEET_PUBLIC_BASE_URL":                true,
-	"FLEET_MCP_OAUTH_ENCRYPTION_KEY":       true,
-	"FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP": true,
-
-	// ── personas / protocols ──
-	// The two default-persona knobs are read through the prefix alias machinery
-	// with a bare-name fallback (getenvFleetOrBare), so the canonical FLEET_
-	// spelling must survive the env-file allowlist alongside the historical one.
-	"FLEET_PERSONA_DEFAULT": true,
-	"PERSONA_DEFAULT":       true,
-	"FLEET_PERSONA":         true,
-	"PERSONA":               true,
-	"SYSTEM_PROMPT":         true,
-
-	// ── cutlass agent knobs ──
-	"MAX_ITERATIONS":           true,
-	"CUTLASS_TEMPERATURE":      true,
-	"CUTLASS_MAX_COST_USD":     true,
-	"CUTLASS_MAX_TOTAL_TOKENS": true,
-
-	// ── cutlass image gen ──
-	"CUTLASS_IMAGE_OUTPUT":    true,
-	"CUTLASS_IMAGE_MODEL":     true,
-	"OPENROUTER_HTTP_REFERER": true,
-	"OPENROUTER_X_TITLE":      true,
-
-	// ── cutlass task input (set by runner) ──
-	// The canonical FLEET_ spellings stay adjacent to their legacy twins: the
-	// loader resolves FLEET_TASK_MODEL → CHAT_ → CUTLASS_ (#1015), so both must
-	// survive the env-file filter (#1107).
-	"FLEET_TASK_MODEL":            true,
-	"CUTLASS_TASK_MODEL":          true,
-	"FLEET_TASK_FALLBACK_MODEL":   true,
-	"CUTLASS_TASK_FALLBACK_MODEL": true,
-	// Dedicated end-of-run verifier model (empty = the run's own model).
-	"FLEET_VERIFIER_MODEL": true,
-
-	// ── model tiers (#1187): env defaults of the default_model /
-	// advanced_model admin settings ──
-	"FLEET_DEFAULT_MODEL":  true,
-	"FLEET_ADVANCED_MODEL": true,
-	// ── operator-pinned / relabelled picker rows ──
-	"FLEET_PINNED_MODELS":  true,
-	"CUTLASS_ALLOWED_DIRS": true,
-	"GH_TOKEN":             true,
-
-	// ── phone a friend: super-LLM review (#175) ──
-	"FLEET_PHONE_A_FRIEND_ENABLED": true,
-	"FLEET_PHONE_A_FRIEND_MODEL":   true,
-
-	// ── sub-agents / delegation (#175, #264, #1043) ──
-	"FLEET_SUBAGENTS_ENABLED":         true,
-	"FLEET_SUBAGENTS_MAX_DEPTH":       true,
-	"FLEET_SUBAGENTS_MAX_CHILDREN":    true,
-	"FLEET_SUBAGENTS_BUDGET_FRACTION": true,
-	"FLEET_SUBAGENTS_MODEL":           true,
-
-	// ── task scheduler pacing: anti-starvation (#230), paused expiry (#510),
-	// and the POST /tasks + /upload sliding-window rate limits (cmd/fleet) ──
-	"FLEET_TASK_STARVATION_WINDOW_MINUTES":     true,
-	"FLEET_PAUSED_TASK_EXPIRY_MINUTES":         true,
-	"FLEET_SCHED_RATE_LIMIT_PER_MINUTE":        true,
-	"FLEET_SCHED_RATE_LIMIT_PER_DAY":           true,
-	"FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE": true,
-
-	// ── logging / debug (cutlass) ──
-	"LOG_LEVEL": true,
-	"DEBUG":     true,
-	"VERBOSE":   true,
-
-	// ── MCP: email ──
-	"AWS_ACCESS_KEY_ID":             true,
-	"AWS_SECRET_ACCESS_KEY":         true,
-	"AWS_REGION":                    true,
-	envEmailS3Bucket:                true,
-	envEmailS3Prefix:                true,
-	"EMAIL_S3_DATE_PREFIX_FORMAT":   true,
-	"EMAIL_S3_MAX_DATE_PREFIX_DAYS": true,
-	"EMAIL_ATTACHMENT_DIR":          true,
-	"EMAIL_LAST_CHECK_FILE":         true,
-	envSendGridAPIKey:               true,
-	envSendGridFromEmail:            true,
-
-	// ── web search ──
-	"TAVILY_API_KEY": true,
-
-	// ── hosted browser automation (#987) ──
-	// Mints Browserbase live-view URLs host-side (internal/tools/browserbase_live_view.go).
-	// Deliberately separate from the browserbase MCP connector's own per-user key,
-	// which is sealed in remote_mcp_servers.api_key_enc and brokered — see
-	// docs/BROWSERBASE.md for why the two are not shared.
-	"BROWSERBASE_API_KEY": true,
-
-	// NOTE: client-specific MCP connector credentials (DSPs, fast.io, gamma,
-	// etc.) are NOT enumerated here. The MCP catalog lives in the client
-	// bundle's manifest (internal/clientconfig), and cmd/fleet admits the
-	// manifest-referenced env-var names at startup via RegisterAllowedEnvVars,
-	// keeping fleet client-agnostic while preserving the .env allowlist's
-	// security model.
-
-	// ── rate limiting (chat) ──
-	"CHAT_RATE_PER_MIN":                true,
-	"CHAT_RATE_PER_DAY":                true,
-	"FLEET_CHAT_RATE_LIMIT_ENABLED":    true,
-	"FLEET_CHAT_RATE_LIMIT_CONCURRENT": true,
-	"FLEET_SEARCH_ENABLED":             true,
-	"FLEET_CONVERSATION_SOFT_DELETE":   true,
-
-	// ── admin ──
-	"ADMIN_EMAILS": true,
-
-	// ── task completion notifications (#208, #316) ──
-	// Host-side outbound notifier for scheduled-task terminal status. All OFF by
-	// default: with none of these set, no notifications fire. The SMTP password
-	// and webhook signing secret are held host-side and never logged or shipped
-	// into the sandbox. When FLEET_WEBHOOK_SECRET is set the webhook body is signed
-	// with HMAC-SHA256 (X-Fleet-Signature/X-Fleet-Timestamp, #316); unset = the
-	// webhook is delivered unsigned. FLEET_PUBLIC_URL is reused to build the
-	// per-task log link.
-	"FLEET_NOTIFY_ON":             true,
-	"FLEET_NOTIFY_EMAIL_TO":       true,
-	"FLEET_NOTIFY_TIMEOUT":        true,
-	"FLEET_NOTIFY_RETRIES":        true,
-	"FLEET_SMTP_HOST":             true,
-	"FLEET_SMTP_PORT":             true,
-	"FLEET_SMTP_USERNAME":         true,
-	"FLEET_SMTP_PASSWORD":         true,
-	"FLEET_SMTP_FROM":             true,
-	"FLEET_WEBHOOK_URL":           true,
-	"FLEET_WEBHOOK_METHOD":        true,
-	"FLEET_WEBHOOK_BODY_TEMPLATE": true,
-	"FLEET_WEBHOOK_SECRET":        true,
-	"FLEET_PUBLIC_URL":            true,
-
-	// ── browser tier (internal/webui, ADR-0091) ──
-	// What the Next.js tier read from /etc/fleet/fleet-web.env, now read by the
-	// fleet binary itself. APP_SESSION_SECRET signs the session cookie; the
-	// AUTH_* keys configure the legacy Elcano magic-link cookie and the
-	// back-channel signing keys; FLEET_OIDC_* is central-Auth SSO, and with it
-	// configured Fleet passwords are off unless FLEET_OIDC_ALLOW_PASSWORD=1
-	// (Config.PasswordLoginDisabled); FLEET_OIDC_GENERIC=1 marks another OIDC
-	// provider, which leaves passwords and accounts to Fleet.
-	// NEXT_PUBLIC_PUBLIC_ORIGIN is read only as a fallback for
-	// FLEET_PUBLIC_BASE_URL on a box whose env predates the move.
-	"FLEET_WEB_ADDR":                true,
-	"FLEET_WEB_DEV_SERVER":          true,
-	"APP_SESSION_SECRET":            true,
-	"AUTH_SIGNING_PUBKEY":           true,
-	"AUTH_SIGNING_PREVIOUS_PUBKEYS": true,
-	"AUTH_COOKIE_NAME":              true,
-	"AUTH_COOKIE_DOMAIN":            true,
-	"AUTH_LOGIN_URL":                true,
-	"FLEET_OIDC_ISSUER":             true,
-	"FLEET_OIDC_CLIENT_ID":          true,
-	"FLEET_OIDC_CLIENT_SECRET":      true,
-	"FLEET_OIDC_SCOPES":             true,
-	"FLEET_OIDC_ALLOWED_DOMAINS":    true,
-	"FLEET_OIDC_BUTTON_LABEL":       true,
-	"FLEET_OIDC_REDIRECT_URI":       true,
-	"FLEET_OIDC_AUTO_START":         true,
-	"FLEET_OIDC_ALLOW_PASSWORD":     true,
-	"FLEET_OIDC_GENERIC":            true,
-	"CATWALK_URL":                   true,
-	"ORCHESTRATOR_SERVER_TOKEN":     true,
-	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
-
-	// Retired with the account-events feed (ADR-0096). Still loaded from the
-	// env file so Load's boot warning can name a stale value; nothing reads
-	// either key.
-	"FLEET_ACCOUNT_EVENTS_URL":    true,
-	"FLEET_ACCOUNT_EVENTS_SECRET": true,
-
-	// ── browser Web Push notifications (#292) ──
-	// OFF unless all three FLEET_VAPID_* vars are set (generate them with
-	// `fleet generate-vapid-keys`). The private key is a SECRET held host-side
-	// and never logged or shipped into the sandbox; the public key is served
-	// to browsers. The two flags gate the triggers and default ON when the
-	// keys are configured. FLEET_PUBLIC_URL (above) is reused for deep links.
-	"FLEET_VAPID_PUBLIC_KEY":         true,
-	"FLEET_VAPID_PRIVATE_KEY":        true,
-	"FLEET_VAPID_CONTACT":            true,
-	"FLEET_PUSH_ON_TASK_COMPLETE":    true,
-	"FLEET_PUSH_ON_APPROVAL_REQUEST": true,
-
-	// ── sandbox ──
-	"CHAT_SANDBOX_IMAGE":    true,
-	"CHAT_SANDBOX_RUNTIME":  true,
-	"CHAT_WORKSPACE_ROOT":   true,
-	"FLEET_SANDBOX_IMAGE":   true,
-	"FLEET_SANDBOX_RUNTIME": true,
-	// The podman seccomp knob. Its kubernetes counterpart below has always been
-	// here; this one was not, so a value set only in FLEET_ENV_FILE was dropped
-	// and neither the podman profile override nor the kubernetes backend's
-	// fail-closed refusal of it ever saw the operator's value.
-	"FLEET_SANDBOX_SECCOMP_PROFILE":              true,
-	"FLEET_SANDBOX_BACKEND":                      true,
-	"FLEET_SANDBOX_K8S_NAMESPACE":                true,
-	"FLEET_SANDBOX_K8S_WORKSPACE_CLAIM":          true,
-	"FLEET_SANDBOX_K8S_SERVICE_ACCOUNT":          true,
-	"FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET":        true,
-	"FLEET_SANDBOX_K8S_RUNTIME_CLASS":            true,
-	"FLEET_SANDBOX_K8S_SECCOMP_PROFILE":          true,
-	"FLEET_SANDBOX_K8S_KUBECONFIG":               true,
-	"FLEET_SANDBOX_K8S_NETWORK_POLICY":           true,
-	"FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY":       true,
-	"FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED": true,
-	"FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE":     true,
-	"FLEET_SANDBOX_K8S_NODE_SELECTOR":            true,
-	"FLEET_SANDBOX_K8S_TOLERATIONS":              true,
-	"FLEET_DEFAULT_NETWORK_MODE":                 true,
-	"FLEET_PII_REDACTION_ENABLED":                true,
-	"FLEET_PII_REDACTION_MODE":                   true,
-	// Retired with the Rampart engine (ADR-0063). Still loaded from the env
-	// file so Load's boot warning can name a stale value wherever it is set;
-	// nothing reads either key.
-	"FLEET_PII_REDACTION_ENGINE":              true,
-	"FLEET_PII_RAMPART_URL":                   true,
-	"FLEET_GUARDRAIL_MODE":                    true,
-	"FLEET_GUARDRAIL_PROFILE":                 true,
-	"FLEET_GUARDRAIL_URL":                     true,
-	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
-	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
-	"FLEET_TEAM_CHATS_SHARED_BY_DEFAULT":      true,
-
-	// ── A2A protocol server (#1279) ──
-	"FLEET_A2A_ENABLED":            true,
-	"FLEET_A2A_PUSH_ALLOW_PRIVATE": true,
-	"FLEET_A2A_UNARY_WAIT_SECONDS": true,
-	"FLEET_A2A_PERSONA":            true,
-	"FLEET_A2A_MODEL":              true,
-	// ── outbound A2A delegation (#1368); point-of-use knobs (knobs.go) ──
-	"FLEET_A2A_MAX_DELEGATION_DEPTH": true,
-	"FLEET_A2A_CLIENT_ALLOW_PRIVATE": true,
-
-	"FLEET_SANDBOX_MEMORY":                true,
-	"FLEET_SANDBOX_CPUS":                  true,
-	"FLEET_SANDBOX_PIDS":                  true,
-	"FLEET_SANDBOX_START_TIMEOUT_SECONDS": true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB":      true,
-	"FLEET_SANDBOX_DISK_GB":               true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":         true,
-	"FLEET_SANDBOX_CPUS_MAX":              true,
-	"FLEET_SANDBOX_PIDS_MAX":              true,
-	"FLEET_SANDBOX_WARM_SIZE":             true,
-	"FLEET_SANDBOX_WARM_TTL":              true,
-	"FLEET_PYTHON_REPL_MODE":              true,
-	"FLEET_PYTHON_CELL_TIMEOUT":           true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":          true,
-	"FLEET_PYTHON_REPL_MAX":               true,
-	"FLEET_WORKSPACE_ROOT":                true,
-	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
-	// spellings stay allowlisted so existing env files keep sealing.
-	"FLEET_LOCKDOWN_ONLY":           true,
-	"FLEET_LOCKDOWN_ALLOWED_MODELS": true,
-	"CHAT_LOCKDOWN_ONLY":            true,
-	"CHAT_LOCKDOWN_ALLOWED_MODELS":  true,
-
-	// ── test harness ──
-	"CHAT_MOCK_MODE":  true,
-	"FLEET_MOCK_MODE": true,
-
-	// ── observability: Sentry error tracking (#193) ──
-	// FLEET_SENTRY_DSN is the OPTIONAL Sentry-protocol endpoint (Sentry or a
-	// Better Stack Errors ingest URL). Unset = Sentry is a complete no-op with
-	// zero overhead; the SDK is initialized only when set. FLEET_ENVIRONMENT
-	// tags events by deployment tier ("production" | "staging" | "dev") for
-	// scope filtering in the Sentry UI. The DSN itself is a public ingest
-	// identifier, not a secret — it is safe to ship in the .env file.
-	"FLEET_SENTRY_DSN":  true,
-	"FLEET_ENVIRONMENT": true,
-}
+// It is DERIVED from the configuration registry (#2053): every registry entry
+// that is not ProcessOnly, plus every alias spelling marked EnvFile
+// (envreg.EnvFileNames). Before the registry this was a hand-maintained map,
+// and a key the loader read but the map omitted was silently dropped when set
+// only in FLEET_ENV_FILE — a bug class that recurred three times (the
+// per-store DSNs, the boot-read operator keys, ~20 loader knobs in #1107).
+// Now a read goes through the registry, so the key is declared, and whether
+// the env file admits it is a field on the same declaration.
+// TestAllowlistMatchesPreRegistrySnapshot pins the derived set to the exact
+// map it replaced.
+var allowedEnvVars = func() map[string]bool {
+	names := envreg.EnvFileNames()
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[n] = true
+	}
+	return m
+}()
 
 // allowedEnvPrefixes admits open-ended user/account suffixes the operator names
 // at provisioning time. A key matching one of these is treated like an exact
@@ -1207,7 +763,7 @@ type Config struct {
 	// SandboxK8s* configure the kubernetes backend; ignored (and refused if
 	// set, to catch dead config) under the podman backend. Env values override
 	// the bundle manifest's sandbox.kubernetes block field-by-field.
-	SandboxK8sNamespace       string // FLEET_SANDBOX_K8S_NAMESPACE, default "fleet-sandboxes"
+	SandboxK8sNamespace       string // FLEET_SANDBOX_K8S_NAMESPACE; empty = the kubeconfig context's, else the control plane's own, else "fleet-sandboxes" (sandbox.NewKubernetesBackend)
 	SandboxK8sWorkspaceClaim  string // FLEET_SANDBOX_K8S_WORKSPACE_CLAIM — required RWX PVC name
 	SandboxK8sServiceAccount  string // FLEET_SANDBOX_K8S_SERVICE_ACCOUNT — pod identity (no token is ever mounted)
 	SandboxK8sImagePullSecret string // FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET
@@ -1589,12 +1145,26 @@ func applyEnvFile(envFile string) (map[string]string, error) {
 	}
 
 	if envFile != "" {
-		if err := loadEnvFile(envFile); err != nil && !os.IsNotExist(err) {
+		file, err := readEnvFileValues(envFile)
+		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("load env file %s: %w", envFile, err)
+		}
+		// The merge rule `fleet config explain` shares (resolve.go): a name
+		// present in the process env wins, even empty; otherwise an admitted
+		// file value is applied.
+		layers := envLayers{
+			process: func(k string) (string, bool) { v, ok := existing[k]; return v, ok },
+			file:    file,
+			admit:   isAllowedEnvVar,
+		}
+		for k := range file {
+			if lv := layers.get(k); lv.source == SourceEnvFile {
+				_ = os.Setenv(k, lv.value)
+			}
 		}
 	}
 
-	// Restore process-env winners.
+	// Restore process-env winners (quote-stripped).
 	for key, v := range existing {
 		_ = os.Setenv(key, v)
 	}
@@ -1708,11 +1278,11 @@ func Load(envFile string) (*Config, error) {
 
 		// ── TLS termination (chat server) ──
 		TLSMode:      strings.ToLower(strings.TrimSpace(getenvDefault("FLEET_TLS_MODE", "off"))),
-		TLSCertFile:  os.Getenv("FLEET_TLS_CERT_FILE"),
-		TLSKeyFile:   os.Getenv("FLEET_TLS_KEY_FILE"),
-		TLSDomain:    os.Getenv("FLEET_TLS_DOMAIN"),
+		TLSCertFile:  envreg.Get("FLEET_TLS_CERT_FILE"),
+		TLSKeyFile:   envreg.Get("FLEET_TLS_KEY_FILE"),
+		TLSDomain:    envreg.Get("FLEET_TLS_DOMAIN"),
 		TLSACMEDir:   getenvDefault("FLEET_TLS_ACME_DIR", "/var/lib/fleet/acme-cache"),
-		TLSACMEEmail: os.Getenv("FLEET_TLS_ACME_EMAIL"),
+		TLSACMEEmail: envreg.Get("FLEET_TLS_ACME_EMAIL"),
 		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
@@ -1749,7 +1319,7 @@ func Load(envFile string) (*Config, error) {
 		},
 
 		// ── LLM (shared) ──
-		OpenRouterAPIKey:         creds.StripEnvQuotes(os.Getenv("OPENROUTER_API_KEY")),
+		OpenRouterAPIKey:         creds.StripEnvQuotes(envreg.Get("OPENROUTER_API_KEY")),
 		MaxIterations:            lp.getenvFleetInt("MAX_ITERATIONS", 300),
 		TaskDefaultMaxRetries:    lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1),
 		MaxCostUSD:               lp.getenvFleetFloat("MAX_COST_USD", 50.0),
@@ -1864,7 +1434,7 @@ func Load(envFile string) (*Config, error) {
 		RateLimitConcurrent: lp.getenvInt("FLEET_CHAT_RATE_LIMIT_CONCURRENT", 5),
 
 		// ── admin ──
-		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
+		AdminEmails: splitEmails(envreg.Get("ADMIN_EMAILS")),
 
 		// ── sandbox ──
 		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
@@ -1940,7 +1510,7 @@ func Load(envFile string) (*Config, error) {
 		AccountsManagedByAuth: centralAuth,
 
 		// ── observability: Sentry error tracking (#193) ──
-		SentryDSN:   creds.StripEnvQuotes(os.Getenv("FLEET_SENTRY_DSN")),
+		SentryDSN:   creds.StripEnvQuotes(envreg.Get("FLEET_SENTRY_DSN")),
 		Environment: getenvDefault("FLEET_ENVIRONMENT", "dev"),
 	}
 
@@ -2258,18 +1828,15 @@ func splitEmails(raw string) []string {
 	return out
 }
 
-// loadEnvFile parses a KEY=VALUE env file, respecting the allowlist. Always
-// overwrites — Load snapshots/restores the pre-existing process env around
-// this call so "process env wins" holds.
+// loadEnvFileFiltered applies a KEY=VALUE env file's allowlisted keys that
+// include admits, overwriting — the hot-reload path (reload.go) restores the
+// boot winners around this call so "process env wins" holds. Boot itself
+// applies the file through applyEnvFile and the shared merge (resolve.go).
 //
 // Each line is parsed by creds.ParseEnvLine, the one env-file line parser,
 // which the creds writer encodes values for (#834) — see its doc for the value
 // semantics (`export ` prefix, inline comments on unquoted values, one layer
 // of quotes).
-func loadEnvFile(path string) error {
-	return loadEnvFileFiltered(path, func(string) bool { return true })
-}
-
 func loadEnvFileFiltered(path string, include func(string) bool) error {
 	f, err := os.Open(path) // #nosec G304 — path comes from trusted config.
 	if err != nil {
@@ -2305,7 +1872,7 @@ func hasKnownPromptExtension(name string) bool {
 // the issuer not counting). A test in cmd/fleet pins the two to agree, so
 // passwords are never refused on a box that offers no SSO in their place.
 func OIDCConfigured() bool {
-	get := func(k string) string { return strings.TrimSpace(os.Getenv(k)) }
+	get := func(k string) string { return strings.TrimSpace(envreg.Get(k)) }
 	return strings.TrimRight(get("FLEET_OIDC_ISSUER"), "/") != "" &&
 		get("FLEET_OIDC_CLIENT_ID") != "" &&
 		get("FLEET_OIDC_CLIENT_SECRET") != ""
@@ -2375,7 +1942,7 @@ func absoluteDir(dir string) string {
 }
 
 func getenvDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := envreg.Get(key); v != "" {
 		return creds.StripEnvQuotes(v)
 	}
 	return def
@@ -2385,19 +1952,17 @@ func getenvDefault(key, def string) string {
 //
 // These try FLEET_<suffix> first, then each legacy prefix in order. The first
 // non-empty value wins. They power the canonical-prefix-with-back-compat
-// behavior for shared knobs (timeouts, ceilings, sandbox image).
-
+// behavior for shared knobs (timeouts, ceilings, sandbox image). The
+// spellings come from the configuration registry (envreg.ChainSpellings):
+// FLEET_<suffix> must be a registered Chain entry, so a new read through these
+// helpers is declared — and documented — before it can ship.
+//
+// LEGACY-ENV-ALIAS: remove after migrate-env (lookupFleet then reads the
+// canonical FLEET_<suffix> alone).
 func lookupFleet(suffix string) (string, bool) {
 	suffix = strings.TrimLeft(suffix, "_")
-	if v := os.Getenv(canonicalPrefix + suffix); v != "" {
-		return v, true
-	}
-	for _, p := range legacyPrefixes {
-		if v := os.Getenv(p + suffix); v != "" {
-			return v, true
-		}
-	}
-	return "", false
+	v, _, ok := resolveSpellings(envreg.ChainSpellings(canonicalPrefix+suffix), os.LookupEnv)
+	return v, ok
 }
 
 // getenvFleet is getenvFleetDefault with an empty default.
@@ -2431,6 +1996,12 @@ func getenvFleetOrBare(suffix, def string) string {
 // no aliases and is returned alone. Callers that must reason about a knob's
 // whole alias family (e.g. the MCP broker's connector/parent env-separation
 // gate) derive it here rather than hand-enumerating legacy spellings.
+//
+// It is deliberately generic (any name, registered or not): the broker also
+// protects bundle-declared names this way.
+//
+// LEGACY-ENV-ALIAS: remove after migrate-env (EnvAliases then returns name
+// alone; its callers keep working unchanged).
 func EnvAliases(name string) []string {
 	suffix, ok := strings.CutPrefix(name, canonicalPrefix)
 	if !ok {

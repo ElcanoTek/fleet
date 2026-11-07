@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
@@ -1145,10 +1146,10 @@ func ChildLogFilePath(childSessionID string) string {
 func childLogFilePath(parentLogFile, childID string) string {
 	base := parentLogFile
 	if base == "" {
-		base = os.Getenv("FLEET_LOG_FILE")
+		base = envreg.Get("FLEET_LOG_FILE")
 	}
 	if base == "" {
-		base = os.Getenv("CUTLASS_LOG_FILE")
+		base = envreg.Get("CUTLASS_LOG_FILE") // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 	if base == "" {
 		base = "fleet-session.json"
