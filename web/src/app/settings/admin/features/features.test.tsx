@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import FeaturesAdminPage from "./page";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 // Settings → Admin → Features — the admin Features page. Load-bearing
 // assertions: settings render grouped with provenance badges, a toggle PUTs
@@ -91,24 +92,18 @@ function mockFetch(
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     if (!init || init.method === undefined || init.method === "GET") {
-      return { ok: true, status: 200, json: async () => ({ settings }) };
+      return jsonResponse({ settings });
     }
     const custom = onWrite?.(url, init);
     if (custom) {
-      return {
-        ok: custom.status < 400,
-        status: custom.status,
-        json: async () => custom.body,
-        text: async () => JSON.stringify(custom.body),
-      };
+      return jsonResponse(custom.body, custom.status);
     }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    return textResponse("{}");
   });
 }
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("FeaturesAdminPage", () => {
@@ -296,16 +291,12 @@ describe("FeaturesAdminPage", () => {
     };
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === "/api/admin/decision-models") {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ models: [{ id: "liquid/d1", name: "Liquid: D1", input_per_million: 0.02 }] }),
-        };
+        return jsonResponse({ models: [{ id: "liquid/d1", name: "Liquid: D1", input_per_million: 0.02 }] });
       }
       if (init?.method === "PUT") {
-        return { ok: true, status: 200, json: async () => ({ ...MODEL_ROW, value: "liquid/d1", source: "admin" }) };
+        return jsonResponse({ ...MODEL_ROW, value: "liquid/d1", source: "admin" });
       }
-      return { ok: true, status: 200, json: async () => ({ settings: [MODEL_ROW] }) };
+      return jsonResponse({ settings: [MODEL_ROW] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
@@ -488,16 +479,11 @@ describe("FeaturesAdminPage", () => {
     });
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method === undefined || init.method === "GET") {
-        return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS, PII] }) };
+        return jsonResponse({ settings: [SUBAGENTS, PII] });
       }
       // Hold the PUT open so the in-flight state is observable.
       await gate;
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ ...SUBAGENTS, value: "true", source: "admin" }),
-        text: async () => "{}",
-      };
+      return jsonResponse({ ...SUBAGENTS, value: "true", source: "admin" });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
@@ -516,7 +502,7 @@ describe("FeaturesAdminPage", () => {
   it("reports the admin-allowlist 403 instead of an empty panel", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) }),
+      vi.fn().mockImplementation(async () => jsonResponse({}, 403)),
     );
     render(<FeaturesAdminPage />);
     expect(await screen.findByText(/not on the admin allowlist/)).toBeInTheDocument();
@@ -528,10 +514,10 @@ describe("FeaturesAdminPage reload", () => {
     let fail = true;
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (!init || init.method === undefined || init.method === "GET") {
-        if (fail) return { ok: false, status: 502, json: async () => ({}), text: async () => "" };
-        return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS] }) };
+        if (fail) return textResponse("", 502);
+        return jsonResponse({ settings: [SUBAGENTS] });
       }
-      return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+      return textResponse("{}");
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);

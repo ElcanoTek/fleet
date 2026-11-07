@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SharedFilesPage from "./page";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 // Settings → Shared files — the cross-chat shared file library. Load-bearing
 // assertions: a member gets the read-only library (grouped list + download
@@ -72,30 +73,20 @@ function mockFetch(
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     if (!init || init.method === undefined || init.method === "GET") {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => library,
-        text: async () => JSON.stringify(library),
-      };
+      return jsonResponse(library);
     }
     const custom = onWrite?.(url, init);
     if (custom) {
-      return {
-        ok: custom.status < 400,
-        status: custom.status,
-        json: async () => custom.body,
-        text: async () =>
-          typeof custom.body === "string" ? custom.body : JSON.stringify(custom.body),
-      };
+      return typeof custom.body === "string"
+        ? textResponse(custom.body, custom.status)
+        : jsonResponse(custom.body, custom.status);
     }
-    return { ok: true, status: 204, json: async () => ({}), text: async () => "" };
+    return jsonResponse({}, 204);
   });
 }
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
   adminState = "admin";
 });
 

@@ -11,6 +11,12 @@ export default defineConfig({
     globals: true,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["./vitest.setup.ts"],
+    // Every case starts from the real globals and real spied-on methods:
+    // vi.stubGlobal (fetch, matchMedia, …) is undone and vi.spyOn spies are
+    // restored after each test, so a stub can never leak into the next case
+    // or file and no test needs its own afterEach to undo them.
+    unstubGlobals: true,
+    restoreMocks: true,
   },
   resolve: {
     alias: {

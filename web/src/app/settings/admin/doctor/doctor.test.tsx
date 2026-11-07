@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminDoctorPage from "./page";
+import { jsonResponse, stubFetch } from "@/test/fetch";
 
 vi.mock("@/app/lib/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("../../useIsAdmin", () => ({ useIsAdmin: () => "admin" }));
@@ -36,12 +37,11 @@ const UNHEALTHY = {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("AdminDoctorPage", () => {
   it("renders the quick report with per-check status and a healthy badge", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => HEALTHY }));
+    stubFetch({ "/api/admin/doctor": HEALTHY });
     render(<AdminDoctorPage />);
 
     const panel = await screen.findByTestId("doctor-panel");
@@ -55,7 +55,7 @@ describe("AdminDoctorPage", () => {
   });
 
   it("surfaces failing checks with their on-box fix commands", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => UNHEALTHY }));
+    stubFetch({ "/api/admin/doctor": UNHEALTHY });
     render(<AdminDoctorPage />);
 
     const panel = await screen.findByTestId("doctor-panel");
@@ -69,8 +69,8 @@ describe("AdminDoctorPage", () => {
   it("requests deep mode only via the explicit button", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => HEALTHY })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...HEALTHY, deep: true }) });
+      .mockResolvedValueOnce(jsonResponse(HEALTHY))
+      .mockResolvedValueOnce(jsonResponse({ ...HEALTHY, deep: true }));
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminDoctorPage />);
     await screen.findByTestId("doctor-panel");
@@ -84,8 +84,8 @@ describe("AdminDoctorPage", () => {
   it("keeps the last report on screen, dated, when a re-run fails", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => HEALTHY })
-      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) });
+      .mockResolvedValueOnce(jsonResponse(HEALTHY))
+      .mockResolvedValueOnce(jsonResponse({}, 502));
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminDoctorPage />);
     const panel = await screen.findByTestId("doctor-panel");
@@ -101,7 +101,7 @@ describe("AdminDoctorPage", () => {
   });
 
   it("shows the error banner when the report cannot load", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) }));
+    stubFetch(() => jsonResponse({}, 502));
     render(<AdminDoctorPage />);
     expect(await screen.findByTestId("doctor-error")).toHaveTextContent("502");
     expect(screen.queryByTestId("doctor-panel")).toBeNull();

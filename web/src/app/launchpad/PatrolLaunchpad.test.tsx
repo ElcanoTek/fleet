@@ -5,6 +5,7 @@ const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
 import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem, recoveryItem, withMemory } from "./PatrolLaunchpad";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 // The Patrol Launchpad end to end against a stubbed API
 // (docs/PATROL-LAUNCHPAD.md): it walks the six steps, saves a non-negotiable
@@ -52,7 +53,7 @@ function mockApi(opts: Opts = {}) {
   const fn = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" });
+    const json = (body: unknown) => (jsonResponse(body));
     if (url === "/api/mcp-servers") {
       if (opts.alwaysOnLater && catalogGets > 0) {
         return json({
@@ -65,9 +66,9 @@ function mockApi(opts: Opts = {}) {
       }
       const n = catalogGets++;
       if (n > 0 && opts.catalogLater?.[n - 1] === "fail") {
-        return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
+        return textResponse("down", 500);
       }
-      if (opts.catalog === "fail") return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
+      if (opts.catalog === "fail") return textResponse("down", 500);
       return json({
         servers: [
           { name: "gmail", display_name: "Gmail", description: "Read and search mail", enabled: true },
@@ -80,11 +81,11 @@ function mockApi(opts: Opts = {}) {
       return new Promise(() => {});
     }
     if (url === "/api/memories" && method === "GET" && opts.memoriesFail) {
-      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+      return textResponse("", 500);
     }
     if (url === "/api/memories" && method === "GET") return json({ memories: [...(opts.memories ?? []), ...savedMemories] });
     if (url === "/api/memories/m1" && method === "PATCH" && opts.pin === "fail") {
-      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+      return textResponse("", 500);
     }
     if (url === "/api/memories" && method === "POST" && opts.memoryReplyLost) {
       opts.memoryReplyLost = false;
@@ -101,7 +102,7 @@ function mockApi(opts: Opts = {}) {
     }
     if (url === "/api/patrol-draft" && opts.hangDraft) return new Promise(() => {});
     if (url === "/api/patrol-draft") {
-      if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
+      if (opts.draft === "fail") return textResponse("busy", 502);
       return json({ title: "Deal & inbox sweep", prompt: "**Mission**\nAI-written.", summary: "Every morning I check." });
     }
     if (url === "/api/conversations" && method === "POST") {
@@ -117,15 +118,15 @@ function mockApi(opts: Opts = {}) {
       return json({ id: "conv-9" });
     }
     if (url.endsWith("/mcp-servers") && method === "POST" && opts.tools === "fail") {
-      return { ok: false, status: 500, json: async () => ({}), text: async () => "tools down" };
+      return textResponse("tools down", 500);
     }
     if (url.endsWith("/run-now") && opts.runNow === "drop") throw new TypeError("Failed to fetch");
     if (url === "/api/conversations/conv-9" && method === "DELETE" && (opts.deleteFailures ?? 0) > 0) {
       opts.deleteFailures = (opts.deleteFailures ?? 0) - 1;
-      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+      return textResponse("", 500);
     }
     if (url.endsWith("/run-now") && opts.runNow === "fail") {
-      return { ok: false, status: 429, json: async () => ({}), text: async () => "queue full" };
+      return textResponse("queue full", 429);
     }
     if (url.endsWith("/schedules") && method === "POST") return json({ schedule: { id: "s-1" } });
     return json({});
@@ -143,8 +144,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
   navigateMock.mockReset();
 });
 
@@ -291,7 +290,7 @@ describe("PatrolLaunchpad", () => {
     await walkToLaunch(calls);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({}), text: async () => "cron too frequent" }),
+      vi.fn().mockImplementation(async () => textResponse("cron too frequent", 400)),
     );
     fireEvent.click(screen.getByTestId("launchpad-launch"));
     expect((await screen.findByRole("alert")).textContent).toContain("cron too frequent");
