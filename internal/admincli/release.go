@@ -70,7 +70,7 @@ const releaseUsage = `fleet release — signed release artifacts (docs/RELEASE-A
 
   fleet release latest
       print the newest published release tag
-  fleet release fetch --tag <vYYYY.MM.DD.N> --dir <dir> [--allow-downgrade]
+  fleet release fetch --tag <vYYYY.MM.DD.N> --dir <dir> [--allow-downgrade] [--commit <sha>]
       download this box's binary, SHA256SUMS and release.json into <dir> and
       verify them (signature by fleet's release workflow, checksums, tag,
       architecture, no host executor); prints the verified binary's path
@@ -148,6 +148,7 @@ type releaseFlags struct {
 	tag, dir       string
 	cacheDir       string
 	allowDowngrade bool
+	commit         string
 }
 
 func newReleaseFlags(name string) *releaseFlags {
@@ -178,11 +179,12 @@ func (f *releaseFlags) parse(argv []string) (release.Tag, int) {
 func releaseFetch(ctx context.Context, argv []string) int {
 	f := newReleaseFlags("fetch")
 	f.fs.BoolVar(&f.allowDowngrade, "allow-downgrade", false, "allow a release older than the running one")
+	f.fs.StringVar(&f.commit, "commit", "", "the commit the tag resolves to in this checkout; release.json must name the same")
 	tag, rc := f.parse(argv)
 	if rc != 0 {
 		return rc
 	}
-	if err := os.MkdirAll(f.dir, 0o700); err != nil {
+	if err := release.EnsurePrivateDir(f.dir); err != nil {
 		return errf(5, "staging dir: %v", err)
 	}
 	v, err := newVerifier(ctx, releaseCacheDir(f.cacheDir))
@@ -191,7 +193,7 @@ func releaseFetch(ctx context.Context, argv []string) int {
 	}
 	got, err := release.Fetch(ctx, release.NewDownloader(), v, release.FetchOptions{
 		Tag: tag, Arch: release.HostArch(), Dir: f.dir,
-		Current: version.Version(), AllowDowngrade: f.allowDowngrade,
+		Current: version.Version(), AllowDowngrade: f.allowDowngrade, Commit: f.commit,
 	})
 	if err != nil {
 		if errors.Is(err, release.ErrDowngrade) {
@@ -258,6 +260,7 @@ func releaseSandbox(ctx context.Context, argv []string) int {
 	if err != nil {
 		return errf(5, "%s: %v", f.dir, err)
 	}
+	_ = got.BinaryFile.Close()
 	ref, err := got.Manifest.ImageRef(release.SandboxImage)
 	if err != nil {
 		return errf(5, "%v", err)
@@ -365,7 +368,10 @@ func releaseInstall(ctx context.Context, argv []string) int {
 	if err != nil {
 		return errf(5, "install %s: %v", tag, err)
 	}
+	defer got.BinaryFile.Close()
 	o.Binary = got.Binary
+	o.Source = got.BinaryFile
+	o.SHA256 = got.BinarySHA256
 	res, err := release.Install(ctx, o)
 	if err != nil {
 		switch {

@@ -5,8 +5,10 @@ package release
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +49,12 @@ type Prober interface {
 
 // InstallOptions configures an install or a rollback.
 type InstallOptions struct {
-	Binary        string // the verified new binary (ignored by Rollback)
+	Binary string // the verified new binary (ignored by Rollback)
+	// Source, when set, is the verified binary held OPEN since it was hashed
+	// (LoadVerified's BinaryFile): the install copies from this descriptor,
+	// never re-opening Binary by name, and SHA256 must match the copy.
+	Source        *os.File
+	SHA256        string
 	InstallDir    string
 	Service       string
 	HealthURL     string
@@ -127,7 +134,7 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	}
 	defer unlock()
 
-	same, err := sameFile(o.Binary, live)
+	same, err := o.sameAsLive(live)
 	if err != nil {
 		return res, err
 	}
@@ -151,7 +158,7 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 		return res, err
 	}
 	staging := filepath.Join(o.InstallDir, stagingName)
-	if err := copyFileSync(o.Binary, staging); err != nil {
+	if err := o.stage(staging); err != nil {
 		_ = os.Remove(staging)
 		return res, fmt.Errorf("stage the new binary: %w", err)
 	}
@@ -271,6 +278,72 @@ func lockDir(dir string) (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil
+}
+
+// sameAsLive reports whether the binary to install has the same bytes as
+// live: by the verified digest when there is one, else by hashing Binary.
+func (o *InstallOptions) sameAsLive(live string) (bool, error) {
+	if o.SHA256 == "" {
+		return sameFile(o.Binary, live)
+	}
+	if _, err := os.Stat(live); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	h, err := fileSHA256(live)
+	if err != nil {
+		return false, err
+	}
+	return h == o.SHA256, nil
+}
+
+// stage writes the new binary to the install dir's staging name: from the
+// open verified descriptor when there is one (hashing as it copies, so the
+// bytes renamed into place are exactly the bytes that were verified), else
+// from Binary by name.
+func (o *InstallOptions) stage(staging string) error {
+	if o.Source == nil {
+		if err := copyFileSync(o.Binary, staging); err != nil {
+			return err
+		}
+		if o.SHA256 != "" {
+			got, err := fileSHA256(staging)
+			if err != nil {
+				return err
+			}
+			if got != o.SHA256 {
+				_ = os.Remove(staging)
+				return fmt.Errorf("the staged binary hashes to %s, not the verified %s", got, o.SHA256)
+			}
+		}
+		return nil
+	}
+	_ = os.Remove(staging)
+	if _, err := o.Source.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(staging, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755) //nolint:gosec // G302/G304: the install dir's executable.
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	_, err = io.Copy(io.MultiWriter(out, h), o.Source)
+	if err == nil {
+		err = out.Sync()
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && o.SHA256 != "" && hex.EncodeToString(h.Sum(nil)) != o.SHA256 {
+		err = fmt.Errorf("the binary changed after it was verified (copy hashes to %s, verified %s) — refusing it", hex.EncodeToString(h.Sum(nil)), o.SHA256)
+	}
+	if err != nil {
+		_ = os.Remove(staging)
+		return err
+	}
+	return os.Chmod(staging, 0o755) //nolint:gosec // G302: an executable
 }
 
 // sameFile reports whether a and b exist and have identical bytes.

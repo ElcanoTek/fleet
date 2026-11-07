@@ -68,29 +68,48 @@ func realignFixture(t *testing.T) (clone string, env []string, sha func(string) 
 	return clone, env, func(ref string) string { return run(clone, "rev-parse", ref) }
 }
 
-// TestUpdateMovesACheckoutBackToTheRelease — a checkout past the release (a
-// downgrade, or a box that tracked the branch tip) must not keep its newer
-// units and scripts next to an older binary: update moves it back to the tag.
-func TestUpdateMovesACheckoutBackToTheRelease(t *testing.T) {
-	clone, env, sha := realignFixture(t)
-	tagSHA := sha("v2026.11.01.1^{commit}")
-	if sha("HEAD") == tagSHA {
+// TestUpdateVerifiesTheReleaseBeforeMovingTheCheckout — the checkout is
+// moved to a release tag (forward, or back past newer commits) only after the
+// tag's SIGNED manifest is verified and names the commit the tag resolves to.
+// The fixture serves no signed manifest, so the checkout must stay put and
+// nothing from the tag may run.
+func TestUpdateVerifiesTheReleaseBeforeMovingTheCheckout(t *testing.T) {
+	_, env, sha := realignFixture(t)
+	before := sha("HEAD")
+	if before == sha(fixtureTag+"^{commit}") {
 		t.Fatal("fixture: the clone should start past the tag")
 	}
 	out, err := runScript(t, env, "update.sh", "--yes")
 	if err == nil {
-		t.Fatalf("the fixture serves no release, so the run must stop at the download\n%s", out)
+		t.Fatalf("an unverifiable release was accepted\n%s", out)
 	}
-	if got := sha("HEAD"); got != tagSHA {
-		t.Fatalf("checkout at %s, want the release commit %s\n--- output ---\n%s", got, tagSHA, out)
+	if got := sha("HEAD"); got != before {
+		t.Fatalf("the checkout moved to an unverified release (%s → %s)\n%s", before, got, out)
 	}
-	if !strings.Contains(out, "moving the checkout BACK to v2026.11.01.1") {
-		t.Errorf("the move back must be announced\n%s", out)
+	for _, want := range []string{"release to install: " + fixtureTag, "could not be verified", "checkout was NOT moved"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
 	}
-	if !strings.Contains(out, "could not download") && !strings.Contains(out, "did not verify") {
-		t.Errorf("expected the run to stop at the release download\n%s", out)
+}
+
+// TestUpdateMovesTheCheckoutOnlyAfterTheManifestCheck pins the order in the
+// script itself (the end-to-end move needs a release signed by fleet's
+// workflow, which no test can mint): the manifest check precedes both the
+// move back and the fast-forward, and the re-exec of the moved update.sh.
+func TestUpdateMovesTheCheckoutOnlyAfterTheManifestCheck(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	_ = clone
+	s := string(body)
+	verify := strings.Index(s, `fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$after_sha"`)
+	for _, later := range []string{`git checkout --quiet -B "$target_branch" "$after_sha"`, `git merge --ff-only --quiet "$after_sha"`, `exec env FLEET_UPDATE_REEXEC=1`} {
+		at := strings.Index(s, later)
+		if verify < 0 || at < 0 || at < verify {
+			t.Errorf("%q (at %d) must come after the manifest check (at %d)", later, at, verify)
+		}
+	}
 }
 
 // TestUpdateRefusesToStrandLocalCommits — moving back is only safe for commits

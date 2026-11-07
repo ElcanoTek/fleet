@@ -578,6 +578,17 @@ else
           || die "${SRC_DIR} has commits that are not on origin/${target_branch}; moving it back to ${RELEASE_TAG} would strand them — push or reset them first"
         _realign=1
       fi
+      # Nothing from the tag runs (not even a re-exec of its update.sh) until
+      # its SIGNED manifest is checked: SHA256SUMS signed by the release
+      # identity, release.json matching it, naming this tag AND the commit the
+      # tag resolves to here. A tag moved or forged in the local clone fails
+      # here, before the checkout moves. Verified with this (current,
+      # already-trusted) checkout's pinned cosign.
+      if [[ "$before_sha" != "$after_sha" ]]; then
+        fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$after_sha" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" \
+          || die "release ${RELEASE_TAG} could not be verified (above) — the checkout was NOT moved and nothing was installed"
+        ok "the signed release.json names ${RELEASE_TAG} = ${after_sha:0:12}"
+      fi
     fi
 
     if [[ "$before_sha" == "$after_sha" ]]; then
@@ -1119,7 +1130,12 @@ RELEASE_DIR=""   # its staging dir (SHA256SUMS, signatures, release.json, binary
 if [[ "$FROM_SOURCE" != "1" ]]; then
   resolve_install_dir
   step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
-  RELEASE_DIR="${STATE_DIR}/release/${RELEASE_TAG:-latest}"
+  # Staging lives under the root-owned release cache, never under the
+  # checkout (which another user may own): it must be private — see
+  # internal/release CheckPrivateDir — or the verified files could be swapped.
+  RELEASE_ROOT="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
+  RELEASE_DIR="${RELEASE_ROOT}/${RELEASE_TAG:-latest}"
+  RELEASE_COMMIT="$(git -C "$SRC_DIR" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
   _fetch_flags=()
   [[ "$ALLOW_DOWNGRADE" == "1" ]] && _fetch_flags+=(--allow-downgrade)
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -1129,13 +1145,14 @@ if [[ "$FROM_SOURCE" != "1" ]]; then
     # Only the release being installed is staged: earlier releases' staging
     # dirs (~100 MB each) are dropped first — the previous binary lives on as
     # fleet.prev in the install dir, which is all a rollback needs.
-    if [[ -d "${STATE_DIR}/release" ]]; then
-      find "${STATE_DIR}/release" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
+    [[ -n "$RELEASE_COMMIT" ]] || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} — cannot tie the release to a commit"
+    if [[ -d "$RELEASE_ROOT" ]]; then
+      find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
     fi
     rm -rf "$RELEASE_DIR"
-    install -d -m 0700 "$RELEASE_DIR"
+    install -d -m 0700 "$RELEASE_ROOT" "$RELEASE_DIR"
     if fleet_release_capable "$INSTALL_DIR/fleet"; then
-      NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" "${_fetch_flags[@]}")" \
+      NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
         || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
     else
       # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
@@ -1145,7 +1162,12 @@ if [[ "$FROM_SOURCE" != "1" ]]; then
       # verified binary check its own build info the way `fleet release
       # fetch` would.
       warn "${INSTALL_DIR}/fleet predates \`fleet release\`; verifying this first artifact with scripts/lib/release.sh (same pinned cosign and signer identity)"
-      NEW_FLEET="$(fleet_release_fetch "$SRC_DIR" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}")" \
+      # The downgrade guard `fleet release fetch` applies, applied here too.
+      _installed_version="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}' || true)"
+      if [[ "$ALLOW_DOWNGRADE" != "1" ]] && fleet_release_older "$RELEASE_TAG" "$_installed_version"; then
+        die "${RELEASE_TAG} is older than the installed ${_installed_version} — refusing a downgrade (pass --allow-downgrade to roll back on purpose)"
+      fi
+      NEW_FLEET="$(fleet_release_fetch "$SRC_DIR" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$RELEASE_COMMIT")" \
         || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
       "$NEW_FLEET" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
         || die "the verified binary reports the host executor compiled in — refusing it"

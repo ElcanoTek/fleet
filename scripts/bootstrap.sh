@@ -955,6 +955,13 @@ if [[ "$FROM_SOURCE" != "1" && "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
       || warn "could not fetch tags into ${REPO_ROOT}; using the tags it has"
     _tag_sha="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
       || die "release ${RELEASE_TAG} is not a tag in ${REPO_ROOT} — is it a clone of ElcanoTek/fleet?"
+    # The SIGNED manifest first: nothing from the tag is checked out, let
+    # alone executed, until SHA256SUMS carries the release identity's
+    # signature and release.json — matching it — names this tag and the
+    # commit it resolves to here. Verified with the pinned cosign of the
+    # checkout the operator cloned and is running now.
+    fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$_tag_sha" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" \
+      || die "release ${RELEASE_TAG} could not be verified (above) — the checkout was NOT moved and nothing was installed"
     if [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$_tag_sha" ]]; then
       git -C "$REPO_ROOT" diff --quiet HEAD -- \
         || die "${REPO_ROOT} has uncommitted changes — commit or discard them, then re-run (bootstrap moves the checkout to ${RELEASE_TAG})"
@@ -1015,9 +1022,15 @@ else
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest published release}, and verify them before use: the pinned cosign (internal/release/cosign.lock), the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, no host executor"
   else
-    RELEASE_DIR="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}/release/${RELEASE_TAG}"
+    # Private staging under the root-owned release cache (never under the
+    # checkout, which another user may own), the same place `fleet update`
+    # stages.
+    install -d -m 0700 "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
+    RELEASE_DIR="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release/${RELEASE_TAG}"
     rm -rf "$RELEASE_DIR"
-    FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}")" \
+    _rel_commit="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+      || die "release ${RELEASE_TAG} is not a tag in ${REPO_ROOT}"
+    FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$_rel_commit")" \
       || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed. (A --tag older than the newest ten releases has no downloadable assets any more.)"
     "$FLEET_RELEASE_BIN" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
       || die "the verified binary reports the host executor compiled in — refusing it"

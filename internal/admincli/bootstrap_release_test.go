@@ -15,10 +15,9 @@ import (
 )
 
 // TestBootstrapInstallsTheNewestPublishedRelease — with no --tag, bootstrap
-// asks for the newest PUBLISHED release (not whatever tag the clone has), moves
-// the checkout to it and re-runs from there. The fixture serves no assets, so
-// the re-run stops at the download; what is asserted is the choice of release
-// and the move.
+// asks for the newest PUBLISHED release (not whatever tag the clone has) and
+// verifies its signed manifest BEFORE moving the checkout to it. The fixture
+// serves no signed manifest, so it must stop there with the checkout unmoved.
 func TestBootstrapInstallsTheNewestPublishedRelease(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -68,6 +67,7 @@ func TestBootstrapInstallsTheNewestPublishedRelease(t *testing.T) {
 	defer api.Close()
 	dead := httptest.NewServer(http.NotFoundHandler())
 	defer dead.Close()
+	head := git(clone, "rev-parse", "HEAD")
 	cmd := exec.Command("bash", filepath.Join(clone, "scripts", "bootstrap.sh"), "--postgres=external")
 	cmd.Dir = clone
 	cmd.Env = append(append([]string{}, gitEnv...), "TERM=dumb", "FLEET_RELEASE_LATEST_URL="+api.URL, "FLEET_RELEASE_BASE_URL="+dead.URL,
@@ -77,10 +77,16 @@ func TestBootstrapInstallsTheNewestPublishedRelease(t *testing.T) {
 	if err == nil {
 		t.Fatalf("the fixture serves no assets, so bootstrap must stop at the download\n%s", out)
 	}
-	if got, want := git(clone, "rev-parse", "HEAD"), git(clone, "rev-parse", "v2026.11.01.1^{commit}"); got != want {
-		t.Fatalf("checkout at %s, want the PUBLISHED release %s\n%s", got, want, out)
+	// It picked the PUBLISHED release (v2026.11.01.1, not the newer tag the
+	// clone also has) — and, with no signed manifest to verify, did NOT move
+	// the checkout to it or run anything from it.
+	if got := git(clone, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the checkout moved to an unverified release (%s → %s)\n%s", head, got, out)
 	}
-	for _, want := range []string{"checkout moved to v2026.11.01.1", "re-running bootstrap from it", "could not be downloaded and verified"} {
+	if strings.Contains(string(out), "v2026.11.02.1") {
+		t.Errorf("bootstrap considered the unpublished tag\n%s", out)
+	}
+	for _, want := range []string{"release v2026.11.01.1 could not be verified", "checkout was NOT moved"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("output missing %q\n%s", want, out)
 		}
