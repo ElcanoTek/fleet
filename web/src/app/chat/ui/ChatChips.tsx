@@ -265,7 +265,7 @@ export function SummaryBanner({
       {meta?.model || (meta?.costUsd ?? 0) > 0 ? (
         <p className="mt-2 text-[0.65rem] text-[var(--color-text-muted)] tabular-nums">
           {meta?.model ? <>Summarized by <span className="font-medium">{shortModelName(meta.model)}</span></> : null}
-          {(meta?.costUsd ?? 0) > 0 ? <> · {meta!.costUsd! < 0.01 ? `$${meta!.costUsd!.toFixed(4)}` : `$${meta!.costUsd!.toFixed(2)}`}</> : null}
+          {meta?.costUsd && meta.costUsd > 0 ? <> · {meta.costUsd < 0.01 ? `$${meta.costUsd.toFixed(4)}` : `$${meta.costUsd.toFixed(2)}`}</> : null}
           {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString()} prompt tokens condensed</> : null}
         </p>
       ) : null}

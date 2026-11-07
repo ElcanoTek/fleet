@@ -2119,9 +2119,9 @@ export function TaskCreateModal({
                 </div>
                 <div className="form-group">
                   <span className="task-field-label">Attachments</span>
-                  {editing && (editTask?.files?.length ?? 0) > 0 ? (
+                  {editing && editTask?.files && editTask.files.length > 0 ? (
                     <p className="field-hint task-hint-tight">
-                      This task has {editTask!.files!.length} existing {editTask!.files!.length === 1 ? "attachment" : "attachments"}.
+                      This task has {editTask.files.length} existing {editTask.files.length === 1 ? "attachment" : "attachments"}.
                       Attach new files to replace them, or leave this empty to keep them.
                     </p>
                   ) : null}

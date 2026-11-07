@@ -91,9 +91,9 @@ export function useApprovalCountdown(
   // of truth, so a brief local clock skew only shifts the displayed m:ss. The
   // sub-second poll makes the first tick appear promptly.
   useEffect(() => {
-    if (!hasDeadline) return undefined;
+    if (!hasDeadline || expiresAt === undefined) return undefined;
     const tick = () =>
-      setRemaining(Math.max(0, expiresAt! - Math.floor(Date.now() / 1000)));
+      setRemaining(Math.max(0, expiresAt - Math.floor(Date.now() / 1000)));
     const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
   }, [hasDeadline, expiresAt]);

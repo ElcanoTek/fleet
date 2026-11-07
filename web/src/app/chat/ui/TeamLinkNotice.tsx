@@ -28,6 +28,7 @@ export function TeamLinkNotice({
   notice: TeamLinkNoticeState;
   onOpenProject: (projectId: string) => void;
 }) {
+  const project = notice.kind === "not_on_team" ? undefined : notice.project;
   return (
     <div
       data-testid="team-link-notice"
@@ -60,13 +61,13 @@ export function TeamLinkNotice({
             <p className="text-[0.875rem] leading-[1.5] text-[var(--color-text-secondary)]">
               Ask the person who sent the link if you still need it.
             </p>
-            {notice.project ? (
+            {project ? (
               <button
                 type="button"
-                onClick={() => onOpenProject(notice.project!.id)}
+                onClick={() => onOpenProject(project.id)}
                 className="inline-flex h-9 items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
-                Open {notice.project.name}
+                Open {project.name}
               </button>
             ) : null}
           </>

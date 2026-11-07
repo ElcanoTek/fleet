@@ -953,8 +953,8 @@ function ProvidersAdmin() {
                       <ActStatus state={probe.ok ? "ok" : "err"}>
                         {probe.ok ? "✓" : "✗"} {probe.detail}
                         {probe.latency_ms > 0 ? ` · ${probe.latency_ms}ms` : ""}
-                        {(probe.missing_models?.length ?? 0) > 0
-                          ? ` — missing: ${probe.missing_models!.join(", ")}`
+                        {probe.missing_models && probe.missing_models.length > 0
+                          ? ` — missing: ${probe.missing_models.join(", ")}`
                           : ""}
                       </ActStatus>
                     </span>
