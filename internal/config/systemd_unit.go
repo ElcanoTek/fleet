@@ -108,15 +108,38 @@ func UnitEnvFromSystemctl(unit, show string, readFile func(string) ([]byte, erro
 			}
 		case "Environment":
 			d.environment = append(d.environment, splitUnitWords(val)...)
-		case "EnvironmentFiles": // one line per file: "<path> (ignore_errors=yes)"
-			if f := strings.Fields(val); len(f) > 0 {
-				d.files = append(d.files, strings.TrimPrefix(f[0], "-"))
-			}
+		case "EnvironmentFiles":
+			// systemd prints one line per file ("<path> (ignore_errors=yes)"),
+			// but accept several members on one line too, so no file is lost
+			// whichever way a systemd version serializes the array.
+			d.files = append(d.files, environmentFilesMembers(val)...)
 		case "UnsetEnvironment":
 			d.unset = append(d.unset, splitUnitWords(val)...)
 		}
 	}
 	return buildUnitEnv(unit, d, readFile)
+}
+
+// environmentFilesMembers splits one EnvironmentFiles= property value into
+// its paths: each member is "<path> (ignore_errors=yes|no)"; a bare path with
+// no annotation is accepted as one member.
+func environmentFilesMembers(val string) []string {
+	var out []string
+	rest := strings.TrimSpace(val)
+	for rest != "" {
+		i := strings.Index(rest, " (ignore_errors=")
+		if i < 0 {
+			out = append(out, strings.TrimPrefix(rest, "-"))
+			break
+		}
+		out = append(out, strings.TrimPrefix(strings.TrimSpace(rest[:i]), "-"))
+		j := strings.Index(rest[i:], ")")
+		if j < 0 {
+			break
+		}
+		rest = strings.TrimSpace(rest[i+j+1:])
+	}
+	return out
 }
 
 // UnitEnvFromFiles builds the unit's environment from unit files the way
