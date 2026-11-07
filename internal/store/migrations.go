@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -99,16 +101,66 @@ func loadMigrations() ([]migration, error) {
 // be the same everywhere the migration runner runs.
 const migrationLockKey int64 = 0x01A7B00B_CAFE01
 
+// migrationLockTimeout bounds how long a boot waits for another process's
+// chat migration lock before failing. Generous: a slow migration on a large
+// database legitimately holds the lock for minutes, but a boot that never
+// returns (a wedged peer, a leaked session) must fail loudly instead of
+// hanging silently. A var so a test can shorten it.
+var migrationLockTimeout = 5 * time.Minute
+
+// migrationLockPollInterval is how often acquireMigrationLock retries a held
+// lock; migrationLockLogInterval is how often it says it is still waiting.
+// Vars for the same reason as migrationLockTimeout.
+var (
+	migrationLockPollInterval = 250 * time.Millisecond
+	migrationLockLogInterval  = 10 * time.Second
+)
+
+// acquireMigrationLock takes the session-level chat migration advisory lock
+// within migrationLockTimeout. Like internal/sched/db's acquireLock it polls
+// pg_try_advisory_lock rather than blocking in pg_advisory_lock: a blocked
+// call cannot report progress, and cancelling one under a deadline races the
+// grant.
+func acquireMigrationLock(ctx context.Context, conn *sql.Conn) error {
+	start := time.Now()
+	deadline := start.Add(migrationLockTimeout)
+	nextLog := start.Add(migrationLockLogInterval)
+	for {
+		var got bool
+		if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, migrationLockKey).Scan(&got); err != nil {
+			return fmt.Errorf("pg_try_advisory_lock: %w", err)
+		}
+		if got {
+			return nil
+		}
+		now := time.Now()
+		if !now.Before(deadline) {
+			return fmt.Errorf("timed out after %s waiting for chat migration lock (key %d): another process holds it",
+				migrationLockTimeout, migrationLockKey)
+		}
+		if !now.Before(nextLog) {
+			slog.Warn("waiting for chat migration lock", "key", migrationLockKey,
+				"waited", now.Sub(start).Round(time.Second), "timeout", migrationLockTimeout)
+			nextLog = now.Add(migrationLockLogInterval)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for chat migration lock: %w", ctx.Err())
+		case <-time.After(migrationLockPollInterval):
+		}
+	}
+}
+
 // applyMigrations runs every migration whose version is newer than the
 // highest version in schema_migrations. Each migration executes inside
 // its own transaction; on failure the transaction rolls back and the
 // database is left at the last successfully-applied version.
 //
-// Grabs a session-level pg_advisory_lock first so two processes that
-// race through Open() can't both try to CREATE TABLE at once — Postgres'
-// catalog locking can surface as pg_type unique-constraint violations
-// under concurrent DDL otherwise.
-func applyMigrations(ctx context.Context, db *sql.DB) error {
+// Grabs a session-level advisory lock first (bounded by
+// migrationLockTimeout) so two processes that race through Open() can't
+// both try to CREATE TABLE at once — Postgres' catalog locking can surface
+// as pg_type unique-constraint violations under concurrent DDL otherwise.
+func applyMigrations(ctx context.Context, db *sql.DB) (err error) {
 	// Advisory lock on a dedicated connection so we hold it for the
 	// full migration run. Using the pool would risk releasing early.
 	conn, err := db.Conn(ctx)
@@ -116,11 +168,25 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("acquire conn for migration lock: %w", err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
-		return fmt.Errorf("pg_advisory_lock: %w", err)
+	if err := acquireMigrationLock(ctx, conn); err != nil {
+		return err
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+		// Surface a failed unlock: the session lock would otherwise stay
+		// held until conn.Close returns the connection, and a silent
+		// failure here is exactly what makes the next boot's wait opaque.
+		// WithoutCancel: a cancelled ctx must not skip the release and hand
+		// a still-locked connection back to the pool.
+		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		var released bool
+		uerr := conn.QueryRowContext(uctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey).Scan(&released)
+		switch {
+		case uerr != nil:
+			err = errors.Join(err, fmt.Errorf("pg_advisory_unlock: %w", uerr))
+		case !released:
+			err = errors.Join(err, errors.New("pg_advisory_unlock: chat migration lock was not held"))
+		}
 	}()
 
 	// Run every migration operation on the lock-owning connection. Besides
