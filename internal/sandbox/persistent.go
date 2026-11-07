@@ -375,7 +375,7 @@ func (p *Pool) sandboxAlive(sb *Sandbox) bool {
 	defer cancel()
 	res, err := sb.RunBash(ctx, BashRequest{Command: "true", Timeout: 5 * time.Second})
 	if err != nil {
-		logging.From(ctx).Error("sandbox: persistent sandbox failed liveness probe, recreating", "err", err)
+		logging.From(ctx).Warn("sandbox: persistent sandbox failed liveness probe, recreating", "err", err)
 		return false
 	}
 	return !res.TimedOut

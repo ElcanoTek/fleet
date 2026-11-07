@@ -252,7 +252,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 			// The row exists and the canonical bytes are safe; the staged copy
 			// self-heals on the next Sync. Log and keep going rather than
 			// failing an upload that IS durably recorded.
-			logging.From(r.Context()).Error("shared files: stage failed (will self-heal on the next maintenance pass)", "name", name, "err", err)
+			logging.From(r.Context()).Warn("shared files: stage failed (will self-heal on the next maintenance pass)", "name", name, "err", err)
 		}
 		out = append(out, row)
 	}
@@ -279,7 +279,7 @@ func (s *Server) rollbackSharedFileBatch(ctx context.Context, lib sharedfiles.Li
 			continue
 		}
 		if err := lib.Unstage(row); err != nil {
-			logging.From(ctx).Error("shared files: roll back staged failed (will self-heal on the next maintenance pass)", "row_id", row.ID, "err", err)
+			logging.From(ctx).Warn("shared files: roll back staged failed (will self-heal on the next maintenance pass)", "row_id", row.ID, "err", err)
 		}
 		if err := lib.RemoveCanonical(row.ID); err != nil {
 			logging.From(ctx).Error("shared files: roll back canonical failed", "row_id", row.ID, "err", err)
@@ -392,7 +392,7 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 			logging.From(r.Context()).Error("shared files: unstage old path failed", "id", id, "err", err)
 		}
 		if err := lib.Stage(updated); err != nil {
-			logging.From(r.Context()).Error("shared files: restage failed (will self-heal on the next maintenance pass)", "id", id, "err", err)
+			logging.From(r.Context()).Warn("shared files: restage failed (will self-heal on the next maintenance pass)", "id", id, "err", err)
 		}
 	}
 	writeJSON(w, updated)
@@ -408,7 +408,7 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 	}
 	lib := s.sharedFilesLibrary()
 	if err := lib.Unstage(f); err != nil {
-		logging.From(r.Context()).Error("shared files: unstage failed (will self-heal on the next maintenance pass)", "id", id, "err", err)
+		logging.From(r.Context()).Warn("shared files: unstage failed (will self-heal on the next maintenance pass)", "id", id, "err", err)
 	}
 	if err := lib.RemoveCanonical(f.ID); err != nil {
 		logging.From(r.Context()).Error("shared files: remove canonical failed", "id", id, "err", err)

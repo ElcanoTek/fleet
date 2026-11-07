@@ -238,7 +238,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	body, n := jsonReader(map[string]string{"email": email, "password": password})
 	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/verify", header: h, body: body, contentLength: n})
 	if !ok {
-		logging.From(r.Context()).Info("webui: login: no chat backend")
+		logging.From(r.Context()).Warn("webui: login: no chat backend")
 		back("server")
 		return
 	}

@@ -471,7 +471,7 @@ func (p *Pool) Run(ctx context.Context) {
 			if p.drainWithGrace(p.drainGrace) {
 				logging.From(ctx).Info("runner: all in-flight tasks drained")
 			} else {
-				logging.From(ctx).Info("runner: grace period expired; force-cancelling in-flight tasks", "grace", p.drainGrace)
+				logging.From(ctx).Warn("runner: grace period expired; force-cancelling in-flight tasks", "grace", p.drainGrace)
 				taskCancel()
 				p.taskWG.Wait()
 			}
@@ -657,7 +657,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 				}
 			}
 			if rerr != nil {
-				logging.From(ctx).Error("runner: could not release drained claim for task; lease recovery will reclaim on restart", "task_id", task.ID, "err", rerr)
+				logging.From(ctx).Warn("runner: could not release drained claim for task; lease recovery will reclaim on restart", "task_id", task.ID, "err", rerr)
 			}
 			release()
 			return
@@ -689,7 +689,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// cause-cancel is an idempotent no-op when the previous run already
 			// ended (ask/wake/stop cancelled it themselves and its exit-path
 			// cleanup simply hasn't deleted the entry yet).
-			logging.From(ctx).Info("runner: task re-claimed while a previous run's bookkeeping was still active; cancelling the stale run (lease lost)", "task_id", task.ID)
+			logging.From(ctx).Warn("runner: task re-claimed while a previous run's bookkeeping was still active; cancelling the stale run (lease lost)", "task_id", task.ID)
 			prev.cancelCause(errTaskLeaseLost)
 		}
 
@@ -1031,7 +1031,7 @@ func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pa
 	if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, token, pauseQuestion); err != nil {
 		slog.Error("runner: task pause write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
-		slog.Info("runner: task pause did not apply (lease lost or not running)", "task_id", task.ID)
+		slog.Warn("runner: task pause did not apply (lease lost or not running)", "task_id", task.ID)
 	}
 	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion, "")
 	slog.Info("runner: task paused awaiting input", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
@@ -1055,7 +1055,7 @@ func (p *Pool) finishStopped(task *models.Task, session *models.LogSession, stop
 func (p *Pool) finishLeaseLost(task *models.Task, session *models.LogSession, start time.Time) {
 	msg := "Task run cancelled: this run's lease was lost (recovery re-queued the task; a fresh attempt owns it now)"
 	p.submitLog(task, session, msg)
-	slog.Info("runner: task run cancelled after lease loss", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
+	slog.Warn("runner: task run cancelled after lease loss", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 }
 
 // finishSuccess commits the successful terminal transition: it persists the
@@ -1247,7 +1247,7 @@ func (p *Pool) failAuditAborted(task *models.Task, session *models.LogSession, r
 		slog.Error("runner: failed to report audit abort for task", "task_id", task.ID, "err", err)
 	}
 	p.submitLog(task, session, msg)
-	slog.Info("runner: task aborted by self-audit", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
+	slog.Warn("runner: task aborted by self-audit", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	if landed {
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	}
@@ -1392,7 +1392,7 @@ func (p *Pool) requeueForConnectorOutage(task *models.Task, session *models.LogS
 	msg := fmt.Sprintf("Task could not start (%s, infra re-run %d of %d); re-running in %s without spending a retry: %v",
 		models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, delay.Round(time.Second), runErr)
 	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
-		slog.Error("runner: failed to re-queue task after a connector outage; classifying normally", "task_id", task.ID, "err", err)
+		slog.Warn("runner: failed to re-queue task after a connector outage; classifying normally", "task_id", task.ID, "err", err)
 		return false
 	}
 	slog.Warn("runner: task could not start; scheduling an infra re-run", "task_id", task.ID, "reason", models.FailureConnectorUnavailable, "re_run", task.InfraRetryCount+1, "max_re_runs", maxConnectorInfraRetries, "at", when.Format(time.RFC3339))
@@ -1579,7 +1579,7 @@ func (p *Pool) parkForWake(task *models.Task, session *models.LogSession, spec t
 	if ok, err := p.store.PauseTaskForWake(context.Background(), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
 		slog.Error("runner: task wake park write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
-		slog.Info("runner: task wake park did not apply (lease lost or not running)", "task_id", task.ID)
+		slog.Warn("runner: task wake park did not apply (lease lost or not running)", "task_id", task.ID)
 	}
 	slog.Info("runner: task sleeping", "task_id", task.ID, "sleep", safe.LogSafe(what), "elapsed", time.Since(start).Round(time.Second))
 }
@@ -1965,7 +1965,7 @@ func (p *Pool) renewActiveLeases() {
 			continue
 		}
 		if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
-			slog.Info("runner: lease for task is no longer held by this run; cancelling it so its external side effects stop", "task_id", id)
+			slog.Warn("runner: lease for task is no longer held by this run; cancelling it so its external side effects stop", "task_id", id)
 			claim.cancelCause(errTaskLeaseLost)
 			continue
 		}

@@ -100,7 +100,7 @@ func Init(opts Options) bool {
 		AttachStacktrace: true,
 	}); err != nil {
 		// Non-fatal: fleet keeps running; Sentry is just absent.
-		slog.Error("sentry: init failed (non-fatal)", "err", err)
+		slog.Warn("sentry: init failed (non-fatal)", "err", err)
 		return false
 	}
 	slog.Info("sentry: initialized", "env", env)

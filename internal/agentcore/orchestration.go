@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -1218,7 +1219,13 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				if len(o.pendingCriticalActions) == 0 {
 					o.selfAuditRequested = true
 				}
-				slog.Error("Critical batch: discharged new records", "tool", toolName, "discharged", newly, "failed", failed)
+				// The level is the outcome's: Info when every record
+				// succeeded, Warn when some failed (#2052).
+				level := slog.LevelInfo
+				if failed > 0 {
+					level = slog.LevelWarn
+				}
+				slog.Log(context.Background(), level, "Critical batch: discharged new records", "tool", toolName, "discharged", newly, "failed", failed)
 			} else if failed > 0 {
 				o.criticalToolFailureAttempts[key]++
 				slog.Error("Critical batch made no forward progress", "tool", toolName, "failed", failed, "attempt", o.criticalToolFailureAttempts[key], "max_attempts", maxAttemptsPerCriticalAction)

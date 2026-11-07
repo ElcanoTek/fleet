@@ -44,7 +44,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 	// no remote connectors this turn and the cause is logged.
 	prefs, perr := s.store.ListConnectorPrefs(ctx, email)
 	if perr != nil {
-		logging.From(ctx).Error("remotemcp: connector prefs unreadable — mounting no remote connectors this run", "user", email, "err", perr)
+		logging.From(ctx).Warn("remotemcp: connector prefs unreadable — mounting no remote connectors this run", "user", email, "err", perr)
 		return nil, nil
 	}
 	enabledForMe := func(id string) bool {

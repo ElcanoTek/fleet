@@ -61,7 +61,7 @@ func screenText(ctx context.Context, source, text string) (bool, error) {
 		metrics.RecordGuardrailVerdict(source, p.mode, "clean")
 		return false, nil
 	}
-	logging.From(ctx).Info("guardrail: content flagged", "content_source", source, "profile", p.profile, "mode", p.mode, "score", fmt.Sprintf("%.3f", v.Score))
+	logging.From(ctx).Warn("guardrail: content flagged", "content_source", source, "profile", p.profile, "mode", p.mode, "score", fmt.Sprintf("%.3f", v.Score))
 	metrics.RecordGuardrailVerdict(source, p.mode, "flagged")
 	if p.block {
 		return true, fmt.Errorf("%w: profile %s", ErrGuardrailBlocked, p.profile)
@@ -122,7 +122,7 @@ func seedScreenError(blocked bool, err error) error {
 func screenToolOutput(ctx context.Context, toolName, text string) (string, bool) {
 	blocked, err := screenText(ctx, "tool_output", guardrailScreenSample(text))
 	if err != nil || blocked {
-		logging.From(ctx).Info("guardrail: withheld tool output", "tool", toolName)
+		logging.From(ctx).Warn("guardrail: withheld tool output", "tool", toolName)
 		return "[BLOCKED: workspace content guardrail]", true
 	}
 	return text, false

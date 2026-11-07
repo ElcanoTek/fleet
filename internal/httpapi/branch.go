@@ -217,14 +217,14 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 					}
 				}
 				if gerr != nil {
-					logging.From(ctx).Info("branch files: re-check failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
+					logging.From(ctx).Warn("branch files: re-check failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
 				}
 				if gerr != nil || !ok {
 					return branchCopyClosed
 				}
 				excluded, gerr := s.store.ListOutputExclusions(copyCtx, src.ID)
 				if gerr != nil {
-					logging.From(ctx).Info("branch files: re-check exclusions failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
+					logging.From(ctx).Warn("branch files: re-check exclusions failed", "src_id", safe.LogSafe(src.ID), "err", safe.LogSafe(gerr.Error()))
 					return branchCopyClosed
 				}
 				if excluded[p] {

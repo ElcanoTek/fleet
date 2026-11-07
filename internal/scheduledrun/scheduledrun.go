@@ -325,7 +325,7 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 	}
 	personaFile := filepath.Base(override) + ".yaml"
 	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
-		slog.Info("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "persona", override)
+		slog.Warn("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "persona", override)
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	return r.composeSystemPrompt(personaFile), personaFile
@@ -848,7 +848,7 @@ func verifierModelFor(ctx context.Context, slug, taskID string, runModel fantasy
 	}
 	vm, err := resolve(ctx, slug)
 	if err != nil {
-		logging.From(ctx).Error("scheduled task: verifier model unresolved; the run's own model will verify", "task_id", taskID, "slug", slug, "err", err)
+		logging.From(ctx).Warn("scheduled task: verifier model unresolved; the run's own model will verify", "task_id", taskID, "slug", slug, "err", err)
 		return runModel
 	}
 	return vm
@@ -1290,7 +1290,7 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	slog.Info("scheduled task: skipped remote MCP servers", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
+	slog.Warn("scheduled task: skipped remote MCP servers", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.

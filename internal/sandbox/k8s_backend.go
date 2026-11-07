@@ -1033,7 +1033,7 @@ func (b *KubernetesBackend) reapLoop() {
 				b.reapMu.Lock()
 				delete(b.reapPending, name)
 				b.reapMu.Unlock()
-				logging.From(ctx).Warn("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "pod_name", sanitizeClusterText(name))
+				logging.From(ctx).Info("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "pod_name", sanitizeClusterText(name))
 				continue
 			}
 			b.reapMu.Lock()

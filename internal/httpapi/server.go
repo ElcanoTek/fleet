@@ -722,7 +722,7 @@ func envDuration(key string, def time.Duration) time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		slog.Info("config: value is not a valid duration; using default", "key", key, "default", def)
+		slog.Warn("config: value is not a valid duration; using default", "key", key, "default", def)
 	}
 	return def
 }
@@ -733,7 +733,7 @@ func envInt(key string, def int) int {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}
-		slog.Info("config: value is not a valid integer; using default", "key", key, "default", def)
+		slog.Warn("config: value is not a valid integer; using default", "key", key, "default", def)
 	}
 	return def
 }

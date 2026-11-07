@@ -463,13 +463,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	}
 	root, err := filepath.Abs(uploadsRoot)
 	if err != nil {
-		slog.Error("attachment staging: resolve uploads root failed (attachments keep uploads paths)", "err", err)
+		slog.Warn("attachment staging: resolve uploads root failed (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	root = filepath.Clean(root)
 	convDir, err := tools.EnsureWorkspaceDir(convID)
 	if err != nil {
-		slog.Error("attachment staging: workspace dir failed (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
+		slog.Warn("attachment staging: workspace dir failed (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
 		return atts
 	}
 	// The sandbox can replace any child of its workspace with a symlink.
@@ -477,14 +477,14 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	// staging into another conversation or host files (including during copy).
 	workspace, err := os.OpenRoot(convDir)
 	if err != nil {
-		slog.Error("attachment staging: open workspace failed (attachments keep uploads paths)", "err", err)
+		slog.Warn("attachment staging: open workspace failed (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	defer workspace.Close()
 	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
 	if err := workspace.MkdirAll(dir, 0o755); err != nil {
-		slog.Error("attachment staging: mkdir failed (attachments keep uploads paths)", "dir", dir, "err", err)
+		slog.Warn("attachment staging: mkdir failed (attachments keep uploads paths)", "dir", dir, "err", err)
 		return atts
 	}
 	out := make([]chatAttachment, 0, len(atts))
@@ -499,7 +499,7 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 		}
 		dst, err := stageOneAttachment(workspace, dir, root, src, a)
 		if err != nil {
-			slog.Error("attachment staging: staging failed (this attachment keeps its uploads path)", "name", safe.LogSafe(a.Name), "err", err)
+			slog.Warn("attachment staging: staging failed (this attachment keeps its uploads path)", "name", safe.LogSafe(a.Name), "err", err)
 			out = append(out, a)
 			continue
 		}

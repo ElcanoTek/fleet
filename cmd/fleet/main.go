@@ -285,6 +285,13 @@ func serveArgsExit(args []string, out, errW io.Writer) (code int, done bool) {
 
 func run() error {
 	startTime := time.Now() // process start, for the admin health summary uptime (#301)
+	// Logging is configured only once the config is read (the env file may set
+	// FLEET_LOG_*), but loading it, tracing and Sentry init already log. Hold
+	// those lines until logging.Configure replays them in the configured
+	// format and level (and into FLEET_LOG_FILE); an early return flushes them
+	// to stderr instead of losing them.
+	logging.BufferStartup()
+	defer logging.FlushStartup()
 	// Load the client bundle first: it supplies the MCP catalog (built into
 	// cfg.MCPServers), the supporting-doc dirs, and branding/empty-state. Its
 	// manifest also tells us which connector env-var names to admit from the
@@ -355,8 +362,8 @@ func run() error {
 	// the secret redactor, to stderr — which journald rotates under the shipped
 	// systemd unit (ADR-0004) — and, when FLEET_LOG_FILE is set (typically a
 	// container/non-systemd box), also to a size/age/backup-rotated file.
-	// Configured before the first diagnostic log line so the file sink captures
-	// startup too. See docs/TELEMETRY.md.
+	// Configure replays the lines buffered since the top of run(), so the
+	// file sink captures startup too. See docs/TELEMETRY.md.
 	logCloser, err := logging.Configure(logging.Config{
 		File:       cfg.Log.File,
 		MaxSizeMB:  cfg.Log.MaxSizeMB,
@@ -1197,7 +1204,7 @@ func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
 func initTracing(serviceVersion string) func() {
 	shutdown, err := otelsetup.Init(context.Background(), serviceVersion)
 	if err != nil {
-		slog.Error("otel: init failed, tracing disabled", "err", err)
+		slog.Warn("otel: init failed, tracing disabled", "err", err)
 		return func() {}
 	}
 	return func() {
@@ -1847,7 +1854,7 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 	slog.Info("disk backpressure: ON (scheduled work pauses below the free-space floor; chat is never gated)", "min_free_pct", cfg.DiskMinFreePercent, "data_dir", cfg.DataDir)
 	switch {
 	case !st.Available:
-		slog.Error("⚠ disk backpressure: cannot measure free space — failing OPEN, scheduled work will not be held back", "data_dir", cfg.DataDir, "err", st.Err)
+		slog.Warn("⚠ disk backpressure: cannot measure free space — failing OPEN, scheduled work will not be held back", "data_dir", cfg.DataDir, "err", st.Err)
 	case st.Shedding:
 		slog.Warn("⚠ disk backpressure: low free space at boot — scheduled tasks are held back until space is reclaimed", "free_pct", fmt.Sprintf("%.1f", st.FreePercent), "data_dir", cfg.DataDir)
 	}
@@ -2305,7 +2312,11 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 		logging.From(recCtx).Error("stranded-turn recovery: failed", "err", err, "recovered", len(recovered))
 	}
 	for _, r := range recovered {
-		logging.From(recCtx).Info("stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
+		level := slog.LevelInfo
+		if r.Synthesized > 0 {
+			level = slog.LevelWarn // tool calls whose outcome is unknown
+		}
+		logging.From(recCtx).Log(recCtx, level, "stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
 	}
 	// Outcomes must follow recovered calls. The store excludes conversations
 	// still containing running turns, so one failed recovery cannot strand
@@ -2313,7 +2324,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
 		logging.From(recCtx).Error("stranded-approval recovery: failed", "err", err)
 	} else if count > 0 {
-		logging.From(recCtx).Info("stranded-approval recovery: recorded unknown outcomes", "count", count)
+		logging.From(recCtx).Warn("stranded-approval recovery: recorded unknown outcomes", "count", count)
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,

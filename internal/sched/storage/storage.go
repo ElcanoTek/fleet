@@ -2070,11 +2070,11 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// is stored in UTC — scheduled_for is always an absolute UTC instant.
 	loc, ok := TaskLocation(current.Timezone, s.location)
 	if !ok {
-		logging.From(ctx).Error("Task has invalid timezone; using server timezone", "task_id", current.ID, "timezone", safe.LogSafe(current.Timezone))
+		logging.From(ctx).Warn("Task has invalid timezone; using server timezone", "task_id", current.ID, "timezone", safe.LogSafe(current.Timezone))
 	}
 	nextTime, err := NextRun(current.Recurrence, loc, time.Now())
 	if err != nil {
-		logging.From(ctx).Warn("Error computing the next run for task; settling the chain — a parse error or a recurrence that never fires is permanent, so retrying the spawn cannot fix it", "task_id", current.ID, "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("Error computing the next run for task; settling the chain — a parse error or a recurrence that never fires is permanent, so retrying the spawn cannot fix it", "task_id", current.ID, "err", safe.LogSafe(err.Error()))
 		if cerr := tx.Commit(); cerr != nil {
 			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "task_id", current.ID, "err", cerr)
 			return false
@@ -2158,7 +2158,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	prev := current.ID
 	newTask.PreviousOccurrenceID = &prev
 	if err := validateStoredOutputContract(newTask); err != nil {
-		logging.From(ctx).Warn("Error creating next recurring task; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", "task_id", current.ID, "err", err)
+		logging.From(ctx).Error("Error creating next recurring task; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", "task_id", current.ID, "err", err)
 		if cerr := tx.Commit(); cerr != nil {
 			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "task_id", current.ID, "err", cerr)
 			return false

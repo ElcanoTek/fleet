@@ -267,7 +267,7 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest,
 		}
 	}
 	if len(o.typedCommitments) > 0 && !o.allCommitmentsExhausted() {
-		slog.Error("Enforcement: REFUSED to discharge any commitment — no outstanding commitment matches this server/variant/record; cross-server discharge is not allowed (#715)", "tool", toolName, "record", dealID)
+		slog.Warn("Enforcement: REFUSED to discharge any commitment — no outstanding commitment matches this server/variant/record; cross-server discharge is not allowed (#715)", "tool", toolName, "record", dealID)
 	}
 }
 

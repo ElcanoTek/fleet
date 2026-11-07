@@ -121,6 +121,9 @@ func Configure(cfg Config) (io.Closer, error) {
 	levelVar.Set(ParseLevel(cfg.Level))
 	setOutput(dest)
 	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
+	// Lines logged before Configure (BufferStartup) go out now, through the
+	// configured format, level and file sink.
+	replayStartup(slog.Default().Handler())
 	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
@@ -182,6 +185,7 @@ func (logBridge) Write(p []byte) (int, error) {
 // so use it only where the process has nothing left to unwind (main, a CLI
 // verb's top level).
 func Fatal(msg string, args ...any) {
+	FlushStartup() // a fatal error before Configure must not lose the startup lines
 	slog.Error(msg, args...)
 	os.Exit(1)
 }

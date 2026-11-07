@@ -413,7 +413,7 @@ func (o *orchestrationState) unsettleCreateFailure(toolName, identity string) {
 	unsettle := func(c *typedCommitment) {
 		if c.settledFailed {
 			c.settledFailed, c.failedIdentity = false, ""
-			slog.Info("Enforcement: create commitment is UNSETTLED again — the latest attempt had an ambiguous outcome; it holds the summary email back until reconciled", "commitment", c.describe(), "record", identity)
+			slog.Warn("Enforcement: create commitment is UNSETTLED again — the latest attempt had an ambiguous outcome; it holds the summary email back until reconciled", "commitment", c.describe(), "record", identity)
 		}
 	}
 	named, cands := o.splitCreateCommitments(toolName, identity)

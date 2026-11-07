@@ -268,7 +268,7 @@ func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope)
 	if logged {
 		return
 	}
-	slog.Info("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
+	slog.Warn("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
 }
 
 // headCapture is an io.Writer that keeps only the first max bytes written
@@ -750,7 +750,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
 		if s.def.Command != "" && isTransportDeadError(err) {
-			logging.From(ctx).Error("MCP server appears dead; attempting restart", "name", s.name, "err", err)
+			logging.From(ctx).Warn("MCP server appears dead; attempting restart", "name", s.name, "err", err)
 			if restartErr := s.restartLocked(ctx); restartErr != nil {
 				return nil, fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr)
 			}
@@ -1121,7 +1121,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 			case <-stop:
 				stop = nil
 				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
-					logging.From(ctx).Error("MCP stdio: could not send the stop for request", "request_id", id, "err", err)
+					logging.From(ctx).Warn("MCP stdio: could not send the stop for request", "request_id", id, "err", err)
 				}
 			case res = <-resultChan:
 				got = true
