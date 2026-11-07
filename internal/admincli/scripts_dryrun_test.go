@@ -548,7 +548,7 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 		"would remove a leftover fleet-admin shim", // the retired shim's eviction (ADR-0060)
 		"Restarting",
 		"fleet release install", // swap + restart + readiness gate + rollback (ADR-0100)
-		"roll back to fleet.prev automatically",
+		"atomic swap", // with the readiness gate + rollback under systemd, --no-restart without a unit
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("update --dry-run plan missing %q\n--- output ---\n%s", want, out)

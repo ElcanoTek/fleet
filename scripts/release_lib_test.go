@@ -100,13 +100,19 @@ func TestReleaseLibRefusesUnsignedReleases(t *testing.T) {
 }
 
 func TestReleaseLibHealthURLMatchesGo(t *testing.T) {
-	for _, addr := range []string{"", ":9090", "0.0.0.0:8080", "10.0.0.5:8080"} {
-		out, err := runReleaseLib(t, []string{"ADDR=" + addr}, `fleet_release_health_url "$ADDR"`)
-		if err != nil {
-			t.Fatal(err)
+	for _, addr := range []string{"", ":9090", "0.0.0.0:8080", "10.0.0.5:8080", "[::]:8080"} {
+		for _, mode := range []string{"", "off", "manual", "AUTO"} {
+			out, err := runReleaseLib(t, []string{"ADDR=" + addr, "MODE=" + mode}, `fleet_release_health_url "$ADDR" "$MODE"`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := release.HealthURL(addr, mode); out != want {
+				t.Errorf("%q/%q: shell %q, Go %q", addr, mode, out, want)
+			}
 		}
-		if want := release.HealthURLFromAddr(addr); out != want {
-			t.Errorf("%q: shell %q, Go %q", addr, out, want)
-		}
+	}
+	// One argument only, under set -u: the TLS mode is optional.
+	if out, err := runReleaseLib(t, nil, `fleet_release_health_url ":9090"`); err != nil || out != "http://127.0.0.1:9090/readyz" {
+		t.Errorf("single-argument call: %q %v", out, err)
 	}
 }

@@ -22,6 +22,30 @@ FLEET_RELEASE_REPO="ElcanoTek/fleet"
 FLEET_RELEASE_IDENTITY="https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main"
 FLEET_RELEASE_ISSUER="https://token.actions.githubusercontent.com"
 
+# Download ceilings, the same as internal/release (maxMetaBytes,
+# maxBinaryBytes, maxCosignBytes): a hostile or broken server cannot fill the
+# disk. curl enforces --max-filesize on the advertised length and, for a body
+# without one, aborts once the transfer passes it.
+FLEET_RELEASE_MAX_META=$((4 << 20))
+FLEET_RELEASE_MAX_BINARY=$((512 << 20))
+
+# fleet_release_get URL OUT MAX — download URL to OUT (0600) under a size
+# ceiling; a failed or oversized transfer leaves no partial file behind.
+fleet_release_get() {
+  local url="$1" out="$2" max="$3"
+  rm -f "$out"
+  if ! curl -fsSL --retry 3 --max-filesize "$max" -o "$out" "$url"; then
+    rm -f "$out"
+    return 1
+  fi
+  if [[ "$(stat -c %s "$out" 2>/dev/null || echo 0)" -gt "$max" ]]; then
+    rm -f "$out"
+    echo "${url##*/} is larger than ${max} bytes — refusing it" >&2
+    return 1
+  fi
+  chmod 0600 "$out"
+}
+
 # fleet_release_arch — this box's release architecture (amd64|arm64), or fail.
 fleet_release_arch() {
   case "$(uname -m)" in
@@ -40,9 +64,10 @@ fleet_release_base_url() {
 # release that is still building). Same question `fleet release latest` asks.
 fleet_release_latest_tag() {
   local json tag
-  json="$(curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' \
+  json="$(curl -fsSL --retry 3 --max-filesize "$FLEET_RELEASE_MAX_META" -H 'Accept: application/vnd.github+json' \
     "${FLEET_RELEASE_LATEST_URL:-https://api.github.com/repos/${FLEET_RELEASE_REPO}/releases/latest}")" || return 1
-  tag="$(printf '%s' "$json" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  # Pretty-printed or compact JSON alike (no jq dependency for bootstrap).
+  tag="$(printf '%s' "$json" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
   [[ "$tag" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] || { echo "unexpected latest release tag: ${tag:-none}" >&2; return 1; }
   printf '%s' "$tag"
 }
@@ -64,7 +89,7 @@ fleet_release_cosign() {
     printf '%s' "$path"; return 0
   fi
   tmp="${path}.download"
-  curl -fsSL --retry 3 -o "$tmp" "${FLEET_COSIGN_URL:-https://github.com/sigstore/cosign/releases/download/${ver}}/cosign-linux-${arch}" || { rm -f "$tmp"; return 1; }
+  fleet_release_get "${FLEET_COSIGN_URL:-https://github.com/sigstore/cosign/releases/download/${ver}}/cosign-linux-${arch}" "$tmp" "$FLEET_RELEASE_MAX_BINARY" || return 1
   if [[ "$(sha256sum "$tmp" | awk '{print $1}')" != "$want" ]]; then
     rm -f "$tmp"
     echo "downloaded cosign ${ver} does not match the digest pinned in cosign.lock — refusing to run it" >&2
@@ -88,18 +113,19 @@ fleet_release_verify_blob() {
 # fleet_release_fetch REPO_ROOT TAG DIR CACHE_DIR — download and verify TAG's
 # binary for this box into DIR; print the verified binary's path.
 fleet_release_fetch() {
-  local root="$1" tag="$2" dir="$3" cache="$4" arch cosign base name want got
+  local root="$1" tag="$2" dir="$3" cache="$4" arch cosign base name want got _max
   [[ "$tag" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] || { echo "not a release tag: $tag" >&2; return 1; }
   arch="$(fleet_release_arch)" || return 1
   cosign="$(fleet_release_cosign "$root" "$cache")" || return 1
   base="$(fleet_release_base_url)/${tag}"
   install -d -m 0700 "$dir" || return 1
   for name in SHA256SUMS SHA256SUMS.sigstore.json "fleet-linux-${arch}" "fleet-linux-${arch}.sigstore.json" release.json; do
-    if ! curl -fsSL --retry 3 -o "$dir/$name" "$base/$name"; then
+    _max="$FLEET_RELEASE_MAX_META"
+    [[ "$name" == "fleet-linux-${arch}" ]] && _max="$FLEET_RELEASE_MAX_BINARY"
+    if ! fleet_release_get "$base/$name" "$dir/$name" "$_max"; then
       echo "could not download ${name} for ${tag}" >&2
       return 1
     fi
-    chmod 0600 "$dir/$name"
   done
   fleet_release_verify_blob "$cosign" "$dir/SHA256SUMS" || return 1
   for name in "fleet-linux-${arch}" release.json; do
@@ -125,10 +151,12 @@ fleet_release_capable() {
 # fleet_release_health_url ADDR — the readiness URL for FLEET_SERVER_ADDR
 # (mirrors release.HealthURLFromAddr; used only for messages and dry runs).
 fleet_release_health_url() {
-  local addr="${1:-127.0.0.1:8080}"
+  local addr="${1:-127.0.0.1:8080}" mode="${2:-}" scheme=http
+  case "${mode,,}" in manual|auto) scheme=https ;; esac
   case "$addr" in
     :*) addr="127.0.0.1${addr}" ;;
     0.0.0.0:*) addr="127.0.0.1:${addr##*:}" ;;
+    \[::\]:*) addr="127.0.0.1:${addr##*:}" ;;
   esac
-  printf 'http://%s/readyz' "$addr"
+  printf '%s://%s/readyz' "$scheme" "$addr"
 }

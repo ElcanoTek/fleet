@@ -494,6 +494,20 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
       fi
     fi
   fi
+  # --no-pull with an explicit --tag must name the release the checkout is
+  # AT: installing another one would run its binary on this checkout's units,
+  # scripts and generic bundle. (The re-exec carries the tag it just aligned to.)
+  if [[ "$REEXEC" != "1" && "$FROM_SOURCE" != "1" && -n "$RELEASE_TAG" ]]; then
+    _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+    if [[ "$_tag_sha" != "$after_sha" ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        warn "[dry-run] BLOCKER: --no-pull reinstalls the release the checkout is at, and ${SRC_DIR} is not at ${RELEASE_TAG} — the real run stops here (drop --no-pull to move the checkout to it)"
+        DRY_RUN_BLOCKED=1
+      else
+        die "--no-pull reinstalls the release the checkout is at, and ${SRC_DIR} is not at ${RELEASE_TAG} — drop --no-pull so the checkout moves to ${RELEASE_TAG} with its binary"
+      fi
+    fi
+  fi
   if [[ "$REEXEC" == "1" ]]; then
     ok "post-self-update re-exec — fleet checkout already at ${after_sha:0:12}; continuing (client bundle still pulls)"
   elif [[ "$FROM_SOURCE" == "1" ]]; then
@@ -533,18 +547,26 @@ else
         RELEASE_TAG="$(fleet_release_latest_tag)" \
           || die "could not ask GitHub which release is newest (offline? rate-limited?) — retry, or name one: fleet update --tag vYYYY.MM.DD.N"
       fi
+      # The API answer can be newer than the fetch above (a release published
+      # in between): fetch once more before calling the tag missing.
       _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+        || { git fetch --quiet --tags origin; _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)"; } \
         || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} even after fetching tags — is origin ElcanoTek/fleet?"
       git merge-base --is-ancestor "$_tag_sha" "origin/$target_branch" \
         || die "release ${RELEASE_TAG} is not on origin/${target_branch} — refusing to move the checkout off its branch"
       after_sha="$_tag_sha"
       ok "release to install: ${RELEASE_TAG} (${after_sha:0:12})"
-      # A checkout already PAST the release (a box that tracked the branch tip
-      # before artifacts, or a dev checkout) is left where it is: a
-      # fast-forward cannot go backwards, and its scripts are a superset.
+      # The checkout must BE the release: its units, scripts and generic
+      # bundle ship with the binary. A checkout PAST the tag — a downgrade
+      # (--tag older --allow-downgrade), or a box that tracked the branch tip
+      # before artifacts — is moved BACK to it, which a fast-forward cannot
+      # do. Only commits that are on origin/<branch> may be left behind
+      # (they come back on the next update); local-only commits refuse.
+      _realign=0
       if [[ "$before_sha" != "$after_sha" ]] && git merge-base --is-ancestor "$after_sha" "$before_sha"; then
-        info "the checkout (${before_sha:0:12}) already contains ${RELEASE_TAG} — leaving it in place"
-        after_sha="$before_sha"
+        git merge-base --is-ancestor "$before_sha" "origin/$target_branch" \
+          || die "${SRC_DIR} has commits that are not on origin/${target_branch}; moving it back to ${RELEASE_TAG} would strand them — push or reset them first"
+        _realign=1
       fi
     fi
 
@@ -552,12 +574,19 @@ else
       ok "already on ${after_sha:0:12} — fleet checkout up to date"
     else
       say
-      printf '%s  incoming commits:%s\n' "$c_dim" "$c_reset"
-      git --no-pager log --oneline --no-decorate "${before_sha}..${after_sha}" | sed 's/^/    /'
+      if [[ "${_realign:-0}" == "1" ]]; then
+        printf '%s  moving the checkout BACK to %s; these commits leave it (they stay on origin):%s\n' "$c_dim" "$RELEASE_TAG" "$c_reset"
+        git --no-pager log --oneline --no-decorate "${after_sha}..${before_sha}" | sed 's/^/    /'
+        _range="${after_sha}..${before_sha}"
+      else
+        printf '%s  incoming commits:%s\n' "$c_dim" "$c_reset"
+        git --no-pager log --oneline --no-decorate "${before_sha}..${after_sha}" | sed 's/^/    /'
+        _range="${before_sha}..${after_sha}"
+      fi
       say
 
       if [[ "$ASSUME_YES" != "1" ]]; then
-        count="$(git rev-list --count "${before_sha}..${after_sha}")"
+        count="$(git rev-list --count "$_range")"
         printf '%s?%s Apply %s%d%s commits — %s..%s? %s(y/N)%s ' \
           "$c_cyan" "$c_reset" "$c_bold" "$count" "$c_reset" \
           "${before_sha:0:12}" "${after_sha:0:12}" "$c_dim" "$c_reset"
@@ -573,8 +602,15 @@ else
       # --ff-only refuses on divergence so unpushed commits surface loudly.
       git checkout --quiet "$target_branch" \
         || die "cannot switch to $target_branch — uncommitted changes in $SRC_DIR"
-      git merge --ff-only --quiet "$after_sha" \
-        || die "cannot fast-forward $target_branch to ${after_sha:0:12} — $SRC_DIR has unpushed commits or diverged; push/reset first"
+      if [[ "${_realign:-0}" == "1" ]]; then
+        git diff --quiet HEAD -- \
+          || die "cannot move $target_branch back to ${RELEASE_TAG} — uncommitted changes in $SRC_DIR"
+        git checkout --quiet -B "$target_branch" "$after_sha" \
+          || die "cannot move $target_branch back to ${RELEASE_TAG} (${after_sha:0:12})"
+      else
+        git merge --ff-only --quiet "$after_sha" \
+          || die "cannot fast-forward $target_branch to ${after_sha:0:12} — $SRC_DIR has unpushed commits or diverged; push/reset first"
+      fi
 
       # The shell running this script read the PRE-update file (bash holds the
       # old inode across the checkout above), so a fix to update.sh itself would
@@ -1696,16 +1732,42 @@ if [[ "$NEED_DAEMON_RELOAD" == "1" ]] && command -v systemctl >/dev/null 2>&1; t
     warn "systemctl daemon-reload failed (need root?) — run it before the restart, or the old unit stays cached"
   fi
 fi
-if ! command -v systemctl >/dev/null 2>&1; then
-  warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
+INSTALL_STATE=none   # none | swapped (not restarted) | restarted
+# artifact_swap_only WHY — install the verified binary with an atomic swap but
+# no restart (no systemd here, or no unit): the supervisor that runs fleet is
+# the operator's, so is the restart. Never reported as a finished update.
+artifact_swap_only() {
+  if "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+      --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" --no-restart; then
+    INSTALL_STATE=swapped
+    warn "$1 — ${RELEASE_TAG} is installed at ${INSTALL_DIR}/fleet but NOT running: restart fleet with your supervisor now."
+    warn "  if it does not come up: sudo fleet release rollback --install-dir ${INSTALL_DIR} --no-restart, then restart it again"
+  else
+    die "could not install ${RELEASE_TAG} into ${INSTALL_DIR} (above) — the previous binary is unchanged"
+  fi
+}
+if [[ "$DRY_RUN" != "1" && "$FROM_SOURCE" != "1" ]] && { ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; }; then
+  if command -v systemctl >/dev/null 2>&1; then
+    artifact_swap_only "${SERVICE_NAME}.service is not installed"
+  else
+    artifact_swap_only "no systemd on this box"
+  fi
+elif ! command -v systemctl >/dev/null 2>&1; then
+  if [[ "$DRY_RUN" == "1" && "$FROM_SOURCE" != "1" ]]; then
+    info "[dry-run] no systemd: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor"
+  else
+    warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
+  fi
 elif [[ "$DRY_RUN" == "1" ]]; then
   if [[ -f /etc/systemd/system/fleet-web.service ]] || systemctl cat fleet-web.service >/dev/null 2>&1; then
     info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web — fleet serves the web UI on 127.0.0.1:3000 itself"
   fi
   if [[ "$FROM_SOURCE" == "1" ]]; then
     info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
+  elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    info "[dry-run] ${SERVICE_NAME}.service is not installed: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor; the run would not report it as running"
   else
-    info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), systemctl restart ${SERVICE_NAME} (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
+    info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), systemctl restart ${SERVICE_NAME} (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_TLS_MODE "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
   fi
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
@@ -1743,6 +1805,7 @@ else
   fi
   fleet_clear_drain "$backend_env_file"
   if [[ "$_install_rc" == "0" ]]; then
+    INSTALL_STATE=restarted
     ok "${SERVICE_NAME} is active${RELEASE_TAG:+ and ready on ${RELEASE_TAG}}"
     fleet_remove_web_tier "$SRC_DIR" || true
   else
@@ -1800,8 +1863,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
-if [[ "$FROM_SOURCE" != "1" ]]; then
-  printf '%s ✓ fleet %s installed (signed release, verified)%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
+if [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" == "swapped" ]]; then
+  printf '%s ! fleet %s installed (signed release, verified) — NOT restarted: restart it with your supervisor%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
+elif [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" != "restarted" ]]; then
+  die "${RELEASE_TAG} was verified but not installed — see the warnings above"
+elif [[ "$FROM_SOURCE" != "1" ]]; then
+  printf '%s ✓ fleet %s installed (signed release, verified) and ready%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
 elif [[ "$before_sha" == "$after_sha" ]]; then
   printf '%s ✓ fleet rebuilt at %s%s\n' "$c_bold" "${after_sha:0:12}" "$c_reset"
 else

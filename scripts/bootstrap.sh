@@ -142,8 +142,10 @@
 #                              the caddy package's untouched stock file, which
 #                              is replaced with a copy kept beside it (#1657).
 #   --tag <vYYYY.MM.DD.N>      install this signed release (default: the newest
-#                              release this checkout contains, else the newest
-#                              published one). It is verified before use:
+#                              PUBLISHED one). The checkout is moved to that
+#                              tag first, and bootstrap re-runs from it, so
+#                              units and scripts match the binary. Verified
+#                              before use:
 #                              signature by fleet's release workflow, checksums,
 #                              tag, architecture, no host executor.
 #   --from-source              DEVELOPMENT BOXES ONLY: build fleet here with
@@ -281,6 +283,8 @@ SCHED_DB_NAME_ARG=""
 SCHED_DB_USER_ARG=""
 RELEASE_TAG="${FLEET_RELEASE_TAG:-}"
 FROM_SOURCE="${FLEET_BOOTSTRAP_FROM_SOURCE:-0}"
+# The argv as given, for the re-exec after the checkout moves to the release.
+ORIG_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -927,6 +931,48 @@ if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
   unset _apk_raw
 fi
 
+# ── which release, and the checkout at it ──
+# Default: the newest PUBLISHED release (GitHub's "latest" names a release only
+# once its assets are uploaded), never a tag merely present in this checkout —
+# a fresh tag's artifacts may still be building, and an old one's may be past
+# the retention window. --tag picks another. Either way the checkout moves to
+# that tag, so the units, scripts and generic bundle bootstrap installs are the
+# ones the binary was released with; this script then re-runs from the moved
+# checkout (bash reads a script as it goes, so it must not keep running the
+# old copy of itself).
+if [[ "$FROM_SOURCE" != "1" && "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
+  [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
+    || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
+  step "Release: ${RELEASE_TAG:-the newest published one}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would resolve ${RELEASE_TAG:-the newest published release (GitHub API)}, move ${REPO_ROOT} to that tag and re-run bootstrap from it"
+  else
+    if [[ -z "$RELEASE_TAG" ]]; then
+      RELEASE_TAG="$(fleet_release_latest_tag)" \
+        || die "could not ask GitHub which release is newest (offline? rate-limited?) — retry, or name one: --tag vYYYY.MM.DD.N"
+    fi
+    git -C "$REPO_ROOT" fetch --quiet --tags origin 2>/dev/null \
+      || warn "could not fetch tags into ${REPO_ROOT}; using the tags it has"
+    _tag_sha="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+      || die "release ${RELEASE_TAG} is not a tag in ${REPO_ROOT} — is it a clone of ElcanoTek/fleet?"
+    if [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$_tag_sha" ]]; then
+      git -C "$REPO_ROOT" diff --quiet HEAD -- \
+        || die "${REPO_ROOT} has uncommitted changes — commit or discard them, then re-run (bootstrap moves the checkout to ${RELEASE_TAG})"
+      _branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+      if [[ "$_branch" == "HEAD" ]]; then
+        git -C "$REPO_ROOT" checkout --quiet --detach "$_tag_sha" || die "cannot check out ${RELEASE_TAG}"
+      else
+        git -C "$REPO_ROOT" merge-base --is-ancestor HEAD "origin/${_branch}" 2>/dev/null \
+          || die "${REPO_ROOT} has commits that are not on origin/${_branch}; moving it to ${RELEASE_TAG} would strand them — push them, or use --from-source on a development box"
+        git -C "$REPO_ROOT" checkout --quiet -B "$_branch" "$_tag_sha" || die "cannot move ${_branch} to ${RELEASE_TAG}"
+      fi
+      ok "checkout moved to ${RELEASE_TAG} (${_tag_sha:0:12}) — re-running bootstrap from it"
+      exec env FLEET_BOOTSTRAP_ALIGNED=1 FLEET_RELEASE_TAG="$RELEASE_TAG" bash "$REPO_ROOT/scripts/bootstrap.sh" "${ORIG_ARGS[@]}"
+    fi
+    ok "checkout ${REPO_ROOT} is at ${RELEASE_TAG}"
+  fi
+fi
+
 # ── system dependencies: the runtime + sandbox toolchain ──
 # So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
 # end: podman (the execution sandbox), python3 + pip (host-side Python MCP
@@ -962,27 +1008,17 @@ if [[ "$FROM_SOURCE" == "1" ]]; then
   [[ -z "$RELEASE_TAG" ]] || die "--tag selects a signed release; it cannot be combined with --from-source"
   info "--from-source: no release is downloaded; fleet is built from ${REPO_ROOT} with --enable-service (LEGACY-BUILD-FROM-SOURCE)"
 else
-  if [[ -z "$RELEASE_TAG" ]]; then
-    # The release this checkout contains, so the units, scripts and generic
-    # bundle it ships match the binary; else the newest published one.
-    RELEASE_TAG="$(cd "$REPO_ROOT" && bash scripts/version.sh current 2>/dev/null || true)"
-    [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == v* ]] || RELEASE_TAG="v${RELEASE_TAG}"
-    [[ "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]] || RELEASE_TAG=""
-  fi
+  # RELEASE_TAG was resolved (and the checkout moved to it) above.
   [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
     || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
   step "Fetching + verifying the fleet release ${RELEASE_TAG:-(newest published)}"
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest published release}, and verify them before use: the pinned cosign (internal/release/cosign.lock), the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, no host executor"
   else
-    if [[ -z "$RELEASE_TAG" ]]; then
-      RELEASE_TAG="$(fleet_release_latest_tag)" \
-        || die "this checkout contains no release and GitHub could not be asked for the newest one — pass --tag vYYYY.MM.DD.N"
-    fi
     RELEASE_DIR="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}/release/${RELEASE_TAG}"
     rm -rf "$RELEASE_DIR"
     FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}")" \
-      || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed. An old checkout's release may be past the retention window: git pull, or pass --tag."
+      || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed. (A --tag older than the newest ten releases has no downloadable assets any more.)"
     "$FLEET_RELEASE_BIN" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
       || die "the verified binary reports the host executor compiled in — refusing it"
     "$FLEET_RELEASE_BIN" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
