@@ -421,9 +421,12 @@ if [[ "$DB_LAYOUT" == "legacy" && ( -n "$DB_NAME_ARG" || -n "$DB_USER_ARG" || "$
 fi
 FLEET_DB_NAME="${DB_NAME_ARG:-fleet}"
 FLEET_DB_USER="${DB_USER_ARG:-fleet}"
+# Lower-case only: the names go unquoted into the provisioning SQL, where
+# Postgres folds them to lower case — "Fleet" would create role/db "fleet"
+# while the DSN written below says "Fleet", which then fails to connect.
 for _ident in "$FLEET_DB_NAME" "$FLEET_DB_USER"; do
-  [[ "$_ident" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
-    || die "database/role name '${_ident}' must be a plain identifier ([A-Za-z_][A-Za-z0-9_]*)"
+  [[ "$_ident" =~ ^[a-z_][a-z0-9_]*$ ]] \
+    || die "database/role name '${_ident}' must be a lower-case plain identifier ([a-z_][a-z0-9_]*)"
 done
 if [[ "$POSTGRES_MODE" == "external" && "$ADOPT_DB" == "1" ]]; then
   die "--adopt-existing-db applies to --postgres=local; external mode always uses your DSN and never touches roles"
@@ -1510,24 +1513,38 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
 
 elif [[ "$DB_LAYOUT" == "one" ]]; then
   SSLMODE="require"
-  step "Branch B (external): validate the pre-provisioned DATABASE_URL (SELECT 1)"
-  DB_URL="${DATABASE_URL:-}"
-  [[ -n "$DB_URL" ]] || die "external mode needs DATABASE_URL"
+  step "Branch B (external): validate the pre-provisioned DATABASE_URL (SELECT 1 + schema privilege)"
+  # The process env first, then the env file — a re-run converges on the DSN
+  # a previous run recorded, like every other persisted setting.
+  DB_URL="${DATABASE_URL:-$(env_get DATABASE_URL)}"
+  [[ -n "$DB_URL" ]] || die "external mode needs DATABASE_URL (in the environment, or already in ${ENV_FILE})"
   if [[ -n "${FLEET_DB_SUPERUSER_URL:-}" ]]; then
-    step "Opt-in: creating the database via FLEET_DB_SUPERUSER_URL"
-    SU_SQL="SELECT 'CREATE DATABASE ${FLEET_DB_NAME}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${FLEET_DB_NAME}')\\gexec"
+    step "Opt-in: creating the database and granting the role CREATE on it via FLEET_DB_SUPERUSER_URL"
+    # The role and database come from DATABASE_URL itself, so the database
+    # created is the one fleet will use; the grant lets the role create the
+    # chat and sched schemas in a database the superuser owns.
+    _role_db="$(fleet_dsn_role_db "$DB_URL")" \
+      || die "FLEET_DB_SUPERUSER_URL needs a DATABASE_URL of the form postgres://<role>:…@host/<database> with a lower-case role and database name"
+    SU_SQL="$(fleet_external_db_sql "${_role_db%% *}" "${_role_db#* }")"
     if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would run superuser SQL against FLEET_DB_SUPERUSER_URL"
+      info "[dry-run] would run as FLEET_DB_SUPERUSER_URL:"
+      printf '%s\n' "$SU_SQL" | sed 's/^/    /'
     else
       printf '%s\n' "$SU_SQL" | psql -v ON_ERROR_STOP=1 "$FLEET_DB_SUPERUSER_URL" >/dev/null \
         || die "superuser provisioning failed"
     fi
+    unset _role_db
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would run: psql '<dsn>' -c 'SELECT 1'"
+    info "[dry-run] would run: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat and sched schemas"
   else
     psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null || die "DATABASE_URL failed SELECT 1"
-    ok "DATABASE_URL answered SELECT 1 (sslmode=${SSLMODE} expected in the DSN)"
+    # fleet's stores create their schemas (chat, sched) on first start; a role
+    # without CREATE on the database would pass SELECT 1 here and then fail
+    # at boot. Refuse now instead.
+    fleet_db_can_create_schemas "$DB_URL" \
+      || die "DATABASE_URL's role cannot create the chat and sched schemas: grant it CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>), pre-create both schemas with CREATE + USAGE for it, or set FLEET_DB_SUPERUSER_URL so bootstrap grants it"
+    ok "DATABASE_URL answered SELECT 1 and may create the chat and sched schemas (sslmode=${SSLMODE} expected in the DSN)"
   fi
 
 else # LEGACY-DB-LAYOUT: remove after consolidation — this whole branch.

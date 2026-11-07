@@ -34,6 +34,40 @@ SELECT 'CREATE DATABASE ${3} OWNER ${1}'
 SQL
 }
 
+# fleet_dsn_role_db DSN — print "ROLE DATABASE" from a postgres:// URL DSN
+# whose user and database are lower-case plain identifiers (safe to quote
+# into SQL); return 1 for anything else.
+fleet_dsn_role_db() {
+  local re='^postgres(ql)?://([a-z_][a-z0-9_]*)(:[^@]*)?@[^/?#]*/([a-z_][a-z0-9_]*)([?#].*)?$'
+  [[ "$1" =~ $re ]] || return 1
+  printf '%s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]}"
+}
+
+# fleet_external_db_sql ROLE DATABASE — the superuser SQL external mode runs
+# with FLEET_DB_SUPERUSER_URL: create the database when missing, and grant
+# the role CONNECT + CREATE on it, so it can create the chat and sched
+# schemas even in a database the superuser owns. Names are validated by
+# fleet_dsn_role_db.
+fleet_external_db_sql() {
+  cat <<SQL
+SELECT 'CREATE DATABASE "${2}"'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${2}')\gexec
+GRANT CONNECT, CREATE ON DATABASE "${2}" TO "${1}";
+SQL
+}
+
+# fleet_db_can_create_schemas DSN — true when DSN's role can run fleet's
+# stores in that database: CREATE on the database (each store creates its
+# schema on first start), or both schemas chat and sched already there with
+# CREATE + USAGE for it. False on any error.
+fleet_db_can_create_schemas() {
+  local out
+  out="$(psql -X -v ON_ERROR_STOP=1 -tAq "$1" -c "SELECT has_database_privilege(current_database(), 'CREATE')
+    OR (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')
+          AND has_schema_privilege(nspname::text, 'CREATE') AND has_schema_privilege(nspname::text, 'USAGE')) = 2" 2>/dev/null)" || return 1
+  [[ "$out" == "t" ]]
+}
+
 # fleet_redact_db_passwords < TEXT — TEXT with every occurrence of the
 # passwords in FLEET_REDACT_CHAT_PW and FLEET_REDACT_SCHED_PW replaced by their
 # placeholders. The passwords come from the environment, never argv, and are
