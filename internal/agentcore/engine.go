@@ -408,24 +408,50 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		return messages
 	}
 
-	var summary fantasy.Message
-	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(middle))
-	} else {
-		summary = fantasy.NewUserMessage(fmt.Sprintf(
-			"%s] %d earlier messages were dropped to fit the model's context window after the provider rejected the prompt size.",
-			compactionSummaryPrefix, len(middle)))
-	}
+	summary := e.compactionSummary(ctx, middle,
+		"were dropped to fit the model's context window after the provider rejected the prompt size.")
 
 	e.logCompactionSummary(summary)
-	planText := planReannounceText(e.runOrch)
-	tail = dropPlanReannounceMessages(tail)
-	persistableTail := e.dropRunLocalMessages(tail)
-	firstKeptCallID := ""
-	if len(persistableTail) > 0 {
-		firstKeptCallID = firstToolCallID(persistableTail[0])
+	out, record := e.spliceCompaction(head, middle, tail, summary)
+	e.consecutiveCompactions++
+	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
+	e.compactions = append(e.compactions, record)
+	// The next step re-measures the resend-checkpoint floor (#1600).
+	e.resendFloorStale = true
+	return out
+}
+
+// compactionSummary is the message that stands in for dropped: the engine's
+// compactionSummarizer when set, else a deterministic placeholder tagged with
+// compactionSummaryPrefix that counts the dropped messages and gives reason
+// (the rest of the sentence after "N earlier messages").
+func (e *engine) compactionSummary(ctx context.Context, dropped []fantasy.Message, reason string) fantasy.Message {
+	if e.compactionSummarizer != nil {
+		return e.compactionSummarizer(ctx, e.compactionSummarizeInput(dropped))
 	}
-	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
+	return fantasy.NewUserMessage(fmt.Sprintf("%s] %d earlier messages %s",
+		compactionSummaryPrefix, len(dropped), reason))
+}
+
+// spliceCompaction is the head + summary + kept splice both compaction paths
+// (forceCompactMessageHistory, proactiveCompactKeeping) share once each has
+// chosen its own boundary. It returns head, summary, a fresh task-plan
+// re-announcement (when the plan has open items; marked run-local so it is
+// never persisted) and kept with any earlier re-announcement dropped, plus the
+// CompactionRecord a later turn replays. The record counts head and dropped
+// without run-local messages and names the first persistable kept message's
+// tool call, so a replay finds the same cut. The caller appends the record and
+// updates its own counters; spliceCompaction writes no engine state beyond
+// marking the plan message run-local.
+func (e *engine) spliceCompaction(head, dropped, kept []fantasy.Message, summary fantasy.Message) ([]fantasy.Message, CompactionRecord) {
+	planText := planReannounceText(e.runOrch)
+	kept = dropPlanReannounceMessages(kept)
+	persistableKept := e.dropRunLocalMessages(kept)
+	firstKeptCallID := ""
+	if len(persistableKept) > 0 {
+		firstKeptCallID = firstToolCallID(persistableKept[0])
+	}
+	out := make([]fantasy.Message, 0, len(head)+2+len(kept))
 	out = append(out, head...)
 	out = append(out, summary)
 	if planText != "" {
@@ -433,18 +459,13 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		e.markRunLocalMessages(planMsg)
 		out = append(out, planMsg)
 	}
-	out = append(out, tail...)
-	e.consecutiveCompactions++
-	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
-	e.compactions = append(e.compactions, CompactionRecord{
+	out = append(out, kept...)
+	return out, CompactionRecord{
 		Head:                len(e.dropRunLocalMessages(head)),
-		Removed:             len(e.dropRunLocalMessages(middle)),
+		Removed:             len(e.dropRunLocalMessages(dropped)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
-	})
-	// The next step re-measures the resend-checkpoint floor (#1600).
-	e.resendFloorStale = true
-	return out
+	}
 }
 
 // CompactionRecord describes one head/summary/tail compaction applied to a
@@ -689,31 +710,10 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	droppable := active[:midpoint]
 	keep := messages[head+midpoint:]
 
-	var summary fantasy.Message
-	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(droppable))
-	} else {
-		summary = fantasy.NewUserMessage(fmt.Sprintf(
-			"%s] %d earlier messages were summarized to relieve context-window pressure before the prompt overflowed.",
-			compactionSummaryPrefix, len(droppable)))
-	}
+	summary := e.compactionSummary(ctx, droppable,
+		"were summarized to relieve context-window pressure before the prompt overflowed.")
 
-	planText := planReannounceText(e.runOrch)
-	keep = dropPlanReannounceMessages(keep)
-	persistableKeep := e.dropRunLocalMessages(keep)
-	firstKeptCallID := ""
-	if len(persistableKeep) > 0 {
-		firstKeptCallID = firstToolCallID(persistableKeep[0])
-	}
-	out := make([]fantasy.Message, 0, head+2+len(keep))
-	out = append(out, messages[:head]...)
-	out = append(out, summary)
-	if planText != "" {
-		planMsg := fantasy.NewUserMessage(planText)
-		e.markRunLocalMessages(planMsg)
-		out = append(out, planMsg)
-	}
-	out = append(out, keep...)
+	out, record := e.spliceCompaction(messages[:head], droppable, keep, summary)
 
 	// Proactive compaction is a clean reduction, not a reactive resilience
 	// compaction — reset the consecutive counter so it never trips
@@ -721,12 +721,7 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	e.consecutiveCompactions = 0
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
-	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                len(e.dropRunLocalMessages(messages[:head])),
-		Removed:             len(e.dropRunLocalMessages(droppable)),
-		FirstKeptToolCallID: firstKeptCallID,
-		Summary:             messageText(summary),
-	})
+	e.compactions = append(e.compactions, record)
 
 	return proactiveCompactResult{
 		messages:      out,
