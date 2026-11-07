@@ -45,7 +45,7 @@ earlier one like `replaces` does (`deriveGenUiState`). See
 **`view: "dashboard"`: a per-turn hint.** While the view is on, the web client
 sends `view: "dashboard"` on `POST /api/chat`. The handler then appends one
 note to the turn's injected context (`appendDashboardViewBlock`,
-`internal/httpapi/chat.go`). The note tells the agent that the user is reading
+`internal/httpapi/chat_view_context.go`). The note tells the agent that the user is reading
 a board, to put watched figures in panel cards, to refresh a panel instead of
 restating it, and to keep prose short. The request also carries `board`: the panels on the
 sender's board, in order, as `{title, card_id, panel?, pinned?}`. The note

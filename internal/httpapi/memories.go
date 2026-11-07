@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -190,4 +191,62 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// memoryContents renders the injectable memory bullets (#515): retired and
+// still-proposed rows are EXCLUDED (retirement is the mechanism that stops
+// stale-fact citations — the annotations below are explainability/tiebreaker
+// signal, not staleness control), pinned rows survive the cap first (the
+// store's list order), and a lightweight annotation carries the kind (when
+// not a plain fact) and the user-declared validity window so the model can
+// weigh time-scoped facts.
+func memoryContents(memories []store.Memory) []string {
+	return memoryContentsCapped(memories, 0)
+}
+
+// memoryContentsCapped is memoryContents with each memory's CONTENT cut to
+// maxContentRunes (0 = no cut) before its annotation is appended, so a long
+// memory keeps its kind and validity window. The Patrol Launchpad's drafter
+// uses it to bound its prompt without making a dated fact look timeless.
+func memoryContentsCapped(memories []store.Memory, maxContentRunes int) []string {
+	out := make([]string, 0, len(memories))
+	for _, memory := range memories {
+		if memory.Source == "proposed" || memory.Retired() {
+			continue
+		}
+		if len(out) >= 50 {
+			break
+		}
+		content := strings.TrimSpace(memory.Content)
+		if content == "" {
+			continue
+		}
+		if maxContentRunes > 0 {
+			if r := []rune(content); len(r) > maxContentRunes {
+				content = strings.TrimSpace(string(r[:maxContentRunes])) + "…"
+			}
+		}
+		if note := memoryAnnotation(&memory); note != "" {
+			content += " (" + note + ")"
+		}
+		out = append(out, content)
+	}
+	return out
+}
+
+// memoryAnnotation builds the parenthetical suffix for one injected memory.
+// Kept deliberately lean — most memories are plain facts and get NO suffix,
+// so the 50-bullet prompt doesn't pay a per-line token tax.
+func memoryAnnotation(m *store.Memory) string {
+	var parts []string
+	if m.Kind != "" && m.Kind != "fact" {
+		parts = append(parts, m.Kind)
+	}
+	if m.ValidFrom != nil {
+		parts = append(parts, "true since "+time.Unix(*m.ValidFrom, 0).UTC().Format("2006-01-02"))
+	}
+	if m.ValidTo != nil {
+		parts = append(parts, "until "+time.Unix(*m.ValidTo, 0).UTC().Format("2006-01-02"))
+	}
+	return strings.Join(parts, ", ")
 }
