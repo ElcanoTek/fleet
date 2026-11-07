@@ -10,7 +10,7 @@ import { RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
-import { downloadFile } from "./downloadFile";
+import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "./plural";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 

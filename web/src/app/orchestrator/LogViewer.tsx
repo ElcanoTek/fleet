@@ -37,6 +37,7 @@ import {
 import { ToolStepCard, TranscriptTimeline } from "./LogTimeline";
 import { formatDuration, unwrapDeferredCall } from "./logTimeline";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { saveBlob } from "@/app/shared/lib/downloadFile";
 
 // The transcript itself — tool steps, events, the prompt, filters — renders in
 // LogTimeline.tsx; this file owns the modal around it. The ReactMarkdown
@@ -957,14 +958,7 @@ function LogViewerBody({
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `fleet-task-${task.id.slice(0, 8)}-logs.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `fleet-task-${task.id.slice(0, 8)}-logs.json`);
   };
 
   const canResubmit = RUNNABLE.has(task.status ?? "");

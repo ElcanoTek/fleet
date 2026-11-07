@@ -10,6 +10,7 @@ import {
 import { isFormPrompt, PromptLibraryForm } from "./PromptLibraryForm";
 import { useDialogA11y } from "./useDialogA11y";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { saveBlob } from "@/app/shared/lib/downloadFile";
 
 // Not on the shared DialogShell (the B-2 pass), deliberately: this is the
 // full-bleed "sheet" shape, not a centred panel — it portals to <body>, fills
@@ -170,16 +171,10 @@ export function PromptLibrary({
       exported_at: new Date().toISOString(),
       prompts: items,
     };
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      }),
+    saveBlob(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+      `fleet-prompts-${new Date().toISOString().slice(0, 10)}.json`,
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `fleet-prompts-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
   };
 
   const openLibrary = () => {

@@ -166,6 +166,7 @@ import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -5037,22 +5038,14 @@ export function ChatExperience({
         detail.trim() || `Could not download this chat (${response.status})`,
       );
     }
-    // Prefer the filename chosen by the server (Content-Disposition), fall
-    // back to a client-side slug if that header is stripped by a proxy
-    // somewhere.
-    const cd = response.headers.get("Content-Disposition") ?? "";
-    const match = /filename="([^"]+)"/i.exec(cd);
+    // Prefer the filename chosen by the server (Content-Disposition, either
+    // the plain or the RFC 5987 filename*= form), fall back to a client-side
+    // slug if that header is stripped by a proxy somewhere.
     const extension = format === "markdown" ? "md" : format;
-    const filename = match?.[1] ?? `${conversation.id}.${extension}`;
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    const filename =
+      filenameFrom(response.headers.get("Content-Disposition")) ??
+      `${conversation.id}.${extension}`;
+    saveBlob(await response.blob(), filename);
   };
 
   // promoteConversation asks the server to synthesize a recurring-task proposal

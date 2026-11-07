@@ -8,7 +8,7 @@ import {
   type UsageReport,
 } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
-import { downloadFile } from "./downloadFile";
+import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "./plural";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 
