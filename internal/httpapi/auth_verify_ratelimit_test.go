@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -36,5 +37,19 @@ func TestVerifyLimiter_PerEmailAndGlobal(t *testing.T) {
 	// The next window resets both.
 	if !l.allow("a@x.com", now.Add(time.Minute)) {
 		t.Fatal("window did not reset")
+	}
+}
+
+// The process-wide guard is sized so the attempts one client address can make
+// through the web tier (which limits each address first) leave it open for
+// everyone else.
+func TestVerifyLimiter_GlobalLeavesRoomAfterOneSourcesAttempts(t *testing.T) {
+	var l verifyLimiter
+	now := time.Unix(2_000_000, 0)
+	for i := 0; i < 31; i++ {
+		l.allow("user"+strconv.Itoa(i)+"@x.com", now)
+	}
+	if !l.allow("bob@x.com", now) {
+		t.Fatal("a valid sign-in was refused after 31 attempts from elsewhere")
 	}
 }

@@ -9,7 +9,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -283,5 +285,60 @@ func TestLoginBodyIsCapped(t *testing.T) {
 	res = e.do(req("POST", "/api/auth/login", body.String(), "Origin", "https://fleet.example.com", "Content-Type", mw.FormDataContentType()))
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != testOrigin+"/" {
 		t.Fatalf("multipart login: %d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+// Password sign-in is limited per client address before the backend's
+// process-wide verify guard is reached, so one address's attempts leave room
+// for everyone else's.
+func TestLoginIsLimitedPerClientAddress(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	// A backend whose verify guard admits 30 attempts in total.
+	verifies := 0
+	ok := loginBackend(200, true, "epoch-1")
+	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/verify" {
+			verifies++
+			if verifies > 30 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": r.Header.Get("X-User-Email") == "bob@x.com"})
+			return
+		}
+		ok(w, r)
+	}
+	from := func(addr, form string) string {
+		r := loginReq(form)
+		r.RemoteAddr = addr
+		return e.do(r).Header.Get("Location")
+	}
+	for i := 0; i < 31; i++ {
+		loc := from("203.0.113.40:5000", "email=user"+strconv.Itoa(i)+"%40x.com&password=wrong")
+		want := testOrigin + "/login?e=invalid"
+		if i >= loginAttemptsPerClientPerMinute {
+			want = testOrigin + "/login?e=throttled"
+		}
+		if loc != want {
+			t.Fatalf("attempt %d from one address: %q, want %q", i+1, loc, want)
+		}
+	}
+	if verifies != loginAttemptsPerClientPerMinute {
+		t.Fatalf("backend saw %d attempts from one address, want %d", verifies, loginAttemptsPerClientPerMinute)
+	}
+	if loc := from("198.51.100.7:6000", "email=bob%40x.com&password=right"); loc != testOrigin+"/" {
+		t.Fatalf("sign-in from another address: %q, want success", loc)
+	}
+}
+
+func TestLoginClientKeyGroupsIPv6ByPrefix(t *testing.T) {
+	a := loginClientKey(netip.MustParseAddr("2001:db8:1:2::1"))
+	b := loginClientKey(netip.MustParseAddr("2001:db8:1:2:ffff::9"))
+	c := loginClientKey(netip.MustParseAddr("2001:db8:1:3::1"))
+	if a != b || a == c {
+		t.Fatalf("IPv6 keys: %q %q %q", a, b, c)
+	}
+	if got := loginClientKey(netip.MustParseAddr("203.0.113.9")); got != "203.0.113.9" {
+		t.Fatalf("IPv4 key %q", got)
 	}
 }
