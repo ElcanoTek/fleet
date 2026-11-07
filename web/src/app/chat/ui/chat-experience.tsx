@@ -163,6 +163,7 @@ import {
 } from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
 import { responseErrorText } from "@/app/lib/responseError";
+import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -1641,7 +1642,7 @@ export function ChatExperience({
   // phase — it patches React state from an external system (localStorage)
   // rather than synchronously cascading a render off the effect body.
   useEffect(() => {
-    const stored = window.localStorage.getItem("chat-show-stats");
+    const stored = readPref("chat-show-stats");
     if (stored !== "1") return;
     let cancelled = false;
     queueMicrotask(() => {
@@ -1844,20 +1845,13 @@ export function ChatExperience({
   // device (browser storage), not an order: those chats expire with
   // inactivity, so a hand-placed one would keep being displaced.
   const [recentSort, setRecentSortState] = useState<RecentSort>(() => {
-    try {
-      const saved = window.localStorage.getItem(RECENT_SORT_ITEM);
-      return isRecentSort(saved) ? saved : "activity";
-    } catch {
-      return "activity";
-    }
+    const saved = readPref(RECENT_SORT_ITEM);
+    return isRecentSort(saved) ? saved : "activity";
   });
   const setRecentSort = useCallback((next: RecentSort) => {
     setRecentSortState(next);
-    try {
-      window.localStorage.setItem(RECENT_SORT_ITEM, next);
-    } catch {
-      // Storage unavailable: the choice lasts for this page only.
-    }
+    // Storage unavailable: the choice lasts for this page only.
+    writePref(RECENT_SORT_ITEM, next);
   }, []);
   const visibleOrder = useMemo(
     () =>
@@ -6434,12 +6428,13 @@ export function ChatExperience({
     // without changing the mount-once behavior.
   }, [initialUserEmail, refreshServerConfig, refreshSkills]);
 
+  // The write sits outside the state updater: an updater must stay pure
+  // (StrictMode runs it twice), and a storage that throws (#2002) must not
+  // take the toggle down with it.
   const toggleShowStats = () => {
-    setShowStats((prev) => {
-      const next = !prev;
-      window.localStorage.setItem("chat-show-stats", next ? "1" : "0");
-      return next;
-    });
+    const next = !showStats;
+    setShowStats(next);
+    writePref("chat-show-stats", next ? "1" : "0");
   };
 
   const jumpToLatest = () => {

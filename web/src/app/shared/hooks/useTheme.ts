@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 
 // useTheme is the single source of truth for the app's light/dark theme. The
 // chat view, the orchestrator, and the login card each used to hand-roll this
@@ -28,12 +29,8 @@ export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
 
 function readStoredTheme(): Theme | null {
-  try {
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "light" || stored === "dark" ? stored : null;
-  } catch {
-    return null;
-  }
+  const stored = readPref(THEME_STORAGE_KEY);
+  return stored === "light" || stored === "dark" ? stored : null;
 }
 
 function systemTheme(): Theme {
@@ -101,11 +98,8 @@ export function useTheme(): UseTheme {
   const setTheme = useCallback((next: ThemePreference) => {
     setThemePreference(next);
     if (next === "system") {
-      try {
-        window.localStorage.removeItem(THEME_STORAGE_KEY);
-      } catch {
-        // Private-mode / storage-disabled: still re-resolve the live attribute.
-      }
+      // Private-mode / storage-disabled: still re-resolve the live attribute.
+      removePref(THEME_STORAGE_KEY);
       const resolved = systemTheme();
       setThemeState(resolved);
       document.documentElement.setAttribute("data-theme", resolved);
@@ -113,11 +107,8 @@ export function useTheme(): UseTheme {
     }
     setThemeState(next);
     document.documentElement.setAttribute("data-theme", next);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      // Private-mode / storage-disabled: still flip the live attribute.
-    }
+    // Private-mode / storage-disabled: still flip the live attribute.
+    writePref(THEME_STORAGE_KEY, next);
   }, []);
 
   // The sun/moon toggle (login card, orchestrator slim header) flips to an
@@ -127,11 +118,7 @@ export function useTheme(): UseTheme {
       const next: Theme = prev === "dark" ? "light" : "dark";
       setThemePreference(next);
       document.documentElement.setAttribute("data-theme", next);
-      try {
-        window.localStorage.setItem(THEME_STORAGE_KEY, next);
-      } catch {
-        // Private-mode / storage-disabled: still flip the live attribute.
-      }
+      writePref(THEME_STORAGE_KEY, next);
       return next;
     });
   }, []);

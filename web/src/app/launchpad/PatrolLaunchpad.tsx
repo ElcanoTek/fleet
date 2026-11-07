@@ -39,6 +39,7 @@ import {
   type PatrolMode,
 } from "./launchpadModel";
 import { responseErrorText } from "@/app/lib/responseError";
+import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -401,11 +402,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   };
   useEffect(() => {
     if (launch) return;
-    try {
-      window.sessionStorage.setItem(progressItem(), JSON.stringify(state));
-    } catch {
-      // Private mode: progress just is not remembered.
-    }
+    // Private mode: progress just is not remembered.
+    writePref(progressItem(), JSON.stringify(state), "session");
   }, [state, launch]);
 
   // The person's optional choices, plus every usable always-on connector the
@@ -542,12 +540,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         }).catch(() => null);
         firstRun = runRes === null ? "unknown" : runRes.ok ? "running" : "refused";
       }
-      try {
-        window.sessionStorage.removeItem(progressItem());
-        window.localStorage.setItem(LAUNCHPAD_LAUNCHED_ITEM, "1");
-      } catch {
-        // Storage unavailable: nothing to clean up.
-      }
+      // Storage unavailable: nothing to clean up.
+      removePref(progressItem(), "session");
+      writePref(LAUNCHPAD_LAUNCHED_ITEM, "1");
       setCreated({ conversationId: "", scheduleId: "" });
       setLaunch({ phase: "done", conversationId, firstRun });
     } catch (e) {
@@ -832,11 +827,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 }
 
 function launchedBefore(): boolean {
-  try {
-    return window.localStorage.getItem(LAUNCHPAD_LAUNCHED_ITEM) === "1";
-  } catch {
-    return false;
-  }
+  return readPref(LAUNCHPAD_LAUNCHED_ITEM) === "1";
 }
 
 function personaName(ref: string, fallback: string, users: UserPersona[]): string {

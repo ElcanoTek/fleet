@@ -32,6 +32,7 @@ import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
+import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // "settings" renders the rail with neither surface active (the design's
 // settings view): Chat/Operations Center stay plain links and the account
@@ -65,12 +66,8 @@ export function useRailCollapse(): RailCollapse {
   useEffect(() => {
     const mql = window.matchMedia(NARROW_QUERY);
     const syncFromEnvironment = () => {
-      let stored = false;
-      try {
-        stored = window.localStorage.getItem(RAIL_COLLAPSED_STORAGE_KEY) === "1";
-      } catch {
-        // Private-mode / storage-disabled: default expanded.
-      }
+      // Private-mode / storage-disabled: default expanded.
+      const stored = readPref(RAIL_COLLAPSED_STORAGE_KEY) === "1";
       setIsNarrow(mql.matches);
       // Narrow viewports auto-collapse without touching the stored preference.
       setCollapsedState(stored || mql.matches);
@@ -92,11 +89,8 @@ export function useRailCollapse(): RailCollapse {
 
   const setCollapsed = useCallback((next: boolean) => {
     setCollapsedState(next);
-    try {
-      window.localStorage.setItem(RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
-    } catch {
-      // Private-mode / storage-disabled: state stays session-only.
-    }
+    // Private-mode / storage-disabled: state stays session-only.
+    writePref(RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
   }, []);
 
   return { collapsed, isNarrow, railReady, setCollapsed };
