@@ -68,10 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_chat_schedules_user_patrols
     ON chat_schedules (user_email, status, next_run_at, id)
     WHERE cron_expr <> '' AND status IN ('active', 'paused');
 
--- chat_schedule_runs is the run history: one row per settled fire. trigger_kind is
--- 'schedule' (the tick) or 'manual' (Run now). outcome: 'queued' (a turn was
--- enqueued; input_id names it), 'coalesced' (Run now found a patrol turn
--- already queued or running; input_id names that one), 'busy' (the chat had a
+-- chat_schedule_runs is the run history: one row per settled fire that did
+-- something. trigger_kind is 'schedule' (the tick) or 'manual' (Run now).
+-- run_number is the run's number for a counted run ('queued') and NULL for
+-- every other outcome, so no row ever claims a number a later run will take.
+-- outcome: 'queued' (a turn was enqueued; input_id names it), 'busy' (the chat had a
 -- patrol in flight, an approval waiting or a full queue: the fire was skipped
 -- to the next slot) or 'gone' (the conversation was deleted or the owner lost
 -- access: the schedule was cancelled). Pruned by the scheduler's run-history
@@ -79,7 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_schedules_user_patrols
 CREATE TABLE IF NOT EXISTS chat_schedule_runs (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     schedule_id TEXT NOT NULL REFERENCES chat_schedules(id) ON DELETE CASCADE,
-    run_number  INTEGER NOT NULL,
+    run_number  INTEGER,
     trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('schedule', 'manual')),
     outcome     TEXT NOT NULL CHECK (outcome IN ('queued', 'coalesced', 'busy', 'gone')),
     input_id    TEXT NOT NULL DEFAULT '',

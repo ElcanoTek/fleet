@@ -11,7 +11,8 @@ import (
 )
 
 // Chat schedules (#2049 M5, ADR-0104): in-chat patrols and timers are fired by
-// this scheduler's one tick loop. Each fire is claim (lease) → delivery (the
+// this scheduler's chat schedule loop (runChatLoop), a goroutine of its own
+// beside the task loop. Each fire is claim (lease) → delivery (the
 // chat server enqueues the turn, idempotently) → settle (run count, next slot,
 // run history, lease released). See db/chat_schedules.go for the lease rules.
 
@@ -83,8 +84,9 @@ const chatScheduleFireTimeout = 30 * time.Second
 
 // RunChatScheduleNow fires one chat schedule immediately ("Run now"), whether
 // or not it is due, through the same claim → delivery → settle path as the
-// tick. It returns the delivery: queued (InputID is the new turn), coalesced
-// (InputID is the patrol turn already in flight), or gone.
+// tick. It returns the delivery: queued (InputID is the new turn) or gone.
+// A schedule with a fire in flight, or whose patrol turn is still queued or
+// running, answers ErrChatScheduleFiring: of two Run nows racing, one runs.
 //
 // Only the claim runs on ctx. Once claimed, the fire is the scheduler's: its
 // delivery and settle run on a context detached from the caller and bounded
@@ -102,7 +104,13 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	}
 	fireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatScheduleFireTimeout)
 	defer cancel()
-	return s.fireChatSchedule(fireCtx, fire, now)
+	d, err := s.fireChatSchedule(fireCtx, fire, now)
+	if err == nil && d.Outcome == models.ChatScheduleCoalesced {
+		// A patrol turn of this schedule is still queued or running: of two
+		// Run nows racing, exactly one runs and the other is told so.
+		return d, models.ErrChatScheduleFiring
+	}
+	return d, err
 }
 
 type chatSchedError string
@@ -117,7 +125,40 @@ const errNoChatDeliverer = chatSchedError("chat schedules are not wired to a cha
 // wake-up arms right away.
 const maxChatScheduleFiresPerSweep = 10000
 
-// runChatSchedules is the tick phase: re-drive fires whose lease expired,
+// runChatLoop is the chat schedule loop (ADR-0104), its own goroutine beside
+// the task loop so nothing on the task path can delay a chat fire: a pass at
+// start (a schedule due across a restart fires now), one every tick
+// interval, and one at each wake-up — armed by the passes themselves for the
+// next schedule or fire retry due before the next tick, and by the chat
+// server when a schedule is created or edited. Ends on Stop.
+func (s *Scheduler) runChatLoop() {
+	defer close(s.chatLoopDone)
+	defer safe.Recover("scheduler.chatLoop", nil)
+	ticker := time.NewTicker(s.tickInterval)
+	defer ticker.Stop()
+	var wake chatWakeTimer
+	defer wake.stop()
+	wake.request(time.Now())
+	pass := func() {
+		defer safe.Recover("scheduler.chat-schedules", nil)
+		s.runChatSchedules()
+	}
+	for {
+		select {
+		case <-ticker.C:
+			pass()
+		case t := <-s.chatWake:
+			wake.request(t)
+		case <-wake.c():
+			wake.fired()
+			pass()
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+// runChatSchedules is one chat schedule pass: re-drive fires whose lease expired,
 // then claim and fire due schedules a batch at a time until none is left (or
 // the sweep's deadline), then start the drain of any patrol turn left queued
 // and arm the wake-up for the next schedule due before the next tick.
@@ -259,7 +300,7 @@ func (s *Scheduler) runChatScheduleCleanup() {
 }
 
 // chatWakeTimer tracks the earliest requested chat schedule wake-up for
-// runLoop.
+// runChatLoop.
 type chatWakeTimer struct {
 	timer *time.Timer
 	at    time.Time

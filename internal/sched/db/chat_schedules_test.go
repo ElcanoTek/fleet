@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -335,5 +336,47 @@ func TestChatScheduleDeferredFireIsKept(t *testing.T) {
 	rec, err := db.RecoverChatScheduleFires(ctx, now, time.Minute, 25)
 	if err != nil || len(rec) != 1 || rec[0].FireID != f.FireID || rec[0].Trigger != models.ChatScheduleTriggerManual {
 		t.Fatalf("retry = %+v, %v; want manual fire %s", rec, err, f.FireID)
+	}
+}
+
+// Only a counted run carries a run number in the history: a busy fire's row
+// has none (it would otherwise claim the number the next counted run takes),
+// and a coalesced Run now is not recorded at all.
+func TestChatScheduleHistoryNumbersOnlyCountedRuns(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	insertChatSchedule(t, db, "p", "*/10 * * * *", 0, "active", now.Add(-time.Minute).Unix(), 0, 0)
+
+	settle := func(f models.ChatScheduleFire, o models.ChatScheduleOutcome) {
+		t.Helper()
+		if ok, err := db.SettleChatScheduleFire(ctx, f, models.ChatScheduleDelivery{Outcome: o, InputID: "in-" + string(o)}, now); err != nil || !ok {
+			t.Fatalf("settle %s = %v, %v", o, ok, err)
+		}
+	}
+	fs, _ := db.ClaimDueChatSchedules(ctx, now, time.Minute, 25, nil)
+	settle(fs[0], models.ChatScheduleBusy)
+	m, err := db.ClaimChatScheduleNow(ctx, "p", now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settle(m, models.ChatScheduleCoalesced)
+	m, err = db.ClaimChatScheduleNow(ctx, "p", now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settle(m, models.ChatScheduleQueued)
+
+	runs, err := db.ListChatScheduleRuns(ctx, "p", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(runs))
+	for _, r := range runs {
+		got = append(got, fmt.Sprintf("%d/%s", r.RunNumber, r.Outcome))
+	}
+	if want := "[1/queued 0/busy]"; fmt.Sprint(got) != want {
+		t.Fatalf("history = %v, want %s (busy unnumbered, coalesced unrecorded)", got, want)
 	}
 }

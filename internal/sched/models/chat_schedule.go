@@ -51,7 +51,8 @@ const (
 	ChatScheduleQueued ChatScheduleOutcome = "queued"
 	// ChatScheduleCoalesced: a manual fire found a patrol turn already queued
 	// or running for the schedule's owner (Delivery.InputID names it). The run
-	// does not count.
+	// does not count and is not recorded; Run now answers it as
+	// ErrChatScheduleFiring.
 	ChatScheduleCoalesced ChatScheduleOutcome = "coalesced"
 	// ChatScheduleBusy: a scheduled fire found a patrol in flight, an approval
 	// waiting on the owner or a full input queue. The slot is skipped.
@@ -107,12 +108,14 @@ type ChatScheduleDelivery struct {
 // ChatScheduleRun is one row of a schedule's run history.
 type ChatScheduleRun struct {
 	ScheduleID string
-	RunNumber  int
-	Trigger    ChatScheduleTrigger
-	Outcome    ChatScheduleOutcome
-	InputID    string
-	DueAt      *int64
-	FiredAt    time.Time
+	// RunNumber is the counted run's number for a queued run, 0 (NULL) for
+	// any other outcome.
+	RunNumber int
+	Trigger   ChatScheduleTrigger
+	Outcome   ChatScheduleOutcome
+	InputID   string
+	DueAt     *int64
+	FiredAt   time.Time
 }
 
 // ChatScheduleLocation resolves a schedule's timezone ("" is UTC).

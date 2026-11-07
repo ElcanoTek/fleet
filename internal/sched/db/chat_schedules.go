@@ -268,6 +268,8 @@ func (db *Database) FailChatScheduleFire(ctx context.Context, fire models.ChatSc
 //     the head of the due scan.
 //   - gone: the schedule is cancelled.
 //   - coalesced, stale: the definition is left as it is and the fire ends.
+//     Nothing is recorded: a Run now that found a patrol turn in flight did
+//     not run.
 //   - deferred (the chat server is draining or shutting down): the fire is
 //     KEPT — same id, run number and trigger — with its lease pushed out by
 //     ChatScheduleDeferRetry, so the recovery pass retries it as itself
@@ -275,7 +277,9 @@ func (db *Database) FailChatScheduleFire(ctx context.Context, fire models.ChatSc
 //     deferred at shutdown is neither lost nor counted twice, and a manual
 //     one on a paused or not-yet-due schedule is not dropped.
 //
-// queued, coalesced, busy and gone each add a row to the run history.
+// queued, busy and gone each add a row to the run history; only queued (a
+// counted run) carries a run number — a busy or gone row has none, so it can
+// never collide with the number the next counted run takes.
 func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, d models.ChatScheduleDelivery, now time.Time) (bool, error) {
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -305,7 +309,7 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 	nowUnix := now.Unix()
 	live := status == models.ChatScheduleStatusActive || status == models.ChatScheduleStatusPaused
 	recordRun := true
-	runNumber := fire.RunNumber
+	var runNumber any // NULL unless the run counts
 	switch d.Outcome {
 	case models.ChatScheduleQueued:
 		runCount++
@@ -357,7 +361,7 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 			 WHERE id = $1`,
 			fire.ScheduleID, ChatScheduleDeferRetry.Seconds())
 	default: // coalesced, stale
-		recordRun = d.Outcome == models.ChatScheduleCoalesced
+		recordRun = false
 		_, err = tx.ExecContext(ctx, `UPDATE chat_schedules SET `+releaseFireSQL+` WHERE id = $1`, fire.ScheduleID)
 	}
 	if err != nil {
@@ -424,14 +428,16 @@ func (db *Database) ListChatScheduleRuns(ctx context.Context, scheduleID string,
 	var out []models.ChatScheduleRun
 	for rows.Next() {
 		var (
-			r       models.ChatScheduleRun
-			trigger string
-			outcome string
-			dueAt   sql.NullInt64
+			r         models.ChatScheduleRun
+			trigger   string
+			outcome   string
+			dueAt     sql.NullInt64
+			runNumber sql.NullInt64
 		)
-		if err := rows.Scan(&r.ScheduleID, &r.RunNumber, &trigger, &outcome, &r.InputID, &dueAt, &r.FiredAt); err != nil {
+		if err := rows.Scan(&r.ScheduleID, &runNumber, &trigger, &outcome, &r.InputID, &dueAt, &r.FiredAt); err != nil {
 			return nil, err
 		}
+		r.RunNumber = int(runNumber.Int64)
 		r.Trigger = models.ChatScheduleTrigger(trigger)
 		r.Outcome = models.ChatScheduleOutcome(outcome)
 		if dueAt.Valid {
