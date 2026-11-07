@@ -44,14 +44,20 @@
 //
 // Each test process holds a session advisory lock, on its maintenance
 // connection, keyed by a random owner id that is also part of every per-test
-// database name (fleet_t_<owner>_<n>). When a process dies without running
-// its cleanups (a killed or timed-out run), its lock goes with its
-// connection. The next process to start garbage-collects: under the build
-// lock it drops every fleet_t_ database whose owner's lock it can take — the
-// owner is gone — and every fleet_tmpl_build_ leftover. A database whose
-// owner is alive is never touched. When it builds a template it also drops
-// all but the newest three templates of that kind. `scripts/test-db-setup.sh
-// --gc` does the same by hand.
+// database name (fleet_t_<owner>_<n>) and template build name. When a
+// process dies without running its cleanups (a killed or timed-out run), its
+// lock goes with its connection. The next process to start garbage-collects:
+// under the build lock it drops every fleet_t_ and fleet_tmpl_build_ database
+// whose owner holds no owner lock in pg_locks (which spans every database of
+// the server, so a run with another maintenance database still counts as
+// alive). A database whose owner is alive is never touched. When it builds a
+// template it also drops all but the newest three templates of that kind.
+// `scripts/test-db-setup.sh --gc` does the same by hand.
+//
+// Point every run on one server at the same maintenance database: the build
+// lock is an advisory lock, which Postgres scopes to one database. (Two runs
+// that do not still work — a build that loses the race uses the winner's
+// template — they may just migrate the same template twice.)
 package testdb
 
 import (
@@ -139,6 +145,10 @@ var specName = regexp.MustCompile(`^[a-z]{1,12}$`)
 // an optional suffix for databases a tool under test derives from a reserved
 // name (fleet db consolidate's <target>_consolidate_<store>).
 var cloneName = regexp.MustCompile(`^fleet_t_([0-9a-f]{8})_[0-9]+(_[a-z0-9_]+)?$`)
+
+// buildName parses a template build in progress:
+// fleet_tmpl_build_<spec name>_<key hash>_<owner hex>.
+var buildName = regexp.MustCompile(`^fleet_tmpl_build_[a-z]+_[0-9a-f]{12}_([0-9a-f]{8})$`)
 
 // server is the per-process maintenance state, created on first use.
 type server struct {
@@ -266,8 +276,13 @@ func (s *server) withBuildLock(ctx context.Context, fn func(context.Context) err
 }
 
 // collect drops what dead test processes left behind (see the package
-// comment). It runs under the build lock, so no template build is in flight.
+// comment): per-test databases and template builds whose owner holds no owner
+// lock. It runs under the build lock.
 func (s *server) collect(ctx context.Context) error {
+	live, err := s.liveOwners(ctx)
+	if err != nil {
+		return err
+	}
 	names, err := s.databases(ctx, clonePrefix)
 	if err != nil {
 		return err
@@ -278,43 +293,67 @@ func (s *server) collect(ctx context.Context) error {
 			byOwner[m[1]] = append(byOwner[m[1]], n)
 		}
 	}
-	for owner, dbs := range byOwner {
-		if err := s.collectOwner(ctx, owner, dbs); err != nil {
-			return err
-		}
-	}
 	builds, err := s.databases(ctx, buildPrefix)
 	if err != nil {
 		return err
 	}
-	for _, db := range builds { // nobody builds without the lock we hold
-		if err := s.drop(ctx, db); err != nil {
+	for _, n := range builds {
+		if m := buildName.FindStringSubmatch(n); m != nil {
+			byOwner[m[1]] = append(byOwner[m[1]], n)
+		}
+	}
+	for owner, dbs := range byOwner {
+		if err := s.collectOwner(ctx, owner, dbs, live); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// collectOwner drops dbs, the per-test databases of owner, unless owner is a
-// live process. Until this process has started (its first collect, before it
+// liveOwners returns the owner ids (hex) whose owner lock some session holds,
+// in ANY database of the server: pg_locks is cluster-wide, so two runs that
+// use different maintenance databases still see each other as alive.
+func (s *server) liveOwners(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.admin.QueryContext(ctx, `SELECT DISTINCT lpad(to_hex(objid::bigint), 8, '0') FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND objsubid = 2 AND classid = $1::bigint::oid`, int64(lockNSOwner))
+	if err != nil {
+		return nil, fmt.Errorf("list live test processes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	live := map[string]bool{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		live[h] = true
+	}
+	return live, rows.Err()
+}
+
+// collectOwner drops dbs, the databases of owner, unless owner is a live
+// process. Until this process has started (its first collect, before it
 // creates any database), databases under its own id are leftovers of a dead
 // process that drew the same id; after that they are its own.
-func (s *server) collectOwner(ctx context.Context, owner string, dbs []string) error {
+func (s *server) collectOwner(ctx context.Context, owner string, dbs []string, live map[string]bool) error {
 	if owner == s.ownerHex() && s.started {
 		return nil
 	}
 	if owner != s.ownerHex() {
+		if live[owner] {
+			return nil // a live process's databases
+		}
 		id, err := strconv.ParseUint(owner, 16, 32)
 		if err != nil {
 			return nil
 		}
 		key := int32(uint32(id)) //nolint:gosec // the int4 half of an advisory-lock key; wrap-around is intended
-		var dead bool
-		if err := s.lockConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1::int4, $2::int4)`, lockNSOwner, key).Scan(&dead); err != nil {
+		var free bool
+		if err := s.lockConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1::int4, $2::int4)`, lockNSOwner, key).Scan(&free); err != nil {
 			return fmt.Errorf("probe owner %s: %w", owner, err)
 		}
-		if !dead {
-			return nil // a live process's databases
+		if !free {
+			return nil // it came alive since liveOwners
 		}
 		// Hold the dead owner's lock while dropping, so a new process cannot
 		// draw the id meanwhile; then let it go.
@@ -448,6 +487,12 @@ func (s *server) build(ctx context.Context, spec Spec, key, name string) error {
 		_, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+q+` RENAME TO `+quoteIdent(name))
 		return err
 	}); err != nil {
+		if isDuplicate(err) {
+			// A run whose maintenance DSN names another database (so another
+			// build lock) built it meanwhile; use theirs.
+			_ = s.drop(context.Background(), tmp)
+			return nil
+		}
 		return fail(fmt.Errorf("rename %s: %w", tmp, err))
 	}
 	if _, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+quoteIdent(name)+` WITH IS_TEMPLATE true`); err != nil {
@@ -618,6 +663,11 @@ func MaintenanceDSN(t testing.TB) string {
 func isInUse(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && pg.Code == "55006" // object_in_use
+}
+
+func isDuplicate(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "42P04" // duplicate_database
 }
 
 func isMissing(err error) bool {
