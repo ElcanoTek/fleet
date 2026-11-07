@@ -73,9 +73,10 @@ name: Publish sandbox image (reusable)
 # org rather than a portable guarantee: after a first publish of a new name,
 # CHECK the package's visibility instead of assuming either way.
 #
-# What this means in practice. The image contents carry nothing sensitive — no
-# shipped Containerfile has a COPY or ADD, so every one of these is Fedora plus
-# RPMs. What a public package would disclose is its NAME: a public
+# What this means in practice. The image contents carry nothing sensitive — the
+# only COPY in a shipped Containerfile is the generic one's hash-locked
+# requirements.txt, so every one of these is Fedora, RPMs and pinned PyPI
+# packages. What a public package would disclose is its NAME: a public
 # fleet-sandbox-<client> tells the world that client is a customer. Private
 # bundle repo -> private package handles that without anyone configuring it, but
 # it is worth verifying for a new bundle rather than trusted blindly.

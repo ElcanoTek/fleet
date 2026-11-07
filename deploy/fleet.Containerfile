@@ -17,23 +17,36 @@
 # The generic client bundle is baked in at /opt/fleet/client; mount your own
 # bundle over it (or at another FLEET_CLIENT_CONFIG_DIR) — ADR-0006.
 
-FROM registry.fedoraproject.org/fedora-minimal:latest
+# Base pinned by tag + digest; Dependabot (docker, /deploy) bumps both monthly.
+FROM registry.fedoraproject.org/fedora-minimal:45@sha256:ef221f00e46f2e51c950188e6c64fdb45cfc375b0480f575be150ca0bda4c3cc
 
 ARG FLEET_ARCH
 
+# The Python packages (Playwright and its dependencies) are hash-locked in
+# deploy/python/requirements.txt (compiled from requirements.in; Dependabot's
+# pip entry keeps it current) and installed --require-hashes --no-deps.
+# Playwright's own browser download is never used: the browser is the
+# distribution's chromium-headless RPM (signature-checked by microdnf), which
+# fleet's browser runner launches by path — PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+# keeps it that way.
+COPY deploy/python/requirements.txt /tmp/fleet-requirements.txt
 RUN microdnf install -y --setopt=install_weak_deps=0 \
         git ca-certificates tzdata python3 python3-pip chromium-headless postgresql \
-    && pip3 install --no-cache-dir playwright \
+    && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir --require-hashes --no-deps \
+        -r /tmp/fleet-requirements.txt \
+    && rm -f /tmp/fleet-requirements.txt \
     && microdnf clean all
 
 COPY dist/fleet-linux-${FLEET_ARCH} /usr/local/bin/fleet
 COPY config/default /opt/fleet/client
 
 ENV FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client \
-    HOME=/var/lib/fleet
+    HOME=/var/lib/fleet \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+# (`fleet version --web` and the host-executor check run on this exact binary
+# in release.yml's build job, before this image is built.)
 RUN chmod 0755 /usr/local/bin/fleet \
-    && /usr/local/bin/fleet version --web \
     && mkdir -p /var/lib/fleet \
     && chown 1000:1000 /var/lib/fleet
 

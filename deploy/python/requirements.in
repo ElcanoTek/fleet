@@ -1,0 +1,5 @@
+# Python packages the fleet control-plane image (deploy/fleet.Containerfile)
+# installs. Compile the lock with:
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras requirements.in
+# Dependabot (pip, /deploy/python) keeps requirements.txt current.
+playwright

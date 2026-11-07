@@ -172,17 +172,17 @@ updates:
   # Docker supports cooldown `default-days` only — the semver-*-days keys are
   # not supported for this ecosystem, so they are deliberately absent.
   #
-  # Honest expectations for the one file covered:
-  #   * config/default/sandbox/Containerfile — fedora-minimal:latest. A
-  #     non-comparable tag short-circuits the update checker
-  #     (`return true unless version_tag.comparable?`), so this will produce NO
-  #     PRs at all. It is listed anyway so coverage already exists the day
-  #     someone pins a digest, as that file's own header contemplates. (The
-  #     node:24-slim Containerfile that did produce PRs left with
-  #     scripts/rampart-service, ADR-0063.)
+  # The two release images (ADR-0100, docs/RELEASE-ARTIFACTS.md "How pins are
+  # kept current") pin fedora-minimal by a comparable tag AND its digest
+  # (`fedora-minimal:45@sha256:…`), which is the shape the update checker
+  # bumps: a new digest for the same release, or the next Fedora release with
+  # its digest.
+  #   * config/default/sandbox/Containerfile — the fleet-sandbox image
+  #   * deploy/fleet.Containerfile — the fleet control-plane image
   - package-ecosystem: docker
     directories:
       - "/config/default/sandbox"
+      - "/deploy"
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
@@ -190,6 +190,30 @@ updates:
       default-days: 7
     commit-message:
       prefix: "deps(image)"
+
+  # Hash-locked Python for the two release images. Each directory holds a
+  # requirements.in and the requirements.txt pip-compile --generate-hashes
+  # made from it; Dependabot re-compiles the lock (hashes included) and the
+  # images install it --require-hashes --no-deps.
+  - package-ecosystem: pip
+    directories:
+      - "/deploy/python"
+      - "/config/default/sandbox"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "deps(image-python)"
+    groups:
+      image-python-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   # GitHub Actions referenced by .github/workflows/*.
   - package-ecosystem: github-actions

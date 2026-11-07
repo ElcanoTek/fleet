@@ -1623,6 +1623,52 @@ jobs:
           sarif_file: 'grype-results.sarif'
           category: 'grype-sandbox-image'
 
+      # The control-plane image release.yml publishes (ghcr.io/elcanotek/fleet)
+      # goes through the same gate: its RPMs and its hash-locked Python
+      # (deploy/python/requirements.txt). The fleet binary itself is NOT part
+      # of this scan — govulncheck gates its Go modules, reachability-aware —
+      # so a placeholder stands in for dist/fleet-linux-amd64 and the build
+      # needs no web bundle or Go toolchain.
+      - name: Build the control-plane image (placeholder binary) and export it
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          printf '#!/bin/sh\nexit 0\n' > dist/fleet-linux-amd64
+          chmod 0755 dist/fleet-linux-amd64
+          for attempt in 1 2; do
+            if podman build -f deploy/fleet.Containerfile --build-arg FLEET_ARCH=amd64 -t localhost/fleet:scan .; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then
+              echo "::error::the control-plane image build failed twice"
+              exit 1
+            fi
+            echo "::warning::control-plane image build failed (attempt ${attempt}/2); retrying in 20s"
+            sleep 20
+          done
+          podman save --format docker-archive -o fleet-image.tar localhost/fleet:scan
+
+      - name: Scan the control-plane image (report all findings)
+        if: ${{ !cancelled() && hashFiles('fleet-image.tar') != '' }}
+        run: |
+          set -euo pipefail
+          grype "docker-archive:fleet-image.tar" \
+            --exclude /usr/local/bin/fleet \
+            --output table \
+            --output json=grype-fleet-results.json \
+            --output sarif=grype-fleet-results.sarif
+
+      - name: Enforce actionable Fedora RPM policy (control-plane image)
+        if: ${{ !cancelled() && hashFiles('grype-fleet-results.json') != '' }}
+        run: scripts/check-grype-policy.sh grype-fleet-results.json
+
+      - name: Upload control-plane Grype SARIF to the GitHub Security tab
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        if: ${{ !cancelled() && hashFiles('grype-fleet-results.sarif') != '' }}
+        with:
+          sarif_file: 'grype-fleet-results.sarif'
+          category: 'grype-fleet-image'
+
   ci-gate:
     # The SINGLE required status check on `main` (see .github/CODEOWNERS). It
     # `needs` every other job and ALWAYS runs, so it always reports a result —

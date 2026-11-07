@@ -292,8 +292,9 @@ each piece yourself):
    org-level setting may be in play — **check a new package's visibility after
    its first publish rather than assuming**. A public image needs no pull
    credentials; a private one means the box (or cluster) authenticates to GHCR.
-   Nothing sensitive is in any of these images either way — no shipped
-   Containerfile has a `COPY` or `ADD`, so they are Fedora plus RPMs; what a
+   Nothing sensitive is in any of these images either way — the only `COPY`
+   in a shipped sandbox Containerfile is the generic one's hash-locked
+   `requirements.txt`, so they are Fedora, RPMs and pinned PyPI packages; what a
    public package discloses is its *name*, and a public
    `fleet-sandbox-<client>` names a customer.
 
