@@ -355,3 +355,24 @@ func TestChatPatrolTool_InvokedInsideTurn(t *testing.T) {
 		t.Errorf("model-invoked chat_patrol must not enable conversation auto_approve without explicit user action")
 	}
 }
+
+// TestWriteScheduleError_RunNowRefusals: the Run now refusals reach the
+// client as the right 4xx, not a 500.
+func TestWriteScheduleError_RunNowRefusals(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{models.ErrChatScheduleQueueFull, http.StatusTooManyRequests},
+		{models.ErrChatScheduleFiring, http.StatusConflict},
+		{models.ErrChatScheduleNotRunnable, http.StatusBadRequest},
+		{models.ErrChatScheduleNotFound, http.StatusNotFound},
+	} {
+		rec := httptest.NewRecorder()
+		writeScheduleError(rec, tc.err)
+		if rec.Code != tc.want {
+			t.Errorf("%v: status %d, want %d", tc.err, rec.Code, tc.want)
+		}
+	}
+}

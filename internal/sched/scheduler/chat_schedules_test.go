@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -330,5 +331,104 @@ func TestChatSchedules_UnsettledRunNowIsNotDuplicated(t *testing.T) {
 	runs, err := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 10)
 	if err != nil || len(runs) != 1 || runs[0].InputID != first.InputID || runs[0].Trigger != models.ChatScheduleTriggerManual {
 		t.Fatalf("run history = %+v, %v", runs, err)
+	}
+}
+
+// fillInputQueue queues n user inputs in the conversation (the deliverer's
+// maxPending is 20).
+func fillInputQueue(t *testing.T, s *Scheduler, convID string, n int) {
+	t.Helper()
+	now := time.Now().Unix()
+	for i := 0; i < n; i++ {
+		if _, err := s.storage.DB().Conn().Exec(`INSERT INTO chat.chat_input_queue
+			(id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
+			VALUES ($1, $2, 'owner@elcanotek.com', $1, 'hi', '[]', 'queued', 'queued', $3, $4, $4)`,
+			fmt.Sprintf("full-%s-%02d", convID, i), convID, i+1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func drainInputQueue(t *testing.T, s *Scheduler, convID string) {
+	t.Helper()
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat.chat_input_queue SET state = 'completed' WHERE conversation_id = $1`, convID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func patrolTurns(t *testing.T, s *Scheduler, scheduleID string) int {
+	t.Helper()
+	var n int
+	if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat.chat_input_queue WHERE client_input_id LIKE $1`,
+		store.ChatPatrolInputKeyPrefix+scheduleID+":%").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestChatSchedules_RunNowOnFullQueueIsRefused: a Run now on a conversation
+// whose input queue is full is refused (ErrChatScheduleQueueFull, a 429) and
+// ended — once the queue drains, no pass runs it.
+func TestChatSchedules_RunNowOnFullQueueIsRefused(t *testing.T) {
+	t.Parallel()
+	s, chat, _, convID := newChatScheduleFleet(t)
+	ctx := context.Background()
+	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillInputQueue(t, s, convID, 20)
+	if _, err := s.RunChatScheduleNow(ctx, sc.ID); !errors.Is(err, models.ErrChatScheduleQueueFull) {
+		t.Fatalf("Run now on a full queue: err = %v, want ErrChatScheduleQueueFull", err)
+	}
+	drainInputQueue(t, s, convID)
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE lease_owner IS NOT NULL`); err != nil {
+		t.Fatal(err)
+	}
+	s.runChatSchedules()
+	if n := patrolTurns(t, s, sc.ID); n != 0 {
+		t.Fatalf("the refused Run now queued %d turn(s) after the queue drained", n)
+	}
+	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
+	if len(all) != 1 || all[0].RunCount != 0 {
+		t.Fatalf("schedule = %+v; want no counted run", all)
+	}
+}
+
+// TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot: a scheduled fire
+// meeting a full queue does what the chat sweeper always did — the slot is
+// skipped (next_run_at moves to the next cron slot), nothing is queued or
+// counted, and nothing is retried when the queue drains.
+func TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot(t *testing.T) {
+	t.Parallel()
+	s, chat, _, convID := newChatScheduleFleet(t)
+	ctx := context.Background()
+	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET next_run_at = $1 WHERE id = $2`, time.Now().Add(-time.Minute).Unix(), sc.ID); err != nil {
+		t.Fatal(err)
+	}
+	fillInputQueue(t, s, convID, 20)
+	s.runChatSchedules()
+
+	next, _ := models.NextChatScheduleRun("0 9 * * *", "UTC", time.Now())
+	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
+	if len(all) != 1 || all[0].RunCount != 0 || all[0].NextRunAt != next.Unix() {
+		t.Fatalf("schedule = %+v; want no run counted and the slot moved to %d", all, next.Unix())
+	}
+	drainInputQueue(t, s, convID)
+	s.runChatSchedules()
+	if n := patrolTurns(t, s, sc.ID); n != 0 {
+		t.Fatalf("the skipped slot queued %d turn(s) after the queue drained", n)
+	}
+	runs, err := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].Outcome != models.ChatScheduleBusy || runs[0].RunNumber != 0 {
+		t.Fatalf("run history = %+v, %v; want one unnumbered busy row", runs, err)
 	}
 }

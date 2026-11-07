@@ -387,6 +387,8 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, models.ErrChatScheduleFiring):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, models.ErrChatScheduleQueueFull):
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -606,7 +608,7 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 	case models.ChatScheduleDeferred:
 		http.Error(w, "the server is not taking new turns right now; the run starts when it does", http.StatusServiceUnavailable)
 		return
-	case models.ChatScheduleQueued, models.ChatScheduleCoalesced, models.ChatScheduleBusy:
+	case models.ChatScheduleQueued, models.ChatScheduleCoalesced, models.ChatScheduleBusy, models.ChatScheduleRejected:
 	}
 	s.emitQueueUpdate(r.Context(), user, conv.ID)
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)

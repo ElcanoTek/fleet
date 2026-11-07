@@ -654,8 +654,10 @@ func ChatScheduleInputKey(fire models.ChatScheduleFire) string {
 //   - busy (scheduled): a patrol turn of the owner's is in flight, an approval
 //     card is waiting on them, or the input queue holds maxPending rows. The
 //     slot is skipped, so patrols never pile up behind one another.
+//   - rejected (Run now): the input queue holds maxPending rows. The user is
+//     told (429) and the fire ends; nothing runs it once the queue drains.
 //
-// A Run now against a full queue is an error, as it always was.
+// Errors are only for what a retry may fix (the database).
 func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, maxPending int) (models.ChatScheduleDelivery, error) {
 	nowUnix := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -754,7 +756,9 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		}
 		if pending >= maxPending {
 			if manual {
-				return models.ChatScheduleDelivery{}, fmt.Errorf("conversation input queue is full (%d queued)", pending)
+				// Refused for good, not an error to retry: a retry would run
+				// the turn later, unasked, once the queue drained.
+				return models.ChatScheduleDelivery{Outcome: models.ChatScheduleRejected, Reason: "queue_full"}, tx.Commit()
 			}
 			return busy, tx.Commit()
 		}
