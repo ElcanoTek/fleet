@@ -227,6 +227,12 @@ type ThinkingConfig struct {
 // "gone" from "the server broke" — which a raw 500 never let it do.
 var ErrConversationNotFound = errors.New("conversation not found")
 
+// ErrSummaryStale is returned by ReplaceSummary when a message was committed
+// to the conversation after the history the summary covers was read: saving
+// the summary would hide that message from the model (#2044). The caller
+// discards the summary and asks the user to summarize again.
+var ErrSummaryStale = errors.New("the conversation changed while it was being summarized; summarize again")
+
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
 // more of the supplied IDs do not belong to the caller (or do not exist). The
 // HTTP layer surfaces it as 403 and the whole operation is a no-op.
@@ -322,9 +328,9 @@ func (s *Store) Close() error {
 // deletion), so it stopped cascading — which quietly made the usage-analytics
 // tests non-rerunnable (rows accumulated across suite runs). projects,
 // user_connector_prefs, user_skills, user_personas, external_access_state,
-// external_team_renames, and account_events (unused since ADR-0096, until a
-// later migration drops it) have no FK into any truncated table and are named
-// for the same reason.
+// external_team_renames, account_events (unused since ADR-0096, until a
+// later migration drops it), and webhook_deliveries have no FK into any
+// truncated table and are named for the same reason.
 // The lock discipline below exists because a bare TRUNCATE here deadlocked in
 // CI (SQLSTATE 40P01), failing PRs whose diffs touched nothing nearby. TRUNCATE
 // takes ACCESS EXCLUSIVE on every listed table plus everything CASCADE reaches,
@@ -442,7 +448,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, chat_schedules, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, external_team_renames, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, user_personas, shared_files, teams, conversation_order RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, chat_schedules, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, external_team_renames, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, user_personas, shared_files, teams, conversation_order, webhook_deliveries RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -537,11 +543,19 @@ func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) er
 // mutated afterward — matches how persona is locked after the first
 // turn.
 func (s *Store) CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
-	id := newConversationID(ctx)
+	return insertConversation(ctx, s.db, newConversationID(ctx), userEmail, title, persona, model, lockdown)
+}
+
+// insertConversation is CreateConversation's body against any executor, so a
+// caller can make the insert part of its own transaction
+// (CreateWebhookConversation).
+func insertConversation(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, id, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
 	now := time.Now().Unix()
 	// optional_mcp_servers_enabled gets the column default ('[]'::jsonb);
 	// we don't need to write it explicitly on insert.
-	_, err := s.db.ExecContext(ctx,
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8)`,
 		id, userEmail, title, persona, model, lockdown, now, now,
@@ -2025,6 +2039,13 @@ func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agen
 func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	now := time.Now().Unix()
 
+	// Bump updated_at FIRST: it takes the conversation row lock before any
+	// message id is allocated, which is what lets ReplaceSummary's
+	// newer-message check be atomic (#2044) — see lockConversationForAppend.
+	if err := lockConversationForAppend(ctx, tx, convID, now); err != nil {
+		return nil, err
+	}
+
 	var b strings.Builder
 	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, injected_context) VALUES `)
 	args := make([]any, 0, len(entries)*6)
@@ -2073,12 +2094,41 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 			return nil, err
 		}
 	}
-
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID); err != nil {
-		return nil, err
-	}
 	return ids, nil
+}
+
+// lockConversationForAppend bumps the conversation's updated_at at the START
+// of a history-append transaction. The UPDATE's row lock is held to commit,
+// so every writer of a conversation's messages serializes on that row before
+// it allocates message ids. ReplaceSummary relies on it (#2044): it locks the
+// same row, so a concurrent turn's rows are either committed (and seen by its
+// newer-message check) or allocated after the summary's id. Without it, a
+// writer could draw ids below the summary's and commit after it, landing
+// before the summary marker where replayHistory discards them.
+func lockConversationForAppend(ctx context.Context, tx *sql.Tx, convID string, now int64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID)
+	return err
+}
+
+// SummarySnapshot fingerprints the history a summary was generated from:
+// ThroughID is the highest messages.id in it, Messages the number of its
+// non-summary entries. ReplaceSummary compares it with the live history.
+type SummarySnapshot struct {
+	ThroughID int64
+	Messages  int
+}
+
+// SummarySnapshotOf fingerprints a history as LoadHistory returned it.
+func SummarySnapshotOf(history []agent.HistoryEntry) SummarySnapshot {
+	var snap SummarySnapshot
+	for _, e := range history {
+		snap.ThroughID = max(snap.ThroughID, e.ID)
+		if e.Type != "summary" {
+			snap.Messages++
+		}
+	}
+	return snap
 }
 
 // ReplaceSummary deletes any prior `summary` messages on the conversation
@@ -2089,7 +2139,25 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 //
 // Scoped by user_email: a foreign-owned conversation returns an error
 // instead of mutating someone else's chat.
-func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error {
+//
+// snap describes the history the summary was generated from (see
+// SummarySnapshot). The summary row gets a fresh (larger) id, and
+// replayHistory discards everything before the latest summary — so a message
+// committed while the 30-60 s summary call was running would sit *before* the
+// summary and silently drop out of the model's context (#2044), and a message
+// removed meanwhile (TruncateAfter, the retry/regenerate clip) would live on
+// inside the summary text. ReplaceSummary therefore refuses with
+// ErrSummaryStale unless the conversation's non-summary history is still
+// exactly the snapshot: nothing newer than snap.ThroughID, and still
+// snap.Messages rows at or below it. Ids are never reused, so an append
+// shows up as a newer id and a deletion as a lower count.
+//
+// The check and the insert are atomic with respect to every history writer:
+// the conversation row is locked FOR UPDATE first, and the append paths
+// (appendHistoryTx, appendHistoryProvenanceTx) and TruncateAfter take that
+// row's lock before they touch messages, so a writer is either fully
+// committed and visible to the check, or it waits until the summary commits.
+func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry, snap SummarySnapshot) error {
 	if entry.Type != "summary" {
 		return fmt.Errorf("ReplaceSummary: entry type must be \"summary\", got %q", entry.Type)
 	}
@@ -2106,6 +2174,32 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// FOR UPDATE (not NO KEY UPDATE) also conflicts with the KEY SHARE lock a
+	// concurrent message INSERT's foreign-key check holds, so even a writer
+	// that has not reached its own conversation-row lock is waited out.
+	var locked string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM conversations WHERE id = $1 FOR UPDATE`, convID,
+	).Scan(&locked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConversationNotFound
+		}
+		return fmt.Errorf("lock conversation: %w", err)
+	}
+	var newer bool
+	var covered int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(bool_or(id > $2), FALSE), count(*) FILTER (WHERE id <= $2)
+		   FROM messages
+		  WHERE conversation_id = $1 AND type <> 'summary'`,
+		convID, snap.ThroughID,
+	).Scan(&newer, &covered); err != nil {
+		return fmt.Errorf("check the summarized history: %w", err)
+	}
+	if newer || covered != snap.Messages {
+		return ErrSummaryStale
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id = $1 AND type = 'summary'`,
@@ -2132,7 +2226,9 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 
 // TruncateAfter deletes every message in a conversation whose id is strictly
 // greater than afterMessageID. Used by the retry + regenerate flows to clip
-// off a cancelled/failed assistant tail before re-running the turn.
+// off a cancelled/failed assistant tail before re-running the turn. It takes
+// the conversation row lock first, like every history writer, so it is
+// serialized against ReplaceSummary's check of the summarized history.
 //
 // Scoped by user_email: if the conversation belongs to someone else we
 // return a 0-row error so the handler surfaces a 404.
@@ -2145,19 +2241,23 @@ func (s *Store) TruncateAfter(ctx context.Context, userEmail, convID string, aft
 	if owned == nil {
 		return ErrConversationNotFound
 	}
-	_, err = s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Bump updated_at (so the sidebar reflects the change) first: it is the
+	// conversation row lock (lockConversationForAppend).
+	if err := lockConversationForAppend(ctx, tx, convID, time.Now().Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id = $1 AND id > $2`,
 		convID, afterMessageID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("truncate: %w", err)
 	}
-	// Bump updated_at so the sidebar reflects the change.
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE conversations SET updated_at = $1 WHERE id = $2`,
-		time.Now().Unix(), convID,
-	)
-	return err
+	return tx.Commit()
 }
 
 // MaxMessageIDForRole returns the DB row id of the latest message for this

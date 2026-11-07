@@ -106,6 +106,33 @@ The operator is responsible for scoping the persona and template so an
 adversarial payload cannot direct the agent somewhere it should not go. The docs
 say this plainly (`docs/WEBHOOKS.md`).
 
+### Delivery idempotency (added later)
+
+Senders deliver at least once — Slack retries unanswered events, GitHub
+redelivers on request — and each delivery used to start its own conversation
+and turn. The endpoint now claims every authenticated delivery, per slug, in a
+small `webhook_deliveries` table (migration 098) before it starts anything, and
+answers a repeat of an accepted delivery `200` with the original
+`conversation_id`. The key is `X-GitHub-Delivery`, else a Slack trigger's
+payload `event_id`, else the SHA-256 of the signature header and body; records
+are kept 24 hours and expire through the existing retention sweep. The
+conversation is created and bound to the claim in one transaction; the
+delivery is marked complete in the same transaction that commits the turn's
+user message (the shared pre-provider commit point of the one governed turn
+path, through a store wrapper rather than a second path), and the endpoint
+answers `202` only after that commit (waiting at most 10 seconds), so a `2xx`
+means the input is durable and startup recovery covers the turn from there. A
+claim carries a random token that a takeover of a stale (over a minute old,
+incomplete) claim rotates, and binding, completing, releasing and discarding
+all require it. A takeover starts afresh in a new conversation under the
+current settings; the earlier request's conversation is deleted only while
+empty. A delivery that was not accepted (throttled, input not saved in time)
+gives its claim back and discards the conversation it created only while that
+is still empty, so the sender's retry is processed. The table, rather than
+process memory, holds the records because fleet runs as one replica that
+restarts on every release: an in-memory set would forget accepted deliveries
+across exactly the restarts a retry window can span. See `docs/WEBHOOKS.md`.
+
 ### Identity is the configured owner
 
 The turn runs as `notify_user` — a real, operator-configured account — so it uses

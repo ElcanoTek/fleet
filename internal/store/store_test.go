@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -368,12 +369,13 @@ func TestReplaceSummary_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
-	_, _ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+	ids, _ := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
 		textEntry("user", "hi"),
 		textEntry("assistant", "hello"),
 	})
+	covered := SummarySnapshot{ThroughID: ids[len(ids)-1], Messages: len(ids)}
 
-	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("first")); err != nil {
+	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("first"), covered); err != nil {
 		t.Fatalf("first ReplaceSummary: %v", err)
 	}
 	hist, _ := s.LoadHistory(ctx, c.ID)
@@ -382,7 +384,9 @@ func TestReplaceSummary_HappyPath(t *testing.T) {
 		t.Fatalf("expected 1 summary after first call, got %d", summaries)
 	}
 
-	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("second")); err != nil {
+	// The prior summary is newer than `covered` but is not a message the
+	// summary could hide — it is the row being replaced.
+	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("second"), covered); err != nil {
 		t.Fatalf("second ReplaceSummary: %v", err)
 	}
 	hist, _ = s.LoadHistory(ctx, c.ID)
@@ -420,7 +424,7 @@ func TestReplaceSummary_RejectsWrongType(t *testing.T) {
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 
 	bad := textEntry("assistant", "not a summary")
-	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, bad); err == nil {
+	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, bad, SummarySnapshot{}); err == nil {
 		t.Fatal("expected error for non-summary entry type")
 	}
 }
@@ -431,8 +435,59 @@ func TestReplaceSummary_WrongUser(t *testing.T) {
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
 
-	if err := s.ReplaceSummary(ctx, "intruder@x.com", c.ID, summaryEntry("x")); err == nil {
+	if err := s.ReplaceSummary(ctx, "intruder@x.com", c.ID, summaryEntry("x"), SummarySnapshot{}); err == nil {
 		t.Fatal("expected error for wrong user")
+	}
+}
+
+// TestReplaceSummary_RefusesWhenHistoryMovedOn pins #2044: a message
+// committed after the summarized snapshot was read (a turn that finished
+// during the 30-60 s summary call) would get an id below the summary's and be
+// dropped from the model's context by replayHistory. ReplaceSummary refuses
+// with ErrSummaryStale and writes nothing; a summary saved first leaves a
+// later message after the marker, where replay keeps it.
+func TestReplaceSummary_RefusesWhenHistoryMovedOn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
+	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+		textEntry("user", "hi"),
+		textEntry("assistant", "hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := SummarySnapshot{ThroughID: ids[len(ids)-1], Messages: len(ids)}
+
+	// A turn commits while the summary is being generated.
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+		textEntry("user", "meanwhile"),
+		textEntry("assistant", "answered meanwhile"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("stale"), covered)
+	if !errors.Is(err, ErrSummaryStale) {
+		t.Fatalf("ReplaceSummary over a moved-on history: err = %v, want ErrSummaryStale", err)
+	}
+	hist, _ := s.LoadHistory(ctx, c.ID)
+	if n := countByType(hist, "summary"); n != 0 {
+		t.Fatalf("a refused summary must write nothing, got %d summary rows", n)
+	}
+
+	// Summarizing the current history succeeds, and a message written after
+	// it lands after the marker.
+	hist, _ = s.LoadHistory(ctx, c.ID)
+	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("fresh"), SummarySnapshotOf(hist)); err != nil {
+		t.Fatalf("ReplaceSummary over the current history: %v", err)
+	}
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "after")}); err != nil {
+		t.Fatal(err)
+	}
+	hist, _ = s.LoadHistory(ctx, c.ID)
+	if last := hist[len(hist)-1]; last.Type != "text" || hist[len(hist)-2].Type != "summary" {
+		t.Fatalf("expected the post-summary message after the marker, got tail %s/%s", hist[len(hist)-2].Type, last.Type)
 	}
 }
 
@@ -444,4 +499,120 @@ func countByType(entries []agent.HistoryEntry, typ string) int {
 		}
 	}
 	return n
+}
+
+// TestReplaceSummary_WaitsOutAnOpenAppend pins the atomicity half of #2044:
+// a history append whose transaction is still open when the summary is saved
+// has already drawn message ids below the summary's. ReplaceSummary must wait
+// for it (the conversation-row lock both sides take) and then see its rows,
+// rather than commit first and leave them before the summary marker.
+func TestReplaceSummary_WaitsOutAnOpenAppend(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
+	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "hi")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := s.appendHistoryTx(ctx, tx, c.ID, []agent.HistoryEntry{textEntry("assistant", "in flight")}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("s"), SummarySnapshot{ThroughID: ids[0], Messages: 1})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("ReplaceSummary returned (%v) while an append was still open; it must wait", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrSummaryStale) {
+			t.Fatalf("after the append committed: err = %v, want ErrSummaryStale", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ReplaceSummary never returned after the append committed")
+	}
+}
+
+// A truncate (the retry/regenerate clip) during summarization removes messages
+// the summary text still describes without adding a newer id; the count half
+// of the snapshot catches it and nothing is written.
+func TestReplaceSummary_RefusesAfterTruncate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
+	ids, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+		textEntry("user", "hi"),
+		textEntry("assistant", "hello"),
+		textEntry("user", "again"),
+		textEntry("assistant", "discarded reply"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := s.LoadHistory(ctx, c.ID)
+	snap := SummarySnapshotOf(hist)
+	if snap.ThroughID != ids[3] || snap.Messages != 4 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if err := s.TruncateAfter(ctx, "u@x.com", c.ID, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("stale"), snap); !errors.Is(err, ErrSummaryStale) {
+		t.Fatalf("ReplaceSummary after a truncate: err = %v, want ErrSummaryStale", err)
+	}
+	hist, _ = s.LoadHistory(ctx, c.ID)
+	if n := countByType(hist, "summary"); n != 0 {
+		t.Fatalf("a refused summary wrote %d rows", n)
+	}
+}
+
+// TruncateAfter takes the conversation row lock, so a summary being saved
+// waits for an open truncate and then sees it.
+func TestReplaceSummary_WaitsOutAnOpenTruncate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "hi"), textEntry("assistant", "bye")}); err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := s.LoadHistory(ctx, c.ID)
+	snap := SummarySnapshotOf(hist)
+
+	// Hold the lock TruncateAfter takes, then start it and the summary save.
+	blocker, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback() }()
+	if err := lockConversationForAppend(ctx, blocker, c.ID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	truncated := make(chan error, 1)
+	go func() { truncated <- s.TruncateAfter(ctx, "u@x.com", c.ID, hist[0].ID) }()
+	time.Sleep(200 * time.Millisecond) // TruncateAfter queues on the row lock first
+	saved := make(chan error, 1)
+	go func() { saved <- s.ReplaceSummary(ctx, "u@x.com", c.ID, summaryEntry("s"), snap) }()
+	time.Sleep(200 * time.Millisecond)
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-truncated; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-saved; !errors.Is(err, ErrSummaryStale) {
+		t.Fatalf("summary saved behind a truncate: err = %v, want ErrSummaryStale", err)
+	}
 }

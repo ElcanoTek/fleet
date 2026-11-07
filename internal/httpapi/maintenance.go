@@ -181,7 +181,8 @@ func (s *Server) NoteMaintenanceRun(at time.Time) {
 }
 
 // sweepRetention runs the database retention sweeps — expired
-// conversations, terminal input-queue rows, and finished turns' durable SSE
+// conversations, terminal input-queue rows, webhook delivery records past
+// their 24 h idempotency window, and finished turns' durable SSE
 // ledgers (turns + turn_events + turn_journal, which otherwise outlive their
 // usefulness as reattach/recovery state and grow without bound in long-lived
 // conversations). It is RunMaintenance's database half; a mock-mode turn
@@ -200,6 +201,11 @@ func (s *Server) sweepRetention(ctx context.Context) {
 		log.Printf("post-turn input-queue purge error: %v", err)
 	} else if purged > 0 {
 		log.Printf("input-queue purge: %d terminal row(s) removed", purged)
+	}
+	if swept, err := s.store.SweepWebhookDeliveries(ctx, store.WebhookDeliveryTTL); err != nil {
+		log.Printf("post-turn webhook-delivery sweep error: %v", err)
+	} else if swept > 0 {
+		log.Printf("webhook-delivery sweep: %d expired record(s) removed", swept)
 	}
 	if swept, err := s.store.SweepTurnEvents(ctx,
 		time.Duration(s.cfg.TurnEventRetentionDays)*24*time.Hour); err != nil {

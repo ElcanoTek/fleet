@@ -9,7 +9,13 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
+
+// summaryStaleMessage is the summary.error text when a message landed while
+// the summary was being written (store.ErrSummaryStale). Nothing was saved,
+// so pressing Summarize again covers the new message too.
+const summaryStaleMessage = "The conversation changed while it was being summarized, so the summary was not saved. Summarize again."
 
 // summarizeRequest is the body of POST /conversations/{id}/summarize.
 //
@@ -49,7 +55,13 @@ type summarizeResponse struct {
 //     as they generate so a 30-60s wait reads as a chat message
 //     materializing instead of a frozen spinner.
 //  5. Persist as a `summary` HistoryEntry via store.ReplaceSummary
-//     (deletes any prior summary in the same tx).
+//     (deletes any prior summary in the same tx). The in-flight check in
+//     step 1 is only a snapshot: a turn can start and commit during the
+//     model call. ReplaceSummary refuses (store.ErrSummaryStale →
+//     summary.error) when the history changed since it was read — a newer
+//     message (the summary's fresh id would sit after it and replayHistory
+//     would drop it from the model's context) or a removed one (the summary
+//     would keep it) (#2044).
 //  6. Emit a final `summary.completed` event with usage + cost.
 //
 // Wire shape — text/event-stream with these events:
@@ -133,6 +145,12 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Fingerprint the history the summary covers, BEFORE redaction: a message
+	// committed after this point (a turn finishing in another tab, a resolved
+	// approval) or removed meanwhile (a retry's truncate) makes ReplaceSummary
+	// refuse instead of persisting a summary that would hide the new message
+	// from the model or keep the removed one (#2044).
+	snapshot := store.SummarySnapshotOf(history)
 	history = redactHistoryForSender(history, user, conv.UserEmail)
 	if len(history) == 0 {
 		http.Error(w, "conversation has no history to summarize", http.StatusBadRequest)
@@ -190,8 +208,12 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		CompletionTokens: result.CompletionTokens,
 		CostUSD:          result.CostUSD,
 	})
-	if err := s.store.ReplaceSummary(r.Context(), user, convID, entry); err != nil {
-		emit("summary.error", map[string]any{"message": err.Error()})
+	if err := s.store.ReplaceSummary(r.Context(), user, convID, entry, snapshot); err != nil {
+		msg := err.Error()
+		if errors.Is(err, store.ErrSummaryStale) {
+			msg = summaryStaleMessage
+		}
+		emit("summary.error", map[string]any{"message": msg})
 		return
 	}
 
