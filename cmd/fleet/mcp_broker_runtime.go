@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/redact"
@@ -46,7 +47,10 @@ func productionMCPBrokerCommand() (*exec.Cmd, error) {
 		return nil, fmt.Errorf("resolve fleet executable for MCP broker: %w", err)
 	}
 	cmd := exec.CommandContext(context.Background(), executable, "mcp-broker") //nolint:gosec // executable is the running fleet binary, not request input.
-	cmd.Stderr = os.Stderr
+	// The child logs to its stderr in the parent's format and level
+	// (mcpBrokerLogConfig); its lines join the parent's log destination,
+	// FLEET_LOG_FILE included.
+	cmd.Stderr = logging.ChildStderr()
 	return cmd, nil
 }
 

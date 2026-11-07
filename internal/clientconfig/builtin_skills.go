@@ -369,7 +369,7 @@ func copyDirSkill(src, dst, containRoot string) error {
 		if containRoot != "" {
 			resolved, ok := containedRegularFile(p, containRoot)
 			if !ok {
-				slog.Info("clientconfig: plugin skill file skipped: not a regular file inside the plugin root", "file", p, "plugin_root", containRoot)
+				slog.Warn("clientconfig: plugin skill file skipped: not a regular file inside the plugin root", "file", p, "plugin_root", containRoot)
 				return nil
 			}
 			p = resolved

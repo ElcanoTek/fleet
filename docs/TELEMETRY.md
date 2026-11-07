@@ -42,9 +42,10 @@ Both go to stderr (journald under the systemd unit) and, with `FLEET_LOG_FILE`,
 also to the rotating file. `FLEET_LOG_LEVEL` gates every fleet line in both
 formats. A line a third-party library writes through `log.Printf` is bridged
 in at `INFO` and is not gated, so raising the level cannot hide a library's
-only report of a failure. The MCP broker child logs to the parent's stderr in
-the same format and level. It does not write to `FLEET_LOG_FILE`, because two
-processes rotating one file would corrupt it.
+only report of a failure. The MCP broker child logs in the same format and
+level. It opens no log file of its own (two processes rotating one file would
+corrupt it): the parent pipes the child's stderr, whole lines at a time, into
+its own destination, so broker lines reach stderr and `FLEET_LOG_FILE` alike.
 
 **Correlation ids.** `logging.From(ctx)` returns the default logger with the
 context's ids attached. The ids are attached where they become known:
@@ -284,5 +285,3 @@ and `client_ca_file` to require the client certificate.
   `tool.call` span only.
 - `trace_id` exists only when tracing is on. With it off, `turn_id`/`run_id`
   are the correlation keys.
-- The broker child's log lines go to journald (the parent's stderr), not to
-  `FLEET_LOG_FILE`.

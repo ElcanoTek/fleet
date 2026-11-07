@@ -1262,7 +1262,7 @@ func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handle
 		return nil, nil
 	}
 	if cfg.A2APushAllowPrivate {
-		slog.Info("a2a: push SSRF guard RELAXED (FLEET_A2A_PUSH_ALLOW_PRIVATE=1) — loopback/private webhook targets accepted; do not run production this way")
+		slog.Warn("a2a: push SSRF guard RELAXED (FLEET_A2A_PUSH_ALLOW_PRIVATE=1) — loopback/private webhook targets accepted; do not run production this way")
 	}
 	return push.New(store, cfg.A2APushAllowPrivate), nil
 }
@@ -1840,7 +1840,7 @@ func diskAdmissionGate(guard *diskguard.Guard) func() (bool, string) {
 // box needs to know that before wondering why nothing is being claimed.
 func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 	if !guard.Enabled() {
-		slog.Info("disk backpressure: OFF (FLEET_DISK_MIN_FREE_PERCENT=0)")
+		slog.Warn("disk backpressure: OFF (FLEET_DISK_MIN_FREE_PERCENT=0)")
 		return
 	}
 	st := guard.Sample()

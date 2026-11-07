@@ -741,7 +741,7 @@ var table = []Entry{
 	{Name: "FLEET_LOG_COMPRESS", Group: GroupObservability, Scope: ScopeServer, Type: TypeBool, Default: "true", Chain: true, Knob: loader,
 		Description: "Gzip rotated files."},
 	{Name: "FLEET_LOG_FORMAT", Group: GroupObservability, Scope: ScopeServer, Type: TypeEnum, Default: "json", Enum: []string{"json", "text"}, Chain: true,
-		Description: "Process log format: one JSON object per line, or logfmt text (docs/TELEMETRY.md)."},
+		Description: "Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). See docs/TELEMETRY.md."},
 	{Name: "FLEET_LOG_LEVEL", Group: GroupObservability, Scope: ScopeServer, Type: TypeEnum, Default: "info", Enum: []string{"debug", "info", "warn", "error"}, Chain: true,
 		Description: "Minimum process log level (both formats)."},
 	{Name: "FLEET_LOG_ARCHIVE_AFTER_DAYS", Group: GroupObservability, Scope: ScopeServer, Type: TypeInt, Default: "0", Chain: true, Knob: loader,

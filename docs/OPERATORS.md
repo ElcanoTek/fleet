@@ -706,10 +706,10 @@ The `fleet serve` process log is **structured `log/slog`** — by default one JS
 object per line (`time`/`level`/`msg` plus attributes), which log aggregators
 (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index natively. This
 applies to both stderr and the rotating file above, and to the MCP broker
-child's lines (stderr only).
+child's lines, which the parent pipes into the same destination.
 
 ```
-FLEET_LOG_FORMAT=json                      # default; one JSON object per line. "text" = logfmt (key=value)
+FLEET_LOG_FORMAT=json                      # default; one JSON object per line. "text" = logfmt (key=value), for reading by eye
 FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
 ```
 
@@ -717,10 +717,28 @@ Every line about a request, turn or task run carries the ids that tie it
 together — `request_id`, `user_id`, `conv_id`, `turn_id`, `task_id`, `run_id`,
 and `trace_id`/`span_id` when tracing is on — so
 `journalctl -u fleet -o cat | jq 'select(.turn_id=="…")'` is the whole story of
-one turn. `FLEET_LOG_LEVEL` gates every fleet line; only a third-party
-library's own `log` output is bridged in ungated at info. Secret-shaped values
-are redacted by the same rules that scrub tool output. Tracing (OTLP over TLS,
-`FLEET_OTEL_*`) and a local Collector setup: [`TELEMETRY.md`](TELEMETRY.md).
+one turn. Secret-shaped values are redacted by the same rules that scrub tool
+output. Tracing (OTLP over TLS, `FLEET_OTEL_*`) and a local Collector setup:
+[`TELEMETRY.md`](TELEMETRY.md).
+
+Operator notes:
+
+- **`FLEET_LOG_FORMAT=text`** emits slog's logfmt lines —
+  `time=… level=WARN msg="remote-mcp: skipping server — token unavailable" reg_name=github user=…` —
+  for an operator reading `journalctl` by eye. It is **not** the plaintext of
+  releases before #2052: every call site is now structured, so a value that was
+  part of the old message (an id, an error) is a `key=value` attribute, and the
+  message texts themselves changed in that release. Point log-parsing tooling
+  (alerts, grep pipelines, dashboards) at the **JSON** format and its stable
+  `msg` plus attribute keys, not at text-mode lines.
+- **`FLEET_LOG_LEVEL`** gates every fleet log line, in both formats. Warnings
+  about unsafe or degraded configuration (a disabled seccomp filter, a relaxed
+  SSRF guard, a fallback in effect) log at `warn`, so `FLEET_LOG_LEVEL=warn`
+  still shows them. Lines a third-party library writes through Go's standard
+  `log` package are bridged at info and are not gated, since their true
+  severity is unknown.
+- The `fleet mcp-broker` child logs in the same format and level, and its lines
+  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.

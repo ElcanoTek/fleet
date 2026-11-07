@@ -538,7 +538,7 @@
             "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY": { "type": ["string", "number", "boolean"], "description": "Base64 AES-256 key encrypting log archives; unset or malformed archives gzip-only. Secret: set it through config.existingSecret, not config.env." },
             "FLEET_LOG_COMPRESS": { "type": ["string", "number", "boolean"], "description": "Gzip rotated files. Default: true." },
             "FLEET_LOG_FILE": { "type": ["string", "number", "boolean"], "description": "Opt-in rotating process log file; empty logs to stderr only. Agent session logs are written beside it." },
-            "FLEET_LOG_FORMAT": { "type": ["string", "number", "boolean"], "description": "Process log format: one JSON object per line, or logfmt text (docs/TELEMETRY.md). Default: json." },
+            "FLEET_LOG_FORMAT": { "type": ["string", "number", "boolean"], "description": "Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). See docs/TELEMETRY.md. Default: json." },
             "FLEET_LOG_LEVEL": { "type": ["string", "number", "boolean"], "description": "Minimum process log level (both formats). Default: info." },
             "FLEET_LOG_MAX_AGE_DAYS": { "type": ["string", "number", "boolean"], "description": "Delete rotated files older than this; 0 keeps them. Default: 0." },
             "FLEET_LOG_MAX_BACKUPS": { "type": ["string", "number", "boolean"], "description": "Rotated files kept. Default: 7." },

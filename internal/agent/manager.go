@@ -677,7 +677,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		}
 		poolCfg.Size = 0
 		poolCfg.Mode = sandbox.ModeHost
-		slog.Info("sandbox: mock mode — tool calls are stubbed by e2e harness")
+		slog.Warn("sandbox: mock mode — tool calls are stubbed by e2e harness")
 		return sandbox.NewPool(poolCfg), nil
 	}
 
@@ -938,11 +938,11 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 			// nested mount above.
 			slog.Warn("sandbox: kubernetes backend — skills dir is still the merged tree under the control plane's data dir because staging it into the workspace claim failed at boot (see the earlier 'stage skills' warning); no pod can see it, so in-sandbox skill reads will not resolve", "dir", d)
 		case docsInImage:
-			slog.Info("sandbox: kubernetes backend — dir is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", "dir", d)
+			slog.Warn("sandbox: kubernetes backend — dir is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", "dir", d)
 		}
 	}
 	if !docsInImage && len(dropped) > 0 {
-		slog.Info("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads of these host dirs will not resolve. If your sandbox image carries the bundle's doc dirs at the same paths, set sandbox.kubernetes.bundle_docs_in_image (FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE=true)", "dirs", len(dropped))
+		slog.Warn("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads of these host dirs will not resolve. If your sandbox image carries the bundle's doc dirs at the same paths, set sandbox.kubernetes.bundle_docs_in_image (FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE=true)", "dirs", len(dropped))
 	}
 	poolCfg.Container.Runtime = ""
 

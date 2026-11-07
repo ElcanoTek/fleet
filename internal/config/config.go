@@ -244,14 +244,14 @@ type LogConfig struct {
 	MaxAgeDays int    // FLEET_LOG_MAX_AGE_DAYS — delete rotated files older than this (0 = no age limit)
 	MaxBackups int    // FLEET_LOG_MAX_BACKUPS — keep this many rotated files (default 7)
 	Compress   bool   // FLEET_LOG_COMPRESS — gzip rotated files (default true)
-	// Format selects the process-log output format (#178): "json" (default) emits
-	// structured log/slog JSON — aggregation-friendly (Loki/Datadog/journald JSON)
-	// — by routing the standard log package through an slog JSON handler; "text"
-	// keeps the legacy plaintext lines exactly as before. FLEET_LOG_FORMAT.
+	// Format selects the process-log output format (#178, #2052): "json"
+	// (default) emits one structured log/slog JSON object per line —
+	// aggregation-friendly (Loki/Datadog/journald JSON); "text" emits slog's
+	// logfmt (time=… level=… msg="…" key=value), for reading by eye. It is not
+	// the pre-#2052 plaintext. FLEET_LOG_FORMAT.
 	Format string
 	// Level is the minimum slog level to emit: debug|info|warn|error (default
-	// info). FLEET_LOG_LEVEL. Applies to the json format; the text format is
-	// unlevelled (legacy behavior).
+	// info). FLEET_LOG_LEVEL. Applies to both formats.
 	Level string
 }
 

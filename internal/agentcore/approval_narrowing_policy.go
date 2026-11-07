@@ -84,7 +84,7 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 func installNarrowableArgs(entries map[string]string, modes map[string]string, critical map[string]bool) map[string]string {
 	out, problems := buildNarrowableArgs(entries, modes, critical)
 	for _, problem := range problems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	return out
 }

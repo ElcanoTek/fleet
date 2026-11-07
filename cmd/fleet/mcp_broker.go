@@ -41,18 +41,28 @@ const (
 // parent's agent loop then holds no connector secrets: it delegates every MCP call
 // here, so "in-process" means only where the loop runs, not where secrets live.
 //
-// Frames ride stdin/stdout; all logging goes to stderr (the parent hands the
-// child its own stderr) so it never corrupts the frame stream the parent
-// decodes. The child logs in the parent's format and level (FLEET_LOG_FORMAT /
-// FLEET_LOG_LEVEL), and exports its spans to the parent's collector as
-// service "<FLEET_SERVICE_NAME>" with fleet.process=mcp-broker, so a
-// delegated call's span lands in the trace of the turn or run that made it
-// (#2052, internal/mcpbroker/telemetry.go).
-func runMCPBroker() error {
-	if _, err := logging.Configure(logging.Config{
+// Frames ride stdin/stdout; all logging goes to stderr so it never corrupts the
+// frame stream the parent decodes. The parent pipes that stderr into its own
+// log destination (logging.ChildStderr), so the child's lines reach
+// FLEET_LOG_FILE under the one rotator the parent owns. The child exports its
+// spans to the parent's collector as service "<FLEET_SERVICE_NAME>" with
+// fleet.process=mcp-broker, so a delegated call's span lands in the trace of
+// the turn or run that made it (#2052, internal/mcpbroker/telemetry.go).
+//
+// mcpBrokerLogConfig is the broker child's logging: the parent's format and
+// level (FLEET_LOG_FORMAT, FLEET_LOG_LEVEL — canonical names), and NO file of
+// its own.
+func mcpBrokerLogConfig() logging.Config {
+	return logging.Config{
 		Format: envreg.Get("FLEET_LOG_FORMAT"),
 		Level:  envreg.Get("FLEET_LOG_LEVEL"),
-	}); err != nil {
+	}
+}
+
+func runMCPBroker() error {
+	// Same handler, redactor, format and level as the parent, so the
+	// broker's lines are not Go's default plaintext mixed into JSON.
+	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
 		return fmt.Errorf("configure broker logging: %w", err)
 	}
 	shutdownTracing, err := otelsetup.InitWith(context.Background(), otelsetup.Options{ServiceVersion: version.String(), Process: "mcp-broker"})

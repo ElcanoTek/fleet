@@ -119,6 +119,7 @@ func Configure(cfg Config) (io.Closer, error) {
 		newHandler = newTextHandler
 	}
 	levelVar.Set(ParseLevel(cfg.Level))
+	setOutput(dest)
 	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
 	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
