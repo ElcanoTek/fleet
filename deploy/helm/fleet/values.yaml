@@ -14,7 +14,7 @@
 #      in the control-plane process (ADR-0003).
 #
 # Images default to the ones every fleet release publishes, signed, with an
-# SBOM and SLSA provenance (docs/RELEASE-ARTIFACTS.md, ADR-0098):
+# SBOM and SLSA provenance (docs/RELEASE-ARTIFACTS.md, ADR-0100):
 #   control plane:  ghcr.io/elcanotek/fleet          (binary + generic bundle)
 #   sandbox:        ghcr.io/elcanotek/fleet-sandbox  (the generic bundle's image)
 # both at the same release tag. The chart attached to a release is stamped with

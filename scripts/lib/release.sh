@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # scripts/lib/release.sh — the shell half of fleet's signed release artifacts
-# (docs/RELEASE-ARTIFACTS.md, ADR-0098). Sourced by bootstrap.sh and update.sh.
+# (docs/RELEASE-ARTIFACTS.md, ADR-0100). Sourced by bootstrap.sh and update.sh.
 #
 # Its one job is the FIRST verified binary on a box: bootstrap has no fleet
 # yet, and a box upgrading from a from-source install has a fleet that

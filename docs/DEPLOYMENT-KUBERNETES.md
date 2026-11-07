@@ -77,7 +77,7 @@ configured. The chart grants all of these; a hand-written Role must too.
 Every fleet release publishes both images to GHCR — multi-arch (amd64,
 arm64), signed with keyless cosign by the release workflow, with an SPDX SBOM
 attached as a signed attestation and SLSA build provenance
-([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0098):
+([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0100):
 
 | Image | What it is |
 | --- | --- |

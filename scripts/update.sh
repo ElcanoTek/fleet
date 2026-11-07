@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/update.sh — in-place update for an existing fleet install.
 #
-# DEFAULT: SIGNED RELEASE ARTIFACTS (docs/RELEASE-ARTIFACTS.md, ADR-0098). No Go,
+# DEFAULT: SIGNED RELEASE ARTIFACTS (docs/RELEASE-ARTIFACTS.md, ADR-0100). No Go,
 # no Node and no web build on the box. In order:
 #
 #   1. fast-forward the fleet checkout (scripts, units, the generic bundle) to
@@ -131,7 +131,7 @@ set -euo pipefail
 # ── locate this script + its repo root (default SRC_DIR) ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Signed-release download + verification for a box whose installed fleet
-# predates `fleet release` (ADR-0098).
+# predates `fleet release` (ADR-0100).
 # shellcheck source=lib/release.sh
 . "$SCRIPT_DIR/lib/release.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same

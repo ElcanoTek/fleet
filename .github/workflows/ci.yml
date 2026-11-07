@@ -394,7 +394,7 @@ jobs:
           grep -q 'rack=12' <<<"$out"
 
       - name: The chart defaults to the published release images
-        # ADR-0098: a chart packaged for a release (stamped appVersion, as
+        # ADR-0100: a chart packaged for a release (stamped appVersion, as
         # release.yml attaches it) installs that release's GHCR images with no
         # image values at all, and an unstamped checkout chart refuses to
         # guess a release instead of rendering a tagless image.

@@ -40,7 +40,7 @@ with each other, on purpose.
    SHA CI certified, builds the static binaries and the GHCR images from that
    tag, signs them, and publishes a GitHub release carrying every file, whose
    notes are generated from the commits since the previous tag
-   ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0098).
+   ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0100).
 
 Nothing else is a release step. There is no release commit and no version-bump
 PR. Boxes install the release's signed binary (`fleet update`); the tag is what
@@ -56,7 +56,7 @@ Two properties worth knowing:
 - **The newest ten releases are listed — best-effort.** After publishing, the
   workflow deletes older release *objects* beyond ten (release objects carry
   the downloadable artifacts, so ten is the window `fleet update --tag
-  <older> --allow-downgrade` can reach; it was one before ADR-0098). The prune
+  <older> --allow-downgrade` can reach; it was one before ADR-0100). The prune
   is housekeeping: a failure to list or delete warns in the job log instead of
   failing the release, and the next run (a re-run of the same one included)
   retries. **Tags are never deleted** — they are what builds and `fleet

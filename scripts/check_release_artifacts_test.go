@@ -14,7 +14,7 @@ import (
 )
 
 // The release pipeline and the box-side verifier are two halves of one
-// contract (ADR-0098, docs/RELEASE-ARTIFACTS.md). Nothing in CI runs
+// contract (ADR-0100, docs/RELEASE-ARTIFACTS.md). Nothing in CI runs
 // release.yml before it ships, and a box only meets a broken contract on its
 // next update — so the joins are tests here.
 

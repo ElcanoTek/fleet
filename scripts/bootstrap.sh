@@ -210,7 +210,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Signed-release download + verification: bootstrap has no fleet yet, so the
-# first binary is verified here (same pins as `fleet release`, ADR-0098).
+# first binary is verified here (same pins as `fleet release`, ADR-0100).
 # shellcheck source=lib/release.sh
 . "$SCRIPT_DIR/lib/release.sh"
 # The fleet-managed Caddyfile: marker, renderer, foreign-file detection. ONE
@@ -932,7 +932,7 @@ fi
 # end: podman (the execution sandbox), python3 + pip (host-side Python MCP
 # servers), chromium-headless (built-in browser automation), plus
 # git/curl/jq/rsync/gcc. No Go and no Node: the fleet binary is a signed release
-# artifact with the web UI embedded (docs/RELEASE-ARTIFACTS.md, ADR-0098).
+# artifact with the web UI embedded (docs/RELEASE-ARTIFACTS.md, ADR-0100).
 # Postgres-server is installed per-mode below (local only). Non-Fedora hosts:
 # install these yourself, then re-run.
 #

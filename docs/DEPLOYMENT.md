@@ -281,7 +281,7 @@ each piece yourself):
    `GITHUB_TOKEN`. It exposes `image_ref` and `image_digest` as workflow outputs
    and prints them in the run summary. The generic bundle's image,
    `ghcr.io/elcanotek/fleet-sandbox`, is published (signed) by release.yml on
-   every release, so this workflow refuses that name (ADR-0098).
+   every release, so this workflow refuses that name (ADR-0100).
 
    **Package visibility follows the publishing repo** (measured 2026-08-20, in
    this org): `ghcr.io/elcanotek/fleet-sandbox` and `…/fleet-sandbox-example`

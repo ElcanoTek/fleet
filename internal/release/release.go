@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Package release is the box side of fleet's signed release artifacts
-// (docs/RELEASE-ARTIFACTS.md, ADR-0098): it resolves a release, downloads the
+// (docs/RELEASE-ARTIFACTS.md, ADR-0100): it resolves a release, downloads the
 // fleet binary for this box's architecture, verifies it BEFORE anything uses it,
 // swaps it in atomically while keeping the previous binary, restarts the
 // service and rolls back when the new one does not become ready.
@@ -27,7 +27,7 @@
 // The verifier is the cosign CLI at a version pinned, with per-architecture
 // SHA-256 digests, in cosign.lock (embedded here and read by
 // scripts/lib/release.sh, so the Go updater and the shell bootstrap pin the
-// same bytes). ADR-0098 records why cosign and not the sigstore-go library or
+// same bytes). ADR-0100 records why cosign and not the sigstore-go library or
 // `gh attestation verify`.
 package release
 

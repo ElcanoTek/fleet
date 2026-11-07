@@ -17,7 +17,7 @@
 # here — CI, and the development-only `--from-source` paths of
 # scripts/update.sh and bootstrap.sh, all shell out to `make build`. (A release
 # box builds nothing: it installs the signed binary release.yml publishes —
-# ADR-0098.)
+# ADR-0100.)
 #
 # `?=` so an operator who has deliberately chosen a value — an air-gapped host
 # pinned to `local`, or a specific `go1.27.0` — keeps it.

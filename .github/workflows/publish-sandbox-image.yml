@@ -360,7 +360,7 @@ jobs:
               ;;
             # release.yml publishes this name on every release — signed, with
             # an SBOM and provenance, as the base boxes pull and bundles
-            # layer FROM (ADR-0098). An ad-hoc publish here would move its
+            # layer FROM (ADR-0100). An ad-hoc publish here would move its
             # :latest to an unsigned build.
             ghcr.io/elcanotek/fleet-sandbox)
               echo "::error::ghcr.io/elcanotek/fleet-sandbox is published by release.yml (signed, per release). Publish a bundle's image under its own name."

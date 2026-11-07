@@ -86,7 +86,7 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 		"Installing system dependencies",
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
-		"Fetching + verifying the fleet release", // the signed release, verified before use (ADR-0098)
+		"Fetching + verifying the fleet release", // the signed release, verified before use (ADR-0100)
 		"Installing the fleet binary",            // the binary install step (#71)
 		"would install fleet",
 		// A bare --enable-service install stages the in-repo default bundle
@@ -547,7 +547,7 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 		"would install fleet",                      // the install-to-ExecStart step (#71)
 		"would remove a leftover fleet-admin shim", // the retired shim's eviction (ADR-0060)
 		"Restarting",
-		"fleet release install", // swap + restart + readiness gate + rollback (ADR-0098)
+		"fleet release install", // swap + restart + readiness gate + rollback (ADR-0100)
 		"roll back to fleet.prev automatically",
 	} {
 		if !strings.Contains(out, want) {
@@ -608,7 +608,7 @@ func TestUpdateFromSourceIsIsolatedLegacy(t *testing.T) {
 		}
 		for _, gone := range []string{"node-version.sh", "fleet_resolve_node_bin", "fleet_node_tarball_install", "doctor.sh --node", "--no-node-repair"} {
 			if strings.Contains(src, gone) {
-				t.Errorf("%s still references %q — the box-side node toolchain is gone (ADR-0098)", script, gone)
+				t.Errorf("%s still references %q — the box-side node toolchain is gone (ADR-0100)", script, gone)
 			}
 		}
 	}
@@ -856,7 +856,7 @@ func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
 		t.Errorf("a shell-only FLEET_SANDBOX_IMAGE must not skip the sandbox gate (the service cannot see it)\n--- output ---\n%s", out)
 	}
 	// With the image unset the generic bundle runs the release's signed sandbox
-	// image (ADR-0098) — verified and pulled, not skipped.
+	// image (ADR-0100) — verified and pulled, not skipped.
 	if !strings.Contains(out, "fleet release sandbox") {
 		t.Errorf("plan must pull the release's verified sandbox image when the env file leaves the image unset\n--- output ---\n%s", out)
 	}

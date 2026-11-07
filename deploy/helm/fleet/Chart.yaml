@@ -13,7 +13,7 @@ type: application
 # chart names no release, so its image tag must be set (image.tag); the chart
 # release.yml attaches to every release is stamped, and its appVersion is what
 # the images default to (ghcr.io/elcanotek/fleet{,-sandbox}:v<appVersion>,
-# ADR-0098).
+# ADR-0100).
 #
 # `make helm-package` stamps the real values when someone actually packages the
 # chart: Helm PARSES both, and rejects the four dotted components of

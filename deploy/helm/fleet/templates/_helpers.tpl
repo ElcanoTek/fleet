@@ -57,7 +57,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The release tag both images default to (ADR-0098): image.tag when set, else
+The release tag both images default to (ADR-0100): image.tag when set, else
 "v" + the chart's appVersion, which `make helm-package` (and release.yml, for
 the chart attached to every release) stamps with the release the chart came
 from. A chart installed straight from a checkout is unstamped (appVersion

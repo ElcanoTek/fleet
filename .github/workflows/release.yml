@@ -1,4 +1,4 @@
-# Automatic date-based releases with signed artifacts (ADR-0059, ADR-0098,
+# Automatic date-based releases with signed artifacts (ADR-0059, ADR-0100,
 # docs/VERSIONING.md, docs/RELEASE-ARTIFACTS.md).
 #
 # fleet ships from a rolling release train: every PR squash-merges into `main`
@@ -11,7 +11,7 @@
 # derives N from the tags already on the repo; builds derive their own identity
 # from `git describe` against these tags. Tags are permanent.
 #
-# Three jobs, split by privilege (ADR-0098):
+# Three jobs, split by privilege (ADR-0100):
 #
 #   tag      contents: write. Mints the tag on the certified SHA; runs only the
 #            default branch's scripts/version.sh.
@@ -620,7 +620,7 @@ jobs:
           fi
 
           # Keep the newest RETAIN release OBJECTS — the rollback window for
-          # `fleet update --tag <older> --allow-downgrade` (ADR-0098). It was
+          # `fleet update --tag <older> --allow-downgrade` (ADR-0100). It was
           # one: a rolling train tags several times a day, and a Releases page
           # that lists every one of them is a feed nobody reads. Release
           # objects now carry the signed binaries, so pruning one removes a

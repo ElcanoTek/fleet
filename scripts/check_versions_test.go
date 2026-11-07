@@ -332,7 +332,7 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 	const k8sDoc = "docs/DEPLOYMENT-KUBERNETES.md"
 	img := regexp.MustCompile(`FROM (?:docker\.io/library/)?golang:(\S+?)(?:\s|$)`).FindAllStringSubmatch(readFile(t, root, k8sDoc), -1)
 	// The doc no longer carries a from-source build recipe: operators build
-	// FROM the published ghcr.io/elcanotek/fleet image (ADR-0098). Any
+	// FROM the published ghcr.io/elcanotek/fleet image (ADR-0100). Any
 	// `FROM golang:` stage that comes back must still agree with go.mod.
 	for _, m := range img {
 		got, ok := goMinor(m[1])

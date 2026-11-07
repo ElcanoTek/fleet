@@ -8,7 +8,7 @@
   below were retired on 2026-09-07; every PR now squash-merges into `main`
   directly. The decision itself is unchanged: every green push to `main` is
   still tagged `vYYYY.MM.DD.N` by `release.yml`, exactly as decided here);
-  extended by [ADR-0098](0098-signed-release-artifacts.md) (2026-11-07: a
+  extended by [ADR-0100](0100-signed-release-artifacts.md) (2026-11-07: a
   release is now the tag **and** its signed artifacts — binaries, GHCR images,
   SBOMs, provenance — which boxes install instead of building; the "deploy
   path is a git checkout that rebuilds in place" premise below no longer

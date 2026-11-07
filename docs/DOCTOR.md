@@ -64,7 +64,7 @@ Division of labor across the three health verbs:
 ## Design decisions
 
 - **No build toolchain.** Boxes install signed release binaries
-  ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0098), so doctor checks
+  ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0100), so doctor checks
   no Go or Node and keeps neither current; the node repair seam it used to
   offer `fleet update` (`--node`) is gone with the on-box web build. What it
   checks instead is the installed binary itself — no host executor compiled

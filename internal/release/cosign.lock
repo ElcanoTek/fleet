@@ -1,4 +1,4 @@
-# The cosign build fleet verifies releases with (ADR-0098).
+# The cosign build fleet verifies releases with (ADR-0100).
 #
 # One file, three readers: internal/release embeds it (fleet update), and
 # scripts/lib/release.sh (bootstrap, and the first artifact update on a box

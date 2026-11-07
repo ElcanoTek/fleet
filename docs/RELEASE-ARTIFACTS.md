@@ -1,6 +1,6 @@
 # Signed release artifacts
 
-Design note for #2051 (decision record: [ADR-0098](adr/0098-signed-release-artifacts.md)).
+Design note for #2051 (decision record: [ADR-0100](adr/0100-signed-release-artifacts.md)).
 Every green push to `main` is a release (ADR-0059). A release is now the tag
 **and** a set of signed artifacts, and boxes install those artifacts instead of
 building fleet themselves. No box needs Go or Node.
@@ -73,7 +73,7 @@ A missing signature anywhere is a failure. There is no unverified mode.
 The verifier is the cosign CLI at the version and SHA-256 pinned in
 `internal/release/cosign.lock` — downloaded on first use into
 `/var/cache/fleet` (root) and re-hashed before every run. Why cosign rather than
-the sigstore-go library or `gh attestation verify` is in ADR-0098.
+the sigstore-go library or `gh attestation verify` is in ADR-0100.
 
 ## Install (a new box)
 

@@ -98,7 +98,7 @@ version: 2
 #     from 27 on, node ships one major a year and every one becomes LTS.
 #   * The distro lag cannot strand a box: no box has node any more. The web
 #     bundle is built in CI and release.yml (actions/setup-node reads
-#     web/.nvmrc) and ships embedded in the signed binary (ADR-0098).
+#     web/.nvmrc) and ships embedded in the signed binary (ADR-0100).
 #
 # Deliberately NOT expressed as an `ignore` rule for major node bumps. Silencing
 # them would remove a signal that a new line exists, which is precisely how the

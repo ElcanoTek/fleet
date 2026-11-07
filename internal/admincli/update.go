@@ -32,7 +32,7 @@ import (
 // pull the release's sandbox image or build a custom bundle's on top of it, then
 // swap the binary in atomically, restart, wait for /readyz and roll back
 // automatically (`fleet release install`) — no Go or Node on the box
-// (docs/RELEASE-ARTIFACTS.md, ADR-0098). --from-source keeps the old on-box
+// (docs/RELEASE-ARTIFACTS.md, ADR-0100). --from-source keeps the old on-box
 // build for development boxes. Like bootstrap, the CLI runs NO migrations
 // (services self-migrate on restart).
 //

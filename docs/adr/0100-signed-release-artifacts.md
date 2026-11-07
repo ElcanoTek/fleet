@@ -1,4 +1,4 @@
-# ADR-0098: Every release publishes signed artifacts; boxes install them instead of building
+# ADR-0100: Every release publishes signed artifacts; boxes install them instead of building
 
 - **Status:** Accepted
 - **Date:** 2026-11-07

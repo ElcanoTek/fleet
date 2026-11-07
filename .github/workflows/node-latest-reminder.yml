@@ -5,7 +5,7 @@
 # .github/dependabot.yml — the npm ecosystem bumps packages, not the
 # interpreter, and `engines.node` is a constraint it never moves). fleet tracks
 # the LATEST node major for the web bundle it builds — in CI and release.yml
-# only since ADR-0098; no box runs or builds with node — so "a new major exists"
+# only since ADR-0100; no box runs or builds with node — so "a new major exists"
 # is the event that starts the bump, and nothing else would surface it: the
 # same rot pattern scan-cron-alarm.yml exists for, a thing with no PR attached.
 #
@@ -84,7 +84,7 @@ jobs:
 
           Bump every declaration point together (\`TestNodeMajorAgreesEverywhere\` in scripts/check_versions_test.go enforces the set):
 
-          - [ ] \`web/.nvmrc\` → ${latest_major} (the single declaration point; CI and release.yml build the web bundle with it — boxes have no node, ADR-0098)
+          - [ ] \`web/.nvmrc\` → ${latest_major} (the single declaration point; CI and release.yml build the web bundle with it — boxes have no node, ADR-0100)
           - [ ] \`web/package.json\` \`engines.node\` → \`>=${latest_major}\`, and \`@types/node\` → \`^${latest_major}\` (+ \`npm install\` for the lockfile)
           - [ ] \`make test\` (\`TestNodeMajorAgreesEverywhere\` green) + \`make ci-web\`
 

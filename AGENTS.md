@@ -123,7 +123,7 @@ that Tier A would mean re-implementing by hand.
   `fleet version --web`, which fails on a binary without one — as do the CI
   web job, release.yml (which also refuses a binary built with
   `fleet_host_executor`) and `fleet release fetch` on every box
-  ([ADR-0098](docs/adr/0098-signed-release-artifacts.md)).
+  ([ADR-0100](docs/adr/0100-signed-release-artifacts.md)).
 
 ## What fleet is (one paragraph)
 
