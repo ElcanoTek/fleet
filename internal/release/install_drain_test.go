@@ -250,3 +250,102 @@ func TestInstallWithoutClearDrainKeepsRestart(t *testing.T) {
 		t.Errorf("restarts %v", svc.restarts)
 	}
 }
+
+// interruptibleStop models `systemctl stop` run through exec.CommandContext:
+// cancelling its context kills the systemctl client (Stop returns an error),
+// but the stop job systemd already queued still runs to completion, so the
+// old process exits either way.
+type interruptibleStop struct {
+	*drainService
+	started chan struct{}
+	stopErr error // returned even though the stop completed (a failing client)
+}
+
+func (s *interruptibleStop) Stop(ctx context.Context, _ string) error {
+	s.events = append(s.events, "stop")
+	if s.started != nil {
+		close(s.started)
+		s.started = nil
+	}
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-time.After(200 * time.Millisecond):
+	}
+	s.running = false // systemd finishes the queued stop regardless
+	if err != nil {
+		return err
+	}
+	return s.stopErr
+}
+
+// TestInstallStartsWhenInterruptedDuringTheStop: a SIGINT/SIGTERM that lands
+// while `systemctl stop` is still waiting must not abort the stop halfway and
+// skip the start — systemd completes the queued stop and fleet stays down.
+// The stop runs to completion, the new binary starts and passes its gate,
+// and nothing is rolled back. The reinstall case (live already is this
+// binary) has no rollback to fall back on, so there a skipped start would
+// leave the box down.
+func TestInstallStartsWhenInterruptedDuringTheStop(t *testing.T) {
+	for _, reinstall := range []bool{false, true} {
+		t.Run(map[bool]string{false: "upgrade", true: "reinstall"}[reinstall], func(t *testing.T) {
+			dir, bin, ds := drainSetup(t)
+			if reinstall {
+				_ = os.WriteFile(filepath.Join(dir, "fleet"), []byte("NEW"), 0o755)
+			}
+			ds.ready["NEW"], ds.ready["OLD"] = true, true
+			started := make(chan struct{})
+			s := &interruptibleStop{drainService: ds, started: started}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				<-started
+				cancel()
+			}()
+			o := opts(dir, bin, s, s)
+			o.ClearDrain = func() error {
+				_ = os.Remove(ds.marker)
+				return nil
+			}
+			res, err := Install(ctx, o)
+			if !ds.running {
+				t.Fatalf("the service was left stopped after an interrupt during the stop (err %v, events %v)", err, ds.events)
+			}
+			if err != nil || res.RolledBack {
+				t.Fatalf("install: %v (rolled back %v, events %v) — the interrupted stop should still complete and the new binary start", err, res.RolledBack, ds.events)
+			}
+			if got, want := strings.Join(ds.events, ","), "stop,start NEW,probe NEW"; got != want {
+				t.Errorf("events %q, want %q", got, want)
+			}
+			if !noneTrue(ds.startedDraining) {
+				t.Errorf("started under the drain marker: %v", ds.startedDraining)
+			}
+		})
+	}
+}
+
+// TestInstallStartsWhenTheStopFails: whatever `systemctl stop` reports, the
+// drain is cleared and the service is started, and the stop error is reported.
+func TestInstallStartsWhenTheStopFails(t *testing.T) {
+	dir, bin, ds := drainSetup(t)
+	ds.ready["NEW"] = true
+	s := &interruptibleStop{drainService: ds, stopErr: errors.New("Job for fleet.service canceled")}
+	var log bytes.Buffer
+	o := opts(dir, bin, s, s)
+	o.Log = &log
+	o.ClearDrain = func() error {
+		_ = os.Remove(ds.marker)
+		return nil
+	}
+	_, err := Install(context.Background(), o)
+	if !ds.running || len(ds.startedDraining) == 0 || !noneTrue(ds.startedDraining) {
+		t.Fatalf("running %v, starts %v (events %v): want started without the drain", ds.running, ds.startedDraining, ds.events)
+	}
+	if err != nil {
+		t.Fatalf("install: %v — the new binary came up ready; a stop error alone must not roll it back", err)
+	}
+	if !strings.Contains(log.String(), "Job for fleet.service canceled") {
+		t.Errorf("the stop error is not reported: log %q", log.String())
+	}
+}

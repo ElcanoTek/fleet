@@ -437,6 +437,9 @@ func restorePrevious(dir string) error {
 func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	drainErr, err := o.restart(ctx)
 	if err != nil {
+		if drainErr != nil {
+			return fmt.Errorf("restart %s: %w (before the start: %w)", o.Service, err, drainErr)
+		}
 		return fmt.Errorf("restart %s: %w", o.Service, err)
 	}
 	if o.HealthURL == "" {
@@ -448,31 +451,47 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	}
 	if err := o.Prober.WaitReady(ctx, o.HealthURL, timeout); err != nil {
 		if drainErr != nil {
-			return fmt.Errorf("%s not ready: %w (the update drain marker was not cleared: %w)", o.HealthURL, err, drainErr)
+			return fmt.Errorf("%s not ready: %w (before the start: %w)", o.HealthURL, err, drainErr)
 		}
 		return fmt.Errorf("%s not ready: %w", o.HealthURL, err)
 	}
 	return nil
 }
 
+// stopTimeout bounds the detached `systemctl stop`: well past the shipped
+// unit's TimeoutStopSec (60s), after which systemd has killed the process.
+const stopTimeout = 3 * time.Minute
+
 // restart (re)starts the service. With ClearDrain set it stops the old
-// process, clears the drain marker, then starts the new one; the start runs
-// even when ctx was cancelled during the stop, so an interrupt never leaves
-// the service down. A Restarter that cannot stop and start separately gets
-// the marker cleared immediately before its restart. drainErr is ClearDrain's
-// failure, which the caller reports.
+// process, clears the drain marker, then starts the new one.
+//
+// Once the stop is issued it is not interruptible: it and the start run under
+// contexts detached from ctx's cancellation. Cancelling ctx would kill the
+// systemctl client while the stop job it queued still completes, and a
+// skipped start then leaves the service down. For the same reason a failed
+// stop does not skip the start: the marker is cleared and the service started
+// regardless (starting a unit that is still running is a no-op), and the stop
+// error is logged and returned as part of drainErr, so it is reported with
+// the readiness result rather than turned into a rollback. A Restarter that
+// cannot stop and start separately gets the marker cleared immediately before
+// its restart. drainErr carries the stop and ClearDrain failures.
 func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	if o.ClearDrain == nil {
 		return nil, o.Restarter.Restart(ctx, o.Service)
 	}
 	ss, split := o.Restarter.(StopStarter)
 	if split {
-		if err := ss.Stop(ctx, o.Service); err != nil {
-			return nil, fmt.Errorf("stop: %w", err)
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
+		stopErr := ss.Stop(stopCtx, o.Service)
+		cancel()
+		if stopErr != nil {
+			drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
+			o.logf("warning: %v — clearing the update drain marker and starting it anyway", drainErr)
 		}
 	}
-	if drainErr = o.ClearDrain(); drainErr != nil {
-		o.logf("warning: could not clear the update drain marker before starting %s: %v", o.Service, drainErr)
+	if clearErr := o.ClearDrain(); clearErr != nil {
+		o.logf("warning: could not clear the update drain marker before starting %s: %v", o.Service, clearErr)
+		drainErr = errors.Join(drainErr, fmt.Errorf("clear the update drain marker: %w", clearErr))
 	}
 	if split {
 		if err := ss.Start(context.WithoutCancel(ctx), o.Service); err != nil {

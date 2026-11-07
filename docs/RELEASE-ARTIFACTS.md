@@ -179,8 +179,12 @@ What it does, in order (`scripts/update.sh`):
    the new one starts — every start, so a rolled-back binary also comes back
    serving. It removes only a marker that is this update's, or one whose owner
    process is gone; a marker another live `fleet restart`/`stop` holds, or one
-   an operator created by hand, is left in place and named in the output. If
-   the install is killed between the steps, the update's exit trap still
+   an operator created by hand, is left in place and named in the output.
+   Once the stop is issued, a Ctrl-C or SIGTERM cannot cut it short (it runs
+   detached, bounded at 3 minutes), and the start always follows — even when
+   `systemctl stop` reports an error, which is printed with the result — so
+   an interrupted or failed stop never leaves fleet down. If the install is
+   SIGKILLed between the steps, the update's exit trap still
    clears the marker, and fleet ignores one older than 15 minutes in any case.
    `--from-source` restarts the same way (stop, clear, start).
 
