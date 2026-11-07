@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptrace"
 	"os"
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 const (
@@ -267,7 +268,7 @@ func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope)
 	if logged {
 		return
 	}
-	log.Printf("MCP http: server answered HTTP %d %s with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", status, http.StatusText(status))
+	slog.Info("MCP http: server answered HTTP with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
 }
 
 // headCapture is an io.Writer that keeps only the first max bytes written
@@ -601,8 +602,7 @@ func (s *Server) initialize(ctx context.Context) error {
 	}
 	if err := json.Unmarshal(result, &initResult); err == nil &&
 		initResult.ProtocolVersion != "" && initResult.ProtocolVersion != mcpProtocolVersion {
-		log.Printf("MCP %s: server negotiated protocolVersion %q; client pinned %q",
-			s.name, initResult.ProtocolVersion, mcpProtocolVersion)
+		logging.From(ctx).Info("MCP: server negotiated protocolVersion; client pinned", "name", s.name, "protocol_version", initResult.ProtocolVersion, "mcp_protocol_version", mcpProtocolVersion)
 	}
 
 	// MCP lifecycle: the client MUST send notifications/initialized after the
@@ -750,7 +750,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
 		if s.def.Command != "" && isTransportDeadError(err) {
-			log.Printf("MCP server %s appears dead (%v), attempting restart...", s.name, err)
+			logging.From(ctx).Error("MCP server appears dead, attempting restart...", "name", s.name, "err", err)
 			if restartErr := s.restartLocked(ctx); restartErr != nil {
 				return nil, fmt.Errorf("tool call failed and server restart also failed: original=%w, restart=%w", err, restartErr)
 			}
@@ -766,7 +766,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 						"verify whether the action took effect (e.g. query for the created object or sent email) "+
 						"before re-issuing it: %w", s.name, name, err)
 			}
-			log.Printf("MCP server %s restarted successfully, retrying tool call (request was never delivered)", s.name)
+			logging.From(ctx).Warn("MCP server restarted successfully, retrying tool call (request was never delivered)", "name", s.name)
 			result, err = s.transport.Call(ctx, "tools/call", params)
 			if err != nil {
 				return nil, fmt.Errorf("tool call failed after server restart: %w", err)
@@ -805,7 +805,7 @@ func (s *Server) restartLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to reinitialize server: %w", err)
 	}
 
-	log.Printf("MCP server %s restarted and reinitialized (%d tools)", s.name, len(s.toolsSnapshot()))
+	logging.From(ctx).Info("MCP server restarted and reinitialized (tools)", "name", s.name, "tools_snapshot_count", len(s.toolsSnapshot()))
 	return nil
 }
 
@@ -1121,7 +1121,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 			case <-stop:
 				stop = nil
 				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
-					log.Printf("MCP stdio: could not send the stop for request %d: %v", id, err)
+					logging.From(ctx).Error("MCP stdio: could not send the stop for request", "request", id, "err", err)
 				}
 			case res = <-resultChan:
 				got = true
@@ -1169,7 +1169,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		// A response for a different request id — stale leftover or a
 		// misbehaving server. Never hand it to this caller.
 		if !response.ID.matchesInt(id) {
-			log.Printf("MCP stdio: discarding response with id %s while waiting for %d", response.ID.String(), id)
+			logging.From(ctx).Info("MCP stdio: discarding response with id while waiting", "response_id", response.ID.String(), "count", id)
 			continue
 		}
 
@@ -1701,7 +1701,7 @@ func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (jso
 	// Never hand this caller a response for a different request — checked
 	// before the error branch so a stale error isn't returned as this call's.
 	if !response.ID.matchesInt(wantID) {
-		log.Printf("MCP http: discarding SSE response with id %s while waiting for %d", response.ID.String(), wantID)
+		slog.Info("MCP http: discarding SSE response with id while waiting", "response_id", response.ID.String(), "want_id", wantID)
 		return nil, fmt.Errorf("JSON-RPC response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 

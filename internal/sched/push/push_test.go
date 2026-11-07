@@ -5,6 +5,7 @@ package push
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -73,7 +74,7 @@ func TestTickSlowReceiverDoesNotDelayOthers(t *testing.T) {
 		pushWork("slow", slow.URL), pushWork("fast", fast.URL),
 	}}
 	d := New(store, true) // loopback receivers: dev/TCK posture
-	d.logf = t.Logf
+	d.logger = slog.New(slog.NewTextHandler(testLogWriter{t}, nil))
 
 	start := time.Now()
 	done := make(chan struct{})
@@ -112,7 +113,7 @@ func TestTickBudgetDefersUnstartedWork(t *testing.T) {
 	}
 	store := &fakeStore{marked: map[string]bool{}, work: work}
 	d := New(store, true)
-	d.logf = t.Logf
+	d.logger = slog.New(slog.NewTextHandler(testLogWriter{t}, nil))
 	d.budget = 100 * time.Millisecond
 
 	done := make(chan struct{})
@@ -134,3 +135,8 @@ func TestTickBudgetDefersUnstartedWork(t *testing.T) {
 		t.Fatalf("claimed %d deliveries, want exactly the %d started before the budget ran out", claimed, deliverWorkers)
 	}
 }
+
+// testLogWriter hands each slog line to t.Log.
+type testLogWriter struct{ t *testing.T }
+
+func (w testLogWriter) Write(p []byte) (int, error) { w.t.Log(string(p)); return len(p), nil }

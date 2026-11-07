@@ -10,7 +10,6 @@ package httpapi
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // themeTokenOrder maps each themable manifest color key to the CSS custom
@@ -279,7 +279,7 @@ func (s *Server) serveBrandImage(w http.ResponseWriter, r *http.Request, path, f
 		return
 	}
 	if info.Size() > maxBytes {
-		log.Printf("httpapi: %s %s is %d bytes (cap %d); serving fleet's default asset instead", field, path, info.Size(), maxBytes)
+		logging.From(r.Context()).Info("httpapi is bytes (cap); serving fleet's default asset instead", "field", field, "path", path, "size", info.Size(), "max_bytes", maxBytes)
 		http.NotFound(w, r)
 		return
 	}

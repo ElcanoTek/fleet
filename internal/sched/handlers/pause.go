@@ -6,11 +6,11 @@ package handlers
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -78,7 +78,7 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "task is no longer paused")
 		return
 	}
-	log.Printf("Task resumed: %s (by %s)", safe.LogSafe(task.ID.String()), safe.LogSafe(p.stopLabel())) //nolint:gosec // G706: task.ID is a parsed uuid.UUID and safe.LogSafe strips CR/LF.
+	logging.From(r.Context()).Info("Task resumed", "task_id", safe.LogSafe(task.ID.String()), "stop_label", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
@@ -127,7 +127,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "task is not waiting for that event")
 		return
 	}
-	log.Printf("Task woken by event: %s (event %s, by %s)", safe.LogSafe(task.ID.String()), safe.LogSafe(event), safe.LogSafe(p.stopLabel())) //nolint:gosec // G706: task.ID is a parsed uuid.UUID and safe.LogSafe strips CR/LF.
+	logging.From(r.Context()).Info("Task woken by event (event)", "task_id", safe.LogSafe(task.ID.String()), "event", safe.LogSafe(event), "stop_label", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
@@ -196,13 +196,13 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 		delete(r.cancels, d.ID)
 		r.mu.Unlock()
 		if _, err := r.store.UpdateDatasetStatus(context.WithoutCancel(ctx), d.ID, []string{models.DatasetStatusRunning}, to); err != nil {
-			log.Printf("dataset %s: park status %s: %v", d.ID, to, err)
+			logging.From(ctx).Error("dataset: park status", "dataset", d.ID, "status", to, "err", err)
 		}
 	}()
 
 	schema, err := OutputSchema(d.Columns)
 	if err != nil {
-		log.Printf("dataset %s: output schema: %v", d.ID, err)
+		logging.From(ctx).Error("dataset: output schema", "dataset", d.ID, "err", err)
 		return
 	}
 
@@ -233,7 +233,7 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 				row, err := r.store.ClaimNextDatasetRow(ctx, d.ID)
 				if err != nil {
 					if ctx.Err() == nil {
-						log.Printf("dataset %s: claim: %v", d.ID, err)
+						logging.From(ctx).Error("dataset: claim", "dataset", d.ID, "err", err)
 					}
 					return
 				}
@@ -267,7 +267,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	defer safe.Recover("datasets.runRow", func(v any) {
 		msg := clamp("row run panicked: "+safe.PanicClass(v), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", msg, 0); ferr != nil {
-			log.Printf("dataset %s row %d: record panic: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: record panic", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
 		}
 	})
 	prompt, err := RowPrompt(d, row)
@@ -293,12 +293,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// persistent the re-run records it as failed properly.
 		if ctx.Err() != nil {
 			if rerr := r.store.RequeueDatasetRow(wctx, row.ID); rerr != nil {
-				log.Printf("dataset %s row %d: requeue after pause: %v", d.ID, row.RowIndex, rerr)
+				logging.From(ctx).Error("dataset row: requeue after pause", "dataset", d.ID, "row_index", row.RowIndex, "err", rerr)
 			}
 			return
 		}
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", clamp(err.Error(), maxNoteChars), 0); ferr != nil {
-			log.Printf("dataset %s row %d: record failure: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: record failure", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -307,7 +307,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// A (nil, nil) from the turn runner is a contract violation, not a
 		// row outcome to dereference: fail the row explicitly.
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", "turn runner returned no result", 0); ferr != nil {
-			log.Printf("dataset %s row %d: record missing result: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: record missing result", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -318,12 +318,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// cell mutation. The row fails with the answer preserved for review.
 		note := clamp(strings.TrimSpace(turn.FinalText), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, note, "output did not conform to the dataset schema: "+clamp(verr.Error(), 500), turn.CostUSD); ferr != nil {
-			log.Printf("dataset %s row %d: record nonconforming: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: record nonconforming", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
 		}
 		return
 	}
 	if ferr := r.store.FinishDatasetRow(wctx, row.ID, proposed, "", "", turn.CostUSD); ferr != nil {
-		log.Printf("dataset %s row %d: record proposal: %v", d.ID, row.RowIndex, ferr)
+		logging.From(ctx).Error("dataset row: record proposal", "dataset", d.ID, "row_index", row.RowIndex, "err", ferr)
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,7 +204,7 @@ func ensureStagedRoot(dir string) error {
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if verr := verifyExistingDir(dir); verr != nil {
-			log.Printf("clientconfig: staged skills root %s is not a trusted directory (%v); replacing it", dir, verr)
+			slog.Error("clientconfig: staged skills root is not a trusted directory; replacing it", "dir", dir, "err", verr)
 			if rerr := os.RemoveAll(dir); rerr != nil {
 				return fmt.Errorf("replace untrusted staged skills root: %w", rerr)
 			}
@@ -282,11 +282,11 @@ func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidde
 	for _, ov := range overlays {
 		for _, name := range ov.Names {
 			if prev, dup := pluginOwned[name]; dup {
-				log.Printf("clientconfig: plugin %q skill %q is shadowed by plugin %q's skill of the same name (first plugin wins)", ov.Plugin, name, prev)
+				slog.Info("clientconfig: plugin skill is shadowed by plugin 's skill of the same name (first plugin wins)", "plugin", ov.Plugin, "name", name, "prev", prev)
 				continue
 			}
 			if want[name] {
-				log.Printf("clientconfig: plugin %q skill %q overrides the built-in skill of the same name", ov.Plugin, name)
+				slog.Info("clientconfig: plugin skill overrides the built-in skill of the same name", "plugin", ov.Plugin, "name", name)
 			}
 			pluginOwned[name] = ov.Plugin
 			want[name] = true
@@ -303,9 +303,9 @@ func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidde
 				continue
 			}
 			if p, fromPlugin := pluginOwned[e.Name()]; fromPlugin {
-				log.Printf("clientconfig: bundle skill %q overrides plugin %q's skill of the same name", e.Name(), p)
+				slog.Info("clientconfig: bundle skill overrides plugin 's skill of the same name", "name", e.Name(), "plugin", p)
 			} else if want[e.Name()] {
-				log.Printf("clientconfig: bundle skill %q overrides the built-in skill of the same name", e.Name())
+				slog.Info("clientconfig: bundle skill overrides the built-in skill of the same name", "name", e.Name())
 			}
 			want[e.Name()] = true
 			if err := copyDirSkill(filepath.Join(bundleSkillsDir, e.Name()), filepath.Join(merged, e.Name()), ""); err != nil {
@@ -369,7 +369,7 @@ func copyDirSkill(src, dst, containRoot string) error {
 		if containRoot != "" {
 			resolved, ok := containedRegularFile(p, containRoot)
 			if !ok {
-				log.Printf("clientconfig: plugin skill file %s skipped: not a regular file inside the plugin root %s", p, containRoot)
+				slog.Info("clientconfig: plugin skill file skipped: not a regular file inside the plugin root", "file", p, "contain_root", containRoot)
 				return nil
 			}
 			p = resolved

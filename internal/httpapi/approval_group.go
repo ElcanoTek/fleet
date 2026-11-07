@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -111,7 +112,7 @@ func (a *approvalStager) joinApprovalGroup(approval *store.Approval) {
 	}
 	ok, err := a.store.SetApprovalGroup(a.ctx, a.userEmail, approval.ID, a.groupID)
 	if err != nil || !ok {
-		log.Printf("approval group: store group for %s: ok=%t err=%v", approval.ID, ok, err)
+		slog.Error("approval group: store group", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.GroupID = a.groupID
@@ -260,8 +261,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			resume = true
 		}
 	}
-	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
-	log.Printf("audit: %q decided approval group %q in conversation %q (%d cards)", user, groupID, convID, len(decisions))
+	logging.From(ctx).Info("audit decided approval group in conversation (cards)", "user", user, "group_id", groupID, "conv_id", convID, "decisions_count", len(decisions))
 	out := map[string]any{"group_id": groupID, "results": results}
 	if resume {
 		// At least one card's settlement may start the automatic continue

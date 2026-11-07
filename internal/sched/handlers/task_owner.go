@@ -7,13 +7,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -139,8 +139,7 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	//nolint:gosec // G706: taskID is a parsed uuid.UUID; the names pass safe.LogSafe.
-	log.Printf("Task %s owner set to %s by %s (%d row(s) of its chain)", taskID, safe.LogSafe(owner.Username), safe.LogSafe(p.stopLabel()), len(updated))
+	logging.From(ctx).Info("Task owner set (row(s) of its chain)", "task_id", taskID, "username", safe.LogSafe(owner.Username), "stop_label", safe.LogSafe(p.stopLabel()), "updated_count", len(updated))
 
 	task, err = h.storage.GetTask(taskID)
 	if err != nil || task == nil {
@@ -148,7 +147,7 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.populateCreatedByUsernames(ctx, []*models.Task{task}); err != nil {
-		log.Printf("Warning: failed to populate created_by username for task %s: %v", taskID, err) //nolint:gosec // G706: taskID is a parsed uuid.UUID; err is a storage error, not request input.
+		logging.From(ctx).Warn("Warning: failed to populate created_by username for task", "task_id", taskID, "err", err)
 	}
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, taskOwnerResponse{Task: task, UpdatedTaskIDs: updated})

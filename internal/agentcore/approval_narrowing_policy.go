@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -84,7 +84,7 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 func installNarrowableArgs(entries map[string]string, modes map[string]string, critical map[string]bool) map[string]string {
 	out, problems := buildNarrowableArgs(entries, modes, critical)
 	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Info("agent_policy", "problem", problem)
 	}
 	return out
 }

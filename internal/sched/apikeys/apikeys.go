@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -334,23 +334,23 @@ func (m *Manager) logAudit(entry AuditLogEntry) {
 	dir := filepath.Dir(m.auditLogPath)
 	// 0700: the audit log can reveal key IDs and operations; keep it owner-only.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Printf("apikeys: failed to create audit log dir %s: %v", dir, err)
+		slog.Error("apikeys: failed to create audit log dir", "dir", dir, "err", err)
 		return
 	}
 	entry.Timestamp = time.Now().UTC()
 	data, err := json.Marshal(entry)
 	if err != nil {
-		log.Printf("apikeys: failed to marshal audit entry: %v", err)
+		slog.Error("apikeys: failed to marshal audit entry", "err", err)
 		return
 	}
 	f, err := os.OpenFile(m.auditLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		log.Printf("apikeys: failed to open audit log %s: %v", m.auditLogPath, err)
+		slog.Error("apikeys: failed to open audit log", "audit_log_path", m.auditLogPath, "err", err)
 		return
 	}
 	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		log.Printf("apikeys: failed to append audit entry: %v", err)
+		slog.Error("apikeys: failed to append audit entry", "err", err)
 	}
 }
 
@@ -633,7 +633,7 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 			// rejected this process), but the change must survive a restart, so
 			// surface the failure rather than dropping it silently.
 			if err := m.save(); err != nil {
-				log.Printf("apikeys: failed to persist expiry of rotated key %s: %v", key.KeyID, err)
+				slog.Error("apikeys: failed to persist expiry of rotated key", "key_id", key.KeyID, "err", err)
 			}
 			return false, nil, "API key has been rotated"
 		}

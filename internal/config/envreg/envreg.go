@@ -46,7 +46,7 @@ package envreg
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -488,6 +488,6 @@ func unregistered(name, why string) {
 		panic(msg)
 	}
 	if _, dup := warned.LoadOrStore(name, true); !dup {
-		log.Printf("BUG: %s; reading it anyway", msg)
+		slog.Info("BUG; reading it anyway", "detail", msg)
 	}
 }

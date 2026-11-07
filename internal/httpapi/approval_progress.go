@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"math"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -198,7 +198,7 @@ func (s *Server) writeApprovalProgress(user, approvalID string, u mcp.ProgressUp
 	ctx, cancel := context.WithTimeout(context.Background(), approvalProgressWriteTimeout)
 	defer cancel()
 	if _, err := s.store.SetApprovalProgress(ctx, user, approvalID, string(raw)); err != nil {
-		log.Printf("approval progress: store %s: %s", safe.LogSafe(approvalID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the server-minted id and the error text.
+		logging.From(ctx).Error("approval progress: store", "approval_id", safe.LogSafe(approvalID), "err", safe.LogSafe(err.Error()))
 	}
 }
 
@@ -229,7 +229,7 @@ func (s *Server) notifyApprovalFinished(user, convID string, approval *store.App
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalFinished(ctx, user, convID, label, failed); err != nil {
-			log.Printf("push: approval finished (conv=%s): %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("push: approval finished", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	})
 }
@@ -245,7 +245,7 @@ func (s *Server) notifyResumeSkipped(owner, convID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyResumeSkipped(ctx, owner, convID); err != nil {
-			log.Printf("push: resume skipped (conv=%s): %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("push: resume skipped", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	})
 }

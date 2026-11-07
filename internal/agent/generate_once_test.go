@@ -108,7 +108,7 @@ func TestGenerateOnce(t *testing.T) {
 	if model.deadline.IsZero() || model.deadline.Before(start.Add(39*time.Second)) || model.deadline.After(time.Now().Add(40*time.Second)) {
 		t.Errorf("deadline %v is not Timeout from the call", model.deadline)
 	}
-	if got := logs.String(); !strings.Contains(got, "aux model call: label=unit_test_label model=test/one-shot prompt=12 completion=7") {
+	if got := logs.String(); !strings.Contains(got, "aux model call label=unit_test_label model=test/one-shot prompt=12 completion=7") {
 		t.Errorf("labelled call must be metered, log = %q", got)
 	}
 

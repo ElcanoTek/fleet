@@ -3,7 +3,8 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -245,7 +246,7 @@ func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist 
 		// possible grant. An empty, non-nil list is "deny all"; the task then
 		// fails loudly on its first credentialed call instead of running with
 		// seats nobody granted it.
-		log.Printf("ERROR: credential_allowlist unreadable — treating as deny-all: %v (input: %.100s)", err, ns.String)
+		slog.Error("ERROR: credential_allowlist unreadable — treating as deny-all (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return models.CredentialAllowlist{}
 	}
 	return result
@@ -267,7 +268,7 @@ func unmarshalLoopConfig(ns sql.NullString) *models.LoopConfig {
 	}
 	var lc models.LoopConfig
 	if err := json.Unmarshal([]byte(ns.String), &lc); err != nil {
-		log.Printf("Warning: failed to unmarshal loop_config: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal loop_config (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &lc
@@ -289,7 +290,7 @@ func unmarshalWorktreeConfig(ns sql.NullString) *models.WorktreeConfig {
 	}
 	var wc models.WorktreeConfig
 	if err := json.Unmarshal([]byte(ns.String), &wc); err != nil {
-		log.Printf("Warning: failed to unmarshal worktree_config: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal worktree_config (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &wc
@@ -312,7 +313,7 @@ func unmarshalSandboxLimits(ns sql.NullString) *models.TaskSandboxLimits {
 	}
 	var l models.TaskSandboxLimits
 	if err := json.Unmarshal([]byte(ns.String), &l); err != nil {
-		log.Printf("Warning: failed to unmarshal sandbox_limits: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal sandbox_limits (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &l
@@ -353,7 +354,7 @@ func unmarshalRetryPolicy(ns sql.NullString) *models.RetryPolicy {
 	}
 	var rp models.RetryPolicy
 	if err := json.Unmarshal([]byte(ns.String), &rp); err != nil {
-		log.Printf("Warning: failed to unmarshal retry_policy: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal retry_policy (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &rp
@@ -376,7 +377,7 @@ func unmarshalRunIf(ns sql.NullString) *models.RunIf {
 	}
 	var r models.RunIf
 	if err := json.Unmarshal([]byte(ns.String), &r); err != nil {
-		log.Printf("Warning: failed to unmarshal run_if: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal run_if (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &r

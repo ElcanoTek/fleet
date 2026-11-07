@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/mail"
@@ -31,6 +31,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -383,7 +384,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	// failure (typically the client disconnecting) can't change the response —
 	// log it for diagnostics rather than swallowing it silently.
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writeJSON: failed to encode response body: %v", err)
+		slog.Error("writeJSON: failed to encode response body", "err", err)
 	}
 }
 
@@ -490,7 +491,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, safe.LogSafe(task.Prompt))
+	logging.From(r.Context()).Info("Task created (prompt...)", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1296,7 +1297,7 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 	// Populate CreatedByUsername for display
 	if err := h.populateCreatedByUsernames(r.Context(), tasks); err != nil {
-		log.Printf("Warning: failed to populate creator usernames: %v", err)
+		logging.From(r.Context()).Warn("Warning: failed to populate creator usernames", "err", err)
 		// Continue without usernames - will fall back to UUID display on frontend
 	}
 	localizeTasks(tasks)
@@ -1340,7 +1341,7 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 
 	// Populate CreatedByUsername for display
 	if err := h.populateCreatedByUsernames(r.Context(), []*models.Task{task}); err != nil {
-		log.Printf("Warning: failed to populate creator username: %v", err)
+		logging.From(r.Context()).Warn("Warning: failed to populate creator username", "err", err)
 	}
 	localizeTask(task)
 
@@ -1350,7 +1351,7 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	if task.LoopConfig != nil {
 		iterations, ierr := h.storage.ListTaskIterations(r.Context(), taskID)
 		if ierr != nil {
-			log.Printf("Warning: failed to load task iterations: %v", ierr)
+			logging.From(r.Context()).Warn("Warning: failed to load task iterations", "err", ierr)
 		}
 		writeJSON(w, http.StatusOK, struct {
 			*models.Task
@@ -1570,7 +1571,7 @@ func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Cleaned up %d tasks older than %d days", deleted, days)
+	logging.From(r.Context()).Info("Cleaned up tasks older days", "deleted", deleted, "days", days)
 	writeJSON(w, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
 }
 
@@ -1647,7 +1648,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 			fbLog = *fallback
 		}
 	}
-	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", safe.LogSafe(req.Model), safe.LogSafe(fbLog), safe.LogSafe(req.FromModel), updated)
+	logging.From(ctx).Info("Bulk re-assigned scheduled task(s)", "model", safe.LogSafe(req.Model), "fallback", safe.LogSafe(fbLog), "from", safe.LogSafe(req.FromModel), "updated", updated)
 	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 
@@ -1709,9 +1710,9 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// running nowhere (pending) or in a prior process's orphaned lease simply
 	// stays cancelled in the DB, exactly as before.
 	if h.taskStopper != nil && h.taskStopper(taskID, who) {
-		log.Printf("Task cancelled: %s (live run interrupted, stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
+		logging.From(r.Context()).Info("Task cancelled (live run interrupted, stopped)", "task_id", taskID, "who", safe.LogSafe(who))
 	} else {
-		log.Printf("Task cancelled: %s (stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
+		logging.From(r.Context()).Info("Task cancelled (stopped)", "task_id", taskID, "who", safe.LogSafe(who))
 	}
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1785,7 +1786,7 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	log.Printf("Task deleted: %s (by %s)", taskID, safe.LogSafe(p.stopLabel())) //nolint:gosec // G706: taskID is a parsed uuid.UUID; the label passes safe.LogSafe.
+	logging.From(r.Context()).Info("Task deleted", "task_id", taskID, "stop_label", safe.LogSafe(p.stopLabel()))
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
 }
 
@@ -2048,8 +2049,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: untrusted fields are sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
-	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, safe.LogSafe(updated.Prompt))
+	logging.From(r.Context()).Info("Task updated (prompt...)", "updated_id", updated.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(updated.Prompt)))
 	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
 }

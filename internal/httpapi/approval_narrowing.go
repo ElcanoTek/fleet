@@ -34,11 +34,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -297,9 +297,7 @@ func (s *Server) claimApproved(ctx context.Context, user, convID string, a *stor
 		// Counts and staged positions only: the values are model-authored and
 		// may carry anything, so they never reach the log. The exact record is
 		// on the row (narrowed_json).
-		//nolint:gosec // G706: every interpolated value is rendered with %q or %d, which escapes any CR/LF.
-		log.Printf("audit: %q approved %d of %d %q of approval %q (%q) in conversation %q; left out staged positions %q",
-			user, len(n.Approved), len(n.Staged), n.Arg, a.ID, a.ToolName, convID, n.leftOutPositions())
+		logging.From(ctx).Info("audit approved of approval in conversation; left out staged positions", "user", user, "approved_count", len(n.Approved), "staged_count", len(n.Staged), "detail", n.Arg, "approval", a.ID, "tool_name", a.ToolName, "conv_id", convID, "left_out_positions", n.leftOutPositions())
 	}
 	return claimed, err
 }

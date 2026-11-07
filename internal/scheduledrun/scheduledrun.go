@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -324,7 +325,7 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 	}
 	personaFile := filepath.Base(override) + ".yaml"
 	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
-		log.Printf("scheduled task %s: persona %q not found in bundle; using global default", task.ID, override)
+		slog.Info("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "override", override)
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	return r.composeSystemPrompt(personaFile), personaFile
@@ -391,7 +392,7 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 			MaxCreations:     tools.DefaultMaxTaskCreations,
 			Counter:          counter,
 		}))
-	log.Printf("scheduled task %s: create_task tool enabled (recurring=%v)", task.ID, task.AllowRecurringTaskCreation)
+	slog.Info("scheduled task: create_task tool enabled", "task_id", task.ID, "recurring", task.AllowRecurringTaskCreation)
 	return out
 }
 
@@ -420,7 +421,7 @@ func applyUnattendedBuiltinPolicy(in []fantasy.AgentTool, task *models.Task, egr
 	for _, t := range in {
 		name := t.Info().Name
 		if agentcore.UnattendedToolDisabled(name) {
-			log.Printf("scheduled task %s: %s removed by agent_policy.unattended_disabled_tools", task.ID, name)
+			slog.Info("scheduled task removed by agent_policy.unattended_disabled_tools", "task_id", task.ID, "name", name)
 			continue
 		}
 		if name == tools.WebFetchToolName {
@@ -710,7 +711,7 @@ func (r *Runner) taskWorkspaceDir(task *models.Task) string {
 		return root
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		log.Printf("scheduled task %s: could not create per-job workspace %s (falling back to the shared root): %v", task.ID, dir, err)
+		slog.Warn("scheduled task: could not create per-job workspace (falling back to the shared root)", "task_id", task.ID, "dir", dir, "err", err)
 		return root
 	}
 	return dir
@@ -769,7 +770,7 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 		if strictlyInside(root, runDir) {
 			scope.ReadOnly = append(scope.ReadOnly, runDir)
 		} else {
-			log.Printf("scheduled task %s: MCP run dir %s is outside the workspace root %s; not mounted in the scoped sandbox", task.ID, runDir, root)
+			logging.From(ctx).Info("scheduled task: MCP run dir is outside the workspace root; not mounted in the scoped sandbox", "task_id", task.ID, "run_dir", runDir, "root", root)
 		}
 	}
 	return scope, nil
@@ -847,7 +848,7 @@ func verifierModelFor(ctx context.Context, slug, taskID string, runModel fantasy
 	}
 	vm, err := resolve(ctx, slug)
 	if err != nil {
-		log.Printf("scheduled task %s: verifier model %q unresolved (%v); the run's own model will verify", taskID, slug, err)
+		logging.From(ctx).Error("scheduled task: verifier model unresolved; the run's own model will verify", "task_id", taskID, "slug", slug, "err", err)
 		return runModel
 	}
 	return vm
@@ -908,7 +909,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 			if rv, rerr := r.mgr.Resolve(ctx, slug); rerr == nil {
 				reviewer = rv
 			} else {
-				log.Printf("scheduled task %s: phone_a_friend reviewer %q unresolved (%v); falling back to the run's fallback model", task.ID, slug, rerr)
+				logging.From(ctx).Warn("scheduled task: phone_a_friend reviewer unresolved; falling back to the run's fallback model", "task_id", task.ID, "slug", slug, "err", rerr)
 			}
 		}
 	}
@@ -951,7 +952,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	ctx = artifactCtx
 	defer releaseArtifacts()
 	if wtPath != "" {
-		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, toolRoot)
+		logging.From(ctx).Info("scheduled task: git worktree isolation active; tool calls scoped", "task_id", task.ID, "tool_root", toolRoot)
 	}
 
 	// nil Browserbase resolver: a scheduled run has no per-user connector key
@@ -1289,7 +1290,7 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	log.Printf("scheduled task %s: skipped remote MCP server(s): %s", task.ID, agent.SkippedForLog(overlay))
+	slog.Info("scheduled task: skipped remote MCP server(s)", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.
@@ -1360,12 +1361,12 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	// owner's bearer tokens and dialing third-party servers for a run that can
 	// never use them.
 	if taskCredentialAllowlist(task).DeniesAll() {
-		log.Printf("scheduled task %s: credential allowlist denies all MCP, skipping the owner's remote connections", task.ID)
+		logging.From(ctx).Warn("scheduled task: credential allowlist denies all MCP, skipping the owner's remote connections", "task_id", task.ID)
 		return nil, nil
 	}
 	email, err := r.ownerEmail(ctx, *task.CreatedBy)
 	if err != nil {
-		log.Printf("scheduled task %s: cannot resolve owner email for remote MCP: %v", task.ID, err)
+		logging.From(ctx).Error("scheduled task: cannot resolve owner email for remote MCP", "task_id", task.ID, "err", err)
 		return nil, nil
 	}
 	if email == "" {
@@ -1398,7 +1399,7 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 		overlay, err = agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, sel)
 	}
 	if err != nil {
-		log.Printf("scheduled task %s: remote-mcp overlay unavailable: %v", task.ID, err)
+		logging.From(ctx).Error("scheduled task: remote-mcp overlay unavailable", "task_id", task.ID, "err", err)
 		if len(remotePins) > 0 {
 			overlay.Close()
 			return nil, fmt.Errorf("scheduled task pins hosted connection seat(s) %v but the remote MCP overlay is unavailable: %w", pinnedNames(remotePins), err)
@@ -1413,7 +1414,7 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 		return nil, unknownMCPSelectionError(unknown)
 	}
 	if overlay.Active() {
-		log.Printf("scheduled task %s: wired %d remote MCP server(s) for %s", task.ID, len(overlay.Servers), email)
+		logging.From(ctx).Info("scheduled task: wired remote MCP server(s)", "task_id", task.ID, "servers_count", len(overlay.Servers), "email", email)
 	}
 	return overlay, nil
 }
@@ -1545,7 +1546,7 @@ func (r *Runner) CheckTaskMCPSelection(ctx context.Context, task *models.Task) e
 	}
 	email, err := r.ownerEmail(ctx, *task.CreatedBy)
 	if err != nil {
-		log.Printf("mcp selection check: cannot resolve owner email: %v", err)
+		logging.From(ctx).Error("mcp selection check: cannot resolve owner email", "err", err)
 		return nil
 	}
 	if email == "" {
@@ -1560,7 +1561,7 @@ func (r *Runner) CheckTaskMCPSelection(ctx context.Context, task *models.Task) e
 	}
 	conns, err := list(ctx, email)
 	if err != nil {
-		log.Printf("mcp selection check: cannot list the owner's hosted connections: %v", err)
+		logging.From(ctx).Error("mcp selection check: cannot list the owner's hosted connections", "err", err)
 		return nil
 	}
 	known := make(map[string]bool, 2*len(conns))
@@ -1667,7 +1668,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		closeCtx, cancel := context.WithTimeout(context.Background(), taskMCPScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
-			log.Printf("scheduled task %s: close MCP scope: %v", task.ID, closeErr)
+			logging.From(ctx).Error("scheduled task: close MCP scope", "task_id", task.ID, "err", closeErr)
 		}
 	}
 	if scope.Broker == nil {
@@ -1829,7 +1830,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		client := mcp.NewClient()
 		return client, func() {
 			if err := client.Close(); err != nil {
-				log.Printf("scheduled task %s: error closing empty per-run MCP client: %v", task.ID, err)
+				logging.From(ctx).Error("scheduled task: error closing empty per-run MCP client", "task_id", task.ID, "err", err)
 			}
 		}, "", nil, nil
 	}
@@ -1838,7 +1839,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	client := mcp.NewClient()
 	cleanup := func() {
 		if err := client.Close(); err != nil {
-			log.Printf("scheduled task %s: error closing per-run MCP client: %v", task.ID, err)
+			logging.From(ctx).Error("scheduled task: error closing per-run MCP client", "task_id", task.ID, "err", err)
 		}
 	}
 
@@ -1875,7 +1876,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		// is the default the call context normally overrides anyway.
 		agent.RegisterA2APeers(client, r.cfg.A2APeers, task.A2ADelegationDepth)
 	}
-	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
+	logging.From(ctx).Info("scheduled task: bound MCP server(s) on per-run client", "task_id", task.ID, "registered_count", len(registered), "registered", registered)
 	return client, cleanup, workdir, failed, nil
 }
 

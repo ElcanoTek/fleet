@@ -12,7 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +69,7 @@ func (w *turnJournalWriter) write(kind, callID, toolName, content string, isErr 
 		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
 	}
 	w.degraded.Store(true)
-	log.Printf("turn journal degraded (turn=%s kind=%s tool=%s): %v", w.turnID, kind, toolName, err)
+	slog.Warn("turn journal degraded", "turn_id", w.turnID, "kind", kind, "tool", toolName, "err", err)
 	return err
 }
 
@@ -143,7 +143,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// commit's cctx was just cancelled.
 			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+				slog.Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
 			}
 			qcancel()
 			return nil
@@ -157,7 +157,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// snapshot until the next boot recovery.
 			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+				slog.Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
 			}
 			qcancel()
 			return nil

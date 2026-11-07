@@ -2,7 +2,7 @@ package notify
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -187,4 +187,4 @@ func sanitizeHeader(s string) string {
 // stdLogf is the default Notifier logger. It is a thin wrapper so the Notifier
 // can hold a swappable log seam (tests assert no secret is ever logged). It
 // deliberately mirrors log.Printf's signature.
-func stdLogf(format string, args ...any) { log.Printf(format, args...) }
+func stdLogf(format string, args ...any) { slog.Info(fmt.Sprintf(format, args...)) }

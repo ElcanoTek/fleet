@@ -24,11 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -390,13 +390,13 @@ func storeApprovalResultCard(ctx context.Context, st chatStore, user, approvalID
 	card, ok, reason := extractResultCard(governed)
 	if !ok {
 		if reason != "" {
-			log.Printf("approval result card: %q result card refused: %q", toolName, reason) //nolint:gosec // G706: every value is rendered with %q, which escapes CR/LF; the reason is already redacted.
+			logging.From(ctx).Error("approval result card result card refused", "tool_name", toolName, "reason", reason)
 		}
 		return nil
 	}
 	stored, err := st.SetApprovalResultCard(ctx, user, approvalID, string(card))
 	if err != nil || !stored {
-		log.Printf("approval result card: %q: not stored (stored=%v, err=%q)", toolName, stored, redactedForLog(err)) //nolint:gosec // G706: strings are rendered with %q, which escapes CR/LF; the error is redacted.
+		logging.From(ctx).Error("approval result card: not stored", "tool_name", toolName, "stored", stored, "err", redactedForLog(err))
 		return nil
 	}
 	return card

@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -39,6 +38,7 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -327,7 +327,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	}
 	dstDir, err := tools.EnsureWorkspaceDir(dstConvID)
 	if err != nil {
-		log.Printf("branch files: workspace for %s: %v", safe.LogSafe(dstConvID), safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("branch files: workspace", "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
 		for _, o := range shared {
 			withheld = append(withheld, o.Path)
 		}
@@ -335,7 +335,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	}
 	dst, err := os.OpenRoot(dstDir)
 	if err != nil {
-		log.Printf("branch files: open workspace for %s: %v", safe.LogSafe(dstConvID), safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("branch files: open workspace", "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
 		for _, o := range shared {
 			withheld = append(withheld, o.Path)
 		}
@@ -348,7 +348,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	for _, o := range shared {
 		if !closed && ctx.Err() != nil {
 			closed = true
-			log.Printf("branch files: copy budget for %s ran out; withholding the remaining files", safe.LogSafe(dstConvID))
+			logging.From(ctx).Info("branch files: copy budget ran out; withholding the remaining files", "dst_conv_id", safe.LogSafe(dstConvID))
 		}
 		decision := branchCopyFile
 		if !closed && gate != nil {
@@ -356,7 +356,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 		}
 		if !closed && decision == branchCopyClosed {
 			closed = true
-			log.Printf("branch files: %s is no longer readable by the brancher; withholding the remaining files of %s", safe.LogSafe(srcConvID), safe.LogSafe(dstConvID))
+			logging.From(ctx).Info("branch files is no longer readable by the brancher; withholding the remaining files", "src_conv_id", safe.LogSafe(srcConvID), "dst_conv_id", safe.LogSafe(dstConvID))
 		}
 		if closed || decision == branchCopySkip {
 			withheld = append(withheld, o.Path)
@@ -364,7 +364,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 		}
 		n, err := copyOneOutput(ctx, srcDir, dst, o.Path, budget)
 		if err != nil {
-			log.Printf("branch files: %q not copied into %s: %v", safe.LogSafe(o.Path), safe.LogSafe(dstConvID), safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("branch files not copied", "path", safe.LogSafe(o.Path), "dst_conv_id", safe.LogSafe(dstConvID), "err", safe.LogSafe(err.Error()))
 			withheld = append(withheld, o.Path)
 			continue
 		}
@@ -608,7 +608,7 @@ const maxBranchFilesInNote = 50
 func (s *Server) appendBranchFilesBlock(ctx context.Context, injected, convID string) string {
 	origin, err := s.store.PendingBranchFilesAnnouncement(ctx, convID)
 	if err != nil {
-		log.Printf("branch files note for %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("branch files note", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		return injected
 	}
 	if origin == nil {

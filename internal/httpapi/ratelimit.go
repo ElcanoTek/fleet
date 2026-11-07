@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -87,6 +87,6 @@ func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	setJSONContentType(w)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("write json: %v", err)
+		slog.Error("write json", "err", err)
 	}
 }

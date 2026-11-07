@@ -2902,6 +2902,10 @@ func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
 					line = l
 				}
 			}
+			// Drop the level word slog's default handler writes first.
+			if _, rest, ok := strings.Cut(line, " "); ok {
+				line = rest
+			}
 			if !strings.HasPrefix(line, tc.logLine) {
 				t.Fatalf("log line = %q, want prefix %q", line, tc.logLine)
 			}

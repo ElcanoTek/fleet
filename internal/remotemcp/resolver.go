@@ -2,11 +2,11 @@ package remotemcp
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -44,7 +44,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 	// no remote connectors this turn and the cause is logged.
 	prefs, perr := s.store.ListConnectorPrefs(ctx, email)
 	if perr != nil {
-		log.Printf("remotemcp: connector prefs unreadable for %s — mounting no remote connectors this run: %v", email, perr)
+		logging.From(ctx).Error("remotemcp: connector prefs unreadable — mounting no remote connectors this run", "email", email, "err", perr)
 		return nil, nil
 	}
 	enabledForMe := func(id string) bool {
@@ -70,7 +70,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 		}
 		reg := agentcore.RegisteredMCPName(srv.Name, srv.Account)
 		if seats[reg] {
-			log.Printf("remotemcp: shared seat %q (owner %s) shadowed by %s's own seat of the same name; skipping", reg, srv.UserEmail, email)
+			logging.From(ctx).Warn("remotemcp: shared seat (owner) shadowed's own seat of the same name; skipping", "reg", reg, "user_email", srv.UserEmail, "email", email)
 			continue
 		}
 		seats[reg] = true

@@ -8,7 +8,7 @@
 package httpapi
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -48,7 +48,7 @@ func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) boo
 	}
 	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	log.Printf("push: refused a %s from %s: %s", what, safe.LogSafe(user), safe.LogSafe(err.Error()))
+	slog.Error("push: refused a", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }

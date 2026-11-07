@@ -4,7 +4,7 @@ package handlers
 
 import (
 	"crypto/subtle"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -121,8 +121,7 @@ func (h *Handlers) writeRateLimited(w http.ResponseWriter, retry time.Duration, 
 	w.Header().Set("X-RateLimit-Remaining", "0")
 	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(retry).Unix(), 10))
 	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
-	//nolint:gosec // G706: window is a fixed internal label ("global"|"minute"|"day") set by this package, never request input; retrySeconds is an int.
-	log.Printf("orchestrator rate limit exceeded (window=%s, retry_after=%ds)", window, retrySeconds)
+	slog.Warn("orchestrator rate limit exceeded", "window", window, "retry_after_s", retrySeconds)
 	writeJSON(w, http.StatusTooManyRequests, map[string]any{
 		"error":               "rate_limit_exceeded",
 		"retry_after_seconds": retrySeconds,

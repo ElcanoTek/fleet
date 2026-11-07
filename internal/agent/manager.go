@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -419,10 +420,10 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 		}
 		cancel()
 		if addErr != nil {
-			log.Printf("warn: MCP %s failed to connect: %v", name, addErr)
+			logging.From(ctx).Warn("warn: MCP failed to connect", "name", name, "err", addErr)
 			continue
 		}
-		log.Printf("MCP %s connected (%d tools available, optional=%v)", name, len(client.GetAllTools()), spec.Optional)
+		logging.From(ctx).Info("MCP connected (tools available)", "name", name, "get_all_tools_count", len(client.GetAllTools()), "optional", spec.Optional)
 	}
 	// Inline HTTP tools (issue #261): registered host-side on the SAME credentialed
 	// client so they route through the same broker/governance seam as MCP tools. The
@@ -460,7 +461,7 @@ func RegisterHTTPTools(client *mcp.Client, httpTools []config.HTTPToolConfig) {
 		})
 	}
 	client.AddHTTPTools(specs)
-	log.Printf("inline HTTP tools registered: %d", len(specs))
+	slog.Info("inline HTTP tools registered", "specs_count", len(specs))
 }
 
 // RegisterA2APeers translates the resolved config.A2APeerConfig catalog into
@@ -481,12 +482,12 @@ func RegisterA2APeers(client *mcp.Client, peers []config.A2APeerConfig, defaultD
 	}
 	maxDepth, err := config.EnvKnobInt("FLEET_A2A_MAX_DELEGATION_DEPTH", config.DefaultA2AMaxDelegationDepth)
 	if err != nil {
-		log.Printf("warn: %v; a2a peers keep the default delegation ceiling %d", err, config.DefaultA2AMaxDelegationDepth)
+		slog.Warn("warn; a2a peers keep the default delegation ceiling", "err", err, "default_a2a_max_delegation_depth", config.DefaultA2AMaxDelegationDepth)
 		maxDepth = config.DefaultA2AMaxDelegationDepth
 	}
 	allowPrivate, err := config.EnvKnobBool("FLEET_A2A_CLIENT_ALLOW_PRIVATE", false)
 	if err != nil {
-		log.Printf("warn: %v; a2a peers keep the SSRF guard on", err)
+		slog.Warn("warn; a2a peers keep the SSRF guard on", "err", err)
 		allowPrivate = false
 	}
 	if defaultDepth < 0 {
@@ -505,7 +506,7 @@ func RegisterA2APeers(client *mcp.Client, peers []config.A2APeerConfig, defaultD
 		})
 	}
 	client.AddA2APeers(specs)
-	log.Printf("a2a peers registered: %d (delegation depth %d of max %d, private peers allowed=%v)", len(specs), defaultDepth, maxDepth, allowPrivate)
+	slog.Info("a2a peers registered (delegation depth of max, private peers)", "specs_count", len(specs), "default_depth", defaultDepth, "max_depth", maxDepth, "allowed", allowPrivate)
 }
 
 func New(opts ManagerOptions) (*Manager, error) {
@@ -676,7 +677,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		}
 		poolCfg.Size = 0
 		poolCfg.Mode = sandbox.ModeHost
-		log.Printf("sandbox: mock mode — tool calls are stubbed by e2e harness")
+		slog.Info("sandbox: mock mode — tool calls are stubbed by e2e harness")
 		return sandbox.NewPool(poolCfg), nil
 	}
 
@@ -787,9 +788,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// non-graceful exit leaks them into BridgeDir permanently. Age-bounded and
 	// best-effort — log and continue, like the container orphan prune.
 	if n, err := sandbox.PruneOrphanedBridgeFiles(poolCfg.Container.BridgeDir); err != nil {
-		log.Printf("sandbox: prune orphaned bridge files: %v", err)
+		slog.Error("sandbox: prune orphaned bridge files", "err", err)
 	} else if n > 0 {
-		log.Printf("sandbox: pruned %d orphaned bridge temp file(s) from a prior run", n)
+		slog.Info("sandbox: pruned orphaned bridge temp file(s) from a prior run", "pruned", n)
 	}
 	// Fail closed BEFORE the warm pool spawns its first container: a kata/krun
 	// runtime whose KVM or runtime binary is missing must abort boot, never
@@ -811,17 +812,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	sandbox.PrewarmKeepIDImage(context.Background(), poolCfg.Container.PodmanBinary,
 		poolCfg.Container.Image,
 		filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-keepid-prewarm"))
-	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
-		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
+	slog.Info("sandbox: container mode", "image", poolCfg.Container.Image, "pool", poolCfg.Size, "workspace", poolCfg.Container.WorkspaceHostDir, "runtime", defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
 	if poolCfg.PersistentREPL {
-		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
-			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+		slog.Info("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL, max sessions)", "persistent_idle_ttl", poolCfg.PersistentIdleTTL, "python_repl_max_sessions", cfg.PythonREPLMaxSessions)
 		warnPersistentMemoryBudget(poolCfg.PersistentMaxSessions, poolCfg.Container.MemoryLimit)
 	} else {
-		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
+		slog.Info("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
 	}
 	if poolCfg.PythonCellTimeout > 0 {
-		log.Printf("sandbox: run_python per-cell timeout ceiling=%s (FLEET_PYTHON_CELL_TIMEOUT)", poolCfg.PythonCellTimeout)
+		slog.Info("sandbox: run_python per-cell timeout (FLEET_PYTHON_CELL_TIMEOUT)", "ceiling", poolCfg.PythonCellTimeout)
 	}
 
 	// Sandbox egress mode (#211). The mode + allowlist are carried on the pool so
@@ -850,12 +849,12 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		}
 		poolCfg.EgressProxy = proxy
 		if len(cfg.SandboxNetworkAllowlist) == 0 {
-			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked scheduled-task, interactive chat, AND approved-bash sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
+			slog.Warn("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked scheduled-task, interactive chat, AND approved-bash sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
 		} else {
-			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task, interactive chat, AND approved-bash egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
+			slog.Info("sandbox: network mode=allowlisted — networked scheduled-task, interactive chat, AND approved-bash egress filtered via the host proxy (best-effort; ADR-0012).", "sandbox_network_allowlist", cfg.SandboxNetworkAllowlist)
 		}
 	case sandbox.NetworkModeLockdown:
-		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork; the warm pool spawns sealed (--network=none) containers, and sealed turns claim them (#1291).")
+		slog.Info("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork; the warm pool spawns sealed (--network=none) containers, and sealed turns claim them (#1291).")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }
@@ -924,12 +923,12 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	// they bypass the host-mount drop below entirely.
 	wsNested, hostMounts := splitWorkspaceNestedMounts(poolCfg.Container.ReadOnlyMounts, poolCfg.Container.WorkspaceHostDir)
 	if len(wsNested) > 0 {
-		log.Printf("sandbox: kubernetes backend — %d read-only root(s) inside the workspace claim %v are mounted read-only (subPath) in every sandbox pod", len(wsNested), wsNested)
+		slog.Info("sandbox: kubernetes backend — read-only root(s) inside the workspace claim are mounted read-only (subPath) in every sandbox pod", "ws_nested_count", len(wsNested), "ws_nested", wsNested)
 	}
 	kept, dropped := k8sDocMounts(hostMounts, bundleDocDirs, docsInImage)
 	poolCfg.Container.ReadOnlyMounts = slices.Concat(wsNested, kept)
 	if len(kept) > 0 {
-		log.Printf("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors for %d bundle doc root(s) %v; the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", len(kept), kept)
+		slog.Info("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors bundle doc root(s); the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", "kept_count", len(kept), "kept", kept)
 	}
 	for _, d := range dropped {
 		switch {
@@ -937,13 +936,13 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 			// Only reachable when StageSkillsForBackend failed at boot: the
 			// staged copy inside the claim would have been split off as a
 			// nested mount above.
-			log.Printf("sandbox: kubernetes backend — skills dir %q is still the merged tree under the control plane's data dir because staging it into the workspace claim failed at boot (see the earlier 'stage skills' warning); no pod can see it, so in-sandbox skill reads will not resolve", d)
+			slog.Warn("sandbox: kubernetes backend — skills dir is still the merged tree under the control plane's data dir because staging it into the workspace claim failed at boot (see the earlier 'stage skills' warning); no pod can see it, so in-sandbox skill reads will not resolve", "dir", d)
 		case docsInImage:
-			log.Printf("sandbox: kubernetes backend — %q is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", d)
+			slog.Info("sandbox: kubernetes backend — is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", "detail", d)
 		}
 	}
 	if !docsInImage && len(dropped) > 0 {
-		log.Printf("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads of %d host dir(s) will not resolve. If your sandbox image carries the bundle's doc dirs at the same paths, set sandbox.kubernetes.bundle_docs_in_image (FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE=true)", len(dropped))
+		slog.Info("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads host dir(s) will not resolve. If your sandbox image carries the bundle's doc dirs at the same paths, set sandbox.kubernetes.bundle_docs_in_image (FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE=true)", "dropped_count", len(dropped))
 	}
 	poolCfg.Container.Runtime = ""
 
@@ -992,15 +991,13 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 
 	poolCfg.DefaultNetworkMode = cfg.DefaultNetworkMode
 	poolCfg.DefaultEgressAllowlist = nil
-	log.Printf("sandbox: kubernetes backend — image=%s, pool=%d, workspace=%s, namespace=%s, runtime_class=%s",
-		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, backend.Namespace(), defaultIfEmpty(cfg.SandboxK8sRuntimeClass, "cluster default"))
+	slog.Info("sandbox: kubernetes backend", "image", poolCfg.Container.Image, "pool", poolCfg.Size, "workspace", poolCfg.Container.WorkspaceHostDir, "namespace", backend.Namespace(), "runtime_class", defaultIfEmpty(cfg.SandboxK8sRuntimeClass, "cluster default"))
 	if poolCfg.PersistentREPL {
-		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
-			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+		slog.Info("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL, max sessions)", "persistent_idle_ttl", poolCfg.PersistentIdleTTL, "python_repl_max_sessions", cfg.PythonREPLMaxSessions)
 	} else {
-		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
+		slog.Info("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
 	}
-	log.Print(k8sNetworkModeLine(cfg.DefaultNetworkMode))
+	slog.Info(k8sNetworkModeLine(cfg.DefaultNetworkMode))
 	return sandbox.NewPool(poolCfg), nil
 }
 
@@ -1098,7 +1095,7 @@ func StageSkillsForBackend(cfg *config.Config, bundle *clientconfig.Bundle) (str
 	if err := bundle.StageSkillsAt(staged); err != nil {
 		return bundle.SkillsDir, err
 	}
-	log.Printf("sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged at %s inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed", staged)
+	slog.Info("sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed", "staged", staged)
 	return bundle.SkillsDir, nil
 }
 
@@ -1167,7 +1164,7 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 			// Enforced, not just documented: a doc dir configured to sit
 			// inside the uploads tree (or a future edit that adds the tree
 			// itself) is dropped rather than quietly re-opening the hole.
-			log.Printf("sandbox: refusing to mount %q — it is inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", safe.LogSafe(m))
+			slog.Error("sandbox: refusing to mount — it is inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", "mount", safe.LogSafe(m))
 			continue
 		}
 		kept = append(kept, m)
@@ -1221,7 +1218,7 @@ func absSupportingDocs(dirs ...string) []string {
 		}
 		abs, err := filepath.Abs(d)
 		if err != nil {
-			log.Printf("warn: cannot absolutize supporting-doc dir %q: %v (skipping bind mount)", d, err)
+			slog.Warn("warn: cannot absolutize supporting-doc dir (skipping bind mount)", "dir", d, "err", err)
 			continue
 		}
 		out = append(out, abs)
@@ -1543,7 +1540,7 @@ func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbo
 	}
 	artifactCtx, releaseArtifacts, artifactErr := tools.WithSandboxModelOutputArtifacts(ctx, sb, fileOpRoot)
 	if artifactErr != nil {
-		log.Printf("conversation %s: governed tool-output artifact recovery unavailable: %v", conversationID, artifactErr)
+		logging.From(ctx).Error("conversation: governed tool-output artifact recovery unavailable", "conv_id", conversationID, "err", artifactErr)
 		return ctx, fileOpRoot, func() {}, nil
 	}
 	return artifactCtx, fileOpRoot, releaseArtifacts, nil
@@ -1567,7 +1564,7 @@ func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPS
 		closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
-			log.Printf("RunTurn: close MCP turn scope: %v", closeErr)
+			logging.From(ctx).Error("RunTurn: close MCP turn scope", "err", closeErr)
 		}
 	}
 	if scope.Broker == nil {
@@ -1699,7 +1696,7 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 	var notes []agentcore.Note
 	if m.notesProvider != nil {
 		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
-			log.Printf("agent notes unavailable; running without notes section: %v", err)
+			logging.From(ctx).Error("agent notes unavailable; running without notes section", "err", err)
 		} else {
 			notes = got
 		}
@@ -1769,15 +1766,14 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 		// without an entry mounts its default seat (#988).
 		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
-			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", safe.LogSafe(in.UserEmail), oerr)
+			logging.From(ctx).Error("RunTurn: remote-mcp overlay unavailable", "user_email", safe.LogSafe(in.UserEmail), "err", oerr)
 		} else if ov != nil {
 			overlay = ov
 			if len(ov.Skipped) > 0 {
 				// Interactive: the user can see+fix these on the Connections page.
 				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
 				// hostile name cannot forge a log entry (log-injection guard).
-				log.Printf("RunTurn: remote MCP server(s) not mounted for %s: %s",
-					safe.LogSafe(in.UserEmail), safe.LogSafe(skippedWithReasons(ov)))
+				logging.From(ctx).Info("RunTurn: remote MCP server(s) not mounted", "user_email", safe.LogSafe(in.UserEmail), "skipped", safe.LogSafe(skippedWithReasons(ov)))
 			}
 		}
 	}
@@ -2073,7 +2069,7 @@ func commitPartialSideEffects(runErr error, res agentcore.Result, senderEmail st
 	}
 	entries := append(mapRunEntriesWithSender(res.Entries, senderEmail), mustEntry("assistant", "turn_summary", summary))
 	if cerr := commit(entries, false); cerr != nil {
-		log.Printf("RunTurn: committing partial side-effect transcript failed: %v", cerr)
+		slog.Error("RunTurn: committing partial side-effect transcript failed", "err", cerr)
 	}
 }
 
@@ -2174,8 +2170,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	// quoted rather than blending into the line. reason is a fixed enum
 	// the classifier returns, but it is DERIVED from runErr, so it gets the
 	// same guard to keep the whole line provably clean.
-	log.Printf("RunTurn stream failed (reason=%s model=%q status=%d): %s",
-		safe.LogSafe(string(reason)), safe.LogSafe(modelSlug), status, safe.LogSafe(runErr.Error()))
+	logging.From(ctx).Error("RunTurn stream failed", "reason", safe.LogSafe(string(reason)), "model", safe.LogSafe(modelSlug), "status", status, "run_err", safe.LogSafe(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
 	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }
@@ -2437,9 +2432,7 @@ func warnPersistentMemoryBudget(maxSessions int, memoryLimit string) {
 	if worstCase*3 <= total*2 {
 		return
 	}
-	log.Printf("⚠ sandbox: persistent REPL worst case is %d sessions x %s = %.1f GiB, against %.1f GiB of host RAM — "+
-		"lower FLEET_PYTHON_REPL_MAX or FLEET_SANDBOX_MEMORY, or expect OOM kills under load",
-		maxSessions, memoryLimit, float64(worstCase)/(1<<30), float64(total)/(1<<30))
+	slog.Info("⚠ sandbox: persistent REPL worst case is sessions GiB, against GiB of host RAM — lower FLEET_PYTHON_REPL_MAX or FLEET_SANDBOX_MEMORY, or expect OOM kills under load", "max_sessions", maxSessions, "memory_limit", memoryLimit, "value", fmt.Sprintf("%.1f", float64(worstCase)/(1<<30)), "against", fmt.Sprintf("%.1f", float64(total)/(1<<30)))
 }
 
 // hostMemoryBytes reads MemTotal from /proc/meminfo. Returns an error on any

@@ -6,7 +6,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/jsonrepair"
@@ -114,7 +114,7 @@ func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool)
 	if !changed {
 		return nil, false
 	}
-	log.Printf("agentcore: replaying tool call %s (%s) with a normalized input: the model's arguments were not a JSON object", tc.ToolCallID, tc.ToolName)
+	slog.Info("agentcore: replaying tool call with a normalized input: the model's arguments were not a JSON object", "tool_call_id", tc.ToolCallID, "tool_name", tc.ToolName)
 	tc.Input = normalized
 	return tc, true
 }

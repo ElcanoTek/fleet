@@ -11,12 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -79,7 +79,7 @@ func (s *Server) rollbackCreatedConversation(user, convID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.Delete(ctx, user, convID); err != nil {
-		log.Printf("rollback created conversation %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error()))
+		logging.From(ctx).Error("rollback created conversation", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 	}
 }
 

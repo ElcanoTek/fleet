@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -217,7 +217,7 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 			model = "unknown"
 		}
 		metrics.RecordToolCallOutOfRoster(model, reason)
-		log.Printf("out-of-roster tool call: model=%s tool=%q reason=%s rerouted=%t", model, call.ToolName, reason, repaired != nil)
+		slog.Info("out-of-roster tool call", "model", model, "tool", call.ToolName, "reason", reason, "rerouted", repaired != nil)
 		payload := map[string]any{"id": call.ToolCallID, "tool": call.ToolName, "reason": reason, "model": model}
 		if repaired != nil {
 			payload["rerouted_to"] = repaired.ToolName

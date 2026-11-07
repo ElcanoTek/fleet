@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +14,7 @@ import (
 	"charm.land/fantasy"
 	"golang.org/x/net/http2"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -260,7 +261,7 @@ func loadResilienceConfig() resilienceConfig {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			attempts = n
 		} else {
-			log.Printf("Warning: ignoring invalid FLEET_RETRY_MAX_ATTEMPTS=%q (using default %d)", raw, defaultRetryMaxAttempts)
+			slog.Warn("Warning: ignoring invalid (using default)", "fleet_retry_max_attempts", raw, "default_retry_max_attempts", defaultRetryMaxAttempts)
 		}
 	}
 	return resilienceConfig{maxAttempts: attempts}
@@ -566,8 +567,7 @@ func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
 			title = fantasy.ErrorTitleForStatusCode(status)
 		}
 		rounded := delay.Round(10 * time.Millisecond)
-		log.Printf("🔁 LLM retry: status=%d (%s) delay=%s msg=%q",
-			status, title, rounded, summarizeForConsole(err.Message))
+		slog.Warn("🔁 LLM retry", "status", status, "title", title, "delay", rounded, "msg", summarizeForConsole(err.Message))
 		if session == nil {
 			return
 		}
@@ -602,8 +602,7 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError, cause er
 // waitStreamBlipRetry logs a mid-stream retry and waits streamBlipRetryDelay
 // or returns a context-cancellation error.
 func (e *engine) waitStreamBlipRetry(ctx context.Context, providerErr *fantasy.ProviderError, cause error) error {
-	log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
-		providerErrStatus(providerErr), streamBlipRetryDelay)
+	logging.From(ctx).Warn("🔁 Mid-stream provider error; retrying same model once after", "status", providerErrStatus(providerErr), "stream_blip_retry_delay", streamBlipRetryDelay)
 	e.logStreamBlipRetry(providerErr, cause)
 	select {
 	case <-time.After(streamBlipRetryDelay):
@@ -625,8 +624,7 @@ func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.P
 		status = providerErr.StatusCode
 		body = summarizeForConsole(providerErr.Message)
 	}
-	log.Printf("⚠️  Primary model failed (%s, status=%d); swapping to fallback %s",
-		reason, status, e.fallbackModel.Model())
+	slog.Error("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "model", e.fallbackModel.Model())
 	if e.logSession == nil {
 		return
 	}
@@ -784,7 +782,7 @@ func (e *engine) streamRoundWithResilience(
 	// instead of burning this round's attempts on a known-bad model. Half-open is
 	// deliberately NOT skipped — that state exists to send exactly one probe.
 	if shouldFastFailoverOnOpenCircuit(e, activeModel, swappedToFallback) {
-		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
+		logging.From(ctx).Info("⚡ circuit open; routing to fallback without a primary attempt", "model", activeModel.Model(), "fallback_model", e.fallbackModel.Model())
 		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
 		activeModel = e.takeFallback()
 		e.noteActiveModel(activeModel)
@@ -891,8 +889,7 @@ func (e *engine) streamRoundWithResilience(
 				recordContextFromError(activeModel, providerErr)
 			}
 			if !forceCompactedThisRound {
-				log.Printf("⚠️  Provider rejected prompt as too large (status=%d); forcing compaction and retrying",
-					providerErrStatus(providerErr))
+				logging.From(ctx).Warn("⚠️ Provider rejected prompt as too large; forcing compaction and retrying", "status", providerErrStatus(providerErr))
 				// Discard the failed attempt's partial output BEFORE compacting,
 				// so the re-driven round replaces — not duplicates — it in the
 				// sink and the message history (same contract as the blip/

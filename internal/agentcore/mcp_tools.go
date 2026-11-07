@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -567,8 +567,7 @@ func buildFantasyTools(
 			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
-		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema, %d MCP hidden from chat)",
-			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema, mcpSkippedHidden)
+		slog.Info("Fantasy tools registered; MCP tools DEFERRED behind tool_search/describe/call (#506)", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "bridges", len(bridges), "mcp_deferred", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
 		if len(allTools) > maxToolsPerRequest {
 			return nil, toolRoster{}, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
@@ -585,8 +584,7 @@ func buildFantasyTools(
 	allTools = append(allTools, mcpTools...)
 	allTools = append(allTools, confirmAudit...)
 
-	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema, %d MCP hidden from chat)",
-		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema, mcpSkippedHidden)
+	slog.Info("Fantasy tools registered", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "mcp", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)

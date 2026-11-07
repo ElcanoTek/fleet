@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"reflect"
 	"sort"
@@ -1102,7 +1102,7 @@ func toolInputSchemaProblem(info fantasy.ToolInfo) error {
 	meta, err := draft2020Metaschema()
 	if err != nil {
 		// Fail open: an unavailable validator must never remove tools.
-		log.Printf("tool schema check disabled: compile draft 2020-12 metaschema: %v", err)
+		slog.Error("tool schema check disabled: compile draft 2020-12 metaschema", "err", err)
 		return nil
 	}
 	required := info.Required
@@ -1429,7 +1429,7 @@ func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
 		delete(toolSchemaRecord.issues, key)
 		toolSchemaRecord.Unlock()
 		if had {
-			log.Printf("MCP tool mcp_%s_%s: schema issue cleared (%s before)", server, tool, prev.Status)
+			slog.Info("MCP tool: schema issue cleared", "server", server, "tool", tool, "prev_status", prev.Status)
 		}
 		return
 	}
@@ -1441,9 +1441,9 @@ func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
 	}
 	switch issue.Status {
 	case ToolSchemaInvalid:
-		log.Printf("MCP tool mcp_%s_%s skipped: input schema is not valid JSON Schema draft 2020-12: %s — the connector must fix its schema", server, tool, issue.Detail)
+		slog.Info("MCP tool skipped: input schema is not valid JSON Schema draft 2020-12 — the connector must fix its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	default:
-		log.Printf("MCP tool mcp_%s_%s: input schema uses older JSON Schema drafts, translated for the model: %s — the connector should update its schema", server, tool, issue.Detail)
+		slog.Info("MCP tool: input schema uses older JSON Schema drafts, translated for the model — the connector should update its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	}
 	metrics.RecordToolSchemaIssue(server, issue.Status)
 }

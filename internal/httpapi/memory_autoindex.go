@@ -2,10 +2,10 @@ package httpapi
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -39,7 +39,7 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 	// numbered known-list, and the supersede-claim id/hash resolution.
 	existing, err := s.store.ListMemories(ctx, user)
 	if err != nil {
-		log.Printf("autoIndexMemories: memory load (user=%s): %v; skipping this turn", user, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+		logging.From(ctx).Warn("autoIndexMemories: memory load; skipping this turn", "user", user, "err", err)
 		return
 	}
 
@@ -88,7 +88,7 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 			}
 		}
 		if _, err := proposer.propose(params, supersededContent); err != nil {
-			log.Printf("autoIndexMemories: propose (user=%s conv=%s): %v", user, conversationID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+			logging.From(ctx).Error("autoIndexMemories: propose", "user", user, "conv_id", conversationID, "err", err)
 		}
 	}
 }

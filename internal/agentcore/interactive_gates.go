@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -53,7 +53,7 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		log.Printf("approval stage failed (bash): %v", err)
+		slog.Error("approval stage failed (bash)", "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
 	switch id {
@@ -122,7 +122,7 @@ func (o *orchestrationState) checkBrowserSafety(toolName, toolCallID, rawInput s
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		log.Printf("approval stage failed (%s): %v", toolName, err)
+		slog.Error("approval stage failed", "tool_name", toolName, "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
 	switch id {
@@ -182,7 +182,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify {
 		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
 			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
-				log.Printf("notify-mode record failed (%s): %v — falling back to a blocking approval", toolName, err)
+				slog.Warn("notify-mode record failed — falling back to a blocking approval", "tool_name", toolName, "err", err)
 			} else {
 				// A tool in critical_tool_result_cards: its record waits for the
 				// call's result, to show the outcome card it carries
@@ -193,7 +193,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 				return false, ""
 			}
 		} else {
-			log.Printf("notify-mode configured for %s but this transport cannot record actions — falling back to a blocking approval", toolName)
+			slog.Warn("notify-mode configured but this transport cannot record actions — falling back to a blocking approval", "tool_name", toolName)
 		}
 	}
 	if pending, ok := o.pendingApprovalOnSameServer(toolName); ok {
@@ -206,7 +206,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		log.Printf("approval stage failed (%s): %v", toolName, err)
+		slog.Error("approval stage failed", "tool_name", toolName, "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action. Could not stage it for user approval (%v). Ask the user what to do.", toolName, err)
 	}
 	switch id {
@@ -258,7 +258,7 @@ func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawIn
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
-		log.Printf("preview stage failed (preview_email): %v", err)
+		slog.Error("preview stage failed (preview_email)", "err", err)
 		return true, fmt.Sprintf("PREVIEW_FAILED: could not render preview for display (%v).", err)
 	}
 	return true, fmt.Sprintf("PREVIEW_DISPLAYED: the user is now viewing your draft in an inbox-style preview card (preview_id=%s). Nothing was sent and no approval is needed. The card has a Dismiss button ONLY — there is no Send button. Do NOT tell the user to \"click Send\" or \"approve\" the card. Instead, describe what you drafted in your reply and wait for the user's next instruction. If they want changes, revise and call preview_email again. If they say \"send it\", call mcp_sendgrid_send_email.", id)
@@ -295,7 +295,7 @@ func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawIn
 		return true, "SCHEDULE_TASK_REFUSED: " + refused.Reason
 	}
 	if err != nil {
-		log.Printf("approval stage failed (schedule_task): %v", err)
+		slog.Error("approval stage failed (schedule_task)", "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage schedule_task for user approval (%v). Ask the user what to do.", err)
 	}
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: the scheduled task has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize the task you would create (name, what it does, when it runs) and wait for the user to click Approve.", id)
@@ -324,7 +324,7 @@ func (o *orchestrationState) checkManageTasksSafety(toolName, toolCallID, rawInp
 		return true, "MANAGE_TASKS_REFUSED: " + refused.Reason
 	}
 	if err != nil {
-		log.Printf("approval stage failed (manage_tasks): %v", err)
+		slog.Error("approval stage failed (manage_tasks)", "err", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage manage_tasks for user approval (%v). Ask the user what to do.", err)
 	}
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: the change has been staged for explicit user approval (approval_id=%s). Do NOT retry. Say plainly which tasks you are about to change and what changes, then wait for the user to click Approve.", id)
@@ -354,7 +354,7 @@ func (o *orchestrationState) checkSuggestAdvancedSafety(toolName, rawInput strin
 	}
 	id, msg, err := o.approvalSink.StageSuggestion(args.Reason)
 	if err != nil {
-		log.Printf("suggestion stage failed: %v", err)
+		slog.Error("suggestion stage failed", "err", err)
 		return true, fmt.Sprintf("SUGGESTION_FAILED: could not stage suggestion (%v).", err)
 	}
 	// id == "" means the gate suppressed the suggestion; msg explains why.

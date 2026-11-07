@@ -21,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -554,7 +555,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	if toolName != tools.ScheduleTaskToolName {
 		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
-			log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
+			slog.Error("supersede approvals", "tool", toolName, "conv_id", a.conversationID, "err", err)
 		} else if n > 0 {
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
@@ -582,14 +583,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
 	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
 		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
-			log.Printf("approval narrowing: freeze the argument for %s: ok=%t err=%v", approval.ID, ok, err)
+			slog.Error("approval narrowing: freeze the argument", "approval_id", approval.ID, "ok", ok, "err", err)
 		} else {
 			approval.NarrowableArg = arg
 		}
 	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
-			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
+			slog.Error("approval card: store card", "approval_id", approval.ID, "ok", ok, "err", err)
 			cardFallback = cardFallbackStore
 		} else {
 			approval.CardJSON = cardJSON
@@ -627,7 +628,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
-			log.Printf("push: approval notification (tool=%s conv=%s): %s", safe.LogSafe(toolName), safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("push: approval notification", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
 	if a.bg != nil {
@@ -835,7 +836,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	// Supersede any older pending cards for this same tool so the UI
 	// stays clean if a rare race writes two in quick succession.
 	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
-		log.Printf("supersede suggestions (conv=%s): %v", a.conversationID, err)
+		slog.Error("supersede suggestions", "conv_id", a.conversationID, "err", err)
 	} else if n > 0 {
 		a.emitUserScoped("tool.approval_superseded", map[string]any{
 			"tool":  tools.SuggestAdvancedModelToolName,
@@ -886,7 +887,7 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 	broker, catalog, _ := a.mcpScope()
 	server, err := resolveEmailValidationServer(catalog, sourceToolName)
 	if err != nil {
-		log.Printf("prevalidateEmail: resolve source tool: %v", err)
+		logging.From(ctx).Error("prevalidateEmail: resolve source tool", "err", err)
 		return nil
 	}
 	// The email is staged by a chat turn, so a validate_email_content the
@@ -896,7 +897,7 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 	// could not. Prevalidation is best-effort, so it is skipped like an
 	// unreachable validator and the card is staged unvalidated.
 	if full := agentcore.MCPToolName(server, "validate_email_content"); agentcore.InteractiveHiddenTool(full) {
-		log.Printf("prevalidateEmail: %q is hidden from interactive chat (interactive_hidden_tools); not called", full)
+		logging.From(ctx).Info("prevalidateEmail is hidden from interactive chat (interactive_hidden_tools); not called", "full", full)
 		return nil
 	}
 	text, isError, err := broker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
@@ -904,11 +905,11 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 		"subject": subject,
 	})
 	if err != nil {
-		log.Printf("prevalidateEmail: validation tool error: %v", err)
+		logging.From(ctx).Error("prevalidateEmail: validation tool error", "err", err)
 		return nil
 	}
 	if isError {
-		log.Printf("prevalidateEmail: validation tool reported an error")
+		logging.From(ctx).Error("prevalidateEmail: validation tool reported an error")
 		return nil
 	}
 	if strings.TrimSpace(text) == "" {
@@ -917,7 +918,7 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 
 	var vr validationResult
 	if err := json.Unmarshal([]byte(text), &vr); err != nil {
-		log.Printf("prevalidateEmail: unmarshal validation result: %v", err)
+		logging.From(ctx).Error("prevalidateEmail: unmarshal validation result", "err", err)
 		return nil
 	}
 	if !vr.Valid && len(vr.Errors) > 0 {
@@ -1207,8 +1208,7 @@ func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req a
 		pattern = strings.TrimSpace(req.Pattern)
 	}
 	s.sessionApprovals.RegisterForUser(convID, user, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
-	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF, so a request-supplied scope/pattern cannot forge a log line.
-	log.Printf("audit: %q pre-%s %q for conversation %q (scope=%q pattern=%q)", user, mode, toolName, convID, scope, pattern)
+	slog.Info("audit pre- for conversation", "user", user, "mode", mode, "tool_name", toolName, "conv_id", convID, "scope", scope, "pattern", pattern)
 }
 
 // approvalHandler runs the staged tool when the user approves, or marks it
@@ -1633,7 +1633,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultCard = s.recordApprovalResultCard(execCtx, user, approval, governed)
 	}
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
-		log.Printf("SetApprovalResult: %v", err)
+		slog.Error("SetApprovalResult", "err", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
 		return withApprovalNarrowed(map[string]any{
 			"status": "approved", "execution_unknown": true,
@@ -1865,7 +1865,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	resultText := fmt.Sprintf("User accepted the suggestion (%s). Conversation pinned to %s.", action, advancedModel)
 	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {
-		log.Printf("ClaimApprovalAndSetModel (suggest_advanced approval): %v", err)
+		logging.From(r.Context()).Error("ClaimApprovalAndSetModel (suggest_advanced approval)", "err", err)
 		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1949,7 +1949,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		// The batch is capped (store.MaxExpiredApprovalsPerSweep). More may be
 		// pending past their deadline; the next tick picks up the remainder. Log
 		// rather than silently bounding coverage.
-		log.Printf("approval expiry sweep: batch hit the %d-row cap; remainder handled next tick", store.MaxExpiredApprovalsPerSweep)
+		logging.From(ctx).Info("approval expiry sweep: batch hit the -row cap; remainder handled next tick", "max_expired_approvals_per_sweep", store.MaxExpiredApprovalsPerSweep)
 	}
 	denied := 0
 	for i := range expired {
@@ -1960,14 +1960,14 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		// keeps each processed row's claim+append atomic-in-practice; the
 		// unprocessed rows stay pending and are swept on the next tick.
 		if err := ctx.Err(); err != nil {
-			log.Printf("approval expiry sweep: stopping after %d/%d (%v); remainder handled next tick", denied, len(expired), err)
+			logging.From(ctx).Error("approval expiry sweep: stopping after /; remainder handled next tick", "denied", denied, "expired_count", len(expired), "err", err)
 			break
 		}
 		a := expired[i]
 		resultText := timeoutResultTextFor(a.ToolName)
 		claimed, err := s.store.ClaimExpiredApproval(ctx, a.UserEmail, a.ID, "rejected", resultText)
 		if err != nil {
-			log.Printf("approval expiry sweep: claim %s: %v", a.ID, err)
+			logging.From(ctx).Error("approval expiry sweep: claim", "claim", a.ID, "err", err)
 			continue
 		}
 		if !claimed {

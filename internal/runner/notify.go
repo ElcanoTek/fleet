@@ -3,12 +3,12 @@ package runner
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -95,7 +95,7 @@ func (p *Pool) notifyBlocked(task *models.Task, session *models.LogSession, dur 
 		if task.Recurrence != "" && p.store != nil {
 			streak, err := p.store.BlockedStreak(ctx, task.ID, blockedStreakAlert+1)
 			if err != nil {
-				log.Printf("runner: blocked-streak lookup for task %s failed: %v", task.ID, err)
+				logging.From(ctx).Error("runner: blocked-streak lookup for task failed", "task_id", task.ID, "err", err)
 			} else if streak == blockedStreakAlert {
 				message = fmt.Sprintf("Blocked %d runs in a row — the schedule keeps running, but none of them published: %s", streak, detail)
 			}
@@ -116,7 +116,7 @@ func (p *Pool) ownerEmail(ctx context.Context, task *models.Task) string {
 	}
 	m, err := p.store.GetUsersByIDsWithContext(ctx, []uuid.UUID{*task.CreatedBy})
 	if err != nil {
-		log.Printf("runner: notify owner lookup for task %s failed: %v", task.ID, err)
+		logging.From(ctx).Error("runner: notify owner lookup for task failed", "task_id", task.ID, "err", err)
 		return ""
 	}
 	return m[*task.CreatedBy]

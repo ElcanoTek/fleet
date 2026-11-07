@@ -3,11 +3,12 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"log"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // storageProbeTimeout bounds the one-time boot probe for --storage-opt support.
@@ -95,17 +96,17 @@ func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) (suppo
 			// from this bundle's rootfs. Report support, and say so rather than
 			// leaving an operator to wonder why a quota-capable host logged a
 			// probe failure.
-			log.Printf("sandbox: --storage-opt size probe could not exec /usr/bin/true in %s (%s) — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", image, detail)
+			logging.From(ctx).Error("sandbox: --storage-opt size probe could not exec /usr/bin/true — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", "image", image, "detail", detail)
 			return true, true
 		}
 		if probeCtx.Err() != nil {
 			// The probe was cut short (caller cancelled, or the probe's own
 			// timeout fired) before podman answered — that is not a statement
 			// about the storage driver.
-			log.Printf("sandbox: --storage-opt size probe did not complete (%v) — no determination made: %s", probeCtx.Err(), detail)
+			logging.From(ctx).Error("sandbox: --storage-opt size probe did not complete — no determination made", "err", probeCtx.Err(), "detail", detail)
 			return false, false
 		}
-		log.Printf("sandbox: --storage-opt size probe failed (%v): %s", err, detail)
+		logging.From(ctx).Error("sandbox: --storage-opt size probe failed", "err", err, "detail", detail)
 		return false, true
 	}
 	return true, true

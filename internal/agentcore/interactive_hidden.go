@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -79,7 +79,7 @@ func buildInteractiveHiddenList(members []string) ([]string, []string) {
 func installInteractiveHiddenList(members []string) []string {
 	list, problems := buildInteractiveHiddenList(members)
 	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Info("agent_policy", "problem", problem)
 	}
 	return list
 }

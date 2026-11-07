@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -107,7 +107,7 @@ func (p *EgressProxy) Start() error {
 	}
 	go func() {
 		if err := p.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("sandbox: egress proxy serve error: %v", err)
+			slog.Error("sandbox: egress proxy serve error", "err", err)
 		}
 	}()
 	return nil
@@ -351,12 +351,11 @@ func (r *drainProgressReader) Read(b []byte) (int, error) {
 // (peer reset, closed conn) and stays quiet.
 func (d *tunnelDrain) logReap(direction, host, port string, err error) {
 	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
-		//nolint:gosec // G706 false positive: host reached here only by matching
 		// domainAllowed against this turn's allowlist (domain patterns, no CR/LF),
 		// port is the fixed requirePort when one is set, and net/http rejects
 		// CR/LF in the request line before either is parsed. direction is one of
 		// two package literals.
-		log.Printf("sandbox: egress tunnel to %s reaped: %s idle for %s during drain", net.JoinHostPort(host, port), direction, d.timeout)
+		slog.Info("sandbox: egress tunnel reaped idle during drain", "join_host_port", net.JoinHostPort(host, port), "direction", direction, "timeout", d.timeout)
 	}
 }
 

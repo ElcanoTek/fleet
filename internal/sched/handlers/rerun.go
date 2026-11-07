@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/go-chi/chi/v5"
@@ -105,8 +105,7 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 	if keepRecurrence {
 		verb = "clone"
 	}
-	//nolint:gosec // G706: IDs are uuid.UUID values; their String() is canonical hex+dashes, no CR/LF.
-	log.Printf("Task %s created (%s of %s)", newTask.ID, verb, source.ID)
+	logging.From(r.Context()).Info("Task created", "new_task_id", newTask.ID, "verb", verb, "source_id", source.ID)
 	localizeTask(newTask)
 	writeJSON(w, http.StatusCreated, newTask)
 }

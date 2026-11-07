@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -103,7 +103,7 @@ func AugmentTaskWithCreateReconciliation(task, workdir string) string {
 	raw, err := readCreateLedger(filepath.Join(workdir, createLedgerFilename))
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("create reconciliation: ledger in %s not read: %v", workdir, err)
+			slog.Error("create reconciliation: ledger not read", "workdir", workdir, "err", err)
 		}
 		return task
 	}

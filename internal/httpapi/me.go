@@ -21,9 +21,9 @@ package httpapi
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -137,7 +137,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	// %q escapes CR/LF, so the request-supplied team cannot forge a log line.
-	log.Printf("teams: %q set own team to %q", u.Email, u.TeamID)
+	logging.From(r.Context()).Info("teams set own team", "email", u.Email, "team_id", u.TeamID)
 	writeJSON(w, s.meResponseFor(u))
 }
 

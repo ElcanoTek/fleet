@@ -3,7 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -342,15 +342,13 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 		if c.adminMaxCostUSD != nil {
 			// The env value is recorded (Reset in the admin panel reverts to
 			// it) but the admin override stays in effect until it is cleared.
-			log.Printf("Config reload: FLEET_MAX_COST_USD=%v recorded, but the admin override max_cost_usd=%v remains in effect",
-				v, *c.adminMaxCostUSD)
+			slog.Info("Config reload recorded, but the admin override remains in effect", "fleet_max_cost_usd", v, "max_cost_usd", *c.adminMaxCostUSD)
 		}
 	})
 	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, func(v int) {
 		c.MaxTotalTokens = v
 		if c.adminMaxTotalTokens != nil {
-			log.Printf("Config reload: FLEET_MAX_TOTAL_TOKENS=%d recorded, but the admin override max_total_tokens=%d remains in effect",
-				v, *c.adminMaxTotalTokens)
+			slog.Info("Config reload recorded, but the admin override remains in effect", "fleet_max_total_tokens", v, "max_total_tokens", *c.adminMaxTotalTokens)
 		}
 	})
 	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, func(v int) { c.MaxIterations = v })

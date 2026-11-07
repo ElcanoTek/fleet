@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -40,21 +40,21 @@ func webAddr() (addr string, enabled bool) {
 func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, error) {
 	addr, enabled := webAddr()
 	if !enabled {
-		log.Printf("web: browser tier disabled (FLEET_WEB_ADDR=off)")
+		slog.Info("web: browser tier disabled (FLEET_WEB_ADDR=off)")
 		return nil, nil
 	}
 	wc := gatewayConfig(cfg)
 	if wc.SessionSecret == "" {
-		log.Printf("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
+		slog.Warn("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
 	}
 	g, err := webui.New(wc, webui.Options{Chat: chat, Orchestrator: orch})
 	if err != nil {
 		return nil, err
 	}
 	if !g.BundlePresent() {
-		log.Printf("WARNING: this fleet binary carries no web bundle — pages answer 503 until it is rebuilt with `make build` (the API still works)")
+		slog.Warn("WARNING: this fleet binary carries no web bundle — pages answer 503 until it is rebuilt with `make build` (the API still works)")
 	}
-	log.Printf("web: bundle %s", g.BuildID())
+	slog.Info("web: bundle", "build_id", g.BuildID())
 	return &http.Server{
 		Addr:              addr,
 		Handler:           g,
@@ -101,7 +101,7 @@ func serveInBackground(name string, srv *http.Server, errCh chan<- error) {
 	}
 	go func() {
 		defer safe.Recover("cmd."+name, func(any) { errCh <- errors.New(name + ": panicked") })
-		log.Printf("%s listening on %q", name, srv.Addr)
+		slog.Info("listening", "name", name, "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("%s: %w", name, err)
 		}

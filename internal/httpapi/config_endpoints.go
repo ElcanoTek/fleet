@@ -5,13 +5,13 @@
 package httpapi
 
 import (
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 	if list, err := s.store.ListUserPersonas(r.Context(), userFromCtx(r.Context())); err == nil {
 		userPersonas = activeUserPersonaSummaries(list)
 	} else {
-		log.Printf("list user personas: %v", err)
+		logging.From(r.Context()).Error("list user personas", "err", err)
 	}
 	writeJSON(w, personasResponse{
 		Personas:     names,

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -217,7 +218,7 @@ func (b *turnBuffer) runPersister() {
 		// the turn can still finish.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := b.persister.InsertTurnEvents(ctx, toStore); err != nil {
-			log.Printf("persist turn_events (turn=%s n=%d): %v", b.turnID, len(toStore), err)
+			logging.From(ctx).Error("persist turn_events", "turn_id", b.turnID, "n", len(toStore), "err", err)
 			// These rows are unconfirmed; flag the turn for a full backfill on
 			// Finish rather than leaving a permanent gap.
 			b.markNeedsBackfill()
@@ -314,7 +315,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		default:
 			b.needsBackfill = true // already under b.mu
 			b.droppedOnFull++
-			log.Printf("persister channel full (turn=%s); event id=%d deferred to Finish backfill", b.turnID, ev.ID)
+			slog.Info("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "id", ev.ID)
 		}
 	}
 }
@@ -469,14 +470,14 @@ func (b *turnBuffer) Finish() {
 		b.mu.Unlock()
 		if needsBackfill {
 			if err := b.backfill(snapshot); err != nil {
-				log.Printf("persist backfill (turn=%s n=%d): %v", b.turnID, len(snapshot), err)
+				slog.Error("persist backfill", "turn_id", b.turnID, "n", len(snapshot), "err", err)
 				lossy = true
 			}
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := b.persister.FinishTurn(ctx, b.turnID, status, b.finishedAt.Unix(), lossy); err != nil {
-			log.Printf("persist FinishTurn (turn=%s): %v", b.turnID, err)
+			logging.From(ctx).Error("persist FinishTurn", "turn_id", b.turnID, "err", err)
 		}
 		cancel()
 	}

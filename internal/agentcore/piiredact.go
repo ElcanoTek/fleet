@@ -1,7 +1,7 @@
 package agentcore
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/piiredact"
@@ -50,7 +50,7 @@ func redactPII(toolName, text string) (out string, blocked bool) {
 	}
 	res := r.Redact(text)
 	if res.Found() {
-		log.Printf("piiredact: %s output — %s (mode=%s)", toolName, res.Summary(), r.Mode())
+		slog.Info("piiredact output", "tool_name", toolName, "summary", res.Summary(), "mode", r.Mode())
 	}
 	return res.Text, res.Blocked
 }

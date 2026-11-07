@@ -197,35 +197,40 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 
 ## When something fails
 
-Read `fleet.log` first. The lines that matter:
+Read `fleet.log` first (one structured line per event — JSON by default; every
+line of a turn carries its `conv_id`, `turn_id` and `trace_id`). The lines that matter, by message:
 
-- `remote-mcp: skipping server "<name>" for <user> — token unavailable` —
+- `remote-mcp: skipping server for — token unavailable` (`reg_name`, `email`) —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
   marked *Sign-in needed* (`needs_reauth`); have the owner click Sign in. For
   transient network errors or vendor 5xx, the same line is logged but the
   connection stays connected and the next call retries automatically.
-- `remote-mcp: skipping server "<name>" … — failed to connect: … HTTP 404` —
+- `remote-mcp: skipping server for — failed to connect` with
+  `connect_failure_reason` … `HTTP 404` —
   the vendor rejected the tools handshake; usually a wrong URL (check the
   vendor's documented MCP path), not a credential problem. The model is told
   the connector "did not respond this turn" and not to ask for a reconnect;
   only a 401 at mount, or a dead refresh token, is announced as needing one,
   and a failure fleet cannot classify (a credential it could not read) is
   announced as exactly that (F10). `RunTurn: remote MCP server(s) not
-  mounted for <user>: <name> (<reason>)` carries the class per connector.
-- `mcpbroker: tool call failed (passed to the caller as "…"): … HTTP 422 …`
+  mounted` (`user_email`, `skipped` = `<name> (<reason>)`) carries the class
+  per connector.
+- `mcpbroker: call failed (passed to the caller as told)` with `op="tool call"`,
+  `told="…"` and an `err` quoting … `HTTP 422` …
   — the vendor refused the tool arguments, and since F8 the model was told
   the vendor's 4xx or JSON-RPC answer, bounded and scrubbed (`the server
   answered HTTP 422 …: …`; a 403 is passed as what the vendor said, a 401
   only as "the server rejected the stored credential"). The line quotes what
   the model saw and carries the full redacted text.
-- `mcpbroker: tool call failed (masked to the caller): …` — a 5xx, a
+- `mcpbroker: call failed (masked to the caller)` with `op="tool call"` — a 5xx, a
   transport failure, or any error of a bundle server: the model saw only
-  `credential-owner call failed`; the real text is on this line.
-- `scheduled task <id>: wired N remote MCP server(s) for <user>` /
-  `skipped remote MCP server(s): […] (reasons map[…])` — what a scheduled run
-  mounted and what it could not, with the reason class per connector.
-- `Fantasy tools registered: … N MCP tools DEFERRED` — the run is in deferred
-  mode.
+  `credential-owner call failed`; the real text is in its `err`.
+- `scheduled task: wired remote MCP server(s)` (`task_id`, `servers_count`,
+  `email`) / `scheduled task: skipped remote MCP server(s)` (`skipped`) —
+  what a scheduled run mounted and what it could not, with the reason class
+  per connector.
+- `Fantasy tools registered; MCP tools DEFERRED behind tool_search/describe/call (#506)`
+  with `mcp_deferred=N` — the run is in deferred mode.
 
 At **Add** time, the error toast names every metadata location fleet tried.
 `fetch protected-resource metadata … 404` on every location means the vendor

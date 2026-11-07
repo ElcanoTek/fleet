@@ -3,13 +3,13 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -74,7 +74,7 @@ func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, fun
 		// probe: the probe itself would refuse (ErrPoisoned) anyway, but the
 		// explicit branch keeps the log honest about WHY it was recreated.
 		if e.sb.Poisoned() {
-			log.Printf("sandbox: persistent sandbox poisoned by a cancelled command; retiring and recreating")
+			logging.From(ctx).Info("sandbox: persistent sandbox poisoned by a cancelled command; retiring and recreating")
 			p.retireDead(e)
 			continue
 		}
@@ -375,7 +375,7 @@ func (p *Pool) sandboxAlive(sb *Sandbox) bool {
 	defer cancel()
 	res, err := sb.RunBash(ctx, BashRequest{Command: "true", Timeout: 5 * time.Second})
 	if err != nil {
-		log.Printf("sandbox: persistent sandbox failed liveness probe, recreating: %v", err)
+		logging.From(ctx).Error("sandbox: persistent sandbox failed liveness probe, recreating", "err", err)
 		return false
 	}
 	return !res.TimedOut

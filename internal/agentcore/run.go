@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -656,7 +656,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if deps.ClearMCPDirty != nil {
 				deps.ClearMCPDirty()
 			}
-			log.Printf("🔌 MCP loaded-server set changed; fantasy agent rebuilt for round %d", round+1)
+			logging.From(ctx).Info("🔌 MCP loaded-server set changed; fantasy agent rebuilt for round", "round", round+1)
 		}
 
 		// Context-window pressure check (#209): warn — and, above the higher

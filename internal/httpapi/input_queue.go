@@ -14,7 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -212,7 +213,7 @@ func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, statu
 		n, inLine, err := s.store.InputsAhead(ctx, row.ID)
 		switch {
 		case err != nil:
-			log.Printf("queue ack: count inputs ahead (conv=%s): %v", convID, err)
+			logging.From(ctx).Error("queue ack: count inputs ahead", "conv_id", convID, "err", err)
 		case inLine:
 			input["ahead"] = n
 		}
@@ -321,7 +322,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		}
 		if rerr != nil {
 			// The mark still refuses the launch while it lives.
-			log.Printf("withdraw stopped input (conv=%s): %v", conv.ID, rerr)
+			logging.From(r.Context()).Error("withdraw stopped input", "conv_id", conv.ID, "err", rerr)
 		} else {
 			row.State = store.InputStateCancelled
 		}
@@ -486,7 +487,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
-		log.Printf("input queue claim (conv=%s): %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; convID is a server-generated UUID.
+		slog.Error("input queue claim", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		return
 	}
 	if row == nil {
@@ -498,7 +499,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 		// covers a winner whose tail already ran before our un-claim landed.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
-			log.Printf("input queue unclaim (conv=%s input=%s): %s", safe.LogSafe(convID), safe.LogSafe(row.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; both IDs are server-generated UUIDs.
+			slog.Error("input queue unclaim", "conv_id", safe.LogSafe(convID), "input", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
 		}
 		rcancel()
 		s.rekickDrainAfter(convID, 2*time.Second)
@@ -550,7 +551,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	if err != nil {
 		// TRANSIENT store failure: the 202-acknowledged input must survive.
 		// Back to queued + a bounded re-kick; never cancelled for weather.
-		log.Printf("input queue: conversation %s load failed: %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; convID is a server-generated UUID.
+		slog.Error("input queue: conversation load failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 		s.rekickDrainAfter(convID, 3*time.Second)
 		return true
@@ -563,7 +564,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
 		defaultModel := agentcore.CurrentDefaultModel()
 		if err := s.store.SetModel(lctx, convOwnerEmail(conv, user), convID, defaultModel); err != nil {
-			log.Printf("input queue: conversation %s set default model failed: %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; convID is a server-generated UUID.
+			slog.Error("input queue: conversation set default model failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 			s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 			s.rekickDrainAfter(convID, 3*time.Second)
 			return true
@@ -654,7 +655,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 		}
 		return
 	}
-	log.Printf("input queue state (%s -> %s, %d retries left): %v", id, state, retriesLeft, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	logging.From(ctx).Error("input queue state transition failed", "input_id", id, "state", state, "retries_left", retriesLeft, "err", err)
 	if retriesLeft <= 0 {
 		return
 	}
@@ -750,7 +751,7 @@ func (s *Server) settleUnqueuedInput(user, convID, key string) {
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
 		}); err != nil {
-			log.Printf("settle unqueued input (conv=%s): %v", convID, err)
+			logging.From(ctx).Error("settle unqueued input", "conv_id", convID, "err", err)
 			return false
 		}
 		return true

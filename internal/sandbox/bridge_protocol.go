@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // bridgeResponseCaptureCap bounds how many bytes of a single bridge response
@@ -93,7 +93,7 @@ func parseBridgeResponse(data []byte) (PythonResult, error) {
 		if len(preview) > 240 {
 			preview = preview[:240] + "..."
 		}
-		log.Printf("sandbox: bridge response not JSON: %v (preview: %s)", err, preview)
+		slog.Error("sandbox: bridge response not JSON (preview)", "err", err, "preview", preview)
 		return PythonResult{}, fmt.Errorf("parse bridge response: %w", err)
 	}
 	return PythonResult(resp), nil

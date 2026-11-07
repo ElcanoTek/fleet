@@ -77,8 +77,8 @@ func TestToAgentcoreProviders(t *testing.T) {
 		if len(got) != 2 || got[0].APIKey != "" {
 			t.Errorf("unset env => %+v, want an empty APIKey on provider[0]", got)
 		}
-		if out := buf.String(); !strings.Contains(out, `bundle provider "x": its api_key_env variable is unset or empty`) ||
-			strings.Contains(out, `"local"`) {
+		if out := buf.String(); !strings.Contains(out, `bundle provider: its api_key_env variable is unset or empty`) ||
+			!strings.Contains(out, `provider=x`) || strings.Contains(out, `provider=local`) {
 			t.Errorf("log = %q, want one warning naming x's unset variable", out)
 		}
 	})
@@ -134,8 +134,8 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 		t.Fatalf("legacy row window = %d (present %v), want it loaded with 0", w, ok)
 	}
 	out := buf.String()
-	if !strings.Contains(out, `admin provider "`+name+`-legacy" (type ollama) declares no context window`) ||
-		strings.Contains(out, `"`+name+`" (type`) {
+	if !strings.Contains(out, `declares no context window`) || !strings.Contains(out, `source=admin provider=`+name+`-legacy type=ollama`) ||
+		strings.Contains(out, `provider=`+name+` `) {
 		t.Fatalf("log = %q, want one warning, for the legacy row only", out)
 	}
 }
@@ -190,8 +190,8 @@ func TestToAgentcoreProvidersWarnsOnAnUndeclaredWindow(t *testing.T) {
 		t.Fatalf("got %d providers, want all 3 loaded", len(got))
 	}
 	out := buf.String()
-	if !strings.Contains(out, `bundle provider "anthropic-direct" (type anthropic) declares no context window`) ||
-		strings.Contains(out, `"openrouter"`) || strings.Contains(out, `"local"`) {
+	if !strings.Contains(out, `declares no context window`) || !strings.Contains(out, `source=bundle provider=anthropic-direct type=anthropic`) ||
+		strings.Contains(out, `provider=openrouter`) || strings.Contains(out, `provider=local`) {
 		t.Fatalf("log = %q, want one warning, for anthropic-direct only", out)
 	}
 }

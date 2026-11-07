@@ -44,7 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -331,7 +331,7 @@ func (s *k8sExecSession) close() {
 	select {
 	case <-s.done:
 	case <-time.After(bridgeReapTimeout):
-		log.Printf("sandbox: exec stream did not exit within %s of cancel — abandoning the join to keep teardown bounded", bridgeReapTimeout)
+		slog.Info("sandbox: exec stream did not exit within of cancel — abandoning the join to keep teardown bounded", "bridge_reap_timeout", bridgeReapTimeout)
 	}
 }
 

@@ -13,11 +13,12 @@ package main
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
 
@@ -29,14 +30,14 @@ func main() {
 	cfg := webui.ConfigFromEnv()
 	g, err := webui.New(cfg, webui.Options{})
 	if err != nil {
-		log.Fatalf("web-e2e-server: %v", err)
+		logging.Fatal("web-e2e-server", "err", err)
 	}
 	if !g.BundlePresent() {
-		log.Fatalf("web-e2e-server: no web bundle embedded — run `make web` (cd web && npm run build) before building this harness")
+		logging.Fatal("web-e2e-server: no web bundle embedded — run `make web` (cd web && npm run build) before building this harness")
 	}
 	srv := &http.Server{Addr: addr, Handler: g, ReadHeaderTimeout: 30 * time.Second}
-	log.Printf("web-e2e-server: bundle %s listening on %q", g.BuildID(), addr)
+	slog.Info("web-e2e-server: bundle listening", "build_id", g.BuildID(), "addr", addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		logging.Fatal(err.Error())
 	}
 }

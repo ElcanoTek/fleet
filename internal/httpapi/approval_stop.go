@@ -23,12 +23,12 @@ package httpapi
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -248,8 +248,7 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		return
 	}
 	if marked {
-		//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
-		log.Printf("audit: %q stopped running approval %q (%q) in conversation %q", user, approvalID, a.ToolName, convID)
+		logging.From(r.Context()).Info("audit stopped running approval in conversation", "user", user, "approval_id", approvalID, "tool_name", a.ToolName, "conv_id", convID)
 	}
 	if !accepted {
 		// The call finished first: its outcome is being recorded without a

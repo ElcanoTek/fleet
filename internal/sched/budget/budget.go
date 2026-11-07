@@ -34,12 +34,12 @@ package budget
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -304,7 +304,7 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 	}
 	won, err := e.cfg.Store.MarkBudgetSoftAlert(ctx, b.ID, ws)
 	if err != nil {
-		log.Printf("budget: failed to claim soft alert for budget %s: %v", b.ID, err)
+		logging.From(ctx).Error("budget: failed to claim soft alert for budget", "budget", b.ID, "err", err)
 		return
 	}
 	if !won || e.cfg.Notifier == nil {
@@ -326,7 +326,7 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 	}
 	if e.cfg.SyncNotify {
 		if err := e.cfg.Notifier.Notify(ctx, ev); err != nil {
-			log.Printf("budget: soft alert delivery for budget %s: %v", b.ID, err)
+			logging.From(ctx).Error("budget: soft alert delivery for budget", "budget", b.ID, "err", err)
 		}
 		return
 	}
@@ -335,7 +335,7 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 		nctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		if err := notifier.Notify(nctx, ev); err != nil {
-			log.Printf("budget: soft alert delivery for budget %s: %v", b.ID, err)
+			logging.From(ctx).Error("budget: soft alert delivery for budget", "budget", b.ID, "err", err)
 		}
 	})
 }

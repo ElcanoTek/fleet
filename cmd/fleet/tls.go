@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // TLS termination for the chat server (the user-facing HTTP/SSE API).
@@ -60,7 +61,7 @@ func serveChat(server *http.Server, cfg *config.Config) error {
 		}
 		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		go startRedirectServer(cfg.TLSHTTPAddr, nil)
-		log.Printf("chat-server listening on %s (TLS manual)", server.Addr)
+		slog.Info("chat-server listening (TLS manual)", "addr", server.Addr)
 		return server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 	case "auto":
 		warnIfPrivateDomain(cfg.TLSDomain)
@@ -76,10 +77,10 @@ func serveChat(server *http.Server, cfg *config.Config) error {
 		server.TLSConfig = m.TLSConfig()
 		// :80 serves the ACME HTTP-01 challenge AND redirects everything else.
 		go startRedirectServer(cfg.TLSHTTPAddr, m)
-		log.Printf("chat-server listening on %s (TLS auto, domain=%s)", server.Addr, cfg.TLSDomain)
+		slog.Info("chat-server listening (TLS auto)", "addr", server.Addr, "domain", cfg.TLSDomain)
 		return server.ListenAndServeTLS("", "")
 	default: // off
-		log.Printf("chat-server listening on %s", server.Addr)
+		slog.Info("chat-server listening", "addr", server.Addr)
 		return server.ListenAndServe()
 	}
 }
@@ -96,7 +97,7 @@ func startRedirectServer(addr string, m *autocert.Manager) {
 	}
 	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("TLS redirect listener (%s): %v", addr, err)
+		slog.Error("TLS redirect listener", "addr", addr, "err", err)
 	}
 }
 
@@ -131,7 +132,7 @@ func warnIfPrivateDomain(domain string) {
 	}
 	for _, a := range addrs {
 		if ip := net.ParseIP(a); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
-			log.Printf("warn: FLEET_TLS_MODE=auto but DNS for %q resolves to %s (private/loopback); the ACME HTTP-01 challenge will likely fail — use FLEET_TLS_MODE=manual for internal deployments", domain, a)
+			logging.From(ctx).Warn("warn: FLEET_TLS_MODE=auto but DNS resolves (private/loopback); the ACME HTTP-01 challenge will likely fail — use FLEET_TLS_MODE=manual for internal deployments", "domain", domain, "detail", a)
 			return
 		}
 	}

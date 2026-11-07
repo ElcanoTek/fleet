@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -371,7 +371,7 @@ func boundModelVisibleToolResponseExact(ctx context.Context, toolName, toolCallI
 			metrics.RecordToolOutputArtifact("capacity")
 		default:
 			metrics.RecordToolOutputArtifact("failure")
-			log.Printf("agentcore: failed to stage governed %s output artifact: %v", boundedToolName(toolName), artifactErr)
+			logging.From(ctx).Error("agentcore: failed to stage governed output artifact", "tool_name", boundedToolName(toolName), "err", artifactErr)
 		}
 	}
 
@@ -400,8 +400,7 @@ func boundModelVisibleToolResponseExact(ctx context.Context, toolName, toolCallI
 	resp.Data = nil
 	resp.MediaType = ""
 	metrics.RecordToolOutputTruncation(toolName, format)
-	log.Printf("agentcore: bounded %s output from %d to %d bytes (limit=%d, format=%s, binary_suppressed=%t)",
-		env.Tool, len(content), len(resp.Content), limit, format, encodedBinary)
+	logging.From(ctx).Info("agentcore: bounded tool output", "tool", env.Tool, "from_bytes", len(content), "to_bytes", len(resp.Content), "limit", limit, "format", format, "binary_suppressed", encodedBinary)
 	return resp
 }
 

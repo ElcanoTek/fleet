@@ -24,7 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- used once, for +/-10% jitter on a retry interval (see rand.Int64N below). Nothing here is a secret, a token, or an identity; crypto/rand would only make backoff slower.
 	"strconv"
 	"strings"
@@ -38,6 +38,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
@@ -371,7 +372,7 @@ func wallTimeoutFromEnv() time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d < 0 {
-		log.Printf("⚠ Ignoring invalid FLEET_TASK_WALL_TIMEOUT=%q; using default %s", v, DefaultTaskWallClockTimeout)
+		slog.Warn("⚠ Ignoring invalid; using default", "fleet_task_wall_timeout", v, "default_task_wall_clock_timeout", DefaultTaskWallClockTimeout)
 		return DefaultTaskWallClockTimeout
 	}
 	return d
@@ -391,7 +392,7 @@ func maxConcurrentFromEnv() int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		log.Printf("⚠ Ignoring invalid FLEET_MAX_CONCURRENT_AGENTS=%q; using default %d", v, DefaultMaxConcurrentAgents)
+		slog.Warn("⚠ Ignoring invalid; using default", "fleet_max_concurrent_agents", v, "default_max_concurrent_agents", DefaultMaxConcurrentAgents)
 		return DefaultMaxConcurrentAgents
 	}
 	return n
@@ -421,9 +422,9 @@ func (p *Pool) Run(ctx context.Context) {
 	p.mu.Unlock()
 
 	if p.wallTimeout > 0 {
-		log.Printf("runner: per-task wall-clock timeout ON (%s; FLEET_TASK_WALL_TIMEOUT, 0 disables)", p.wallTimeout)
+		logging.From(ctx).Info("runner: per-task wall-clock timeout ON (FLEET_TASK_WALL_TIMEOUT, 0 disables)", "wall_timeout", p.wallTimeout)
 	} else {
-		log.Printf("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
+		logging.From(ctx).Info("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
 	}
 
 	// Lease renewal runs until the in-flight tasks have DRAINED, not until ctx
@@ -457,15 +458,15 @@ func (p *Pool) Run(ctx context.Context) {
 		p.tryClaim(ctx, taskCtx)
 		select {
 		case <-ctx.Done():
-			log.Printf("runner: draining in-flight tasks (grace %s)...", p.drainGrace)
+			logging.From(ctx).Info("runner: draining in-flight tasks (grace)...", "drain_grace", p.drainGrace)
 			if p.drainWithGrace(p.drainGrace) {
-				log.Println("runner: all in-flight tasks drained")
+				logging.From(ctx).Info("runner: all in-flight tasks drained")
 			} else {
-				log.Printf("runner: grace period (%s) expired; force-cancelling in-flight tasks", p.drainGrace)
+				logging.From(ctx).Info("runner: grace period expired; force-cancelling in-flight tasks", "drain_grace", p.drainGrace)
 				taskCancel()
 				p.taskWG.Wait()
 			}
-			log.Println("runner: shutdown complete")
+			logging.From(ctx).Info("runner: shutdown complete")
 			return
 		case <-ticker.C:
 		case <-p.kick:
@@ -581,14 +582,14 @@ func (p *Pool) admitClaims() bool {
 	ok, reason := p.admitScheduled()
 	if ok {
 		if p.shedLogged.CompareAndSwap(true, false) {
-			log.Print("runner: resuming scheduled task claims (backpressure cleared)")
+			slog.Info("runner: resuming scheduled task claims (backpressure cleared)")
 		}
 		return true
 	}
 	if p.shedLogged.CompareAndSwap(false, true) {
 		// reason is operator-facing text from the gate itself (see
 		// Config.AdmitScheduled), never request input — no log-forgery risk.
-		log.Printf("runner: holding back scheduled task claims: %s", reason)
+		slog.Info("runner: holding back scheduled task claims", "reason", reason)
 	}
 	return false
 }
@@ -623,7 +624,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 		task, err := p.store.ClaimNextPendingTask(ctx, token.String())
 		if err != nil {
 			if ctx.Err() == nil {
-				log.Printf("runner: claim error: %v", err)
+				logging.From(ctx).Error("runner: claim error", "err", err)
 			}
 			release()
 			return
@@ -647,7 +648,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 				}
 			}
 			if rerr != nil {
-				log.Printf("runner: could not release drained claim for task %s (%v); lease recovery will reclaim on restart", task.ID, rerr)
+				logging.From(ctx).Error("runner: could not release drained claim for task; lease recovery will reclaim on restart", "task_id", task.ID, "err", rerr)
 			}
 			release()
 			return
@@ -679,7 +680,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// cause-cancel is an idempotent no-op when the previous run already
 			// ended (ask/wake/stop cancelled it themselves and its exit-path
 			// cleanup simply hasn't deleted the entry yet).
-			log.Printf("runner: task %s re-claimed while a previous run's bookkeeping was still active; cancelling the stale run (lease lost)", task.ID)
+			logging.From(ctx).Info("runner: task re-claimed while a previous run's bookkeeping was still active; cancelling the stale run (lease lost)", "task_id", task.ID)
 			prev.cancelCause(errTaskLeaseLost)
 		}
 
@@ -717,7 +718,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			defer safe.Recover("runner.worker", func(val any) {
 				if p.stillOwns(task.ID, token) {
 					if _, err := p.reportStatus(task.ID, token, models.TaskStatusError, "task panicked during execution"); err != nil {
-						log.Printf("runner: failed to mark panicked task %s errored: %v", task.ID, err)
+						logging.From(ctx).Error("runner: failed to mark panicked task errored", "task_id", task.ID, "err", err)
 					}
 				}
 				model := ""
@@ -789,7 +790,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 
 	// Report running (sets StartedAt + renews lease).
 	if _, err := p.reportStatus(task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
-		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
+		slog.Error("runner: failed to report running for task", "task_id", task.ID, "err", err)
 	}
 	// Resumed-after-ask (#510): the run injects the pending Q&A from the
 	// in-memory task struct. The DB columns are cleared at the TERMINAL
@@ -870,7 +871,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// task), do not clobber its state.
 	if !p.stillOwns(task.ID, token) {
 		terminalFrame["status"] = "failed"
-		log.Printf("runner: task %s lease no longer held (recovered); skipping terminal write", task.ID)
+		logging.From(runCtx).Warn("runner: task lease no longer held (recovered); skipping terminal write", "task_id", task.ID)
 		return
 	}
 
@@ -1001,12 +1002,12 @@ func captureRunFailure(ctx context.Context, task *models.Task, model string, run
 func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pauseQuestion string, token uuid.UUID, start time.Time) {
 	p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
 	if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, token, pauseQuestion); err != nil {
-		log.Printf("runner: task %s pause write failed: %v", task.ID, err)
+		slog.Error("runner: task pause write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
-		log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
+		slog.Info("runner: task pause did not apply (lease lost or not running)", "task_id", task.ID)
 	}
 	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion, "")
-	log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
+	slog.Info("runner: task paused awaiting input after", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 }
 
 // finishStopped records a deliberate operator stop (#508). The cancel handler
@@ -1018,7 +1019,7 @@ func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pa
 func (p *Pool) finishStopped(task *models.Task, session *models.LogSession, stoppedBy string, start time.Time) {
 	msg := "Task stopped by " + stoppedBy
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s stopped by %s after %v", task.ID, safe.LogSafe(stoppedBy), time.Since(start).Round(time.Second))
+	slog.Info("runner: task stopped after", "task_id", task.ID, "stopped_by", safe.LogSafe(stoppedBy), "elapsed", time.Since(start).Round(time.Second))
 }
 
 // finishLeaseLost records the honest outcome of a run cancelled by lease loss
@@ -1027,7 +1028,7 @@ func (p *Pool) finishStopped(task *models.Task, session *models.LogSession, stop
 func (p *Pool) finishLeaseLost(task *models.Task, session *models.LogSession, start time.Time) {
 	msg := "Task run cancelled: this run's lease was lost (recovery re-queued the task; a fresh attempt owns it now)"
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s run cancelled after lease loss, %v after start", task.ID, time.Since(start).Round(time.Second))
+	slog.Info("runner: task run cancelled after lease loss, after start", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 }
 
 // finishSuccess commits the successful terminal transition: it persists the
@@ -1046,7 +1047,7 @@ func (p *Pool) finishSuccess(task *models.Task, session *models.LogSession, outp
 	landedTask, err := p.reportSuccess(task.ID, token, outputJSON, session)
 	if err != nil {
 		terminalFrame["status"] = "failed"
-		log.Printf("runner: failed to commit success for task %s: %v; suppressing success side effects", task.ID, err)
+		slog.Error("runner: failed to commit success for task; suppressing success side effects", "task_id", task.ID, "err", err)
 		// Never borrow a success row to justify this run's notification/session
 		// side effects. A Commit error is genuinely outcome-unknown: only a
 		// reread that still shows this exact claim's token on a nonterminal row
@@ -1079,7 +1080,7 @@ func (p *Pool) finishSuccess(task *models.Task, session *models.LogSession, outp
 		terminalFrame["status"] = "succeeded"
 	}
 	p.submitLog(task, session, "")
-	log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
+	slog.Info("runner: task completed", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	// Terminal success side effects fire ONLY when the terminal write landed
 	// (#580): if the lease was lost (operator cancel racing the finish, or a
 	// recovery re-queue), the DB does not record this run as a success — a
@@ -1216,10 +1217,10 @@ func (p *Pool) failAuditAborted(task *models.Task, session *models.LogSession, r
 	landed := true
 	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
-		log.Printf("runner: failed to report audit abort for task %s: %v", task.ID, err)
+		slog.Error("runner: failed to report audit abort for task", "task_id", task.ID, "err", err)
 	}
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s aborted by self-audit after %v", task.ID, time.Since(start).Round(time.Second))
+	slog.Info("runner: task aborted by self-audit after", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	if landed {
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	}
@@ -1252,10 +1253,10 @@ func (p *Pool) failInterrupted(task *models.Task, session *models.LogSession, le
 	landed := true
 	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
-		log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
+		slog.Error("runner: failed to report interrupt for task", "task_id", task.ID, "err", err)
 	}
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
+	slog.Info("runner: task interrupted after", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	// Terminal failure: fire the outbound notification off-thread (#208) — only
 	// when the terminal write actually landed (#580), so a lease lost out from
 	// under us never produces a notification the DB contradicts.
@@ -1275,11 +1276,10 @@ func (p *Pool) failWallTimeout(task *models.Task, session *models.LogSession, le
 	landed := true
 	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
-		log.Printf("runner: failed to report wall-clock timeout for task %s: %v", task.ID, err)
+		slog.Error("runner: failed to report wall-clock timeout for task", "task_id", task.ID, "err", err)
 	}
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s exceeded the wall-clock timeout (%s); failed after %v",
-		task.ID, p.wallTimeout, time.Since(start).Round(time.Second))
+	slog.Error("runner: task exceeded the wall-clock timeout; failed after", "task_id", task.ID, "wall_timeout", p.wallTimeout, "elapsed", time.Since(start).Round(time.Second))
 	// Terminal failure: fire the outbound notification off-thread (#208) — only
 	// when the terminal write landed (#580), matching every other branch.
 	if landed {
@@ -1365,11 +1365,10 @@ func (p *Pool) requeueForConnectorOutage(task *models.Task, session *models.LogS
 	msg := fmt.Sprintf("Task could not start (%s, infra re-run %d of %d); re-running in %s without spending a retry: %v",
 		models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, delay.Round(time.Second), runErr)
 	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
-		log.Printf("runner: failed to re-queue task %s after a connector outage: %v; classifying normally", task.ID, err)
+		slog.Error("runner: failed to re-queue task after a connector outage; classifying normally", "task_id", task.ID, "err", err)
 		return false
 	}
-	log.Printf("runner: task %s could not start (%s); infra re-run %d of %d at %s",
-		task.ID, models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, when.Format(time.RFC3339))
+	slog.Error("runner: task could not start; infra re-run", "task_id", task.ID, "failure_connector_unavailable", models.FailureConnectorUnavailable, "re_run", task.InfraRetryCount+1, "max_connector_infra_retries", maxConnectorInfraRetries, "rfc3339", when.Format(time.RFC3339))
 	p.submitLog(task, session, msg)
 	return true
 }
@@ -1407,17 +1406,16 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
 		// Pending Q&A deliberately survives a successful requeue (#582).
 		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
-			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
+			slog.Warn("runner: failed to re-queue task for retry; marking error", "task_id", task.ID, "err", err)
 			p.clearPendingQA(task, leaseOwner)
 			if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
-				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
+				slog.Error("runner: failed to report error for task", "task_id", task.ID, "err", rerr)
 			} else {
 				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 				p.maybeAnalyzeFailure(task, session, runErr)
 			}
 		} else {
-			log.Printf("runner: task %s attempt %d failed (%s); re-queued for retry at %s",
-				task.ID, task.AttemptCount+1, class, when.Format(time.RFC3339))
+			slog.Warn("runner: task attempt failed; re-queued for retry", "task_id", task.ID, "attempt", task.AttemptCount+1, "class", class, "rfc3339", when.Format(time.RFC3339))
 		}
 		p.submitLog(task, session, msg)
 		return
@@ -1494,11 +1492,11 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 	attempts := task.AttemptCount + 1
 	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.Background(), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
 	if err != nil {
-		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
+		slog.Warn("runner: failed to dead-letter task; falling back to error status", "task_id", task.ID, "err", err)
 		landed := true
 		if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
 			landed = false
-			log.Printf("runner: failed to report fallback error for task %s: %v", task.ID, rerr)
+			slog.Error("runner: failed to report fallback error for task", "task_id", task.ID, "err", rerr)
 		}
 		p.submitLog(task, session, reason)
 		return landed
@@ -1512,8 +1510,7 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 	}
 	p.submitLog(task, session, reason)
 	metrics.RecordDeadLetterQueued(reasonClass)
-	log.Printf("runner: task %s dead-lettered (%s) after %v and %d attempt(s): %v",
-		task.ID, reasonClass, time.Since(start).Round(time.Second), attempts, runErr)
+	slog.Error("runner: task dead-lettered after and attempt(s)", "task_id", task.ID, "reason_class", reasonClass, "elapsed", time.Since(start).Round(time.Second), "attempts", attempts, "err", runErr)
 	return true
 }
 
@@ -1553,11 +1550,11 @@ func (p *Pool) parkForWake(task *models.Task, session *models.LogSession, spec t
 	}
 	p.submitLog(task, session, "Sleeping "+what)
 	if ok, err := p.store.PauseTaskForWake(context.Background(), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
-		log.Printf("runner: task %s wake park write failed: %v", task.ID, err)
+		slog.Error("runner: task wake park write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
-		log.Printf("runner: task %s wake park did not apply (lease lost or not running)", task.ID)
+		slog.Info("runner: task wake park did not apply (lease lost or not running)", "task_id", task.ID)
 	}
-	log.Printf("runner: task %s sleeping %s after %v", task.ID, safe.LogSafe(what), time.Since(start).Round(time.Second))
+	slog.Info("runner: task sleeping after", "task_id", task.ID, "what", safe.LogSafe(what), "elapsed", time.Since(start).Round(time.Second))
 }
 
 // clearPendingQA nulls a resumed task's pending question/answer columns (#510)
@@ -1569,7 +1566,7 @@ func (p *Pool) parkForWake(task *models.Task, session *models.LogSession, spec t
 func (p *Pool) clearPendingQA(task *models.Task, leaseOwner uuid.UUID) {
 	if task.PendingQuestion != "" || task.PendingAnswer != "" {
 		if err := p.store.ClearPendingQA(context.Background(), task.ID, leaseOwner); err != nil {
-			log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
+			slog.Error("runner: failed to clear pending Q&A for task", "task_id", task.ID, "err", err)
 		}
 	}
 	// Wake state follows the same terminal-only clearing contract
@@ -1578,7 +1575,7 @@ func (p *Pool) clearPendingQA(task *models.Task, leaseOwner uuid.UUID) {
 	// them. wake_cycles survives by design (lifetime cap counter).
 	if task.WakeReason != "" || task.WakeNote != "" || task.WakeAt != nil {
 		if err := p.store.ClearWakeState(context.Background(), task.ID, leaseOwner); err != nil {
-			log.Printf("runner: failed to clear wake state for task %s: %v", task.ID, err)
+			slog.Error("runner: failed to clear wake state for task", "task_id", task.ID, "err", err)
 		}
 	}
 }
@@ -1701,7 +1698,7 @@ func (p *Pool) reportWorkspacePath(taskID, leaseOwner uuid.UUID, path string) {
 		Status:        models.TaskStatusRunning,
 		WorkspacePath: &path,
 	}); err != nil {
-		log.Printf("runner: failed to record workspace path for task %s: %v", taskID, err)
+		slog.Error("runner: failed to record workspace path for task", "task_id", taskID, "err", err)
 	}
 }
 
@@ -1720,7 +1717,7 @@ func (p *Pool) recordArtifactsForLease(taskID, leaseOwner uuid.UUID, manifest js
 		Status:    models.TaskStatusRunning,
 		Artifacts: manifest,
 	}); err != nil {
-		log.Printf("runner: task %s failed to persist artifacts: %v", taskID, err)
+		slog.Error("runner: task failed to persist artifacts", "task_id", taskID, "err", err)
 	}
 }
 
@@ -1747,7 +1744,7 @@ func (p *Pool) submitLog(task *models.Task, session *models.LogSession, failureR
 		}
 	}
 	if _, err := p.store.AddLogWithContext(context.Background(), task.ID, session); err != nil {
-		log.Printf("runner: failed to submit logs for task %s: %v", task.ID, err)
+		slog.Error("runner: failed to submit logs for task", "task_id", task.ID, "err", err)
 	}
 }
 
@@ -1785,7 +1782,7 @@ func (p *Pool) notifyProgress(task *models.Task, message string, kind notify.Kin
 			ev.LogURL = p.publicURLBase + "/orchestrator/tasks/" + task.ID.String()
 		}
 		if err := p.notifier.Notify(ctx, ev); err != nil {
-			log.Printf("runner: progress notify for task %s failed: %v", task.ID, err)
+			logging.From(ctx).Error("runner: progress notify for task failed", "task_id", task.ID, "err", err)
 		}
 	}()
 }
@@ -1823,7 +1820,7 @@ func (p *Pool) maybeReplyToEmailEvent(task *models.Task, session *models.LogSess
 			return // not an email-triggered run, or no reply target
 		}
 		if err := replier.ReplyToEmailEvent(ctx, ev.Sender, ev.Subject, body, ev.MessageID); err != nil {
-			log.Printf("runner: email reply for task %s failed: %v", taskID, err)
+			logging.From(ctx).Error("runner: email reply for task failed", "task_id", taskID, "err", err)
 		}
 	}()
 }
@@ -1930,11 +1927,11 @@ func (p *Pool) renewActiveLeases() {
 			continue
 		}
 		if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
-			log.Printf("runner: lease for task %s is no longer held by this run; cancelling it so its external side effects stop", id)
+			slog.Info("runner: lease for task is no longer held by this run; cancelling it so its external side effects stop", "task", id)
 			claim.cancelCause(errTaskLeaseLost)
 			continue
 		}
-		log.Printf("runner: lease renewal failed for task %s: %v", id, err)
+		slog.Error("runner: lease renewal failed for task", "task", id, "err", err)
 	}
 }
 

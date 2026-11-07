@@ -41,7 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,6 +52,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -942,7 +943,7 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		// stragglers running. The caller reports that honestly to the user
 		// ("could not be confirmed killed"); queue a retry so it also stops
 		// being true as soon as the apiserver answers again.
-		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+		slog.Warn("sandbox: cancelled-exec pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
 		k.backend.scheduleReap(podName)
 		return false
 	}
@@ -994,7 +995,7 @@ func (b *KubernetesBackend) scheduleReap(podName string) {
 	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
 		// Refusing to grow without bound is the point of a bound; say so
 		// rather than dropping the pod silently.
-		log.Printf("sandbox: pod-delete retry queue is full (%d) — %s will be reclaimed by the boot-time orphan sweep instead", podReapMaxPending, sanitizeClusterText(podName))
+		slog.Warn("sandbox: pod-delete retry queue is full — will be reclaimed by the boot-time orphan sweep instead", "pod_reap_max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
 		return
 	}
 	b.reapPending[podName] = 0
@@ -1032,7 +1033,7 @@ func (b *KubernetesBackend) reapLoop() {
 				b.reapMu.Lock()
 				delete(b.reapPending, name)
 				b.reapMu.Unlock()
-				log.Printf("sandbox: reclaimed sandbox pod %s on retry (its delete had failed while the apiserver was unreachable)", sanitizeClusterText(name))
+				logging.From(ctx).Warn("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "name", sanitizeClusterText(name))
 				continue
 			}
 			b.reapMu.Lock()
@@ -1043,8 +1044,7 @@ func (b *KubernetesBackend) reapLoop() {
 			}
 			b.reapMu.Unlock()
 			if giveUp {
-				log.Printf("sandbox: gave up deleting sandbox pod %s after %d attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start: %v",
-					sanitizeClusterText(name), podReapMaxAttempts, err)
+				logging.From(ctx).Error("sandbox: gave up deleting sandbox pod after attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start", "name", sanitizeClusterText(name), "pod_reap_max_attempts", podReapMaxAttempts, "err", err)
 			}
 		}
 
@@ -1456,7 +1456,7 @@ func (k *k8sImpl) close() {
 		delCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
-			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+			slog.Warn("sandbox: close-time pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
 			k.backend.scheduleReap(podName)
 		}
 	}

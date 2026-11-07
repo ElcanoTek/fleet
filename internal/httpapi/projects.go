@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -438,8 +438,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
-	log.Printf("projects: %q transferred project %q to %q", user, projectID, updated.OwnerEmail)
+	logging.From(r.Context()).Info("projects transferred project", "user", user, "project_id", projectID, "owner_email", updated.OwnerEmail)
 	writeJSON(w, updated)
 }
 

@@ -30,12 +30,14 @@ package ownerdigest
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/mail"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 
 	"github.com/google/uuid"
 
@@ -261,7 +263,9 @@ type Service struct {
 	claims Claimer
 	mailer Mailer
 	now    func() time.Time
-	logf   func(format string, args ...any)
+	// logger, when set, receives the service's log lines (a test seam); nil
+	// logs through logging.From(ctx).
+	logger *slog.Logger
 
 	mu sync.Mutex
 	// doneDay is the UTC day (YYYY-MM-DD) this process has settled: it
@@ -273,12 +277,19 @@ type Service struct {
 	noSMTPDay string
 }
 
+// log is the service's logger: the test seam when set, else the context logger.
+func (s *Service) log(ctx context.Context) *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return logging.From(ctx)
+}
+
 // New builds the service.
 func New(tasks TaskStore, claims Claimer, mailer Mailer) *Service {
 	return &Service{
 		tasks: tasks, claims: claims, mailer: mailer,
-		now:  time.Now,
-		logf: log.Printf,
+		now: time.Now,
 	}
 }
 
@@ -322,7 +333,7 @@ func (s *Service) Tick(ctx context.Context) TickResult {
 	if !cfg.DirectEmailConfigured() {
 		if s.noSMTPDay != day {
 			s.noSMTPDay = day
-			s.logf("owner digest: not sent for %s — SMTP is not configured (an SMTP host and a From address are needed; Settings → Admin → Notifications)", day)
+			s.log(ctx).Info("owner digest: not sent — SMTP is not configured (an SMTP host and a From address are needed; Settings → Admin → Notifications)", "day", day)
 		}
 		return TickResult{Outcome: OutcomeNoSMTP}
 	}
@@ -331,12 +342,12 @@ func (s *Service) Tick(ctx context.Context) TickResult {
 	// next tick retries instead of losing it.
 	digests, skipped, err := s.collect(ctx, now, cfg.PublicURLBase)
 	if err != nil {
-		s.logf("owner digest: reading tasks for %s failed: %v (retrying next tick)", day, err)
+		s.log(ctx).Error("owner digest: reading tasks failed (retrying next tick)", "day", day, "err", err)
 		return TickResult{Outcome: OutcomeError}
 	}
 	won, err := s.claims.ClaimOwnerDigestDay(ctx, now)
 	if err != nil {
-		s.logf("owner digest: claiming %s failed: %v (retrying next tick)", day, err)
+		s.log(ctx).Error("owner digest: claiming the day failed (retrying next tick)", "day", day, "err", err)
 		return TickResult{Outcome: OutcomeError}
 	}
 	s.doneDay = day
@@ -351,13 +362,12 @@ func (s *Service) Tick(ctx context.Context) TickResult {
 		subject, text, html := Render(d, now)
 		if err := s.mailer.SendDirectEmail(sendCtx, d.Owner, subject, text, html); err != nil {
 			res.Failed++
-			s.logf("owner digest: sending to %s failed: %v", d.Owner, err)
+			s.log(ctx).Error("owner digest: sending failed", "owner", d.Owner, "err", err)
 			continue
 		}
 		res.Sent++
 	}
-	s.logf("owner digest: %s — sent %d of %d owner digest(s), %d failed; %d problem(s) skipped for an owner without an email address",
-		day, res.Sent, res.Owners, res.Failed, res.Skipped)
+	s.log(ctx).Info("owner digest: day settled", "day", day, "sent", res.Sent, "owners", res.Owners, "failed", res.Failed, "skipped_no_email", res.Skipped)
 	return res
 }
 

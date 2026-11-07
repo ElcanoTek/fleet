@@ -15,12 +15,12 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -145,7 +145,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 			// Pre-login endpoint: the caller has not authenticated, so a raw
 			// store error (Postgres text names tables, columns, sometimes
 			// values) is logged here and never echoed to the login form.
-			log.Printf("auth/verify: count users: %v", err)
+			logging.From(r.Context()).Error("auth/verify: count users", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -167,7 +167,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, verifyResponse{OK: false, Error: "invalid credentials"})
 			return
 		}
-		log.Printf("auth/verify: verify user: %v", err)
+		logging.From(r.Context()).Error("auth/verify: verify user", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

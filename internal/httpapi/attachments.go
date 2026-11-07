@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -133,7 +134,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
-			log.Printf("saveUpload %q: %s", safe.LogSafe(fh.Filename), safe.LogSafe(err.Error())) //nolint:gosec // G706: both values pass safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+			logging.From(r.Context()).Error("saveUpload", "filename", safe.LogSafe(fh.Filename), "err", safe.LogSafe(err.Error()))
 			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -365,14 +366,14 @@ func (s *Server) validateAttachments(userEmail string, atts []chatAttachment) []
 			// %q, not %s: a.Path here is the RAW client-supplied string on the
 			// branch where containment just FAILED, so it is hostile by
 			// construction. %q escapes CR/LF and cannot forge a log entry.
-			log.Printf("attachment rejected (outside the caller's own uploads root): %q", a.Path)
+			slog.Info("attachment rejected (outside the caller's own uploads root)", "path", a.Path)
 			continue
 		}
 		abs = filepath.Join(root, rel)
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
 			// %q for the same reason as above: still the pre-validation client string.
-			log.Printf("attachment rejected (stat): %q: %v", a.Path, err)
+			slog.Error("attachment rejected (stat)", "path", a.Path, "err", err)
 			continue
 		}
 		a.Path = filepath.ToSlash(abs)
@@ -462,13 +463,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	}
 	root, err := filepath.Abs(uploadsRoot)
 	if err != nil {
-		log.Printf("attachment staging: resolve uploads root: %v (attachments keep uploads paths)", err)
+		slog.Error("attachment staging: resolve uploads root (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	root = filepath.Clean(root)
 	convDir, err := tools.EnsureWorkspaceDir(convID)
 	if err != nil {
-		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", safe.LogSafe(convID), err)
+		slog.Error("attachment staging: workspace dir (attachments keep uploads paths)", "conv_id", safe.LogSafe(convID), "err", err)
 		return atts
 	}
 	// The sandbox can replace any child of its workspace with a symlink.
@@ -476,14 +477,14 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	// staging into another conversation or host files (including during copy).
 	workspace, err := os.OpenRoot(convDir)
 	if err != nil {
-		log.Printf("attachment staging: open workspace: %v (attachments keep uploads paths)", err)
+		slog.Error("attachment staging: open workspace (attachments keep uploads paths)", "err", err)
 		return atts
 	}
 	defer workspace.Close()
 	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
 	if err := workspace.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("attachment staging: mkdir %s: %v (attachments keep uploads paths)", dir, err)
+		slog.Error("attachment staging: mkdir (attachments keep uploads paths)", "dir", dir, "err", err)
 		return atts
 	}
 	out := make([]chatAttachment, 0, len(atts))
@@ -492,13 +493,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 		if !ok {
 			// %q + CR/LF strip: on this branch Path is by definition a value
 			// that failed containment, so treat it as hostile in the log too.
-			log.Printf("attachment staging: %q is outside the uploads root (kept unstaged)", safe.LogSafe(a.Path))
+			slog.Info("attachment staging is outside the uploads root (kept unstaged)", "path", safe.LogSafe(a.Path))
 			out = append(out, a)
 			continue
 		}
 		dst, err := stageOneAttachment(workspace, dir, root, src, a)
 		if err != nil {
-			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", safe.LogSafe(a.Name), err)
+			slog.Error("attachment staging (this attachment keeps its uploads path)", "name", safe.LogSafe(a.Name), "err", err)
 			out = append(out, a)
 			continue
 		}

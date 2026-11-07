@@ -13,13 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
@@ -118,7 +119,7 @@ func (s *Storage) MigrationStatus(ctx context.Context) (db.MigrationReport, erro
 func (s *Storage) SetTimezone(timezone string) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
-		log.Printf("Warning: Invalid timezone '%s', using UTC: %v", timezone, err)
+		slog.Warn("Warning: Invalid timezone, using UTC", "timezone", timezone, "err", err)
 		s.location = time.UTC
 		return
 	}
@@ -150,7 +151,7 @@ func (s *Storage) resolveTaskTimezone(tc *models.TaskCreate) *time.Location {
 	}
 	loc, err := time.LoadLocation(tzName)
 	if err != nil {
-		log.Printf("EnqueueTask: invalid timezone %q, using UTC: %v", tzName, err)
+		slog.Error("EnqueueTask: invalid timezone, using UTC", "tz_name", tzName, "err", err)
 		tc.Timezone = "UTC"
 		return time.UTC
 	}
@@ -583,7 +584,7 @@ func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, err
 		return requeued, err
 	}
 	if deadLettered > 0 {
-		log.Printf("Lease recovery dead-lettered %d crash-looping task(s) past their retry budget", deadLettered)
+		logging.From(ctx).Warn("Lease recovery dead-lettered crash-looping task(s) past their retry budget", "dead_lettered", deadLettered)
 		for i := 0; i < deadLettered; i++ {
 			metrics.RecordDeadLetterQueued("lease_recovery")
 		}
@@ -2039,7 +2040,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	observed := task.Status
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "task_id", task.ID, "err", err)
 		return false
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -2048,7 +2049,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND NOT recurrence_spawned AND status = $2`,
 		task.ID, string(observed))
 	if err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "task_id", task.ID, "err", err)
 		return false
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
@@ -2056,7 +2057,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	}
 	current, err := s.db.GetTaskForUpdate(ctx, tx, task.ID)
 	if err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "task_id", task.ID, "err", err)
 		return false
 	}
 	if current.Status != observed {
@@ -2069,13 +2070,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// is stored in UTC — scheduled_for is always an absolute UTC instant.
 	loc, ok := TaskLocation(current.Timezone, s.location)
 	if !ok {
-		log.Printf("Task %s has invalid timezone %q; using server timezone", current.ID, safe.LogSafe(current.Timezone))
+		logging.From(ctx).Error("Task has invalid timezone; using server timezone", "current_id", current.ID, "timezone", safe.LogSafe(current.Timezone))
 	}
 	nextTime, err := NextRun(current.Recurrence, loc, time.Now())
 	if err != nil {
-		log.Printf("Error computing the next run for task %s: %s; settling the chain — a parse error or a recurrence that never fires is permanent, so retrying the spawn cannot fix it", current.ID, safe.LogSafe(err.Error()))
+		logging.From(ctx).Warn("Error computing the next run for task; settling the chain — a parse error or a recurrence that never fires is permanent, so retrying the spawn cannot fix it", "current_id", current.ID, "err", safe.LogSafe(err.Error()))
 		if cerr := tx.Commit(); cerr != nil {
-			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", cerr)
 			return false
 		}
 		return false
@@ -2086,18 +2087,17 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// the last allowed run. Either way the chain simply stops — the completing
 	// task keeps its own terminal status. The credit is already claimed.
 	if current.RecurrenceUntil != nil && nextTime.After(*current.RecurrenceUntil) {
-		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
-			current.ID, nextTime.Format(time.RFC3339), current.RecurrenceUntil.Format(time.RFC3339))
+		logging.From(ctx).Info("Recurrence for task ended: next occurrence is past recurrence_until", "current_id", current.ID, "rfc3339", nextTime.Format(time.RFC3339), "rfc3339_2", current.RecurrenceUntil.Format(time.RFC3339))
 		if cerr := tx.Commit(); cerr != nil {
-			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", cerr)
 			return false
 		}
 		return false
 	}
 	if current.RecurrenceRemaining != nil && *current.RecurrenceRemaining <= 1 {
-		log.Printf("Recurrence for task %s ended: run budget exhausted", current.ID)
+		logging.From(ctx).Info("Recurrence for task ended: run budget exhausted", "current_id", current.ID)
 		if cerr := tx.Commit(); cerr != nil {
-			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", cerr)
 			return false
 		}
 		return false
@@ -2125,15 +2125,15 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 			return false
 		}
 		if parkReason != "" {
-			log.Printf("Recurrence for task %s parked: %s", current.ID, parkReason)
+			logging.From(ctx).Info("Recurrence for task parked", "current_id", current.ID, "park_reason", parkReason)
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE tasks SET recurrence_parked_at = now(), recurrence_parked_reason = $3 WHERE id = $1 AND status = $2`,
 				current.ID, string(models.TaskStatusDeadLettered), parkReason); err != nil {
-				log.Printf("Error parking recurrence for task %s: %v (the reconciliation sweep will retry)", current.ID, err)
+				logging.From(ctx).Warn("Error parking recurrence for task (the reconciliation sweep will retry)", "current_id", current.ID, "err", err)
 				return false
 			}
 			if cerr := tx.Commit(); cerr != nil {
-				log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+				logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", cerr)
 				return false
 			}
 			parkedAt := time.Now().UTC()
@@ -2158,15 +2158,15 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	prev := current.ID
 	newTask.PreviousOccurrenceID = &prev
 	if err := validateStoredOutputContract(newTask); err != nil {
-		log.Printf("Error creating next recurring task for %s: %v; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", current.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", "current_id", current.ID, "err", err)
 		if cerr := tx.Commit(); cerr != nil {
-			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", cerr)
 			return false
 		}
 		return false
 	}
 	if err := s.db.AddTaskTx(ctx, tx, newTask); err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", err)
 		return false
 	}
 	if _, cerr := tx.ExecContext(ctx, `
@@ -2174,14 +2174,14 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		SELECT gen_random_uuid(), $1, key, value, created_at, updated_at
 		FROM task_memories WHERE task_id = $2`,
 		newTask.ID, current.ID); cerr != nil {
-		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v (the reconciliation sweep will retry)", current.ID, newTask.ID, cerr)
+		logging.From(ctx).Warn("recurring task: failed to carry persistent memory forward (the reconciliation sweep will retry)", "current_id", current.ID, "new_task_id", newTask.ID, "err", cerr)
 		return false
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, err)
+		logging.From(ctx).Warn("Error creating next recurring task (the reconciliation sweep will retry)", "current_id", current.ID, "err", err)
 		return false
 	}
-	log.Printf("Scheduled next recurrence for task %s at %s", current.ID, nextTime)
+	logging.From(ctx).Info("Scheduled next recurrence for task", "current_id", current.ID, "next_time", nextTime)
 	return true
 }
 
@@ -2196,7 +2196,7 @@ func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID 
 	if _, err := s.db.Conn().ExecContext(ctx,
 		`UPDATE tasks SET recurrence_spawned = TRUE, recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
 		taskID, string(models.TaskStatusDeadLettered)); err != nil {
-		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
+		logging.From(ctx).Error("Failed to settle recurrence spawn for task", "task_id", taskID, "err", err)
 	}
 }
 
@@ -2216,7 +2216,7 @@ func deadLetterParkReason(ctx context.Context, tx *sql.Tx, current *models.Task)
 	if current.IsRunOutcome(models.RunOutcomeConnectorUnavailable) {
 		streak, err := connectorOutageStreak(ctx, tx, current, connectorOutageParkStreak)
 		if err != nil {
-			log.Printf("Error checking connector-outage recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, err)
+			logging.From(ctx).Warn("Error checking connector-outage recurrence breaker for task (the reconciliation sweep will retry)", "current_id", current.ID, "err", err)
 			return "", false
 		}
 		if streak < connectorOutageParkStreak {
@@ -2236,7 +2236,7 @@ func deadLetterParkReason(ctx context.Context, tx *sql.Tx, current *models.Task)
 	}
 	parked, perr := predecessorIsDeadLettered(ctx, tx, current)
 	if perr != nil {
-		log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
+		logging.From(ctx).Warn("Error checking dead-letter recurrence breaker for task (the reconciliation sweep will retry)", "current_id", current.ID, "err", perr)
 		return "", false
 	}
 	if parked {
@@ -2358,7 +2358,7 @@ func (s *Storage) ReconcileRecurrences(ctx context.Context) (int, error) {
 	repaired := 0
 	for _, task := range tasks {
 		if s.scheduleNextRecurrence(ctx, task) {
-			log.Printf("Reconciled recurrence for task %s: its post-completion spawn never landed; a successor has been scheduled", task.ID)
+			logging.From(ctx).Info("Reconciled recurrence for task: its post-completion spawn never landed; a successor has been scheduled", "task_id", task.ID)
 			repaired++
 		}
 	}

@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,6 +19,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -178,7 +179,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		// delisted still migrates on the launch path
 		// (reconcileLockdownModelCtx) rather than 400ing at its owner.
 		next := s.lockdownCorrectedModel(conv)
-		log.Printf("lockdown: conversation %s refused a disallowed model %q from the client and offered %q instead", safe.LogSafe(conv.ID), safe.LogSafe(reqModel), safe.LogSafe(next))
+		logging.From(r.Context()).Error("lockdown: conversation refused a disallowed model from the client and offered instead", "conv_id", safe.LogSafe(conv.ID), "req_model", safe.LogSafe(reqModel), "next", safe.LogSafe(next))
 		writeLockdownModelRefusal(w, next)
 		return false
 	}
@@ -302,7 +303,7 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 	if err := s.store.SetModel(ctx, convOwnerEmail(conv, user), conv.ID, next); err != nil {
 		return err
 	}
-	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", safe.LogSafe(conv.ID), safe.LogSafe(conv.Model), safe.LogSafe(next)) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the conversation id and both slugs.
+	logging.From(ctx).Info("lockdown: conversation moved from model (no longer allow-listed) to the lockdown default", "conv_id", safe.LogSafe(conv.ID), "conv_model", safe.LogSafe(conv.Model), "next", safe.LogSafe(next))
 	conv.Model = next
 	return nil
 }
@@ -552,7 +553,7 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
 	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		log.Printf("attachPersister (user=%s conv=%s): %v", user, convID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+		slog.Error("attachPersister", "user", user, "conv_id", convID, "err", err)
 	}
 	persistCancelAttach()
 }
@@ -622,7 +623,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			http.Error(w, err.Error(), status)
 			return
 		}
-		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+		logging.From(reqCtx).Error("queued turn launch", "user", user, "conv_id", conv.ID, "err", err)
 		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateQueued)
 		// No turn launched, so no completion tail will re-drain: without an
 		// explicit re-kick a 202-acknowledged row stalls until the next
@@ -839,7 +840,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// 400s until reload. A failed write here is logged and the turn goes on
 	// with the stored model; the manager's own guard then decides.
 	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
-		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+		logging.From(turnCtx).Error("lockdown: conversation: model migration write failed, running with the stored model", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 	}
 
 	// If this conversation was materialized before its first message (for
@@ -931,10 +932,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.settleDirectInput(directInputID, turnID)
 		}
 		if serr != nil {
-			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
+			logging.From(turnCtx).Error("settle turn inputs", "turn_id", turnID, "err", serr)
 		}
 		if cancelledSteers > 0 {
-			log.Printf("input queue: cancelled %d injected steer(s) of failed turn %s — tools dispatched after injection, re-running could duplicate side effects (#823)", cancelledSteers, turnID)
+			logging.From(turnCtx).Error("input queue: cancelled injected steer(s) of failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled_steers", cancelledSteers, "turn_id", turnID)
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()
@@ -963,7 +964,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
 		if err := buf.AttachForViewer(r.Context(), 0, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+			logging.From(turnCtx).Error("Attach", "user", user, "conv_id", conv.ID, "err", err)
 		}
 	}
 	return true
@@ -1113,7 +1114,7 @@ func (s *Server) runTurnAsync(
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
 		if err := runMockTurn(turnCtx, s.turnStore(buf), conv, buf.turnID, userInput, buf); err != nil {
-			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+			logging.From(turnCtx).Error("runMockTurn error", "user", user, "conv_id", conv.ID, "err", err)
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1228,11 +1229,11 @@ func (s *Server) runTurnAsync(
 			// error. A Stop is confirmed only by turn.cancelled, so a
 			// turn.error here would read as a failure of the turn's own —
 			// and so would an "error" log line, which is what operators grep.
-			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", safe.LogSafe(user), safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from email, conv id, and the error text.
+			logging.From(turnCtx).Warn("RunTurn cancelled before it finished", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}
-		log.Printf("RunTurn error (user=%s conv=%s): %s", safe.LogSafe(user), safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from email, conv id, and the error text.
+		logging.From(turnCtx).Error("RunTurn error", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		if !errors.Is(err, ErrModelSelectionRequired) {
 			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})
 		}
@@ -1270,7 +1271,7 @@ func (s *Server) runTurnAsync(
 	// not a turn-blocking dependency.
 	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix, buf.toolDurationsSnapshot()); len(entries) > 0 {
 		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
-			log.Printf("RecordToolCalls (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+			logging.From(turnCtx).Error("RecordToolCalls", "user", user, "conv_id", conv.ID, "err", err)
 		}
 	}
 
@@ -1288,7 +1289,7 @@ func (s *Server) runTurnAsync(
 		CacheCreationTokens: res.CacheCreationTokens,
 		Cancelled:           res.Cancelled,
 	}); err != nil {
-		log.Printf("RecordTurn: %v", err)
+		logging.From(turnCtx).Error("RecordTurn", "err", err)
 	}
 	// Operational metrics (#176): cost + tokens by model, and a turn-timeout
 	// counter when the turn ended because its wall-clock deadline fired (as
@@ -1325,7 +1326,7 @@ func (s *Server) runTurnAsync(
 			case errors.Is(err, store.ErrTitleLocked):
 				// user renamed it; leave their name in place.
 			default:
-				log.Printf("auto-title UpdateTitle failed: %v", err)
+				logging.From(turnCtx).Error("auto-title UpdateTitle failed", "err", err)
 			}
 		}
 	}
@@ -1337,9 +1338,9 @@ func (s *Server) runTurnAsync(
 	if s.cfg.AutoArchiveAfterDays > 0 {
 		if n, err := s.store.AutoArchiveOlderThan(persistCtx,
 			time.Duration(s.cfg.AutoArchiveAfterDays)*24*time.Hour); err != nil {
-			log.Printf("post-turn auto-archive error: %v", err)
+			logging.From(turnCtx).Error("post-turn auto-archive error", "err", err)
 		} else if n > 0 {
-			log.Printf("auto-archive: %d conversations archived", n)
+			logging.From(turnCtx).Info("auto-archive conversations archived", "count", n)
 		}
 	}
 

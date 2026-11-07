@@ -12,10 +12,10 @@ package handlers
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -56,7 +56,7 @@ func (h *Handlers) lookupMember(ctx context.Context, email string) (*models.User
 func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
 	if token, ok := bearerToken(r); ok && h.storage != nil {
 		if _, err := h.storage.RevokeSessionToken(r.Context(), token); err != nil {
-			log.Printf("logout: end bearer session: %v", err)
+			logging.From(r.Context()).Error("logout: end bearer session", "err", err)
 		}
 	}
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")

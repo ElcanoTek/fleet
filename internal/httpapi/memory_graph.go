@@ -2,11 +2,11 @@ package httpapi
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -58,17 +58,17 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 		g, err := s.memoryGraphExtractor(ctx, content)
 		if err != nil {
 			// %q escapes CR/LF, so a value can't forge a log line.
-			log.Printf("memory-graph: extraction for memory %q failed: %v", memoryID, err) //nolint:gosec // G706: memoryID is a store-generated UUID and rendered with %q
+			logging.From(ctx).Error("memory-graph: extraction for memory failed", "memory_id", memoryID, "err", err)
 			return
 		}
 		// Detached background context for the write: a validated extraction is
 		// worth persisting even if the extraction deadline just elapsed.
 		n, err := s.store.ReplaceRelationsForMemory(context.Background(), user, memoryID, toGraphExtraction(g))
 		if err != nil {
-			log.Printf("memory-graph: persist for memory %q failed: %v", memoryID, err) //nolint:gosec // G706: memoryID is a store-generated UUID and rendered with %q
+			logging.From(ctx).Error("memory-graph: persist for memory failed", "memory_id", memoryID, "err", err)
 			return
 		}
-		log.Printf("memory-graph: memory %q -> %d relation(s)", memoryID, n) //nolint:gosec // G706: memoryID is a store-generated UUID and rendered with %q
+		logging.From(ctx).Info("memory-graph: memory relation(s)", "memory_id", memoryID, "count", n)
 	})
 }
 
@@ -219,7 +219,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	g, err := s.memoryGraphExtractor(ctx, m.Content)
 	if err != nil {
-		log.Printf("memory-graph: manual extraction for memory %q failed: %v", id, err) //nolint:gosec // G706: %q escapes CR/LF, so the request-supplied id cannot forge a log line
+		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory", id, "err", err)
 		http.Error(w, "graph extraction failed", http.StatusBadGateway)
 		return
 	}

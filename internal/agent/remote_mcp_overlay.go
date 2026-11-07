@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
@@ -559,7 +559,7 @@ func recordRefusedMount(ctx context.Context, resolver RemoteMCPResolver, email, 
 	}
 	detail := fmt.Sprintf("the server rejected the stored credential (HTTP %d) — reconnect, or update the key, to use", hs.StatusCode)
 	if merr := marker.MarkRemoteMCPUnauthorized(ctx, owner, conn.ID, detail); merr != nil {
-		log.Printf("remote-mcp: could not record the credential rejection for %q: %v", regName, merr)
+		logging.From(ctx).Error("remote-mcp: could not record the credential rejection", "reg_name", regName, "err", merr)
 	}
 }
 
@@ -827,7 +827,7 @@ func (o *RemoteMCPOverlay) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), remoteMCPOverlayCloseTimeout)
 		defer cancel()
 		if err := o.CloseScope(ctx); err != nil {
-			log.Printf("remote-mcp: close overlay scope: %v", err)
+			logging.From(ctx).Error("remote-mcp: close overlay scope", "err", err)
 		}
 	}
 	if o.Client != nil {
@@ -868,7 +868,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		// A pinned seat that is not connected: never fall back to another
 		// account under the same name — surface it so the owner can connect
 		// (or re-pin) it.
-		log.Printf("remote-mcp: skipping %q for %s — the pinned seat is not connected", name, email)
+		logging.From(ctx).Warn("remote-mcp: skipping — the pinned seat is not connected", "name", name, "email", email)
 		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0
@@ -879,14 +879,14 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// A collision never takes a slot, so it is checked before the cap:
 			// past the cap it would otherwise be reported as a connector the
 			// user could free a slot for, which it can never use.
-			log.Printf("remote-mcp: skipping remote server %q — name collides with a built-in server", regName)
+			logging.From(ctx).Warn("remote-mcp: skipping remote server — name collides with a built-in server", "reg_name", regName)
 			continue
 		}
 		if registered >= maxOverlayServers {
 			// Past the cap: record every one (the notice names them, and a
 			// pinned name here is "left out", not "unknown"), log once.
 			if !capLogged {
-				log.Printf("remote-mcp: overlay cap %d reached for %s — skipping %q and every further server", maxOverlayServers, email, regName)
+				logging.From(ctx).Warn("remote-mcp: overlay cap reached — skipping and every further server", "max_overlay_servers", maxOverlayServers, "email", email, "reg_name", regName)
 				capLogged = true
 			}
 			overlay.skipConn(conn, SkipReasonOverlayCap)
@@ -895,19 +895,19 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		if conn.Owner != "" {
 			// Attribution for shared connections: the run belongs to email, but
 			// tool calls authenticate with the OWNER's token host-side.
-			log.Printf("remote-mcp: run for %s uses shared server %q owned by %s", email, regName, conn.Owner)
+			logging.From(ctx).Info("remote-mcp: run uses shared server owned", "email", email, "reg_name", regName, "owner", conn.Owner)
 		}
 		bearer, terr := resolver.AcquireTokenByID(ctx, email, conn.ID)
 		if terr != nil {
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
-			log.Printf("remote-mcp: skipping server %q for %s — token unavailable", regName, email)
+			logging.From(ctx).Warn("remote-mcp: skipping server — token unavailable", "reg_name", regName, "email", email)
 			overlay.skipConn(conn, tokenSkipReason(terr))
 			continue
 		}
 		if conn.Transport == "http_tools" || conn.Transport == "playwright" {
 			if cerr := mountCustomRemoteConnector(client, regName, conn, bearer, httpClient); cerr != nil {
-				log.Printf("remote-mcp: skipping custom connector %q for %s: %s", regName, email, connectFailureReason(bearer, cerr))
+				logging.From(ctx).Warn("remote-mcp: skipping custom connector", "reg_name", regName, "email", email, "connect_failure_reason", connectFailureReason(bearer, cerr))
 				overlay.skipConn(conn, SkipReasonUnknown)
 				continue
 			}
@@ -946,7 +946,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// "failed to connect" left the GitHub verification in #1006 blind
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
+			logging.From(ctx).Warn("remote-mcp: skipping server — failed to connect", "reg_name", regName, "email", email, "connect_failure_reason", connectFailureReason(bearer, aerr))
 			overlay.skipConn(conn, connectSkipReason(aerr))
 			failure := agentcore.NewMCPConnectFailure(regName, aerr)
 			// The summary never quotes a URL or body, but a vendor's own

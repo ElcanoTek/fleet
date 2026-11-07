@@ -1,7 +1,7 @@
 package agentcore
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -198,8 +198,7 @@ func logCircuitOpen(slug string, c *modelCircuit) {
 		return
 	}
 	c.openLogged = true
-	log.Printf(`{"level":"WARN","event":"circuit_open","model":%q,"recent_errors":%d,"last_error":%q}`,
-		slug, len(c.errorTimes), c.lastError)
+	slog.Warn("circuit_open", "event", "circuit_open", "model", slug, "recent_errors", len(c.errorTimes), "last_error", c.lastError)
 }
 
 // Snapshot returns a point-in-time copy of every tracked model's health,

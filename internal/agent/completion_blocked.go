@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -83,7 +83,7 @@ func (p *scheduledPolicy) evaluateBlockedOutcome() {
 		return
 	}
 	p.blockedDetail = detail
-	log.Printf("Completion blocked rule matched (%s); the run finishes as blocked", detail)
+	slog.Info("Completion blocked rule matched; the run finishes as blocked", "matched", detail)
 	t := messageTypeCompletionBlocked
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
 		"[completion_blocked] %s — the task's EXECUTION REQUIREMENTS completion clause declares this a blocked outcome, so the run finishes as Blocked rather than plain success",

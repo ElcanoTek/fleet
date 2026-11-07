@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -118,7 +118,7 @@ func (m *Manager) SuggestPatrolDraft(ctx context.Context, in PatrolDraftInput) (
 func parsePatrolDraft(raw string) (*PatrolDraft, error) {
 	validated, err := structuredoutput.ValidateOutput(raw, json.RawMessage(patrolDraftSchema))
 	if err != nil {
-		log.Printf("SuggestPatrolDraft: output failed schema validation")
+		slog.Error("SuggestPatrolDraft: output failed schema validation")
 		return nil, fmt.Errorf("patrol-draft synthesis produced no conforming output")
 	}
 	var d PatrolDraft

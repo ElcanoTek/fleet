@@ -3,7 +3,7 @@ package agentcore
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -769,8 +769,7 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 			return false, ""
 		}
 		o.loopGuardTrips++
-		log.Printf("Enforcement: loop guard blocked %s — %d consecutive identical calls (cap %d, trip %d)",
-			toolName, o.lastWrapperRepeats, maxConsecutiveIdenticalCalls, o.loopGuardTrips)
+		slog.Info("Enforcement: loop guard blocked — consecutive identical calls (cap, trip)", "tool_name", toolName, "last_wrapper_repeats", o.lastWrapperRepeats, "max_consecutive_identical_calls", maxConsecutiveIdenticalCalls, "loop_guard_trips", o.loopGuardTrips)
 		return true, fmt.Sprintf("LOOP_GUARD (block #%d): this exact tool_call with these exact arguments has now been issued %d times in a row (execution cap: %d). Repeating it cannot produce a different result. Fix the arguments (valid JSON, a tool that exists) or take a different action.",
 			o.loopGuardTrips, o.lastWrapperRepeats, maxConsecutiveIdenticalCalls)
 	}
@@ -793,8 +792,7 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 	if noun == "" {
 		noun = repeatGuardNounFinishTask
 	}
-	log.Printf("Enforcement: loop guard blocked %s — %d consecutive identical calls (cap %d, trip %d)",
-		toolName, o.lastCallRepeats, maxConsecutiveIdenticalCalls, o.loopGuardTrips)
+	slog.Info("Enforcement: loop guard blocked — consecutive identical calls (cap, trip)", "tool_name", toolName, "last_call_repeats", o.lastCallRepeats, "max_consecutive_identical_calls", maxConsecutiveIdenticalCalls, "loop_guard_trips", o.loopGuardTrips)
 	return true, fmt.Sprintf("LOOP_GUARD (block #%d): this exact %s call with these exact arguments has now been issued %d times in a row (execution cap: %d). Re-running identical code cannot produce new information. Change your approach: print() or inspect intermediate values, write your work to a workspace file, alter the arguments — or %s with what you have.",
 		o.loopGuardTrips, toolName, o.lastCallRepeats, maxConsecutiveIdenticalCalls, noun)
 }
@@ -820,7 +818,7 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 	defer o.mu.Unlock()
 
 	if o.sendEmailSuccessCount >= maxSendEmailCallsPerTurn {
-		log.Printf("Enforcement: blocking %s — per-turn limit %d reached", toolName, maxSendEmailCallsPerTurn)
+		slog.Info("Enforcement: blocking — per-turn limit reached", "tool_name", toolName, "max_send_email_calls_per_turn", maxSendEmailCallsPerTurn)
 		return true, fmt.Sprintf("Safety limit: send_email already executed %d time(s) in this turn. Further sends blocked. Ask the user before sending more.",
 			maxSendEmailCallsPerTurn)
 	}
@@ -831,7 +829,7 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 	if o.approvalSink != nil {
 		id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 		if err != nil {
-			log.Printf("approval stage failed: %v", err)
+			slog.Error("approval stage failed", "err", err)
 			return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage send for user approval (%v). Ask the user what to do.", err)
 		}
 		switch id {
@@ -1051,7 +1049,7 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 		if served != o.LastServedUpstream {
 			if preferred := preferredUpstreamFor(modelSlug); preferred != "" && served != preferred {
 				o.ServedFallback = true
-				log.Printf("⚠️  Upstream fallback: model=%s pinned=%s served=%s (prompt cache cold; verify serving precision if output quality is off)", modelSlug, preferred, served)
+				slog.Info("⚠️ Upstream fallback (prompt cache cold; verify serving precision if output quality is off)", "model", modelSlug, "pinned", preferred, "served", served)
 			}
 		}
 		o.LastServedUpstream = served
@@ -1118,7 +1116,7 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) 
 		}
 	}
 	if fallback >= 0 {
-		log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
+		slog.Info("Enforcement: discharging pending against corrected arguments (blocked-call hash no longer matches)", "tool_name", toolName)
 		o.dischargePendingCriticalAt(fallback)
 		return
 	}
@@ -1142,7 +1140,7 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) 
 	record := pendingRecordKey(rawInput)
 	for i, p := range o.pendingCriticalActions {
 		if sameOrStandInTool(p.toolName, toolName) && p.record == record && record != unbindableRecordKey {
-			log.Printf("Enforcement: discharging pending %s via its declared alias or substitute %s", p.toolName, toolName)
+			slog.Info("Enforcement: discharging pending via its declared alias or substitute", "pending_tool", p.toolName, "tool_name", toolName)
 			o.dischargePendingCriticalAt(i)
 			return
 		}
@@ -1185,7 +1183,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.sendEmailSuccessCount++
 			o.sentEmailFingerprints[emailDedupKey(rawInput)] = struct{}{}
 			o.noteSummaryEmailSent()
-			log.Printf("send_email queued successfully (%d/%d)", o.sendEmailSuccessCount, maxSendEmailCallsPerTask)
+			slog.Info("send_email queued successfully", "send_email_success_count", o.sendEmailSuccessCount, "max_send_email_calls_per_task", maxSendEmailCallsPerTask)
 		}
 	}
 
@@ -1220,11 +1218,10 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				if len(o.pendingCriticalActions) == 0 {
 					o.selfAuditRequested = true
 				}
-				log.Printf("Critical batch %s: discharged %d new record(s), %d failed", toolName, newly, failed)
+				slog.Error("Critical batch: discharged new record(s), failed", "tool_name", toolName, "newly", newly, "failed", failed)
 			} else if failed > 0 {
 				o.criticalToolFailureAttempts[key]++
-				log.Printf("Critical batch %s made no forward progress (%d failed); attempt %d/%d",
-					toolName, failed, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+				slog.Error("Critical batch made no forward progress (failed); attempt", "tool_name", toolName, "failed", failed, "critical_tool_failure_attempts", o.criticalToolFailureAttempts[key], "max_attempts_per_critical_action", maxAttemptsPerCriticalAction)
 			}
 		case failClosedDealOutcomes(rawInput, resultText):
 			// A deal_ids batch without usable per-record results, or a
@@ -1233,8 +1230,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// Falling through to the single-call branch would credit the
 			// input's records as done and clear the retry budget.
 			o.criticalToolFailureAttempts[key]++
-			log.Printf("Critical batch %s returned malformed per-record results; treating as failed (attempt %d/%d)",
-				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+			slog.Error("Critical batch returned malformed per-record results; treating as failed", "tool_name", toolName, "critical_tool_failure_attempts", o.criticalToolFailureAttempts[key], "max_attempts_per_critical_action", maxAttemptsPerCriticalAction)
 			// A malformed result proves nothing about what was written: a
 			// settleable create's unit is put back to unsettled (as in
 			// cutlass), never settled by it (audit_email_last.go).
@@ -1247,7 +1243,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}
-			log.Printf("Critical action succeeded: %s", toolName)
+			slog.Info("Critical action succeeded", "tool_name", toolName)
 			o.creditSingleRecordCanary(toolName, rawInput)
 			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), o.attemptIdentity(rawInput))
 		default:
@@ -1255,8 +1251,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// payload-level failure per mcpReportedFailure) → counts against
 			// the per-(tool,args) retry budget and discharges NOTHING.
 			o.criticalToolFailureAttempts[key]++
-			log.Printf("Critical action failed: %s (attempt %d/%d for these args)",
-				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+			slog.Error("Critical action failed (attempt for these args)", "tool_name", toolName, "critical_tool_failure_attempts", o.criticalToolFailureAttempts[key], "max_attempts_per_critical_action", maxAttemptsPerCriticalAction)
 			// A settleable create's definitive failure settles its unit for
 			// the summary email; an ambiguous or transport-level one keeps (or
 			// puts back) the unit unsettled.
@@ -1330,18 +1325,15 @@ func (o *orchestrationState) recordDealOutcomes(toolName, rawInput string, outco
 		id := strings.TrimSpace(oc.dealID)
 		singleCanaryMatch := !invokedBatch && singleID != "" && id == singleID && o.hasSingleDealCommitment(toolName, id)
 		if len(approved) > 0 && oc.success && !approved[id] && !singleCanaryMatch {
-			log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
-				oc.dealID, toolName)
+			slog.Warn("Enforcement: ignoring batch result for unapproved record id (not in the audit's approved set)", "deal_id", oc.dealID, "tool_name", toolName)
 			continue
 		}
 		if invokedBatch && oc.success && !inCall[id] {
-			log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
-				oc.dealID, toolName)
+			slog.Warn("Enforcement: ignoring batch result for record id (not in this call's deal_ids)", "deal_id", oc.dealID, "tool_name", toolName)
 			continue
 		}
 		if !invokedBatch && singleID != "" && oc.success && id != singleID {
-			log.Printf("Enforcement: ignoring batch result for record id %q on %q (not this call's record %q)",
-				oc.dealID, toolName, singleID)
+			slog.Warn("Enforcement: ignoring batch result for record id (not this call's record)", "deal_id", oc.dealID, "tool_name", toolName, "single_id", singleID)
 			continue
 		}
 		switch {
@@ -1513,7 +1505,7 @@ func (o *orchestrationState) handOverNotifyRecordResult(toolName, rawInput, resu
 	o.mu.Unlock()
 	if matches != 1 {
 		if matches > 1 {
-			log.Printf("notify-mode record result: %d recorded %s calls share one input; no result card is attached to any of them", matches, toolName)
+			slog.Info("notify-mode record result recorded calls share one input; no result card is attached to any of them", "matches", matches, "tool_name", toolName)
 		}
 		return
 	}

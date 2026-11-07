@@ -32,11 +32,11 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // brandMetaResponse is the white-label identity the web resolves server-side.
@@ -126,6 +126,6 @@ func (s *Server) brandMeta(w http.ResponseWriter, r *http.Request) {
 	// process on top, so a page render does not pay a round trip per request.
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("httpapi: encode /brand/meta: %v", err)
+		logging.From(r.Context()).Error("httpapi: encode /brand/meta", "err", err)
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/google/uuid"
@@ -47,7 +48,7 @@ func unmarshalEmailPolicy(ns sql.NullString) *models.EmailTriggerPolicy {
 	}
 	var p models.EmailTriggerPolicy
 	if err := json.Unmarshal([]byte(ns.String), &p); err != nil {
-		log.Printf("Warning: failed to unmarshal email_policy: %v (input: %.100s)", err, ns.String)
+		slog.Warn("Warning: failed to unmarshal email_policy (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &p

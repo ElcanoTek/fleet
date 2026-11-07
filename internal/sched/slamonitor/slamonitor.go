@@ -13,13 +13,14 @@ package slamonitor
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -75,7 +76,7 @@ func New(store SLAStore) *SLAMonitor {
 // recovered (safe.Recover) so a panic in the check never kills the process —
 // matching the scheduler's own crash-safety posture.
 func (m *SLAMonitor) Start(ctx context.Context) {
-	log.Println("Starting SLA monitor...")
+	logging.From(ctx).Info("Starting SLA monitor...")
 	go m.run(ctx)
 }
 
@@ -115,7 +116,7 @@ func (m *SLAMonitor) run(ctx context.Context) {
 func (m *SLAMonitor) Check(ctx context.Context) {
 	tasks, err := m.store.GetRunningTasksWithSLA(ctx)
 	if err != nil {
-		log.Printf("sla-monitor: query failed: %v", err)
+		logging.From(ctx).Error("sla-monitor: query failed", "err", err)
 		return
 	}
 	now := m.now()
@@ -139,11 +140,10 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 			// task fell through to the warn branch and logged sla-warn every
 			// tick until it finished.)
 		case elapsed >= failAt:
-			log.Printf("sla-breach: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
-				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
+			logging.From(ctx).Info("sla-breach", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
 			metrics.RecordSLAFail(TaskName(t))
 			if err := m.store.MarkSLABreached(ctx, t.ID); err != nil {
-				log.Printf("sla-monitor: mark-breached failed for %s: %v", t.ID, err)
+				logging.From(ctx).Error("sla-monitor: mark-breached failed", "value", t.ID, "err", err)
 			}
 		case elapsed >= warnAt:
 			// Latched for THIS attempt (same started_at) → already warned. A
@@ -152,8 +152,7 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 				break
 			}
 			m.warned[t.ID] = *t.StartedAt
-			log.Printf("sla-warn: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
-				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
+			logging.From(ctx).Warn("sla-warn", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
 			metrics.RecordSLAWarn(TaskName(t))
 		}
 	}

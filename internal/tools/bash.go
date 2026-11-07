@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +14,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -541,7 +542,7 @@ func auditWarnOnce(msg string) {
 	if _, loaded := auditWarnedAbout.LoadOrStore(msg, true); loaded {
 		return
 	}
-	log.Printf("bash audit: %s", msg) // msg comes from our own audit code, not user input
+	slog.Info("bash audit", "detail", msg) // msg comes from our own audit code, not user input
 }
 
 // runBashWithSandbox is the production dispatch path. The caller MUST
@@ -695,7 +696,7 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 			if wdErr != nil {
 				return "", fmt.Errorf("error getting current directory: %w", wdErr)
 			}
-			log.Printf("workspace ensure failed for conv %s (%v); using cwd %s", convID, err, wd)
+			logging.From(ctx).Error("workspace ensure failed for conv; using cwd", "conv_id", convID, "err", err, "cwd", wd)
 			return wd, nil
 		}
 		if abs, absErr := filepath.Abs(dir); absErr == nil {

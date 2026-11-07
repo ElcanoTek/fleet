@@ -24,7 +24,7 @@ package observability
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -69,7 +69,7 @@ func Init(opts Options) bool {
 		redactor = opts.Redact
 	}
 	if opts.DSN == "" {
-		log.Printf("sentry: disabled (FLEET_SENTRY_DSN not set)")
+		slog.Info("sentry: disabled (FLEET_SENTRY_DSN not set)")
 		return false
 	}
 	env := opts.Environment
@@ -100,10 +100,10 @@ func Init(opts Options) bool {
 		AttachStacktrace: true,
 	}); err != nil {
 		// Non-fatal: fleet keeps running; Sentry is just absent.
-		log.Printf("sentry: init failed (non-fatal): %v", err)
+		slog.Error("sentry: init failed (non-fatal)", "err", err)
 		return false
 	}
-	log.Printf("sentry: initialized (env=%s)", env)
+	slog.Info("sentry: initialized", "env", env)
 	return true
 }
 

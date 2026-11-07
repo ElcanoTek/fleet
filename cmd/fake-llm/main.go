@@ -13,13 +13,14 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 func main() {
@@ -32,13 +33,13 @@ func main() {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", *addr)
 	if err != nil {
-		log.Fatalf("fake-llm: listen %s: %v", *addr, err)
+		logging.Fatal("fake-llm: listen", "addr", *addr, "err", err)
 	}
-	log.Printf("fake-llm: listening on http://%s (chat-completions + models)", ln.Addr())
+	slog.Info("fake-llm: listening on http:// (chat-completions + models)", "addr", ln.Addr())
 
 	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 30 * time.Second}
 	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("fake-llm: serve: %v", err)
+		logging.Fatal("fake-llm: serve", "err", err)
 	}
 }
 

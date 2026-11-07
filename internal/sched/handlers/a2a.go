@@ -35,7 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,6 +48,7 @@ import (
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
@@ -553,7 +554,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		a2aWrite(w, a2aCreateError(req.ID, err))
 		return
 	}
-	log.Printf("Task created via A2A: %s (prompt: %.50s...)", task.ID, safe.LogSafe(task.Prompt))
+	logging.From(r.Context()).Info("Task created via A2A (prompt...)", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
 
 	// Inline push registration binds to the task this send just created (its
 	// URL was validated before the create, so a failure here is storage).
@@ -666,7 +667,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation, "the task is no longer awaiting input", nil))
 		return
 	}
-	log.Printf("Task resumed via A2A: %s", task.ID)
+	logging.From(r.Context()).Info("Task resumed via A2A", "task_id", task.ID)
 	// The caller is about to block on the outcome (the unary wait below or the
 	// SSE stream): dispatch the resumed task now, not at the next poll tick.
 	h.kickTaskQueue()
@@ -725,7 +726,7 @@ func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
 		}
 		return a2abridge.NewErrorResponse(id, wire.ErrServerError, exceeded.Error(), meta)
 	}
-	log.Printf("A2A: task create failed (infrastructure): %v", err)
+	slog.Error("A2A: task create failed (infrastructure)", "err", err)
 	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "task creation failed on the server; try again", nil)
 }
 
@@ -952,9 +953,9 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p princ
 	}
 	// Interrupt a live in-process run, exactly like DELETE /tasks/{id} (#508).
 	if h.taskStopper != nil && h.taskStopper(task.ID, who) {
-		log.Printf("Task cancelled via A2A: %s (live run interrupted, stopped by %s)", task.ID, safe.LogSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes safe.LogSafe.
+		slog.Info("Task cancelled via A2A (live run interrupted, stopped)", "task_id", task.ID, "who", safe.LogSafe(who))
 	} else {
-		log.Printf("Task cancelled via A2A: %s (stopped by %s)", task.ID, safe.LogSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes safe.LogSafe.
+		slog.Info("Task cancelled via A2A (stopped)", "task_id", task.ID, "who", safe.LogSafe(who))
 	}
 	a2aWrite(w, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(cancelled, h.a2a.PublicBaseURL, true)))
 }

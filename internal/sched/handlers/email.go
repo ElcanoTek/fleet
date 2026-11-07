@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
@@ -86,8 +86,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 	if triggerSlugShape.MatchString(slug) {
 		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-			//nolint:gosec // G706: slug is sanitized via safe.LogSafe (CR/LF stripped) before interpolation.
-			log.Printf("email trigger lookup error for slug %q: %v", safe.LogSafe(slug), lookupErr)
+			logging.From(r.Context()).Error("email trigger lookup error for slug", "slug", safe.LogSafe(slug), "err", lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -139,8 +138,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	inserted, err := h.storage.RecordTriggerEvent(r.Context(), ev)
 	if err != nil {
-		//nolint:gosec // G706: slug is sanitized via safe.LogSafe before interpolation.
-		log.Printf("email trigger %q dedup error: %v", safe.LogSafe(slug), err)
+		logging.From(r.Context()).Error("email trigger dedup error", "slug", safe.LogSafe(slug), "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -164,8 +162,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 
 	runID, err := h.storage.SpawnEmailRun(r.Context(), trig, prompt, inheritConnectors)
 	if err != nil {
-		//nolint:gosec // G706: slug is sanitized via safe.LogSafe before interpolation.
-		log.Printf("email trigger %q enqueue error: %v", safe.LogSafe(slug), err)
+		logging.From(r.Context()).Error("email trigger enqueue error", "slug", safe.LogSafe(slug), "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -174,8 +171,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 	// reply-back can recover the sender. Best-effort: a failure here does not
 	// fail the (already-spawned) run.
 	if err := h.storage.SetTriggerEventRunID(r.Context(), ev.ID, runID); err != nil {
-		//nolint:gosec // G706: slug is sanitized via safe.LogSafe before interpolation.
-		log.Printf("email trigger %q event-link warning: %v", safe.LogSafe(slug), err)
+		logging.From(r.Context()).Warn("email trigger event-link warning", "slug", safe.LogSafe(slug), "err", err)
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID.String()})

@@ -3,11 +3,12 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // SuggestTitle generates a short, sidebar-friendly title for a freshly-created
@@ -21,7 +22,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 	titleModel := m.config.TitleModel
 	model, err := m.modelResolver().Resolve(ctx, titleModel)
 	if err != nil {
-		log.Printf("SuggestTitle: resolve title model %q: %v", titleModel, err)
+		logging.From(ctx).Error("SuggestTitle: resolve title model", "title_model", titleModel, "err", err)
 		return ""
 	}
 	sys := "You write concise chat titles for a sidebar. Given a short exchange between a user and an assistant, " +
@@ -39,7 +40,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		Timeout:     20 * time.Second,
 	})
 	if err != nil {
-		log.Printf("SuggestTitle: %v", err)
+		logging.From(ctx).Error("SuggestTitle", "err", err)
 		return ""
 	}
 	return normalizeTitle(text)

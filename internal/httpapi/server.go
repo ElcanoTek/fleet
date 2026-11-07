@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -672,8 +672,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 	for _, opt := range opts {
 		opt(s)
 	}
-	log.Printf("sse: buffer_duration=%s max_bytes_per_turn=%d heartbeat_interval=%s",
-		bufferRetainTTL, sseMaxBytesPerTurn, sseHeartbeatInterval)
+	slog.Info("sse", "buffer_duration", bufferRetainTTL, "max_bytes_per_turn", sseMaxBytesPerTurn, "heartbeat_interval", sseHeartbeatInterval)
 	// Surface the active IP access-control state (#314) so an operator can confirm
 	// their config loaded. Silent when neither list is set (the default open case).
 	logIPFilter(ipFilterConfig{allow: cfg.IPAllowlist, deny: cfg.IPDenylist, trustedProxies: cfg.TrustedProxies})
@@ -723,7 +722,7 @@ func envDuration(key string, def time.Duration) time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		log.Printf("config: %s is not a valid duration; using default %s", key, def)
+		slog.Info("config is not a valid duration; using default", "key", key, "def", def)
 	}
 	return def
 }
@@ -734,7 +733,7 @@ func envInt(key string, def int) int {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}
-		log.Printf("config: %s is not a valid integer; using default %d", key, def)
+		slog.Info("config is not a valid integer; using default", "key", key, "def", def)
 	}
 	return def
 }
@@ -1152,7 +1151,7 @@ func setJSONContentType(w http.ResponseWriter) {
 func writeJSON(w http.ResponseWriter, v any) {
 	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("write json: %v", err)
+		slog.Error("write json", "err", err)
 	}
 }
 

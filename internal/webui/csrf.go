@@ -4,11 +4,11 @@
 package webui
 
 import (
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -36,7 +36,7 @@ func (g *Gateway) verifyOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if reason == "" {
 		return true
 	}
-	log.Printf("webui: csrf rejected: %s", safe.LogSafe(reason))
+	logging.From(r.Context()).Info("webui: csrf rejected", "reason", safe.LogSafe(reason))
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 	return false
 }

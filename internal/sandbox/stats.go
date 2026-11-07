@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"os/exec"
 	"strconv"
@@ -460,8 +460,7 @@ func logMemoryBreach(containerID string, usedBytes, limitBytes uint64) {
 		return
 	}
 	pct := float64(usedBytes) / float64(limitBytes) * 100
-	log.Printf("sandbox %s: memory usage at %.0f%% of limit (%s / %s) — consider raising the sandbox memory limit",
-		shortID(containerID), pct, humanMiB(usedBytes), humanMiB(limitBytes))
+	slog.Info("sandbox: memory usage of limit — consider raising the sandbox memory limit", "container_id", shortID(containerID), "pct", fmt.Sprintf("%.0f", pct), "used_bytes", humanMiB(usedBytes), "limit_bytes", humanMiB(limitBytes))
 }
 
 // humanMiB renders a byte count as "NNN MiB" for the breach warning.

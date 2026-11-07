@@ -28,7 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"net/url"
 	"sort"
@@ -36,6 +36,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -399,7 +400,7 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 			// Out-of-bounds env default: keep it verbatim. It is what the runtime
 			// actually does and what a reset must revert to; only NEW admin writes
 			// are held to the registry bounds.
-			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%s); keeping it as the default", safe.LogSafe(spec.Key), safe.LogSafe(err.Error()))
+			slog.Error("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "spec_key", safe.LogSafe(spec.Key), "err", safe.LogSafe(err.Error()))
 			nd = strings.TrimSpace(d)
 		}
 		s.defaults[spec.Key] = nd
@@ -483,7 +484,7 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 	delete(s.applyErrs, key)
 	// Audit line: key and value are registry-validated constants (never raw
 	// input); updatedBy is the authenticated admin identity.
-	log.Printf("workspace settings: %s = %s (set by %s)", safe.LogSafe(key), safe.LogSafe(v), safe.LogSafe(updatedBy))
+	logging.From(ctx).Info("workspace settings (set)", "key", safe.LogSafe(key), "detail", safe.LogSafe(v), "updated_by", safe.LogSafe(updatedBy))
 	s.retryFailedLocked(ctx)
 	return Resolved{
 		Spec: spec, Value: v, Source: SourceAdmin, Default: s.defaults[key],
@@ -511,7 +512,7 @@ func (s *Service) retryFailedLocked(ctx context.Context) {
 		r := s.resolve(key, overrides)
 		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err == nil {
 			delete(s.applyErrs, key)
-			log.Printf("workspace settings: %s recovered and is now in effect", safe.LogSafe(key))
+			logging.From(ctx).Info("workspace settings recovered and is now in effect", "key", safe.LogSafe(key))
 		}
 	}
 }
@@ -545,7 +546,7 @@ func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, e
 		return Resolved{}, err
 	}
 	delete(s.applyErrs, key)
-	log.Printf("workspace settings: %s reset to default %s (by %s)", safe.LogSafe(key), safe.LogSafe(s.defaults[key]), safe.LogSafe(updatedBy))
+	logging.From(ctx).Info("workspace settings reset to default", "key", safe.LogSafe(key), "defaults", safe.LogSafe(s.defaults[key]), "updated_by", safe.LogSafe(updatedBy))
 	s.retryFailedLocked(ctx)
 	return Resolved{Spec: spec, Value: s.defaults[key], Source: SourceDefault, Default: s.defaults[key]}, nil
 }

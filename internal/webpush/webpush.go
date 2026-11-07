@@ -40,7 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -180,10 +180,10 @@ type Service struct {
 	// client is the HTTP seam every send goes through, overridable in tests so
 	// no real relay is contacted. Defaults to newClient's.
 	client HTTPClient
-	// logf is the package logger seam, overridable in tests. It must never be
-	// handed a secret — log lines carry only emails/endpoints hosts, statuses,
-	// and error text from send (which never quotes a key or an endpoint).
-	logf func(format string, args ...any)
+	// logger is the package logger seam, overridable in tests; nil logs
+	// through the process default logger. It must never be handed an
+	// endpoint or a key: only a host, a status and a reason reach it.
+	logger *slog.Logger
 }
 
 // New builds a Service, or returns nil (feature off, all methods no-op) when
@@ -205,13 +205,13 @@ func New(cfg Config, st SubscriptionStore) *Service {
 // still gates every send, but the redirect policy is the caller's client's, so
 // production code uses New. A nil client gets New's.
 func NewWithHTTPClient(cfg Config, st SubscriptionStore, client HTTPClient) *Service {
-	return newService(cfg, st, client, log.Printf)
+	return newService(cfg, st, client, nil)
 }
 
 // newService is NewWithHTTPClient with the logger injected too, so the startup
 // warning goes through the same seam the sends log through and is testable
 // there.
-func newService(cfg Config, st SubscriptionStore, client HTTPClient, logf func(format string, args ...any)) *Service {
+func newService(cfg Config, st SubscriptionStore, client HTTPClient, logger *slog.Logger) *Service {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -222,12 +222,12 @@ func newService(cfg Config, st SubscriptionStore, client HTTPClient, logf func(f
 		cfg:    cfg,
 		store:  st,
 		client: client,
-		logf:   logf,
+		logger: logger,
 	}
 	if problem := contactProblem(cfg.Contact); problem != "" {
 		// Only the problem is logged, never the value: an env-file whose lines
 		// slipped can put the private key here.
-		s.logf(`webpush: WARNING FLEET_VAPID_CONTACT is not a usable contact: it %s. Every push is signed with it (the VAPID "sub" claim), and a push service may refuse every notification over it: Apple's, which delivers to Safari, answers 403 with reason BadJwtToken. Set it to a mailto: address such as mailto:you@example.com, or an https: URL with a host such as https://example.com/contact, and restart fleet`, problem)
+		s.log().Warn(`webpush: WARNING FLEET_VAPID_CONTACT is not a usable contact. Every push is signed with it (the VAPID "sub" claim), and a push service may refuse every notification over it: Apple's, which delivers to Safari, answers 403 with reason BadJwtToken. Set it to a mailto: address such as mailto:you@example.com, or an https: URL with a host such as https://example.com/contact, and restart fleet`, "problem", problem)
 	}
 	return s
 }
@@ -395,9 +395,9 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 	// gate. It can never be delivered, so it is retired like an endpoint the
 	// relay reported gone rather than refused again on every send.
 	if err := ValidateEndpoint(sub.Endpoint); err != nil {
-		s.logf("webpush: retiring a subscription of %s: %v", sub.UserEmail, err)
+		s.log().Warn("webpush: retiring a subscription", "user_email", sub.UserEmail, "err", err)
 		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
-			s.logf("webpush: delete refused subscription failed: %v", err)
+			s.log().Error("webpush: delete refused subscription failed", "err", err)
 		}
 		return
 	}
@@ -419,7 +419,7 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		if errors.As(err, &uerr) {
 			err = uerr.Err
 		}
-		s.logf("webpush: send to %s failed: %v", endpointHost(sub.Endpoint), err)
+		s.log().Warn("webpush: send failed", "relay", endpointHost(sub.Endpoint), "err", err)
 		return
 	}
 	defer func() {
@@ -432,7 +432,7 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		// is authoritative, so retire the row. Best-effort: on failure the next
 		// send retries the delete.
 		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
-			s.logf("webpush: delete expired subscription failed: %v", err)
+			s.log().Error("webpush: delete expired subscription failed", "err", err)
 		}
 	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
 		// The relay refused this server's VAPID authentication (RFC 8292 §4.2
@@ -443,9 +443,9 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		// it (POST /push/renew) the next time it loads fleet. Every send still
 		// refused after browsers have reopened fleet points at the
 		// configuration instead, so the line names both.
-		s.logf("webpush: relay %s returned status %d%s: it refused this server's VAPID authentication. A subscription made with an earlier key is the usual cause after a key rotation, and the browser renews it the next time it opens fleet; if this persists, check that FLEET_VAPID_PUBLIC_KEY and FLEET_VAPID_PRIVATE_KEY are one pair, FLEET_VAPID_CONTACT is a mailto: or https: address, and the host clock is right", endpointHost(sub.Endpoint), resp.StatusCode, relayReason(resp.Body))
+		s.log().Warn("webpush: relay refused this server's VAPID authentication. A subscription made with an earlier key is the usual cause after a key rotation, and the browser renews it the next time it opens fleet; if this persists, check that FLEET_VAPID_PUBLIC_KEY and FLEET_VAPID_PRIVATE_KEY are one pair, FLEET_VAPID_CONTACT is a mailto: or https: address, and the host clock is right", relayAttrs(sub.Endpoint, resp)...)
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		s.logf("webpush: relay %s returned status %d%s", endpointHost(sub.Endpoint), resp.StatusCode, relayReason(resp.Body))
+		s.log().Warn("webpush: relay refused the send", relayAttrs(sub.Endpoint, resp)...)
 	}
 }
 
@@ -594,7 +594,7 @@ const (
 	maxReasonLen   = 100
 )
 
-// relayReason is the push service's stated reason for a refusal, formatted for
+// relayReason is the push service's stated reason for a refusal, bounded for
 // the log line (` (reason "BadJwtToken")`), or "" when it gives none. Apple's
 // push service answers a refusal with a JSON object whose "reason" names the
 // cause; only that field is read, never the rest of the body, which is the
@@ -615,7 +615,26 @@ func relayReason(body io.Reader) string {
 		// the cut instead of leaving a stray byte for %q to print as \xNN.
 		reason = strings.ToValidUTF8(reason[:maxReasonLen], "")
 	}
-	return fmt.Sprintf(" (reason %q)", reason)
+	return reason
+}
+
+// relayAttrs are a refusal's log attributes: the relay host, the status and,
+// when the push service states one, its bounded reason.
+func relayAttrs(endpoint string, resp *http.Response) []any {
+	attrs := []any{"relay", endpointHost(endpoint), "status", resp.StatusCode}
+	if reason := relayReason(resp.Body); reason != "" {
+		attrs = append(attrs, "reason", reason)
+	}
+	return attrs
+}
+
+// log is the service's logger: the test seam when set, else the process
+// default.
+func (s *Service) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // endpointHost reduces a subscription endpoint to its host for log lines: the

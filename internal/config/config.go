@@ -20,7 +20,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"path"
@@ -1599,13 +1599,13 @@ func Load(envFile string) (*Config, error) {
 	// operator's env file — PII redaction always runs the built-in pattern engine.
 	for _, k := range []string{"PII_REDACTION_ENGINE", "PII_RAMPART_URL"} {
 		if strings.TrimSpace(getenvFleet(k)) != "" {
-			log.Printf("Warning: FLEET_%s is set but no longer used — the Rampart PII engine was removed (docs/adr/0063); PII redaction uses the built-in pattern engine", k)
+			slog.Warn("Warning: a retired setting is set but no longer used — the Rampart PII engine was removed (docs/adr/0063); PII redaction uses the built-in pattern engine", "setting", "FLEET_"+k)
 		}
 	}
 	// Retired knobs (ADR-0096): Fleet no longer publishes account events.
 	for _, k := range []string{"ACCOUNT_EVENTS_URL", "ACCOUNT_EVENTS_SECRET"} {
 		if strings.TrimSpace(getenvFleet(k)) != "" {
-			log.Printf("Warning: FLEET_%s is set but no longer used: Fleet no longer publishes account events (docs/adr/0096); remove it from the env file", k)
+			slog.Warn("Warning: a retired setting is set but no longer used: Fleet no longer publishes account events (docs/adr/0096); remove it from the env file", "setting", "FLEET_"+k)
 		}
 	}
 
@@ -2074,11 +2074,11 @@ func decodeAES256KeyEnv(name, consequence string) []byte {
 	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
 	if err != nil {
-		log.Printf("Warning: FLEET_%s is not valid base64; %s", name, consequence)
+		slog.Warn("Warning: setting is not valid base64", "setting", "FLEET_"+name, "consequence", consequence)
 		return nil
 	}
 	if len(key) != 32 {
-		log.Printf("Warning: FLEET_%s must decode to 32 bytes (got %d); %s", name, len(key), consequence)
+		slog.Warn("Warning: setting must decode to 32 bytes", "setting", "FLEET_"+name, "got_bytes", len(key), "consequence", consequence)
 		return nil
 	}
 	return key
@@ -2107,8 +2107,7 @@ func normalizePythonREPLMode(raw string) string {
 	case pythonREPLModePersistent:
 		return pythonREPLModePersistent
 	default:
-		log.Printf("Warning: FLEET_PYTHON_REPL_MODE=%q is not recognized (want %q or %q); falling back to %q",
-			raw, pythonREPLModePerTurn, pythonREPLModePersistent, pythonREPLModePerTurn)
+		slog.Warn("Warning: FLEET_PYTHON_REPL_MODE is not recognized; falling back to the default", "value", raw, "want", []string{pythonREPLModePerTurn, pythonREPLModePersistent}, "default", pythonREPLModePerTurn)
 		return pythonREPLModePerTurn
 	}
 }

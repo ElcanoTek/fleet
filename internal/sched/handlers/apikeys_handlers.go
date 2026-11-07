@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -116,11 +116,11 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	// Apply the optional task-urgency ceiling (#230), validated above.
 	if keyCreate.MaxPriority != nil {
 		if err := h.apiKeys.SetMaxPriority(key.KeyID, keyCreate.MaxPriority); err != nil {
-			log.Printf("Warning: failed to set max_priority on new key %s: %v", key.KeyID, err)
+			logging.From(r.Context()).Warn("Warning: failed to set max_priority on new key", "key_id", key.KeyID, "err", err)
 		}
 	}
 
-	log.Printf("Created API key: %s (%s)", key.KeyID, safe.LogSafe(key.Name))
+	logging.From(r.Context()).Info("Created API key", "key_id", key.KeyID, "key_name", safe.LogSafe(key.Name))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyCreated{
@@ -220,8 +220,7 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Rotated API key: %s", safe.LogSafe(keyID))
+	logging.From(r.Context()).Info("Rotated API key", "key_id", safe.LogSafe(keyID))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyRotated{
@@ -239,8 +238,7 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Revoked API key: %s", safe.LogSafe(keyID))
+	logging.From(r.Context()).Info("Revoked API key", "key_id", safe.LogSafe(keyID))
 
 	key := h.apiKeys.GetKey(keyID)
 	if key == nil {
@@ -259,8 +257,7 @@ func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Deleted API key: %s", safe.LogSafe(keyID))
+	logging.From(r.Context()).Info("Deleted API key", "key_id", safe.LogSafe(keyID))
 	writeJSON(w, http.StatusOK, models.DeleteKeyResponse{
 		Deleted: true,
 		KeyID:   keyID,

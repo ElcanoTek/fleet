@@ -1,7 +1,7 @@
 package agentcore
 
 import (
-	"log"
+	"log/slog"
 	"strings"
 
 	"charm.land/fantasy"
@@ -87,7 +87,7 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 		}
 		out = append(out, t)
 	}
-	log.Printf("persona %q tool policy: %d of %d tools offered (%d blocked)", persona, len(out), len(all), blocked)
+	slog.Info("persona tool policy tools offered (blocked)", "persona", persona, "out_count", len(out), "all_count", len(all), "blocked", blocked)
 	return out
 }
 

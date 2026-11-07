@@ -3,7 +3,7 @@ package clientconfig
 import (
 	_ "embed"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -331,14 +331,14 @@ func mergeRemoteCatalog(bundle, builtin []RemoteMCPCatalogEntry, mcpServers []Se
 		case sandboxed[e.Name]:
 			// Loud, never silent: the author must be able to see why a
 			// built-in listing vanished from the directory.
-			log.Printf("clientconfig: warning: builtin remote MCP catalog entry %q is shadowed by the bundle's mcp_servers connector of the same name and was dropped from the directory", e.Name)
+			slog.Warn("clientconfig: warning: builtin remote MCP catalog entry is shadowed by the bundle's mcp_servers connector of the same name and was dropped from the directory", "name", e.Name)
 		default:
 			merged = append(merged, e)
 		}
 	}
 	for h := range hiddenSet {
 		if !known[h] {
-			log.Printf("clientconfig: warning: remote_mcp_catalog_hidden names %q, which is not a builtin catalog entry (typo?)", h)
+			slog.Warn("clientconfig: warning: remote_mcp_catalog_hidden names, which is not a builtin catalog entry (typo?)", "names", h)
 		}
 	}
 	return merged

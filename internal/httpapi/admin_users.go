@@ -13,10 +13,10 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -140,7 +140,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		s.setOpsRole(r, u.Email, *body.OpsRole)
 	}
 	// %q escapes CR/LF, so request-supplied values cannot forge a log line.
-	log.Printf("admin users: created %q (role=%s) by %q", u.Email, u.Role, userFromCtx(r.Context()))
+	logging.From(r.Context()).Info("admin users: created", "email", u.Email, "role", u.Role, "context", userFromCtx(r.Context()))
 	writeJSONStatus(w, http.StatusCreated, s.toAdminUserAnnotated(r, *u))
 }
 
@@ -190,8 +190,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	s.purgeParticipantPrivateStashes(email)
 	s.removeOpsAdmin(r, email)
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: deleted %q by %q", email, actor)
+	logging.From(r.Context()).Info("admin users: deleted", "email", email, "actor", actor)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -220,8 +219,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		}
 		return
 	}
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: password reset for %q by %q", safe.LogSafe(email), safe.LogSafe(userFromCtx(r.Context())))
+	logging.From(r.Context()).Info("admin users: password reset", "email", safe.LogSafe(email), "context", safe.LogSafe(userFromCtx(r.Context())))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -233,8 +231,7 @@ func (s *Server) setOpsRole(r *http.Request, email, role string) {
 		return
 	}
 	if err := s.opsAdmins.SetRole(r.Context(), email, role); err != nil {
-		//nolint:gosec // G706: %q escapes CR/LF; role is validated before this call.
-		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", safe.LogSafe(role), safe.LogSafe(email), safe.LogSafe(err.Error()))
+		logging.From(r.Context()).Warn("WARNING: admin users: set ops role failed", "role", safe.LogSafe(role), "email", safe.LogSafe(email), "err", safe.LogSafe(err.Error()))
 	}
 }
 
@@ -256,8 +253,7 @@ func (s *Server) ensureOpsAdmin(r *http.Request, email string) {
 		return
 	}
 	if err := s.opsAdmins.Ensure(r.Context(), email); err != nil {
-		//nolint:gosec // G706: %q escapes CR/LF, so the request-supplied email cannot forge a log line.
-		log.Printf("admin users: WARNING ops-center admin grant for %q failed: %v", email, err)
+		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin grant failed", "email", email, "err", err)
 	}
 }
 
@@ -266,8 +262,7 @@ func (s *Server) removeOpsAdmin(r *http.Request, email string) {
 		return
 	}
 	if err := s.opsAdmins.Remove(r.Context(), email); err != nil {
-		//nolint:gosec // G706: %q escapes CR/LF, so the request-supplied email cannot forge a log line.
-		log.Printf("admin users: WARNING ops-center admin removal for %q failed: %v", email, err)
+		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin removal failed", "email", email, "err", err)
 	}
 }
 
@@ -317,7 +312,6 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
-		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
+	logging.From(r.Context()).Info("admin teams: renamed (users, projects)", "from", body.From, "detail", body.To, "users_n", usersN, "projects_n", projectsN, "context", userFromCtx(r.Context()))
 	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

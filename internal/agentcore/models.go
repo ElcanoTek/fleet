@@ -1,7 +1,7 @@
 package agentcore
 
 import (
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -392,6 +392,5 @@ func recordObservedContextWindow(key observedContextKey, tokens int) {
 		return
 	}
 	observedContextWindows.m[key] = tokens
-	log.Printf("📏 Recorded ContextMaxTokens for provider=%s type=%s model=%s: %d (was %d)",
-		key.providerName, key.providerType, key.slug, tokens, existing)
+	slog.Info("📏 Recorded ContextMaxTokens (was)", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "existing", existing)
 }

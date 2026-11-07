@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -140,7 +140,7 @@ func (h *Handlers) promptItems(r *http.Request) ([]PromptLibraryItem, error) {
 	if h.promptCatalog != nil {
 		gitPrompts, problems := h.promptCatalog()
 		for _, problem := range problems {
-			log.Printf("prompt library: %s", problem)
+			logging.From(r.Context()).Info("prompt library", "problem", problem)
 		}
 		for _, gp := range gitPrompts {
 			items = append(items, promptLibraryItemFromGit(gp))

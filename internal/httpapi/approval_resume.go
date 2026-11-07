@@ -37,11 +37,12 @@ package httpapi
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -163,7 +164,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		defer s.approvalResumeObserver(convID, res, err)
 	}
 	if err != nil {
-		log.Printf("approval resume (conv=%s): claim failed: %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; convID is a server-generated UUID.
+		logging.From(ctx).Error("approval resume: claim failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		if attempt < approvalResumeRetries {
 			s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt+1)
 		}
@@ -183,9 +184,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 			// walked away expecting it to carry on (approval_progress.go).
 			s.notifyResumeSkipped(res.Owner, convID)
 		}
-		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
-		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
-			convID, res.Skipped, res.RecentResumes, maxPerHour, approvalResumeIDs(res.Claimed))
+		logging.From(ctx).Info("audit: approval resume skipped for conversation (in the last hour, cap) after", "conv_id", convID, "skipped", res.Skipped, "recent_resumes", res.RecentResumes, "max_per_hour", maxPerHour, "claimed", approvalResumeIDs(res.Claimed))
 		if res.Skipped != store.ApprovalResumeSkipConversationGone {
 			if armed, err := s.store.HasArmedApprovals(ctx, convID); err == nil && armed {
 				s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
@@ -194,9 +193,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		return
 	}
 	metrics.RecordApprovalResume("queued")
-	//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
-	log.Printf("audit: approval resume queued for conversation %q as input %q after %q",
-		convID, res.Input.ID, approvalResumeIDs(res.Claimed))
+	logging.From(ctx).Info("audit: approval resume queued for conversation as input after", "conv_id", convID, "input_id", res.Input.ID, "claimed", approvalResumeIDs(res.Claimed))
 	s.emitQueueUpdate(ctx, res.Input.UserEmail, convID)
 	// Idle → the drain launches it now; a running turn → it waits in the
 	// queue and that turn's completion tail drains it.
@@ -232,7 +229,7 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 	}
 	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)
 	if err != nil || !ok {
-		log.Printf("approval resume: arm %s: ok=%t err=%v", approval.ID, ok, err)
+		slog.Error("approval resume: arm", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.ResumeState = store.ApprovalResumeArmed
@@ -282,8 +279,7 @@ func (s *Server) noteDroppedResume(convID, rowID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.AppendApprovalResumeDroppedNotice(ctx, convID); err != nil {
-		log.Printf("approval resume (conv=%s): note the dropped resume %s: %v", safe.LogSafe(convID), safe.LogSafe(rowID), err) //nolint:gosec // G706: safe.LogSafe strips CR/LF; both ids are server-generated.
+		logging.From(ctx).Error("approval resume: note the dropped resume", "conv_id", safe.LogSafe(convID), "row_id", safe.LogSafe(rowID), "err", err)
 	}
-	//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
-	log.Printf("audit: approval resume %q in conversation %q predates this process; cancelled, not run", rowID, convID)
+	logging.From(ctx).Info("audit: approval resume in conversation predates this process; cancelled, not run", "row_id", rowID, "conv_id", convID)
 }

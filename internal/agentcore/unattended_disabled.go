@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 )
@@ -70,7 +70,7 @@ func unattendedDisableableNames() []string {
 func installUnattendedDisabledSet(members []string) map[string]bool {
 	set, problems := buildUnattendedDisabledSet(members)
 	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Info("agent_policy", "problem", problem)
 	}
 	return set
 }

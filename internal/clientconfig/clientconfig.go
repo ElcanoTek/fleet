@@ -47,7 +47,7 @@ package clientconfig
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -298,7 +298,7 @@ func Load(dir string) (*Bundle, error) {
 	b.skillsBuiltin = m.SkillsBuiltin == nil || *m.SkillsBuiltin
 	b.skillsHidden = m.SkillsHidden
 	if mergedSkills, serr := materializeMergedSkills(b.BundleSkillsDir, b.skillsBuiltin, b.skillsHidden, b.pluginSkillOverlays); serr != nil {
-		log.Printf("clientconfig: warning: builtin skills pack / plugin skills unavailable (%v) — using bundle skills only", serr)
+		slog.Warn("clientconfig: warning: builtin skills pack plugin skills unavailable — using bundle skills only", "err", serr)
 	} else {
 		b.SkillsDir = mergedSkills
 	}
@@ -306,27 +306,27 @@ func Load(dir string) (*Bundle, error) {
 	// a skipped skill or server entry, a rejected plugin. The spec's failure
 	// boundaries keep the rest loading; surface each so the author notices.
 	for _, p := range b.pluginProblems {
-		log.Printf("clientconfig: warning: plugin: %s", p)
+		slog.Warn("clientconfig: warning: plugin", "problem", p)
 	}
 	if len(b.Plugins) > 0 {
 		names := make([]string, 0, len(b.Plugins))
 		for _, p := range b.Plugins {
 			names = append(names, fmt.Sprintf("%s(skills=%d,mcp=%d)", p.Name, len(p.Skills), len(p.MCPServers)))
 		}
-		log.Printf("clientconfig: agent plugins loaded: %s", strings.Join(names, " "))
+		slog.Info("clientconfig: agent plugins loaded", "names", strings.Join(names, " "))
 	}
 	// Warn (don't fail) on stdio script-path args that don't resolve under the
 	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
 	// a silent connector launch failure at runtime.
 	for _, p := range b.ValidateMCPArgPaths() {
-		log.Printf("clientconfig: warning: %s", p)
+		slog.Warn("clientconfig: warning", "detail", p)
 	}
 	// Warn (don't fail) on malformed Agent Skills — a missing SKILL.md, bad
 	// frontmatter, name/folder mismatch, or empty description. A defective skill
 	// is skipped from the prompt roster but should not block the load; surface it
 	// loudly so the author notices. A CI test asserts the shipped bundle is clean.
 	for _, p := range b.ValidateSkills() {
-		log.Printf("clientconfig: warning: %s", p)
+		slog.Warn("clientconfig: warning", "detail", p)
 	}
 	return b, nil
 }

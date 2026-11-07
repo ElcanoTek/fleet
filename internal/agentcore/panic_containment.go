@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -343,7 +343,7 @@ func finalizeWithPanicBoundary(
 		return "", observerErr
 	}
 	if err != nil {
-		log.Printf("finalize hook error: %v", err)
+		logging.From(ctx).Error("finalize hook error", "err", err)
 		return in.FinalText, nil
 	}
 	if recovered != "" {

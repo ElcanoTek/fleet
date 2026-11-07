@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -49,7 +49,7 @@ func buildResultCardSet(members []string, critical map[string]bool) (map[string]
 func installResultCardSet(members []string, critical map[string]bool) map[string]bool {
 	set, problems := buildResultCardSet(members, critical)
 	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Info("agent_policy", "problem", problem)
 	}
 	return set
 }

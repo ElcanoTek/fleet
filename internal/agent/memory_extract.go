@@ -3,11 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -80,7 +80,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	}
 	model, err := m.modelResolver().Resolve(ctx, m.config.MemoryModel)
 	if err != nil {
-		log.Printf("ExtractMemories: resolve memory model %q: %v", m.config.MemoryModel, err)
+		logging.From(ctx).Error("ExtractMemories: resolve memory model", "memory_model", m.config.MemoryModel, "err", err)
 		return nil
 	}
 
@@ -118,7 +118,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		Timeout:     25 * time.Second,
 	})
 	if err != nil {
-		log.Printf("ExtractMemories: %v", err)
+		logging.From(ctx).Error("ExtractMemories", "err", err)
 		return nil
 	}
 
@@ -127,7 +127,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		// Deliberately do NOT log the validation error verbatim: it can echo the
 		// model's non-conforming output, which is derived from conversation
 		// content. The bare failure is enough to diagnose.
-		log.Printf("ExtractMemories: output failed schema validation; skipping")
+		logging.From(ctx).Warn("ExtractMemories: output failed schema validation; skipping")
 		return nil
 	}
 	var parsed struct {

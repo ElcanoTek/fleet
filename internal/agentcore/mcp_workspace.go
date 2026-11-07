@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,7 +314,7 @@ func SharedMCPWorkspaceDir() string {
 		dir = abs
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		log.Printf("mcp workspace: could not create shared dir %s: %v", dir, err)
+		slog.Error("mcp workspace: could not create shared dir", "dir", dir, "err", err)
 	}
 	return dir
 }
@@ -438,7 +438,7 @@ func removeTopLevelSpecialFiles(run *os.Root) error {
 		if err := run.Remove(e.Name()); err != nil {
 			return fmt.Errorf("remove planted %s %s: %w", e.Type(), e.Name(), err)
 		}
-		log.Printf("mcp workspace: removed planted %s %s from %s", e.Type(), e.Name(), run.Name())
+		slog.Info("mcp workspace: removed planted", "type", e.Type(), "name", e.Name(), "run", run.Name())
 	}
 	return nil
 }

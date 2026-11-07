@@ -43,7 +43,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
@@ -359,7 +359,7 @@ func (c *modelsCache) ensureFresh() {
 	if err != nil {
 		// Don't spam on every cold-start miss; the static table still answers
 		// context windows and AllEntries keeps serving the last-known catalog.
-		log.Printf("⚠️  OpenRouter /models fetch failed (%v); serving last-known catalog + static context-window table", err)
+		slog.Error("⚠️ OpenRouter /models fetch failed; serving last-known catalog + static context-window table", "err", err)
 		// Back off for half the TTL before trying again.
 		c.fetchedAt = time.Now().Add(-ttl / 2)
 		return
@@ -380,7 +380,7 @@ func (c *modelsCache) ensureFresh() {
 	c.contextMap = freshMap
 	c.entries = kept
 	c.fetchedAt = time.Now()
-	log.Printf("📥 OpenRouter /models refreshed: %d entries cached", len(c.entries))
+	slog.Info("📥 OpenRouter /models refreshed entries cached", "entries_count", len(c.entries))
 }
 
 // modelsEndpointFor returns the /models listing URL, honoring the

@@ -9,7 +9,6 @@ package httpapi
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"slices"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -90,7 +90,7 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 				servers = append(servers, s.remoteCatalogEntry(g, true, ""))
 			}
 		} else {
-			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
+			logging.From(r.Context()).Error("mcp catalog: remote server lookup failed", "user", user, "err", err)
 		}
 	}
 	// What a chat turn can call: interactive_hidden_tools are not offered
@@ -141,7 +141,7 @@ func (s *Server) defaultEnabledOptionalMCPServers(ctx context.Context, user stri
 				add(g.Name)
 			}
 		} else {
-			log.Printf("mcp defaults: remote server lookup failed for %s: %v", user, err)
+			logging.From(ctx).Error("mcp defaults: remote server lookup failed", "user", user, "err", err)
 		}
 	}
 	sort.Strings(out)
@@ -384,14 +384,14 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: remote server lookup failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+		logging.From(ctx).Error("mcp seats: remote server lookup failed", "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	}
 	if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 		for _, srv := range shared {
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: shared remote server lookup failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+		logging.From(ctx).Error("mcp seats: shared remote server lookup failed", "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	}
 	return out
 }
@@ -476,14 +476,14 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("mcp opt-in: remote server lookup failed", "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 		}
 		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 			for _, srv := range shared {
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("mcp opt-in: shared remote server lookup failed", "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 		}
 	}
 	return valid
@@ -597,7 +597,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 				servers = append(servers, s.remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
 			}
 		} else {
-			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
+			logging.From(r.Context()).Error("mcp catalog: remote server lookup failed", "user", user, "err", err)
 		}
 	}
 	// What a chat turn can call: interactive_hidden_tools are not offered

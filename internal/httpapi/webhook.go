@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -178,7 +178,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The template is operator-authored; log the detail host-side but return a
 		// generic message so a rendering error can't leak template internals.
-		log.Printf("webhook trigger %q template render error: %v", safe.LogSafe(trig.Slug), err)
+		logging.From(r.Context()).Error("webhook trigger template render error", "slug", safe.LogSafe(trig.Slug), "err", err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "template render error", http.StatusInternalServerError)
 		return
@@ -299,7 +299,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseTurn()
-		log.Printf("webhook trigger: start turn (conv=%s): %v", conv.ID, err)
+		logging.From(turnCtx).Error("webhook trigger: start turn", "conv_id", conv.ID, "err", err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "could not start the turn", http.StatusInternalServerError)
 		return
@@ -364,7 +364,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		completed, err := s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, turnID)
 		if !completed || err != nil {
-			log.Printf("webhook trigger: turn input not saved (conv=%s): %v", conv.ID, commitErr)
+			logging.From(turnCtx).Error("webhook trigger: turn input not saved", "conv_id", conv.ID, "err", commitErr)
 			metrics.RecordWebhookTrigger(trig.Slug, "error")
 			http.Error(w, "could not start the turn", http.StatusInternalServerError)
 			return
@@ -418,7 +418,7 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey, token); err != nil {
-		log.Printf("webhook trigger: release delivery claim: %v", err)
+		logging.From(ctx).Error("webhook trigger: release delivery claim", "err", err)
 	}
 }
 
@@ -432,7 +432,7 @@ func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, ownTurnID 
 	defer cancel()
 	completed, err = s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, ownTurnID)
 	if err != nil {
-		log.Printf("webhook trigger: give back delivery: %v", err)
+		logging.From(ctx).Error("webhook trigger: give back delivery", "err", err)
 	}
 	return completed, err
 }

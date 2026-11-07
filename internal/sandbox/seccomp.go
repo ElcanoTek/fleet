@@ -3,7 +3,7 @@ package sandbox
 import (
 	_ "embed"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -154,7 +154,7 @@ func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error)
 			// Log a fixed message (no operator-tainted value) — the only thing
 			// that varies is which of the two literal keywords matched, which
 			// the static text already covers.
-			log.Printf("sandbox seccomp: DISABLED via %s=none/unconfined — the syscall filter defense-in-depth layer is OFF; --cap-drop=ALL + no-new-privileges still apply, but dangerous syscalls (ptrace, perf_event_open, bpf, io_uring, …) are reachable. Use for debugging only.", seccompProfileEnv)
+			slog.Info("sandbox seccomp: DISABLED=none/unconfined — the syscall filter defense-in-depth layer is OFF; --cap-drop=ALL + no-new-privileges still apply, but dangerous syscalls (ptrace, perf_event_open, bpf, io_uring, …) are reachable. Use for debugging only.", "seccomp_profile_env", seccompProfileEnv)
 		})
 		return "unconfined", noop, nil
 	default:

@@ -2,7 +2,7 @@ package clientconfig
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -259,7 +259,7 @@ func warnUserTokenFromEnv(name string) {
 	if _, seen := userTokenEnvWarned.LoadOrStore(name, true); seen {
 		return
 	}
-	log.Printf("clientconfig: warning: the process env value of %s names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so %s is treated as unset (see docs/MCP-BUNDLE-ENV.md)", name, name)
+	slog.Warn("clientconfig: warning: the process env value names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so is treated as unset (see docs/MCP-BUNDLE-ENV.md)", "name", name)
 }
 
 // matchBrace returns the index of the '}' that closes the '{' at position open
@@ -345,7 +345,7 @@ func warnUserTokenAssembled(key string) {
 	if _, seen := userTokenEnvWarned.LoadOrStore("assembled:"+key, true); seen {
 		return
 	}
-	log.Printf("clientconfig: warning: MCP env/header %s resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", key)
+	slog.Warn("clientconfig: warning: MCP env/header resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", "key", key)
 }
 
 // resolveSpawnExpr resolves one ${...} expression at catalog-build time (expr

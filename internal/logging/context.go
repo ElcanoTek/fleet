@@ -144,5 +144,64 @@ func From(ctx context.Context) *slog.Logger {
 	if len(attrs) == 0 {
 		return l
 	}
-	return slog.New(l.Handler().WithAttrs(attrs))
+	return slog.New(ctxHandler{inner: l.Handler(), attrs: attrs})
+}
+
+// ctxHandler prepends the context's correlation attributes to each record,
+// skipping any key the call site passed itself — so a line that logs
+// "task_id" explicitly (a handler naming the task it acted on) does not also
+// carry the context's copy as a duplicate JSON key. The call site wins.
+type ctxHandler struct {
+	inner slog.Handler
+	attrs []slog.Attr
+}
+
+func (h ctxHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.inner.Enabled(ctx, l)
+}
+
+func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
+	var own map[string]struct{}
+	if r.NumAttrs() > 0 {
+		own = make(map[string]struct{}, r.NumAttrs())
+		r.Attrs(func(a slog.Attr) bool {
+			own[a.Key] = struct{}{}
+			return true
+		})
+	}
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	for _, a := range h.attrs {
+		if _, dup := own[a.Key]; !dup {
+			nr.AddAttrs(a)
+		}
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(a)
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+
+func (h ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	// Bound attributes win over the context's too: drop the shadowed keys.
+	kept := make([]slog.Attr, 0, len(h.attrs))
+	for _, c := range h.attrs {
+		shadowed := false
+		for _, a := range attrs {
+			if a.Key == c.Key {
+				shadowed = true
+				break
+			}
+		}
+		if !shadowed {
+			kept = append(kept, c)
+		}
+	}
+	return ctxHandler{inner: h.inner.WithAttrs(attrs), attrs: kept}
+}
+
+func (h ctxHandler) WithGroup(name string) slog.Handler {
+	// Inside a group the context attributes would be nested under it; bind
+	// them at the top level first so they keep their standard keys.
+	return h.inner.WithAttrs(h.attrs).WithGroup(name)
 }

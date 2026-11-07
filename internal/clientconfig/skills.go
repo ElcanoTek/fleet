@@ -3,7 +3,7 @@ package clientconfig
 import (
 	"bytes"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -299,7 +299,7 @@ func (b *Bundle) Skills() []Skill {
 	// picked up without a restart (the copy is a no-op when nothing changed).
 	if b.SkillsDir != b.BundleSkillsDir && b.BundleSkillsDir != "" {
 		if err := syncMergedSkills(b.BundleSkillsDir, b.SkillsDir, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
-			log.Printf("clientconfig: warning: skills resync failed: %v", err)
+			slog.Warn("clientconfig: warning: skills resync failed", "err", err)
 		}
 	}
 	skills, _ := ReadSkills(b.SkillsDir)

@@ -38,7 +38,7 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 func main() {
@@ -55,11 +56,11 @@ func main() {
 
 	key := envreg.Get("TCK_API_KEY")
 	if key == "" {
-		log.Fatal("TCK_API_KEY is required (a fleet_task_… key; mint one with the admin key via POST /v1/keys)")
+		logging.Fatal("TCK_API_KEY is required (a fleet_task_… key; mint one with the admin key via POST /v1/keys)")
 	}
 	targetURL, err := url.Parse(*target)
 	if err != nil {
-		log.Fatalf("bad -target: %v", err)
+		logging.Fatal("bad -target", "err", err)
 	}
 
 	rp := &httputil.ReverseProxy{
@@ -71,9 +72,9 @@ func main() {
 		},
 	}
 
-	log.Printf("a2a-tck-shim: %s -> %s (auth injection + messageId scenario markers)", *listen, *target)
+	slog.Info("a2a-tck-shim (auth injection + messageId scenario markers)", "listen", *listen, "target", *target)
 	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls -- loopback-only conformance-test harness (default listen 127.0.0.1, header forbids any other use); TLS on a loopback rig would add nothing and the official TCK speaks plain HTTP to it.
-	log.Fatal(http.ListenAndServe(*listen, rp)) //nolint:gosec // loopback test harness, not a served endpoint
+	logging.Fatal(http.ListenAndServe(*listen, rp).Error()) //nolint:gosec // loopback test harness, not a served endpoint
 }
 
 // scenarioForMessageID maps the TCK's messageId prefixes to the fake-llm
