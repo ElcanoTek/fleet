@@ -17,6 +17,12 @@ export default defineConfig({
     // or file and no test needs its own afterEach to undo them.
     unstubGlobals: true,
     restoreMocks: true,
+    // vitest.setup.ts gives each findBy*/waitFor up to 5 s, for a loaded CI
+    // runner. A test is several such steps, so its own budget must sit well
+    // above one step's: with both at 5 s a slow-but-correct case was cut off
+    // as a bare "Test timed out", and a genuinely missing element reported
+    // that instead of Testing Library's message naming what it waited for.
+    testTimeout: 20000,
   },
   resolve: {
     alias: {
