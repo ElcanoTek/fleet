@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,11 +18,12 @@ import (
 )
 
 // Backup/restore wrap pg_dump -Fc / pg_restore for the chat and sched Postgres
-// databases. fleet runs one cluster with two logical DBs (chat: conversations +
-// turn events + users; sched: tasks + nodes + API keys), each reached by its own
-// DSN. We therefore dump PER DATABASE (custom-format, one file each) rather than a
-// single cluster-wide pg_dumpall: each DB has independent credentials, --db=chat
-// needs only the chat DSN, and restore targets one DB at a time. The custom (-Fc)
+// stores (chat: conversations + turn events + users; sched: tasks + nodes + API
+// keys). We dump PER STORE (custom-format, one file each): in the one-database
+// layout (#2049) each store is a schema of the one database and its dump is
+// that schema (pg_dump -n); in the legacy layout each store is its own
+// database. --db=chat needs only the chat DSN, and restore targets one store at
+// a time. The custom (-Fc)
 // format is what pg_restore consumes and supports --clean/--if-exists for an
 // idempotent restore-over-existing-DB.
 //
@@ -99,8 +101,14 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
+	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}
+	// In the one-database layout the DSN names the store's schema: dump only
+	// that schema, so a chat dump holds the chat store and nothing else.
+	if schema := config.DSNSchema(dsn); schema != "" {
+		args = append(args, "-n", schema)
+	}
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
-	cmd := exec.CommandContext(ctx, "pg_dump", "-Fc", "--no-owner", "--no-acl", "-f", outPath)
+	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = c.env()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -118,10 +126,25 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 // runPgRestore restores a custom-format dump into the DSN's database. --clean
 // --if-exists drops existing objects first so the restore is idempotent over an
 // already-migrated DB; --no-owner ignores dump ownership.
+//
+// The dump's tables must all live in the schema the store uses (its DSN's
+// schema in the one-database layout, public in the legacy one): restoring a
+// sched dump into the chat store, or a legacy public-schema dump into the one
+// database, would scatter tables where no store looks. Such a dump is
+// refused before anything is dropped.
 func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
+	}
+	want := config.DSNSchema(dsn)
+	if want == "" {
+		want = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation (every store has a schema then)
+	}
+	if got, err := dumpTableSchemas(ctx, inPath); err != nil {
+		return err
+	} else if len(got) > 0 && (len(got) != 1 || got[0] != want) {
+		return fmt.Errorf("the dump's tables are in schema(s) %s but this store uses schema %q; a dump of the legacy two-database layout restores into a legacy box (restore it there, then run `fleet db consolidate`), and a chat dump restores only with --db=chat", strings.Join(got, ", "), want)
 	}
 	//nolint:gosec // G204: fixed "pg_restore" binary; dbname comes from the parsed operator DSN and inPath is an operator-supplied path, both separate argv (no shell interpolation); connection params ride in the env.
 	cmd := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "-d", c.dbname, inPath)
@@ -131,6 +154,44 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 		return fmt.Errorf("pg_restore %s: %w", redactDSN(dsn), err)
 	}
 	return nil
+}
+
+// dumpTableSchemas lists the schemas holding the TABLE entries of a
+// custom-format dump (pg_restore --list, which reads only the archive's
+// table of contents), sorted and distinct.
+func dumpTableSchemas(ctx context.Context, path string) ([]string, error) {
+	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv. --list is read-only.
+	out, err := exec.CommandContext(ctx, "pg_restore", "--list", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
+	}
+	return parseTOCTableSchemas(string(out)), nil
+}
+
+// parseTOCTableSchemas extracts the schemas of TABLE entries from pg_restore
+// --list output, whose entry lines read "<id>; <oid> <oid> TABLE <schema>
+// <name> <owner>".
+func parseTOCTableSchemas(toc string) []string {
+	seen := map[string]bool{}
+	for _, ln := range strings.Split(toc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), ";") {
+			continue
+		}
+		_, rest, ok := strings.Cut(ln, "; ")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(rest)
+		if len(f) >= 5 && f[2] == "TABLE" && f[3] != "DATA" {
+			seen[f[3]] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // backupFileName is the default per-DB dump filename: fleet-<db>-<UTC stamp>.dump.

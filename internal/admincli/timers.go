@@ -16,7 +16,7 @@ import (
 )
 
 // `fleet timers` manages the scheduled-maintenance systemd pairs fleet ships in
-// deploy/: fleet-backup.{service,timer} (daily pg_dump of both databases) and
+// deploy/: fleet-backup.{service,timer} (daily pg_dump of both stores) and
 // fleet-maintenance.{service,timer} (daily podman layer + build-cache prune).
 //
 // Why a dedicated verb: bootstrap --enable-service installs the pairs on a NEW
@@ -55,7 +55,7 @@ var timerPairs = []timerPair{
 		name:           "backup",
 		service:        "fleet-backup.service",
 		timer:          "fleet-backup.timer",
-		what:           "daily pg_dump of the chat + sched databases (02:00)",
+		what:           "daily pg_dump of the chat + sched stores (02:00)",
 		skip:           "skip if you back up at the volume/hypervisor layer",
 		needsBackupDir: true,
 	},
@@ -160,7 +160,7 @@ func timersUsage(w io.Writer) {
 Install + enable the scheduled-maintenance systemd timers fleet ships in
 deploy/ (both pairs by default; --backup / --maintenance select one):
 
-  fleet-backup.timer       daily pg_dump of the chat + sched databases (02:00)
+  fleet-backup.timer       daily pg_dump of the chat + sched stores (02:00)
                            (skip if you back up at the volume/hypervisor layer)
   fleet-maintenance.timer  daily podman layer + build-cache prune (03:30)
                            (skip if you prune the container store yourself)
