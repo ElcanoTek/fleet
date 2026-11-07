@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	wire "github.com/a2aproject/a2a-go/v2/a2a"
@@ -59,6 +60,18 @@ const scanInterval = time.Second
 // scanBatch bounds one tick's deliveries; the next tick takes the remainder.
 const scanBatch = 100
 
+// deliverWorkers is how many deliveries one tick runs at once (#2040), so a
+// receiver that answers slowly (up to deliverTimeout) holds one worker
+// instead of delaying every delivery queued behind it.
+const deliverWorkers = 4
+
+// tickBudget bounds how long one tick keeps STARTING deliveries. Past it,
+// the remaining work is left unclaimed (its delivery marker untouched) and
+// the next scan picks it up first, since the scan orders by updated_at.
+// Deliveries already started finish under their own deliverTimeout, so a
+// tick lasts at most tickBudget + deliverTimeout.
+const tickBudget = 2 * deliverTimeout
+
 // notificationTokenHeaders carries the config's token to the receiver. The
 // spec never names a header for it; these are the two de-facto spellings —
 // X-A2A-Notification-Token (a2a-python, a2a-js, a2a-java receivers) and
@@ -80,6 +93,8 @@ type Dispatcher struct {
 	logf   func(format string, args ...any)
 	// scanEvery, when set, replaces scanInterval (SetScanInterval).
 	scanEvery time.Duration
+	// budget, when set, replaces tickBudget (tests).
+	budget time.Duration
 }
 
 // New builds a dispatcher. allowPrivate disables the SSRF dial guard (never
@@ -105,9 +120,9 @@ func (d *Dispatcher) SetScanInterval(interval time.Duration) {
 	d.scanEvery = interval
 }
 
-// Run scans until ctx ends. Deliveries within a tick run sequentially — the
-// batch bound keeps a tick finite, and per-receiver parallelism is not worth
-// its complexity until a real integrator needs it.
+// Run scans until ctx ends. Deliveries within a tick run on a small worker
+// pool (deliverWorkers) under a per-tick budget (tickBudget); ticks never
+// overlap — a tick that runs long makes the ticker drop the missed beats.
 func (d *Dispatcher) Run(ctx context.Context) {
 	every := d.scanEvery
 	if every <= 0 {
@@ -134,32 +149,74 @@ func (d *Dispatcher) tick(ctx context.Context) {
 		}
 		return
 	}
-	for _, w := range work {
-		if ctx.Err() != nil {
-			return
+	if len(work) == 0 {
+		return
+	}
+	budget := d.budget
+	if budget <= 0 {
+		budget = tickBudget
+	}
+	dispatchCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	jobs := make(chan models.A2APushWork)
+	var wg sync.WaitGroup
+	for range min(deliverWorkers, len(work)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for w := range jobs {
+				d.process(ctx, w)
+			}
+		}()
+	}
+	deferred := 0
+	for i, w := range work {
+		// Check first: select picks at random between ready cases, so an
+		// idle worker must not win over an expired budget.
+		if dispatchCtx.Err() == nil {
+			select {
+			case jobs <- w:
+				continue
+			case <-dispatchCtx.Done():
+			}
 		}
-		// Mark FIRST, conditionally: the one-winner UPDATE is what keeps a
-		// second dispatcher (or an overlapping tick) from double-delivering
-		// the same transition. Losing the race means someone else owns this
-		// delivery. A crash after marking loses at most one notification for
-		// a state the next transition supersedes — while the reverse order
-		// would deliver duplicates on every crash AND on every race, and the
-		// client contract already demands idempotent processing.
-		claimed, err := d.store.MarkA2APushAttempted(ctx, w.Config.TaskID, w.Config.ID, w.Status)
-		if err != nil {
-			d.logf("a2a push: mark failed for task %s config %s: %v", w.Config.TaskID, w.Config.ID, err)
-			continue
-		}
-		if !claimed {
-			continue
-		}
-		if err := d.deliver(ctx, w); err != nil {
-			// One attempt is the contract (spec: retry is MAY). The receiver
-			// learns current state from GetTask; the next transition pushes
-			// again. URL and credentials never enter the log line.
-			d.logf("a2a push: delivery attempt failed for task %s config %s: %v",
-				w.Config.TaskID, w.Config.ID, sanitizeErr(err))
-		}
+		deferred = len(work) - i
+		break
+	}
+	close(jobs)
+	wg.Wait()
+	if deferred > 0 && ctx.Err() == nil {
+		d.logf("a2a push: tick budget %s spent; %d deliveries deferred to the next scan", budget, deferred)
+	}
+}
+
+// process claims one delivery and attempts it.
+func (d *Dispatcher) process(ctx context.Context, w models.A2APushWork) {
+	if ctx.Err() != nil {
+		return
+	}
+	// Mark FIRST, conditionally: the one-winner UPDATE is what keeps a
+	// second dispatcher (or an overlapping tick) from double-delivering
+	// the same transition. Losing the race means someone else owns this
+	// delivery. A crash after marking loses at most one notification for
+	// a state the next transition supersedes — while the reverse order
+	// would deliver duplicates on every crash AND on every race, and the
+	// client contract already demands idempotent processing.
+	claimed, err := d.store.MarkA2APushAttempted(ctx, w.Config.TaskID, w.Config.ID, w.Status)
+	if err != nil {
+		d.logf("a2a push: mark failed for task %s config %s: %v", w.Config.TaskID, w.Config.ID, err)
+		return
+	}
+	if !claimed {
+		return
+	}
+	if err := d.deliver(ctx, w); err != nil {
+		// One attempt is the contract (spec: retry is MAY). The receiver
+		// learns current state from GetTask; the next transition pushes
+		// again. URL and credentials never enter the log line.
+		d.logf("a2a push: delivery attempt failed for task %s config %s: %v",
+			w.Config.TaskID, w.Config.ID, sanitizeErr(err))
 	}
 }
 

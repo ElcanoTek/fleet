@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	schedpush "github.com/ElcanoTek/fleet/internal/sched/push"
 )
@@ -116,6 +118,21 @@ func TestA2APushConfigCRUD(t *testing.T) {
 	// A bad URL is refused at create time.
 	_, env = rpc(t, mux, rawKey, "CreateTaskPushNotificationConfig", map[string]any{
 		"task_id": task.ID.String(), "url": "ftp://example.com/x",
+	})
+	wantRPCError(t, env, -32602, "INVALID_PARAMS")
+
+	// The per-task cap (#2040): past db.MaxA2APushConfigsPerTask a NEW
+	// config is refused as invalid params, not an internal error.
+	for i := range db.MaxA2APushConfigsPerTask {
+		_, env = rpc(t, mux, rawKey, "CreateTaskPushNotificationConfig", map[string]any{
+			"task_id": task.ID.String(), "id": fmt.Sprintf("cap-%d", i), "url": "https://example.com/hook",
+		})
+		if env == nil || env.Error != nil {
+			t.Fatalf("create #%d under the cap: %+v", i, env)
+		}
+	}
+	_, env = rpc(t, mux, rawKey, "CreateTaskPushNotificationConfig", map[string]any{
+		"task_id": task.ID.String(), "id": "one-too-many", "url": "https://example.com/hook",
 	})
 	wantRPCError(t, env, -32602, "INVALID_PARAMS")
 }

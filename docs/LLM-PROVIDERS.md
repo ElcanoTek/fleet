@@ -115,8 +115,9 @@ only be configured from the client bundle's `providers:` block.
   expands a browsable model list from the
   [catwalk](https://github.com/charmbracelet/catwalk) model database (the
   no-auth catalog Crush uses) through the session-gated `/api/catwalk-models`
-  proxy (`web/src/app/lib/catwalkModels.ts`, 24 h server-side cache; the
-  browser never leaves the origin — CSP pins `connect-src 'self'`). Default
+  proxy (`web/src/app/lib/catwalkModels.ts`, 24 h server-side cache;
+  concurrent requests share one outbound fetch and a failed fetch is cached
+  for 2 minutes; the browser never leaves the origin — CSP pins `connect-src 'self'`). Default
   base is `https://catwalk.charm.land` (crush's default); `CATWALK_URL`
   overrides it for air-gapped/self-hosted catwalk. Advisory only: an
   unreachable catwalk just means no pre-listed rows — typed slugs still route,

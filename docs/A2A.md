@@ -123,16 +123,26 @@ deliberate:
   ("duplicate deliveries may occur"; at-least-once ATTEMPT is the only MUST).
 - **One attempt, no retry** (spec: retry is a MAY). A dead receiver misses a
   doorbell ring, not the state — `GetTask` always has the truth.
+- **Deliveries run four at a time** within a scan, and a scan stops starting
+  new ones after 20 s (in-flight ones finish under the 10 s per-POST
+  timeout; the rest go first on the next scan), so one slow receiver cannot
+  hold up everyone else's notifications.
 - **Caller secrets are sealed at rest** (`internal/secretbox`, AAD-bound to
   the config row) under the store cipher; without
-  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` the capability is off, fail-closed.
+  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` the capability is off, fail-closed. A
+  config whose secrets no longer unseal (the key changed) is skipped with a
+  log line naming its task and config id, and marked so it is not retried
+  until the task's next state change; the caller re-registers the config
+  (same id) to reseal it under the current key. Other configs keep
+  delivering.
 - **SSRF posture**: webhook URLs are CALLER-supplied, so delivery dials
   through the resolved-IP guard (loopback/private/link-local refused, every
   redirect refused). `FLEET_A2A_PUSH_ALLOW_PRIVATE=1` relaxes the dial guard
   for dev/TCK runs against localhost receivers — never production.
 - Configs are creatable on terminal tasks, persist until task deletion or
   explicit delete (`ON DELETE CASCADE`), and a repeated create for the same
-  client id is an update. Reads/writes require the task's creator or an
+  client id is an update. A task holds at most 10 configs: creating an 11th
+  (new id) answers `-32602` invalid params until one is deleted. Reads/writes require the task's creator or an
   operator credential; pagination params on List are accepted and ignored
   (spec MAY — the reference implementation does the same).
 - The dispatcher also accepts the official TCK's snake_case param spellings

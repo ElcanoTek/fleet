@@ -4,11 +4,16 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -331,5 +336,100 @@ func TestDiscussClearsRevokedSession(t *testing.T) {
 		if res.StatusCode != http.StatusUnauthorized || !strings.Contains(setCookies(res), "elcano_session=;") {
 			t.Fatalf("%s: %d %q", which, res.StatusCode, setCookies(res))
 		}
+	}
+}
+
+// TestCatwalkSharedFetch pins #2041: concurrent callers share ONE outbound
+// fetch, the cache mutex is not held across it, and a caller whose context
+// ends stops waiting without failing the others.
+func TestCatwalkSharedFetch(t *testing.T) {
+	var hits atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		<-release
+		_, _ = io.WriteString(w, `[{"id":"p","type":"openai","models":[{"id":"m"}]}]`)
+	}))
+	defer srv.Close()
+	m := newModelCatalogs(srv.Client(), srv.URL)
+
+	const callers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			providers, err := m.loadCatwalk(context.Background())
+			if err == nil && (len(providers) != 1 || providers[0].ID != "p") {
+				err = fmt.Errorf("providers %+v", providers)
+			}
+			errs <- err
+		}()
+	}
+	// Wait until the shared fetch is on the wire.
+	deadline := time.Now().Add(5 * time.Second)
+	for hits.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The mutex is free while the fetch is in flight.
+	if !m.mu.TryLock() {
+		t.Fatal("catwalk cache mutex held across the fetch")
+	}
+	m.mu.Unlock()
+	// A caller that gives up returns its own context error promptly.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.loadCatwalk(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller: %v", err)
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("outbound fetches = %d, want 1", got)
+	}
+}
+
+// TestCatwalkFailureCached pins the #2041 negative cache: a failed fetch is
+// served from cache for catwalkFailureTTL, then retried.
+func TestCatwalkFailureCached(t *testing.T) {
+	var hits atomic.Int32
+	var ok atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		if !ok.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"id":"p","models":[]}]`)
+	}))
+	defer srv.Close()
+	m := newModelCatalogs(srv.Client(), srv.URL)
+
+	if _, err := m.loadCatwalk(context.Background()); err == nil {
+		t.Fatal("failing catwalk returned no error")
+	}
+	if _, err := m.loadCatwalk(context.Background()); err == nil || !strings.Contains(err.Error(), "502") {
+		t.Fatalf("cached failure: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("outbound fetches within the failure TTL = %d, want 1", got)
+	}
+	// Past the TTL the fetch is retried and a success replaces the failure.
+	ok.Store(true)
+	m.mu.Lock()
+	m.catwalkErrAt = time.Now().Add(-catwalkFailureTTL - time.Second)
+	m.mu.Unlock()
+	if providers, err := m.loadCatwalk(context.Background()); err != nil || len(providers) != 1 {
+		t.Fatalf("retry after TTL: %v %+v", err, providers)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("outbound fetches after the TTL = %d, want 2", got)
 	}
 }
