@@ -41,6 +41,7 @@
       "properties": {
         "backend": { "type": "string", "enum": ["podman", "kubernetes"] },
         "image": { "type": "string" },
+        "imageRepository": { "type": "string" },
         "memory": { "type": "string" },
         "cpus": { "type": ["string", "number"] },
         "diskGB": { "type": "integer" },

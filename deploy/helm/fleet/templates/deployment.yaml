@@ -50,7 +50,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fleet
-          image: "{{ required "image.repository is required (you build the fleet image yourself — see docs/DEPLOYMENT-KUBERNETES.md)" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          image: {{ include "fleet.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["serve"]
           securityContext:
@@ -107,7 +107,7 @@ spec:
             - name: FLEET_SANDBOX_BACKEND
               value: {{ .Values.sandbox.backend | quote }}
             - name: FLEET_SANDBOX_IMAGE
-              value: {{ required "sandbox.image is required (a registry ref sandbox nodes can pull)" .Values.sandbox.image | quote }}
+              value: {{ include "fleet.sandboxImage" . | quote }}
             - name: FLEET_SANDBOX_K8S_NAMESPACE
               value: {{ include "fleet.sandboxNamespace" . | quote }}
             - name: FLEET_SANDBOX_K8S_WORKSPACE_CLAIM

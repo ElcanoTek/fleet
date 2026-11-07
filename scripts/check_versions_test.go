@@ -331,12 +331,9 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 
 	const k8sDoc = "docs/DEPLOYMENT-KUBERNETES.md"
 	img := regexp.MustCompile(`FROM (?:docker\.io/library/)?golang:(\S+?)(?:\s|$)`).FindAllStringSubmatch(readFile(t, root, k8sDoc), -1)
-	if len(img) == 0 {
-		// The stage existing is part of what this test pins: the doc's build
-		// recipe is the copy operators consume, so silently losing it would
-		// reopen the drift blind spot.
-		t.Errorf("%s has no `FROM golang:` stage — the control-plane image recipe should declare one", k8sDoc)
-	}
+	// The doc no longer carries a from-source build recipe: operators build
+	// FROM the published ghcr.io/elcanotek/fleet image (ADR-0098). Any
+	// `FROM golang:` stage that comes back must still agree with go.mod.
 	for _, m := range img {
 		got, ok := goMinor(m[1])
 		if !ok {

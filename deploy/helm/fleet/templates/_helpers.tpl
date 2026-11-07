@@ -55,3 +55,38 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The release tag both images default to (ADR-0098): image.tag when set, else
+"v" + the chart's appVersion, which `make helm-package` (and release.yml, for
+the chart attached to every release) stamps with the release the chart came
+from. A chart installed straight from a checkout is unstamped (appVersion
+0.0.0) and names no release, so it must be told which one.
+*/}}
+{{- define "fleet.releaseTag" -}}
+{{- if .Values.image.tag -}}
+{{- .Values.image.tag -}}
+{{- else if and .Chart.AppVersion (ne .Chart.AppVersion "0.0.0") -}}
+{{- printf "v%s" .Chart.AppVersion -}}
+{{- else -}}
+{{- fail "image.tag is required: this chart is unstamped (installed from a checkout, appVersion 0.0.0). Set image.tag to a release tag (vYYYY.MM.DD.N, see https://github.com/ElcanoTek/fleet/releases), or install the chart attached to that release, which defaults to its own images." -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The control-plane image: the published ghcr.io/elcanotek/fleet by default. */}}
+{{- define "fleet.image" -}}
+{{- printf "%s:%s" (required "image.repository must not be empty" .Values.image.repository) (include "fleet.releaseTag" .) -}}
+{{- end -}}
+
+{{/*
+The sandbox image: sandbox.image verbatim when set (a client bundle's own
+image), else the published sandbox repository at the same release tag as the
+control plane — the pair release.yml built together.
+*/}}
+{{- define "fleet.sandboxImage" -}}
+{{- if .Values.sandbox.image -}}
+{{- .Values.sandbox.image -}}
+{{- else -}}
+{{- printf "%s:%s" (required "sandbox.imageRepository must not be empty when sandbox.image is unset" .Values.sandbox.imageRepository) (include "fleet.releaseTag" .) -}}
+{{- end -}}
+{{- end -}}

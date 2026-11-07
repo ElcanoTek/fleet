@@ -1,7 +1,7 @@
 fleet installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
 
 Control plane : one replica (by design — single-owner scheduler; do not scale it)
-Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ .Values.sandbox.image }}
+Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ include "fleet.sandboxImage" . }}
 Workspace     : PVC {{ .Values.workspace.claimName }} mounted at {{ .Values.workspaceRoot }} (control plane + every sandbox pod)
 
 Check boot (the kubernetes sandbox preflight runs before serving; a missing
