@@ -75,7 +75,7 @@ func healthyFake() *fakePG {
 	}
 	f := &fakePG{clientMajor: 16}
 	f.rules = append(f.rules,
-		fakeRule{frag: "SHOW server_version_num", rows: [][]string{{"160004"}}},
+		fakeRule{frag: "current_setting('server_version_num')", rows: [][]string{{"160004", "5432"}}},
 		fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}, {"sched", "sched"}}},
 		fakeRule{frag: "FROM pg_roles", rows: [][]string{{"1"}}},
 		fakeRule{frag: "pg_stat_activity", rows: nil},
@@ -239,7 +239,9 @@ func TestConsolidatePlanRefusals(t *testing.T) {
 		name, env, target, want string
 	}{
 		{"remote server", "FLEET_CHAT_DATABASE_URL=postgres://c@db.example.com/chat\nFLEET_SCHED_DATABASE_URL=postgres://s@db.example.com/sched\n", "fleet", "not this box"},
-		{"two servers", "FLEET_CHAT_DATABASE_URL=postgres://c@127.0.0.1:5432/chat\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1:5433/sched\n", "fleet", "different servers"},
+		{"two servers", "FLEET_CHAT_DATABASE_URL=postgres://c@127.0.0.1:5432/chat\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1:5433/sched\n", "fleet", "do not name the same Postgres instance"},
+		{"socket vs loopback", "FLEET_CHAT_DATABASE_URL=postgres://c@/chat?host=/run/postgresql&port=5432\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1:5432/sched\n", "fleet", "do not name the same Postgres instance"},
+		{"two socket dirs", "FLEET_CHAT_DATABASE_URL=postgres://c@/chat?host=/run/a\nFLEET_SCHED_DATABASE_URL=postgres://s@/sched?host=/run/b\n", "fleet", "do not name the same Postgres instance"},
 		{"target is a source", "FLEET_CHAT_DATABASE_URL=postgres://c@127.0.0.1/chat\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1/fleet\n", "fleet", "is the sched source"},
 		{"bad target name", "FLEET_CHAT_DATABASE_URL=postgres://c@127.0.0.1/chat\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1/sched\n", "Fleet;", "--target-db"},
 		{"keyword DSN", "FLEET_CHAT_DATABASE_URL=host=127.0.0.1 dbname=chat\nFLEET_SCHED_DATABASE_URL=postgres://s@127.0.0.1/sched\n", "fleet", "URL DSNs only"},

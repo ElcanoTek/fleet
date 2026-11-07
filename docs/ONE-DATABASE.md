@@ -155,10 +155,18 @@ in the copy, `pg_dump -Fc -n <store> | pg_restore --single-transaction
 --no-owner --no-privileges --role=<owner> -d <target>`, then the scratch copy
 is dropped — always, also on a failure or an interrupt. Superuser work runs as
 `runuser -u postgres -- psql/pg_dump/pg_restore` (peer authentication, no
-password anywhere); no password is printed.
+password anywhere), aimed at the instance the legacy DSNs name: their socket
+directory when they give one (`?host=/dir`), else the default socket
+directory (which loopback TCP DSNs map to), and their port. Passwords are
+scrubbed from tool output where they appear as a credential (a DSN's
+userinfo, a `password=` pair), and anywhere else only when 12+ characters
+long — database and role names are never rewritten.
 
 **Preflight — any failure refuses, and changes nothing:** `fleet.service` and
-the backup/maintenance services and timers inactive; no client connection to
+the backup/maintenance services and timers inactive; no client connection
+(`backend_type = 'client backend'`; autovacuum and parallel workers do not
+count; a busy answer is re-checked for up to 15 s, since a just-closed pool can
+linger) to
 either source or the target (`pg_stat_activity`); `psql`, `pg_dump`,
 `pg_restore`, `runuser` present and `pg_dump` not older than the server; both
 sources exist, are fleet stores (`public.schema_migrations`) and are not
@@ -166,7 +174,9 @@ already in schema mode; the sched migrations are not dirty; the target role
 exists; the target is absent, or exists owned by that role with empty
 `chat`/`sched` schemas and nothing in `public`; enough free disk at the data
 directory (about twice the sources' size, best effort); both sources on the
-same local server; URL DSNs. It also refuses a box whose env file already
+same local instance (same socket directory or loopback, same port) and the
+server that answers the superuser connection on that port; URL DSNs. It also
+refuses a box whose env file already
 configures one database ("Nothing to do").
 
 **Verification — before the env file is touched:** exact per-table row
@@ -208,7 +218,9 @@ superuser runner (the env file must stay byte-identical on every failure);
 `db_consolidate_e2e_test.go` consolidates two real databases filled by the
 real migrations with the real client tools, including a refused and then
 `--force-clean`ed half-filled target, a sequence value, ownership, untouched
-sources and an idempotent re-run.
+sources and an idempotent re-run; `TestConsolidateEndToEndRunuser` runs the
+same move through the production runner (`runuser -u postgres`, peer auth)
+when the test runs as root with a local cluster.
 
 ## What deviated from the issue
 

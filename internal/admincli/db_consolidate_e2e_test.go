@@ -141,7 +141,29 @@ func checkSourcesIntact(t *testing.T, admin *sql.DB, chatDSN, target string) {
 // TestConsolidateEndToEnd moves a real legacy install — two databases filled
 // by the real migrations plus rows — into one database with the real client
 // tools, and checks the result through the real stores.
-func TestConsolidateEndToEnd(t *testing.T) {
+func TestConsolidateEndToEnd(t *testing.T) { runConsolidateE2E(t, nil) }
+
+// TestConsolidateEndToEndRunuser is the same move through the PRODUCTION
+// runner: runuser -u postgres, peer authentication, aimed at the DSNs'
+// instance (superuserPG). It needs root, runuser and a local cluster the
+// postgres OS user can reach on its default socket; skipped otherwise.
+func TestConsolidateEndToEndRunuser(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root (runuser -u postgres)")
+	}
+	if _, err := exec.LookPath("runuser"); err != nil {
+		t.Skip("runuser not installed")
+	}
+	if out, err := exec.Command("runuser", "-u", "postgres", "--", "psql", "-XAtqc", "SELECT 1").CombinedOutput(); err != nil {
+		t.Skipf("runuser -u postgres -- psql does not reach a local cluster: %v: %s", err, out)
+	}
+	runConsolidateE2E(t, superuserPG)
+}
+
+// runConsolidateE2E runs the end-to-end move. With pgFor nil the client tools
+// run as the test role (consolidateServer); otherwise pgFor builds the runner
+// from the plan, as in production.
+func runConsolidateE2E(t *testing.T, pgFor func(*consolidatePlan) pgSuper) {
 	clearDSNEnv(t)
 	base, pg, admin := consolidateServer(t)
 	ctx := t.Context()
@@ -171,7 +193,11 @@ func TestConsolidateEndToEnd(t *testing.T) {
 	}
 	deps := func(out *bytes.Buffer) consolidateDeps {
 		return consolidateDeps{
-			pg:           pg,
+			pg:    pg,
+			pgFor: pgFor,
+			// The seed step's pools have just closed; their backends can
+			// linger in pg_stat_activity for a moment (seen under -race).
+			connWait:     15 * time.Second,
 			unitState:    func(string) string { return "" },
 			freeBytes:    freeBytesAt,
 			verifyStores: verifyStoresOpen,

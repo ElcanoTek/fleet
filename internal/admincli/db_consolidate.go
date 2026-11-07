@@ -135,6 +135,14 @@ type pgSuper interface {
 
 type consolidateDeps struct {
 	pg pgSuper
+	// pgFor, when set, builds pg for the plan's Postgres instance once the
+	// plan has named it (production: runuser aimed at the DSNs' socket
+	// directory and port).
+	pgFor func(p *consolidatePlan) pgSuper
+	// connWait is how long the connection check keeps re-checking before it
+	// refuses: a client that has just disconnected (a pool closing) can
+	// linger in pg_stat_activity for a moment.
+	connWait time.Duration
 	// unitState is `systemctl is-active`'s word for a unit ("" without
 	// systemd).
 	unitState func(unit string) string
@@ -165,7 +173,8 @@ func cmdDBConsolidate(argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	deps := consolidateDeps{
-		pg: &execPG{prefix: []string{"runuser", "-u", "postgres", "--"}, needRoot: true},
+		pgFor:    superuserPG,
+		connWait: 15 * time.Second,
 		unitState: func(unit string) string {
 			if _, err := exec.LookPath("systemctl"); err != nil {
 				return ""
@@ -178,6 +187,20 @@ func cmdDBConsolidate(argv []string) int {
 		out:          os.Stdout,
 	}
 	return runConsolidate(ctx, o, deps)
+}
+
+// superuserPG is the production runner: the client tools as the postgres OS
+// user (peer authentication, no password), aimed at the Postgres instance the
+// legacy DSNs name — their socket directory when they give one, else the
+// client's default socket directory (which loopback TCP DSNs map to) — and
+// their port. Preflight then confirms the instance answering is on that port.
+func superuserPG(p *consolidatePlan) pgSuper {
+	var conn []string
+	if p.socketDir != "" {
+		conn = append(conn, "-h", p.socketDir)
+	}
+	conn = append(conn, "-p", p.port)
+	return &execPG{prefix: []string{"runuser", "-u", "postgres", "--"}, connArgs: conn, needRoot: true}
 }
 
 // ── the plan ────────────────────────────────────────────────────────────────
@@ -219,6 +242,9 @@ type consolidatePlan struct {
 	sourceSize     uint64
 	inv            map[string]inventory // keyed by label
 	passwords      []string             // for redaction only
+	// The local Postgres instance both sources are on: its socket directory
+	// ("" = the client's default, which loopback TCP DSNs map to) and port.
+	socketDir, port string
 }
 
 func (p *consolidatePlan) tmpDB(s pgSource) string { return p.target + "_consolidate_" + s.label }
@@ -250,6 +276,9 @@ func runConsolidate(ctx context.Context, o consolidateOptions, d consolidateDeps
 	}
 	if plan == nil { // already one database
 		return 0
+	}
+	if d.pgFor != nil {
+		d.pg = d.pgFor(plan)
 	}
 	printSources(out, plan)
 
@@ -329,11 +358,21 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 	if err != nil {
 		return nil, 1, err
 	}
-	if chat.host != sched.host || chat.port != sched.port {
-		return nil, 1, fmt.Errorf("chat (%s:%s) and sched (%s:%s) are on different servers; consolidation moves two databases of ONE local server", chat.host, chat.port, sched.host, sched.port)
+	// Both sources must be ONE local instance: superuser work is aimed at it
+	// (socket directory + port) and preflight confirms the port that answers.
+	cSock, cPort, cLocal := localServer(chat)
+	sSock, sPort, sLocal := localServer(sched)
+	for _, s := range []struct {
+		src   pgSource
+		local bool
+	}{{chat, cLocal}, {sched, sLocal}} {
+		if !s.local {
+			return nil, 1, fmt.Errorf("the %s database is on %q, not this box; consolidation runs on the box that hosts Postgres", s.src.label, s.src.host)
+		}
 	}
-	if !localHost(sched.host) {
-		return nil, 1, fmt.Errorf("the databases are on %q, not this box; consolidation runs on the box that hosts Postgres", sched.host)
+	if cSock != sSock || cPort != sPort {
+		return nil, 1, fmt.Errorf("chat (%s) and sched (%s) do not name the same Postgres instance; consolidation moves two databases of ONE local server — make both DSNs use the same host form and port",
+			serverLabel(cSock, cPort), serverLabel(sSock, sPort))
 	}
 	if !config.PlainIdentifier(o.targetDB) {
 		return nil, 1, fmt.Errorf("--target-db %q: use a lower-case name of letters, digits and _", o.targetDB)
@@ -351,6 +390,7 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 	}
 	p := &consolidatePlan{
 		envFile: o.envFile, chat: chat, sched: sched, target: o.targetDB, owner: sched.role,
+		socketDir: sSock, port: sPort,
 	}
 	p.targetDSN, err = targetDSN(sched.dsn, o.targetDB)
 	if err != nil {
@@ -391,12 +431,29 @@ func parseSource(label, schema, dsn, from string) (pgSource, error) {
 	return s, nil
 }
 
-func localHost(h string) bool {
-	if h == "" || strings.HasPrefix(h, "/") || h == "localhost" {
-		return true
+func serverLabel(socketDir, port string) string {
+	if socketDir == "" {
+		return "loopback port " + port
 	}
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
+	return "socket " + socketDir + " port " + port
+}
+
+// localServer is the local Postgres instance a source names: its socket
+// directory (an absolute host; "" for loopback TCP, which the client reaches
+// through its default socket directory) and its port. ok is false for a host
+// that is not this box.
+func localServer(s pgSource) (socketDir, port string, ok bool) {
+	h := s.host
+	switch {
+	case strings.HasPrefix(h, "/"):
+		return h, s.port, true
+	case h == "" || h == "localhost":
+		return "", s.port, true
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		return "", s.port, true
+	}
+	return "", "", false
 }
 
 // targetDSN is the sched DSN pointed at the target database: same role,
@@ -411,11 +468,31 @@ func targetDSN(schedDSN, target string) (string, error) {
 	return u.String(), nil
 }
 
+// redactMinBare is the shortest password redact also scrubs where it stands
+// alone in text. Shorter ones are scrubbed only where they appear as a
+// credential: a short bare match is far likelier to be part of a name
+// ("fleet" in "cons_fleet_1") than a leaked secret.
+const redactMinBare = 12
+
+// redact scrubs the plan's DSN passwords out of tool and driver output: in a
+// DSN's userinfo (":pw@", raw or escaped) and a key=value password pair
+// always, and anywhere else only when the password is at least
+// redactMinBare long and is not itself one of the plan's database or role
+// names. It never rewrites a database or role name.
 func (p *consolidatePlan) redact(s string) string {
+	names := map[string]bool{p.target: true, p.owner: true, p.chat.database: true, p.sched.database: true, p.chat.role: true, p.sched.role: true}
 	for _, pw := range p.passwords {
-		s = strings.ReplaceAll(s, pw, "<password>")
-		s = strings.ReplaceAll(s, url.QueryEscape(pw), "<password>")
-		s = strings.ReplaceAll(s, url.PathEscape(pw), "<password>")
+		if pw == "" {
+			continue
+		}
+		for _, enc := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw), url.UserPassword("u", pw).String()[2:]} {
+			s = strings.ReplaceAll(s, ":"+enc+"@", ":<password>@")
+		}
+		s = strings.ReplaceAll(s, "password="+pw, "password=<password>")
+		s = strings.ReplaceAll(s, "password='"+pw+"'", "password=<password>")
+		if len(pw) >= redactMinBare && !names[pw] {
+			s = strings.ReplaceAll(s, pw, "<password>")
+		}
 	}
 	return s
 }
@@ -501,11 +578,18 @@ func (f *preflighter) tools() bool {
 		return false
 	}
 	f.add(true, "postgres client tools", "psql, pg_dump, pg_restore run as the postgres user")
-	row, err := f.q1("postgres", `SHOW server_version_num`, 1)
+	row, err := f.q1("postgres", `SELECT current_setting('server_version_num'), current_setting('port')`, 2)
 	if err != nil {
 		f.add(false, "server reachable as superuser", err.Error())
 		return false
 	}
+	// The instance that answered is the one the DSNs name: same port (the
+	// socket directory or loopback was chosen from the DSNs too).
+	if row[1] != f.p.port {
+		f.add(false, "server is the DSNs' instance", fmt.Sprintf("the superuser connection reached a server on port %s, but the DSNs name %s", row[1], serverLabel(f.p.socketDir, f.p.port)))
+		return false
+	}
+	f.add(true, "server is the DSNs' instance", serverLabel(f.p.socketDir, f.p.port))
 	serverMajor := 0
 	if n, err := strconv.Atoi(row[0]); err == nil {
 		serverMajor = n / 10000
@@ -552,11 +636,27 @@ func (f *preflighter) databases() bool {
 
 // connections: no client may be connected to a source (CREATE DATABASE …
 // TEMPLATE needs that, and a writer would make the copy stale) or the target.
+// Only client backends count: autovacuum and parallel workers come and go on
+// their own (and CREATE DATABASE stops autovacuum itself). A client that has
+// just disconnected can linger for a moment, so a busy answer is re-checked
+// for up to connWait before it refuses.
 func (f *preflighter) connections() {
 	p := f.p
-	rows, err := f.q("postgres", `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
-		WHERE datname IN (`+sqlList([]string{p.chat.database, p.sched.database, p.target})+`) AND pid <> pg_backend_pid()
-		GROUP BY 1, 2, 3 ORDER BY 1`)
+	query := `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
+		WHERE datname IN (` + sqlList([]string{p.chat.database, p.sched.database, p.target}) + `)
+		  AND backend_type = 'client backend' AND pid <> pg_backend_pid()
+		GROUP BY 1, 2, 3 ORDER BY 1`
+	deadline := time.Now().Add(f.d.connWait)
+	rows, err := f.q("postgres", query)
+	for err == nil && len(rows) > 0 && time.Now().Before(deadline) {
+		select {
+		case <-f.ctx.Done():
+			err = f.ctx.Err()
+			continue
+		case <-time.After(500 * time.Millisecond):
+		}
+		rows, err = f.q("postgres", query)
+	}
 	switch {
 	case err != nil:
 		f.add(false, "no client connections", err.Error())
