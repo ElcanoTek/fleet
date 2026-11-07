@@ -46,6 +46,11 @@ type turnBuffer struct {
 	turnID    string
 	inputKind string
 
+	// userCommitStore, when set before the turn starts, is the store the turn
+	// commits its history through instead of the server's (a webhook turn's
+	// webhookCommitStore). Read by runTurnAsync via Server.turnStore.
+	userCommitStore chatStore
+
 	// stoppedByKey records that a Stop naming this turn's input key reached
 	// it, confirmed or not: the turn's settlement then cancels its drained
 	// row, unless its user entry committed, instead of returning it to the

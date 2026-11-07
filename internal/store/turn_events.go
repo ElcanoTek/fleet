@@ -50,15 +50,7 @@ const (
 // turns of the same conversation create concurrently — which keeps the
 // ordinal gap-free without a separate lock.
 func (s *Store) CreateTurn(ctx context.Context, turnID, convID string, startedAt int64) error {
-	return createTurn(ctx, s.db, turnID, convID, startedAt)
-}
-
-// createTurn is CreateTurn against any executor, so a caller can make the
-// insert part of its own transaction (CreateWebhookTurn).
-func createTurn(ctx context.Context, db interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, turnID, convID string, startedAt int64) error {
-	_, err := db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO turns (turn_id, conversation_id, started_at, status, turn_index)
 		 VALUES ($1, $2, $3, $4,
 		         (SELECT COUNT(*) FROM turns WHERE conversation_id = $2))`,

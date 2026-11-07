@@ -121,9 +121,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Redeliver re-sends the same X-GitHub-Delivery). Claim the delivery before
 	// anything else so a repeat of an accepted one answers 200 with the
 	// original conversation and starts nothing — and spends none of the slug's
-	// rate budget. A delivery counts as accepted only once its turn row is
-	// durable (CreateWebhookTurn completes the claim in the same transaction),
-	// so a crash before that leaves it retryable. Every early return below
+	// rate budget. A delivery counts as accepted only once its turn's input is
+	// durable (CommitWebhookUserMessage completes the claim in the same
+	// transaction that commits the user message), so a crash before that
+	// leaves it retryable. Every early return below
 	// gives the claim back (and discards a conversation created for it without
 	// a turn), so a delivery that was not accepted is processed afresh when it
 	// comes again. The claim token makes those calls no-ops once a repeat has
@@ -149,19 +150,22 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		// The conversation bound to the claim: one an earlier request for
-		// this delivery created but never started a turn in (reused below),
-		// or the one created here.
+		// The conversation the claim inherited: one an earlier request for
+		// this delivery created but never completed (reused below), or "".
 		boundConvID = claim.ConversationID
-		launched    bool // set once the turn goroutine is started
+		// createdConvID is set only for a conversation THIS request created.
+		// Only that one may be discarded on failure (and only while empty); one
+		// inherited through a takeover belongs to an earlier request.
+		createdConvID string
+		launched      bool // set once the turn goroutine is started
 	)
 	defer func() {
 		switch {
 		case launched:
-		case boundConvID == "":
-			s.releaseWebhookClaim(trig.Slug, deliveryKey, claim.Token)
+		case createdConvID != "":
+			s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, createdConvID)
 		default:
-			s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, boundConvID)
+			s.releaseWebhookClaim(trig.Slug, deliveryKey, claim.Token)
 		}
 	}()
 
@@ -258,9 +262,11 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Otherwise create the conversation and bind it to the delivery claim in
 	// one transaction: a turn is only ever launched for a delivery whose
 	// record names its conversation.
+	created := false
 	if conv == nil {
 		conv, err = s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token, boundConvID,
 			user, agent.HeuristicTitle(prompt), persona, model, lockdown)
+		created = err == nil
 	}
 	if errors.Is(err, store.ErrWebhookClaimLost) {
 		// This request outlived its claim and a repeat now owns the delivery.
@@ -275,7 +281,9 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	boundConvID = conv.ID
+	if created {
+		createdConvID = conv.ID
+	}
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 
 	history, err := s.store.LoadHistory(r.Context(), conv.ID)
@@ -305,25 +313,16 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// the webhook POST, and its ledger must exist whether or not the sender
 	// waits for the response.
 	//
-	// Unlike a chat turn, a failure here is fatal: the turn row is created in
-	// the same transaction that completes the delivery claim
-	// (webhookTurnPersister), and a delivery is answered as a duplicate only
-	// once it is complete. Starting the turn without that would let a crash
-	// strand the delivery — or let a repeat start a second turn.
+	// Unlike a chat turn, a failure here is fatal: without the turn row,
+	// startup recovery could not account for a turn whose input later
+	// committed.
 	persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err = buf.attachPersister(persistCtx, webhookTurnPersister{
-		chatStore: s.store, slug: trig.Slug, deliveryKey: deliveryKey, token: claim.Token,
-	})
+	err = buf.attachPersister(persistCtx, s.store)
 	persistCancel()
 	if err != nil {
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseTurn()
-		if errors.Is(err, store.ErrWebhookClaimLost) {
-			metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
-			return
-		}
 		log.Printf("webhook trigger: start turn (conv=%s): %v", conv.ID, err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "could not start the turn", http.StatusInternalServerError)
@@ -344,6 +343,13 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// trigger prompt itself, exactly as the chat path does (ADR-0058).
 	injected := appendWorkspaceInventoryBlock("", tools.WorkspaceDirForConversation(conv.ID))
 
+	// The turn's user-message commit (the shared #798 commit point, before
+	// the first provider call) also completes the delivery claim, in one
+	// transaction (store.CommitWebhookUserMessage). A turn whose claim was
+	// taken over meanwhile fails that commit and runs nothing.
+	buf.userCommitStore = webhookCommitStore{
+		chatStore: s.store, slug: trig.Slug, deliveryKey: deliveryKey, token: claim.Token,
+	}
 	launched = true
 	go func() {
 		defer releaseTurn()
@@ -360,20 +366,22 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
 }
 
-// webhookTurnPersister is the store as a webhook turn's event persister,
-// except that CreateTurn also completes the delivery claim, in one
-// transaction (store.CreateWebhookTurn).
-type webhookTurnPersister struct {
+// webhookCommitStore is the store a webhook turn commits through: identical,
+// except that committing the turn's user message also completes the delivery
+// claim, in one transaction (store.CommitWebhookUserMessage). The turn runs
+// the shared path (runTurnAsync, agentcore.Run) unchanged.
+type webhookCommitStore struct {
 	chatStore
 	slug, deliveryKey, token string
 }
 
-func (p webhookTurnPersister) CreateTurn(ctx context.Context, turnID, convID string, startedAt int64) error {
-	return p.CreateWebhookTurn(ctx, p.slug, p.deliveryKey, p.token, turnID, convID, startedAt)
+func (c webhookCommitStore) CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error) {
+	return c.CommitWebhookUserMessage(ctx, c.slug, c.deliveryKey, c.token, convID, turnID, entry)
 }
 
 // releaseWebhookClaim drops the delivery claim of a request that did not
-// start a conversation, so the sender's retry is processed afresh.
+// start a turn and did not create the conversation, so the sender's retry is
+// processed afresh. An inherited conversation is left as it is.
 // Background-rooted: the request context may already be cancelled, and a
 // leaked claim would refuse the retry until it goes stale.
 func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
@@ -384,10 +392,10 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	}
 }
 
-// abandonWebhookConversation discards a conversation created for a claimed
-// delivery whose turn could not be started, together with its delivery
-// record, so the sender's retry is processed afresh instead of being answered
-// with a conversation in which nothing ran.
+// abandonWebhookConversation releases the claim of a delivery whose turn could
+// not be started and discards the conversation this request created for it if
+// it is still empty, so the sender's retry is processed afresh instead of
+// being answered with a conversation in which nothing ran.
 func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, convID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

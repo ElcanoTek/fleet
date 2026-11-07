@@ -1051,6 +1051,15 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 	return true
 }
 
+// turnStore is the store a turn commits its history through: the server's,
+// unless the launcher set buf.userCommitStore (see webhookCommitStore).
+func (s *Server) turnStore(buf *turnBuffer) chatStore {
+	if buf.userCommitStore != nil {
+		return buf.userCommitStore
+	}
+	return s.store
+}
+
 // runTurnAsync executes the agent turn, persists the result, emits the
 // optional title_updated event, and then finishes the buffer. Lives in
 // its own goroutine so the HTTP POST can disconnect without killing
@@ -1103,7 +1112,7 @@ func (s *Server) runTurnAsync(
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
-		if err := runMockTurn(turnCtx, s.store, conv, buf.turnID, userInput, buf); err != nil {
+		if err := runMockTurn(turnCtx, s.turnStore(buf), conv, buf.turnID, userInput, buf); err != nil {
 			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1140,7 +1149,7 @@ func (s *Server) runTurnAsync(
 	}()
 
 	journal := newTurnJournalWriter(s.store, buf.turnID)
-	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
+	commits := &turnCommits{store: s.turnStore(buf), convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
 	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))

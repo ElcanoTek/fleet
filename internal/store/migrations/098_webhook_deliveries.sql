@@ -11,9 +11,10 @@
 -- A row moves through three states:
 --   claimed    conversation_id = '', completed_at = 0
 --   bound      conversation_id set (created in the same transaction), completed_at = 0
---   completed  completed_at set, in the same transaction that inserts the
---              turn row — only then is the delivery answered as a duplicate,
---              so a crash before the turn is durable leaves it retryable.
+--   completed  completed_at set, in the same transaction that commits the
+--              turn's user message (the rendered prompt) — only then is the
+--              delivery answered as a duplicate, so a crash before the input
+--              is durable leaves it retryable.
 -- claim_token is a random value the claiming request holds; binding,
 -- completing, releasing and discarding all require it, and a takeover of a
 -- stale unfinished row rotates it (keeping a bound conversation for reuse), so

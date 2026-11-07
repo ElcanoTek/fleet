@@ -176,8 +176,10 @@ type fakeChatStore struct {
 	webhookClaimsStale bool
 	// webhookBindErr makes the next CreateWebhookConversation fail with it.
 	webhookBindErr error
-	// webhookTurnErr makes the next CreateWebhookTurn fail with it.
-	webhookTurnErr error
+	// webhookCommitErr makes the next CommitWebhookUserMessage fail with it.
+	webhookCommitErr error
+	// createTurnErr makes the next CreateTurn fail with it.
+	createTurnErr error
 	// beforeWebhookBind runs (unlocked) at the start of
 	// CreateWebhookConversation.
 	beforeWebhookBind func()
@@ -367,6 +369,10 @@ func (s *fakeChatStore) RecordTurn(context.Context, store.TurnMetric) error {
 func (s *fakeChatStore) CreateTurn(context.Context, string, string, int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.createTurnErr; err != nil {
+		s.createTurnErr = nil
+		return err
+	}
 	s.turnRows++
 	return nil
 }

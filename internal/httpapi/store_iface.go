@@ -384,7 +384,7 @@ type chatStore interface {
 	// Webhook delivery idempotency (migration 098, docs/WEBHOOKS.md).
 	ClaimWebhookDelivery(ctx context.Context, slug, deliveryKey string) (store.WebhookClaim, error)
 	CreateWebhookConversation(ctx context.Context, slug, deliveryKey, token, prevConvID, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
-	CreateWebhookTurn(ctx context.Context, slug, deliveryKey, token, turnID, convID string, startedAt int64) error
+	CommitWebhookUserMessage(ctx context.Context, slug, deliveryKey, token, convID, turnID string, entry agent.HistoryEntry) (int64, error)
 	ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error
 	AbandonWebhookConversation(ctx context.Context, slug, deliveryKey, token, convID string) error
 	SweepWebhookDeliveries(ctx context.Context, ttl time.Duration) (int, error)
