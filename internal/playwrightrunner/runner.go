@@ -777,7 +777,66 @@ func (c *cappedBuffer) String() string {
 	return s
 }
 
-const embeddedPythonRunner = `
+// webrtcIPPolicyArgs keeps WebRTC traffic on the configured proxy path, like
+// every other request the browser makes: disable_non_proxied_udp lets WebRTC
+// use only the proxy (TCP), never a direct UDP socket. Both switch spellings
+// are passed on purpose: the headless shell Playwright launches by default
+// honors --force-webrtc-ip-handling-policy, while a full Chromium build (the
+// executable-path fallback) honors --webrtc-ip-handling-policy, and each
+// ignores the other's spelling (checked against Playwright's Chromium 1243
+// builds by gathering ICE candidates with each flag).
+var webrtcIPPolicyArgs = []string{
+	"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+	"--webrtc-ip-handling-policy=disable_non_proxied_udp",
+}
+
+// chromiumLaunchArgs is the base Chromium command line both one-shot runners
+// (Python and Node) launch with, and chromiumSessionLaunchArgs the one both
+// live-session workers (session.go) launch with; the proxy flags are appended
+// per launch when a proxy is configured. Each list is defined once here and
+// rendered into its scripts (renderLaunchArgs) so the Python and Node
+// launchers cannot drift.
+var (
+	chromiumLaunchArgs = append([]string{
+		"--disable-dev-shm-usage",
+		"--disable-gpu",
+		"--disable-extensions",
+		"--disable-background-networking",
+		"--disable-sync",
+		"--no-first-run",
+	}, webrtcIPPolicyArgs...)
+	chromiumSessionLaunchArgs = append([]string{
+		"--disable-dev-shm-usage",
+		"--disable-gpu",
+		"--disable-extensions",
+		"--no-first-run",
+	}, webrtcIPPolicyArgs...)
+)
+
+// Placeholders mark where each script takes its launch args.
+const (
+	launchArgsPlaceholder        = "__FLEET_CHROMIUM_LAUNCH_ARGS__"
+	sessionLaunchArgsPlaceholder = "__FLEET_CHROMIUM_SESSION_LAUNCH_ARGS__"
+)
+
+// renderLaunchArgs substitutes args into a script at placeholder as a JSON
+// array of strings, which is a valid list literal in Python and an array
+// literal in JavaScript alike. The args are fixed ASCII flags, so the JSON
+// form needs no escaping either language would read differently.
+func renderLaunchArgs(script, placeholder string, args []string) string {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		panic(fmt.Sprintf("playwrightrunner: encode launch args: %v", err))
+	}
+	return strings.Replace(script, placeholder, string(raw), 1)
+}
+
+var (
+	embeddedPythonRunner = renderLaunchArgs(embeddedPythonRunnerTemplate, launchArgsPlaceholder, chromiumLaunchArgs)
+	embeddedNodeRunner   = renderLaunchArgs(embeddedNodeRunnerTemplate, launchArgsPlaceholder, chromiumLaunchArgs)
+)
+
+const embeddedPythonRunnerTemplate = `
 import json
 import os
 import shutil
@@ -854,14 +913,7 @@ def main():
     timeout_ms = min(max(int(payload.get("timeout_ms") or 30000), 5000), 85000)
     step_default_ms = min(15000, timeout_ms // 2)
 
-    launch_args = [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-sync",
-        "--no-first-run",
-    ]
+    launch_args = list(__FLEET_CHROMIUM_LAUNCH_ARGS__)
     if proxy_server:
         launch_args.append(f"--proxy-server={proxy_server}")
         launch_args.append("--proxy-bypass-list=<-loopback>")
@@ -1096,7 +1148,7 @@ if __name__ == "__main__":
     main()
 `
 
-const embeddedNodeRunner = `
+const embeddedNodeRunnerTemplate = `
 const fs = require("fs");
 const path = require("path");
 
@@ -1198,14 +1250,7 @@ function loadPlaywright() {
   const timeoutMs = Math.min(Math.max(Number(payload.timeout_ms) || 30000, 5000), 85000);
   const stepDefaultMs = Math.min(15000, Math.floor(timeoutMs / 2));
 
-  const launchArgs = [
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--disable-extensions",
-    "--disable-background-networking",
-    "--disable-sync",
-    "--no-first-run",
-  ];
+  const launchArgs = [...__FLEET_CHROMIUM_LAUNCH_ARGS__];
   if (proxyServer) {
     launchArgs.push("--proxy-server=" + proxyServer);
     launchArgs.push("--proxy-bypass-list=<-loopback>");
