@@ -222,6 +222,16 @@ bundle) when set, else `sandbox/Containerfile` — resolved by one helper
 and `update` share. A manifest that names a Containerfile which does not exist
 stops the run; the generic image is never used in its place.
 
+A bundle that customizes nothing should ship **no** Containerfile and name
+none, keeping only `sandbox.tag`. If such a box ever builds the sandbox
+locally (`--from-source`, or the release image is unreachable),
+`build-sandbox-image.sh` builds fleet's own `config/default` Containerfile
+under the bundle's `sandbox.tag` — the same generic image, built here. A copy
+of the generic Containerfile that has drifted from fleet's (an old
+boilerplate) counts as a custom image and is built on the box, so delete it
+rather than keeping it in sync. Remove it only once the box runs a release
+with artifact-based updates; an older `update.sh` still requires the file.
+
 A bundle Containerfile that only adds packages should become:
 
 ```dockerfile

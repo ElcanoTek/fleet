@@ -112,3 +112,54 @@ func TestSandboxContainerfileFollowsTheManifest(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildSandboxImageFallsBackToTheGenericContainerfile — a bundle that
+// ships and names no Containerfile customizes nothing, so an on-box build
+// (--from-source, or no release image reachable) builds the generic bundle's
+// Containerfile under the bundle's own sandbox.tag; a bundle that NAMES a
+// missing Containerfile is still refused.
+func TestBuildSandboxImageFallsBackToTheGenericContainerfile(t *testing.T) {
+	root := repoRoot(t)
+	bin := t.TempDir()
+	argsFile := filepath.Join(bin, "podman.args")
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argsFile + "\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "podman"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(bundle string) (string, error) {
+		_ = os.Remove(argsFile)
+		cmd := exec.Command("bash", filepath.Join(root, "scripts/build-sandbox-image.sh"))
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"FLEET_CLIENT_CONFIG_DIR="+bundle,
+			"FLEET_SERVICE_NAME=fleet-test-no-such-unit",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return string(out), err
+		}
+		args, rerr := os.ReadFile(argsFile)
+		if rerr != nil {
+			t.Fatalf("podman was not invoked: %v\n%s", rerr, out)
+		}
+		return string(args), nil
+	}
+
+	args, err := run(sandboxBundle(t, "", map[string]string{}))
+	if err != nil {
+		t.Fatalf("bundle without a Containerfile: %v\n%s", err, args)
+	}
+	wantCF := filepath.Join(root, "config/default/sandbox/Containerfile")
+	if !strings.Contains(args, "-f\n"+wantCF+"\n") {
+		t.Errorf("want -f %s, podman got:\n%s", wantCF, args)
+	}
+	if !strings.Contains(args, "-t\nlocalhost/fleet-sandbox:latest\n") {
+		t.Errorf("want the bundle's sandbox.tag, podman got:\n%s", args)
+	}
+
+	if out, err := run(sandboxBundle(t, "images/agent/Containerfile", map[string]string{})); err == nil {
+		t.Errorf("a bundle naming a missing Containerfile must fail, got podman args:\n%s", out)
+	} else if !strings.Contains(out, "missing") {
+		t.Errorf("want a missing-Containerfile error, got:\n%s", out)
+	}
+}
