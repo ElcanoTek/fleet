@@ -1,5 +1,3 @@
-"use client";
-
 // WorkspaceImage renders an <img> from the chat workspace with the
 // settings that keep it from flickering when the user scrolls.
 //
@@ -42,7 +40,6 @@ export const WorkspaceImage = memo(function WorkspaceImage({
     );
   }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}
       alt={alt}

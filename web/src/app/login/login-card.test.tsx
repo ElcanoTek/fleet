@@ -12,7 +12,7 @@ import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
 // The card's copy arrives as props now (#892). It used to be hardcoded, so a
 // bundle's branding.login_title never rendered; the defaults below stand in for
-// what the page-level server component resolves from /brand/meta.
+// what the login page reads from the bootstrap (resolved from /brand/meta).
 const DEFAULT_COPY = {
   title: "Welcome aboard.",
   tagline: "Sign in to your workspace and pick up where you left off.",

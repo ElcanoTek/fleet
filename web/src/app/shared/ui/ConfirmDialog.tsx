@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useRef } from "react";
 import { useDialogA11y } from "./useDialogA11y";
 

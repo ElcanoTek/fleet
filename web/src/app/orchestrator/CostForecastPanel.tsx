@@ -1,5 +1,3 @@
-"use client";
-
 import type { CostForecast } from "@/app/shared/lib/orchestratorApi";
 
 // CostForecastPanel renders the pre-submission cost forecast inline below the

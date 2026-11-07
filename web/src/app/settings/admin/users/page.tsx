@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Users (fleet-unified settings pass): the admin surface
 // for the RBAC layer (#237) merged with the old /admin usage table. One table
 // joins GET /api/admin/users (provisioned accounts: role/team/ops flag) with

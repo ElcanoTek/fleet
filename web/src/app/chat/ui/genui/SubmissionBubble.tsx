@@ -1,5 +1,3 @@
-"use client";
-
 // The user-side bubble for a card submission. The message itself is the
 // machine-readable "[UI submission] card=… action=…" + JSON the model reads;
 // people get the card's title, the button they pressed, and their answers by

@@ -1,5 +1,3 @@
-"use client";
-
 // Polling for a running approved call's progress and outcome
 // (docs/APPROVAL-PROGRESS.md). For a tool the bundle lists in
 // agent_policy.critical_tool_progress, the server records the latest MCP

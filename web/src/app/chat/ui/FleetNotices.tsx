@@ -1,5 +1,3 @@
-"use client";
-
 // Rows fleet writes itself, rendered as notices — never as the user's words.
 //
 // AutoContinueNotice is the input of a turn fleet started on its own after an

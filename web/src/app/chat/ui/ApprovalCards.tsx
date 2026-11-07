@@ -1,5 +1,3 @@
-"use client";
-
 // Approval / email-preview / memory card cluster extracted from
 // chat-experience.tsx (slice 4 of #169). These cards turn a pending
 // Approval (send/preview email, run bash, suggest the advanced model) or a

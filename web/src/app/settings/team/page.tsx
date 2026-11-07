@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Team (#1157) — the member-facing half of team membership.
 //
 // Teams were writable only from Settings → Admin → Users, so on a box whose

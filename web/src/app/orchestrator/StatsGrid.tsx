@@ -1,5 +1,3 @@
-"use client";
-
 import type { DashboardStats } from "@/app/shared/lib/orchestratorApi";
 
 // StatsGrid — the task-metric cards. Renders the design handoff's segmented

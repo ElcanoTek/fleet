@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 
 import { useClientConfig } from "@/app/lib/useClientConfig";
@@ -193,9 +191,6 @@ export function LoadingLogo({
           height: size,
         }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element -- the brand
-            mark is a same-origin SVG/PNG served by /api/brand/logo; next/image
-            adds nothing for a tiny always-fresh asset and complicates sizing */}
         <img
           id={`${p}-brandmark`}
           src={brandLogoSrc}

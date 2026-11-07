@@ -1,5 +1,3 @@
-"use client";
-
 // ChatTranscript — the scrollable conversation transcript extracted from
 // ChatExperience (issue #169 decomposition, slice 8). This is a *presentational*
 // component: it owns no turn/send/SSE state machine of its own. Every value,

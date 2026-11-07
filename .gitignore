@@ -61,9 +61,6 @@ web/node_modules
 # The Vite build of web/, embedded into the fleet binary by go:embed
 # (internal/webui/embed.go). A build product: `make web` writes it, never git.
 /internal/webui/bundle/dist/
-# Left over from the Next.js tier on an upgraded checkout (ADR-0091).
-.next/
-web/next-env.d.ts
 *.tsbuildinfo
 web/test-results/
 web/playwright-report/

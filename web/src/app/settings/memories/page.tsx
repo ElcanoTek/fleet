@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import { MemoryGraphView } from "@/app/chat/ui/MemoryGraphView";
 import {

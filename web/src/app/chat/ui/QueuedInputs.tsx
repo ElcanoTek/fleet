@@ -1,5 +1,3 @@
-"use client";
-
 // #785: the pending-input chip strip under the composer. Renders the
 // conversation's queued follow-ups / steer requests with remove and
 // send-now affordances; state arrives via queue.updated on the live stream

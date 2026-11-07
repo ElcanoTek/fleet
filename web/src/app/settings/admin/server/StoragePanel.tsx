@@ -1,5 +1,3 @@
-"use client";
-
 // Storage panel for Settings → Admin → Server: byte accounting for the
 // fleet data trees (chat attachment uploads, orchestrator temp uploads,
 // per-conversation workspaces), the largest workspaces with owner/pinned

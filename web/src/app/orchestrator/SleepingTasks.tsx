@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";

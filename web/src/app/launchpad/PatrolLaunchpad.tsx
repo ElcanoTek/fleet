@@ -1,5 +1,3 @@
-"use client";
-
 // Patrol Launchpad (docs/PATROL-LAUNCHPAD.md) — the guided path from "nothing
 // set up" to "an assistant on patrol, reporting back on a schedule".
 //

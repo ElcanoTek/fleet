@@ -1,5 +1,3 @@
-"use client";
-
 import { signOutAfter } from "@/app/shared/signOut";
 import { useEffect, useRef, useState } from "react";
 import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";

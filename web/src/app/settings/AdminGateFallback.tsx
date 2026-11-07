@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 
 import { retryAdminProbe, type AdminState } from "./useIsAdmin";

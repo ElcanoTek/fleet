@@ -1,5 +1,3 @@
-"use client";
-
 // Dashboard view (docs/DASHBOARD-VIEW.md): the chat as a live board. The HUD
 // bar replaces the page header, the board of panels fills the screen, and the
 // ordinary chat (transcript + composer, approvals and forms inline) narrows

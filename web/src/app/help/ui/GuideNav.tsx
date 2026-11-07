@@ -1,5 +1,3 @@
-"use client";
-
 // GuideNav — the /help sub-nav, the same sticky left column Settings uses
 // (SetNav): the guide list, then the contents of whichever guide is open so a
 // reader can jump between sections without scrolling back to the top. Below

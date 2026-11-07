@@ -1,5 +1,3 @@
-"use client";
-
 // The delete-refusal notice for Settings → Admin → Users.
 //
 // `DELETE /admin/users/{email}` fails closed with a 409 when the account still

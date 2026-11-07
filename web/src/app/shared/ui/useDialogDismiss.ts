@@ -1,5 +1,3 @@
-"use client";
-
 // Escape closes a dialog. One hook, because five new dialogs shipped without
 // it and every one of them trapped a keyboard user's most reflexive way out.
 //

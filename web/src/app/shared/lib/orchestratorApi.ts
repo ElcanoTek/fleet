@@ -1,5 +1,3 @@
-"use client";
-
 // Browser-side client for the orchestrator. Every call goes through the
 // /api/orchestrator/* proxy, which resolves the caller's identity from the
 // httpOnly chat/elcano session cookie (#1115). Relative URLs only — no

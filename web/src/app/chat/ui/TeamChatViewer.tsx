@@ -1,5 +1,3 @@
-"use client";
-
 // What a teammate sees when they open a chat someone shared with the team
 // (Item C4, ADR-0057).
 //

@@ -1,5 +1,3 @@
-"use client";
-
 // Assistant markdown renderer, extracted verbatim from chat-experience.tsx
 // (final planned slice of the #169 decomposition). This module owns the
 // ReactMarkdown pipeline that turns an assistant/user message string into

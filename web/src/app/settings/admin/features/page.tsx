@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Features (fleet-unified settings pass): every workspace
 // feature setting the server registers (GET /api/admin/settings), with its
 // effective value, where it came from (env default vs admin override), and

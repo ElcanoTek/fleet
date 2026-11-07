@@ -1,5 +1,3 @@
-"use client";
-
 // Composer — the chat message-input form extracted from ChatExperience
 // (issue #169 decomposition, slice 7). This is a *presentational* component:
 // it owns no turn/send state machine of its own. Every value, setter, ref,

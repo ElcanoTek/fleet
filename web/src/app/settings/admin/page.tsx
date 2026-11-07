@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Overview (fleet-unified settings pass): the operator's
 // live single-pane view — system health from GET /api/admin/health-summary
 // (polled every 10s, #301), the MCP catalog chips, and per-deployment usage

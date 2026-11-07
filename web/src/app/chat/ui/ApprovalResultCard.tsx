@@ -1,5 +1,3 @@
-"use client";
-
 // The completed card read from the call's own result
 // (docs/APPROVAL-RESULT-CARDS.md). A bundle that lists a critical tool in
 // agent_policy.critical_tool_result_cards returns a `result_card` next to

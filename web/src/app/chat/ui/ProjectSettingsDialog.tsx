@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useId, useRef, useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";

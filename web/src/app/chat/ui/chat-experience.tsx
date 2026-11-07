@@ -1,5 +1,3 @@
-"use client";
-
 // NOTE (lint hygiene): this large component used to disable three React
 // Compiler rules file-wide (react-hooks/set-state-in-effect,
 // react-hooks/purity, react-hooks/immutability). Those disables hid real
@@ -533,8 +531,8 @@ function isInteractiveTarget(el: Element | null): boolean {
 // The constant lives in ./workspaceHref.ts so the rewrite helpers can
 // share it with no React dependency.
 
-// initialUserEmail: the session email the /chat server component already
-// resolved (getServerSession) — passing it down removes a serial /api/session
+// initialUserEmail: the session email the Go gateway already resolved for
+// this request (the index.html bootstrap, see chat/page.tsx) — passing it down removes a serial /api/session
 // round-trip from the cold-boot critical path (session THEN conversations →
 // just conversations). Optional so other mounts keep the fetch fallback; the
 // warm-return revalidation still re-checks the session on every return.
@@ -543,8 +541,8 @@ export function ChatExperience({
 }: {
   initialUserEmail?: string | null;
 } = {}) {
-  // Cross-navigation rehydration. /chat and /settings are separate App Router
-  // route segments, so leaving chat fully unmounts this component. The module
+  // Cross-navigation rehydration. /chat and /settings are separate lazy
+  // routes (src/App.tsx), so leaving chat fully unmounts this component. The module
   // store (./chatSessionStore) keeps the conversation state alive across that
   // unmount; `restoredSession` is its snapshot captured once at mount. Non-null
   // means we're returning to chat with a warm cache and can paint instantly +
@@ -2575,9 +2573,9 @@ export function ChatExperience({
       return activeConversation.title;
     return deriveConversationTitle(messages);
   }, [activeConversationId, activeConversation, messages]);
-  // Show ⌘K only to mac users; everyone else gets Ctrl+K. SSR is off
-  // for this component (dynamic import in app/page.tsx) so reading
-  // navigator at render time is safe — no hydration mismatch.
+  // Show ⌘K only to mac users; everyone else gets Ctrl+K. The SPA has no
+  // server rendering, so reading navigator at render time is safe — no
+  // hydration mismatch.
   const searchShortcut = useMemo(() => {
     if (typeof navigator === "undefined") return "Ctrl+K";
     return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : "Ctrl+K";
@@ -6491,9 +6489,10 @@ export function ChatExperience({
 
     const loadInitialState = async () => {
       try {
-        // The server component already resolved the session for this very
-        // request; trust it and skip the round-trip. An expired session is
-        // still caught: the conversations fetch below 401s and redirects.
+        // The Go gateway already resolved the session for this very
+        // request (the bootstrap); trust it and skip the round-trip. An
+        // expired session is still caught: the conversations fetch below
+        // 401s and redirects.
         if (initialUserEmail) {
           setUserEmail(initialUserEmail);
         } else {
@@ -6685,8 +6684,8 @@ export function ChatExperience({
     // Mount-once bootstrap: re-running it would re-fetch the session and
     // clobber the active conversation. It calls loadMcpServerCatalogPreview
     // and loadConversation through their latest-refs (see the ref bundle
-    // above). initialUserEmail is a per-mount constant (the server component
-    // resolves it per request), so listing it keeps exhaustive-deps honest
+    // above). initialUserEmail is a per-mount constant (the bootstrap
+    // carries it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
   }, [initialUserEmail, refreshServerConfig, refreshSkills]);
 

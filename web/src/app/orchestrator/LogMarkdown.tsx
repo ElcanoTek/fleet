@@ -1,5 +1,3 @@
-"use client";
-
 // Markdown renderer for the task-log modal — the ONLY orchestrator module
 // that imports react-markdown. It is loaded lazily (React.lazy in
 // LogViewer.tsx) so the ReactMarkdown pipeline (micromark + remark-gfm,
@@ -133,7 +131,6 @@ const LogImage = memo(function LogImage({
   }
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
     <img
       data-testid="log-image"
       className="log-image"

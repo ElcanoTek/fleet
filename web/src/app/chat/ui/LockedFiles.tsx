@@ -1,5 +1,3 @@
-"use client";
-
 // Locked file names (B19, B20): a file a reader can see MENTIONED but cannot
 // open renders as its name with a lock glyph and "(not shared)", never as a
 // link or an image that would only ever 404.

@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";

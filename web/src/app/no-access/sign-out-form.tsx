@@ -1,5 +1,3 @@
-"use client";
-
 import { signOut } from "@/app/shared/signOut";
 
 // The no-access page's way out, through the one signOut every other surface

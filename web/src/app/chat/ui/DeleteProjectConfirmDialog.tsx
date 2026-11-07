@@ -1,5 +1,3 @@
-"use client";
-
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { deleteChatsText, useImpact } from "./ProjectSettingsDialog";
 

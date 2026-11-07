@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Doctor — the box-health report. Renders the read-only
 // /api/admin/doctor checks (DBs, disk headroom, rootless-podman prerequisites,
 // sandbox image, systemd units) with the on-box repair command next to every

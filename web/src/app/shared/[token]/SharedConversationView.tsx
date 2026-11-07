@@ -1,5 +1,3 @@
-"use client";
-
 // Read-only public render of a shared conversation snapshot (#226). No session,
 // no sidebar, no SSE — a static snapshot fetched at page load. Assistant text
 // reuses the same markdown pipeline as the live chat (renderAssistantContent);

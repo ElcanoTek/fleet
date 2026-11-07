@@ -1,5 +1,3 @@
-"use client";
-
 // The two banners that tie a teammate's branch to the chat it came from
 // (docs/TEAM-SHARING.md, frames B20 and B21).
 //

@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 
@@ -53,14 +51,14 @@ function errorCodeToMessage(
 // its divider are omitted entirely so the card shows only the password form
 // and never surfaces the Elcano brand.
 //
-// title/tagline arrive the same way: as props resolved server-side from the
-// bundle's `branding.login_title` / `login_tagline` (#892). They used to be
-// hardcoded literals here, because this is a client component and
+// title/tagline arrive the same way: as props resolved server-side (into the
+// index.html bootstrap) from the bundle's `branding.login_title` / `login_tagline` (#892). They used to be
+// hardcoded literals here, because this card renders before sign-in and
 // /client-config — where those strings are served — is member-gated, so a
 // pre-auth card structurally cannot fetch them. The strings were parsed,
 // defaulted, API-served and typed, and then never rendered: a bundle setting
 // login_title to "Reklaim what's yours." still displayed "Welcome aboard."
-// The page-level server component reads them instead and hands them down.
+// The login page (page.tsx) reads them from the bootstrap and hands them down.
 export default function LoginCard({
   passwordLoginEnabled = true,
   magicLinkLoginEnabled,
@@ -204,7 +202,6 @@ export default function LoginCard({
           // is restated for it.
           <div className="grid gap-3">
             {oidcEnabled ? (
-              // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/oidc/start is a route handler that 303s to the IdP and sets PKCE cookies, not a Next page.
               <a
                 href="/api/auth/oidc/start"
                 className={`${primary} hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))]`}
@@ -213,7 +210,6 @@ export default function LoginCard({
               </a>
             ) : null}
             {magicLinkLoginEnabled ? (
-              // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/elcano-login is a route handler that 303s to the auth service, not a Next page.
               <a href="/api/auth/elcano-login" className={secondary}>
                 Use Elcano email
               </a>
@@ -233,26 +229,20 @@ export default function LoginCard({
                 visually subordinate to the primary password action above, per the
                 flag design system's primary-semantics rule.
 
-                Both targets are route HANDLERS (app/api/auth/oidc/start/route.ts,
-                app/api/auth/elcano-login/route.ts), not pages: each answers with a
-                303 to a third-party identity provider, and /oidc/start also has to
-                SET the state/nonce/PKCE cookies on that response. A next/link
-                soft-navigation would fetch an RSC payload that does not exist and
-                would never perform the cross-origin document navigation the flow
-                depends on, so a plain <a> is the correct element here — the full
-                page load is the handoff. oxlint's port of no-html-link-for-pages
-                flags every root-relative href without resolving it against the
-                route tree (upstream @next/next resolves the pages dir and would
-                not fire here), hence the two suppressions below. */}
+                Both targets are API routes (/api/auth/oidc/start,
+                /api/auth/elcano-login), not pages: each answers with a 303 to a
+                third-party identity provider, and /oidc/start also has to SET the
+                state/nonce/PKCE cookies on that response. A <Link>
+                soft-navigation would never perform the cross-origin document
+                navigation the flow depends on, so a plain <a> is the correct
+                element here — the full page load is the handoff. */}
             <div className="grid gap-3">
               {oidcEnabled ? (
-                // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/oidc/start is a route handler that 303s to the IdP and sets PKCE cookies, not a Next page.
                 <a href="/api/auth/oidc/start" className={secondary}>
                   {oidcLabel}
                 </a>
               ) : null}
               {magicLinkLoginEnabled ? (
-                // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/elcano-login is a route handler that 303s to the auth service, not a Next page.
                 <a href="/api/auth/elcano-login" className={secondary}>
                   Use Elcano email
                 </a>

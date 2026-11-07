@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";

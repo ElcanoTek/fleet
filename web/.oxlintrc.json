@@ -57,10 +57,8 @@
   },
   "ignorePatterns": [
     "node_modules/**",
-    ".next/**",
     "out/**",
     "build/**",
-    "test-results/**",
-    "next-env.d.ts"
+    "test-results/**"
   ]
 }

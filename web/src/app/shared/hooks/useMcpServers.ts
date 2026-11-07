@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback } from "react";
 import { orchestratorApi, type McpServer } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";

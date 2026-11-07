@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 
 // useTheme is the single source of truth for the app's light/dark theme. The

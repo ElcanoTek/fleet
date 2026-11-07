@@ -1,5 +1,3 @@
-"use client";
-
 // The grouped approval card (docs/GROUPED-APPROVALS.md). When one turn stages
 // two or more cards for tools the bundle lists in
 // agent_policy.critical_tool_group_approval, they render as this one card:

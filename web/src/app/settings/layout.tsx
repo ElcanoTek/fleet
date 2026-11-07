@@ -1,5 +1,3 @@
-"use client";
-
 // Settings shell (fleet-unified settings pass): every /settings/* page renders
 // inside the SAME NavRail + PageTopBar chrome as Chat and the Operations
 // Center — settings is a third surface of the one app, not a separate island.

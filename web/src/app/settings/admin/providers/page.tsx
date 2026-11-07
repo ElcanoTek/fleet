@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
 // surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
 // Vercel AI Gateway/Gemini API key, an Azure OpenAI resource, or point at any

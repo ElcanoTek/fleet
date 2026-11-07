@@ -1,5 +1,3 @@
-"use client";
-
 import { useId } from "react";
 
 // Segmented is the one single-choice switch for 2–4 mutually exclusive

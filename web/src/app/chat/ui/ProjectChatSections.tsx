@@ -1,5 +1,3 @@
-"use client";
-
 import { useRef, useState, type RefObject } from "react";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";

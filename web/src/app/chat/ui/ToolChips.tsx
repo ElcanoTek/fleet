@@ -1,5 +1,3 @@
-"use client";
-
 // Tool-call rendering family extracted from chat-experience.tsx (slice 3 of
 // #169). These components turn an agent ToolCall (and run_python output) into
 // the collapsible chips and per-tool input/result views shown under an

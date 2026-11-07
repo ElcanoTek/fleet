@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";

@@ -1,5 +1,3 @@
-"use client";
-
 import { useRef, useState } from "react";
 
 // MessageMinimap — the Codex-style jump rail at the left edge of the

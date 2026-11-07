@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 
 // useIsAdmin — client-side admin visibility for the settings sub-nav and the

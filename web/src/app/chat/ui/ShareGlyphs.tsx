@@ -1,5 +1,3 @@
-"use client";
-
 // The two share audiences, as two distinct glyphs (ADR-0057).
 //
 // A chat can be shared BY LINK (anyone with the URL) or WITH THE TEAM (people

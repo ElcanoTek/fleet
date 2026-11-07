@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import type { McpServer } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";

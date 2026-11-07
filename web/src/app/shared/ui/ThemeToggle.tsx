@@ -1,5 +1,3 @@
-"use client";
-
 import { Icon } from "./Icon";
 import { useTheme } from "@/app/shared/hooks/useTheme";
 

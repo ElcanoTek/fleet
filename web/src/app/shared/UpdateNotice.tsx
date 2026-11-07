@@ -1,5 +1,3 @@
-"use client";
-
 import { usePathname } from "@/app/lib/navigation";
 import { useEffect, useState } from "react";
 import { startDeployDriftProbe, useUpdateAvailable } from "./deployDrift";

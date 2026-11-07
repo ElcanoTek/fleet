@@ -1,5 +1,3 @@
-"use client";
-
 // Browser notifications preference row (Settings → General). The Web Push
 // opt-in that used to live on the Connections page as NotificationsCard
 // (#292), re-expressed as the design's preference row: label + description

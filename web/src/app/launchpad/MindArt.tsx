@@ -1,5 +1,3 @@
-"use client";
-
 import { useId } from "react";
 
 // MindArt — the "expanding brain" meme, drawn by hand for the Launchpad's

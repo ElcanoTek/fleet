@@ -1,5 +1,3 @@
-"use client";
-
 // SetNav — the settings area's sticky left sub-nav (the design's .set-nav).
 // General · Team · Connections · Skills · Personas · Shared files, plus an expandable Admin parent whose
 // children (Overview · Server · Doctor · Users · Features · Providers · Notifications) indent

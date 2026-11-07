@@ -1,5 +1,3 @@
-"use client";
-
 import { Icon } from "./Icon";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 

@@ -1,5 +1,3 @@
-"use client";
-
 // The SPA's router: a deliberately small, in-house replacement for the three
 // next/navigation + next/link surfaces this app used (usePathname, useRouter's
 // push/replace, <Link>). See web/AGENTS.md ("Routing") for why it is not
@@ -92,20 +90,14 @@ export function useSearch(): string {
 export type AppRouter = {
   push: (href: string) => void;
   replace: (href: string) => void;
-  back: () => void;
-  refresh: () => void;
-  prefetch: (href: string) => void;
 };
 
-/** useRouter — Next's imperative router shape, over the History API. */
+/** useRouter — imperative push/replace over the History API. */
 export function useRouter(): AppRouter {
   return useMemo(
     () => ({
       push: (href: string) => navigate(href),
       replace: (href: string) => navigate(href, { replace: true }),
-      back: () => window.history.back(),
-      refresh: () => notify(),
-      prefetch: () => {},
     }),
     [],
   );

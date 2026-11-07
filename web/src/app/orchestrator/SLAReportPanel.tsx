@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";

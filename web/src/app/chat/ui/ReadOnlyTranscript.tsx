@@ -1,5 +1,3 @@
-"use client";
-
 // The ONE read-only transcript renderer, shared by the two doors onto a
 // conversation the reader does not own: the public share link
 // (`/shared/[token]`, #226) and a teammate's team-shared chat

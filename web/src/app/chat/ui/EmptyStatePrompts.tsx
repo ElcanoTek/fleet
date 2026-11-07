@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { iconHref } from "@/app/shared/ui/iconHref";

@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Notifications (fleet-unified settings pass): admin-managed
 // task notifications (email + outbound webhook). Previously FLEET_SMTP_*/
 // FLEET_WEBHOOK_*/FLEET_NOTIFY_ON env vars + a restart; now editable here and

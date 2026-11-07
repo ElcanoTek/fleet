@@ -1,5 +1,3 @@
-"use client";
-
 import { Icon } from "./Icon";
 
 // CloseButton is THE dismiss "×" for dialogs, drawers, and panels — one box

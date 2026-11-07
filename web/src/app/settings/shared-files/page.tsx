@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Shared files — the cross-chat shared file library. Admins stage
 // files once; every conversation's agent can then read them (mounted read-only
 // into each sandbox at shared/<name>), and every member can browse/download

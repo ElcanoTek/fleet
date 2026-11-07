@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback } from "react";
 import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 import { StatusChip } from "./StatusChip";

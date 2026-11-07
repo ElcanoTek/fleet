@@ -1,5 +1,3 @@
-"use client";
-
 // Owner's chat, B17 (#40): in a chat the owner has shared with the team, each
 // output chip (a workspace file link in an assistant reply) carries a small
 // "Shared" or "Not shared" marker. Clicking it opens the project home's
