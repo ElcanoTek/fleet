@@ -487,6 +487,12 @@ const clampText = (s: string, max = 20_000) =>
 
 // streamGoneMessage maps a stream failure that will not heal on reconnect to
 // the final message shown in place of "reconnecting…"; null means transient.
+// A live task can 404 for a moment during the leased → running handoff,
+// before the run registers its in-memory stream (and before any log exists),
+// so a 404 ends the watch only after this many in a row; 401/403 end it at
+// once.
+const STREAM_NOT_FOUND_GRACE = 5;
+
 function streamGoneMessage(err: unknown): string | null {
   if (!(err instanceof OrchestratorError)) return null;
   if (err.status === 401) return "Sign in again to keep watching this run.";
@@ -668,6 +674,7 @@ function LiveTaskView({
     // blip does not silently freeze the live Operations Center view.
     const pump = async () => {
       let failures = 0;
+      let notFound = 0;
       while (!ac.signal.aborted && !terminalRef.current) {
         try {
           await orchestratorApi.streamTaskActivity(
@@ -677,6 +684,7 @@ function LiveTaskView({
             lastEventID.current,
           );
           failures = 0;
+          notFound = 0;
           if (!terminalRef.current)
             await new Promise((resolve) => window.setTimeout(resolve, 500));
         } catch (err) {
@@ -684,9 +692,13 @@ function LiveTaskView({
           // A refusal that retrying cannot change ends the watch with a final
           // message instead of reconnecting forever: the run is gone or not
           // ours (404/403), or the session lapsed (401). Network errors, 5xx,
-          // 408 and 429 stay transient and keep the backoff loop.
+          // 408 and 429 stay transient and keep the backoff loop, and so does
+          // a 404 until STREAM_NOT_FOUND_GRACE in a row (the stream may not be
+          // registered yet).
+          const is404 = err instanceof OrchestratorError && err.status === 404;
+          notFound = is404 ? notFound + 1 : 0;
           const gone = streamGoneMessage(err);
-          if (gone) {
+          if (gone && (!is404 || notFound >= STREAM_NOT_FOUND_GRACE)) {
             setStreamError(gone);
             return;
           }

@@ -1988,6 +1988,10 @@ export function ChatExperience({
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal */
+    } finally {
+      // A preview that supersedes an in-flight conversation load takes over
+      // its spinner too: that load's own finally no longer owns the flag.
+      if (gen === mcpCatalogGenRef.current) setIsLoadingMcpServers(false);
     }
   };
 

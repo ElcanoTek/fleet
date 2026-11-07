@@ -97,7 +97,6 @@ describe("LogViewer live stream reconnect", () => {
   });
 
   it.each([
-    [404, "This run is no longer available."],
     [403, "This run is no longer available."],
     [401, "Sign in again to keep watching this run."],
   ])("does not retry a %i and says why", async (status, message) => {
@@ -109,6 +108,32 @@ describe("LogViewer live stream reconnect", () => {
     });
     expect(streamTaskActivity).toHaveBeenCalledTimes(1);
     expect(screen.getByText(`Live stream error: ${message}`)).toBeTruthy();
+  });
+
+  it("rides out a brief 404 while the run registers its stream, then gives up", async () => {
+    vi.useFakeTimers();
+    // Two 404s (the leased → running handoff), then the stream attaches.
+    streamTaskActivity
+      .mockRejectedValueOnce(new OrchestratorError("not found", 404))
+      .mockRejectedValueOnce(new OrchestratorError("not found", 404))
+      .mockImplementation(() => new Promise(() => {}));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(/no longer available/)).toBeNull();
+  });
+
+  it("ends the watch after a run of 404s", async () => {
+    vi.useFakeTimers();
+    streamTaskActivity.mockRejectedValue(new OrchestratorError("not found", 404));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(5);
+    expect(screen.getByText("Live stream error: This run is no longer available.")).toBeTruthy();
   });
 
   it.each([503, 429, 408])("keeps retrying a %i with backoff", async (status) => {
