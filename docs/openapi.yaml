@@ -1156,8 +1156,10 @@ paths:
         in this server process, the governed run is interrupted at its next
         checkpoint: the sandbox is released, the partial transcript persists,
         and the live stream's terminal frame reports "stopped". Allowed for a
-        principal with cancel permission (admin/scoped key), or a user stopping
-        a task they personally created.
+        principal with cancel permission on a task it can see (its own tasks,
+        or every task for admin and view_all_logs principals), or for the
+        task's creator — the user or API key that created it. A task outside
+        the caller's scope answers 404.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: Cancelled (attribution on the task's result). }
@@ -1180,8 +1182,9 @@ paths:
 
         Refuses with 409 while the task is leased or running: the worker still
         holds the lease and is writing to the row. Stop it first, then delete.
-        Same authorization as cancelling — a principal with cancel permission
-        (admin/scoped key), or a user deleting a task they personally created.
+        Same authorization as cancelling — cancel permission on a task the
+        caller can see, or the task's creator (user or API key); 404 for a
+        task outside the caller's scope.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":

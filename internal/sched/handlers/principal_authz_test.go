@@ -170,13 +170,18 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 	// mutating ones.
 	roKey := mustCreateRoleKey(t, keyMgr, "readonly")
 
+	// The task is not this key's and the key holds no fleet-wide grant, so the
+	// task is outside its scope: 404, as for a read of the same task.
 	t.Run("readonly key cannot cancel any task", func(t *testing.T) {
 		req := httptest.NewRequest("DELETE", "/tasks/"+taskA.ID.String(), nil)
 		req.Header.Set("X-API-Key", roKey)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-		if w.Code != http.StatusForbidden {
+		if w.Code != http.StatusNotFound {
 			t.Fatalf("readonly key must not cancel tasks; got %d", w.Code)
+		}
+		if after, _ := store.GetTask(taskA.ID); after == nil || after.Status != models.TaskStatusPending {
+			t.Fatalf("a refused cancel must leave the task pending, got %+v", after)
 		}
 	})
 
