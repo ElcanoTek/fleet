@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -53,6 +54,7 @@ func cmdStatus(argv []string) int {
 	// 3. both databases reachable + active work summary + prompt cache health.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
+	checkLayout(r, *chatURL, *schedURL)
 	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
 	checkPromptCache(r, *chatURL)
 
@@ -135,6 +137,39 @@ func checkEnv(r *report) {
 // checkDB pings a database with a short timeout. It opens a bare pgx connection
 // (NOT store.Open / storage.Initialize, which run migrations) so the check is
 // read-only and fast.
+// checkLayout reports the layout of the DSNs the checks above actually used —
+// the --*-database-url overrides when given (their layout decided by
+// config.DSNs.OverrideFor), else the deployment's — never the environment's
+// layout for overrides that point elsewhere.
+func checkLayout(r *report, chatFlag, schedFlag string) {
+	c, cerr := chatDSN(chatFlag)
+	s, serr := schedDSN(schedFlag)
+	if cerr != nil || serr != nil {
+		r.skip("database layout", "DSN unresolved")
+		return
+	}
+	cs, ss := config.DSNSchema(c), config.DSNSchema(s)
+	ci, si := config.DSNIdentity(c), config.DSNIdentity(s)
+	oneDB := ci != "" && ci == si
+	switch {
+	case cs == config.ChatSchema && ss == config.SchedSchema && oneDB:
+		r.pass("database layout", "one database, schemas chat + sched")
+	case cs == config.ChatSchema && ss == config.SchedSchema:
+		r.warnLine("database layout", "unusual: the chat and sched schemas are in two different databases ("+ci+", "+si+")")
+	case cs == "" && ss == "": // LEGACY-DB-LAYOUT: remove after consolidation
+		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
+	default:
+		r.warnLine("database layout", fmt.Sprintf("unusual: chat in schema %q, sched in schema %q", orPublic(cs), orPublic(ss)))
+	}
+}
+
+func orPublic(s string) string {
+	if s == "" {
+		return config.PublicSchema
+	}
+	return s
+}
+
 func checkDB(r *report, label, flagURL string, resolve func(string) (string, error)) {
 	dsn, err := resolve(flagURL)
 	if err != nil {
@@ -432,14 +467,8 @@ func firstLine(s string) string {
 	return s
 }
 
-// redactDSN strips userinfo (user:password@) from a DSN so the status report
-// never echoes a password.
-func redactDSN(dsn string) string {
-	if i := strings.Index(dsn, "://"); i >= 0 {
-		rest := dsn[i+3:]
-		if at := strings.IndexByte(rest, '@'); at >= 0 {
-			return dsn[:i+3] + "***@" + rest[at+1:]
-		}
-	}
-	return dsn
-}
+// redactDSN hides every credential a DSN can carry — userinfo, and the
+// password / sslpassword / passfile parameters of a URL query or a key=value
+// DSN — so no report, error or plan echoes one (config.RedactDSN, the one
+// implementation).
+func redactDSN(dsn string) string { return config.RedactDSN(dsn) }

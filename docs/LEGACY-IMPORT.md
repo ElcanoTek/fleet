@@ -38,9 +38,9 @@ sudo -u chat sh -c 'cd /opt/chat && set -a && . ./.env.local && set +a && \
 sudo -u moc  sh -c 'cd /opt/moc  && set -a && . ./.env      && set +a && \
     ./moc -export-fleet /opt/moc/data/moc-bundle.json'
 
-# 3. Import into fleet (dry-run first). DSNs come from FLEET_CHAT_DATABASE_URL /
-#    FLEET_SCHED_DATABASE_URL, or --chat-database-url / --sched-database-url
-#    flags. On a systemd deploy the DSNs live in /etc/fleet/fleet.env (0600,
+# 3. Import into fleet (dry-run first). DSNs come from DATABASE_URL (each store
+#    in its own schema), or --chat-database-url / --sched-database-url
+#    flags. On a systemd deploy the DSN lives in /etc/fleet/fleet.env (0600,
 #    root-only) — NOT a .env.local — so source it explicitly:
 sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
     fleet import /opt/chat/data/chat-bundle.json --dry-run'
@@ -101,15 +101,14 @@ pass what the real run would refuse. Bundle tasks carrying a transient status
 (`leased`, `running`, either paused state) are rejected outright, as they always
 have been — exporters normalize those before export.
 
-Both DSN resolvers fall back to the generic `DATABASE_URL` (and then the
-shared `DB_*` parts). Because the chat and sched stores must live in
-**distinct** databases (fleet serve refuses to start otherwise), `fleet import`
-refuses to write a section whose DSN reached that shared fallback while the
-other store's DSN resolves to the same database (same host, port and database
-name) — set `FLEET_CHAT_DATABASE_URL` and `FLEET_SCHED_DATABASE_URL` (or
-pass the `--*-database-url` flags) so each section lands in its own DB. This
-applies to single-section bundles too: the runbook's two imports would
-otherwise mix both schemas into one `DATABASE_URL` database.
+The chat and sched stores need **distinct schemas** (fleet serve refuses to
+start otherwise). With `DATABASE_URL` they get them — the chat section is
+written to schema `chat` and the sched section to schema `sched` of the one
+database, and a `--*-database-url` flag naming that database inherits the
+store's schema. `fleet import` still refuses a section whose DSN reached the
+generic fallback while both stores would land in the **same** schema (two
+flags pointing at one database on a legacy box, say), so the runbook's two
+imports can never mix both stores' tables.
 
 ## Bundle format: `fleet-migration-bundle` version 1
 

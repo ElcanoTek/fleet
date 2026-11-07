@@ -11,8 +11,14 @@ func TestRedactDSN(t *testing.T) {
 	}{
 		{"postgres://chat:secret@127.0.0.1:5432/chat?sslmode=disable", "postgres://***@127.0.0.1:5432/chat?sslmode=disable"},
 		{"postgres://user@host:5432/db", "postgres://***@host:5432/db"},
-		{"postgres://host:5432/db", "postgres://host:5432/db"},                                                           // no userinfo, unchanged
-		{"host=127.0.0.1 user=chat password=secret dbname=chat", "host=127.0.0.1 user=chat password=secret dbname=chat"}, // keyword DSN: no scheme, left as-is
+		{"postgres://host:5432/db", "postgres://host:5432/db"}, // no userinfo, unchanged
+		// #2055 review: every credential shape, not only userinfo.
+		{"host=127.0.0.1 user=chat password=secret dbname=chat", "host=127.0.0.1 user=chat password=*** dbname=chat"},
+		{"host=h password='a b' sslpassword=k passfile=/root/.pgpass dbname=x", "host=h password=*** sslpassword=*** passfile=*** dbname=x"},
+		{"postgres://h/db?password=secret&sslmode=disable", "postgres://h/db?password=***&sslmode=disable"},
+		{"postgres://u:pw@h/db?sslpassword=k&passfile=%2Froot%2F.pgpass", "postgres://***@h/db?sslpassword=***&passfile=***"},
+		{"postgres://h/db?note=a@b", "postgres://h/db?note=a@b"}, // an @ in the query is not userinfo
+		{"not a dsn with password inside", "[REDACTED]"},
 		{"", ""},
 	}
 	for _, c := range cases {

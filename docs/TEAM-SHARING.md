@@ -620,8 +620,8 @@ from the model noticing a durable fact.
    endpoints, UI, permissions) first. That is a feature in its own right,
    bigger than any single item in this pass.
 2. *It lives in the other database.* `task_feedback` and
-   `learned_instructions` are in the **sched** Postgres database, with its own
-   migration system — deliberately separate from the chat store (ADR-0005).
+   `learned_instructions` are in the **sched** store (schema `sched`), with its own
+   migration system — deliberately separate from the chat store (ADR-0098).
    Only the distiller itself (`agent.Manager.DistillLearnedInstruction`, a pure
    `(prompt, critiques, prior) → instruction` call) ports cleanly.
 3. *And the evidence it wants is other people's private chats.* "Members keep

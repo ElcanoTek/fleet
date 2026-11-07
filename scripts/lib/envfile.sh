@@ -88,6 +88,48 @@ fleet_env_get_systemd() {
   fleet_env_decode "${line#*=}"
 }
 
+# fleet_env_value FILE KEY — KEY's value as fleet's own parser reads FILE
+# (internal/creds.ParseEnvLine, which config.Load and the admin CLI use, and
+# so what config.ResolveDSNs sees): blank and # lines skipped, an `export `
+# prefix tolerated, key and value trimmed, an UNQUOTED value cut at ` #` or
+# tab-#, then one layer of matching quotes stripped; the last assignment
+# wins; whitespace-trimmed again, as ResolveDSNs trims. Empty when absent or
+# empty — so `KEY=""` counts as unset, exactly as in Go.
+fleet_env_value() {
+  local file="$1" want="$2" line t k v val=""
+  [[ -r "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    t="${line%$'\r'}"
+    t="${t#"${t%%[![:space:]]*}"}"
+    t="${t%"${t##*[![:space:]]}"}"
+    [[ -z "$t" || "$t" == \#* ]] && continue
+    [[ "$t" == "export "* ]] && t="${t#export }"
+    [[ "$t" == *=* ]] || continue
+    k="${t%%=*}"
+    k="${k#"${k%%[![:space:]]*}"}"
+    k="${k%"${k##*[![:space:]]}"}"
+    [[ -n "$k" && "$k" == "$want" ]] || continue
+    v="${t#*=}"
+    v="${v#"${v%%[![:space:]]*}"}"
+    v="${v%"${v##*[![:space:]]}"}"
+    if [[ "${v:0:1}" != \" && "${v:0:1}" != \' ]]; then
+      if [[ "$v" == *" #"* ]]; then
+        v="${v%% #*}"
+      elif [[ "$v" == *$'\t#'* ]]; then
+        v="${v%%$'\t#'*}"
+      fi
+      v="${v%"${v##*[![:space:]]}"}"
+    fi
+    if (( ${#v} >= 2 )) && [[ ( "${v:0:1}" == '"' && "${v: -1}" == '"' ) || ( "${v:0:1}" == "'" && "${v: -1}" == "'" ) ]]; then
+      v="${v:1:${#v}-2}"
+    fi
+    val="$v"
+  done < "$file"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  printf '%s' "$val"
+}
+
 # fleet_upsert_env_file FILE KEY VALUE — set KEY in FILE (0600, created if
 # missing), encoded by fleet_env_encode: the first KEY= line is replaced in
 # place, later duplicates are dropped (every reader is last-assignment-wins, so

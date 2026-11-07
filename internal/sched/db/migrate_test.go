@@ -164,12 +164,26 @@ func migrationSchemaDB(t *testing.T) (*sql.DB, string) {
 		}
 		t.Fatal(err)
 	}
+	// A scratch DATABASE, not just a schema in the shared one: the shared
+	// sched test database keeps its store in public, and the runner refuses
+	// any store schema next to a fleet store in public (internal/dbschema,
+	// #2055), exactly as it must in production.
 	schema := fmt.Sprintf("migtest_%d", time.Now().UnixNano())
-	if _, err := admin.Exec(`CREATE SCHEMA ` + schema); err != nil {
+	if _, err := admin.Exec(`CREATE DATABASE ` + schema); err != nil {
+		t.Skipf("cannot CREATE DATABASE for an isolated migration run: %v", err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + schema + ` WITH (FORCE)`) })
+	u, err := url.Parse(dsn)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = admin.Exec(`DROP SCHEMA ` + schema + ` CASCADE`) })
-	u, err := url.Parse(dsn)
+	u.Path = "/" + schema
+	scratch, err := sql.Open("pgx", u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = scratch.Exec(`CREATE SCHEMA ` + schema)
+	_ = scratch.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

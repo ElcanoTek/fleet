@@ -101,7 +101,10 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 		return nil, nil, fmt.Errorf("configure broker remote MCP cipher: %w", err)
 	}
 	chatDB := cfg.DatabaseURL
-	if err := config.EnsureDistinctDatabases(chatDB, cfg.SchedDatabaseURL); err != nil {
+	// cfg.DatabaseURL is config.ResolveDSNs' chat DSN, so in the one-database
+	// layout it already carries the chat schema; the broker agrees with
+	// `fleet serve` on the layout without deciding anything itself.
+	if err := config.EnsureDistinctStores(chatDB, cfg.SchedDatabaseURL); err != nil {
 		return nil, nil, err
 	}
 	maxOpen := min(cfg.ChatDBPool.MaxOpenConns, mcpBrokerRemoteDBMaxOpen)

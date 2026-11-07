@@ -1,0 +1,89 @@
+package admincli
+
+import (
+	"database/sql"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// TestBackupFollowsQueryOverrides (#2055 review round 6): pg_dump and
+// pg_restore go where the store's pgx connection goes. The DSN's authority
+// names a host and port nothing answers on, while its query overrides them
+// (and the database) to the real server: pgx connects there, and so must the
+// backup and the restore, or they would fail (or, worse, reach another
+// cluster).
+func TestBackupFollowsQueryOverrides(t *testing.T) {
+	base := os.Getenv("DATABASE_URL")
+	if base == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	for _, b := range []string{"pg_dump", "pg_restore"} {
+		if _, err := exec.LookPath(b); err != nil {
+			t.Skipf("%s not installed", b)
+		}
+	}
+	ctx := t.Context()
+	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
+		t.Skipf("pg_dump major %d != server major %d", cm, sm)
+	}
+	const src, dst = "fleet_bk_override_src", "fleet_bk_override_dst"
+	drop := func() {
+		for _, db := range []string{src, dst} {
+			_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
+		}
+	}
+	drop()
+	t.Cleanup(drop)
+	for _, db := range []string{src, dst} {
+		if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil {
+			t.Skipf("cannot create a scratch database: %v", err)
+		}
+	}
+	srcDB, err := sql.Open("pgx", withDBName(t, base, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, srcDB, "CREATE TABLE sentinel (note text); INSERT INTO sentinel VALUES ('override-ok')")
+	_ = srcDB.Close()
+
+	// The authority says nowhere.invalid:1/decoy; the query says the server.
+	override := func(db string) string {
+		u, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := u.Query()
+		q.Set("host", u.Hostname())
+		if p := u.Port(); p != "" {
+			q.Set("port", p)
+		}
+		q.Set("dbname", db)
+		u.Host = "nowhere.invalid:1"
+		u.Path = "/decoy"
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	dump := filepath.Join(t.TempDir(), "override.dump")
+	if err := runPgDump(ctx, override(src), dump); err != nil {
+		t.Fatalf("pg_dump did not follow the query override: %v", err)
+	}
+	if err := runPgRestore(ctx, override(dst)+"&options=-csearch_path%3Dpublic", dump); err != nil {
+		t.Fatalf("pg_restore did not follow the query override: %v", err)
+	}
+	dstDB, err := sql.Open("pgx", withDBName(t, base, dst))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstDB.Close()
+	if got := mustQueryString(t, dstDB, "SELECT note FROM sentinel"); got != "override-ok" {
+		t.Fatalf("restored %q", got)
+	}
+}

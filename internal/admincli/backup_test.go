@@ -35,11 +35,42 @@ func TestParsePGConn(t *testing.T) {
 		t.Fatalf("defaults wrong: %+v", c2)
 	}
 
+	// #2055 review: query parameters the server's driver honours reach
+	// pg_dump too — a socket directory, port, user, password, passfile — so
+	// a backup never targets another cluster than the store's.
+	c3, err := parsePGConn("postgres:///sched?host=%2Frun%2Fpg&port=5444&user=svc&password=placeholder-not-a-secret&passfile=%2Fetc%2Fpgpass")
+	if err != nil {
+		t.Fatalf("parsePGConn (query parts): %v", err)
+	}
+	if c3.host != "/run/pg" || c3.port != "5444" || c3.user != "svc" || c3.password != "placeholder-not-a-secret" || c3.passfile != "/etc/pgpass" || c3.dbname != "sched" {
+		t.Fatalf("query parts ignored: %+v", c3)
+	}
+	if c4, err := parsePGConn("postgres://h/?dbname=fromquery"); err != nil || c4.dbname != "fromquery" {
+		t.Fatalf("dbname from the query: %+v, %v", c4, err)
+	}
+
+	// #2055 review round 6: a query override WINS over the URL's own part,
+	// as in pgx — pg_dump goes to the host and port the store connects to,
+	// not the authority's.
+	c5, err := parsePGConn("postgres://u:placeholder-not-a-secret@authority.example:5432/db?host=override.example&port=6000&dbname=real&user=svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c5.host != "override.example" || c5.port != "6000" || c5.dbname != "real" || c5.user != "svc" {
+		t.Fatalf("query overrides lost to the authority: %+v", c5)
+	}
+	// No database: the server's default, the role name — as pgx connects.
+	if c6, err := parsePGConn("postgres://bob@localhost"); err != nil || c6.dbname != "bob" {
+		t.Fatalf("no database: %+v, %v", c6, err)
+	}
+
 	for _, bad := range []string{
-		"mysql://x/y",           // wrong scheme
-		"postgres://localhost",  // no dbname
-		"postgres://localhost/", // empty dbname
-		"://nonsense",           // unparseable scheme
+		"mysql://x/y",                      // wrong scheme
+		"://nonsense",                      // unparseable
+		"postgres://a,b/db",                // several hosts
+		"host=a,b dbname=db",               // several hosts, key=value
+		"postgres://h/db?port=notaport",    // pgx refuses it
+		"postgres://u@h/db?malformedparam", // pgx refuses it
 	} {
 		if _, err := parsePGConn(bad); err == nil {
 			t.Errorf("parsePGConn(%q) should error", bad)

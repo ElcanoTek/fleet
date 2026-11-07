@@ -192,12 +192,14 @@ dataDir: /var/lib/fleet
 
 config:
   # Name of an EXISTING Secret carrying the CONTROL PLANE's sensitive env:
-  #   OPENROUTER_API_KEY, FLEET_CHAT_DATABASE_URL, FLEET_SCHED_DATABASE_URL,
+  #   OPENROUTER_API_KEY, DATABASE_URL (ONE database: fleet keeps the chat and
+  #   sched stores in its schemas chat and sched; the per-store
+  #   FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL are deprecated),
   #   FLEET_SERVER_TOKEN (or its CHAT_SERVER_TOKEN alias), APP_SESSION_SECRET
   #   (signs the browser session cookie — required for sign-in), any
   #   FLEET_OIDC_* / AUTH_* sign-in settings, and any SMTP/webhook secrets.
-  # When postgres.enabled=true the DB URLs are wired automatically and may be
-  # omitted from the secret. NOTE that in that case they are set as `env`, which
+  # When postgres.enabled=true the DB URL is wired automatically and may be
+  # omitted from the secret. NOTE that in that case it is set as `env`, which
   # OVERRIDES anything of the same name here (Kubernetes env beats envFrom), so
   # pointing at a managed database means postgres.enabled=false.
   existingSecret: ""
@@ -216,7 +218,9 @@ postgres:
   resources: {}
   # Optional in-cluster PostgreSQL (single replica, one PVC) for evaluation
   # and small installs. Production should point config at a managed database
-  # (RDS, Cloud SQL) via the existingSecret DB URLs instead.
+  # (RDS, Cloud SQL) via a DATABASE_URL in existingSecret instead. It creates
+  # ONE database, "fleet"; a release installed before #2049 keeps its chat and
+  # sched databases on upgrade (docs/ONE-DATABASE.md).
   #
   # The database password is NOT a values entry: the chart auto-generates a
   # random one into the <release>-postgres Secret on first install and reuses

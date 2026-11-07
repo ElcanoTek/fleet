@@ -474,9 +474,15 @@ func run() error {
 		agentLimiter.Total(), agentLimiter.SchedulableSlots(), agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
 	// ── DB pools (both self-migrate on open) ──
+	// cfg's DSNs come from config.ResolveDSNs, which decides the layout: one
+	// database with a chat and a sched schema (the supported layout, #2049),
+	// or a legacy install's two databases, which keep working as before.
 	chatDB, schedDB := cfg.DatabaseURL, cfg.SchedDatabaseURL
-	if err := config.EnsureDistinctDatabases(chatDB, schedDB); err != nil {
+	if err := config.EnsureDistinctStores(chatDB, schedDB); err != nil {
 		return err
+	}
+	if config.LayoutOf(chatDB, schedDB) == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
+		log.Printf("database layout: legacy (chat and sched in two databases); still supported — `fleet db consolidate` moves them into one (docs/ONE-DATABASE.md)")
 	}
 	chatStore, err := store.Open(chatDB, store.PoolConfig{
 		MaxOpenConns:    cfg.ChatDBPool.MaxOpenConns,
@@ -824,7 +830,7 @@ func run() error {
 	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
 	// Both planes are reached with the SAME session cookie, so the Operations
 	// Center checks the same revocation claim chat does. The epoch lives in the
-	// chat users table, which this plane cannot read (ADR-0005) — hand it the
+	// chat users table, which this plane does not read (separate stores, ADR-0098) — hand it the
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
@@ -1383,7 +1389,7 @@ func defaultTaskTimezone() string {
 // on every boot and idempotent; empty = no bootstrap. This is the ONLY automatic
 // orchestrator grant: a non-bootstrap chat user is still NOT a member (they get a
 // clear "ask an admin" page, never silent admin), preserving the deliberate
-// chat/orchestrator membership separation (ADR-0005). Extracted from run() to
+// chat/orchestrator membership separation (separate stores, ADR-0098). Extracted from run() to
 // keep it within the cyclomatic budget.
 func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) error {
 	admins := bootstrapAdmins()

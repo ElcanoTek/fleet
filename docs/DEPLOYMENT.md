@@ -224,16 +224,18 @@ serves, for back-compat); all other verbs are the operator CLI. (The
 below break down what bootstrap does (and the manual path if you'd rather run
 each piece yourself):
 
-1. **Bootstrap** the databases + the 0600 credential env file (one cluster, two
-   DBs; never runs app migrations — each service self-migrates on first start):
+1. **Bootstrap** the database + the 0600 credential env file (one role, one
+   database `fleet`; the chat and sched stores create their schemas `chat` and
+   `sched` in it — [ONE-DATABASE.md](ONE-DATABASE.md). It never runs app
+   migrations — each store self-migrates on first start):
 
    ```
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
    bootstrap installs the build/sandbox toolchain (Go, Node — build-time only, podman,
-   python3 — skipped on non-dnf hosts), then writes the two
-   `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR` into the env file for
+   python3 — skipped on non-dnf hosts), then writes `DATABASE_URL` and
+   `FLEET_CLIENT_CONFIG_DIR` into the env file for
    you; you then add `OPENROUTER_API_KEY`, the bundle's MCP connector
    credentials, and any MCP account secrets (`fleet mcp account set ...`).
    See **Operating fleet** below for the full bootstrap → update → status
@@ -425,7 +427,7 @@ each piece yourself):
    > pinned apart; a backend that is still starting answers `/login?e=server`.
    >
    > **The Operations Center now reads the chat database on every request.** The
-   > two planes keep separate `users` tables (ADR-0005), so the scheduler
+   > two planes keep separate `users` tables (separate stores, ADR-0098), so the scheduler
    > resolves the epoch a cookie claims through a lookup against the chat store.
    > That lookup failing is answered `500`, never as a revocation — a chat-DB
    > blip must not sign the whole Operations Center out — but it does mean the

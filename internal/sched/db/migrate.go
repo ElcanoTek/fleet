@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
 
 //go:embed migrations/*.sql
@@ -320,6 +322,13 @@ func withMigrationLock(ctx context.Context, db *sql.DB, fn func(*migrationRun) e
 		return fmt.Errorf("migration connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+
+	// In the one-database layout the connection's search_path names the
+	// sched schema; CURRENT_SCHEMA() is NULL until it exists, so create it
+	// first (internal/dbschema). A no-op in the legacy layout.
+	if err := dbschema.Ensure(ctx, conn); err != nil {
+		return err
+	}
 
 	var dbName, schema sql.NullString
 	if err := conn.QueryRowContext(ctx, `SELECT CURRENT_DATABASE(), CURRENT_SCHEMA()`).Scan(&dbName, &schema); err != nil {

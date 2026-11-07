@@ -14,6 +14,8 @@
 { set +x; } 2>/dev/null
 
 # What the plan and a redacted psql error show in place of each password.
+FLEET_DB_PW_PLACEHOLDER='<db password>'
+# LEGACY-DB-LAYOUT: remove after consolidation — the per-store placeholders.
 FLEET_CHAT_PW_PLACEHOLDER='<chat db password>'
 # Kept apart from the line above: gitleaks reads a bare next line as its value.
 FLEET_SCHED_PW_PLACEHOLDER='<sched db password>'
@@ -32,6 +34,141 @@ SELECT 'CREATE DATABASE ${3} OWNER ${1}'
 SQL
 }
 
+# fleet_dsn_role_db DSN — print "ROLE DATABASE" from a postgres:// URL DSN
+# whose user and database are lower-case plain identifiers (safe to quote
+# into SQL); return 1 for anything else.
+#
+# #2055 review round 6: pgx (like libpq) lets a query parameter override the
+# URL's role and database, the last occurrence winning, and reads no "#"
+# fragment (it is part of the name). A DSN with a user, dbname, database or
+# service query parameter, or a "#", is refused rather than read two ways;
+# the userinfo ends at the first "@" before any "/", as in pgx.
+fleet_dsn_role_db() {
+  local LC_ALL=C re='^postgres(ql)?://([a-z_][a-z0-9_]*)(:[^@/]*)?@[^/?#@]*/([a-z_][a-z0-9_]*)(\?[^#]*)?$' q p k
+  [[ "$1" =~ $re ]] || return 1
+  local role="${BASH_REMATCH[2]}" db="${BASH_REMATCH[4]}"
+  q="${BASH_REMATCH[5]#\?}"
+  local -a pairs=()
+  [[ -n "$q" ]] && IFS='&' read -r -a pairs <<< "$q"
+  for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    printf -v k '%b' "${k//%/\\x}"
+    case "$k" in user|dbname|database|service) return 1 ;; esac
+  done
+  printf '%s %s\n' "$role" "$db"
+}
+
+# fleet_dsn_is_local_default DSN — true when a postgres:// URL DSN names the
+# local cluster bootstrap provisions: loopback or the default socket, port
+# 5432 (or none), no host/port query override.
+#
+# Parsed, not globbed: the authority's port must be absent or exactly 5432,
+# and so must every port query parameter once percent-decoded (5432 only —
+# not 54321, not 5432x); any host or hostaddr query parameter refuses.
+fleet_dsn_is_local_default() {
+  local LC_ALL=C dsn="$1" rest auth hostport host port query p k v
+  case "$dsn" in
+    postgres://*|postgresql://*) rest="${dsn#*://}" ;;
+    *) return 1 ;;
+  esac
+  # pgx reads no "#" fragment, and ends the userinfo at the FIRST "@": a
+  # "#", a second "@" or a host list is not a DSN this answers for.
+  [[ "$rest" != *"#"* ]] || return 1
+  query=""
+  [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
+  rest="${rest%%\?*}"
+  [[ "$rest" == */* ]] || return 1
+  auth="${rest%%/*}"
+  hostport="${auth#*@}"
+  [[ "$hostport" != *[@,]* ]] || return 1
+  if [[ "$hostport" == \[* ]]; then
+    host="${hostport%%\]*}]"
+    port=""
+    [[ "$hostport" == *\]:* ]] && port="${hostport##*\]:}"
+    [[ "$hostport" == "$host" || "$hostport" == "$host:$port" ]] || return 1
+  else
+    host="${hostport%%:*}"
+    port=""
+    [[ "$hostport" == *:* ]] && port="${hostport#*:}"
+  fi
+  case "$host" in ""|127.0.0.1|localhost|"[::1]") ;; *) return 1 ;; esac
+  [[ -z "$port" || "$port" == "5432" ]] || return 1
+  local -a pairs=()
+  [[ -n "$query" ]] && IFS='&' read -r -a pairs <<< "$query"
+  for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    v=""
+    [[ "$p" == *=* ]] && v="${p#*=}"
+    v="${v//+/ }"
+    printf -v v '%b' "${v//%/\\x}"
+    case "$k" in
+      host|hostaddr) return 1 ;;
+      port) [[ "$v" == "5432" ]] || return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# fleet_external_db_sql ROLE DATABASE — the superuser SQL external mode runs
+# with FLEET_DB_SUPERUSER_URL: create the database when missing, and grant
+# the role CONNECT + CREATE on it, so it can create the chat and sched
+# schemas even in a database the superuser owns. Names are validated by
+# fleet_dsn_role_db.
+fleet_external_db_sql() {
+  cat <<SQL
+SELECT 'CREATE DATABASE "${2}"'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${2}')\gexec
+GRANT CONNECT, CREATE ON DATABASE "${2}" TO "${1}";
+SQL
+}
+
+# fleet_db_store_readiness DSN — can fleet's stores run in the database DSN
+# names, as DSN's role? Returns
+#   0  yes: each of the schemas chat and sched either does not exist and the
+#      role has CREATE on the database (the store creates it on first
+#      start), or exists and is OWNED by the role, as is every table,
+#      sequence and view in it — the migrations ALTER and the stores write
+#      them, which nothing short of ownership guarantees;
+#   1  no: CREATE on the database is missing for a schema that does not exist;
+#   2  no: the database's public schema holds a fleet store
+#      (public.schema_migrations) — a legacy two-database install's
+#      database, which the stores refuse to run next to;
+#   3  the check could not run (psql failed);
+#   4  no: an existing store schema, or something in it, is owned by another
+#      role; what was found (up to five "x is owned by y") is printed.
+fleet_db_store_readiness() {
+  local out legacy create owned sep=$'\x1f'
+  out="$(psql -X -v ON_ERROR_STOP=1 -tAq -F "$sep" "$1" -c "SELECT
+      EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace pn ON pn.oid = c.relnamespace
+              WHERE pn.nspname = 'public' AND c.relname = 'schema_migrations' AND c.relkind IN ('r', 'p')),
+      bool_and(n.oid IS NOT NULL OR has_database_privilege(current_database(), 'CREATE')),
+      coalesce((SELECT string_agg(x, '; ') FROM (
+        SELECT x FROM (
+          SELECT format('schema %s is owned by %s', n2.nspname, pg_get_userbyid(n2.nspowner)) AS x
+            FROM pg_catalog.pg_namespace n2
+           WHERE n2.nspname IN ('chat', 'sched') AND pg_get_userbyid(n2.nspowner) <> current_user
+          UNION ALL
+          SELECT format('%s.%s is owned by %s', n3.nspname, c.relname, pg_get_userbyid(c.relowner))
+            FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n3 ON n3.oid = c.relnamespace
+           WHERE n3.nspname IN ('chat', 'sched') AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+             AND pg_get_userbyid(c.relowner) <> current_user
+        ) f ORDER BY x COLLATE \"C\" LIMIT 5) l), '')
+    FROM (VALUES ('chat'), ('sched')) AS s(name)
+    LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
+  IFS="$sep" read -r legacy create owned <<< "$out"
+  [[ "$legacy" == "t" ]] && return 2
+  if [[ -n "$owned" ]]; then
+    printf '%s\n' "$owned"
+    return 4
+  fi
+  case "$create" in
+    t) return 0 ;;
+    f) return 1 ;;
+    *) return 3 ;;
+  esac
+}
+
+
 # fleet_redact_db_passwords < TEXT — TEXT with every occurrence of the
 # passwords in FLEET_REDACT_CHAT_PW and FLEET_REDACT_SCHED_PW replaced by their
 # placeholders. The passwords come from the environment, never argv, and are
@@ -44,7 +181,7 @@ fleet_redact_db_passwords() {
     printf '%s\n' "(psql's error output withheld: a database password contains a line break)"
     return 0
   fi
-  LC_ALL=C awk -v chat_ph="$FLEET_CHAT_PW_PLACEHOLDER" -v sched_ph="$FLEET_SCHED_PW_PLACEHOLDER" '
+  LC_ALL=C awk -v chat_ph="${FLEET_REDACT_CHAT_PH:-$FLEET_CHAT_PW_PLACEHOLDER}" -v sched_ph="${FLEET_REDACT_SCHED_PH:-$FLEET_SCHED_PW_PLACEHOLDER}" '
     function literal(s, find, rep,    out, i) {
       if (find == "") return s
       out = ""
@@ -80,4 +217,11 @@ fleet_psql_provision() {
     printf '%s\n' "$err" | FLEET_REDACT_CHAT_PW="$1" FLEET_REDACT_SCHED_PW="$2" fleet_redact_db_passwords >&2 || true
   fi
   return "$rc"
+}
+
+# fleet_psql_provision_one PASSWORD < SQL — fleet_psql_provision for the one
+# role and database of the one-database layout: its password is shown as
+# FLEET_DB_PW_PLACEHOLDER in a redacted error.
+fleet_psql_provision_one() {
+  FLEET_REDACT_CHAT_PH="$FLEET_DB_PW_PLACEHOLDER" fleet_psql_provision "$1" ""
 }
