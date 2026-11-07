@@ -2,7 +2,6 @@ package dbtrace_test
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -11,16 +10,16 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/ElcanoTek/fleet/internal/dbtrace"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // Every transaction through a dbtrace pool is one db.tx span under the
 // caller's span, named after the function that opened it and ended by its
 // commit or rollback — with no query text on it.
 func TestTransactionsAreSpans(t *testing.T) {
-	dsn := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL unset")
-	}
+	// Only SELECTs and empty transactions: nothing is written, so the
+	// maintenance database is enough (skips when FLEET_TEST_DATABASE_URL is unset).
+	dsn := testdb.MaintenanceDSN(t)
 	prev := otel.GetTracerProvider()
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
