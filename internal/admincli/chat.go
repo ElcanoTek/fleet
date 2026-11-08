@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/ElcanoTek/fleet/internal/chattui"
-	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // cmdChat is overloaded by design (#457):
@@ -83,7 +82,7 @@ func chatUserRole(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	st, err := openChatStoreDSN(dsn)
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}
@@ -131,7 +130,7 @@ func chatUserUpsert(argv []string, create bool) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	st, err := openChatStoreDSN(dsn)
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}
@@ -166,7 +165,7 @@ func chatUserDel(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	st, err := openChatStoreDSN(dsn)
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}
@@ -195,7 +194,7 @@ func chatUserList(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	st, err := openChatStoreDSN(dsn)
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}

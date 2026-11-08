@@ -80,7 +80,7 @@ func openChatStore(dbURL string) (*store.Store, int) {
 	if err != nil {
 		return nil, errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	st, err := openChatStoreDSN(dsn)
 	if err != nil {
 		return nil, errf(1, "open chat DB: %v", err)
 	}

@@ -219,6 +219,16 @@ If the merge has not run yet (the scheduler never opened on this release),
 - No `ops_session_token` columns: the bearer is retired instead.
 - The merge runs on every scheduler open, not only from `fleet serve`, so a
   CLI verb cannot read a half-migrated identity table.
+- The merge also completes from the chat side: every operator verb opens the
+  chat store through one helper (`openChatStoreDSN`) that, when the database
+  still has an unmerged `sched.users` next to `core.users`, opens the
+  scheduler store in the same process (its migrations and the merge) before
+  the verb touches an account. Otherwise `fleet admin rm` or `fleet chat user
+  del` run first after an upgrade would be undone by the merge that follows.
+- A restore never mixes merge states: `--db=chat` refuses a dump that records
+  the merge as done over a database whose merge is pending, and `--db=sched`
+  with a post-merge dump completes the target's pending merge first, or
+  refuses when it cannot (no chat store yet).
 - The merge report is printed in the server's log when the merge runs,
   stored in `core.identity_merge`, shown by `fleet admin merge-report`, and
   advised on by `fleet doctor`.
