@@ -44,7 +44,12 @@ are fired by it; the chat server is only the deliverer of a fire.**
 - **Storage.** The table moves to the scheduler's schema:
   `sched.chat_schedules` (same columns, ids and values) plus the engine's
   lease columns `lease_owner` / `lease_expires_at` and the fire a lease is
-  for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), and
+  for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), a
+  definition version (`def_version`, bumped by every edit of the prompt,
+  cadence or kind; recorded on the fire at its claim as `fire_def_version`:
+  a fire whose definition was edited since is superseded — it delivers,
+  counts and records nothing, and the next pass fires the new definition),
+  and
   `sched.chat_schedule_runs`, the run history (one row per fire that ran
   or was turned away: `schedule`/`manual` trigger, outcome `queued` /
   `busy` / `gone`, the run number of a queued run, the input-queue row,
