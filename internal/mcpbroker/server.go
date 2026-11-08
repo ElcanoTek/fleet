@@ -154,7 +154,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			// sees the group empty, or Serve can return with the panic
 			// response still unwritten.
 			defer wg.Done()
-			defer recoverBackendPanic(location, req.ID, write)
+			defer recoverBackendPanic(runCtx, location, req.ID, write)
 			defer func() {
 				if cancellable {
 					mu.Lock()
@@ -437,9 +437,12 @@ func validateScopeSpec(spec ScopeSpec) error {
 // leaves the parent Client blocked until its context expires. The incident ID
 // correlates the in-band error with safe's structured event while the recovered
 // value (which may contain connector material) never crosses the broker pipe.
-func recoverBackendPanic(location string, requestID uint64, write func(response)) {
+//
+// ctx is the request's, with the parent's correlation (request.Correlation):
+// the panic event carries its conv_id, turn_id, run_id and request_id.
+func recoverBackendPanic(ctx context.Context, location string, requestID uint64, write func(response)) {
 	if recovered := recover(); recovered != nil {
-		event := safe.EmitPanicWithMetadata(safe.PanicMetadata{
+		event := safe.EmitPanicWithMetadataContext(ctx, safe.PanicMetadata{
 			Location: location,
 			Boundary: "mcpbroker",
 		}, recovered, nil)

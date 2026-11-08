@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 type lockedBuf struct {
@@ -80,5 +81,42 @@ func TestWithCorrelationKeepsOnlyAllowlistedKeys(t *testing.T) {
 	if logging.Value(ctx, logging.KeyRunID) != "run-9" || logging.Value(ctx, "api_key") != "" ||
 		logging.Value(ctx, logging.KeyUserID) != "" || logging.Value(ctx, logging.KeyConvID) != "" {
 		t.Fatalf("attrs = %v", logging.Attrs(ctx))
+	}
+}
+
+// panicCtxRecorder is a panic handler recording the correlation of the
+// context each panic event was emitted under.
+type panicCtxRecorder struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (h *panicCtxRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicCtxRecorder) Handle(ctx context.Context, _ slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.seen = append(h.seen, logging.Value(ctx, logging.KeyRunID)+"/"+logging.Value(ctx, logging.KeyRequestID))
+	return nil
+}
+func (h *panicCtxRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *panicCtxRecorder) WithGroup(string) slog.Handler      { return h }
+
+// A backend panic during a correlated request is reported under that
+// request's context: the incident carries the parent's run_id and
+// request_id (#2074 review).
+func TestBrokerBackendPanicCarriesTheParentsCorrelation(t *testing.T) {
+	rec := &panicCtxRecorder{}
+	safe.SetPanicHandler(rec)
+	t.Cleanup(func() { safe.SetPanicHandler(nil) })
+
+	client := loopback(t, &fakeBroker{panicCall: "backend exploded"})
+	ctx := logging.WithRequestID(logging.WithTask(context.Background(), "task-3", "run-4"), "req-5")
+	if _, _, err := client.CallMCP(ctx, "srv", "tool", nil); err == nil {
+		t.Fatal("the backend panic did not surface as an error")
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.seen) != 1 || rec.seen[0] != "run-4/req-5" {
+		t.Fatalf("panic events = %v, want one under run-4/req-5", rec.seen)
 	}
 }

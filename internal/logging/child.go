@@ -393,7 +393,7 @@ func childRecord(line []byte) (rec slog.Record, bridged, ok bool) {
 		}
 		// The key is scrubbed like every nested key (redactedKeys) and made
 		// unique in document order.
-		attrs = append(attrs, jsonAttr(uniqueKey(seenKeys, Redact(key)), v))
+		attrs = append(attrs, jsonAttr(uniqueKey(seenKeys, scrubKey(key)), v))
 	}
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
 		return slog.Record{}, false, false

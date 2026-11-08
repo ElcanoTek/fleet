@@ -37,16 +37,17 @@ var (
 func redactor() *redact.Redactor {
 	redactorOnce.Do(func() {
 		logRedactor = redact.NewRedactor(nil)
-		logRedactor.SetReserved(ReservedKeys...)
+		logRedactor.SetReservedKeys(ReservedKeys...)
 	})
 	return logRedactor
 }
 
 // ReservedKeys are the field names this package's handlers write themselves:
 // slog's built-ins, the correlation keys, and the keys the package adds to
-// re-logged or bridged records. A registered secret equal to one is refused
-// (the line backstop would otherwise rewrite that key in every record); a
-// warning says so once. A secret-carrying key a call site supplies is still
+// re-logged or bridged records. A registered secret equal to one is still
+// registered and scrubbed everywhere but in key position, where it is the
+// record's own field name (the line backstop would otherwise rewrite that key
+// in every record). A secret-carrying key a call site supplies is still
 // redacted like any other.
 var ReservedKeys = []string{
 	slog.TimeKey, slog.LevelKey, slog.MessageKey, slog.SourceKey,
@@ -54,16 +55,23 @@ var ReservedKeys = []string{
 	StdlibLogKey, childKey, lineKey, truncatedKey,
 }
 
-var reservedWarnOnce sync.Once
-
-// warnReservedRefusals logs once when a registration was refused because the
-// value is a reserved field name. The value itself is not logged.
-func warnReservedRefusals() {
-	if redactor().TakeReservedRefusals() > 0 {
-		reservedWarnOnce.Do(func() {
-			slog.Warn("logging: a registered secret equals a log field name; it is not scrubbed as a literal (it would rewrite that field in every line)")
-		})
+// reservedKeySet is ReservedKeys as a set.
+var reservedKeySet = func() map[string]bool {
+	m := make(map[string]bool, len(ReservedKeys))
+	for _, k := range ReservedKeys {
+		m[k] = true
 	}
+	return m
+}()
+
+// scrubKey is Redact for an attribute key: a reserved key (ReservedKeys) is
+// the record's own field name and is kept as is, even if a registered
+// secret happens to equal it; its VALUE is scrubbed as usual.
+func scrubKey(k string) string {
+	if reservedKeySet[k] {
+		return k
+	}
+	return Redact(k)
 }
 
 // RegisterSecretLiterals adds secret VALUES to the log redactor, with the
@@ -73,7 +81,6 @@ func warnReservedRefusals() {
 // only as scrub targets and are never emitted.
 func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	redactor().RegisterSecrets(scope, rotated, values...)
-	warnReservedRefusals()
 }
 
 // RegisterEnvLiterals adds the values of secret-named variables in environ
@@ -81,7 +88,6 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 // the same name rule the tool-output and broker redactors seed themselves with.
 func RegisterEnvLiterals(environ []string) {
 	redactor().RegisterEnvLiterals(environ)
-	warnReservedRefusals()
 }
 
 // seedEnvLiterals registers this process's own secret-named env values
@@ -127,7 +133,7 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	// A key can carry a secret as well as a value (a token used as a field
 	// name); the secret-key rule below reads the key as written.
 	name := a.Key
-	a.Key = Redact(a.Key)
+	a.Key = scrubKey(a.Key)
 	v := a.Value
 	switch v.Kind() {
 	case slog.KindString:

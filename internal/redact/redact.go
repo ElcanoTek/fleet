@@ -224,30 +224,26 @@ type Redactor struct {
 	// grace window deterministically.
 	now func() time.Time
 
-	// reserved are values never registered as literals (SetReserved): the
-	// field names of the log lines this redactor scrubs, which a literal
-	// equal to one would rewrite. reservedRefused counts refusals since the
-	// last TakeReservedRefusals.
-	reserved        map[string]bool
-	reservedRefused atomic.Int64
+	// reservedKeys are the field names the log encoding writes itself
+	// (SetReservedKeys). ScrubLine leaves a match of one alone only where it
+	// IS that field's key; anywhere else — a value, part of another key —
+	// it is replaced like any registered literal.
+	reservedKeys map[string]bool
 }
 
-// SetReserved names values that are never registered as literals: the field
-// names a log encoding writes itself (time, level, msg, the correlation keys),
-// which a literal equal to one would rewrite in every line (ScrubLine works
-// on the encoded line, keys included). Call it before any registration.
-func (r *Redactor) SetReserved(values ...string) {
+// SetReservedKeys names the field names a log encoding writes itself (time,
+// level, msg, the correlation keys). A registered literal equal to one stays
+// registered and is scrubbed everywhere, except in key position, where it is
+// the record's own field name: ScrubLine would otherwise rewrite that key in
+// every line.
+func (r *Redactor) SetReservedKeys(keys ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.reserved = make(map[string]bool, len(values))
-	for _, v := range values {
-		r.reserved[v] = true
+	r.reservedKeys = make(map[string]bool, len(keys))
+	for _, k := range keys {
+		r.reservedKeys[k] = true
 	}
 }
-
-// TakeReservedRefusals reports how many registrations SetReserved refused
-// since the last call, and resets the count.
-func (r *Redactor) TakeReservedRefusals() int64 { return r.reservedRefused.Swap(0) }
 
 // canonicalPatterns are ordered most-specific-first so a vendor-prefixed key is
 // replaced whole before the generic marker rule could capture only its value.
@@ -327,6 +323,7 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 			}
 		}
 	}
+	reserved := r.reservedKeys
 	r.mu.RUnlock()
 	// Longest form first, for the same reason the literals are kept longest
 	// first: an encoded form can be longer than another literal's.
@@ -337,10 +334,14 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 		// A JSON form never matches JSON syntax: its quotes and backslashes
 		// are escaped exactly as inside a string.
 		for _, form := range present {
+			if reserved[form] {
+				out = replaceOutsideJSONKey(out, form)
+				continue
+			}
 			out = strings.ReplaceAll(out, form, placeholder)
 		}
 	default:
-		out = scrubLogfmtFields(out, present)
+		out = scrubLogfmtFields(out, present, reserved)
 	}
 	lower := strings.ToLower(out)
 	for _, p := range r.patterns[:r.shapePatterns] {
@@ -356,7 +357,11 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 // literal `level=INFO` matches a value holding that text, not the record's
 // own level field. A line that is not logfmt is scrubbed whole, so a
 // registered value is never kept for want of a parse.
-func scrubLogfmtFields(line string, forms []string) string {
+//
+// A form that is a reserved key (SetReservedKeys) is left alone where it is
+// a whole bare key — at a field's start, followed by "=" — and replaced
+// everywhere else.
+func scrubLogfmtFields(line string, forms []string, reserved map[string]bool) string {
 	spans, ok := logfmtSpans(line)
 	if !ok {
 		for _, form := range forms {
@@ -369,12 +374,44 @@ func scrubLogfmtFields(line string, forms []string) string {
 	last := 0
 	for _, sp := range spans {
 		field := line[sp[0]:sp[1]]
+		isKey := sp[1] < len(line) && line[sp[1]] == '=' && (sp[0] == 0 || line[sp[0]-1] == ' ')
 		for _, form := range forms {
+			if isKey && reserved[form] && field == form {
+				continue // the record's own field name
+			}
 			field = strings.ReplaceAll(field, form, placeholder)
 		}
 		b.WriteString(line[last:sp[0]])
 		b.WriteString(field)
 		last = sp[1]
+	}
+	b.WriteString(line[last:])
+	return b.String()
+}
+
+// replaceOutsideJSONKey replaces every occurrence of key in a JSON line
+// except where it is an object key: `"key":` right after `{` or `,`.
+func replaceOutsideJSONKey(line, key string) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; ; {
+		j := strings.Index(line[i:], key)
+		if j < 0 {
+			break
+		}
+		at := i + j
+		end := at + len(key)
+		isKey := at >= 2 && line[at-1] == '"' && (line[at-2] == '{' || line[at-2] == ',') &&
+			end+1 < len(line) && line[end] == '"' && line[end+1] == ':'
+		if !isKey {
+			b.WriteString(line[last:at])
+			b.WriteString(placeholder)
+			last = end
+		}
+		i = end
+	}
+	if last == 0 {
+		return line // every occurrence was the key itself
 	}
 	b.WriteString(line[last:])
 	return b.String()
@@ -604,10 +641,6 @@ func (r *Redactor) retireOlderGenerationsLocked(scope string, gen uint64, nowNan
 //
 // Over-retention is acceptable here; under-redaction is not.
 func (r *Redactor) upsertLocked(value, scope string, gen uint64) {
-	if r.reserved[value] {
-		r.reservedRefused.Add(1)
-		return
-	}
 	l, ok := r.index[value]
 	if !ok {
 		l = newLiteral(value)
