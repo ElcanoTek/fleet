@@ -270,6 +270,10 @@ type Server struct {
 	// answers Run now with 503 and leaves firing to whoever does run one.
 	chatSchedules ChatScheduleEngine
 
+	// publishHook, when set (tests only), sees every queue/patrol update and
+	// drain kick, so a test can count them.
+	publishHook func(kind string)
+
 	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
 	// approved chat manage_tasks call (#1152). Same seam discipline as
 	// scheduleTask: httpapi stays sched-agnostic and main.go supplies the
@@ -588,6 +592,13 @@ type ChatScheduleEngine interface {
 	RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error)
 	// WakeChatSchedulesAt asks for a firing pass at t (non-blocking).
 	WakeChatSchedulesAt(t time.Time)
+}
+
+// notePublish reports one queue/patrol update or drain kick to publishHook.
+func (s *Server) notePublish(kind string) {
+	if s.publishHook != nil {
+		s.publishHook(kind)
+	}
 }
 
 // WithChatScheduleEngine wires the scheduler that fires chat schedules.

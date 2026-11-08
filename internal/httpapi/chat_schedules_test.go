@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,6 +193,8 @@ func (e *fakeChatScheduleEngine) RunChatScheduleNow(ctx context.Context, schedul
 		e.st.schedules[scheduleID] = sc
 		e.st.mu.Unlock()
 	}
+	// The real scheduler publishes a settled fire through the server.
+	e.srv.ChatScheduleFireSettled(ctx, fire, d)
 	return d, nil
 }
 
@@ -374,5 +377,53 @@ func TestWriteScheduleError_RunNowRefusals(t *testing.T) {
 		if rec.Code != tc.want {
 			t.Errorf("%v: status %d, want %d", tc.err, rec.Code, tc.want)
 		}
+	}
+}
+
+// TestScheduleRunNow_PublishesOnce: a Run now's updates come from the fire's
+// settle alone — one queue.updated, one patrol.updated, one drain kick — not
+// again from the HTTP handler.
+func TestScheduleRunNow_PublishesOnce(t *testing.T) {
+	t.Parallel()
+	st := newScheduleFakeStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	srv.chatSchedules = &fakeChatScheduleEngine{st: st, srv: srv}
+	defer srv.StopBackground()
+	var mu sync.Mutex
+	counts := map[string]int{}
+	h := srv.Routes()
+	conv, err := st.CreateConversation(context.Background(), "trader@elcanotek.com", "c", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := st.CreateChatSchedule(context.Background(), store.ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: "trader@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A turn is running in the chat, so the drain kick does not start one
+	// (whose own lifecycle would publish queue updates of its own).
+	srv.inflightMu.Lock()
+	srv.inflight[conv.ID] = inflightEntry{buf: newTurnBuffer(conv.ID, "running-turn"), token: 1, turnID: "running-turn"}
+	srv.inflightMu.Unlock()
+	srv.publishHook = func(kind string) {
+		mu.Lock()
+		defer mu.Unlock()
+		counts[kind]++
+	}
+	req := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/schedules/"+sc.ID+"/run-now", bytes.NewBufferString(`{}`))
+	req.Header.Set("X-Chat-Server-Token", "tok")
+	req.Header.Set("X-User-Email", "trader@elcanotek.com")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run-now = %d, %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if counts["queue.updated"] != 1 || counts["patrol.updated"] != 1 || counts["drain"] != 1 {
+		t.Fatalf("published %v; want exactly one queue.updated, one patrol.updated and one drain", counts)
 	}
 }

@@ -104,6 +104,7 @@ func toChatPatrolScheduleViews(list []store.ChatSchedule) []tools.ChatPatrolSche
 }
 
 func (s *Server) emitPatrolUpdate(ctx context.Context, user, convID string, buf *turnBuffer, autoApprove bool) {
+	s.notePublish("patrol.updated")
 	if s.store == nil {
 		return
 	}
@@ -610,9 +611,8 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		return
 	case models.ChatScheduleQueued, models.ChatScheduleCoalesced, models.ChatScheduleBusy, models.ChatScheduleRejected:
 	}
-	s.emitQueueUpdate(r.Context(), user, conv.ID)
-	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
-	s.maybeDrainQueue(conv.ID)
+	// No publishing here: the fire's settle already did it, once
+	// (ChatScheduleFireSettled — the queue and patrol updates and the drain).
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
 	if all, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, true); err == nil {
 		for i := range all {
