@@ -738,6 +738,15 @@ func run() error {
 	sch := scheduler.New(schedStorage, timezone())
 	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
 
+	// The one API-key store: the orchestrator's keys, and the user keys the
+	// chat listener accepts from `fleet chat`, `fleet acp` and fleet-bench
+	// (ADR-0108).
+	keyMgr, err := apikeys.NewManager(filepath.Join(cfg.DataDir, "api_keys.json"), "")
+	if err != nil {
+		return fmt.Errorf("apikeys manager: %w", err)
+	}
+	chatOpts = append(chatOpts, httpapi.WithAPIKeys(keyMgr))
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
@@ -758,10 +767,6 @@ func run() error {
 	}
 
 	// ── orchestrator HTTP (sched/handlers) ──
-	keyMgr, err := apikeys.NewManager(filepath.Join(cfg.DataDir, "api_keys.json"), "")
-	if err != nil {
-		return fmt.Errorf("apikeys manager: %w", err)
-	}
 	rl, err := schedRateLimits()
 	if err != nil {
 		return err
@@ -776,10 +781,6 @@ func run() error {
 		SchedRateLimitPerMinute:       rl.perMinute,
 		SchedRateLimitPerDay:          rl.perDay,
 		SchedGlobalRateLimitPerMinute: rl.globalPerMinute,
-		// Reuse the chat shared token so the Next proxy's X-User-Email path is
-		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
-		// non-empty by config.Validate.
-		SharedToken: cfg.SharedToken,
 		// Cost-forecast inputs (#233): mirror the runtime selection so POST
 		// /tasks/estimate projects against the same model + iteration cap + cost
 		// ceiling a real dispatch uses. cfg.MaxIterations is the per-task default
@@ -1724,10 +1725,9 @@ func confineFileToolsToWorkspace(workspaceRoot string) {
 // 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
 // fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
 // backends bind loopback and are only reached through the on-box web tier /
-// reverse proxy (which forwards the public /v1 API here with the web-tier
-// header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
-// interface and expose the orchestrator admin surface AND the header-trust
-// channel directly on hosts without a firewall. Multi-host topologies opt in
+// reverse proxy (which forwards the public /v1 API here — ADR-0053). A bare
+// ":8000" would bind every interface and expose the orchestrator's legacy
+// bare paths and admin surface directly on hosts without a firewall. Multi-host topologies opt in
 // explicitly via FLEET_ORCHESTRATOR_ADDR; the Caddyfile renderer follows the
 // env-file value (scripts/lib/caddyfile.sh) when they do.
 func orchestratorAddr() string {

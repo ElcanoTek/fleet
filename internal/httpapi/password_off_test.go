@@ -151,8 +151,8 @@ func TestExternalTeamRenameRoute(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/external-team-rename", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("without the shared secret: %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("without the gateway's principal: %d", w.Code)
 	}
 }
 

@@ -40,7 +40,7 @@ func TestRunSpeaksACPOnStdio(t *testing.T) {
 	var stderr bytes.Buffer
 	exit := make(chan int, 1)
 	go func() {
-		exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, &stderr, nil)
+		exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--key-file", tokenFile}, inR, outW, &stderr, nil)
 		_ = outW.Close()
 	}()
 
@@ -139,7 +139,7 @@ func TestErrorDataOnTheWire(t *testing.T) {
 	var stderr bytes.Buffer
 	exit := make(chan int, 1)
 	go func() {
-		exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, &stderr, nil)
+		exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--key-file", tokenFile}, inR, outW, &stderr, nil)
 		_ = outW.Close()
 	}()
 	lines := bufio.NewScanner(outR)
@@ -450,7 +450,7 @@ func startRunWithStderr(t *testing.T, ff *fakeFleet, stderr *lockedBuffer, errOu
 		exit:      make(chan int, 1),
 	}
 	go func() {
-		r.exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, errOut, func() <-chan os.Signal { return r.stop })
+		r.exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--key-file", tokenFile}, inR, outW, errOut, func() <-chan os.Signal { return r.stop })
 		// The SDK writes a prompt's answer just after the prompt returns,
 		// which can be after run has: stdout stays open a moment longer, so
 		// a frame written after the client went away reaches rest() rather
@@ -815,7 +815,7 @@ func startProcess(t *testing.T, ff *fakeFleet, wrap ...string) *acpProcess {
 	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	argv, _ := json.Marshal([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile})
+	argv, _ := json.Marshal([]string{"--server", srv.URL, "--email", "bot@example.com", "--key-file", tokenFile})
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)

@@ -18,8 +18,9 @@
 # bind loopback (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to
 # 127.0.0.1:8000). Caddy does NOT expose :8080 / :8000 to
 # the internet; it exposes exactly the API paths below, which authenticate with
-# X-API-Key (or a webhook signature) and nothing else — see the header_up
-# deletions and ADR-0053. Every other Go route stays loopback-only.
+# X-API-Key (or a webhook signature) and nothing else (ADR-0053; the header_up
+# deletions are defence in depth since ADR-0108, which retired the identity
+# headers they strip). Every other Go route stays loopback-only.
 #
 # This file is the annotated REFERENCE. scripts/bootstrap.sh writes the live
 # /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh (render_fleet_caddyfile),
@@ -62,11 +63,13 @@ fleet.example.com {
 	# email). Nothing else on the orchestrator is exposed — its legacy bare
 	# paths (/tasks, /keys, …) stay loopback-only behind the web tier's /api/*.
 	#
-	# The header_up deletions are load-bearing: the orchestrator trusts
-	# X-User-Email when X-Orchestrator-Server-Token matches (the web tier's
-	# impersonation channel, #157). Stripping them here means that channel is
-	# reachable from loopback ONLY, so exposing the API adds exactly one
-	# public auth path — X-API-Key — and no header-trust surface (ADR-0053).
+	# The header_up deletions are defence in depth since ADR-0108: no fleet
+	# listener reads an identity header or honours the retired service token
+	# (identity rides the request context; a request still presenting the
+	# token gets 401), so nothing behind them depends on the strip. They are
+	# kept so the rendered layout, and every box's installed copy, stay
+	# unchanged; removing them is harmless too. The public auth paths are
+	# X-API-Key and the webhook signatures (ADR-0053, superseded by ADR-0108).
 	@fleet_api path /v1 /v1/* /api-info /.well-known/agent-card.json /a2a /a2a/* /triggers/*
 	handle @fleet_api {
 		reverse_proxy 127.0.0.1:8000 {
@@ -83,7 +86,7 @@ fleet.example.com {
 	}
 
 	# Signed inbound chat webhooks (docs/WEBHOOKS.md: GitHub/Slack HMAC) →
-	# the chat listener. Same stripping rule for chat's header-trust channel.
+	# the chat listener. The same (now defence-in-depth) strip as above.
 	@fleet_chat_webhooks path /webhooks/*
 	handle @fleet_chat_webhooks {
 		reverse_proxy 127.0.0.1:8080 {

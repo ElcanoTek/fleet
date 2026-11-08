@@ -483,6 +483,8 @@ func validAccountEnvSuffix(suffix string) bool {
 func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 	names := []string{
 		"FLEET_ENV_FILE", clientconfig.EnvDir,
+		// FLEET_SERVER_TOKEN is retired (ADR-0108) but still stripped: a
+		// stale line in the env file reaches the process all the same.
 		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "ADMIN_API_KEY",
 		"DATABASE_URL", "DB_PASSWORD",
 		"TAVILY_API_KEY", "BROWSERBASE_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",

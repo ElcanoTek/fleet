@@ -21,7 +21,7 @@ Point a fleet instance at the fake LLM (`OPENROUTER_BASE_URL=http://127.0.0.1:18
 the address `cmd/fake-llm` listens on), then drive chat turns:
 
 ```sh
-export FLEET_SERVER_TOKEN=…            # the shared X-Chat-Server-Token
+export FLEET_API_KEY=…   # a user key: fleet sched apikey create bench --type user --user you@org
 ./fleet-bench chat \
   --server http://127.0.0.1:8080 \
   --email you@org \

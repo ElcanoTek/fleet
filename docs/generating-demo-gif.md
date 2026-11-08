@@ -62,7 +62,7 @@ recording scripts remain available in `docs/scripts/`.
    was tried first; bubbletea v2's diff renderer confuses pyte's emulation
    into stale-cell tearing, so fleet records with vhs instead.)*
 3. **Setup is hidden.** The tape starts the mock server and exports the dummy
-   `FLEET_SERVER_TOKEN`/`FLEET_USER_EMAIL` inside a `Hide` block, so the GIF
+   `FLEET_API_KEY`/`FLEET_USER_EMAIL` inside a `Hide` block, so the GIF
    opens directly on the TUI. It ends by holding the finished transcript for
    3.5 s, then quits inside another `Hide` — recording the alt-screen teardown
    would capture restore garbage.

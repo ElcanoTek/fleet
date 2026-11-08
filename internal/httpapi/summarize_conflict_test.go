@@ -63,8 +63,7 @@ func TestSummarize_TurnCommittedDuringSummaryIsNotDropped(t *testing.T) {
 		out := make(chan string, 1)
 		go func() {
 			req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/conversations/"+conv.ID+"/summarize", strings.NewReader(`{}`))
-			req.Header.Set("X-Chat-Server-Token", "tok")
-			req.Header.Set("X-User-Email", resumeTestUser)
+			req = req.WithContext(asUser(req.Context(), resumeTestUser))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			routes.ServeHTTP(w, req)
@@ -174,8 +173,7 @@ func TestSummarize_TruncateDuringSummaryIsReported(t *testing.T) {
 	done := make(chan string, 1)
 	go func() {
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/conversations/"+conv.ID+"/summarize", strings.NewReader(`{}`))
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", resumeTestUser)
+		req = req.WithContext(asUser(req.Context(), resumeTestUser))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		routes.ServeHTTP(w, req)

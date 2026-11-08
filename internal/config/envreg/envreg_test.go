@@ -59,7 +59,7 @@ func TestRetiredAliases(t *testing.T) {
 	for name, want := range map[string]string{
 		"CHAT_MAX_COST_USD":    "FLEET_MAX_COST_USD",
 		"CUTLASS_MAX_COST_USD": "FLEET_MAX_COST_USD",
-		"CHAT_SERVER_TOKEN":    "FLEET_SERVER_TOKEN",
+		"CHAT_SMTP_PASSWORD":   "FLEET_SMTP_PASSWORD",
 		"CHAT_TLS_MODE":        "FLEET_TLS_MODE",
 		"CUTLASS_TLS_DOMAIN":   "FLEET_TLS_DOMAIN",
 		"CHAT_IMAGE_MODEL":     "FLEET_IMAGE_MODEL",

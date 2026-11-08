@@ -45,10 +45,9 @@ func setupLogAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) 
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken,
-		DefaultTaskModel: "test/model",
-		AdminAPIKey:      "admin-key",
-		DataDir:          tmpDir,
+	h := New(Config{DefaultTaskModel: "test/model",
+		AdminAPIKey: "admin-key",
+		DataDir:     tmpDir,
 	}, store, keyMgr)
 
 	r := chi.NewRouter()

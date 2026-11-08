@@ -17,13 +17,16 @@ sched's golang-migrate-compatible runner). `make install` puts the `fleet` binar
 For a terminal chat with the agent, `fleet chat` opens a Bubble Tea TUI that
 streams replies from the running server's chat API (or `fleet chat --message
 "…"` for a one-shot, scriptable turn) — same governed run loop and sandbox as the
-web chat, just a CLI front-end for power users. **On the box running fleet you
-usually only need `fleet chat --email you@org`:** the shared `FLEET_SERVER_TOKEN`
-is read automatically from the same env file the server uses (`$FLEET_ENV_FILE`,
-else `.env.local`, else `/etc/fleet/fleet.env`), so an operator who can read that
-0600 file logs in without copying the token anywhere. The token is still never
-accepted on argv — override discovery with `$FLEET_SERVER_TOKEN`, `--token-file`,
-or `--env-file <path>` when the file lives elsewhere. With no `--model`, a new
+web chat, just a CLI front-end for power users. **It authenticates with a user
+API key** (ADR-0108): mint one on the box with `fleet sched apikey create
+my-cli --type user --user you@org`, save it to `~/.config/fleet/api-key` (mode
+0600), and run `fleet chat`. The key is read from `--key-file`, else
+`$FLEET_API_KEY`, else that file, and is never accepted on argv; the server
+acts as the key's account (`--email` only checks it). The server address is
+still read from the server's env file (`$FLEET_ENV_FILE`, else `.env.local`,
+else `/etc/fleet/fleet.env`) or `--env-file <path>`. The shared
+`FLEET_SERVER_TOKEN` it used to read there is retired: `--token-file` is
+refused with an error naming the replacement. With no `--model`, a new
 conversation starts on the workspace default the server advertises (the same
 slug the web picker starts on); resuming with `--conversation <id>` keeps the
 model stored on that thread, and `/model <slug>` switches mid-session.

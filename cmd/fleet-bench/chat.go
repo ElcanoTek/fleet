@@ -22,7 +22,7 @@ import (
 type chatOptions struct {
 	server      string
 	email       string
-	token       string
+	key         string
 	message     string
 	concurrency int
 	duration    time.Duration
@@ -34,8 +34,9 @@ type chatOptions struct {
 func runChat(argv []string) error {
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	server := fs.String("server", "", "chat server base URL (default $FLEET_CHAT_URL, else http://$FLEET_SERVER_ADDR, else http://127.0.0.1:8080)")
-	email := fs.String("email", "", "authenticated user email sent as X-User-Email (default $FLEET_BENCH_EMAIL / $E2E_TEST_EMAIL)")
-	tokenEnv := fs.String("token-env", "FLEET_SERVER_TOKEN", "env var holding the shared server token (X-Chat-Server-Token) — never passed on argv")
+	email := fs.String("email", "", "for the report: the account the key acts as (default $FLEET_BENCH_EMAIL / $E2E_TEST_EMAIL); the key is the identity")
+	keyEnv := fs.String("key-env", "FLEET_API_KEY", "env var holding a user API key (fleet sched apikey create <name> --type user --user <email>), sent as X-API-Key — never passed on argv")
+	tokenEnv := fs.String("token-env", "", "RETIRED (ADR-0108): the shared server token is gone; use --key-env")
 	message := fs.String("message", "[[echo:load-test reply]] respond briefly", "message body sent each turn (use an [[echo:…]] / [[scenario:…]] marker for a deterministic fake-LLM reply)")
 	concurrency := fs.Int("concurrency", 10, "number of concurrent workers")
 	duration := fs.Duration("duration", 30*time.Second, "how long to sustain the load")
@@ -47,17 +48,17 @@ func runChat(argv []string) error {
 	opts := chatOptions{
 		server:      resolveServer(*server),
 		email:       resolveEmail(*email),
-		token:       strings.TrimSpace(envreg.Unregistered(*tokenEnv)),
+		key:         strings.TrimSpace(envreg.Unregistered(*keyEnv)),
 		message:     *message,
 		concurrency: *concurrency,
 		duration:    *duration,
 		timeout:     *timeout,
 	}
-	if opts.token == "" {
-		return fmt.Errorf("server token not set: export %s (the shared X-Chat-Server-Token)", *tokenEnv)
+	if strings.TrimSpace(*tokenEnv) != "" {
+		return fmt.Errorf("--token-env is retired: the shared server token was removed (ADR-0108); create a user API key (fleet sched apikey create <name> --type user --user <email>) and export it as $FLEET_API_KEY (or name the variable with --key-env)")
 	}
-	if opts.email == "" {
-		return fmt.Errorf("user email required: pass --email or set FLEET_BENCH_EMAIL / E2E_TEST_EMAIL")
+	if opts.key == "" {
+		return fmt.Errorf("API key not set: export %s with a user API key (fleet sched apikey create <name> --type user --user <email>)", *keyEnv)
 	}
 	if opts.concurrency < 1 {
 		return fmt.Errorf("--concurrency must be >= 1")
@@ -183,8 +184,7 @@ func oneChatTurn(ctx context.Context, client *http.Client, opts chatOptions) (ti
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Chat-Server-Token", opts.token)
-	req.Header.Set("X-User-Email", opts.email)
+	req.Header.Set("X-API-Key", opts.key)
 
 	start := time.Now()
 	resp, err := client.Do(req)

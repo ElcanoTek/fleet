@@ -65,7 +65,8 @@ func isLoopbackAddr(addr string) bool {
 // scripts/lib/caddyfile.sh is the source of truth and doctor.sh diffs against
 // it); here we only need the three facts an admin cannot see from the UI: is
 // the file fleet's, does it carry a /v1 route to the orchestrator, and does it
-// strip the header-trust channel on the way (ADR-0053). A file fleet did not
+// strip the retired identity headers on the way (ADR-0053; defence in depth
+// since ADR-0108, which retired them). A file fleet did not
 // write is advisory-only — an operator front that routes no /v1 may be
 // deliberate, so it warns and never fails the box.
 func checkCaddyfile(path, orchAddr string) Check {

@@ -11,7 +11,9 @@ onto a schedule.
 
 ### Terminal chat
 
-On the server, `fleet chat --email you@example.com` opens terminal chat. New
+On the server, `fleet chat` opens terminal chat. It signs in with your own
+API key, which an admin creates with `fleet sched apikey create <name> --type
+user --user you@example.com`; save it to `~/.config/fleet/api-key`. New
 threads use the workspace default model by default; `--model` or `/model` selects
 another model. `--message "..."` and `--no-tui` support scripts and piped input.
 One-shot stdout is buffered until the turn ends so it contains the final reply

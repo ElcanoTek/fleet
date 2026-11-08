@@ -26,7 +26,7 @@ func TestClientDefaultModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"})
 	slug, err := c.DefaultModel(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestClientDefaultModel(t *testing.T) {
 	if slug != "acme/frontier-1" {
 		t.Errorf("slug = %q, want acme/frontier-1", slug)
 	}
-	if hdr.Get("X-Chat-Server-Token") != "sekret" || hdr.Get("X-User-Email") != "u@x.co" {
+	if hdr.Get("X-API-Key") != "sekret" || hdr.Get("X-Chat-Server-Token") != "" {
 		t.Errorf("auth headers not sent: %v", hdr)
 	}
 }
@@ -44,7 +44,7 @@ func TestClientDefaultModelErrors(t *testing.T) {
 		http.Error(w, "nope", http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"})
 	if _, err := c.DefaultModel(context.Background()); err == nil {
 		t.Fatal("want error on 401")
 	}
@@ -89,7 +89,7 @@ func TestClientResolveApproval(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"})
 	status, resultText, err := c.ResolveApproval(context.Background(), "conv-9", "appr-1", true)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestClientResolveApprovalErrorRedactsToken(t *testing.T) {
 		http.Error(w, "approval not found", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "super-secret-token"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "super-secret-token"})
 	_, _, err := c.ResolveApproval(context.Background(), "conv-9", "appr-1", true)
 	if err == nil {
 		t.Fatal("want error on 404")
@@ -140,7 +140,7 @@ func TestRunOneShotSurfacesApprovals(t *testing.T) {
 	defer srv.Close()
 
 	var out, errOut bytes.Buffer
-	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}), "", "schedule it", strings.NewReader(""), &out, &errOut)
+	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"}), "", "schedule it", strings.NewReader(""), &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit %d; stderr=%s", code, errOut.String())
 	}
@@ -165,7 +165,7 @@ func TestRunResolveApprovalCLI(t *testing.T) {
 		_, _ = io.WriteString(w, `{"status":"approved","result_text":"Email sent."}`)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"})
 
 	var out, errOut bytes.Buffer
 	if code := runResolveApproval(c, "conv-1", "appr-1", true, &out, &errOut); code != 0 {

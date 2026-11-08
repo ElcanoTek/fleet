@@ -118,7 +118,6 @@ const mockedWebServer = {
     FLEET_WEB_ADDR: `127.0.0.1:${WEB_PORT}`,
     APP_SESSION_SECRET: TEST_SESSION_SECRET,
     AUTH_SIGNING_PUBKEY: TEST_AUTH_PUBKEY,
-    FLEET_SERVER_TOKEN: "e2e-shared-secret",
   },
 };
 

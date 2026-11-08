@@ -35,7 +35,7 @@ func setupNotesTest(t *testing.T) (*chi.Mux, *sched.Store, func()) {
 	}
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", Version: "test", AdminAPIKey: notesTestAdminKey}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", Version: "test", AdminAPIKey: notesTestAdminKey}, store, keyMgr)
 	notesStore := sched.NewStore(store.DB())
 	nh := NewNotesHandlers(notesStore, h)
 

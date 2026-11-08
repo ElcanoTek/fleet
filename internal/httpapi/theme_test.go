@@ -106,20 +106,20 @@ func TestRenderThemeCSS_EmptyPaletteEmitsNoRules(t *testing.T) {
 func TestThemeCSS_TokenGatedButIdentityless(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{sharedToken: "topsecret"}
+	s := &Server{}
 	h := s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS))
 
-	// No token -> 403.
+	// No principal -> 401.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/theme.css", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("no token: status %d want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("no principal: status %d want 401", w.Code)
 	}
 
-	// Valid token, NO X-User-Email -> 200 (identity-less, unlike authMiddleware).
+	// The gateway's principal, no user -> 200 (identity-less, unlike authMiddleware).
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/theme.css", nil)
-	req.Header.Set("X-Chat-Server-Token", "topsecret")
+	req = req.WithContext(asGateway(req.Context()))
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -134,7 +134,6 @@ func TestThemeCSS_ServesBundlePalette(t *testing.T) {
 	t.Parallel()
 
 	s := &Server{
-		sharedToken: "topsecret",
 		clientConfig: &clientconfig.Bundle{
 			Branding: clientconfig.Branding{
 				Colors: clientconfig.BrandColors{
@@ -144,7 +143,7 @@ func TestThemeCSS_ServesBundlePalette(t *testing.T) {
 		},
 	}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/theme.css", nil)
-	req.Header.Set("X-Chat-Server-Token", "topsecret")
+	req = req.WithContext(asGateway(req.Context()))
 	w := httptest.NewRecorder()
 	s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -166,7 +165,6 @@ func newLogoServer(t *testing.T, name string, body []byte) *Server {
 		t.Fatalf("write logo: %v", err)
 	}
 	return &Server{
-		sharedToken: "topsecret",
 		clientConfig: &clientconfig.Bundle{
 			Dir:           dir,
 			Branding:      clientconfig.Branding{Logo: name},
@@ -178,7 +176,7 @@ func newLogoServer(t *testing.T, name string, body []byte) *Server {
 func getLogo(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/logo", nil)
-	req.Header.Set("X-Chat-Server-Token", "topsecret")
+	req = req.WithContext(asGateway(req.Context()))
 	w := httptest.NewRecorder()
 	s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)).ServeHTTP(w, req)
 	return w
@@ -212,9 +210,8 @@ func TestBrandLogo_404WithoutBundleOrLogo(t *testing.T) {
 	t.Parallel()
 
 	for name, s := range map[string]*Server{
-		"no bundle": {sharedToken: "topsecret"},
+		"no bundle": {},
 		"bundle without a logo": {
-			sharedToken:  "topsecret",
 			clientConfig: &clientconfig.Bundle{Dir: t.TempDir()},
 		},
 	} {
@@ -254,8 +251,8 @@ func TestBrandLogo_TokenGated(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/logo", nil)
 	w := httptest.NewRecorder()
 	s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)).ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("no token: status %d want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no principal: status %d want 401", w.Code)
 	}
 }
 

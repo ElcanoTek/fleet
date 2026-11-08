@@ -26,8 +26,7 @@ import (
 // window admitted, so a request refused per identity never counts against
 // anyone else. It is split in two buckets of the same size: one for callers
 // that presented a credential (a resolvable API key, a principal the
-// gateway attached, the legacy service token, or an identity an auth
-// middleware already established), and one for everything else — so unauthenticated
+// gateway attached, or an identity an auth middleware already established), and one for everything else — so unauthenticated
 // traffic draws only on its own bucket and never on the budget of
 // authenticated callers.
 //
@@ -91,17 +90,14 @@ const (
 
 // rateLimitCallerAuthenticated reports whether r carries a credential other
 // than an API key (which the caller resolves itself): a principal the
-// gateway attached in-process or an auth middleware already established, or
-// the legacy internal service token. It only chooses a rate-limit bucket; it
-// authorizes nothing.
+// gateway attached in-process or an auth middleware already established. It
+// only chooses a rate-limit bucket; it authorizes nothing.
 func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
 	if GetUserFromContext(r.Context()) != nil || GetAPIKeyFromContext(r.Context()) != nil {
 		return true
 	}
-	if _, ok := authn.From(r.Context()); ok {
-		return true
-	}
-	return h.edgeServiceToken(r)
+	_, ok := authn.From(r.Context())
+	return ok
 }
 
 // writeRateLimited emits a 429 with the full rate-limit header set and the

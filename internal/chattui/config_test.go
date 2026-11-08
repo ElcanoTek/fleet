@@ -34,7 +34,7 @@ func TestResolve(t *testing.T) {
 	t.Run("flags win; server normalized", func(t *testing.T) {
 		cfg, err := Resolve(
 			Flags{Server: "http://host:9000/", Email: "Me@Example.com", Model: "  x/y  ", Persona: "  my-persona  "},
-			envMap(map[string]string{"FLEET_SERVER_TOKEN": "tok"}), noFile, noEnvFile)
+			envMap(map[string]string{"FLEET_API_KEY": "key"}), noFile, noEnvFile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -44,8 +44,8 @@ func TestResolve(t *testing.T) {
 		if cfg.Email != "me@example.com" {
 			t.Errorf("email = %q, want lowercased", cfg.Email)
 		}
-		if cfg.Token != "tok" || cfg.Model != "x/y" {
-			t.Errorf("token/model = %q/%q", cfg.Token, cfg.Model)
+		if cfg.APIKey != "key" || cfg.Model != "x/y" {
+			t.Errorf("key/model = %q/%q", cfg.APIKey, cfg.Model)
 		}
 		if cfg.Persona != "my-persona" {
 			t.Errorf("persona = %q, want %q", cfg.Persona, "my-persona")
@@ -53,140 +53,138 @@ func TestResolve(t *testing.T) {
 	})
 
 	t.Run("server default + FLEET_SERVER_ADDR", func(t *testing.T) {
-		cfg, _ := Resolve(Flags{Email: "a@b.co"},
-			envMap(map[string]string{"FLEET_SERVER_TOKEN": "t", "FLEET_SERVER_ADDR": "127.0.0.1:9999"}), noFile, noEnvFile)
+		cfg, _ := Resolve(Flags{},
+			envMap(map[string]string{"FLEET_API_KEY": "k", "FLEET_SERVER_ADDR": "127.0.0.1:9999"}), noFile, noEnvFile)
 		if cfg.ServerURL != "http://127.0.0.1:9999" {
 			t.Errorf("server = %q, want from FLEET_SERVER_ADDR", cfg.ServerURL)
 		}
-		cfg2, _ := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{"FLEET_SERVER_TOKEN": "t"}), noFile, noEnvFile)
+		cfg2, _ := Resolve(Flags{}, envMap(map[string]string{"FLEET_API_KEY": "k"}), noFile, noEnvFile)
 		if cfg2.ServerURL != "http://127.0.0.1:8080" {
 			t.Errorf("server = %q, want default :8080", cfg2.ServerURL)
 		}
 	})
 
-	t.Run("missing email errors", func(t *testing.T) {
-		_, err := Resolve(Flags{}, envMap(map[string]string{"FLEET_SERVER_TOKEN": "t"}), noFile, noEnvFile)
-		if err == nil || !strings.Contains(err.Error(), "email") {
-			t.Fatalf("want email error, got %v", err)
+	t.Run("the email is optional: the key is the identity", func(t *testing.T) {
+		cfg, err := Resolve(Flags{}, envMap(map[string]string{"FLEET_API_KEY": "k"}), noFile, noEnvFile)
+		if err != nil || cfg.Email != "" {
+			t.Fatalf("email = %q err=%v", cfg.Email, err)
 		}
 	})
 
-	t.Run("missing token errors, and the error never leaks a token value", func(t *testing.T) {
-		_, err := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{}), noFile, noEnvFile)
-		if err == nil || !strings.Contains(err.Error(), "token") {
-			t.Fatalf("want token error, got %v", err)
+	t.Run("missing key errors with the command that mints one, and never leaks a value", func(t *testing.T) {
+		_, err := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{"HOME": "/home/a"}), noFile, noEnvFile)
+		if err == nil || !strings.Contains(err.Error(), "no API key") || !strings.Contains(err.Error(), "--type user") ||
+			!strings.Contains(err.Error(), "/home/a/.config/fleet/api-key") {
+			t.Fatalf("want key error, got %v", err)
 		}
 	})
 
-	t.Run("token-file is read and trimmed; CHAT_SERVER_TOKEN is not read", func(t *testing.T) {
+	t.Run("key-file is read and trimmed, then $FLEET_API_KEY, then ~/.config/fleet/api-key", func(t *testing.T) {
 		rf := func(p string) ([]byte, error) {
-			if p == "/secret" {
-				return []byte("  filetoken\n"), nil
+			switch p {
+			case "/secret":
+				return []byte("  filekey\n"), nil
+			case "/home/a/.config/fleet/api-key":
+				return []byte("homekey\n"), nil
 			}
 			return nil, errors.New("nope")
 		}
-		cfg, err := Resolve(Flags{Email: "a@b.co", TokenFile: "/secret"}, envMap(nil), rf, noEnvFile)
-		if err != nil || cfg.Token != "filetoken" {
-			t.Fatalf("token-file: token=%q err=%v", cfg.Token, err)
+		cfg, err := Resolve(Flags{KeyFile: "/secret"}, envMap(map[string]string{"FLEET_API_KEY": "envkey", "HOME": "/home/a"}), rf, noEnvFile)
+		if err != nil || cfg.APIKey != "filekey" {
+			t.Fatalf("key-file: key=%q err=%v", cfg.APIKey, err)
 		}
-		// The removed CHAT_SERVER_TOKEN alias (ADR-0106) is not a fallback.
-		if cfg2, err := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{"CHAT_SERVER_TOKEN": "chattok"}), noFile, noEnvFile); err == nil {
-			t.Errorf("CHAT_SERVER_TOKEN was read: token = %q", cfg2.Token)
+		cfg, err = Resolve(Flags{}, envMap(map[string]string{"FLEET_API_KEY": "envkey", "HOME": "/home/a"}), rf, noEnvFile)
+		if err != nil || cfg.APIKey != "envkey" {
+			t.Fatalf("env: key=%q err=%v", cfg.APIKey, err)
+		}
+		cfg, err = Resolve(Flags{}, envMap(map[string]string{"HOME": "/home/a"}), rf, noEnvFile)
+		if err != nil || cfg.APIKey != "homekey" {
+			t.Fatalf("default file: key=%q err=%v", cfg.APIKey, err)
+		}
+	})
+}
+
+// The shared server token is retired (ADR-0108): a caller still configured
+// with it gets an error naming the replacement, never a silent fallback, and
+// the env file's token is never read as a credential.
+func TestResolveRefusesTheRetiredServerToken(t *testing.T) {
+	t.Run("--token-file", func(t *testing.T) {
+		_, err := Resolve(Flags{TokenFile: "/secret"}, envMap(map[string]string{"FLEET_API_KEY": "k"}), noFile, noEnvFile)
+		if err == nil || !strings.Contains(err.Error(), "ADR-0108") || !strings.Contains(err.Error(), "--type user") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("no key: the error says the token is retired", func(t *testing.T) {
+		_, err := Resolve(Flags{}, envMap(map[string]string{"FLEET_SERVER_TOKEN": "stale-token"}), noFile, noEnvFile)
+		if err == nil || !strings.Contains(err.Error(), "ADR-0108") || strings.Contains(err.Error(), "stale-token") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("the env file's token is not a credential", func(t *testing.T) {
+		evf := envFileFrom(map[string]map[string]string{
+			".env.local": {"FLEET_SERVER_TOKEN": "envfiletok", "CHAT_SERVER_TOKEN": "legacytok"},
+		})
+		if cfg, err := Resolve(Flags{}, envMap(nil), noFile, evf); err == nil {
+			t.Fatalf("a server token was read as the key: %q", cfg.APIKey)
 		}
 	})
 }
 
 // TestResolveEnvFileDiscovery covers the #480 on-box auto-discovery path: the
-// token/addr come from the server's own env file when not given explicitly.
+// server address comes from the server's own env file when not given
+// explicitly. (The token it once also read is retired, ADR-0108.)
 func TestResolveEnvFileDiscovery(t *testing.T) {
-	t.Run("token auto-discovered from the server env file", func(t *testing.T) {
-		// No --token-file, no token in the process env: the token comes from the
-		// default .env.local that an on-box operator can read.
+	key := envMap(map[string]string{"FLEET_API_KEY": "k"})
+	t.Run("address auto-discovered from the server env file", func(t *testing.T) {
 		evf := envFileFrom(map[string]map[string]string{
-			".env.local": {"FLEET_SERVER_TOKEN": "envfiletok", "FLEET_SERVER_ADDR": "127.0.0.1:7000"},
+			".env.local": {"FLEET_SERVER_ADDR": "127.0.0.1:7000"},
 		})
-		cfg, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, evf)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cfg.Token != "envfiletok" {
-			t.Errorf("token = %q, want discovered from env file", cfg.Token)
-		}
-		if cfg.ServerURL != "http://127.0.0.1:7000" {
-			t.Errorf("server = %q, want discovered FLEET_SERVER_ADDR", cfg.ServerURL)
+		cfg, err := Resolve(Flags{}, key, noFile, evf)
+		if err != nil || cfg.ServerURL != "http://127.0.0.1:7000" {
+			t.Fatalf("server = %q err=%v, want discovered FLEET_SERVER_ADDR", cfg.ServerURL, err)
 		}
 	})
 
-	t.Run("explicit token/server win over the env file", func(t *testing.T) {
+	t.Run("an explicit server wins over the env file", func(t *testing.T) {
 		evf := envFileFrom(map[string]map[string]string{
-			".env.local": {"FLEET_SERVER_TOKEN": "envfiletok", "FLEET_SERVER_ADDR": "127.0.0.1:7000"},
+			".env.local": {"FLEET_SERVER_ADDR": "127.0.0.1:7000"},
 		})
-		cfg, _ := Resolve(
-			Flags{Email: "a@b.co", Server: "http://explicit:1234"},
-			envMap(map[string]string{"FLEET_SERVER_TOKEN": "envtok"}), noFile, evf)
-		if cfg.Token != "envtok" {
-			t.Errorf("token = %q, want process-env to win over env file", cfg.Token)
-		}
+		cfg, _ := Resolve(Flags{Server: "http://explicit:1234"}, key, noFile, evf)
 		if cfg.ServerURL != "http://explicit:1234" {
 			t.Errorf("server = %q, want --server to win over env file", cfg.ServerURL)
 		}
 	})
 
-	t.Run("CHAT_SERVER_TOKEN in the env file is not read", func(t *testing.T) {
-		evf := envFileFrom(map[string]map[string]string{
-			".env.local": {"CHAT_SERVER_TOKEN": "legacytok"},
-		})
-		if cfg, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, evf); err == nil {
-			t.Fatalf("removed CHAT_SERVER_TOKEN alias was read: token=%q", cfg.Token)
-		}
-	})
-
 	t.Run("--env-file pins a single path (no silent fallback to defaults)", func(t *testing.T) {
 		evf := envFileFrom(map[string]map[string]string{
-			"/custom/fleet.env": {"FLEET_SERVER_TOKEN": "customtok"},
-			".env.local":        {"FLEET_SERVER_TOKEN": "WRONG"},
+			"/custom/fleet.env": {"FLEET_SERVER_ADDR": "127.0.0.1:7001"},
+			".env.local":        {"FLEET_SERVER_ADDR": "127.0.0.1:9"},
 		})
-		cfg, err := Resolve(Flags{Email: "a@b.co", EnvFile: "/custom/fleet.env"}, envMap(nil), noFile, evf)
-		if err != nil || cfg.Token != "customtok" {
-			t.Fatalf("--env-file: token=%q err=%v", cfg.Token, err)
+		cfg, err := Resolve(Flags{EnvFile: "/custom/fleet.env"}, key, noFile, evf)
+		if err != nil || cfg.ServerURL != "http://127.0.0.1:7001" {
+			t.Fatalf("--env-file: server=%q err=%v", cfg.ServerURL, err)
 		}
-		// A wrong explicit path is a clear miss, not a fallback to .env.local.
-		_, err = Resolve(Flags{Email: "a@b.co", EnvFile: "/does/not/exist"}, envMap(nil), noFile, evf)
-		if err == nil || !strings.Contains(err.Error(), "token") {
-			t.Fatalf("wrong --env-file should miss with a token error, got %v", err)
-		}
-	})
-
-	t.Run("$FLEET_ENV_FILE pins the path when no flag is given", func(t *testing.T) {
-		evf := envFileFrom(map[string]map[string]string{
-			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "systok"},
-		})
-		cfg, err := Resolve(Flags{Email: "a@b.co"},
-			envMap(map[string]string{"FLEET_ENV_FILE": "/etc/fleet/fleet.env"}), noFile, evf)
-		if err != nil || cfg.Token != "systok" {
-			t.Fatalf("$FLEET_ENV_FILE: token=%q err=%v", cfg.Token, err)
+		cfg, _ = Resolve(Flags{EnvFile: "/does/not/exist"}, key, noFile, evf)
+		if cfg.ServerURL != "http://127.0.0.1:8080" {
+			t.Fatalf("a wrong --env-file fell back to %q", cfg.ServerURL)
 		}
 	})
 
 	t.Run("default candidates probed in order: .env.local then /etc/fleet/fleet.env", func(t *testing.T) {
 		evf := envFileFrom(map[string]map[string]string{
-			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "systok"},
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_ADDR": "127.0.0.1:7002"},
 		})
-		// .env.local is absent here, so discovery falls through to the systemd path.
-		cfg, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, evf)
-		if err != nil || cfg.Token != "systok" {
-			t.Fatalf("fallthrough to /etc/fleet/fleet.env: token=%q err=%v", cfg.Token, err)
+		cfg, err := Resolve(Flags{}, key, noFile, evf)
+		if err != nil || cfg.ServerURL != "http://127.0.0.1:7002" {
+			t.Fatalf("fallthrough to /etc/fleet/fleet.env: server=%q err=%v", cfg.ServerURL, err)
 		}
 	})
 
-	t.Run("unreadable env file is skipped; token error names paths, never a value", func(t *testing.T) {
+	t.Run("an unreadable env file is skipped", func(t *testing.T) {
 		deny := func(string, ...string) (map[string]string, error) { return nil, errors.New("permission denied") }
-		_, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, deny)
-		if err == nil || !strings.Contains(err.Error(), "token") {
-			t.Fatalf("want token error on unreadable env file, got %v", err)
-		}
-		if !strings.Contains(err.Error(), ".env.local") {
-			t.Errorf("token error should name the probed paths, got %q", err.Error())
+		cfg, err := Resolve(Flags{}, key, noFile, deny)
+		if err != nil || cfg.ServerURL != "http://127.0.0.1:8080" {
+			t.Fatalf("server=%q err=%v", cfg.ServerURL, err)
 		}
 	})
 }

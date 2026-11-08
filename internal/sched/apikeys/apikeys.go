@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,10 @@ type APIKey struct {
 	Description         string     `json:"description"`
 	PreviousKeyHash     *string    `json:"previous_key_hash,omitempty"`
 	PreviousKeyExpires  *time.Time `json:"previous_key_expires,omitempty"`
+
+	// UserEmail is the person a user-type key acts as (KeyTypeUser); empty
+	// for every other type.
+	UserEmail string `json:"user_email,omitempty"`
 
 	// MaxPriority caps the task urgency this key may submit (#230): a task at a
 	// priority MORE urgent (lower integer) than this value is rejected. nil =
@@ -113,6 +118,7 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		ExpiresAt:           k.ExpiresAt,
 		Enabled:             k.Enabled,
 		Description:         k.Description,
+		UserEmail:           k.UserEmail,
 		MaxPriority:         k.MaxPriority,
 	}
 }
@@ -438,6 +444,25 @@ func (m *Manager) CreateKey(name string, permissions []models.Permission, role *
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
 func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	if kt == KeyTypeUser {
+		return nil, "", errors.New("a user key names its user: use CreateUserKey")
+	}
+	return m.createTypedKey(name, kt, allowedTriggerSlugs, "", rateLimit, expiresInDays, description)
+}
+
+// CreateUserKey mints a user-type key (KeyTypeUser) that acts as email on the
+// chat API. The account is not checked here: it is resolved on every
+// request, so a key for an address that has no enabled account is refused
+// then.
+func (m *Manager) CreateUserKey(name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return nil, "", fmt.Errorf("a user key needs the email of the account it acts as")
+	}
+	return m.createTypedKey(name, KeyTypeUser, nil, email, rateLimit, expiresInDays, description)
+}
+
+func (m *Manager) createTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, userEmail string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -472,6 +497,7 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 		KeyPrefix:           keyPrefix,
 		Type:                kt,
 		AllowedTriggerSlugs: allowedTriggerSlugs,
+		UserEmail:           userEmail,
 		Permissions:         perms,
 		RateLimit:           rateLimit,
 		CreatedAt:           time.Now().UTC(),
@@ -502,6 +528,7 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 			"name":                  name,
 			"type":                  string(kt),
 			"allowed_trigger_slugs": allowedTriggerSlugs,
+			"user_email":            userEmail,
 			"permissions":           permStrings,
 			"rate_limit":            rateLimit,
 		},

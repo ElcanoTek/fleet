@@ -28,16 +28,14 @@ func mockServer(t *testing.T) *Server {
 	}
 	srv := &Server{
 		cfg: &config.Config{
-			SharedToken:     "tok",
 			PersonaDefault:  "generic",
 			ConversationTTL: 14,
 			UnpinnedCap:     50,
 			MockMode:        true,
 		},
-		store:       st,
-		sharedToken: "tok",
-		inflight:    make(map[string]inflightEntry),
-		isMember:    allowAllMembers,
+		store:    st,
+		inflight: make(map[string]inflightEntry),
+		isMember: allowAllMembers,
 	}
 	t.Cleanup(func() { stopServerFixture(t, srv, st) })
 	return srv
@@ -57,8 +55,7 @@ func TestMockTurn_SSEStream(t *testing.T) {
 		"persona": "generic",
 	})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(body))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "u@x.com")
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)
@@ -120,8 +117,7 @@ func TestMockTurn_PersistsHistory(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{"message": "first", "persona": "generic"})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(body))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "u@x.com")
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)
@@ -174,8 +170,7 @@ func TestMockTurn_AgentFieldUnused(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{"message": "no-llm", "persona": "generic"})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(body))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "u@x.com")
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)

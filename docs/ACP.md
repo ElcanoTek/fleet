@@ -45,22 +45,29 @@ library. Only its types and its connection are used. fleet is the executor.
 
 ## Using it
 
-On the box running fleet, identity resolves exactly as it does for `fleet chat`:
+Identity resolves exactly as it does for `fleet chat`: a **user API key**
+(ADR-0108). Provision a dedicated bot user, mint a key that acts as it, and
+keep the key in a file only you can read:
 
 ```sh
+fleet chat user add acp-bot@example.com --password -
+fleet sched apikey create acp-bot --type user --user acp-bot@example.com   # prints the key once
+(umask 077; mkdir -p ~/.config/fleet; cat > ~/.config/fleet/api-key)      # paste it, then Ctrl-D
 fleet acp --email acp-bot@example.com
 ```
 
-The shared server token is read from the server's env file (`$FLEET_ENV_FILE`,
-else `.env.local`, else `/etc/fleet/fleet.env`) or from `$FLEET_SERVER_TOKEN`
-or `--token-file`. It is never accepted on argv. The email is the fleet user
-every ACP turn runs as, so it is the identity in the audit trail. Provision a
-dedicated bot user for it (`fleet chat user add acp-bot@example.com --password -`).
+The key is read from `--key-file`, else `$FLEET_API_KEY`, else
+`~/.config/fleet/api-key`; it is never accepted on argv. The key's account is
+the fleet user every ACP turn runs as, so it is the identity in the audit
+trail; `--email` (or `$FLEET_USER_EMAIL`) only checks it, and a key for
+another account is refused at `session/new`. The shared server token this used
+to read from the server's env file is retired: `--token-file` is refused with
+an error naming the replacement.
 
 Buzz needs an adapter between its `buzz-acp` harness and `fleet acp`, because
 `buzz-acp` expects an agent to post its own replies: see "Buzz" below.
 
-Flags: `--email`, `--server`, `--token-file`, `--env-file`, `--model`
+Flags: `--key-file`, `--email`, `--server`, `--env-file` (the server address only), `--model`
 (the model a new session's conversation starts on; the workspace default otherwise. It is never re-sent on later prompts, so a model switch made in the web UI sticks), `--persona`, `--public-url`
 (the web UI base for links; when `--server` or `$FLEET_CHAT_URL` picks the
 server, only this flag is trusted, since an ambient public URL may belong to
@@ -146,14 +153,16 @@ internals (the `handlers.form_messages(self, messages, capabilities)` hook,
 module path), so recheck it after upgrading CodeCompanion.
 
 CodeCompanion starts `fleet acp` in Neovim's current directory, with Neovim's
-environment plus the adapter's `env`, and fleet resolves the token as above,
-never from argv. Because the `.env.local` fallback is relative to that
-directory, which is the project you are editing, set `FLEET_ENV_FILE` to the
-server env file's absolute path, either in the environment Neovim starts with
-or on the adapter (`env = { FLEET_ENV_FILE = "/etc/fleet/fleet.env" }`). Never
-put the token itself in `env`: Neovim configs are often published as dotfiles.
-Both forms were checked live (adapter `env` on 2026-10-04, the inherited
-environment on 2026-10-05).
+environment plus the adapter's `env`, and fleet resolves the API key as above
+(`~/.config/fleet/api-key` by default), never from argv. Because the
+`.env.local` fallback for the server address is relative to that directory,
+which is the project you are editing, set `FLEET_ENV_FILE` to the server env
+file's absolute path, either in the environment Neovim starts with or on the
+adapter (`env = { FLEET_ENV_FILE = "/etc/fleet/fleet.env" }`). Never put the
+key itself in `env`: Neovim configs are often published as dotfiles. Both
+forms were checked live with the retired server token (adapter `env` on
+2026-10-04, the inherited environment on 2026-10-05); the key file replaces
+it with no other change.
 
 CodeCompanion's rules feature also sends project rule files. With its default
 rules settings (`autoload = "default"`), the first prompt of a new chat carries
@@ -225,7 +234,8 @@ agent-shell. agent-shell ships no fleet agent, so define one in your init file:
      (agent-shell--make-acp-client
       :command "fleet"
       :command-params '("acp" "--email" "acp-bot@example.com")
-      ;; The server env file's absolute path, never the token itself.
+      ;; The server env file's absolute path (the server address), never
+      ;; the API key itself: that is in ~/.config/fleet/api-key.
       :environment-variables '("FLEET_ENV_FILE=/etc/fleet/fleet.env")
       :context-buffer buffer))))
 
@@ -245,7 +255,7 @@ agent-shell starts `fleet acp` in the project's directory, with Emacs's
 environment plus the `:environment-variables` entries, which take precedence.
 As with CodeCompanion, set `FLEET_ENV_FILE` to the server env file's absolute
 path, so the `.env.local` fallback never reads a file from the project you are
-editing, and never put the token itself in your init file. Don't load the
+editing, and never put the API key itself in your init file. Don't load the
 server env file with the `:load-env` option of
 `agent-shell-make-environment-variables` either: that copies every variable in
 it, the server's own secrets included, into the agent's environment.
@@ -293,9 +303,9 @@ sends `SIGKILL`, and the turn keeps running server-side (checked live). Stop it
 in the web chat.
 
 agent-shell's error box shows the error's `message`, which is fleet's reason
-(see Errors); "[ Details ]" expands the raw error. A wrong token, an email
-that is not a fleet user or a viewer is reported as soon as the shell starts,
-because `fleet acp` checks the user and token when the session opens (all
+(see Errors); "[ Details ]" expands the raw error. A wrong key, a key whose
+account is not a fleet user or a viewer is reported as soon as the shell starts,
+because `fleet acp` checks the key's account when the session opens (all
 checked live on 2026-10-07). agent-shell does not display the name and version
 fleet reports in `initialize`; `fleet version` prints them.
 
@@ -336,7 +346,7 @@ The snippet was checked live as written on 2026-10-07, with only the env
 file's path changed and `fleet` on Zed's `PATH`. Zed starts `fleet acp` in the
 project's directory, with its own environment plus `env`. As with the other
 clients, set `FLEET_ENV_FILE` to the server env file's absolute path, and never
-put the token itself in `settings.json`. Zed keeps one `fleet acp` process for
+put the API key itself in `settings.json`. Zed keeps one `fleet acp` process for
 all fleet threads and reads `args` and `env` only when it starts it, so restart
 Zed after changing them: a new thread reuses the running process.
 
@@ -417,7 +427,7 @@ keep the rest as it is:
       "args": ["acp", "--email", "acp-bot@example.com",
                "--server", "http://localhost:8080",
                "--public-url", "http://localhost:3000",
-               "--token-file", "/Users/you/.config/fleet/acp-token"]
+               "--key-file", "/Users/you/.config/fleet/acp-key"]
     }
   }
 }
@@ -592,20 +602,20 @@ On the computer that runs Buzz Desktop, you need:
 3. **A fleet user for the agent.** On the fleet server:
    `fleet chat user add buzz-bot@example.com --password -`. Every turn runs as
    this user, whoever asked in Buzz.
-4. **The shared server token,** in a file only you can read, copied without
-   printing it. It is `FLEET_SERVER_TOKEN` in the server's env file
-   (`/etc/fleet/fleet.env` on a standard install):
+4. **A user API key for that user,** in a file only you can read, copied
+   without printing it. Mint it on the fleet server (ADR-0108):
 
    ```sh
    mkdir -p ~/.config/fleet
    (umask 077; ssh root@fleet.example.com \
-     "sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env" > ~/.config/fleet/acp-token)
+     "fleet sched apikey create buzz-bot --type user --user buzz-bot@example.com | sed -n 's/^secret (shown once): //p'" \
+     > ~/.config/fleet/acp-key)
    ```
 
    It needs a root login, or `sudo` that does not ask for a password: without
    a terminal a password prompt fails, and the file ends up empty, which
-   `fleet acp` later reports only as a missing token. Otherwise read the value
-   on the server and paste it into the file yourself.
+   `fleet acp` later reports only as a missing key. Otherwise run the command
+   on the server and paste the key into the file yourself.
 
 5. **The way to the chat API,** as above.
 
@@ -620,7 +630,7 @@ Then, in Buzz Desktop:
    | --- | --- |
    | Name | `fleet` |
    | Command | the bridge, e.g. `/Users/you/bin/fleet-buzz-bridge` |
-   | Arguments | `/Users/you/bin/fleet`, `acp`, `--email`, `buzz-bot@example.com`, `--server`, `http://localhost:8080`, `--public-url`, fleet's web address (e.g. `https://fleet.example.com`), `--token-file`, `/Users/you/.config/fleet/acp-token` |
+   | Arguments | `/Users/you/bin/fleet`, `acp`, `--email`, `buzz-bot@example.com`, `--server`, `http://localhost:8080`, `--public-url`, fleet's web address (e.g. `https://fleet.example.com`), `--key-file`, `/Users/you/.config/fleet/acp-key` |
    | Env vars | none |
 
    The form saves a JSON file in Buzz Desktop's `custom_harnesses/` folder
@@ -636,7 +646,7 @@ Then, in Buzz Desktop:
               "--email", "buzz-bot@example.com",
               "--server", "http://localhost:8080",
               "--public-url", "https://fleet.example.com",
-              "--token-file", "/Users/you/.config/fleet/acp-token"],
+              "--key-file", "/Users/you/.config/fleet/acp-key"],
      "env": {}
    }
    ```
@@ -698,16 +708,23 @@ On the fleet server:
 2. **`fleet-buzz-gateway`,** built from the bridge's repository
    (`go build -o fleet-buzz-gateway ./gateway` in a clone). fleet's chat API
    stays on loopback. The gateway listens on the cluster bridge address only,
-   adds fleet's server token, read from a file only it can read, pins every
-   request to one fleet user, and forwards only what `fleet acp` calls
+   adds a user API key for one fleet user (`X-API-Key`, ADR-0108), read from a
+   file only it can read, and forwards only what `fleet acp` calls
    (`POST /chat`, `GET /me`, `POST /conversations/{id}/cancel`,
    `GET /client-config`, `GET /healthz`). The pod then holds no fleet secret,
    and whatever runs in it can act only as that user. The other side of that:
    anything on the server or in the cluster that can reach that address can
    act as that user without a token, so keep the cluster to this agent. It
    binds with `IP_FREEBIND`, so it can start before k3s has created the
-   address. As a systemd service, with the server token copied into
-   `/etc/fleet-buzz/fleet-token` (root, 0600):
+   address. As a systemd service, with a user key for `buzz-bot@example.com`
+   (`fleet sched apikey create buzz-bot --type user --user buzz-bot@example.com`)
+   saved to `/etc/fleet-buzz/fleet-token` (root, 0600):
+
+   > **Gateway version.** A `fleet-buzz-gateway` built before ADR-0108 sends
+   > the retired `X-Chat-Server-Token` and `X-User-Email` headers; fleet now
+   > answers that 401 `service_token_retired`. It must send the file's
+   > contents as `X-API-Key` and no identity header instead (its `-email`
+   > flag is then unused: the key names the user).
 
    ```ini
    # /etc/systemd/system/fleet-buzz-gateway.service
@@ -742,7 +759,7 @@ On the fleet server:
 
    - Build `fleet` with `CGO_ENABLED=0`: the base image is Alpine.
    - `via-gateway-token` holds any placeholder text: `fleet acp` needs a
-     token, and the gateway replaces it.
+     key, and the gateway replaces it.
    - Use a current `main` build of the base (`buzz-sprig:main`, checked with
      the build of block/buzz `16eb0b6`). The image Buzz Desktop 0.5.27 fills
      in, `buzz-sprig:sha-6530b58` (August 2026), runs a `buzz-acp` with an
@@ -804,7 +821,7 @@ Then, in Buzz Desktop:
    | --- | --- |
    | Name | `fleet (cloud)` |
    | Command | `fleet-buzz-bridge` |
-   | Arguments | `/usr/local/bin/fleet`, `acp`, `--email`, `buzz-bot@example.com`, `--server`, `http://10.42.0.1:8081`, `--public-url`, fleet's web address, `--token-file`, `/etc/fleet-buzz/via-gateway-token` |
+   | Arguments | `/usr/local/bin/fleet`, `acp`, `--email`, `buzz-bot@example.com`, `--server`, `http://10.42.0.1:8081`, `--public-url`, fleet's web address, `--key-file`, `/etc/fleet-buzz/via-gateway-token` |
    | Env vars | none |
 
    Buzz Desktop lists a runtime as "not installed" when its command is not on
@@ -857,22 +874,24 @@ export BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hexkey>,<hexkey>   # who may mention it
 buzz-acp
 ```
 
-Run as root, `fleet acp` finds the token in the server's env file, as under
-"Using it". `buzz-acp` answers only the agent's owner by default and drops
+`fleet acp` reads the user key from `--key-file`, `$FLEET_API_KEY` or
+`~/.config/fleet/api-key`, as under "Using it". `buzz-acp` answers only the agent's owner by default and drops
 every mention until an owner is set (`BUZZ_ACP_AGENT_OWNER`), hence the
 allowlist. Such an agent shows as a regular user, and agents left on **Only
 me (default)** ignore its mentions, since they admit only agents their owner
 has signed.
 
 As a service, run it as its own unprivileged user. fleet's env file is root
-0600 and holds every fleet secret, so the agent gets only the server token,
-as a systemd credential, and its Buzz key from a file systemd reads. As root:
+0600 and holds every fleet secret, so the agent gets only a user API key for
+its fleet user, as a systemd credential, and its Buzz key from a file systemd
+reads. As root:
 
 ```sh
 useradd --system --home-dir /var/lib/fleet-buzz --no-create-home --shell /usr/sbin/nologin fleet-buzz
 install -d -m 0700 /etc/fleet-buzz
 ( umask 077
-  sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env > /etc/fleet-buzz/fleet-token
+  fleet sched apikey create buzz-bot --type user --user buzz-bot@example.com \
+    | sed -n 's/^secret (shown once): //p' > /etc/fleet-buzz/fleet-token
   printf 'BUZZ_PRIVATE_KEY=%s\n' "$(cat /path/to/agent.nsec)" > /etc/fleet-buzz/agent.env )
 ```
 
@@ -893,7 +912,7 @@ EnvironmentFile=/etc/fleet-buzz/agent.env
 LoadCredential=fleet-token:/etc/fleet-buzz/fleet-token
 Environment=BUZZ_RELAY_URL=<relay-url>
 Environment=BUZZ_ACP_AGENT_COMMAND=/opt/fleet-buzz-agent/bin/fleet-buzz-bridge
-Environment=BUZZ_ACP_AGENT_ARGS=/usr/local/bin/fleet,acp,--email,buzz-bot@example.com,--server,http://127.0.0.1:8080,--public-url,https://fleet.example.com,--token-file,/run/credentials/fleet-buzz-agent.service/fleet-token
+Environment=BUZZ_ACP_AGENT_ARGS=/usr/local/bin/fleet,acp,--email,buzz-bot@example.com,--server,http://127.0.0.1:8080,--public-url,https://fleet.example.com,--key-file,/run/credentials/fleet-buzz-agent.service/fleet-token
 Environment=BUZZ_ACP_RESPOND_TO=allowlist
 Environment=BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hexkey>,<hexkey>
 Environment=FLEET_BUZZ_CLI=/opt/buzz/bin/buzz
@@ -1088,9 +1107,9 @@ otherwise, and agent-shell shows `message`.
 
 | Failure | What the ACP client sees |
 | --- | --- |
-| No email / no token configured | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
-| Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a wrong shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
-| Any 401 | `session/new` answers `auth_required`, with text naming the user (or the next prompt does, when the 401 starts after the session opened). fleet itself sends a 401 here only for a revoked web session, which `fleet acp` never presents, so in practice it comes from a proxy in front of fleet. |
+| No API key configured (or the retired `--token-file`) | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
+| Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a key that names no user (`not_a_user_key`) names `fleet sched apikey create … --type user`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
+| Any 401 | `session/new` answers `auth_required`, with text naming the user (or the next prompt does, when the 401 starts after the session opened). fleet sends one for a missing, unknown, disabled or expired key, and for the retired service token (`service_token_retired`); the text carries fleet's own reason. |
 | Any other error status from the server | Internal error (-32603) quoting the status and the server's reply |
 | Daemon down | Internal error (-32603) naming the unreachable server URL, on the prompt: `session/new` opens the session when the server cannot be reached (see `session/new`). |
 | Identity check inconclusive at `session/new`: no answer, a 404 (a server older than `/me`), a 5xx, any other 4xx, or a 200 that is not the expected JSON | The session opens, and the first prompt reports any real problem as above. |

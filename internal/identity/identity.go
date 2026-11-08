@@ -212,7 +212,8 @@ const SessionEpochBytes = 8
 // SessionEpochSQL derives a row's session epoch in SQL over core.users'
 // password_hash and session_salt (ADR-0041). It is the one copy of the
 // derivation both planes read: the chat membership check and the Operations
-// Center's header-trust check compare a cookie's claim against this value.
+// Center's principal check (principal.Resolve) compare a cookie's claim
+// against this value.
 // store.TestSessionEpochSQLMatchesGo pins it to the Go derivation.
 var SessionEpochSQL = fmt.Sprintf(
 	`encode(substring(sha256(convert_to(password_hash || session_salt, 'UTF8')) FROM 1 FOR %d), 'hex')`,

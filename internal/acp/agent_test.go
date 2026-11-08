@@ -237,7 +237,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	if o.serverURL != "" {
 		serverURL = o.serverURL
 	}
-	cc := chattui.NewClient(chattui.Config{ServerURL: serverURL, Email: "bot@example.com", Token: "test-token", ClientName: "fleet-acp"})
+	cc := chattui.NewClient(chattui.Config{ServerURL: serverURL, Email: "bot@example.com", APIKey: "test-token", ClientName: "fleet-acp"})
 	cc.AdoptDefaultModel("test/default")
 	ag := NewAgent(cc, o.cfgErr, o.publicURL, o.timeout, "test")
 	if o.diag != nil {
@@ -420,7 +420,7 @@ func TestPromptRunsOneTurnAndStreamsIt(t *testing.T) {
 		t.Fatalf("chat requests = %+v", h.fleet.chats)
 	}
 	hdr := h.fleet.headers[0]
-	if hdr.Get("X-Chat-Server-Token") != "test-token" || hdr.Get("X-User-Email") != "bot@example.com" || hdr.Get("X-Fleet-Client") != "fleet-acp" {
+	if hdr.Get("X-API-Key") != "test-token" || hdr.Get("X-User-Email") != "" || hdr.Get("X-Fleet-Client") != "fleet-acp" {
 		t.Errorf("headers = %v", hdr)
 	}
 
@@ -727,11 +727,13 @@ func TestTimeoutStopsTheTurnAndSaysSo(t *testing.T) {
 func TestFailuresBecomeClearErrors(t *testing.T) {
 	t.Run("401/403 is auth_required", func(t *testing.T) {
 		h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
-			http.Error(w.w, "forbidden", http.StatusForbidden) // the shared-token check's exact refusal
+			w.w.Header().Set("Content-Type", "application/json")
+			w.w.WriteHeader(http.StatusForbidden)
+			_, _ = w.w.Write([]byte(`{"error":"not_a_user_key"}`)) // the key check's exact refusal
 		}})
 		_, err := h.prompt(h.newSession(t), "x")
-		if rpcCode(err) != -32000 || !strings.Contains(err.Error(), "FLEET_SERVER_TOKEN") {
-			t.Fatalf("err = %v, want auth_required naming the token", err)
+		if rpcCode(err) != -32000 || !strings.Contains(err.Error(), "--type user") {
+			t.Fatalf("err = %v, want auth_required naming the user-key fix", err)
 		}
 		if strings.Contains(err.Error(), "test-token") {
 			t.Fatal("the token value leaked into an error")
@@ -744,10 +746,10 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			_, _ = w.w.Write([]byte(`{"error":"not_a_member"}`))
 		}})
 		_, err := h.prompt(h.newSession(t), "x")
-		if rpcCode(err) != -32000 || !strings.Contains(err.Error(), "bot@example.com is not a fleet user") {
+		if rpcCode(err) != -32000 || !strings.Contains(err.Error(), "bot@example.com is not an enabled fleet user") {
 			t.Fatalf("err = %v, want auth_required naming the unprovisioned user", err)
 		}
-		if strings.Contains(err.Error(), "FLEET_SERVER_TOKEN") || strings.Contains(err.Error(), "test-token") {
+		if strings.Contains(err.Error(), "--type user") || strings.Contains(err.Error(), "test-token") {
 			t.Fatalf("a membership refusal must not blame (or leak) the token: %v", err)
 		}
 	})
@@ -842,7 +844,7 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			w.emit(frame, map[string]any{"message": message})
 		}
 	}
-	noEmail := resolveErr(t, chattui.Flags{})
+	noKeyAtAll := resolveErr(t, chattui.Flags{})
 	noToken := resolveErr(t, chattui.Flags{Email: "bot@example.com", EnvFile: "/nonexistent/fleet.env"})
 	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
 	// A proxy's 502 page, padded the way nginx pads its error pages: longer
@@ -871,16 +873,16 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 		messageHas []string
 	}{
 		{
-			name:    "403 wrong token",
-			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "forbidden\n")}),
+			name:    "403 a key that names no user",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_user_key"}`)}),
 			code:    -32000,
-			message: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+			message: "server rejected the request (403): this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)",
 		},
 		{
 			name:    "403 not a fleet user",
 			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`)}),
 			code:    -32000,
-			message: "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+			message: "server rejected the request (403): bot@example.com is not an enabled fleet user; an admin can add it with `fleet chat user add <email> --password -`, or use a user key for a provisioned account",
 		},
 		{
 			name:    "403 viewer",
@@ -904,9 +906,9 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			message: "not authorized (401) for bot@example.com: <html> <h1>401</h1> Authorization: Bearer [redacted] </html>",
 		},
 		{
-			name: "missing email at session/new",
+			name: "missing key at session/new",
 			err: func(t *testing.T) error {
-				h := newHarness(t, harnessOpts{cfgErr: noEmail})
+				h := newHarness(t, harnessOpts{cfgErr: noKeyAtAll})
 				if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
 					t.Fatalf("initialize must still succeed: %v", err)
 				}
@@ -914,10 +916,10 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 				return err
 			},
 			code:    -32000,
-			message: "no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)",
+			message: noKeyAtAll.Error(),
 		},
 		{
-			name: "missing token at session/prompt",
+			name: "missing key at session/prompt",
 			err: func(t *testing.T) error {
 				h := newHarness(t, harnessOpts{cfgErr: noToken})
 				_, err := h.prompt("fleet-acp-any", "x")
@@ -1248,13 +1250,13 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 			name:     "not a member",
 			me:       meAnswer(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`),
 			wantCode: -32000,
-			want:     "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+			want:     "server rejected the request (403): bot@example.com is not an enabled fleet user; an admin can add it with `fleet chat user add <email> --password -`, or use a user key for a provisioned account",
 		},
 		{
-			name:     "wrong token",
-			me:       meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "forbidden\n"),
+			name:     "a key that names no user",
+			me:       meAnswer(http.StatusForbidden, "application/json", `{"error":"not_a_user_key"}`),
 			wantCode: -32000,
-			want:     "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+			want:     "server rejected the request (403): this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)",
 		},
 		{
 			name:     "ip filter",
@@ -1264,9 +1266,9 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 		},
 		{
 			name:     "401 from a proxy echoing the token",
-			me:       meAnswer(http.StatusUnauthorized, "text/plain", "unauthorized: X-Chat-Server-Token: test-token\n"),
+			me:       meAnswer(http.StatusUnauthorized, "text/plain", "unauthorized: X-API-Key: test-token\n"),
 			wantCode: -32000,
-			want:     "not authorized (401) for bot@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
+			want:     "not authorized (401) for bot@example.com: unauthorized: X-API-Key: [redacted]",
 		},
 		{name: "member", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member","team_id":"","admin":false}`)},
 		{name: "admin", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"admin","team_id":"","admin":true}`)},
@@ -1284,7 +1286,7 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 			h.fleet.mu.Lock()
 			calls := h.fleet.meHeaders
 			h.fleet.mu.Unlock()
-			if len(calls) != 1 || calls[0].Get("X-Chat-Server-Token") != "test-token" || calls[0].Get("X-User-Email") != "bot@example.com" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
+			if len(calls) != 1 || calls[0].Get("X-API-Key") != "test-token" || calls[0].Get("X-User-Email") != "" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
 				t.Fatalf("GET /me calls = %v, want one with the turn's auth headers", calls)
 			}
 			if tt.wantCode == 0 {

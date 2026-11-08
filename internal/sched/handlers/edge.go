@@ -4,43 +4,39 @@
 package handlers
 
 import (
-	"crypto/subtle"
 	"net/http"
-	"strings"
-
-	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
-// edgePrincipal resolves the legacy internal service token on the
-// orchestrator listener's own port, for a request the gateway did not attach
-// a principal to: a caller holding FLEET_SERVER_TOKEN names its user in
-// X-User-Email. The token can already assert any identity, so the header adds
-// no spoofing surface, and Caddy strips both on every path it exposes
-// (ADR-0053). It is fail-closed: a PRESENT-but-wrong token is refused outright
-// (no fall-through to the weaker key paths).
-//
-// handled=false: no token, try the other auth paths. handled=true with an
-// empty AuthMethod: refused, response written.
-func (h *Handlers) edgePrincipal(w http.ResponseWriter, r *http.Request) (authn.Principal, bool) {
-	tok := r.Header.Get("X-Orchestrator-Server-Token")
-	if tok == "" {
-		return authn.Principal{}, false
+// retiredServiceTokenHeader is the header of the internal service-token
+// channel ADR-0108 removed. Nothing honours it; a caller still sending it
+// gets serviceTokenRetired instead of a silent fall-through.
+const retiredServiceTokenHeader = "X-Orchestrator-Server-Token"
+
+// serviceTokenRetiredMessage is the 401 body for a caller still using the
+// retired channel, naming what replaced it.
+const serviceTokenRetiredMessage = "the internal service token (X-Orchestrator-Server-Token, FLEET_SERVER_TOKEN) was removed (ADR-0108): authenticate with an API key in X-API-Key"
+
+// refuseRetiredServiceToken answers 401 for a request that presents the
+// retired service token and reports whether it did; on true the caller must
+// stop. A request the gateway attached a principal to never reaches here.
+func refuseRetiredServiceToken(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get(retiredServiceTokenHeader) == "" {
+		return false
 	}
-	if h.config.SharedToken == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) != 1 {
-		writeError(w, http.StatusForbidden, "Forbidden")
-		return authn.Principal{}, true
-	}
-	return authn.Principal{
-		Email:      strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email"))),
-		AuthMethod: authn.MethodServiceToken,
-	}, true
+	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "service_token_retired", "message": serviceTokenRetiredMessage})
+	return true
 }
 
-// edgeServiceToken reports whether r carries the valid internal service
-// token (a rate-limit bucket choice and the CSRF exemption only; it
-// authorizes nothing).
-func (h *Handlers) edgeServiceToken(r *http.Request) bool {
-	tok := r.Header.Get("X-Orchestrator-Server-Token")
-	return tok != "" && h.config.SharedToken != "" &&
-		subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) == 1
+// RetiredServiceTokenMiddleware refuses, ahead of CSRF and every auth path,
+// a request that still presents the retired service token, so the caller
+// gets the 401 that names the replacement rather than a CSRF 403 or an
+// unexplained "Unauthorized". The gateway's in-process calls carry a
+// principal and no such header.
+func (h *Handlers) RetiredServiceTokenMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuseRetiredServiceToken(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

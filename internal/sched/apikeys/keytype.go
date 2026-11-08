@@ -28,6 +28,12 @@ const (
 	KeyTypeWebhook KeyType = "webhook"
 	// KeyTypeReadonly is GET-only on tasks/stats/usage endpoints.
 	KeyTypeReadonly KeyType = "readonly"
+	// KeyTypeUser acts as one person (APIKey.UserEmail) on the chat API —
+	// `fleet chat`, `fleet acp`, fleet-bench (ADR-0108). It carries no
+	// Operations Center permission and reaches no scoped-key route: what it
+	// may do is its user's account, resolved on every request (disable the
+	// account and the key stops working).
+	KeyTypeUser KeyType = "user"
 
 	// KeyTypeLegacy is the zero value: an untyped key minted before typed keys
 	// existed (the "sk-" format). Legacy keys are NOT subject to the type-scope
@@ -47,11 +53,11 @@ const (
 	keySuffixLen = 32
 )
 
-// Valid reports whether kt is one of the four real key types (i.e. not the
+// Valid reports whether kt is one of the real key types (i.e. not the
 // legacy zero value and not an unknown string).
 func (kt KeyType) Valid() bool {
 	switch kt {
-	case KeyTypeAdmin, KeyTypeTask, KeyTypeWebhook, KeyTypeReadonly:
+	case KeyTypeAdmin, KeyTypeTask, KeyTypeWebhook, KeyTypeReadonly, KeyTypeUser:
 		return true
 	default:
 		return false
@@ -74,7 +80,7 @@ func (kt KeyType) Permissions() []models.Permission {
 		return []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks, models.PermissionViewLogs}
 	case KeyTypeReadonly:
 		return []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs}
-	case KeyTypeWebhook:
+	case KeyTypeWebhook, KeyTypeUser:
 		return []models.Permission{}
 	default:
 		return []models.Permission{}
@@ -96,7 +102,7 @@ func TypeAllowsMethod(kt KeyType, method string) bool {
 		return true
 	case KeyTypeReadonly:
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
-	default: // webhook, legacy, unknown
+	default: // webhook, user, legacy, unknown
 		return false
 	}
 }

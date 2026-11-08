@@ -77,11 +77,11 @@ What to know:
 
 ## 3. Authenticate
 
-Send the key as `X-API-Key`. That is the only public authentication path:
-the proxy deletes the Next-proxy header-trust headers (`X-User-Email`,
-`X-User-Session-Epoch`, the shared token headers) on every request it
-forwards, so a cookie- or header-impersonation path does not exist from
-outside the box.
+Send the key as `X-API-Key`. That is the only public authentication path: no
+fleet listener reads an identity header or honours a shared service token
+(ADR-0108), and the proxy also deletes the retired ones (`X-User-Email`,
+`X-User-Session-Epoch`, the old service-token headers) on every request it
+forwards, so a cookie- or header-impersonation path does not exist.
 
 ```sh
 FLEET=https://fleet.example.com/v1

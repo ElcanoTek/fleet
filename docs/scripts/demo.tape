@@ -15,7 +15,7 @@ Set Framerate 12
 Set TypingSpeed 35ms
 
 Hide
-Type "python3 docs/scripts/mock_chat_server.py 8199 & export FLEET_SERVER_TOKEN=demo-token FLEET_USER_EMAIL=demo@fleet.example; clear"
+Type "python3 docs/scripts/mock_chat_server.py 8199 & export FLEET_API_KEY=demo-key FLEET_USER_EMAIL=demo@fleet.example; clear"
 Enter
 Sleep 1s
 Type "./fleet chat --server http://127.0.0.1:8199 --model anthropic/claude-opus-4-8"

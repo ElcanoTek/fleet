@@ -68,7 +68,7 @@ func TestStreamTurnReturnsAtTheTerminalFrame(t *testing.T) {
 	}
 	got := make(chan res, 1)
 	go func() {
-		id, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(ev Event) {
+		id, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(ev Event) {
 			seen = append(seen, ev.Name)
 		})
 		got <- res{id, rest, err}
@@ -118,7 +118,7 @@ func TestStreamTurnOutcomes(t *testing.T) {
 			srv := lingeringTurn([]string{frameConversation, tc.frame}, "", release)
 			defer srv.Close()
 			defer close(release) // first: Close waits for the handler
-			_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(Event) {})
+			_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(Event) {})
 			if !tc.want(err) {
 				t.Errorf("err = %v", err)
 			}
@@ -137,7 +137,7 @@ func TestStreamTurnWithoutATerminalFrame(t *testing.T) {
 		fmt.Fprint(w, frameConversation, frameText)
 	}))
 	defer srv.Close()
-	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(Event) {})
+	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamTurn(context.Background(), "hi", "", "", func(Event) {})
 	if err == nil || err.Error() != "stream ended before a terminal turn event" {
 		t.Errorf("err = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestStreamTurnQueuedHasNoRest(t *testing.T) {
 		fmt.Fprint(w, `{"queued":true,"conversation_id":"c","input":{"id":"i","position":1,"state":"queued"}}`)
 	}))
 	defer srv.Close()
-	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamTurn(context.Background(), "hi", "c", "", func(Event) {})
+	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamTurn(context.Background(), "hi", "c", "", func(Event) {})
 	var q *QueuedError
 	if !errors.As(err, &q) {
 		t.Fatalf("err = %v, want *QueuedError", err)
@@ -171,7 +171,7 @@ func TestStreamTurnRestEndsWithItsContext(t *testing.T) {
 	defer srv.Close()
 	defer close(release) // first: Close waits for the handler
 	ctx, cancel := context.WithCancel(context.Background())
-	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamTurn(ctx, "hi", "", "", func(Event) {})
+	_, rest, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamTurn(ctx, "hi", "", "", func(Event) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestStreamInputStillReadsToTheEnd(t *testing.T) {
 	var seen []string
 	done := make(chan error, 1)
 	go func() {
-		_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "", "", func(ev Event) {
+		_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamInput(context.Background(), "hi", "", "", func(ev Event) {
 			seen = append(seen, ev.Name)
 		})
 		done <- err
@@ -220,7 +220,7 @@ func TestStreamTurnReportsTheFirstTerminalFrame(t *testing.T) {
 	close(release)
 	srv := lingeringTurn(frames, "", release)
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"})
 	_, rest, err := c.StreamTurn(context.Background(), "hi", "", "", func(Event) {})
 	if err != nil {
 		t.Errorf("StreamTurn: %v, want the completed turn", err)

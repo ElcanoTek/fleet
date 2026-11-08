@@ -98,7 +98,7 @@ providers:
 	if _, on := b.MCPServerConfigs()["gated"]; on {
 		t.Error("a connector gated on a removed spelling must stay disabled")
 	}
-	if !strings.Contains(buf.String(), "names the removed variable CHAT_SERVER_TOKEN; rename it to FLEET_SERVER_TOKEN") || strings.Contains(buf.String(), "stale-token") {
+	if !strings.Contains(buf.String(), "names the removed setting CHAT_SERVER_TOKEN: the internal service-token channel was removed (ADR-0108)") || strings.Contains(buf.String(), "stale-token") {
 		t.Errorf("load log:\n%s", buf.String())
 	}
 	if ws, err := RetiredManifestRefWarnings(dir); err != nil || len(ws) != 2 {

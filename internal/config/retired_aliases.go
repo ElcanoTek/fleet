@@ -17,17 +17,22 @@ import (
 // loader does not admit them. An operator who still sets one would otherwise
 // see the setting silently fall back to its default, so boot (Load) and
 // `fleet doctor` report every one they find, with the FLEET_ name to use.
-// envreg.RetiredAlias decides what counts.
+// The settings removed outright (the internal service token, ADR-0108) are
+// reported the same way, with what replaced them. envreg.RetiredAlias
+// decides what counts; envreg.RetiredFix words the advice.
 
 // RetiredAliasFinding is one removed spelling found set (non-empty).
 type RetiredAliasFinding struct {
 	Name      string // the removed spelling
-	Canonical string // the FLEET_ name to set instead
+	Canonical string // the FLEET_ name to set instead; "" for a setting removed outright
 	Where     string // SourceProcessEnv, SourceEnvFile or SourceUnit (+ origin)
 }
 
 // String is the one-line warning. It never contains a value.
 func (f RetiredAliasFinding) String() string {
+	if f.Canonical == "" {
+		return fmt.Sprintf("%s is set in the %s, but fleet no longer reads it: %s", f.Name, f.Where, envreg.RetiredFix(f.Name))
+	}
 	return fmt.Sprintf("%s is set in the %s, but fleet no longer reads it (the CHAT_/CUTLASS_ aliases were removed, ADR-0106): rename it to %s", f.Name, f.Where, f.Canonical)
 }
 
@@ -93,7 +98,7 @@ func RetiredAliasFindings(envFile string, unit *UnitEnv) ([]RetiredAliasFinding,
 func warnRetiredEnvAliases(envFile string) {
 	findings, err := RetiredAliasFindings(envFile, nil)
 	if err != nil {
-		log.Printf("Warning: could not check for removed CHAT_/CUTLASS_ env aliases: %v", err)
+		log.Printf("Warning: could not check for removed env settings: %v", err)
 		return
 	}
 	for _, f := range findings {

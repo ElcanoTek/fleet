@@ -467,11 +467,14 @@ each piece yourself):
    Two details of that Caddyfile are load-bearing
    ([ADR-0053](adr/0053-public-api-through-the-tls-front.md)):
    - The backend routes **delete** `X-User-Email`, `X-User-Session-Epoch` and
-     the shared token headers (`X-Orchestrator-Server-Token`,
-     `X-Chat-Server-Token`) before forwarding. Those are the web tier's
-     impersonation channel; stripping them at the edge keeps it reachable from
-     loopback only, so the public API authenticates with `X-API-Key` (or a
-     webhook signature) and nothing else. Do not remove those lines.
+     the old service-token headers (`X-Orchestrator-Server-Token`,
+     `X-Chat-Server-Token`) before forwarding. Since
+     [ADR-0108](adr/0108-typed-principal.md) no fleet listener reads them
+     (identity rides the request context; the service token is retired and
+     answered 401), so the lines are defence in depth: harmless to keep, and
+     kept so an installed Caddyfile does not drift from the shipped layout.
+     The public API authenticates with `X-API-Key` (or a webhook signature)
+     and nothing else.
    - The orchestrator's **legacy bare paths** (`/tasks`, `/keys`, …) are not
      routed — they stay behind the web tier's `/api/*`. External clients use `/v1`.
 

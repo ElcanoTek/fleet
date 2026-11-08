@@ -11,11 +11,12 @@ import (
 	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
-// The web-tier header-trust path (#157) is what lets a /chat-cookie user reach
-// the Operations Center without a second login: the web tier forwards
-// X-User-Email guarded by the shared X-Orchestrator-Server-Token. It must mirror
-// chat-server: token-first (fail-closed, no fall-through), then a non-empty
-// email, then the membership gate.
+// The gateway's session principal (ADR-0108) is what lets a /chat-cookie user
+// reach the Operations Center without a second login: the gateway hands the
+// session over in the request context. A non-empty email, then the
+// membership gate, decide. The internal service token that used to carry the
+// identity in headers is retired: a request still presenting it is refused
+// with 401, never believed and never passed on to weaker paths.
 //
 // Membership is the identity table itself (#2049 M4): alice is an account with
 // ops_scope run (the old "client"); nobody else is.
@@ -25,8 +26,25 @@ func newHeaderTrustHandler(t *testing.T) *Handlers {
 	return &Handlers{
 		// AdminAPIKey non-empty so verifyAdminKey doesn't fail-open on the
 		// empty/empty hash match (matches the elcano cookie test's setup).
-		config:  Config{AdminAPIKey: "admin-secret", SharedToken: "topsecret"},
+		config:  Config{AdminAPIKey: "admin-secret"},
 		storage: st,
+	}
+}
+
+// trustRequest is req as the tests' "token" names it: "topsecret" is a
+// gateway session for email (an empty email is a principal naming no one),
+// any other non-empty token is the retired service token (with email as a
+// spoofed identity header), and "" is neither.
+func trustRequest(req *http.Request, token, email string) *http.Request {
+	switch token {
+	case "":
+		return req
+	case "topsecret":
+		return req.WithContext(authn.With(req.Context(), authn.Principal{Email: email, AuthMethod: authn.MethodSession}))
+	default:
+		req.Header.Set("X-Orchestrator-Server-Token", token)
+		req.Header.Set("X-User-Email", email)
+		return req
 	}
 }
 
@@ -47,12 +65,7 @@ func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
 	do := func(token, email string) *httptest.ResponseRecorder {
 		seenUser = ""
 		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-		if token != "" {
-			req.Header.Set("X-Orchestrator-Server-Token", token)
-		}
-		if email != "" {
-			req.Header.Set("X-User-Email", email)
-		}
+		req = trustRequest(req, token, email)
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 		return rr
@@ -75,10 +88,10 @@ func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong token is rejected with NO fall-through", func(t *testing.T) {
+	t.Run("the retired service token is refused with NO fall-through", func(t *testing.T) {
 		rr := do("wrong", "alice@elcanotek.com")
-		if rr.Code != http.StatusForbidden {
-			t.Errorf("status %d want 403 (present-but-wrong token must fail closed)", rr.Code)
+		if rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "service_token_retired") {
+			t.Errorf("status %d body %q, want 401 service_token_retired", rr.Code, rr.Body.String())
 		}
 	})
 
@@ -115,12 +128,7 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 	h := newHeaderTrustHandler(t)
 	do := func(token, email string) (*httptest.ResponseRecorder, taskCreator, bool) {
 		req := httptest.NewRequest(http.MethodPost, "/tasks", nil)
-		if token != "" {
-			req.Header.Set("X-Orchestrator-Server-Token", token)
-		}
-		if email != "" {
-			req.Header.Set("X-User-Email", email)
-		}
+		req = trustRequest(req, token, email)
 		rr := httptest.NewRecorder()
 		creator, ok := h.authorizeTaskCreator(rr, req)
 		return rr, creator, ok
@@ -139,10 +147,10 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong token fails closed with 403, no fall-through", func(t *testing.T) {
+	t.Run("the retired service token is refused with 401, no fall-through", func(t *testing.T) {
 		rr, _, ok := do("wrong", "alice@elcanotek.com")
-		if ok || rr.Code != http.StatusForbidden {
-			t.Errorf("ok=%v status=%d, want rejected 403 (present-but-wrong token must fail closed)", ok, rr.Code)
+		if ok || rr.Code != http.StatusUnauthorized {
+			t.Errorf("ok=%v status=%d, want refused 401", ok, rr.Code)
 		}
 	})
 
@@ -176,21 +184,16 @@ func TestHandleUpload_HeaderTrust(t *testing.T) {
 	h := newHeaderTrustHandler(t)
 	do := func(token, email string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/upload", nil)
-		if token != "" {
-			req.Header.Set("X-Orchestrator-Server-Token", token)
-		}
-		if email != "" {
-			req.Header.Set("X-User-Email", email)
-		}
+		req = trustRequest(req, token, email)
 		rr := httptest.NewRecorder()
 		h.HandleUpload(rr, req)
 		return rr
 	}
 
-	t.Run("wrong token fails closed with 403", func(t *testing.T) {
+	t.Run("the retired service token is refused with 401", func(t *testing.T) {
 		rr := do("wrong", "alice@elcanotek.com")
-		if rr.Code != http.StatusForbidden {
-			t.Errorf("status %d want 403", rr.Code)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("status %d want 401", rr.Code)
 		}
 	})
 
@@ -231,12 +234,7 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/tasks/estimate",
 			strings.NewReader(`{"prompt":"estimate this prompt please"}`))
 		req.Header.Set("Content-Type", "application/json")
-		if token != "" {
-			req.Header.Set("X-Orchestrator-Server-Token", token)
-		}
-		if email != "" {
-			req.Header.Set("X-User-Email", email)
-		}
+		req = trustRequest(req, token, email)
 		if epoch != "" {
 			// A session claim comes only with a gateway session principal.
 			req = req.WithContext(authn.With(req.Context(), authn.Principal{
@@ -255,10 +253,10 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong token fails closed with 403", func(t *testing.T) {
+	t.Run("the retired service token is refused with 401", func(t *testing.T) {
 		rr := do(newEstimateHandler(t), "wrong", "alice@elcanotek.com", "")
-		if rr.Code != http.StatusForbidden {
-			t.Errorf("status %d want 403", rr.Code)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("status %d want 401", rr.Code)
 		}
 	})
 

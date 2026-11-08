@@ -172,7 +172,7 @@ const usageText = `fleet — unified operator CLI  (run "fleet serve" to start t
 Chat with the agent (TUI, #457):
   fleet chat                                          (interactive Bubble Tea chat with the fleet agent)
   fleet chat --message "<text>" [--no-tui]            (one-shot: stream the reply to stdout; scriptable)
-  fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
+  fleet chat [--conversation <id>] [--model <slug>] [--key-file <path>] [--email …] [--server …]
 
 Serve an ACP client (Agent Client Protocol over stdio — Zed, JetBrains, Neovim, Emacs, …; docs/ACP.md):
   fleet acp [--email …] [--server …] [--model <slug>] [--timeout 4h]

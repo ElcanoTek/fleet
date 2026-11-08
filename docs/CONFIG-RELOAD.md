@@ -105,7 +105,6 @@ require a restart even though they are not individually echoed back.
 |---|---|
 | `FLEET_SERVER_ADDR` | the TCP listener is bound at startup |
 | `DATABASE_URL` / `DB_*` | the Postgres connection pool is opened once at startup |
-| `FLEET_SERVER_TOKEN` | shared-secret auth — rotating it mid-run would invalidate in-flight sessions |
 | `ADMIN_API_KEY` | admin auth secret |
 | `FLEET_MAX_CONCURRENT_AGENTS` | sizes the admission semaphore + sandbox warm pool at startup |
 | `FLEET_TLS_MODE` | the TLS listener context is built at startup |

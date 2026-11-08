@@ -50,6 +50,8 @@ type APIKeyResponse struct {
 	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
 	Enabled             bool       `json:"enabled"`
 	Description         string     `json:"description"`
+	// UserEmail is the account a user-type key acts as (ADR-0108).
+	UserEmail string `json:"user_email,omitempty"`
 	// MaxPriority is the key's task-urgency ceiling (#230); nil = uncapped.
 	MaxPriority *int `json:"max_priority,omitempty"`
 }

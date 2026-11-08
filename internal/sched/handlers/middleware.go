@@ -296,17 +296,6 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Skip for the legacy internal service token on this listener's own
-		// port. Like X-API-Key and Bearer above, a custom header cannot be
-		// attached to a cross-site browser request (it would require a CORS
-		// preflight we never grant), so its presence proves a programmatic
-		// caller. Presence is enough here: the auth paths fail-closed reject a
-		// wrong token value.
-		if r.Header.Get("X-Orchestrator-Server-Token") != "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		// Cookie/session requests: verify the Origin matches our host. This is
 		// stateless (no token store, nothing to go stale on restart) and mirrors
 		// chat's CSRF defense: browsers always send Origin on cross-origin

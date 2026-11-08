@@ -29,8 +29,8 @@
 #                     FLEET_WEB_HOST + PORT -> FLEET_WEB_ADDR (non-default only)
 #   dropped ......... CHAT_SERVER_URL, ORCHESTRATOR_SERVER_URL (the backends are
 #                     in-process now); CHAT_SERVER_TOKEN, ORCHESTRATOR_SERVER_TOKEN
-#                     (the binary uses its own FLEET_SERVER_TOKEN; an old box may
-#                     even hold a wrong ORCHESTRATOR_SERVER_TOKEN — an old
+#                     (the internal service token is retired, ADR-0108; an old
+#                     box may even hold a wrong ORCHESTRATOR_SERVER_TOKEN — an old
 #                     bootstrap wrote ADMIN_API_KEY there — so it is never carried); NODE_ENV,
 #                     FLEET_NODE_BIN, NEXT_PUBLIC_BUILD_ID, BUILD_ID (build/run
 #                     plumbing of the node tier); NEXT_PUBLIC_APP_NAME (the name

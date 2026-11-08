@@ -153,7 +153,6 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 	t.Parallel()
 
 	h, store := setupTest(t)
-	h.config.SharedToken = "shared-secret"
 	// Chat-only accounts: no Operations Center access (ops_scope none), so
 	// /prompts authorizes them by their Fleet role, read from the same row.
 	for email, role := range map[string]identity.Role{"chatmember@example.com": identity.RoleMember, "chatviewer@example.com": identity.RoleViewer} {
@@ -167,8 +166,7 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 
 	// A Chat contributor with ops_scope none can list and create prompts.
 	getReq := httptest.NewRequest(http.MethodGet, "/prompts", nil)
-	getReq.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
-	getReq.Header.Set("X-User-Email", "chatmember@example.com")
+	getReq = asSession(getReq, "chatmember@example.com")
 	getRec := httptest.NewRecorder()
 	promptsAuthed.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
@@ -176,8 +174,7 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 	}
 
 	postReq := httptest.NewRequest(http.MethodPost, "/prompts", strings.NewReader(`{"name":"My Chat Prompt","content":"Run check","visibility":"private"}`))
-	postReq.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
-	postReq.Header.Set("X-User-Email", "chatmember@example.com")
+	postReq = asSession(postReq, "chatmember@example.com")
 	postRec := httptest.NewRecorder()
 	promptsAuthed.ServeHTTP(postRec, postReq)
 	if postRec.Code != http.StatusCreated {
@@ -186,8 +183,7 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 
 	// A Chat viewer can read prompts (200) but cannot create them (403).
 	viewerGet := httptest.NewRequest(http.MethodGet, "/prompts", nil)
-	viewerGet.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
-	viewerGet.Header.Set("X-User-Email", "chatviewer@example.com")
+	viewerGet = asSession(viewerGet, "chatviewer@example.com")
 	viewerGetRec := httptest.NewRecorder()
 	promptsAuthed.ServeHTTP(viewerGetRec, viewerGet)
 	if viewerGetRec.Code != http.StatusOK {
@@ -195,8 +191,7 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 	}
 
 	viewerPost := httptest.NewRequest(http.MethodPost, "/prompts", strings.NewReader(`{"name":"Nope","content":"No","visibility":"private"}`))
-	viewerPost.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
-	viewerPost.Header.Set("X-User-Email", "chatviewer@example.com")
+	viewerPost = asSession(viewerPost, "chatviewer@example.com")
 	viewerPostRec := httptest.NewRecorder()
 	promptsAuthed.ServeHTTP(viewerPostRec, viewerPost)
 	if viewerPostRec.Code != http.StatusForbidden {
@@ -205,8 +200,7 @@ func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 
 	// Operations Center routes (/api/me) remain 403 not_a_member for chat-only users.
 	meReq := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	meReq.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
-	meReq.Header.Set("X-User-Email", "chatmember@example.com")
+	meReq = asSession(meReq, "chatmember@example.com")
 	meRec := httptest.NewRecorder()
 	meAuthed.ServeHTTP(meRec, meReq)
 	if meRec.Code != http.StatusForbidden {

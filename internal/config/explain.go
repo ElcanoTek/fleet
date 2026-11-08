@@ -127,7 +127,11 @@ func Explain(opts ExplainOptions) (*ExplainReport, error) {
 			e, ok := envreg.Find(strings.TrimSpace(k))
 			if !ok {
 				if c, retired := envreg.RetiredAlias(strings.TrimSpace(k)); retired {
-					k += " (a removed alias of " + c + ", ADR-0106: nothing reads it; use " + c + ")"
+					if c == "" {
+						k += " (a removed setting: nothing reads it; " + envreg.RetiredFix(strings.TrimSpace(k)) + ")"
+					} else {
+						k += " (a removed alias of " + c + ", ADR-0106: nothing reads it; use " + c + ")"
+					}
 				}
 				unknown = append(unknown, k)
 				continue

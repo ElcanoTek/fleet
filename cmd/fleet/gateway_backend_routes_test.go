@@ -40,7 +40,7 @@ func TestGatewayRowsResolveOnBackends(t *testing.T) {
 	if !ok {
 		t.Fatal("orchestrator router is not chi.Routes")
 	}
-	chat := httpapi.New(&config.Config{SharedToken: "drift-test-token"}, nil, nil).Routes()
+	chat := httpapi.New(&config.Config{}, nil, nil).Routes()
 
 	// Negative controls: both probes must be able to say "not served", or the
 	// loop below proves nothing.

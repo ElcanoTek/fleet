@@ -70,6 +70,24 @@ var retiredBare = map[string]string{
 	"DATA_DIR": "FLEET_DATA_DIR", // read by `fleet sched apikey` until ADR-0106
 }
 
+// removedSettings are settings fleet no longer has at all — no other name
+// replaces them — mapped to what to do instead. Like a removed alias, each
+// reads as unset whatever the environment holds, and boot, `fleet doctor`,
+// `fleet config` and the bundle scan (`validate-config --retired-only`)
+// report it (RetiredAlias with an empty canonical; RetiredFix words it).
+var removedSettings = map[string]string{
+	// The internal service-token channel (ADR-0108). CHAT_/CUTLASS_ were
+	// ADR-0106's removed spellings of FLEET_SERVER_TOKEN; with the setting
+	// gone they are named here so they stay reported.
+	"FLEET_SERVER_TOKEN":        serviceTokenFix,
+	"ORCHESTRATOR_SERVER_TOKEN": serviceTokenFix,
+	"CHAT_SERVER_TOKEN":         serviceTokenFix,
+	"CUTLASS_SERVER_TOKEN":      serviceTokenFix,
+}
+
+// serviceTokenFix is the advice for a leftover service-token setting.
+const serviceTokenFix = "the internal service-token channel was removed (ADR-0108), so delete the line; `fleet chat`, `fleet acp` and fleet-bench authenticate with a user API key (`fleet sched apikey create <name> --type user --user <email>`)"
+
 // Type is the value type of a setting, as the docs describe it. The typed
 // knob kinds (Int … StrictBool) are the ones internal/config's knob parser
 // understands; the rest are documentation types for string-valued settings.
@@ -360,7 +378,9 @@ func EnvFileNames() []string {
 }
 
 // RetiredAlias reports whether name is a spelling ADR-0106 removed, and the
-// canonical name to set instead. It is CHAT_<X> or CUTLASS_<X> when FLEET_<X>
+// canonical name to set instead — or a setting removed outright
+// (removedSettings, e.g. FLEET_SERVER_TOKEN, ADR-0108), with an empty
+// canonical; RetiredFix words the advice for either. It is CHAT_<X> or CUTLASS_<X> when FLEET_<X>
 // is a registered setting and the name is not itself registered (CHAT_RATE_PER_MIN,
 // CUTLASS_ALLOWED_DIRS and the other canonical CHAT_/CUTLASS_ names stay
 // settings), or a bare spelling in retiredBare — or such a spelling with a
@@ -380,6 +400,9 @@ func RetiredAlias(name string) (canonical string, ok bool) {
 	}
 	for i := strings.IndexByte(name, '_'); i > 0 && i < len(name)-1; {
 		if c, ok := retiredExact(name[:i]); ok && accountSuffix.MatchString(name[i+1:]) {
+			if c == "" {
+				return "", true // a suffix of a setting removed outright
+			}
 			return c + name[i:], true
 		}
 		next := strings.IndexByte(name[i+1:], '_')
@@ -400,6 +423,9 @@ func retiredExact(name string) (string, bool) {
 	if IsRegistered(name) {
 		return "", false
 	}
+	if _, ok := removedSettings[name]; ok {
+		return "", true
+	}
 	if c, ok := retiredBare[name]; ok {
 		return c, true
 	}
@@ -409,6 +435,40 @@ func retiredExact(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// RetiredFix is the one-line advice for a retired name ("" when name is not
+// retired): rename it to its FLEET_ name (ADR-0106), or what replaced a
+// setting removed outright. It never contains a value.
+func RetiredFix(name string) string {
+	canonical, ok := RetiredAlias(name)
+	if !ok {
+		return ""
+	}
+	if canonical != "" {
+		return "rename it to " + canonical + " (ADR-0106)"
+	}
+	if fix, ok := removedSettings[name]; ok {
+		return fix
+	}
+	// A per-account suffix of a removed setting (<BASE>_<ACCOUNT>).
+	for base, fix := range removedSettings {
+		if rest, ok := strings.CutPrefix(name, base+"_"); ok && accountSuffix.MatchString(rest) {
+			return fix
+		}
+	}
+	return "nothing reads it any more"
+}
+
+// RemovedSettings returns the settings removed outright (removedSettings),
+// sorted.
+func RemovedSettings() []string {
+	out := make([]string, 0, len(removedSettings))
+	for n := range removedSettings {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RetiredAliasesOf returns the removed spellings RetiredAlias maps to

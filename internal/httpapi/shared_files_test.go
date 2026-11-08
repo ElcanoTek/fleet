@@ -66,8 +66,7 @@ func uploadShared(t *testing.T, h http.Handler, user, folder, description string
 	}
 	_ = mw.Close()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/shared-files", &buf)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", user)
+	req = req.WithContext(asUser(req.Context(), user))
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -119,8 +118,7 @@ func TestSharedFilesLifecycle(t *testing.T) {
 
 	// Members can download the canonical bytes.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/shared-files/"+f.ID+"/download", nil)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "member@x")
+	req = req.WithContext(asUser(req.Context(), "member@x"))
 	dl := httptest.NewRecorder()
 	h.ServeHTTP(dl, req)
 	if dl.Code != http.StatusOK || dl.Body.String() != "a,b\n1,2\n" {
@@ -489,8 +487,7 @@ func TestSharedFilesBatchUploadRollsBackAfterContextCancel(t *testing.T) {
 	}
 	_ = mw.Close()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/shared-files", &buf)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "admin@x")
+	req = req.WithContext(asUser(req.Context(), "admin@x"))
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

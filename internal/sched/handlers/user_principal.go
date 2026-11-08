@@ -42,10 +42,12 @@ func writeSessionRevoked(w http.ResponseWriter) {
 }
 
 // userPrincipal resolves the request's user principal: the one the gateway
-// attached in-process, else one the listener's edge resolves (edgePrincipal).
+// attached in-process. Nothing on the listener's own port names a person —
+// programs use API keys — and a request still presenting the retired service
+// token is refused with 401 (refuseRetiredServiceToken).
 //
-// Returns (nil, false) when the request carries neither — the caller should
-// try its other auth paths (the admin key, scoped API keys). Returns
+// Returns (nil, false) when the request carries no principal — the caller
+// should try its other auth paths (the admin key, scoped API keys). Returns
 // handled=true when it wrote the response on rejection (user == nil) or
 // resolved the member (user != nil), with the resolved principal on the
 // returned request's context. Shared by AdminOrUserAuthMiddleware,
@@ -59,13 +61,7 @@ func writeSessionRevoked(w http.ResponseWriter) {
 func (h *Handlers) userPrincipal(w http.ResponseWriter, r *http.Request) (*models.User, *http.Request, bool) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		var handled bool
-		if p, handled = h.edgePrincipal(w, r); !handled {
-			return nil, r, false
-		}
-		if p.AuthMethod == "" {
-			return nil, r, true // refused; the edge wrote the response
-		}
+		return nil, r, refuseRetiredServiceToken(w, r)
 	}
 	if p.Email == "" {
 		writeError(w, http.StatusBadRequest, "missing user identity")

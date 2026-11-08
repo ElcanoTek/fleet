@@ -711,7 +711,6 @@ func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *
 func newDefaultChatServer(t *testing.T, engine turnEngine, st chatStore) *Server {
 	t.Helper()
 	cfg := &config.Config{
-		SharedToken:        "tok",
 		PersonaDefault:     "generic",
 		ConversationTTL:    14,
 		UnpinnedCap:        50,
@@ -727,8 +726,7 @@ func postChatRequest(t *testing.T, srv *Server, body map[string]any) *httptest.R
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(raw))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "u@x.com")
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, req)
@@ -2061,8 +2059,7 @@ func TestCancelByInputKey_MarksAreBounded(t *testing.T) {
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 	raw, _ := json.Marshal(map[string]any{"scope": "turn", "input_id": strings.Repeat("k", maxInputIDLen+1)})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "u@x.com")
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -2403,8 +2400,7 @@ func TestCancelByTurnID_ReportsANoOp(t *testing.T) {
 	cancel := func(turn string) int {
 		raw, _ := json.Marshal(map[string]any{"scope": "turn", "turn_id": turn})
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", "u@x.com")
+		req = req.WithContext(asUser(req.Context(), "u@x.com"))
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, req)
 		return w.Code
@@ -2479,8 +2475,7 @@ func TestCancelByInputKey_ReportsAFinishedInput(t *testing.T) {
 			st.mu.Unlock()
 			raw, _ := json.Marshal(map[string]any{"scope": "turn", "input_id": "key-f"})
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
-			req.Header.Set("X-Chat-Server-Token", "tok")
-			req.Header.Set("X-User-Email", "u@x.com")
+			req = req.WithContext(asUser(req.Context(), "u@x.com"))
 			w := httptest.NewRecorder()
 			srv.Routes().ServeHTTP(w, req)
 			if w.Code != tc.want {

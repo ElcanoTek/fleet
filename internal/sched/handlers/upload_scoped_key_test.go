@@ -30,7 +30,7 @@ func setupUploadTest(t *testing.T) (*Handlers, *apikeys.Manager) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "admin-key", DataDir: tmpDir}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "admin-key", DataDir: tmpDir}, store, keyMgr)
 	return h, keyMgr
 }
 

@@ -60,13 +60,12 @@ func TestContextRoundTrip(t *testing.T) {
 
 func TestMethodClasses(t *testing.T) {
 	for m, want := range map[AuthMethod][2]bool{
-		MethodSession:      {true, false},
-		MethodGateway:      {true, false},
-		MethodAPIKey:       {false, true},
-		MethodBearer:       {false, true},
-		MethodAdminKey:     {false, true},
-		MethodServiceToken: {false, true},
-		"":                 {false, false},
+		MethodSession:  {true, false},
+		MethodGateway:  {true, false},
+		MethodAPIKey:   {false, true},
+		MethodBearer:   {false, true},
+		MethodAdminKey: {false, true},
+		"":             {false, false},
 	} {
 		p := Principal{AuthMethod: m}
 		if p.IsBrowserSession() != want[0] || p.IsCredential() != want[1] {

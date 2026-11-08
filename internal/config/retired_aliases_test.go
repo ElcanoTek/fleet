@@ -82,19 +82,48 @@ func TestRetiredAliasFindingsOneWarningPerSpelling(t *testing.T) {
 
 // A suffixed removed spelling is reported with the suffixed canonical name.
 func TestRetiredAliasFindingsNameTheSuffixedCanonical(t *testing.T) {
-	unsetForTest(t, "CHAT_SERVER_TOKEN_ACME")
-	t.Setenv("CHAT_SERVER_TOKEN_ACME", "stale")
+	unsetForTest(t, "CHAT_SMTP_PASSWORD_ACME")
+	t.Setenv("CHAT_SMTP_PASSWORD_ACME", "stale")
 	got, err := RetiredAliasFindings("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range got {
-		if f.Name == "CHAT_SERVER_TOKEN_ACME" {
-			if f.Canonical != "FLEET_SERVER_TOKEN_ACME" || !strings.Contains(f.String(), "rename it to FLEET_SERVER_TOKEN_ACME") || strings.Contains(f.String(), "stale") {
+		if f.Name == "CHAT_SMTP_PASSWORD_ACME" {
+			if f.Canonical != "FLEET_SMTP_PASSWORD_ACME" || !strings.Contains(f.String(), "rename it to FLEET_SMTP_PASSWORD_ACME") || strings.Contains(f.String(), "stale") {
 				t.Errorf("finding = %+v / %s", f, f)
 			}
 			return
 		}
 	}
-	t.Errorf("CHAT_SERVER_TOKEN_ACME not reported: %+v", got)
+	t.Errorf("CHAT_SMTP_PASSWORD_ACME not reported: %+v", got)
+}
+
+// A setting removed outright (the internal service token, ADR-0108) is
+// reported like a removed alias, with what replaced it, from the env file
+// and the process env alike — and never with its value.
+func TestRetiredFindingsReportTheRemovedServiceToken(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_SERVER_TOKEN=stale-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unsetForTest(t, "ORCHESTRATOR_SERVER_TOKEN")
+	t.Setenv("ORCHESTRATOR_SERVER_TOKEN", "stale-secret")
+	got, err := RetiredAliasFindings(envFile, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, f := range got {
+		seen[f.Name] = f.Where
+		if f.Name == "FLEET_SERVER_TOKEN" || f.Name == "ORCHESTRATOR_SERVER_TOKEN" {
+			s := f.String()
+			if f.Canonical != "" || !strings.Contains(s, "ADR-0108") || !strings.Contains(s, "--type user") || strings.Contains(s, "stale-secret") {
+				t.Errorf("finding %s", s)
+			}
+		}
+	}
+	if seen["FLEET_SERVER_TOKEN"] != SourceEnvFile || seen["ORCHESTRATOR_SERVER_TOKEN"] != SourceProcessEnv {
+		t.Fatalf("findings = %+v", got)
+	}
 }

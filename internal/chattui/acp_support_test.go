@@ -19,7 +19,7 @@ import (
 // typed status error so an auth failure is distinguishable without parsing text.
 
 func TestResolvePublicURL(t *testing.T) {
-	base := map[string]string{"FLEET_SERVER_TOKEN": "tok", "FLEET_USER_EMAIL": "a@b.c"}
+	base := map[string]string{"FLEET_API_KEY": "tok", "FLEET_USER_EMAIL": "a@b.c"}
 	t.Run("env, base URL preferred, trailing slash trimmed", func(t *testing.T) {
 		env := map[string]string{"FLEET_PUBLIC_BASE_URL": "https://fleet.example.com/", "FLEET_PUBLIC_URL": "https://other"}
 		for k, v := range base {
@@ -44,36 +44,36 @@ func TestResolvePublicURL(t *testing.T) {
 		}
 	})
 	t.Run("never from a different deployment's env file", func(t *testing.T) {
-		// The token and address come from .env.local; /etc/fleet/fleet.env
-		// belongs to another deployment and must not supply the deep link.
-		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
-			".env.local":           {"FLEET_SERVER_TOKEN": "tok", "FLEET_SERVER_ADDR": "127.0.0.1:9000"},
-			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://other.example.com"},
+		// The address comes from .env.local; /etc/fleet/fleet.env belongs to
+		// another deployment and must not supply the deep link.
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			".env.local":           {"FLEET_SERVER_ADDR": "127.0.0.1:9000"},
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_ADDR": "127.0.0.1:9001", "FLEET_PUBLIC_URL": "https://other.example.com"},
 		}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Token != "tok" || cfg.PublicURL != "" {
-			t.Errorf("token=%q PublicURL=%q, want tok and no public URL", cfg.Token, cfg.PublicURL)
+		if cfg.APIKey != "tok" || cfg.PublicURL != "" {
+			t.Errorf("token=%q PublicURL=%q, want tok and no public URL", cfg.APIKey, cfg.PublicURL)
 		}
 	})
 	t.Run("from the file that supplied the server config", func(t *testing.T) {
-		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
-			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "tok", "FLEET_PUBLIC_BASE_URL": "https://box.example.com"},
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_ADDR": "127.0.0.1:9000", "FLEET_PUBLIC_BASE_URL": "https://box.example.com"},
 		}))
 		if err != nil || cfg.PublicURL != "https://box.example.com" {
 			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
 		}
 	})
 	t.Run("a file that supplied nothing is not the deployment", func(t *testing.T) {
-		// The token came from the env; .env.local matched only on a token key
-		// and has no address, so the client talks to the loopback default —
-		// its (possibly stale) public URL must not be used.
+		// The key came from the env; .env.local has no address, so the
+		// client talks to the loopback default — its (possibly stale) public
+		// URL must not be used.
 		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
 			".env.local": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://stale.example.com"},
 		}))
-		if err != nil || cfg.PublicURL != "" || cfg.Token != "tok" {
-			t.Errorf("token=%q PublicURL=%q err=%v", cfg.Token, cfg.PublicURL, err)
+		if err != nil || cfg.PublicURL != "" || cfg.APIKey != "tok" {
+			t.Errorf("token=%q PublicURL=%q err=%v", cfg.APIKey, cfg.PublicURL, err)
 		}
 	})
 	t.Run("token from env and no pinned file: not probed", func(t *testing.T) {
@@ -99,10 +99,10 @@ func TestResolvePublicURL(t *testing.T) {
 		}
 	})
 	t.Run("an env file that picked the server outranks an ambient public URL", func(t *testing.T) {
-		// --env-file supplies deployment B's token and address; the process
+		// --env-file supplies deployment B's address; the process
 		// env still carries deployment A's public URL.
-		env := map[string]string{"FLEET_USER_EMAIL": "a@b.c", "FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
-		files := map[string]map[string]string{"/srv/b.env": {"FLEET_SERVER_TOKEN": "tok-b", "FLEET_SERVER_ADDR": "b:8080"}}
+		env := map[string]string{"FLEET_API_KEY": "tok", "FLEET_USER_EMAIL": "a@b.c", "FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
+		files := map[string]map[string]string{"/srv/b.env": {"FLEET_SERVER_ADDR": "b:8080"}}
 		cfg, err := Resolve(Flags{EnvFile: "/srv/b.env"}, envMap(env), noFile, envFileFrom(files))
 		if err != nil || cfg.PublicURL != "" {
 			t.Errorf("PublicURL = %q err=%v, want none (the ambient one is deployment A's)", cfg.PublicURL, err)
@@ -126,11 +126,11 @@ func TestCancelStopsTheTurnServerSide(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		gotPath, gotBody = r.Method+" "+r.URL.Path, string(b)
-		gotClient, gotToken = r.Header.Get("X-Fleet-Client"), r.Header.Get("X-Chat-Server-Token")
+		gotClient, gotToken = r.Header.Get("X-Fleet-Client"), r.Header.Get("X-API-Key")
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok", ClientName: "fleet-acp"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok", ClientName: "fleet-acp"})
 	if err := c.Cancel("conv 1", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -150,24 +150,26 @@ func TestStreamReturnsTypedStatusError(t *testing.T) {
 		if got := r.Header.Get("X-Fleet-Client"); got != "fleet-chat" {
 			t.Errorf("default client label = %q", got)
 		}
-		http.Error(w, "forbidden", http.StatusForbidden) // the shared-token check's exact refusal
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"not_a_user_key"}`)) // the key check's exact refusal
 	}))
 	defer srv.Close()
-	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(Event) {})
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).Stream(context.Background(), "hi", "", func(Event) {})
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusForbidden {
 		t.Fatalf("err = %#v, want *StatusError 403", err)
 	}
-	if se.Error() != "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server" {
+	if se.Error() != "server rejected the request (403): this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)" {
 		t.Errorf("message changed: %q", se.Error())
 	}
 }
 
-// POST /chat answers 403 for four reasons fleet names (token, membership,
-// viewer role, IP filter); each gets its own fix-it text, and anything else is
-// quoted as a short single-line excerpt. Every one stays a 403 StatusError so
-// `fleet acp` still maps it to auth_required. Only the token check's own body
-// may point at FLEET_SERVER_TOKEN. Bodies are the exact bytes the server writes.
+// POST /chat answers 403 for four reasons fleet names (a key naming no user,
+// membership, viewer role, IP filter); each gets its own fix-it text, and
+// anything else is quoted as a short single-line excerpt. Every one stays a
+// 403 StatusError so `fleet acp` still maps it to auth_required. Bodies are
+// the exact bytes the server writes.
 func TestStream403NamesTheRefusalReason(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -176,16 +178,16 @@ func TestStream403NamesTheRefusalReason(t *testing.T) {
 		want        string
 	}{
 		{
-			name:        "wrong token",
-			contentType: "text/plain; charset=utf-8",
-			body:        "forbidden\n",
-			want:        "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+			name:        "a key that names no user",
+			contentType: "application/json",
+			body:        `{"error":"not_a_user_key","message":"this key names no user"}`,
+			want:        "server rejected the request (403): this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)",
 		},
 		{
 			name:        "not a member",
 			contentType: "application/json",
 			body:        `{"error":"not_a_member"}`,
-			want:        "server rejected the request (403): nobody@example.com is not a fleet user; an admin can add it with `fleet chat user add nobody@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+			want:        "server rejected the request (403): nobody@example.com is not an enabled fleet user; an admin can add it with `fleet chat user add <email> --password -`, or use a user key for a provisioned account",
 		},
 		{
 			name:        "viewer",
@@ -232,7 +234,7 @@ func TestStream403NamesTheRefusalReason(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
-			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", Token: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", APIKey: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
 			var se *StatusError
 			if !errors.As(err, &se) || se.Code != http.StatusForbidden {
 				t.Fatalf("err = %#v, want *StatusError 403", err)
@@ -298,7 +300,7 @@ func TestStream400IsARejectionNotAnAuthFailure(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
-			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", Token: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", APIKey: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
 			var se *StatusError
 			if !errors.As(err, &se) || se.Code != tt.status {
 				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
@@ -320,7 +322,7 @@ func TestStreamReportsTheHeaderConversationID(t *testing.T) {
 	}))
 	defer srv.Close()
 	var seen []string
-	id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+	id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
 		seen = append(seen, ev.Name+":"+ev.Str("id"))
 	})
 	if err == nil {
@@ -330,7 +332,7 @@ func TestStreamReportsTheHeaderConversationID(t *testing.T) {
 		t.Errorf("id=%q events=%v", id, seen)
 	}
 	// Resuming an existing conversation never lets the header override it.
-	id, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "conv-mine", func(Event) {})
+	id, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).Stream(context.Background(), "hi", "conv-mine", func(Event) {})
 	if id != "conv-mine" {
 		t.Errorf("resumed id = %q", id)
 	}
@@ -345,7 +347,7 @@ func TestStreamReportsAQueuedSubmission(t *testing.T) {
 			w.WriteHeader(status)
 			_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":3,"ahead":1},"conversation_id":"conv-q"}`)
 		}))
-		id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
+		id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
 		srv.Close()
 		var q *QueuedError
 		if !errors.As(err, &q) || q.Position != 3 || q.Ahead == nil || *q.Ahead != 1 || q.InputID != "in-1" || id != "conv-q" {
@@ -364,7 +366,7 @@ func TestStreamQueuedAckWithoutAheadNamesNoPlace(t *testing.T) {
 		_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":40,"state":"queued"},"conversation_id":"conv-q"}`)
 	}))
 	defer srv.Close()
-	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
 	var q *QueuedError
 	if !errors.As(err, &q) || q.Ahead != nil {
 		t.Fatalf("err = %#v, want *QueuedError with a nil Ahead", err)
@@ -422,7 +424,7 @@ func TestCancelNamesTheTurn(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	if err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Cancel("c", "turn-9"); err != nil {
+	if err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).Cancel("c", "turn-9"); err != nil {
 		t.Fatal(err)
 	}
 	if gotBody != `{"scope":"turn","turn_id":"turn-9"}` {
@@ -439,7 +441,7 @@ func TestStreamSurfacesTheHeaderTurnID(t *testing.T) {
 	}))
 	defer srv.Close()
 	var turn string
-	_, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+	_, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
 		if ev.Name == "turn.identified" {
 			turn = ev.Str("turn_id")
 		}
@@ -458,7 +460,7 @@ func TestTruncatedQueueAckIsNotAStatus(t *testing.T) {
 		_, _ = io.WriteString(w, `{"queued":tr`)
 	}))
 	defer srv.Close()
-	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "tok"}).StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
 	var se *StatusError
 	var qe *QueuedError
 	if err == nil || errors.As(err, &se) || errors.As(err, &qe) {
@@ -482,7 +484,7 @@ func TestModelNewConversationsOnly(t *testing.T) {
 	defer srv.Close()
 	for _, newOnly := range []bool{true, false} {
 		models = nil
-		c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "t", Model: "x/model", ModelNewConversationsOnly: newOnly})
+		c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: "t", Model: "x/model", ModelNewConversationsOnly: newOnly})
 		for _, conv := range []string{"", "c1"} {
 			if _, err := c.StreamInput(context.Background(), "hi", conv, "", func(Event) {}); err != nil {
 				t.Fatal(err)
@@ -527,14 +529,14 @@ func TestCheckIdentity(t *testing.T) {
 			want:     "server rejected the request (403): nobody@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role nobody@example.com --role member`",
 		},
 		{
-			name: "wrong token", status: 403, contentType: "text/plain; charset=utf-8", body: "forbidden\n",
+			name: "a key that names no user", status: 403, contentType: "application/json", body: `{"error":"not_a_user_key"}`,
 			wantCode: http.StatusForbidden,
-			want:     "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+			want:     "server rejected the request (403): this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)",
 		},
 		{
 			name: "not a member", status: 403, contentType: "application/json", body: `{"error":"not_a_member"}`,
 			wantCode: http.StatusForbidden,
-			want:     "server rejected the request (403): nobody@example.com is not a fleet user; an admin can add it with `fleet chat user add nobody@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+			want:     "server rejected the request (403): nobody@example.com is not an enabled fleet user; an admin can add it with `fleet chat user add <email> --password -`, or use a user key for a provisioned account",
 		},
 		{
 			name: "ip filter", status: 403, contentType: "text/plain; charset=utf-8", body: "Access denied\n",
@@ -543,15 +545,15 @@ func TestCheckIdentity(t *testing.T) {
 		},
 		{
 			name: "403 proxy page echoing the token", status: 403, contentType: "text/html",
-			body:     "<pre>X-Chat-Server-Token: " + token + "</pre>",
+			body:     "<pre>X-API-Key: " + token + "</pre>",
 			wantCode: http.StatusForbidden,
-			want:     "server rejected the request (403): <pre>X-Chat-Server-Token: [redacted]</pre>",
+			want:     "server rejected the request (403): <pre>X-API-Key: [redacted]</pre>",
 		},
 		{
 			name: "401 echoing the token", status: 401, contentType: "text/plain",
-			body:     "unauthorized: X-Chat-Server-Token: " + token + "\n",
+			body:     "unauthorized: X-API-Key: " + token + "\n",
 			wantCode: http.StatusUnauthorized,
-			want:     "not authorized (401) for nobody@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
+			want:     "not authorized (401) for nobody@example.com: unauthorized: X-API-Key: [redacted]",
 		},
 		{name: "404 from a server older than /me", status: 404, contentType: "text/plain; charset=utf-8", body: "404 page not found\n"},
 		{name: "500", status: 500, contentType: "text/plain; charset=utf-8", body: "membership check failed\n"},
@@ -567,7 +569,7 @@ func TestCheckIdentity(t *testing.T) {
 				if r.Method != http.MethodGet || r.URL.Path != "/me" {
 					t.Errorf("request = %s %s, want GET /me", r.Method, r.URL.Path)
 				}
-				if r.Header.Get("X-Chat-Server-Token") != token || r.Header.Get("X-User-Email") != email || r.Header.Get("X-Fleet-Client") != "fleet-acp" {
+				if r.Header.Get("X-API-Key") != token || r.Header.Get("X-Fleet-Client") != "fleet-acp" || r.Header.Get("X-Chat-Server-Token") != "" {
 					t.Errorf("auth headers = %v", r.Header)
 				}
 				w.Header().Set("Content-Type", tt.contentType)
@@ -575,7 +577,7 @@ func TestCheckIdentity(t *testing.T) {
 				_, _ = io.WriteString(w, tt.body)
 			}))
 			defer srv.Close()
-			err := NewClient(Config{ServerURL: srv.URL, Email: email, Token: token, ClientName: "fleet-acp"}).CheckIdentity(context.Background())
+			err := NewClient(Config{ServerURL: srv.URL, Email: email, APIKey: token, ClientName: "fleet-acp"}).CheckIdentity(context.Background())
 			if tt.wantCode == 0 {
 				if err != nil {
 					t.Fatalf("err = %v, want nil (the session opens)", err)
@@ -617,7 +619,7 @@ func TestCheckIdentityViewerMatchesTheTurnRefusal(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"read_only"}`)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "v@example.com", Token: "tok"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "v@example.com", APIKey: "tok"})
 	checkErr := c.CheckIdentity(context.Background())
 	_, turnErr := c.Stream(context.Background(), "hi", "", func(Event) {})
 	var checkSE, turnSE *StatusError
@@ -640,7 +642,7 @@ func TestCheckIdentityUnreachable(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		url := srv.URL
 		srv.Close() // nothing listens there now
-		err := NewClient(Config{ServerURL: url, Email: "a@b.c", Token: token}).CheckIdentity(context.Background())
+		err := NewClient(Config{ServerURL: url, Email: "a@b.c", APIKey: token}).CheckIdentity(context.Background())
 		var se *StatusError
 		if err == nil || errors.As(err, &se) {
 			t.Fatalf("err = %#v, want a transport error", err)
@@ -659,7 +661,7 @@ func TestCheckIdentityUnreachable(t *testing.T) {
 		defer srv.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: token}).CheckIdentity(ctx)
+		err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", APIKey: token}).CheckIdentity(ctx)
 		var se *StatusError
 		if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &se) || !strings.HasPrefix(err.Error(), "connect "+srv.URL+": ") {
 			t.Fatalf("err = %v, want a transport error naming %s and the deadline", err, srv.URL)

@@ -4,32 +4,84 @@
 package httpapi
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/principal"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+// keyValidator is the API-key store the chat listener's edge checks a
+// presented key against (apikeys.Manager, the orchestrator's store).
+type keyValidator interface {
+	ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *apikeys.APIKey, string)
+}
+
+// WithAPIKeys lets the chat listener's own port accept user API keys
+// (ADR-0108). Without it only the gateway's in-process calls authenticate.
+func WithAPIKeys(v keyValidator) Option {
+	return func(s *Server) { s.apiKeys = v }
+}
+
+// retiredServiceTokenHeader is the header of the internal service-token
+// channel ADR-0108 removed; nothing honours it.
+const retiredServiceTokenHeader = "X-Chat-Server-Token" //nolint:gosec // G101: a header NAME, not a credential.
 
 // edgePrincipal resolves the credential a request presented on the chat
 // listener's own port, for a request the gateway did not attach a principal
-// to. It writes the refusal itself and reports false.
+// to — `fleet chat`, `fleet acp` and fleet-bench on the box. It writes the
+// refusal itself and reports false.
 //
-// The one credential it knows is the legacy internal service token: a caller
-// holding FLEET_SERVER_TOKEN (`fleet chat`, `fleet acp`, fleet-bench, all
-// on the box) names its user in X-User-Email. The token can already assert
-// any identity, so the header adds no spoofing surface; Caddy strips both on
-// the one chat path it exposes (/webhooks/*, ADR-0053). Nothing else is read
-// from headers: the session-epoch claim only ever came from the gateway,
-// which now hands it over in the principal.
+// The credential is a user API key (apikeys.KeyTypeUser), as X-API-Key or
+// Authorization: Bearer. The principal is the account the key names; the
+// membership gate resolves that account on every request, so disabling it
+// ends the key's access too. No header names a person: a caller still
+// presenting the retired service token gets a 401 that says what replaced
+// it, never a silent fall-through.
 func (s *Server) edgePrincipal(w http.ResponseWriter, r *http.Request) (principal.Principal, bool) {
-	tok := r.Header.Get("X-Chat-Server-Token")
-	if subtle.ConstantTimeCompare([]byte(tok), []byte(s.sharedToken)) != 1 || s.sharedToken == "" {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if r.Header.Get(retiredServiceTokenHeader) != "" {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{
+			"error":   "service_token_retired",
+			"message": "the internal service token (X-Chat-Server-Token, FLEET_SERVER_TOKEN) was removed (ADR-0108): authenticate with a user API key in X-API-Key (fleet sched apikey create <name> --type user --user <email>)",
+		})
+		return principal.Principal{}, false
+	}
+	raw, method := strings.TrimSpace(r.Header.Get("X-API-Key")), principal.MethodAPIKey
+	if raw == "" {
+		raw, method = bearerCredential(r), principal.MethodBearer
+	}
+	if raw == "" || s.apiKeys == nil {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{
+			"error":   "authentication_required",
+			"message": "send a user API key in X-API-Key (fleet sched apikey create <name> --type user --user <email>)",
+		})
+		return principal.Principal{}, false
+	}
+	ok, key, reason := s.apiKeys.ValidateKey(raw, nil, nil, nil)
+	if !ok || key == nil {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_key", "message": reason})
+		return principal.Principal{}, false
+	}
+	if key.Type != apikeys.KeyTypeUser || strings.TrimSpace(key.UserEmail) == "" {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{
+			"error":   "not_a_user_key",
+			"message": "this key names no user; the chat API takes a user key (fleet sched apikey create <name> --type user --user <email>)",
+		})
 		return principal.Principal{}, false
 	}
 	return principal.Principal{
-		Email:      strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email"))),
-		AuthMethod: principal.MethodServiceToken,
+		Email:      strings.ToLower(strings.TrimSpace(key.UserEmail)),
+		KeyID:      key.KeyID,
+		AuthMethod: method,
 	}, true
+}
+
+// bearerCredential is an `Authorization: Bearer` credential, or "".
+func bearerCredential(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if len(auth) < 7 || !strings.EqualFold(auth[:7], "bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(auth[7:])
 }

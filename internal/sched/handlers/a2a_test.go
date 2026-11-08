@@ -64,10 +64,9 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken,
-		DefaultTaskModel: "test/model",
-		AdminAPIKey:      "admin-key",
-		DataDir:          tmpDir,
+	h := New(Config{DefaultTaskModel: "test/model",
+		AdminAPIKey: "admin-key",
+		DataDir:     tmpDir,
 	}, store, keyMgr)
 	spec := a2abridge.CardSpec{Name: "Test Fleet", Version: "0.0.0-test", RPCURL: "/v1/a2a", Persona: "qa-bot"}
 	card, cardETag, err := a2abridge.MarshalCard(a2abridge.BuildCard(spec))
@@ -182,7 +181,7 @@ func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, st
 func TestA2ADisabledAnswers501(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{SharedToken: testSharedToken}, nil, nil)
+	h := New(Config{}, nil, nil)
 	for _, route := range []struct{ method, path string }{
 		{"GET", "/.well-known/agent-card.json"},
 		{"POST", "/a2a"},

@@ -71,8 +71,8 @@ func (db *Database) GetUserByUsername(ctx context.Context, username string) (*mo
 }
 
 // GetIdentity returns the account's identity row whatever its access (nil
-// and identity.ErrNotFound when there is none): the header-trust path reads
-// the chat role from it for the shared Prompt Library.
+// and identity.ErrNotFound when there is none): a lookup for the CLI and the
+// admin paths. (The request path resolves a person with principal.Resolve.)
 func (db *Database) GetIdentity(ctx context.Context, email string) (*identity.User, error) {
 	return db.Identity().GetByEmail(ctx, email)
 }

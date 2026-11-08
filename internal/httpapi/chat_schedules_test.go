@@ -245,8 +245,7 @@ func TestChatScheduleRoutes_AndPatrolDrain(t *testing.T) {
 
 	doJSON := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", "trader@elcanotek.com")
+		req = req.WithContext(asUser(req.Context(), "trader@elcanotek.com"))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -334,8 +333,7 @@ func TestChatPatrolTool_InvokedInsideTurn(t *testing.T) {
 		"message":         "Please patrol my deals every 2 hours in this chat.",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "trader@elcanotek.com")
+	req = req.WithContext(asUser(req.Context(), "trader@elcanotek.com"))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -413,8 +411,7 @@ func TestScheduleRunNow_PublishesOnce(t *testing.T) {
 		counts[kind]++
 	}
 	req := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/schedules/"+sc.ID+"/run-now", bytes.NewBufferString(`{}`))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "trader@elcanotek.com")
+	req = req.WithContext(asUser(req.Context(), "trader@elcanotek.com"))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

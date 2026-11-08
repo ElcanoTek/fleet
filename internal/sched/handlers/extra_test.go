@@ -35,7 +35,7 @@ func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
+	h := New(Config{DefaultTaskModel: "test/model",
 		AdminAPIKey: "admin-key",
 		DataDir:     tmpDir,
 	}, store, keyMgr)

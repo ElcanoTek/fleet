@@ -30,7 +30,6 @@ func TestLoad_InputQueueRetentionDays(t *testing.T) {
 func TestValidate_InputQueueRetentionDaysRejectsNegative(t *testing.T) {
 	cfg := &Config{
 		OpenRouterAPIKey:        "placeholder",
-		SharedToken:             "placeholder",
 		ConversationTTL:         1,
 		UnpinnedCap:             1,
 		InputQueueRetentionDays: -1,

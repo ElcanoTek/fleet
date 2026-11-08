@@ -107,12 +107,14 @@ x-fleet-api-version: "1"
 # carries (KeyType.Permissions) and the HTTP methods it may use on the
 # scoped-key route group (TypeAllowsMethod). `any` = every method. Webhook keys
 # reach no scoped-key route: they authenticate POST /triggers/{slug} only, for
-# their own slugs (x-fleet-permission: webhook).
+# their own slugs (x-fleet-permission: webhook). User keys reach none either:
+# they act as one person on the chat API (`fleet chat`, `fleet acp`; ADR-0108).
 x-fleet-key-types:
   admin: { permissions: [admin], methods: any }
   task: { permissions: [create_task, view_tasks, view_logs], methods: any }
   readonly: { permissions: [view_tasks, view_logs], methods: [GET, HEAD, OPTIONS] }
   webhook: { permissions: [], methods: [] }
+  user: { permissions: [], methods: [] }
 
 components:
   headers:

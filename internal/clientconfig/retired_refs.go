@@ -63,6 +63,12 @@ type RetiredRef struct {
 
 // String is the one-line report. It never contains a value.
 func (r RetiredRef) String() string {
+	if r.Canonical == "" {
+		if r.Literal {
+			return fmt.Sprintf("manifest.yaml %s names the removed setting %s: %s", r.Path, r.Name, envreg.RetiredFix(r.Name))
+		}
+		return fmt.Sprintf("manifest.yaml %s references the removed setting ${%s}: %s", r.Path, r.Name, envreg.RetiredFix(r.Name))
+	}
 	if r.Literal {
 		return fmt.Sprintf("manifest.yaml %s names the removed variable %s; rename it to %s (ADR-0106)", r.Path, r.Name, r.Canonical)
 	}
