@@ -73,7 +73,10 @@ $$;
 -- and a rollback never moves the chat schema's version (the previous release
 -- refuses to boot on a chat schema newer than it knows). The function lives in
 -- the chat schema beside its trigger and is a no-op if the sched table is
--- gone. Skipped on a database without chat.conversations (sched-only).
+-- gone. Skipped on a database without chat.conversations — one the scheduler
+-- initialised first (a sched-only CLI verb before any `fleet serve`); there
+-- `fleet serve` installs the same trigger at startup once both schemas exist
+-- (db.EnsureChatScheduleCascade) and removes schedules orphaned meanwhile.
 DO $$
 BEGIN
     IF to_regclass('chat.conversations') IS NOT NULL THEN

@@ -573,6 +573,13 @@ func run() error {
 	schedStorage.SetDefaultTaskTimezone(defaultTaskTimezone())
 	log.Printf("sched DB connected + migrated")
 
+	// Both stores are migrated: make sure a deleted conversation takes its
+	// chat schedules with it (ADR-0104). Sched migration 077 installs the
+	// cascade when the chat schema already exists; on a database the
+	// scheduler initialised first, this installs it now and removes any
+	// schedule orphaned in between. A no-op on every later boot.
+	ensureChatScheduleCascade(schedStorage)
+
 	// Bootstrap operators (#458): provision/promote the configured emails as
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
@@ -1174,6 +1181,22 @@ func run() error {
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
 	return nil
+}
+
+// ensureChatScheduleCascade installs the chat schedules' conversation-delete
+// cascade if a sched-first database is missing it (see
+// db.EnsureChatScheduleCascade). Failure is logged, not fatal: the next start
+// retries, and only hard-deleted chats are affected meanwhile.
+func ensureChatScheduleCascade(st *storage.Storage) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	installed, orphans, err := st.DB().EnsureChatScheduleCascade(ctx)
+	switch {
+	case err != nil:
+		log.Printf("WARNING: chat schedules: could not install the conversation-delete cascade: %v (deleted chats may leave schedules behind until the next start)", err)
+	case installed:
+		log.Printf("chat schedules: installed the conversation-delete cascade; removed %d orphaned schedule(s)", orphans)
+	}
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant

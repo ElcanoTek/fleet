@@ -191,8 +191,11 @@ copies, and drops it in the same transaction:
   `AFTER DELETE` trigger on `chat.conversations` deletes the deleted rows'
   schedules (their history follows by sched's FK), so every hard-delete path
   — present and future — is covered by one mechanism; it is a no-op while
-  the sched table does not exist. It is created by the sched migration, not
-  a chat one, so 077's down drops it and a rollback never moves the chat
+  the sched table does not exist. On a database the scheduler initialised
+  first (no chat schema yet when 077 ran), `fleet serve` installs the same
+  trigger at startup once both schemas exist and removes any schedule
+  orphaned in between (`db.EnsureChatScheduleCascade`). It is created by the
+  sched side, not a chat migration, so 077's down drops it and a rollback never moves the chat
   schema's version (the previous release refuses a newer chat schema). Account erasure deletes a user's schedules
   the same way (and tolerates a chat-only database, for the chat-only CLI
   verbs).
