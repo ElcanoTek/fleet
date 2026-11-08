@@ -162,17 +162,24 @@ func EmitPanicWithMetadataContext(ctx context.Context, meta PanicMetadata, v any
 	}
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
-	logPanic(ctx, "panic recovered",
-		"incident_id", LogSafe(meta.IncidentID),
-		"goroutine", LogSafe(meta.Location),
-		"boundary", LogSafe(meta.Boundary),
-		"tool_name", LogSafe(meta.ToolName),
-		"tool_call_id", LogSafe(meta.ToolCallID),
-		"run_mode", LogSafe(meta.RunMode),
-		"task_id", LogSafe(meta.TaskID),
-		"conversation_id", LogSafe(meta.ConversationID),
-		"panic_class", class,
-	)
+	// Only the metadata the boundary knows: an empty attribute names nothing,
+	// and the handler's context correlation (task_id, run_id, conv_id …)
+	// fills in what the caller did not (#2074 review).
+	args := []any{"incident_id", LogSafe(meta.IncidentID), "goroutine", LogSafe(meta.Location)}
+	for _, kv := range [][2]string{
+		{"boundary", meta.Boundary},
+		{"tool_name", meta.ToolName},
+		{"tool_call_id", meta.ToolCallID},
+		{"run_mode", meta.RunMode},
+		{"task_id", meta.TaskID},
+		{"conversation_id", meta.ConversationID},
+	} {
+		if kv[1] != "" {
+			args = append(args, kv[0], LogSafe(kv[1]))
+		}
+	}
+	args = append(args, "panic_class", class)
+	logPanic(ctx, "panic recovered", args...)
 
 	if SentryHook != nil {
 		callReportingHook("SentryHook", func() { SentryHook(meta.Location, class, nil) })

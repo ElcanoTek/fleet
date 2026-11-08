@@ -203,9 +203,9 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindDuration:
 		// A number is a credential as easily as a string ({"password":
 		// 12345678}, a numeric PIN or account secret). Under a secret-named
-		// key or group it is redacted unless the key is count-like
-		// (prompt_tokens, retry_count, latency_ms — countLikeKey).
-		if (secretAttrKey(name) || secretGroupPath(groups)) && !countLikeKey(name) {
+		// key or group it is redacted unless the key is one of the known
+		// metrics (prompt_tokens, token_count — metricKey).
+		if (secretAttrKey(name) || secretGroupPath(groups)) && !metricKey(name) {
 			return slog.String(a.Key, redactedValue)
 		}
 		return a
@@ -490,7 +490,7 @@ func unloggable(v any) string {
 
 // keepUnderSecretKey reports whether a decoded value under the secret-named
 // key may be logged as is: a boolean (one bit, never a credential), or a
-// number under a count-like key (countLikeKey). Every other value under a
+// number under a known metric key (metricKey). Every other value under a
 // secret-named key — strings, objects, arrays and numbers alike — is
 // redacted whole.
 func keepUnderSecretKey(key string, v any) bool {
@@ -498,30 +498,40 @@ func keepUnderSecretKey(key string, v any) bool {
 	case bool:
 		return true
 	case json.Number, int, int64, float64:
-		return countLikeKey(key)
+		return metricKey(key)
 	}
 	return false
 }
 
-// countLikeSuffixes are the key endings (separators removed, lowercased) that
-// name a measurement rather than a credential. It is an explicit allowlist,
-// matched as a SUFFIX: "prompt_tokens" and "token_count" are counts, while
-// "token", "api_token" and "password" are not — a bare substring rule would
-// let "token" match "prompt_tokens" the wrong way round.
-var countLikeSuffixes = []string{
-	"tokens", "count", "ms", "bytes", "seconds", "secs", "len", "length",
-	"size", "ttl", "limit", "total", "num",
-}
-
-// countLikeKey reports a key whose number is a count, size or duration.
-func countLikeKey(key string) bool {
-	k := keySeparators.Replace(strings.ToLower(key))
-	for _, s := range countLikeSuffixes {
-		if strings.HasSuffix(k, s) {
-			return true
-		}
+// metricKeys are the exact keys (separators removed, lowercased) whose
+// NUMBER may be logged although the key names a secret marker: the token
+// counts and budgets fleet itself logs and returns (prompt_tokens,
+// max_total_tokens, …). It is an exact allowlist, never a suffix rule: a
+// suffix like "_num", "_length" or "_size" let api_key_num, password_length
+// and credential_size through verbatim (#2074 review). A new metric under a
+// secret-looking key is redacted until it is listed here.
+var metricKeys = func() map[string]bool {
+	m := map[string]bool{}
+	for _, k := range []string{
+		"tokens", "token_count", "token_ttl",
+		"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
+		"uncached_tokens", "input_tokens", "output_tokens", "reasoning_tokens",
+		"cache_creation_tokens", "cache_read_tokens", "context_window_tokens",
+		"max_tokens", "max_completion_tokens", "max_total_tokens", "fleet_max_total_tokens",
+		"budget_tokens", "hard_tokens", "soft_tokens", "used_tokens", "prev_tokens",
+		"avg_prompt_tokens", "avg_completion_tokens",
+		"input_cost_per_million_tokens", "output_cost_per_million_tokens",
+		"cache_read_cost_per_million_tokens", "cache_write_cost_per_million_tokens",
+	} {
+		m[keySeparators.Replace(k)] = true
 	}
-	return false
+	return m
+}()
+
+// metricKey reports a key on the metricKeys allowlist, matched on the key
+// lowercased with its separators removed (prompt_tokens, promptTokens).
+func metricKey(key string) bool {
+	return metricKeys[keySeparators.Replace(strings.ToLower(key))]
 }
 
 // errorText is err.Error() with a nil-pointer error guarded, so a typed-nil

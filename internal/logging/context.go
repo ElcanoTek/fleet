@@ -162,26 +162,46 @@ func (h ctxHandler) Enabled(ctx context.Context, l slog.Level) bool {
 	return h.inner.Enabled(ctx, l)
 }
 
+// An empty-string attribute of the call site never shadows a context
+// attribute of the same key: "task_id": "" carries no identity, so the
+// context's non-empty task_id is kept and the empty one dropped (#2074
+// review: a panic record's empty task_id hid the run's).
 func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
-	var own map[string]struct{}
+	var own, emptyOwn map[string]struct{}
 	if r.NumAttrs() > 0 {
 		own = make(map[string]struct{}, r.NumAttrs())
 		r.Attrs(func(a slog.Attr) bool {
+			if isEmptyString(a.Value) {
+				if emptyOwn == nil {
+					emptyOwn = map[string]struct{}{}
+				}
+				emptyOwn[a.Key] = struct{}{}
+				return true
+			}
 			own[a.Key] = struct{}{}
 			return true
 		})
 	}
 	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	fromCtx := make(map[string]struct{}, len(h.attrs))
 	for _, a := range h.attrs {
 		if _, dup := own[a.Key]; !dup {
 			nr.AddAttrs(a)
+			fromCtx[a.Key] = struct{}{}
 		}
 	}
 	r.Attrs(func(a slog.Attr) bool {
+		if _, shadowed := fromCtx[a.Key]; shadowed && isEmptyString(a.Value) {
+			return true // the context's value stands
+		}
 		nr.AddAttrs(a)
 		return true
 	})
 	return h.inner.Handle(ctx, nr)
+}
+
+func isEmptyString(v slog.Value) bool {
+	return v.Kind() == slog.KindString && v.String() == ""
 }
 
 func (h ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

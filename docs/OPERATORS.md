@@ -798,7 +798,9 @@ the finished, encoded line. As a result, the log never contains:
 - **The value of a secret-named field** (`token`, `password`, `secret`,
   `api_key`, `authorization`, `credential`, `cookie`, …) in a plain struct, a
   map, or a group, at any depth. A number under such a key is redacted too,
-  unless the key is a count (`prompt_tokens`, `token_count`, `…_ms`).
+  unless the key is one of the token metrics fleet itself logs, named exactly
+  (`prompt_tokens`, `token_count`, `max_total_tokens`, …); a count-like
+  suffix alone (`api_key_num`, `password_length`) does not keep it.
 - **The output of a self-describing type that carries a secret-named field.**
   This covers a `String()`, `Error()`, `LogValue()`, `MarshalJSON` or `MarshalText` on a
   type with such a field, exported or not, nested or wrapped, in a map key
