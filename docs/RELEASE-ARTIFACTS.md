@@ -343,11 +343,15 @@ Containerfile at the bundle root, beside the bundle's `.git`): it rebuilds
 whenever they change. The default `sandbox/` directory holds only the build's
 own files and is unaffected. The first update from a release that hashed the
 context differently (only the Containerfile, or an earlier context format)
-rebuilds once.
+rebuilds once. A context that cannot be hashed completely (an unreadable
+file, a root-squashed NFS bundle) fails closed: `update` names the path,
+rebuilds, and records no hash, and such a context never counts as the
+release image.
 
 After pulling a new release image by digest, `update` removes the previous
 one (it keeps its `@sha256` name, so `podman image prune` never would),
-without `--force`. When a container still uses it, the removal is refused and
+without `--force`. The same goes for a custom build's previous
+`FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one. When a container still uses it, the removal is refused and
 the ref is kept in `sandbox-image.reclaim` under the state directory; `update`
 retries every listed ref after the service restart and on each later run, and
 drops it once it is removed or gone. The current release ref, the bundle's

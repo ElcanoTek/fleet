@@ -158,9 +158,10 @@ fleet_sandbox_build_containerfile() {
 # and ignore files included — hashes the same as the generic bundle's
 # (fleet_sandbox_context_hash). The image is built from that directory, so an
 # edited requirements.txt, or anything the generic context does not have at
-# all, makes a custom image (when in doubt, build: never a stale image).
+# all, makes a custom image (when in doubt, build: never a stale image). A
+# context that cannot be hashed completely is "not the release image" too.
 fleet_sandbox_uses_release_image() {
-  local cf generic
+  local cf generic h g
   cf="$(fleet_sandbox_containerfile "$1")"
   if [[ ! -f "$cf" ]]; then
     fleet_sandbox_containerfile_named "$1" && return 1
@@ -168,7 +169,9 @@ fleet_sandbox_uses_release_image() {
   fi
   generic="$(fleet_sandbox_containerfile "$2")"
   [[ -f "$generic" ]] || return 1
-  [[ "$(fleet_sandbox_context_hash "$cf")" == "$(fleet_sandbox_context_hash "$generic")" ]]
+  h="$(fleet_sandbox_context_hash "$cf")" || return 1
+  g="$(fleet_sandbox_context_hash "$generic")" || return 1
+  [[ "$h" == "$g" ]]
 }
 
 # fleet__mode PATH — PATH's permission bits that the build preserves and that
@@ -180,7 +183,8 @@ fleet_sandbox_uses_release_image() {
 # only on Linux (BSD/macOS stat would need `stat -f %Lp`).
 fleet__mode() {
   local m
-  m="$(stat -c %a "$1")" || return 1
+  m="$(stat -c %a -- "$1")" || return 1
+  [[ "$m" =~ ^[0-7]+$ ]] || return 1
   printf '%o' $(( 8#$m & 8#755 ))
 }
 
@@ -209,30 +213,88 @@ fleet__mode() {
 # prefix names the format: a `ctx3-` hash never equals a stamp an earlier
 # format wrote (`ctx2-`, `ctx1-`, or the bare Containerfile sha256), so a
 # format change rebuilds once.
+# It fails closed: when any entry cannot be listed, stat'ed, read or hashed
+# (an unreadable file, a root-squashed NFS bundle, a full /tmp) it prints the
+# path and reason to stderr and returns 1 — never a hash of a partial tree.
+# Every step's exit status is checked (no pipeline or process substitution
+# that would swallow one); callers treat a failure as "unknown".
 fleet_sandbox_context_hash() {
-  local cf="$1" ctx path rel cf_rel
+  local cf="$1" ctx cf_rel tmp sum="" rc=0
   if [[ ! -f "$cf" ]]; then
     printf 'absent'
     return 0
   fi
-  ctx="$(cd "$(dirname "$cf")" && pwd -P)"
+  if ! ctx="$(cd "$(dirname "$cf")" && pwd -P)"; then
+    fleet__hash_error "$(dirname "$cf")" "cannot enter the directory"
+    return 1
+  fi
   cf_rel="$(basename "$cf")"
-  {
-    printf 'containerfile\0%s\0%s\0' "$(fleet__mode "$cf")" "$(sha256sum < "$cf" | awk '{print $1}')"
-    while IFS= read -r -d '' path; do
-      rel="${path#"$ctx"/}"
-      [[ "$rel" == "$cf_rel" ]] && continue
-      if [[ -L "$path" ]]; then
-        printf 'link\0%s\0%s\0' "$rel" "$(readlink "$path")"
-      elif [[ -d "$path" ]]; then
-        printf 'dir\0%s\0%s\0' "$rel" "$(fleet__mode "$path")"
-      elif [[ -f "$path" ]]; then
-        printf 'file\0%s\0%s\0%s\0' "$rel" "$(fleet__mode "$path")" "$(sha256sum < "$path" | awk '{print $1}')"
-      else
-        printf 'other\0%s\0%s\0' "$rel" "$(fleet__mode "$path")"
-      fi
-    done < <(find "$ctx" -mindepth 1 -print0 | LC_ALL=C sort -z)
-  } | sha256sum | awk '{printf "ctx3-%s", $1}'
+  if ! tmp="$(mktemp -d)"; then
+    fleet__hash_error "$ctx" "cannot create a temporary directory"
+    return 1
+  fi
+  fleet__context_records "$cf" "$ctx" "$cf_rel" "$tmp" || rc=1
+  if (( rc == 0 )) && ! sum="$(fleet__sha "$tmp/records")"; then
+    fleet__hash_error "$tmp/records" "cannot hash the record list"
+    rc=1
+  fi
+  rm -rf -- "$tmp"
+  (( rc == 0 )) || return 1
+  printf 'ctx3-%s' "$sum"
+}
+
+# fleet__hash_error PATH WHY — fleet_sandbox_context_hash's failure message.
+fleet__hash_error() {
+  printf 'sandbox build context: cannot hash %s: %s\n' "$1" "$2" >&2
+}
+
+# fleet__sha FILE — FILE's SHA-256 (hex), or status 1 when it cannot be read.
+fleet__sha() {
+  local s
+  s="$(sha256sum < "$1")" || return 1
+  s="${s%% *}"
+  [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+
+# fleet__context_records CONTAINERFILE CONTEXT CF_REL TMP — write the
+# NUL-separated records fleet_sandbox_context_hash hashes to TMP/records.
+# Status 1 (with the path on stderr) on the first entry it cannot account for.
+fleet__context_records() {
+  local cf="$1" ctx="$2" cf_rel="$3" tmp="$4" path rel mode sum target
+  if ! mode="$(fleet__mode "$cf")"; then fleet__hash_error "$cf" "cannot stat"; return 1; fi
+  if ! sum="$(fleet__sha "$cf")"; then fleet__hash_error "$cf" "cannot read"; return 1; fi
+  if ! printf 'containerfile\0%s\0%s\0' "$mode" "$sum" > "$tmp/records"; then
+    fleet__hash_error "$tmp/records" "cannot write"
+    return 1
+  fi
+  if ! find "$ctx" -mindepth 1 -print0 > "$tmp/found"; then
+    fleet__hash_error "$ctx" "find could not list every entry"
+    return 1
+  fi
+  if ! LC_ALL=C sort -z "$tmp/found" > "$tmp/sorted"; then
+    fleet__hash_error "$ctx" "cannot sort the entry list"
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    rel="${path#"$ctx"/}"
+    [[ "$rel" == "$cf_rel" ]] && continue
+    if [[ -L "$path" ]]; then
+      if ! target="$(readlink -- "$path")"; then fleet__hash_error "$path" "cannot read the link"; return 1; fi
+      printf 'link\0%s\0%s\0' "$rel" "$target"
+      continue
+    fi
+    if ! mode="$(fleet__mode "$path")"; then fleet__hash_error "$path" "cannot stat"; return 1; fi
+    if [[ -d "$path" ]]; then
+      printf 'dir\0%s\0%s\0' "$rel" "$mode"
+    elif [[ -f "$path" ]]; then
+      if ! sum="$(fleet__sha "$path")"; then fleet__hash_error "$path" "cannot read"; return 1; fi
+      printf 'file\0%s\0%s\0%s\0' "$rel" "$mode" "$sum"
+    else
+      printf 'other\0%s\0%s\0' "$rel" "$mode"
+    fi
+  done < "$tmp/sorted" >> "$tmp/records" || return 1
+  return 0
 }
 
 # fleet_sandbox_reclaim_release_images LIST_FILE NEW_REF PROTECTED_REF… —

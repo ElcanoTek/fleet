@@ -957,11 +957,13 @@ mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"
 mcp_reqs_now="$(hash_file "$mcp_reqs")"
 mcp_reqs_prev="absent"
 [[ -f "$MCP_REQS_STAMP" ]] && mcp_reqs_prev="$(tr -d '[:space:]' < "$MCP_REQS_STAMP")"
-# A context that cannot be hashed (an unreadable file, say) falls back to the
-# Containerfile alone — a stamp mismatch rebuilds; it must never abort the update.
-cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")" || cf_now=""
-[[ -n "$cf_now" ]] || cf_now="cf-$(hash_file "$sandbox_cf")"
-[[ "$cf_now" == "cf-absent" ]] && cf_now="absent"
+# A context that cannot be hashed COMPLETELY (an unreadable file, a
+# root-squashed NFS bundle — the hash names the path on stderr) is "unknown":
+# step 3 rebuilds (or takes the build's own failure path) and records no stamp,
+# since a hash of part of the tree must never vouch for the image. It never
+# aborts the update by itself.
+cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")" || cf_now="unknown"
+[[ -n "$cf_now" ]] || cf_now="unknown"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(tr -d '[:space:]' < "$STAMP_FILE")"
 [[ -n "$cf_prev" ]] || cf_prev="absent"
@@ -1216,6 +1218,9 @@ elif [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] the bundle's Containerfile declares FLEET_SANDBOX_BASE — the build would layer on the release's verified sandbox image (fleet release sandbox), and a new base digest triggers a rebuild"
   fi
   info "[dry-run] would rebuild if the build-context hash (the Containerfile and every file beside it) or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
+  if [[ "$cf_now" == "unknown" ]]; then
+    warn "[dry-run] the sandbox build context could not be hashed completely (see above) — a real run would rebuild and record no build-context hash"
+  fi
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh (--no-cache when age-triggered)"
   info "[dry-run] would record the new build-context hash + tag under ${STATE_DIR}"
 elif ! command -v podman >/dev/null 2>&1; then
@@ -1242,7 +1247,10 @@ else
     sandbox_base="$("$NEW_FLEET" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
       || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify — nothing was installed and ${SERVICE_NAME} was not restarted"
   fi
-  if [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
+  if [[ "$cf_now" == "unknown" ]]; then
+    # Fail closed: an incomplete hash proves nothing about the image.
+    build_reason="the sandbox build context could not be hashed completely (see above) — rebuilding, and recording no build-context hash"
+  elif [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
     build_reason="the release's sandbox base moved to ${sandbox_base##*@} — rebuilding the bundle's layers on it"
   elif [[ "$cf_prev" == "absent" ]]; then
     build_reason="no stored build-context hash yet — establishing the baseline"
@@ -1310,10 +1318,16 @@ else
     if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" FLEET_SANDBOX_BASE="$sandbox_base" \
        FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache" "$SCRIPT_DIR/build-sandbox-image.sh"; then
       mkdir -p "$STATE_DIR"
-      printf '%s\n' "$cf_now" > "$STAMP_FILE"
       printf '%s\n' "$sandbox_base" > "$SANDBOX_BASE_FILE"
       [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"
-      ok "sandbox image rebuilt (${ref_now:-see build output}); recorded build-context hash ${cf_now:0:17}"
+      if [[ "$cf_now" == "unknown" ]]; then
+        # No stamp from a partial hash: the stored one (if any) stays, and the
+        # next update that cannot hash the context rebuilds again.
+        warn "sandbox image rebuilt (${ref_now:-see build output}), but no build-context hash was recorded — the context could not be hashed completely (see above); fix its permissions so updates can skip unneeded rebuilds"
+      else
+        printf '%s\n' "$cf_now" > "$STAMP_FILE"
+        ok "sandbox image rebuilt (${ref_now:-see build output}); recorded build-context hash ${cf_now:0:17}"
+      fi
       # Each rebuild strands the previous image's layers as dangling cruft
       # (~1.3 GB per rebuild) in the store the build targeted; prune THAT
       # store so regular updates can't fill the disk. Dangling-only: any
@@ -1321,6 +1335,15 @@ else
       if sandbox_podman image prune -f >/dev/null 2>&1; then
         ok "pruned dangling image layers left by the rebuild (fleet cleanup does more)."
       fi
+      # A base that moved leaves the previous release image behind under its
+      # own @sha256 name, which no prune removes. Reclaimed AFTER the prune,
+      # so the old bundle image built on it (dangling now) is gone first; the
+      # new base, the tag and a prebuilt sandbox.image (and their image IDs)
+      # are protected, nothing is forced, and a refusal stays listed for the
+      # retry after the restart and on the next update.
+      sandbox_superseded=""
+      [[ -n "$base_prev" && "$base_prev" != "$sandbox_base" ]] && sandbox_superseded="$base_prev"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$sandbox_base" "$ref_now" "$sandbox_image_ref"
     else
       # A failed build is survivable ONLY while the resolved ref still exists
       # in the service user's store — the Containerfile-changed-under-the-
@@ -1821,8 +1844,13 @@ else
     # build's base and the manifest's prebuilt sandbox.image (the image fleet
     # just restarted with) are protected, nothing is forced, a refusal stays listed.
     if [[ -f "$SANDBOX_RECLAIM_FILE" ]] && command -v podman >/dev/null 2>&1; then
+      # The digest file names the image fleet runs only on the published path;
+      # on a custom build it is a leftover, and the base is protected instead
+      # (a base that moved on must be reclaimable even when it equals it).
       sandbox_current=""
-      [[ -f "$SANDBOX_DIGEST_FILE" ]] && sandbox_current="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
+      if [[ "$sandbox_published" == "1" && -z "$sandbox_image_ref" && -f "$SANDBOX_DIGEST_FILE" ]]; then
+        sandbox_current="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
+      fi
       fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"
     fi
   else
