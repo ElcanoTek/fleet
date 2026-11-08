@@ -31,7 +31,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
-	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -169,7 +168,7 @@ func TestOpenAPIAPIVersion(t *testing.T) {
 		t.Errorf("servers[0].url = %q, want /v1", prefix)
 	}
 	h := handlers.New(handlers.Config{}, nil, nil)
-	router := apiversion.Router(buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil))
+	router := apiversion.Router(buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, prefix+"/api-info", nil))
 	if w.Code != http.StatusOK {
@@ -463,12 +462,11 @@ func newProbeEnv(t *testing.T) probeEnv {
 		Version:          "0.0.0-test",
 		DataDir:          tmp,
 	}, store, keyMgr)
-	notes := handlers.NewNotesHandlers(sched.NewStore(database), h)
 	noop := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	return probeEnv{
 		store:    store,
 		keyMgr:   keyMgr,
-		router:   apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
+		router:   apiversion.Router(buildOrchestratorMux(h, noop, noop, nil)),
 		adminKey: adminKey,
 	}
 }

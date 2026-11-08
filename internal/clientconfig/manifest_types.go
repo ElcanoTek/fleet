@@ -164,11 +164,6 @@ type Bundle struct {
 	// into SkillsDir (between the built-in pack and the bundle's own skills).
 	pluginSkillOverlays []skillOverlay
 	MCPDir              string
-	// EvalsDir holds the bundle's eval & regression sets (#502): one YAML file
-	// per set of golden cases, loaded by internal/evals.LoadSets. Optional like
-	// every content dir — a bundle without evals/ simply has no eval sets. It is
-	// a HOST-side dir (read by `fleet eval`), not bind-mounted into the sandbox.
-	EvalsDir string
 
 	// Plugins are the Agent Plugins (https://agent-plugins.org) loaded from the
 	// bundle's plugins/ dir and the manifest's plugin_roots — see plugins.go

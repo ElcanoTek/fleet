@@ -414,10 +414,6 @@ type Config struct {
 	// remediation. FLEET_ERROR_ANALYSIS_MODEL, defaulting to MetadataModel (then
 	// TitleModel) so deployments need zero new config.
 	ErrorAnalysisModel string
-	// SelfImproveEnabled gates the feedback→learned-instruction distiller (#516).
-	// FLEET_SELF_IMPROVE_ENABLED, default false: feedback is always recorded,
-	// but distillation + run-time injection only happen when enabled.
-	SelfImproveEnabled bool
 	// ErrorAnalysisEnabled gates the post-failure LLM diagnosis (#317).
 	// FLEET_ERROR_ANALYSIS_ENABLED, default true. When false, no analysis goroutine
 	// or model call fires on a terminal failure (cost/latency escape hatch); the
@@ -536,19 +532,6 @@ type Config struct {
 	DefaultModel  string
 	AdvancedModel string
 
-	// ── phone a friend: super-LLM review (#175) ──
-	// PhoneAFriendEnabled turns on a one-time, host-side review of a scheduled
-	// run's answer/work by a (typically stronger) reviewer model before the run is
-	// allowed to finish; material issues it reports are fed back as one more
-	// enforcement round (the same shape as the end-of-run verifier). OFF by
-	// default (FLEET_PHONE_A_FRIEND_ENABLED) so config/default behaviour is
-	// unchanged. PhoneAFriendModel names the reviewer model slug
-	// (FLEET_PHONE_A_FRIEND_MODEL); empty falls back to the task's fallback model.
-	// The reviewer is just another host-side LLM call — its credentials never
-	// enter the sandbox, the agent's model context, or logs.
-	PhoneAFriendEnabled bool
-	PhoneAFriendModel   string
-
 	// ── sub-agents / delegation (#175, #264, #1043) ──
 	// SubagentsEnabled turns on the spawn_subagent native tool fleet-wide, which
 	// lets a governed run delegate a scoped piece of work to a CHILD run. The child
@@ -582,16 +565,6 @@ type Config struct {
 	SubagentsMaxChildren    int
 	SubagentsBudgetFraction float64
 	SubagentsModel          string
-
-	// ── agent self-improvement: persistent task memory (#198, #285) ──
-	// A scheduled task that opts into Captain's Log (instruction_self_improve) gets
-	// remember/recall tools backed by the task_memories table. These caps bound how
-	// much a single task may accumulate so a long-lived recurring task cannot grow
-	// its memory unbounded. TaskMemoryMaxKeys (>0) bounds the number of distinct
-	// keys (oldest evicted LRU-style); TaskMemoryMaxValueBytes (>0) hard-rejects an
-	// oversized value. Defaults: 100 keys, 4096 bytes.
-	TaskMemoryMaxKeys       int
-	TaskMemoryMaxValueBytes int
 
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
@@ -1325,7 +1298,6 @@ func Load(envFile string) (*Config, error) {
 		MetadataModel:        getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
 		ErrorAnalysisModel:   getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		ErrorAnalysisEnabled: lp.getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
-		SelfImproveEnabled:   lp.getenvFleetBool("SELF_IMPROVE_ENABLED", false),
 		AutoTitle:            lp.getenvFleetBool("AUTO_TITLE", true),
 
 		EscalationSignalsEnabled:      lp.getenvFleetBool("ESCALATION_SIGNALS_ENABLED", true),
@@ -1356,10 +1328,6 @@ func Load(envFile string) (*Config, error) {
 		DefaultModel:  getenvFleet("DEFAULT_MODEL"),
 		AdvancedModel: getenvFleet("ADVANCED_MODEL"),
 
-		// ── phone a friend: super-LLM review (#175) ──
-		PhoneAFriendEnabled: lp.getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
-		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
-
 		// ── sub-agents / delegation (#175, #264, #1043) ──
 		// Default TRUE (#1043): the parent agent decides whether to delegate;
 		// FLEET_SUBAGENTS_ENABLED=false is the fleet-wide kill switch.
@@ -1368,10 +1336,6 @@ func Load(envFile string) (*Config, error) {
 		SubagentsMaxChildren:    lp.getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
 		SubagentsBudgetFraction: normalizeBudgetFraction(lp.getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),
 		SubagentsModel:          getenvFleet("SUBAGENTS_MODEL"),
-
-		// ── agent self-improvement: persistent task memory (#198, #285) ──
-		TaskMemoryMaxKeys:       lp.getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
-		TaskMemoryMaxValueBytes: lp.getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
 
 		// ── host reclamation + disk backpressure ──
 		WorktreePruneAge:   lp.getenvFleetDuration("WORKTREE_PRUNE_AGE", 24*time.Hour),

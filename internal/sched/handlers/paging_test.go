@@ -4,7 +4,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -100,7 +99,7 @@ func TestParseOffset(t *testing.T) {
 	}
 }
 
-// pagingRouter mounts the four offset/limit list endpoints behind the admin
+// pagingRouter mounts the offset/limit list endpoints behind the admin
 // key, the way cmd/fleet does, so each request travels the real handler.
 func pagingRouter(t *testing.T) (func(method, target string) *httptest.ResponseRecorder, *storage.Storage) {
 	t.Helper()
@@ -114,8 +113,6 @@ func pagingRouter(t *testing.T) (func(method, target string) *httptest.ResponseR
 		rt.Use(h.AdminAuthMiddleware)
 		rt.Get("/tasks", h.ListTasks)
 		rt.Get("/tasks/upcoming", h.GetUpcomingRuns)
-		rt.Get("/tasks/paused", h.ListPausedTasks)
-		rt.Get("/datasets/{datasetID}/rows", h.ListDatasetRows)
 	})
 	do := func(method, target string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, target, nil)
@@ -128,33 +125,13 @@ func pagingRouter(t *testing.T) (func(method, target string) *httptest.ResponseR
 }
 
 // TestListEndpoints_RejectBadPagingUniformly is the regression for the
-// three endpoints that used to swallow strconv errors: a malformed limit is a
+// endpoints that used to swallow strconv errors: a malformed limit is a
 // 400 on every list endpoint, not a silent default on some and a 400 on
-// others, and a negative offset on the rows endpoint is a 400 instead of the
-// Postgres "OFFSET must not be negative" error surfacing as a 500.
+// others.
 func TestListEndpoints_RejectBadPagingUniformly(t *testing.T) {
 	t.Parallel()
 
-	do, store := pagingRouter(t)
-
-	ds := &models.Dataset{
-		ID:      uuid.New(),
-		Name:    "paging",
-		Goal:    "g",
-		Columns: []models.DatasetColumn{{Name: "in", Type: "text"}, {Name: "out", Type: "text", Output: true}},
-		Status:  models.DatasetStatusIdle,
-	}
-	if err := store.CreateDataset(context.Background(), ds); err != nil {
-		t.Fatalf("CreateDataset: %v", err)
-	}
-	var cells []json.RawMessage
-	for i := 0; i < 5; i++ {
-		cells = append(cells, json.RawMessage(`{"in":"row"}`))
-	}
-	if _, err := store.AddDatasetRows(context.Background(), ds.ID, cells); err != nil {
-		t.Fatalf("AddDatasetRows: %v", err)
-	}
-	rowsPath := "/datasets/" + ds.ID.String() + "/rows"
+	do, _ := pagingRouter(t)
 
 	bad := []struct {
 		name   string
@@ -166,12 +143,6 @@ func TestListEndpoints_RejectBadPagingUniformly(t *testing.T) {
 		{"upcoming limit=0", "/tasks/upcoming?limit=0", "must be 1-1000"},
 		{"upcoming limit=abc", "/tasks/upcoming?limit=abc", "must be 1-1000"},
 		{"upcoming limit over max", "/tasks/upcoming?limit=1001", "must be 1-1000"},
-		{"paused limit=abc", "/tasks/paused?limit=abc", "must be 1-1000"},
-		{"paused limit=-5", "/tasks/paused?limit=-5", "must be 1-1000"},
-		{"rows limit=abc", rowsPath + "?limit=abc", "must be 1-1000"},
-		{"rows limit over max", rowsPath + "?limit=100000", "must be 1-1000"},
-		{"rows offset=-1", rowsPath + "?offset=-1", "Invalid offset"},
-		{"rows offset=abc", rowsPath + "?offset=abc", "Invalid offset"},
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,38 +155,9 @@ func TestListEndpoints_RejectBadPagingUniformly(t *testing.T) {
 			}
 		})
 	}
-
-	// And the happy path still pages: absent params return everything (well
-	// under the default), explicit limit/offset slice the ordered rows.
-	decodeRows := func(w *httptest.ResponseRecorder) []*models.DatasetRow {
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
-		}
-		var resp struct {
-			Rows []*models.DatasetRow `json:"rows"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		return resp.Rows
-	}
-	if got := decodeRows(do(http.MethodGet, rowsPath)); len(got) != 5 {
-		t.Fatalf("unparameterized list returned %d rows, want 5", len(got))
-	}
-	page := decodeRows(do(http.MethodGet, rowsPath+"?limit=2&offset=3"))
-	if len(page) != 2 || page[0].RowIndex != 3 || page[1].RowIndex != 4 {
-		idx := make([]int, 0, len(page))
-		for _, r := range page {
-			idx = append(idx, r.RowIndex)
-		}
-		t.Fatalf("limit=2&offset=3 returned row indexes %v, want [3 4]", idx)
-	}
-	if got := decodeRows(do(http.MethodGet, rowsPath+"?offset=0&limit=1000")); len(got) != 5 {
-		t.Fatalf("explicit in-range bounds returned %d rows, want 5", len(got))
-	}
 }
 
-// The paused queue and upcoming feed keep their defaults when the parameter
+// The upcoming feed keeps its defaults when the parameter
 // is absent — an unparameterized call is unchanged by the validation.
 func TestListEndpoints_AbsentLimitKeepsDefaults(t *testing.T) {
 	t.Parallel()
@@ -228,7 +170,7 @@ func TestListEndpoints_AbsentLimitKeepsDefaults(t *testing.T) {
 		t.Fatalf("AddTask: %v", err)
 	}
 
-	for _, target := range []string{"/tasks/upcoming", "/tasks/paused", "/tasks"} {
+	for _, target := range []string{"/tasks/upcoming", "/tasks"} {
 		if w := do(http.MethodGet, target); w.Code != http.StatusOK {
 			t.Fatalf("GET %s without paging params = %d, want 200: %s", target, w.Code, w.Body.String())
 		}

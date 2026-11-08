@@ -91,6 +91,27 @@ var removedSettings = map[string]string{
 	"FLEET_MEMORY_GRAPH_MODEL":     memoryGraphFix,
 	"CHAT_MEMORY_GRAPH_MODEL":      memoryGraphFix,
 	"CUTLASS_MEMORY_GRAPH_MODEL":   memoryGraphFix,
+
+	// Task feedback / learned-instruction distillation (ADR-0111).
+	"FLEET_SELF_IMPROVE_ENABLED":   selfImproveFix,
+	"CHAT_SELF_IMPROVE_ENABLED":    selfImproveFix,
+	"CUTLASS_SELF_IMPROVE_ENABLED": selfImproveFix,
+
+	// Phone-a-friend super-LLM review (ADR-0111).
+	"FLEET_PHONE_A_FRIEND_ENABLED":   phoneAFriendFix,
+	"CHAT_PHONE_A_FRIEND_ENABLED":    phoneAFriendFix,
+	"CUTLASS_PHONE_A_FRIEND_ENABLED": phoneAFriendFix,
+	"FLEET_PHONE_A_FRIEND_MODEL":     phoneAFriendFix,
+	"CHAT_PHONE_A_FRIEND_MODEL":      phoneAFriendFix,
+	"CUTLASS_PHONE_A_FRIEND_MODEL":   phoneAFriendFix,
+
+	// Per-task Captain's Log KV memory (ADR-0111).
+	"FLEET_TASK_MEMORY_MAX_KEYS":          taskMemoryFix,
+	"CHAT_TASK_MEMORY_MAX_KEYS":           taskMemoryFix,
+	"CUTLASS_TASK_MEMORY_MAX_KEYS":        taskMemoryFix,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":   taskMemoryFix,
+	"CHAT_TASK_MEMORY_MAX_VALUE_BYTES":    taskMemoryFix,
+	"CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES": taskMemoryFix,
 }
 
 // serviceTokenFix is the advice for a leftover service-token setting.
@@ -98,6 +119,15 @@ const serviceTokenFix = "the internal service-token channel was removed (ADR-010
 
 // memoryGraphFix is the advice for a leftover memory-graph setting.
 const memoryGraphFix = "the memory knowledge graph was removed (ADR-0111), so delete the line"
+
+// selfImproveFix is the advice for a leftover task-feedback / learned-instruction setting.
+const selfImproveFix = "task feedback / learned-instruction distillation was removed (ADR-0111), so delete the line"
+
+// phoneAFriendFix is the advice for a leftover phone-a-friend setting.
+const phoneAFriendFix = "the phone-a-friend super-LLM review was removed (ADR-0111), so delete the line"
+
+// taskMemoryFix is the advice for a leftover per-task KV memory setting.
+const taskMemoryFix = "per-task Captain's Log KV memory was removed (ADR-0111), so delete the line"
 
 // Type is the value type of a setting, as the docs describe it. The typed
 // knob kinds (Int … StrictBool) are the ones internal/config's knob parser

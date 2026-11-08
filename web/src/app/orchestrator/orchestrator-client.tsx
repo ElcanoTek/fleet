@@ -23,7 +23,6 @@ import { LogViewer } from "./LogViewer";
 import { SLAReportPanel } from "./SLAReportPanel";
 import { UsagePanel } from "./UsagePanel";
 import { AdoptionPanel } from "./AdoptionPanel";
-import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
 import { taskRunLabel } from "./taskDisplay";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
@@ -67,7 +66,6 @@ const DASH_TABS = [
   "tasks",
   "upcoming",
   "sla",
-  "datasets",
   "usage",
   "adoption",
 ] as const;
@@ -586,15 +584,6 @@ function OrchestratorInner({
                 {/* #458 symptom 2: only admins see the SLA tab. The render guard
                     below mirrors this — a non-admin holding a stale tab === "sla"
                     still falls back to the tasks view. */}
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={effectiveTab === "datasets"}
-                  className={`tab-btn${effectiveTab === "datasets" ? " tab-btn-active" : ""}`}
-                  onClick={() => switchTab("datasets")}
-                >
-                  Datasets
-                </button>
                 {isAdmin ? (
                   <button
                     type="button"
@@ -640,9 +629,7 @@ function OrchestratorInner({
                   collapses under the scroll position — the browser clamps to
                   the top, which reads as a jarring jump on phones. */}
               <div className="dashboard-tab-panel">
-                {tab === "datasets" ? (
-                  <DatasetsPanel readOnly={readOnly} />
-                ) : tab === "upcoming" ? (
+                {tab === "upcoming" ? (
                   <UpcomingPanel />
                 ) : tab === "sla" && isAdmin ? (
                   <SLAReportPanel />

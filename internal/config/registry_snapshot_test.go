@@ -113,7 +113,6 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_ESCALATION_CLASSIFIER_MODE":               true,
 	"FLEET_ESCALATION_CLASSIFIER_MODEL":              true,
 	"FLEET_ESCALATION_CLASSIFIER_THRESHOLD":          true,
-	"FLEET_SELF_IMPROVE_ENABLED":                     true,
 	"FLEET_AUTO_TITLE":                               true,
 	"FLEET_MEMORY_MODEL":                             true,
 	"FLEET_MEMORY_AUTOINDEX_ENABLED":                 true,
@@ -128,13 +127,11 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_DISK_MIN_FREE_PERCENT":                    true,
 	// Read by internal/httpapi directly (not the loader), but listed so an
 	// operator can set it in FLEET_ENV_FILE like every other knob.
-	"FLEET_MAINTENANCE_MIN_INTERVAL":    true,
-	"FLEET_KEEP_RUNS_PER_TASK":          true,
-	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
-	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
-	"FLEET_CLEANUP_HOUR":                true,
-	"LLM_MAX_TOKENS":                    true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
+	"FLEET_MAINTENANCE_MIN_INTERVAL": true,
+	"FLEET_KEEP_RUNS_PER_TASK":       true,
+	"FLEET_CLEANUP_HOUR":             true,
+	"LLM_MAX_TOKENS":                 true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":    true,
 
 	// ── knobs parsed at their point of use, not by the loader (#1273) ──
 	// These are scopeExternal rows in the env-knob registry (knobs.go): the
@@ -219,10 +216,6 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_PINNED_MODELS":  true,
 	"CUTLASS_ALLOWED_DIRS": true,
 	"GH_TOKEN":             true,
-
-	// ── phone a friend: super-LLM review (#175) ──
-	"FLEET_PHONE_A_FRIEND_ENABLED": true,
-	"FLEET_PHONE_A_FRIEND_MODEL":   true,
 
 	// ── sub-agents / delegation (#175, #264, #1043) ──
 	"FLEET_SUBAGENTS_ENABLED":         true,
@@ -481,7 +474,6 @@ var preRegistryEnvKnobs = []envKnob{
 	{key: "FLEET_TEMPERATURE", kind: kindFloat, min: bound(0)},
 	{key: "LLM_MAX_TOKENS", kind: kindInt},
 	{key: "FLEET_ERROR_ANALYSIS_ENABLED", kind: kindBool},
-	{key: "FLEET_SELF_IMPROVE_ENABLED", kind: kindBool},
 	{key: "FLEET_AUTO_TITLE", kind: kindBool},
 	{key: "FLEET_ESCALATION_SIGNALS_ENABLED", kind: kindBool},
 	// Percent, the same 50–99 the admin setting allows: below 50 a coin flip
@@ -496,8 +488,7 @@ var preRegistryEnvKnobs = []envKnob{
 	// n<1 as "fall back to 8".) A set 0 is a misconfiguration; refuse it.
 	{key: "FLEET_MAX_CONCURRENT_AGENTS", kind: kindInt, min: bound(1)},
 
-	// ── phone a friend / sub-agents (#175, #264, #1043) ──
-	{key: "FLEET_PHONE_A_FRIEND_ENABLED", kind: kindBool},
+	// ── sub-agents (#175, #264, #1043) ──
 	{key: "FLEET_SUBAGENTS_ENABLED", kind: kindBool},
 	{key: "FLEET_SUBAGENTS_MAX_DEPTH", kind: kindInt},
 	{key: "FLEET_SUBAGENTS_MAX_CHILDREN", kind: kindInt},
@@ -505,10 +496,6 @@ var preRegistryEnvKnobs = []envKnob{
 	// (documented: a misconfiguration must never mean "unbounded"), so no
 	// bounds here — only a non-numeric value errors.
 	{key: "FLEET_SUBAGENTS_BUDGET_FRACTION", kind: kindFloat},
-
-	// ── task memory (#198, #285) ──
-	{key: "FLEET_TASK_MEMORY_MAX_KEYS", kind: kindInt},
-	{key: "FLEET_TASK_MEMORY_MAX_VALUE_BYTES", kind: kindInt},
 
 	// ── run-history retention (#252) + task pacing (#230, #510) ──
 	{key: "FLEET_RUN_LOG_RETENTION_DAYS", kind: kindInt},

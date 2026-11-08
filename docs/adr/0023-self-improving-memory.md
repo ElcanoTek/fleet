@@ -1,6 +1,6 @@
 # ADR-0023: Self-improving memory is staged feedback→learned-instructions
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0111
 - **Date:** 2026-07-01
 - **Deciders:** fleet maintainers
 

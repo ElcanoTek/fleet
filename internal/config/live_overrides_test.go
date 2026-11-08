@@ -14,14 +14,11 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	isolateEnv(t)
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	writeEnv(t, envPath, "FLEET_PHONE_A_FRIEND_ENABLED=false\nFLEET_AUTO_TITLE=true\nFLEET_APPROVAL_TIMEOUT_SECONDS=900\n")
+	writeEnv(t, envPath, "FLEET_AUTO_TITLE=true\nFLEET_APPROVAL_TIMEOUT_SECONDS=900\n")
 
 	cfg, err := Load(envPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.LivePhoneAFriendEnabled() {
-		t.Fatal("env default should be false")
 	}
 	if !cfg.LiveAutoTitle() {
 		t.Fatal("env default should be true")
@@ -30,7 +27,6 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 		t.Fatalf("env default approval timeout = %d, want 900", got)
 	}
 
-	cfg.SetPhoneAFriendEnabled(true)
 	cfg.SetAutoTitle(false)
 	cfg.SetSubagentsEnabled(true)
 	cfg.SetMemoryAutoIndexEnabled(true)
@@ -48,7 +44,6 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"phone_a_friend", cfg.LivePhoneAFriendEnabled(), true},
 		{"auto_title", cfg.LiveAutoTitle(), false},
 		{"subagents", cfg.LiveSubagentsEnabled(), true},
 		{"memory_autoindex", cfg.LiveMemoryAutoIndexEnabled(), true},

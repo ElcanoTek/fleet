@@ -94,7 +94,6 @@ open from the account menu, beside **Settings**.
 | --- | --- |
 | **Recent Tasks** | The ledger. Every task, newest first, with its status and history. This is where you will spend most of your time, and the rest of this guide assumes it. |
 | **Upcoming** | A forecast, not a log: the runs the scheduler is about to perform, grouped by day (Today, Tomorrow, then dates). It is computed from the current schedules, so editing a schedule updates it immediately. |
-| **Datasets** | Background row-by-row work over tables, when your deployment uses it. You see the datasets you created; administrators see all of them. |
 | **SLA**, **Usage**, **Adoption** | Tasks measured against an expected duration, and spend, prompt-cache efficiency, and activity reporting. In **Usage**, summary tiles include **Cache efficiency** (hit rate across chat prompt tokens, cached vs uncached input tokens), the bar chart can switch **Measure** to **Cache hit %**, and the breakdown table shows **Cached**, **Miss**, and **Hit %** alongside spend and token totals (**Settings → Admin** also provides a dedicated **Prompt Cache Efficiency** panel by date and by user). Admin-only: these tabs do not appear for other roles. |
 
 None of the tabs beyond the first two are required for daily work.
@@ -253,7 +252,7 @@ Every status badge means one of eleven things. What each one means, and what to 
 | `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. Most deployments let it wait indefinitely, but an operator can set an expiry after which an unanswered run fails — ask yours whether one is set. |
 | `PAUSED_AWAITING_WAKE` | The run put itself to sleep until a set time or an expected event, for example to check back on something later. It wakes on its own; every sleep has a deadline. Sleeping runs also get their own short list on the dashboard, so parked work stays visible without a status filter. |
 
-Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a scheduled task holds a live `LEASED` or `RUNNING` lease (or a dataset run, chat turn, or approved action is running), and pause new task claims and dataset starts while draining when `--wait` is passed (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check).
+Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a scheduled task holds a live `LEASED` or `RUNNING` lease (or a chat turn or approved action is running), and pause new task claims while draining when `--wait` is passed (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check).
 
 > **The retry rule in one line.** Transient failures retry themselves — quietly,
 > by going back to the queue with a growing delay. Deterministic ones do not:
@@ -368,13 +367,6 @@ with your answer in hand. A paused task consumes nothing while it waits, and by 
 expiry, after which an unanswered run is failed and its question cleared. If
 yours does, an answer left for tomorrow may be an answer left too late; ask your
 administrator whether there is a deadline.
-
-### Rate a run
-
-Each finished run can be marked **Helpful** or **Not helpful**, with an optional
-critique. This is the lightest way to steer recurring work: patterns in the
-feedback surface as suggested adjustments that an operator reviews before
-anything changes.
 
 ## 6. When a run goes wrong
 

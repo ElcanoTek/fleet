@@ -1318,7 +1318,6 @@ describe("TaskCreateModal — dialog shell a11y", () => {
       "Off = sealed — the sandbox has no internet access.",
     );
     for (const name of [
-      "Persistent memory · Captain's Log",
       "Allow sub-agent delegation",
       "Carry context across runs",
     ]) {
@@ -1372,7 +1371,6 @@ describe("TaskCreateModal — resubmit override payload", () => {
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.change(screen.getByLabelText("Expected duration"), { target: { value: "45" } });
     fireEvent.change(screen.getByLabelText("Sandbox memory"), { target: { value: "512" } });
-    fireEvent.click(screen.getByLabelText(/Captain's Log/));
     fireEvent.click(screen.getByLabelText("Carry context across runs"));
     fireEvent.change(screen.getByLabelText("Pre-run shell command"), {
       target: { value: "test -f /workspace/ready" },
@@ -1385,7 +1383,6 @@ describe("TaskCreateModal — resubmit override payload", () => {
       sandbox_limits: { memory_mb: 512 },
       run_if: { command: "test -f /workspace/ready", on_error: "run", timeout_seconds: 30 },
       carry_context: true,
-      instruction_self_improve: true,
     });
   });
 
@@ -1418,7 +1415,6 @@ describe("TaskCreateModal — resubmit override payload", () => {
     expect(overrides.sandbox_limits).toBeNull();
     expect(overrides.run_if).toBeNull();
     expect(overrides.carry_context).toBe(false);
-    expect(overrides.instruction_self_improve).toBe(false);
   });
 });
 

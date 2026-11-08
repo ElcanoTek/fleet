@@ -17,11 +17,11 @@ import (
 )
 
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
-// auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
+// auth groups.
 //
 // trustedProxies is cfg.TrustedProxies (FLEET_TRUSTED_PROXIES); it decides
 // whether X-Forwarded-For is consulted at all — see the comment at its use.
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, trustedProxies []net.IP) http.Handler {
+func buildOrchestratorMux(h *handlers.Handlers, reloadConfig, reloadMCP http.HandlerFunc, trustedProxies []net.IP) http.Handler {
 	r := chi.NewRouter()
 	// The client IP keys login and API rate limiting (getClientIP), so it
 	// follows the FLEET_TRUSTED_PROXIES contract, resolved by the same
@@ -103,13 +103,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
 		r.Post("/keys/{key_id}/revoke", h.RevokeAPIKey)
 		r.Delete("/keys/{key_id}", h.DeleteAPIKey)
-
-		// Notes admin: CRUD + proposal decisions (NOTES_WIKI_SPEC §6).
-		r.Post("/notes", notes.CreateNote)
-		r.Put("/notes/{slug}", notes.UpdateNote)
-		r.Delete("/notes/{slug}", notes.ArchiveNote)
-		r.Post("/notes/proposals/{id}/publish", notes.PublishProposal)
-		r.Post("/notes/proposals/{id}/reject", notes.RejectProposal)
 	})
 
 	// Admin-or-user reads.
@@ -139,23 +132,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Get("/admin/budgets", h.ListBudgets)
 		r.Post("/admin/budgets", h.UpsertBudget)
 		r.Delete("/admin/budgets/{budget_id}", h.DeleteBudget)
-		// Dataset / table agent (#514): typed tables whose rows the agent works
-		// in the background, proposing structured write-backs a human approves.
-		// Reads + review actions live here; run/pause drive the in-process
-		// dataset runner via the SetDatasetRunner seam. Import, run and
-		// re-run lead to row runs, so they carry the task-create rate limiter
-		// (and, in-handler, the budget gate) like /tasks and /tasks/import.
-		r.Get("/datasets", h.ListDatasets)
-		r.Post("/datasets", h.CreateDataset)
-		r.Get("/datasets/{datasetID}", h.GetDataset)
-		r.Delete("/datasets/{datasetID}", h.DeleteDataset)
-		r.Get("/datasets/{datasetID}/rows", h.ListDatasetRows)
-		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/rows", h.ImportDatasetRows)
-		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/run", h.RunDataset)
-		r.Post("/datasets/{datasetID}/pause", h.PauseDataset)
-		r.Post("/datasets/{datasetID}/approve", h.ApproveDatasetRows)
-		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
-		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
 		r.Get("/tasks", h.ListTasks)
 		// Scheduler UX 2.0 (#504): upcoming-runs timeline (computed from cron +
 		// scheduled_for). Static segment, registered with the other task reads.
@@ -191,17 +167,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// the record — and only this frees the task's name for reuse (#238's
 		// partial unique index outlives a cancelled row).
 		r.Delete("/tasks/{task_id}/permanent", h.DeleteTask)
-		// Self-improving memory (#516): feedback capture + versioned learned
-		// instructions (list / activate a version / deactivate).
-		r.Post("/tasks/{task_id}/feedback", h.SubmitFeedback)
-		r.Get("/tasks/{task_id}/learned-instructions", h.LearnedInstructions)
-		r.Post("/tasks/{task_id}/learned-instructions/{version}/activate", h.LearnedInstructions)
-		r.Delete("/tasks/{task_id}/learned-instructions/active", h.LearnedInstructions)
-		// ask/notify (#510): the "needs a human answer" queue + resume with an
-		// answer (re-queues the paused task). /tasks/paused is registered before
-		// /tasks/{task_id} static-vs-param, but chi routes them distinctly.
-		r.Get("/tasks/paused", h.ListPausedTasks)
-		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
 		// self-wake (docs/SELF-WAKE.md): fire a named event at a task parked
 		// by wake_on_event; the key must match what the task waits for.
 		r.Post("/tasks/{task_id}/wake", h.WakeTask)
@@ -242,13 +207,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Get("/prompts/export", h.ExportPromptLibrary)
 		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
 		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
-
-		// Notes reads (admin + scoped user). The proposal queue reads gate
-		// on PermissionAdmin in-handler, like /admin/usage above.
-		r.Get("/notes", notes.ListNotes)
-		r.Get("/notes/{slug}", notes.GetNote)
-		r.Get("/notes/proposals", notes.ListProposals)
-		r.Get("/notes/proposals/{id}", notes.GetProposal)
 	})
 
 	// The two high-cost endpoints carry the sliding-window rate limiter

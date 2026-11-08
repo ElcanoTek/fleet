@@ -36,17 +36,6 @@ type Config struct {
 	WebhookBodyTemplate string
 	WebhookSecret       string // SECRET — HMAC signing key, never logged
 
-	// ── daily owner digest (admin-managed only; docs/OWNER-DIGEST.md) ──
-	// OwnerDigestEnabled turns on the once-a-day email to each task owner
-	// listing their scheduled tasks that did not work. It rides the SMTP
-	// settings above but is addressed to the owner, not EmailTo, so it needs
-	// only an SMTP host and From address (DirectEmailConfigured). No env var
-	// sets it: the env-derived config leaves it off.
-	OwnerDigestEnabled bool
-	// OwnerDigestHourUTC is the UTC hour (0-23) at or after which the day's
-	// digest is sent.
-	OwnerDigestHourUTC int
-
 	// ── shared ──
 	// PublicURLBase is the absolute base (scheme+host) used to build the
 	// per-task LogURL in notifications, e.g. https://fleet.example.com. Empty =

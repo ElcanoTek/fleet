@@ -24,7 +24,7 @@ import (
 func realOrchestratorRouter(t *testing.T) *chi.Mux {
 	t.Helper()
 	h := handlers.New(handlers.Config{}, nil, nil)
-	orch, ok := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(*chi.Mux)
+	orch, ok := buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(*chi.Mux)
 	if !ok {
 		t.Fatal("orchestrator router is not a *chi.Mux")
 	}

@@ -50,17 +50,6 @@ func (c *Config) setLive(write func()) {
 	write()
 }
 
-// LivePhoneAFriendEnabled reports whether scheduled runs get the one-time
-// super-LLM review (#175), admin-override-aware.
-func (c *Config) LivePhoneAFriendEnabled() bool {
-	return c.liveBool(func() bool { return c.PhoneAFriendEnabled })
-}
-
-// SetPhoneAFriendEnabled applies the admin override for phone-a-friend.
-func (c *Config) SetPhoneAFriendEnabled(v bool) {
-	c.setLive(func() { c.PhoneAFriendEnabled = v })
-}
-
 // LiveSubagentsEnabled reports whether the spawn_subagent tool is on
 // fleet-wide (#175/#264), admin-override-aware.
 func (c *Config) LiveSubagentsEnabled() bool {

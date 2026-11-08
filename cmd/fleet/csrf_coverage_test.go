@@ -20,8 +20,7 @@ func TestOrchestratorCSRFCoverage(t *testing.T) {
 	t.Parallel()
 
 	h := handlers.New(handlers.Config{}, nil, nil)
-	notes := handlers.NewNotesHandlers(nil, h)
-	mux := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil)
+	mux := buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil)
 
 	const host = "fleet.example.com"
 	do := func(path, origin string) *httptest.ResponseRecorder {

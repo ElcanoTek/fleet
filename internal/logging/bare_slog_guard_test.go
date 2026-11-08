@@ -47,7 +47,6 @@ var bareSlogAllowed = map[string]string{
 	"cmd/fleet.resolveSandboxInto":                      reasonBoot,
 	"cmd/fleet.runMCPBroker":                            reasonBoot,
 	"cmd/fleet.seedBootstrapAdmins":                     reasonBoot,
-	"cmd/fleet.setupDatasetRunner":                      reasonBoot,
 	"cmd/fleet.setupRemoteMCP":                          reasonBoot,
 	"cmd/fleet.startRedirectServer":                     reasonBoot,
 	"cmd/fleet.toAgentcoreProviders":                    reasonBoot,

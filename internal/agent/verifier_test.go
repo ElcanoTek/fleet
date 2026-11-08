@@ -194,3 +194,23 @@ func TestTruncateFinalResponseForVerifier(t *testing.T) {
 		t.Error("truncation must mark the cut")
 	}
 }
+
+// TestLatestAssistantText pins that latestAssistantText returns the most recent
+// non-empty assistant message (skipping later tool/user turns and empty ones).
+func TestLatestAssistantText(t *testing.T) {
+	if got := latestAssistantText(nil); got != "" {
+		t.Fatalf("nil session should yield empty, got %q", got)
+	}
+	session := NewLogSession()
+	toolID := "c1"
+	session.Messages = []LogMessage{
+		{Role: roleUser, Content: "do the thing"},
+		{Role: roleAssistant, Content: "first draft"},
+		{Role: roleAssistant, Content: "final answer"},
+		{Role: roleAssistant, Content: "   "}, // blank, must be skipped
+		{Role: roleTool, ToolCallID: &toolID, Content: "tool output"},
+	}
+	if got := latestAssistantText(session); got != "final answer" {
+		t.Fatalf("latestAssistantText = %q, want %q", got, "final answer")
+	}
+}

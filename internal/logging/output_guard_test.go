@@ -26,7 +26,6 @@ var directOutputAllowed = map[string]string{
 	"internal/testdb/":                "test-database harness for TestMain, outside the server process",
 	"internal/mcpbroker/supervise.go": "the broker child's protocol frames ride its own stdin/stdout",
 	"cmd/fleet/main.go":               "bootstrap: version and usage output before logging is configured",
-	"cmd/fleet/eval.go":               "`fleet eval` CLI report",
 	"cmd/fleet/mcp_probe.go":          "`fleet mcp test` CLI report",
 	"cmd/fleet/validate_config.go":    "`fleet validate-config` CLI report",
 	"cmd/fleet-bench/":                "benchmark harness binary, prints its results",

@@ -181,13 +181,9 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
 	policy.SetAuditProtocolRef(tc.AuditProtocolRef)
-	// propose_note as a single agentcore-boundary guarantee: register the tool iff
-	// a NoteProposer is wired, so the advertised tool, the gate, and the actual
-	// roster stay in lockstep.
 	nativeTools := tc.NativeTools
 	if tc.NoteProposer != nil {
 		policy.SetNoteProposer(tc.NoteProposer)
-		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
 	}
 	// propose_skill under the same lockstep guarantee (docs/SKILLS.md phase 3).
 	if tc.SkillProposer != nil {

@@ -150,8 +150,6 @@ func Registry() []Spec {
 		// env-file reload keep working and serve again on Reset. 0 = no ceiling.
 		{Key: "max_total_tokens", Kind: KindInt, Min: 10000, Max: 1000000000, MinZeroOK: true,
 			EnvVar: "FLEET_MAX_TOTAL_TOKENS"},
-		{Key: "phone_a_friend_enabled", Kind: KindBool,
-			EnvVar: "FLEET_PHONE_A_FRIEND_ENABLED"},
 		{Key: "subagents_enabled", Kind: KindBool,
 			EnvVar: "FLEET_SUBAGENTS_ENABLED"},
 

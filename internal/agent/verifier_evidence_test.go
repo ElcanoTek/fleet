@@ -206,13 +206,13 @@ func TestVerifierAndReviewerSkipTerminalAuditAbort(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	reviewer := &abortReviewerModel{}
-	a.fallbackModel, a.reviewerModel, a.phoneAFriendEnabled = reviewer, reviewer, true
+	verifier := &abortReviewerModel{}
+	a.fallbackModel = verifier
 	if err := a.Execute(context.Background(), "Create an item only after inspecting the inventory."); !errors.Is(err, agentcore.ErrAuditAborted) {
 		t.Fatalf("terminal abort must remain a failed run: %v", err)
 	}
-	if reviewer.calls != 0 {
-		t.Fatalf("terminal abort triggered %d reviewer calls", reviewer.calls)
+	if verifier.calls != 0 {
+		t.Fatalf("terminal abort triggered %d verifier calls", verifier.calls)
 	}
 }
 

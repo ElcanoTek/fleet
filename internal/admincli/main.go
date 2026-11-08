@@ -126,8 +126,6 @@ func Run(argv []string) int {
 		return cmdTask(argv[1:])
 	case "mcp":
 		return cmdMCP(argv[1:])
-	case "notes":
-		return cmdNotes(argv[1:])
 	case "worktree":
 		return cmdWorktree(argv[1:])
 	case "migrate":
@@ -186,8 +184,6 @@ Preflight & diagnostics (in-binary; no server needed):
   fleet mcp test [--all | <server> ...] [--deep] [--bundle-path <dir>] [--timeout 30s] [--json]
                                                       (per-server smoke: spawn it host-side like the broker, handshake,
                                                        tools/list; --deep also calls its auth-status/probe tool — docs/MCP-TESTING.md)
-  fleet eval run <set> | list | history [set] | capture ...   (golden-set regression harness — docs/EVALS.md;
-                                                       fleet eval alone prints the per-subcommand flags)
   fleet generate-vapid-keys                           (mint the Web Push VAPID key pair for the env file — docs/PUSH-NOTIFICATIONS.md)
 
 Operator lifecycle (bootstrap → update → status/doctor):
@@ -284,7 +280,6 @@ Users, credentials, notes:
   fleet sched dlq list [--tag <tag>] [--limit N] [--json] | replay <task_id>   (dead-letter queue review/replay; #253)
   fleet sched budget list | create --scope user|key --principal <id> --window day|week|month [--soft-usd N] [--hard-usd N] [--soft-tokens N] [--hard-tokens N] | delete <budget_id>
   fleet task run <task.yaml> [--log FILE] [--workspace DIR]   (local one-shot through the governed runtime)
-  fleet task memories list|clear|delete <task_id> [key]   (inspect/reset a task's Captain's Log memory; #198)
   fleet task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)
   fleet task import [--from tasks.yaml] [--format json|yaml] [--dry-run] [--conflict error|skip|replace]   (definition-only import; #238)
   fleet mcp account set <server> <account> --secret KEY=-   (value via stdin; writes the SERVER env file, like config set-*)
@@ -301,12 +296,6 @@ Users, credentials, notes:
     (MCP tools whose input schema Fleet translated for the model or withheld
      from it, as recorded by the running server's turns; fleet doctor reads
      it. Uses ADMIN_API_KEY / FLEET_ORCHESTRATOR_ADDR by default.)
-  fleet notes set <slug> --title "..."  (body via stdin)
-  fleet notes get <slug>
-  fleet notes list [--all]
-  fleet notes rm <slug>
-  fleet notes proposal publish <id> [--note "..."]
-  fleet notes proposal reject  <id> --reason "..."
 
 Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
   fleet worktree list  [--workspace DIR]                       (git worktree list --porcelain)

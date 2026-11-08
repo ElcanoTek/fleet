@@ -33,8 +33,7 @@ func roleHolds(role string, perm models.Permission) bool {
 // perform without the permission (taskResumableByPrincipal: the creator may
 // answer or wake their own task).
 var ownerMayAct = map[string]bool{
-	"POST /tasks/{task_id}/resume": true,
-	"POST /tasks/{task_id}/wake":   true,
+	"POST /tasks/{task_id}/wake": true,
 }
 
 // TestOrchestratorUserRoleCannotMutateWhenReadonly drives every operation a

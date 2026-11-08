@@ -58,7 +58,6 @@ func testDefaults() map[string]string {
 		"approval_timeout_seconds":          "86400",
 		"max_cost_usd":                      "50",
 		"max_total_tokens":                  "10000000",
-		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
 		"default_model":                     "openai/gpt-5.6-luna-pro",
 		"advanced_model":                    "anthropic/claude-opus-5",
@@ -157,8 +156,8 @@ func TestValidate(t *testing.T) {
 		{"pii_redaction_mode", "redact", "redact", false},
 		{"pii_redaction_mode", " Block ", "block", false},
 		{"pii_redaction_mode", "shred", "", true},
-		{"phone_a_friend_enabled", "TRUE", "true", false},
-		{"phone_a_friend_enabled", "yes", "", true},
+		{"subagents_enabled", "TRUE", "true", false},
+		{"subagents_enabled", "yes", "", true},
 		{"tool_disclosure_threshold", "42", "42", false},
 		{"tool_disclosure_threshold", "0", "", true}, // no MinZeroOK: 0 is out of range
 		{"tool_disclosure_threshold", "100001", "", true},

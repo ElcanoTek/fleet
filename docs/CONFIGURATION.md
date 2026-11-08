@@ -182,7 +182,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_ESCALATION_CLASSIFIER_MODEL` | string | `~typesafe/jev-latest` | server | Model the escalation classifier calls. |
 | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | int | `80` | server | Classifier confidence, in percent, above which a card is staged. *Validated at boot* (50–99). |
 | `FLEET_ESCALATION_SIGNALS_ENABLED` | bool | `true` | server | Escalation signals. *Validated at boot*. |
-| `FLEET_PHONE_A_FRIEND_MODEL` | string | — | server | Model the phone-a-friend review calls. |
 | `FLEET_SUBAGENTS_MODEL` | string | (the parent's model) | server | Model sub-agents run on. |
 | `FLEET_VERIFIER_MODEL` | string | (the run's own model) | server | Dedicated model for the scheduled end-of-run completeness verifier. The verifier runs when a fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) or this variable is set; the fallback model only retries a verifier call that produced no verdict. A slug that does not resolve is logged and the run's own model verifies. |
 | `FLEET_A2A_MODEL` | string | — | server | Model inbound A2A tasks run on. |
@@ -210,9 +209,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_AUTO_APPROVE_IN_TEST` | bool | `false` | server | Test harness only: auto-approve approval cards. *Validated at boot*. |
 | `FLEET_AUTO_TITLE` | bool | `true` | server | Title conversations automatically. Also an admin setting. *Validated at boot*. |
 | `FLEET_ERROR_ANALYSIS_ENABLED` | bool | `true` | server | Analyse failed runs with FLEET_ERROR_ANALYSIS_MODEL. Also an admin setting. *Validated at boot*. |
-| `FLEET_SELF_IMPROVE_ENABLED` | bool | `false` | server | Agent self-improvement notes. *Validated at boot*. |
 | `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `true` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. |
-| `FLEET_PHONE_A_FRIEND_ENABLED` | bool | `false` | server | Super-LLM review (phone a friend). Also an admin setting. *Validated at boot*. |
 | `FLEET_SUBAGENTS_ENABLED` | bool | `true` | server | Sub-agent delegation; false is the fleet-wide kill switch. Also an admin setting. *Validated at boot*. |
 | `FLEET_SUBAGENTS_MAX_DEPTH` | int | `1` | server | Maximum delegation depth (1 = the root may delegate, children may not). *Validated at boot*. |
 | `FLEET_SUBAGENTS_MAX_CHILDREN` | int | `20` | server | Maximum children one parent may spawn. *Validated at boot*. |
@@ -250,8 +247,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_TASK_WALL_TIMEOUT` | duration | `4h` | server | Wall-clock limit of one scheduled run; 0 disables. *Validated at boot* (≥ 0). |
 | `FLEET_SCHED_TICK_SECONDS` | int | `30` | server | Interval of the due-task scan. *Validated at boot* (≥ 1). |
 | `FLEET_SCHEDULED_SHARED_WORKSPACE` | bool | `false` | server | Kill switch for per-job workspaces: scheduled runs share the workspace root (ADR-0097). *Validated at boot*. |
-| `FLEET_TASK_MEMORY_MAX_KEYS` | int | `100` | server | Maximum persistent memory keys per task. *Validated at boot*. |
-| `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | int | `4096` | server | Maximum size of one task memory value. *Validated at boot*. |
 | `FLEET_RUN_LOG_RETENTION_DAYS` | int | `90` | server | Days run logs are kept. *Validated at boot*. |
 | `FLEET_KEEP_RUNS_PER_TASK` | int | `10` | server | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. *Validated at boot*. |
 | `FLEET_CLEANUP_HOUR` | int | `4` | server | Hour of day (server time) of the retention cleanup. *Validated at boot*. |

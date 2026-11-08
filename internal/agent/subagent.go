@@ -1053,12 +1053,7 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		Sandbox:                 a.sb,
 		NotesProvider:           a.notesProvider,
 		NoteProposer:            a.noteProposer,
-		// Persistent task memory (#285) is inherited from the parent so a child of a
-		// Captain's Log task shares the same task-scoped memory; nil for a
-		// non-opted-in parent (unchanged default).
-		TaskMemory:       a.taskMemory,
-		TaskID:           a.taskID,
-		TaskMemoryConfig: a.taskMemoryConfig,
+		TaskID:                  a.taskID,
 		// Monotonic privilege: the child carries the parent's (copied) credential
 		// allowlist — Gate-3 enforced by the child's own agentcore.Run.
 		CredentialAllowlist: allowlist,
@@ -1066,9 +1061,6 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		// (#1603): a server loaded after the spawn is as closed to the child as
 		// it is to the parent.
 		MCPRosterNarrowing: a.mcpRosterNarrowing,
-		// A child does not itself run the phone-a-friend reviewer; that is a
-		// root-run finish gate. Leaving it off avoids unbounded reviewer fan-out.
-		PhoneAFriendEnabled: false,
 		Subagent: SubagentOptions{
 			// Off unless the child is still below the depth cap (#264): a depth-limit
 			// child gets NO spawn tool, so it structurally cannot delegate further.

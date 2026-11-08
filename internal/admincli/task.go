@@ -26,15 +26,13 @@ import (
 // is a full-Task backup that preserves IDs and runtime state.
 func cmdTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet task export|import|memories")
+		return errf(1, "usage: fleet task export|import")
 	}
 	switch argv[0] {
 	case "export":
 		return taskExport(argv[1:])
 	case "import":
 		return taskImport(argv[1:])
-	case "memories", "memory":
-		return taskMemories(argv[1:])
 	case "run":
 		// `task run` needs the full agent runtime and is dispatched by the
 		// `fleet` binary BEFORE admincli (see cmd/fleet classifyInvocation), so
@@ -45,7 +43,7 @@ func cmdTask(argv []string) int {
 		// again.
 		return errf(1, "`task run` needs the full agent runtime and is dispatched by the fleet binary itself; run `fleet task run <task.yaml>`")
 	default:
-		return errf(1, "unknown task subcommand %q (want export|import|memories)", argv[0])
+		return errf(1, "unknown task subcommand %q (want export|import)", argv[0])
 	}
 }
 

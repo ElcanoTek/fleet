@@ -32,7 +32,7 @@ func TestUsageNamesEveryDispatchedVerb(t *testing.T) {
 	text := UsageText()
 	for _, verb := range []string{
 		"bootstrap", "update", "cleanup", "status", "cache-stats", "usage", "doctor", "diagnose", "start", "restart", "stop",
-		"logs", "timers", "motd", "chat", "sched", "admin", "config", "env", "task", "mcp", "notes",
+		"logs", "timers", "motd", "chat", "sched", "admin", "config", "env", "task", "mcp",
 		"worktree", "migrate", "backup", "restore", "import", "version",
 	} {
 		if !strings.Contains(text, "fleet "+verb) {
@@ -40,7 +40,7 @@ func TestUsageNamesEveryDispatchedVerb(t *testing.T) {
 		}
 	}
 	// The in-binary verbs cmd/fleet routes are documented here too.
-	for _, verb := range []string{"fleet validate-config", "fleet mcp test", "fleet eval", "fleet generate-vapid-keys"} {
+	for _, verb := range []string{"fleet validate-config", "fleet mcp test", "fleet generate-vapid-keys"} {
 		if !strings.Contains(text, verb) {
 			t.Errorf("usage does not mention %q", verb)
 		}

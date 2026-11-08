@@ -13,7 +13,6 @@ func TestPromptTruncationNeverSplitsARune(t *testing.T) {
 	long := strings.Repeat("日本語🙂", 4000) // 3- and 4-byte runes
 	for name, got := range map[string]string{
 		"truncate":                         truncate(long, 101),
-		"truncateForReviewer":              truncateForReviewer(long, 101),
 		"truncateTaskForVerifier":          truncateTaskForVerifier(long),
 		"truncateFinalResponseForVerifier": truncateFinalResponseForVerifier(long),
 	} {

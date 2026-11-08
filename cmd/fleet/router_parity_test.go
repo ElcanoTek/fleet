@@ -76,7 +76,7 @@ func (c *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func realOrchestratorRoutes(t *testing.T) []apispec.Route {
 	t.Helper()
 	h := handlers.New(handlers.Config{}, nil, nil)
-	orch, ok := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
+	orch, ok := buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
 	if !ok {
 		t.Fatal("orchestrator router is not chi.Routes")
 	}
@@ -233,7 +233,7 @@ func TestOneSurfaceParity(t *testing.T) {
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if n < 180 || len(v1Before) < 90 {
+	if n < 165 || len(v1Before) < 65 {
 		t.Fatalf("replayed %d browser rows and %d /v1 routes; the frozen table looks truncated", n, len(v1Before))
 	}
 
