@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -242,7 +241,9 @@ type Merged struct {
 // It is pure, so the authorization differential test runs every state
 // through the same decision the merge applies.
 func MapLegacy(chat *LegacyChat, sched LegacySched) Merged {
-	role := strings.TrimSpace(sched.Role)
+	// The stored role is judged exactly as written, as the old exact lookup
+	// did: " admin" or "client " was never a role and grants nothing.
+	role := sched.Role
 	scope, adminGrant, known := ParseOpsRole(role)
 	out := Merged{}
 	if !known || role == LegacyOpsNone || role == string(OpsView) || role == string(OpsRun) {
@@ -380,7 +381,7 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 		if email == "" {
 			continue
 		}
-		schedRole := strings.TrimSpace(r.role)
+		schedRole := r.role // exact: a padded role is unknown (MapLegacy)
 		if seen[email] {
 			rep.DuplicateUsernames = append(rep.DuplicateUsernames, MergeEntry{Email: email, SchedRole: schedRole})
 			continue

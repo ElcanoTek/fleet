@@ -77,6 +77,10 @@ func TestMapLegacy(t *testing.T) {
 		{"sched-only admin", nil, LegacySched{"admin", true}, Merged{Role: RoleViewer, OpsScope: OpsRun, Enabled: true, Created: true, SplitAdmin: true}},
 		{"sched-only disabled", nil, LegacySched{"client", false}, Merged{Role: RoleViewer, OpsScope: OpsNone, Enabled: false, Created: true}},
 		{"unknown role", chat(RoleMember), LegacySched{"superuser", true}, Merged{Role: RoleMember, OpsScope: OpsNone, Enabled: true, UnknownRole: true}},
+		// A padded stored role was never a role: no access (Codex 4505570166).
+		{"padded admin", chat(RoleMember), LegacySched{" admin", true}, Merged{Role: RoleMember, OpsScope: OpsNone, Enabled: true, UnknownRole: true}},
+		{"padded client, sched only", nil, LegacySched{"client ", true}, Merged{Role: RoleViewer, OpsScope: OpsNone, Enabled: true, Created: true, UnknownRole: true}},
+		{"re-cased readonly", chat(RoleViewer), LegacySched{"ReadOnly", true}, Merged{Role: RoleViewer, OpsScope: OpsNone, Enabled: true, UnknownRole: true}},
 		{"disabled chat keeps its flag", &LegacyChat{Role: RoleMember}, LegacySched{"client", true}, Merged{Role: RoleMember, OpsScope: OpsRun}},
 	} {
 		if got := MapLegacy(c.chat, c.sched); got != c.want {

@@ -78,7 +78,7 @@ with the report. A failure rolls back whole and the next open retries.
 | chat X + no sched row, or a disabled sched row | scope none |
 | sched admin + chat member/viewer | role unchanged, scope **run**; reported (fail closed, ADR-0074) |
 | sched-only account | new row keyed by the lowercased username, role **viewer**, scope mapped (an admin: run, reported), sched UUID, password hash, `created_at` and `last_login` kept (`updated_at` is the merge), enabled as it was; reported |
-| sched row with an unknown role (the column had no CHECK) | scope none; reported |
+| sched row with an unknown role (the column had no CHECK), judged exactly as stored: a padded or re-cased name (`" admin"`, `ReadOnly`) is unknown too | scope none; reported |
 | two sched usernames differing only in case | the first wins the UUID; the rest reported |
 
 **Username-keyed rows move with the account.** A few scheduler tables key
