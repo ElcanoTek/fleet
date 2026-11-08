@@ -314,6 +314,8 @@ func describeMigrationReport(rep migrations.Report) string {
 	}
 	state := "clean"
 	switch {
+	case rep.Problem != "":
+		state = "REFUSED: " + rep.Problem
 	case len(rep.Unknown) > 0:
 		state = fmt.Sprintf("REFUSED: version(s) %s are not shipped by this build (a newer fleet migrated the database)", infoVersions(rep.Unknown))
 	case len(rep.Mismatched) > 0:

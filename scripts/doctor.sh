@@ -1050,6 +1050,8 @@ if [[ -z "$id_cli" ]] || ! command -v jq >/dev/null 2>&1; then
   advise "migration ledger check skipped (needs the fleet binary and jq)"
 elif ! mig_json="$(FLEET_ENV_FILE="$ENV_FILE" "$id_cli" migrate status --json 2>/dev/null)" || ! jq -e 'has("adopted")' >/dev/null 2>&1 <<<"$mig_json"; then
   advise "could not read the migration ledger — run: fleet migrate status"
+elif [[ -n "$(jq -r '.problem // ""' <<<"$mig_json")" ]]; then
+  fail "migrations: fleet will not start on this database: $(jq -r '.problem' <<<"$mig_json")"
 elif (( $(jq -r '(.unknown // []) | length' <<<"$mig_json") > 0 )); then
   fail "migrations: core.schema_versions has version(s) $(jq -r '[.unknown[].version] | join(", ")' <<<"$mig_json") this release does not ship (a newer fleet migrated this database; fleet will not start) — run that release, or restore a backup taken before it"
 elif (( $(jq -r '(.mismatched // []) | length' <<<"$mig_json") > 0 )); then

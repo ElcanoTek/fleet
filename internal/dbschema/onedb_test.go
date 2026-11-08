@@ -110,8 +110,10 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 		t.Error("a store's table leaked into the other store's schema")
 	}
 	checkIdentityPlacement(t, count, tables)
-	if count(`SELECT count(*) FROM pg_tables WHERE tablename = 'schema_migrations'`) != 0 {
-		t.Error("a fresh database grew a legacy schema_migrations ledger")
+	// Below the boundary the legacy ledgers are kept beside it (ADR-0107: a
+	// release before the one runner can still run on the database).
+	if count(`SELECT count(*) FROM pg_tables WHERE tablename = 'schema_migrations' AND schemaname IN ('chat', 'sched')`) != 2 {
+		t.Error("a fresh database lacks its legacy schema_migrations ledgers")
 	}
 	if count(tables+` AND tablename = 'schema_versions'`, "core") != 1 {
 		t.Error("core.schema_versions is missing")

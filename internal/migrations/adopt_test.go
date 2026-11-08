@@ -132,13 +132,9 @@ func TestAdoption(t *testing.T) {
 			if got := ledgerVersions(t, db); !reflect.DeepEqual(got, all) {
 				t.Fatalf("after up the ledger = %v", got)
 			}
+			// A fresh database grows complete legacy ledgers too: below the
+			// boundary a pre-M6 release can run on it (a rollback).
 			chat, sched := legacyLedgers(t, db)
-			if c.name == "fresh database" {
-				if chat != nil || sched != nil {
-					t.Fatalf("a fresh database grew legacy ledgers: %v %v", chat, sched)
-				}
-				return
-			}
 			if len(chat) != 99 || !reflect.DeepEqual(sched, []string{"(77,f)"}) {
 				t.Fatalf("legacy ledgers after up: chat %d rows, sched %v", len(chat), sched)
 			}
@@ -223,5 +219,99 @@ func TestStatus(t *testing.T) {
 	}
 	if sv := rep.Sched(); *sv.CurrentVersion != 77 || sv.Runner != "golang-migrate" {
 		t.Fatalf("sched view: %+v", sv)
+	}
+}
+
+// TestLegacyLedgersStayAuthoritative (Codex 4506315485): below the boundary a
+// pre-M6 release may run on an adopted database and move the legacy ledgers
+// — apply what the one ledger lacks, or roll something back. The fast path
+// notices, and Up reconciles the one ledger to them instead of re-running
+// applied files (099's ALTER TABLE users SET SCHEMA core would fail) or
+// skipping rolled-back ones.
+func TestLegacyLedgersStayAuthoritative(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	legacyBuild(t, db, 99, 77)
+	r := testEmbeddedRunner(t)
+	if err := r.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// A pre-M6 binary applied 099 and sched 077 that the one ledger does not
+	// record (as if adopted before they ran, then rolled back and forward).
+	mustExec(t, db, `DELETE FROM core.schema_versions WHERE version IN (99, 177)`)
+	if r.current(ctx, db) {
+		t.Fatal("the fast path missed legacy progress")
+	}
+	if err := r.up(ctx, db); err != nil {
+		t.Fatalf("up after legacy progress (must reconcile, not re-run 099/177): %v", err)
+	}
+	if got := ledgerVersions(t, db); len(got) != 176 {
+		t.Fatalf("reconciled ledger has %d rows", len(got))
+	}
+
+	// A pre-M6 binary's operator rolled sched 077 back (its .down.sql, the
+	// legacy row to 76): Up applies 177 again.
+	set, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m177, _ := set.Get(177)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, conn, `SET search_path TO sched`)
+	mustExec(t, conn, m177.Down)
+	mustExec(t, conn, `RESET search_path`)
+	_ = conn.Close()
+	mustExec(t, db, `UPDATE sched.schema_migrations SET version = 76`)
+	var back bool
+	if err := db.QueryRow(`SELECT to_regclass('chat.chat_schedules') IS NOT NULL`).Scan(&back); err != nil || !back {
+		t.Fatalf("077's down did not put chat.chat_schedules back (%v)", err)
+	}
+	if r.current(ctx, db) {
+		t.Fatal("the fast path missed a legacy rollback")
+	}
+	if err := r.up(ctx, db); err != nil {
+		t.Fatalf("up after a legacy rollback: %v", err)
+	}
+	if err := db.QueryRow(`SELECT to_regclass('chat.chat_schedules') IS NOT NULL`).Scan(&back); err != nil || back {
+		t.Fatalf("177 was not applied again (chat.chat_schedules still there: %v, %v)", back, err)
+	}
+	_, sched := legacyLedgers(t, db)
+	if !reflect.DeepEqual(sched, []string{"(77,f)"}) || !r.current(ctx, db) {
+		t.Fatalf("after re-applying 177: sched ledger %v, current %v", sched, r.current(ctx, db))
+	}
+
+	// A legacy state this build cannot continue from (dirty) is refused by
+	// Up and reported as a problem by status.
+	mustExec(t, db, `UPDATE sched.schema_migrations SET dirty = true`)
+	var ae AdoptionError
+	if err := r.up(ctx, db); !errors.As(err, &ae) {
+		t.Fatalf("up over a dirty legacy row = %v", err)
+	}
+	if rep, err := r.status(ctx, db); err != nil || rep.Problem == "" || !rep.Refused() {
+		t.Fatalf("status over a dirty legacy row: problem %q, refused %v, %v", rep.Problem, rep.Refused(), err)
+	}
+}
+
+// TestStatusKeepsTheAdoptionProblem (Codex 4506315482): before adoption, a
+// legacy state adoption refuses makes the report Refused.
+func TestStatusKeepsTheAdoptionProblem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	legacyBuild(t, db, 0, 0)
+	mustExec(t, db, `INSERT INTO sched.schema_migrations VALUES (3, false), (4, false)`)
+	r := testEmbeddedRunner(t)
+	rep, err := r.status(ctx, db)
+	if err != nil || !strings.Contains(rep.Problem, "holds 2 rows") || !rep.Refused() {
+		t.Fatalf("status = problem %q refused %v (%v)", rep.Problem, rep.Refused(), err)
+	}
+	var ae AdoptionError
+	if err := r.up(ctx, db); !errors.As(err, &ae) {
+		t.Fatalf("up = %v, want the same refusal", err)
 	}
 }

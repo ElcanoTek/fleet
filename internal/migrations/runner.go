@@ -104,6 +104,11 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 		if _, err := r.adopt(ctx, conn); err != nil {
 			return err
 		}
+		// Below the boundary the legacy ledgers are authoritative (a pre-M6
+		// release may have run since): bring the one ledger to them first.
+		if err := r.reconcileLegacy(ctx, conn); err != nil {
+			return err
+		}
 		ledger, err := readLedger(ctx, conn)
 		if err != nil {
 			return err
@@ -167,7 +172,8 @@ func sentinelsPresent(ctx context.Context, q querier) (bool, error) {
 	return ok, err
 }
 
-// current is the fast path: one read of the ledger, no lock. Any error (the
+// current is the fast path: one read of the ledger and one of the legacy
+// ledgers (below the boundary) or the sentinels (past it), no lock. Any error (the
 // ledger does not exist yet, a role that cannot read it) is not current, and
 // the locked path then does the work or reports the error properly.
 func (r *runner) current(ctx context.Context, db *sql.DB) bool {
@@ -177,6 +183,7 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 	}
 	defer func() { _ = rows.Close() }()
 	seen, crossed := 0, false
+	legacy := map[int]bool{}
 	for rows.Next() {
 		var row ledgerRow
 		if err := rows.Scan(&row.Version, &row.Name, &row.Checksum, &row.Dirty); err != nil {
@@ -187,6 +194,9 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 			return false
 		}
 		crossed = crossed || row.Version >= FirstNew
+		if row.Version < FirstNew {
+			legacy[row.Version] = true
+		}
 		seen++
 	}
 	if rows.Err() != nil || seen != len(r.set.list) {
@@ -197,7 +207,9 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 		ok, err := sentinelsPresent(ctx, db)
 		return err == nil && ok
 	}
-	return true
+	// Below it the legacy ledgers are authoritative: one more read, which
+	// notices what a pre-M6 release applied or rolled back since.
+	return r.legacyCurrent(ctx, db, legacy)
 }
 
 // matches reports whether a ledger row records exactly migration m: the same

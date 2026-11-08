@@ -40,12 +40,15 @@ type Report struct {
 	// migration). fleet refuses to start on either, as on Dirty.
 	Unknown    []Info `json:"unknown,omitempty"`
 	Mismatched []Info `json:"mismatched,omitempty"`
+	// Problem is a refusal the legacy ledgers cause (adoption, or
+	// reconciliation below the boundary): Up would return it.
+	Problem string `json:"problem,omitempty"`
 }
 
 // Refused reports whether migrations.Up would refuse this database: a dirty
 // row, a version this build does not ship, or an edited shipped migration.
 func (rep Report) Refused() bool {
-	return rep.Dirty || len(rep.Unknown) > 0 || len(rep.Mismatched) > 0
+	return rep.Dirty || len(rep.Unknown) > 0 || len(rep.Mismatched) > 0 || rep.Problem != ""
 }
 
 // Status reports applied vs pending migrations. It is strictly READ-ONLY: it
@@ -92,41 +95,11 @@ func (r *runner) status(ctx context.Context, db querier) (Report, error) {
 		}
 		sort.Slice(rep.Unknown, byVersion(rep.Unknown))
 		sort.Slice(rep.Mismatched, byVersion(rep.Mismatched))
-	} else {
-		st, err := readLegacy(ctx, db)
-		if err != nil {
+		if err := r.legacyView(ctx, db, applied, &rep); err != nil {
 			return rep, err
 		}
-		rep.Legacy = describeLegacy(st)
-		rep.Dirty = st.SchedDirty
-		// What adoption would record; on a ledger it would refuse, the raw
-		// legacy versions, so the report still shows what is there.
-		if rows, err := r.plan(st); err == nil {
-			for _, row := range rows {
-				var at *int64
-				if row.AppliedAt != nil {
-					u := row.AppliedAt.Unix()
-					at = &u
-				}
-				applied[row.Version] = Info{Version: row.Version, Name: row.Name, AppliedAt: at}
-			}
-		} else {
-			for v, row := range st.Chat {
-				at := row.AppliedAt
-				applied[v] = Info{Version: v, Name: StreamChat + "/" + row.Name, AppliedAt: &at}
-			}
-			for _, m := range r.set.list {
-				if m.Stream == StreamSched && m.LegacyVersion() <= st.SchedVersion {
-					applied[m.Version] = Info{Version: m.Version, Name: m.Name}
-				}
-			}
-			if st.SchedVersion >= 0 {
-				if _, ok := r.set.Get(SchedOffset + st.SchedVersion); !ok && st.SchedVersion != 0 {
-					v := SchedOffset + st.SchedVersion
-					applied[v] = Info{Version: v, Name: "sched/unknown"}
-				}
-			}
-		}
+	} else if err := r.preAdoptionView(ctx, db, applied, &rep); err != nil {
+		return rep, err
 	}
 	for _, m := range r.set.list {
 		if _, ok := applied[m.Version]; !ok {
@@ -230,4 +203,88 @@ func Body(v int) (string, bool) {
 	}
 	m, ok := set.Get(v)
 	return m.Up, ok
+}
+
+// legacyView: below the boundary the legacy ledgers are authoritative (Up
+// reconciles to them first), so the report shows what they say, and keeps
+// what the reconciliation would refuse as Problem.
+func (r *runner) legacyView(ctx context.Context, db querier, applied map[int]Info, rep *Report) error {
+	crossed, err := crossedLedger(ctx, db)
+	if err != nil || crossed {
+		return err
+	}
+	st, err := readLegacy(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !st.ChatTable || !st.SchedTable || isFrozen(st) {
+		return nil
+	}
+	rows, perr := r.plan(st)
+	if perr != nil {
+		// Not this call's failure: what Up will refuse with, kept in the report.
+		rep.Problem = perr.Error()
+		return nil //nolint:nilerr // the planning failure is reported, not returned
+	}
+	want := map[int]adoptionRow{}
+	for _, row := range rows {
+		want[row.Version] = row
+	}
+	for v := range applied {
+		if _, ok := want[v]; !ok && v < FirstNew {
+			delete(applied, v)
+		}
+	}
+	for v, row := range want {
+		if _, ok := applied[v]; !ok {
+			applied[v] = Info{Version: v, Name: row.Name}
+		}
+	}
+	return nil
+}
+
+// preAdoptionView: before adoption, what adoption will record from the
+// legacy ledgers; on a state it would refuse, the raw legacy versions and the
+// refusal as Problem.
+func (r *runner) preAdoptionView(ctx context.Context, db querier, applied map[int]Info, rep *Report) error {
+	st, err := readLegacy(ctx, db)
+	if err != nil {
+		return err
+	}
+	rep.Legacy = describeLegacy(st)
+	rep.Dirty = st.SchedDirty
+	// What adoption would record; on a ledger it would refuse, the raw
+	// legacy versions, so the report still shows what is there.
+	rows, perr := r.plan(st)
+	if perr != nil {
+		// What Up will refuse with: keep it in the report.
+		rep.Problem = perr.Error()
+	}
+	if perr == nil {
+		for _, row := range rows {
+			var at *int64
+			if row.AppliedAt != nil {
+				u := row.AppliedAt.Unix()
+				at = &u
+			}
+			applied[row.Version] = Info{Version: row.Version, Name: row.Name, AppliedAt: at}
+		}
+	} else {
+		for v, row := range st.Chat {
+			at := row.AppliedAt
+			applied[v] = Info{Version: v, Name: StreamChat + "/" + row.Name, AppliedAt: &at}
+		}
+		for _, m := range r.set.list {
+			if m.Stream == StreamSched && m.LegacyVersion() <= st.SchedVersion {
+				applied[m.Version] = Info{Version: m.Version, Name: m.Name}
+			}
+		}
+		if st.SchedVersion >= 0 {
+			if _, ok := r.set.Get(SchedOffset + st.SchedVersion); !ok && st.SchedVersion != 0 {
+				v := SchedOffset + st.SchedVersion
+				applied[v] = Info{Version: v, Name: "sched/unknown"}
+			}
+		}
+	}
+	return nil
 }

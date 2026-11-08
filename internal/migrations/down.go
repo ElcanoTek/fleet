@@ -181,6 +181,29 @@ func (r *runner) force(ctx context.Context, db *sql.DB, version int) error {
 			if err = writeSentinels(ctx, tx); err != nil {
 				return fmt.Errorf("force: sentinels: %w", err)
 			}
+			return tx.Commit()
+		}
+		// Below the boundary the legacy ledgers are authoritative: record the
+		// forced state there too (unless they are frozen), or the next start
+		// would reconcile the force away.
+		st, err := readLegacy(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !isFrozen(st) {
+			var crossed bool
+			if crossed, err = crossedLedger(ctx, tx); err != nil {
+				return err
+			}
+			if !crossed {
+				var ledger map[int]ledgerRow
+				if ledger, err = readLedger(ctx, tx); err != nil {
+					return err
+				}
+				if err = r.writeLegacyLedgers(ctx, tx, ledger, true, true); err != nil {
+					return fmt.Errorf("force: legacy ledgers: %w", err)
+				}
+			}
 		}
 		return tx.Commit()
 	})

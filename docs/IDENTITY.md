@@ -167,15 +167,10 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   file, `fleet-all-<stamp>.dump`: one `pg_dump` of `chat`, `core` and `sched`,
   so one snapshot in which the accounts and the rows naming them agree;
   `fleet restore --db=all` restores it in one transaction (the only fully
-  self-contained restore). Per-store dumps (`--db=chat` / `--db=sched`)
-  include `core`. Restoring `--db=chat` brings `core` back; `--db=sched`
-  restores only `sched` (core is the chat store's) and refuses when a task
-  or dataset creator would name no account here — restore chat first, or
-  `--db=all`. `--db=chat` likewise refuses accounts that would orphan live
-  sched creators; `--allow-unresolved-creators` overrides both. Older
-  two-file backups restore one store at a time, chat first. A
-  chat dump from before this release restores only into a database without
-  `core`. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+  self-contained restore). Since #2049 M6 it is the only restore:
+  single-store restores (`--db=chat` / `--db=sched`) and dumps from before
+  the one identity table are refused. Per-store dumps (`--db=chat` /
+  `--db=sched`) still include `core`. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Rolling back
 
@@ -228,10 +223,9 @@ If the merge has not run yet (the scheduler never opened on this release),
   scheduler store in the same process (its migrations and the merge) before
   the verb touches an account. Otherwise `fleet admin rm` or `fleet chat user
   del` run first after an upgrade would be undone by the merge that follows.
-- A restore never mixes merge states: `--db=chat` refuses a dump that records
-  the merge as done over a database whose merge is pending, and `--db=sched`
-  with a post-merge dump completes the target's pending merge first, or
-  refuses when it cannot (no chat store yet).
+- A restore never mixes merge states: it is whole-database only (#2049 M6),
+  so the dump's accounts, merge marker and the rows naming them come back
+  together.
 - The merge report is printed in the server's log when the merge runs,
   stored in `core.identity_merge`, shown by `fleet admin merge-report`, and
   advised on by `fleet doctor`.

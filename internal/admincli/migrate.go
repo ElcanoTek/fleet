@@ -269,6 +269,9 @@ func printMigrations(r migrations.Report) {
 		fmt.Printf("  adopted: not yet — the next fleet start moves the legacy ledgers into %s (%s)\n", r.MigrationTable, r.Legacy)
 	}
 	fmt.Printf("  current version: %s\n", cur)
+	if r.Problem != "" {
+		fmt.Printf("  REFUSED: %s\n", r.Problem)
+	}
 	for _, m := range r.Unknown {
 		fmt.Printf("  REFUSED: version %d (%s) is not shipped by this build: a newer fleet migrated this database\n", m.Version, m.Name)
 	}

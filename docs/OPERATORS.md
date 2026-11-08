@@ -740,13 +740,11 @@ database (`DATABASE_URL`). `fleet backup` takes them with `pg_dump -Fc` /
 fleet backup                          # ONE dump of chat, core and sched (one snapshot): fleet-all-<UTC>.dump
 fleet backup --db=chat --out /backups # dump just chat (+ core) into /backups
 fleet restore --db=all FILE.dump      # restore the whole fleet from a fleet-all dump (one transaction)
-fleet restore --db=chat FILE.dump     # restore one store (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout. `restore` has no default `--db`: it
-overwrites a live database, so the target is named explicitly. Only `--db=all`
-is self-contained; a sched-only restore needs the accounts already in the
-database (restore chat first) — see BACKUP_RESTORE.md. Connection params,
+`backup` prints each dump path on stdout. `restore` puts back the whole
+database from a `fleet-all` dump (`--db=all`, the only restore since #2049
+M6; single-store restores are refused) — see BACKUP_RESTORE.md. Connection params,
 including the password, are passed to the child processes through the
 environment, never argv.
 

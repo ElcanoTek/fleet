@@ -55,8 +55,10 @@ func completeIdentityMerge(ctx context.Context, chatDSN string) error {
 	// The merge reads the scheduler's legacy table in its latest legacy shape
 	// (sched 072's enabled, …): migrate first, under the migration lock, so it
 	// never runs against a partly migrated database (a box from before M6
-	// whose scheduler is behind, here for a restore). One read when current.
-	if err := migrations.Up(ctx, db); err != nil {
+	// whose scheduler is behind, here for a restore). Only through the legacy
+	// versions while below the boundary: a restore of a pre-M6 dump may
+	// follow, which a database carried past it would refuse.
+	if err := migrations.UpLegacy(ctx, db); err != nil {
 		return fmt.Errorf("migrate the database before merging the scheduler's accounts: %w", err)
 	}
 	res, err := identity.MergeLegacySchedUsers(ctx, db, config.SchedSchema)

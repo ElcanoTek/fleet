@@ -23,7 +23,7 @@ import (
 // Spec is the template: keyed by the one migration set's fingerprint.
 var Spec = testdb.Spec{
 	Name:        "fleet",
-	Fingerprint: func() string { return "m6:" + migrations.Fingerprint() },
+	Fingerprint: func() string { return "m6-legacy-ledgers:" + migrations.Fingerprint() },
 	Migrate: func(ctx context.Context, dsn string) error {
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {

@@ -40,7 +40,7 @@
 //	fleet notes proposal publish|reject
 //	fleet worktree list|prune [--workspace DIR] [--older-than DUR]
 //	fleet backup  [--db=chat|sched|all] [--out DIR]
-//	fleet restore  --db=all|chat|sched <dump-file>
+//	fleet restore  [--db=all] <fleet-all dump>
 //	fleet import <bundle.json> [--dry-run] [--live-only]
 //
 // The operator lifecycle is bootstrap → update → status/doctor: bootstrap
@@ -321,7 +321,7 @@ Database migrations (#256):
 
 Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched; prints the path)
-  fleet restore  --db=all|chat|sched <dump-file>     (--clean --if-exists; overwrites the live store)
+  fleet restore  [--db=all] <fleet-all dump>         (whole database only, one transaction; --clean --if-exists; overwrites it)
 
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)

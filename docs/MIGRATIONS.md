@@ -100,14 +100,24 @@ in one transaction under all three locks:
 3. The ledger is created; chat N is recorded as version N (keeping when it was
    applied) and sched 1..v as 101..100+v.
 
-The legacy ledgers are **left in place**. A box behind the latest legacy release
-then applies its backlog as ordinary pending versions, in the merged order;
-while it does, the runner also records each legacy version it applies in that
-store's legacy ledger (when it exists), so the release before M6 remains a
-rollback target until a version ≥ 200 has run. A fresh database takes the same
-path: it adopts an empty ledger and grows no legacy ledgers.
+The legacy ledgers are **left in place, and stay authoritative below the
+boundary** — until a version ≥ 200 has run (and the sentinels below are
+written), a release before M6 may run on the database (that is the rollback),
+and it reads and writes only them. So on every start, under both legacy locks,
+the runner reconciles `core.schema_versions` to them: versions a pre-M6 release
+applied are recorded (not re-run), versions it rolled back are dropped (and
+applied again). The fast path notices legacy progress with one more read, only
+below the boundary. Both legacy ledgers are kept present below the boundary —
+a fresh database gets them too, written from the one ledger — and every legacy
+version the runner applies is recorded in them in its own transaction, so a
+release before M6 can always continue from them. A box behind the latest
+legacy release applies its backlog as ordinary pending versions, in the merged
+order. Past the boundary the sentinels freeze the legacy ledgers and the one
+ledger alone is authoritative (also after `fleet migrate down` below 200).
 
-**Sentinels.** In the transaction of the first version ≥ 200 the runner writes
+**Sentinels.** Whenever the ledger crosses the boundary — in the transaction of
+the first version ≥ 200 that Up applies or `fleet migrate force` records, or on
+the next start for a ledger found past it without them — the runner writes
 `chat.schema_migrations` version 100 `moved_to_core_schema_versions` and sets
 `sched.schema_migrations` to 178 (creating either ledger in its old shape when
 missing). A pre-M6 binary then refuses the database at boot — its chat runner
@@ -139,8 +149,8 @@ DELETE FROM chat.schema_migrations WHERE version = 100;
 UPDATE sched.schema_migrations SET version = 77, dirty = false;
 ```
 
-A database a fresh M6 release installed has no legacy ledgers, so there is no
-release before M6 to go back to.
+A database a fresh M6 release installed carries the legacy ledgers too, so the
+same rollback applies to it.
 
 ## Checking status
 
@@ -280,13 +290,13 @@ fleet backup --db=all --out ./backups   # ONE pg_dump -Fc of chat, core and sche
 ```
 
 and restore it with `fleet restore --db=all <fleet-all-dump>` if needed (one
-transaction; [BACKUP_RESTORE.md](BACKUP_RESTORE.md) covers the per-store
-restores and which of them are self-contained).
+transaction; [BACKUP_RESTORE.md](BACKUP_RESTORE.md) covers what it refuses).
 
-Every dump includes `core`, so `core.schema_versions` travels with it. A
-one-store restore (`--db=chat|sched`) of a dump taken since M6 is refused unless
-the dump's ledger is at the live version; a dump from before M6 restores and
-drops the live ledger, so the next start adopts again.
+Every dump includes `core`, so `core.schema_versions` travels with it, and
+`fleet restore` is whole-database only (`--db=all`): single-store restores are
+refused, since the stores share one migration history. A dump from M4/M5 (no
+`core.schema_versions`) restores below the boundary — its legacy ledgers are
+authoritative there and the next start reconciles — and is refused past it.
 
 ## Squashing old migrations (documented, not done)
 

@@ -29,7 +29,7 @@ import (
 //   - --db=chat / --db=sched dump that store's schema plus core, so each
 //     dump records the accounts its rows name. A sched dump still does not
 //     restore alone into an empty database: a sched restore never writes
-//     core (see planSchedRestore).
+//     core (see checkSchedRestore).
 //
 // Restore takes --db=all for a whole-database dump (all three schemas, in
 // one transaction), or one store: its schema, plus core for chat (whose
@@ -183,111 +183,30 @@ func pgDump(ctx context.Context, dsn, outPath string, schemas []string, extra ..
 	return nil
 }
 
-// runPgRestore restores a custom-format dump into the DSN's database. --clean
-// --if-exists drops existing objects first so the restore is idempotent over an
-// already-migrated DB; --no-owner ignores dump ownership.
-//
-// A restore of one store must never touch the other one, which lives in the
-// same database:
-//
-//   - The archive's schemas are established from its table of contents (its
-//     SCHEMA entries and the schemas of its TABLE entries) and must include
-//     the schema the store uses (its DSN's schema). A dump of the other
-//     store, a dump of the removed two-database layout (its tables in
-//     public), or an archive whose schemas cannot be determined (no SCHEMA or
-//     TABLE entry) is refused before anything is dropped. Other schemas in
-//     the archive are simply not restored.
-//   - pg_restore runs with -n <schema>, so only that schema's entries are
-//     restored, and --clean can drop only objects in that schema (the SCHEMA
-//     entry itself is not selected, so the schema is never dropped). The
-//     store's schema is created first if it is missing.
-func runPgRestore(ctx context.Context, dsn, inPath string) error {
-	return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{notes: os.Stderr})
-}
-
-// runPgRestoreWith is runPgRestore with the operator's choices. Besides the
-// schema checks above, a store restore never leaves task or dataset
-// creators naming no account without the operator saying so
-// (backup_identity.go): --db=sched refuses a dump whose creators are not
-// accounts of this database (restore chat first, or --db=all); --db=chat
-// refuses accounts that would orphan live sched creators.
-func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts) error {
-	want := config.DSNSchema(dsn)
-	if want == "" {
-		return fmt.Errorf("pg_restore %s: the DSN names no store schema", redactDSN(dsn))
-	}
-	got, err := dumpSchemas(ctx, inPath)
-	if err != nil {
-		return err
-	}
-	switch {
-	case len(got) == 0:
-		return fmt.Errorf("cannot tell which store %s holds: its table of contents has no schema or table entry; refusing to restore it", inPath)
-	case !slices.Contains(got, want) && slices.Equal(got, []string{config.PublicSchema}):
-		return fmt.Errorf("%s is a dump of the removed two-database layout (its tables are in schema public); fleet restores only dumps taken since the box moved to one database (one schema per store) — restore a newer dump, or see docs/BACKUP_RESTORE.md for importing an old one by hand", inPath)
-	case !slices.Contains(got, want):
-		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
-	}
-	// Other schemas in the archive (a whole-database dump) are left out by
-	// -n below: only the store's schema is restored — plus, for the chat
-	// store, the identity schema core its migrations own (#2049 M4).
-	schemas := []string{want}
-	// A ledger at another version is refused before anything below can
-	// change the database (planSchedRestore may complete a pending identity
-	// merge); the rest of the ledger plan runs just before the restore.
-	if err := checkLedgerVersions(ctx, dsn, inPath, want); err != nil {
-		return err
-	}
-	if want == config.SchedSchema {
-		if err := planSchedRestore(ctx, dsn, inPath, slices.Contains(got, config.IdentitySchema), opts); err != nil {
-			return err
-		}
-	}
-	if want == config.ChatSchema {
-		switch hasCore := slices.Contains(got, config.IdentitySchema); {
-		case hasCore:
-			schemas = append(schemas, config.IdentitySchema)
-		default:
-			// A chat dump from before the one identity table: its users table
-			// is chat.users, and its migration ledger stops before 099, which
-			// moves that table into core. Restored next to an existing core
-			// it could never migrate again.
-			exists, err := schemaExists(ctx, dsn, config.IdentitySchema)
-			if err != nil {
-				return err
-			}
-			if exists {
-				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
-			}
-		}
-		if slices.Contains(schemas, config.IdentitySchema) {
-			if err := checkChatRestoreMergeOrder(ctx, dsn, inPath); err != nil {
-				return err
-			}
-			if !opts.allowUnresolved {
-				if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	// The one migration ledger (#2049 M6) must stay true to the schemas the
-	// restore leaves: checked before anything is dropped.
-	ledger, err := planLedgerRestore(ctx, dsn, inPath, want)
-	if err != nil {
-		return err
-	}
-	if err := pgRestore(ctx, dsn, inPath, schemas, false); err != nil {
-		return err
-	}
-	return ledger.finish(ctx, dsn, opts)
-}
+// singleStoreRestoreRefusal is the refusal of `fleet restore --db=chat|sched`
+// (#2049 M6, ADR-0107): the whole database is one migration history, so it is
+// restored as one.
+const singleStoreRestoreRefusal = "single-store restores are not supported any more (#2049 M6): the chat and sched stores and " +
+	"the identity schema between them share one migration history (core.schema_versions), so a restore puts back the " +
+	"whole database. Restore a whole-database dump with --db=all (fleet backup --db=all writes fleet-all-<stamp>.dump; " +
+	"see docs/BACKUP_RESTORE.md)"
 
 // runPgRestoreAll restores a whole-fleet dump (--db=all: chat, core and
 // sched, taken in one snapshot) in ONE transaction, so the restored accounts
-// and the rows that reference them are consistent too. A dump missing any of
-// the three — a per-store dump, an old two-file backup's — is refused: those
-// restore one store at a time (--db=chat / --db=sched).
+// and the rows that reference them — and the migration ledgers — are
+// consistent. It is the only restore (#2049 M6). Refused before anything
+// changes:
+//
+//   - a dump missing any of the three schemas (a per-store dump, an old
+//     two-file backup, a dump of the removed two-database layout);
+//   - a dump from before the one identity table (no core.users: its
+//     accounts unmerged in sched.users), which M4 and later cannot run;
+//   - a dump from before the one migration ledger (no core.schema_versions)
+//     over a database past the ledger's boundary (a version >= 200 ran).
+//
+// --clean --if-exists drops the restored objects first so the restore is
+// idempotent over an already-migrated database; --no-owner ignores dump
+// ownership; -n per schema leaves any other schema of the database alone.
 func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	got, err := dumpSchemas(ctx, inPath)
 	if err != nil {
@@ -299,17 +218,22 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 			missing = append(missing, s)
 		}
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): restore it with --db=chat or --db=sched", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
+	switch {
+	case len(got) == 0:
+		return fmt.Errorf("cannot tell what %s holds: its table of contents has no schema or table entry; refusing to restore it", inPath)
+	case slices.Equal(got, []string{config.PublicSchema}):
+		return fmt.Errorf("%s is a dump of the removed two-database layout (its tables are in schema public); fleet restores only whole-database dumps taken since M4 (fleet-all-<stamp>.dump) — see docs/BACKUP_RESTORE.md for importing an old one by hand", inPath)
+	case len(missing) > 0:
+		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): fleet restores only whole-database dumps (fleet backup --db=all writes fleet-all-<stamp>.dump)", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
 	}
-	ledger, err := planLedgerRestore(ctx, dsn, inPath, "all")
+	plan, err := planLedgerRestore(ctx, dsn, inPath)
 	if err != nil {
 		return err
 	}
-	if err := pgRestore(ctx, dsn, inPath, allSchemas, true); err != nil {
+	if err := plan.prepare(ctx, dsn); err != nil {
 		return err
 	}
-	return ledger.finish(ctx, dsn, restoreOpts{notes: os.Stderr})
+	return pgRestore(ctx, dsn, inPath, allSchemas, true)
 }
 
 // pgRestore runs one pg_restore of the given schemas, creating each first if
@@ -356,20 +280,6 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
 	}
 	return nil
-}
-
-// schemaExists reports whether the DSN's database has the schema.
-func schemaExists(ctx context.Context, dsn, schema string) (bool, error) {
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return false, err
-	}
-	defer db.Close()
-	var ok bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&ok); err != nil {
-		return false, fmt.Errorf("probe schema %s: %w", schema, err)
-	}
-	return ok, nil
 }
 
 // dumpSchemas lists the schemas a custom-format dump holds — the names of its
@@ -582,20 +492,23 @@ func cmdBackup(argv []string) int {
 // store (an old two-file backup restores this way, one file each).
 func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	db := fs.String("db", "", "what to restore: all (a fleet-all dump) | chat | sched (required)")
+	db := fs.String("db", "all", "what to restore: all (a fleet-all dump; the only restore since #2049 M6)")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
-	allowUnresolved := fs.Bool("allow-unresolved-creators", false, "restore one store even when task/dataset creators would then name no account (default: refuse)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
-	if *db != "all" && *db != "chat" && *db != "sched" {
-		return errf(1, "--db must be all, chat or sched (required: restore overwrites a live database)")
+	switch *db {
+	case "all":
+	case "chat", "sched":
+		return errf(1, "%s", singleStoreRestoreRefusal)
+	default:
+		return errf(1, "--db must be all (restore overwrites the live database)")
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet restore --db=all|chat|sched <dump-file>")
+		return errf(1, "usage: fleet restore [--db=all] <fleet-all dump file>")
 	}
 	inPath := rest[0]
 	if _, err := os.Stat(inPath); err != nil {
@@ -625,13 +538,7 @@ func cmdRestore(argv []string) int {
 			return 1
 		}
 	}
-	restore := func(ctx context.Context, dsn, inPath string) error {
-		return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{allowUnresolved: *allowUnresolved, notes: os.Stderr})
-	}
-	if *db == "all" {
-		restore = runPgRestoreAll
-	}
-	if err := restore(ctx, dsn, inPath); err != nil {
+	if err := runPgRestoreAll(ctx, dsn, inPath); err != nil {
 		return errf(5, "restore %s: %v", *db, err)
 	}
 	fmt.Fprintf(os.Stderr, "restored %s from %s\n", storeLabel(*db), inPath)

@@ -72,7 +72,7 @@ func TestBackupFollowsQueryOverrides(t *testing.T) {
 	if err := runPgDump(ctx, override(src)+"&options=-csearch_path%3Dpublic", dump); err != nil {
 		t.Fatalf("pg_dump did not follow the query override: %v", err)
 	}
-	if err := runPgRestore(ctx, override(dst)+"&options=-csearch_path%3Dpublic", dump); err != nil {
+	if err := pgRestore(ctx, override(dst)+"&options=-csearch_path%3Dpublic", dump, []string{"public"}, false); err != nil {
 		t.Fatalf("pg_restore did not follow the query override: %v", err)
 	}
 	dstDB, err := sql.Open("pgx", dstDSN)

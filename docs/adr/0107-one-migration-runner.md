@@ -75,10 +75,19 @@ built twice.
    rename or deletion of a shipped `sql/NNNN_*` file, a new one numbered after
    the last shipped, new files in
    `NNNN_name` `.up`/`.down` pairs, unqualified names flagged.
-10. **Backups.** Every dump carries `core`, ledger included. A one-store
-    restore of a post-M6 dump is refused unless its ledger is at the live
-    version (use `--db=all`); a pre-M6 dump restored drops the live ledger so
-    the next start adopts again.
+10. **Backups.** Every dump carries `core`, ledgers included. `fleet restore`
+    is whole-database only (`--db=all`, a `fleet-all` dump from M4 or later);
+    `--db=chat|sched` is refused (owner decision on #2087: every box has a
+    verified `fleet-all` dump). A dump from M4/M5 (legacy ledgers only)
+    restores below the boundary and is reconciled on the next start; past
+    the boundary it is refused, before anything changes.
+11. **Legacy ledgers authoritative below the boundary.** Until a version >=
+    200 has run (no sentinels), a pre-M6 release may run on the database, so
+    every `Up` reconciles `core.schema_versions` to the legacy ledgers (under
+    both legacy locks), and the fast path checks them with one more read; both
+    legacy ledgers are kept present (a fresh install gets them) and mirrored.
+    `fleet migrate status` reports what the reconciliation (or adoption) would
+    refuse as `problem`.
 
 ## Consequences
 
@@ -87,12 +96,11 @@ built twice.
   `migrations.Fingerprint`), which the store and scheduler tests now share.
 - A failed migration records nothing, legacy sched ones included (they ran
   without an explicit transaction before, but as one implicit one).
-- Going back to the release before M6 is `DROP TABLE core.schema_versions`
-  while no version ≥ 200 has run (the rollback block in docs/MIGRATIONS.md,
-  run by a test). The runner keeps the legacy ledgers in step while it applies
-  a legacy backlog, so that holds for a box adopted while behind too
-  (a deviation from "leave the legacy ledgers untouched", which still holds for
-  adoption itself). After a version ≥ 200, `fleet migrate down --to 177` first.
+- Going back to the release before M6 needs nothing while no version ≥ 200
+  has run: the legacy ledgers are authoritative and complete (a fresh install
+  has them too), and the next M6 start reconciles whatever that release did.
+  The documented `DROP TABLE core.schema_versions` (the rollback block in
+  docs/MIGRATIONS.md, run by a test) is optional. After a version ≥ 200, `fleet migrate down --to 177` first.
 - A store open on a fresh database creates both stores' schemas, whichever
   store opens first; the "scheduler migrated before chat" order a pre-M6
   release could produce can no longer arise (`EnsureChatScheduleCascade` stays

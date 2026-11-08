@@ -27,13 +27,26 @@ func TestTOCHasTable(t *testing.T) {
 	}
 }
 
-// TestRestoreKeepsTheLedgerTrue (#2049 M6): a one-store restore of a dump
-// whose ledger is at another version than the live one is refused (--db=all
-// is not); a dump from before the one ledger drops the live ledger after the
-// restore, writing the untouched store's legacy ledger first, so the next
-// start adopts again; and such a dump is refused over a database that has
-// run a migration from 200 on.
-func TestRestoreKeepsTheLedgerTrue(t *testing.T) {
+// TestRestoreIsWholeDatabaseOnly (#2049 M6): `fleet restore --db=chat|sched`
+// is refused with what to do instead.
+func TestRestoreIsWholeDatabaseOnly(t *testing.T) {
+	t.Parallel()
+	for _, db := range []string{"chat", "sched"} {
+		var code int
+		out := captureStderr(t, func() { code = cmdRestore([]string{"--db=" + db, "--no-confirm", "x.dump"}) })
+		if code != 1 || !strings.Contains(out, "single-store restores are not supported") || !strings.Contains(out, "--db=all") {
+			t.Fatalf("restore --db=%s: exit %d, %q", db, code, out)
+		}
+	}
+}
+
+// TestRestoreKeepsTheLedgersTrue: a whole-database restore brings the dump's
+// ledgers; a dump from before the one ledger (M4/M5) restores below the
+// boundary — its legacy ledgers are authoritative and the next start
+// reconciles — and is refused, changing nothing, past it; a dump from before
+// the one identity table is refused; a dump without legacy ledgers leaves
+// none stale behind.
+func TestRestoreKeepsTheLedgersTrue(t *testing.T) {
 	t.Parallel()
 	for _, b := range []string{"pg_dump", "pg_restore"} {
 		if _, err := exec.LookPath(b); err != nil {
@@ -49,154 +62,113 @@ func TestRestoreKeepsTheLedgerTrue(t *testing.T) {
 	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
 		t.Skipf("pg_dump major %d != server major %d", cm, sm)
 	}
-	open := func(dsn string) *sql.DB {
+	dir := t.TempDir()
+	migrated := func() (string, *sql.DB) {
 		t.Helper()
+		dsn := testdb.Empty(t)
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = db.Close() })
-		return db
-	}
-	migrated := func(through int) (string, *sql.DB) {
-		t.Helper()
-		dsn := testdb.Empty(t)
-		db := open(dsn)
-		if err := migrations.UpTo(ctx, db, through); err != nil {
+		if err := migrations.Up(ctx, db); err != nil {
 			t.Fatal(err)
 		}
 		return dsn, db
 	}
-	dir := t.TempDir()
-
-	src, _ := migrated(migrations.LegacyLatest)
-	chatDump, schedDump, allDump := filepath.Join(dir, "chat.dump"), filepath.Join(dir, "sched.dump"), filepath.Join(dir, "all.dump")
-	if err := runPgDump(ctx, config.WithSchema(src, config.ChatSchema), chatDump); err != nil {
-		t.Fatal(err)
-	}
-	if err := runPgDump(ctx, config.WithSchema(src, config.SchedSchema), schedDump); err != nil {
-		t.Fatal(err)
-	}
-	if err := runPgDumpAll(ctx, config.WithSchema(src, config.ChatSchema), allDump); err != nil {
-		t.Fatal(err)
-	}
-	if rows, v, ok, err := dumpLedger(ctx, chatDump); err != nil || !ok || v != migrations.LegacyLatest || len(rows) != 176 || rows[0].Checksum == "" {
-		t.Fatalf("dumpLedger(chat dump) = %d rows, max %d, %v, %v", len(rows), v, ok, err)
-	}
-
-	restoreAcrossVersions(t, migrated, chatDump, schedDump, allDump)
-	restorePreM6Dump(t, open, migrated, dir)
-}
-
-// restoreAcrossVersions: a one-store restore at the live version goes ahead;
-// at another it is refused, and --db=all is not.
-func restoreAcrossVersions(t *testing.T, migrated func(int) (string, *sql.DB), chatDump, schedDump, allDump string) {
-	t.Helper()
-	ctx := context.Background()
-	// Same version: a one-store restore goes ahead.
-	same, sameDB := migrated(migrations.LegacyLatest)
-	if err := runPgRestoreWith(ctx, config.WithSchema(same, config.ChatSchema), chatDump, restoreOpts{}); err != nil {
-		t.Fatalf("restore chat at the same version: %v", err)
-	}
-	if v, ok, err := migrations.LedgerMax(ctx, sameDB); err != nil || !ok || v != migrations.LegacyLatest {
-		t.Fatalf("ledger after the restore: %d, %v, %v", v, ok, err)
-	}
-
-	// The same highest version but a different history (here one row's
-	// checksum): a one-store restore is refused too (Codex 4506166384).
-	twin, twinDB := migrated(migrations.LegacyLatest)
-	if _, err := twinDB.ExecContext(ctx, `UPDATE core.schema_versions SET checksum = 'other' WHERE version = 42`); err != nil {
-		t.Fatal(err)
-	}
-	if err := runPgRestoreWith(ctx, config.WithSchema(twin, config.ChatSchema), chatDump, restoreOpts{allowUnresolved: true}); err == nil ||
-		!strings.Contains(err.Error(), "version 42 differs") || !strings.Contains(err.Error(), "--db=all") {
-		t.Fatalf("one-store restore over a ledger with the same max but another history = %v, want a refusal", err)
-	}
-
-	// Another version: one store is refused, the whole fleet is not. (The
-	// live ledger is made to read 176 by hand: a restore over a schema that
-	// differs is pg_restore --clean's own problem, not this check's.)
-	behind, behindDB := migrated(migrations.LegacyLatest)
-	if _, err := behindDB.ExecContext(ctx, `DELETE FROM core.schema_versions WHERE version = 177`); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []struct{ dsn, dump string }{
-		{config.WithSchema(behind, config.ChatSchema), chatDump},
-		{config.WithSchema(behind, config.SchedSchema), schedDump},
-	} {
-		err := runPgRestoreWith(ctx, c.dsn, c.dump, restoreOpts{allowUnresolved: true})
-		if err == nil || !strings.Contains(err.Error(), "--db=all") || !strings.Contains(err.Error(), "at migration version 176") {
-			t.Fatalf("one-store restore across versions = %v, want a refusal naming --db=all", err)
+	dumpAll := func(dsn, name string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := runPgDumpAll(ctx, config.WithSchema(dsn, config.ChatSchema), p); err != nil {
+			t.Fatal(err)
 		}
+		return p
 	}
-	if err := runPgRestoreAll(ctx, config.WithSchema(behind, config.ChatSchema), allDump); err != nil {
-		t.Fatalf("restore --db=all across versions: %v", err)
+	restore := func(dsn, dump string) error {
+		return runPgRestoreAll(ctx, config.WithSchema(dsn, config.ChatSchema), dump)
 	}
-	if v, _, err := migrations.LedgerMax(ctx, behindDB); err != nil || v != migrations.LegacyLatest {
-		t.Fatalf("after --db=all the ledger is the dump's: %d, %v", v, err)
-	}
-}
-
-// restorePreM6Dump: a dump from before the one ledger drops the live ledger
-// after the restore (writing the untouched store's legacy ledger first), the
-// next start adopts again, and such a dump is refused over a database that
-// ran a migration from 200 on.
-func restorePreM6Dump(t *testing.T, open func(string) *sql.DB, migrated func(int) (string, *sql.DB), dir string) {
-	t.Helper()
-	ctx := context.Background()
-	// A dump from before the one ledger: what a pre-M6 release dumped (its
-	// schemas, its two legacy ledgers, no core.schema_versions).
-	old := testdb.Empty(t)
-	oldDB := open(old)
-	if err := migrations.UpTo(ctx, oldDB, migrations.LegacyLatest); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`DROP TABLE core.schema_versions`,
-		`CREATE TABLE chat.schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at BIGINT NOT NULL)`,
-		`INSERT INTO chat.schema_migrations SELECT g, 'm' || g, 1700000000 FROM generate_series(1, 99) g`,
-		`CREATE TABLE sched.schema_migrations (version bigint not null primary key, dirty boolean not null)`,
-		`INSERT INTO sched.schema_migrations VALUES (77, false)`,
-	} {
-		if _, err := oldDB.ExecContext(ctx, q); err != nil {
+	exec := func(db *sql.DB, q string) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	oldChat := filepath.Join(dir, "old-chat.dump")
-	if err := runPgDump(ctx, config.WithSchema(old, config.ChatSchema), oldChat); err != nil {
-		t.Fatal(err)
+
+	// A dump taken since M6.
+	src, _ := migrated()
+	m6Dump := dumpAll(src, "m6.dump")
+	dst, dstDB := migrated()
+	if err := restore(dst, m6Dump); err != nil {
+		t.Fatalf("restore an M6 dump: %v", err)
 	}
-	if _, _, ok, err := dumpLedger(ctx, oldChat); err != nil || ok {
-		t.Fatalf("a pre-M6 dump read as having a ledger (%v, %v)", ok, err)
+	if v, ok, err := migrations.LedgerMax(ctx, dstDB); err != nil || !ok || v != migrations.LegacyLatest {
+		t.Fatalf("ledger after the restore: %d, %v, %v", v, ok, err)
 	}
-	live, liveDB := migrated(migrations.LegacyLatest)
-	if err := runPgRestoreWith(ctx, config.WithSchema(live, config.ChatSchema), oldChat, restoreOpts{allowUnresolved: true}); err != nil {
-		t.Fatalf("restore a pre-M6 chat dump: %v", err)
-	}
-	if _, ok, err := migrations.LedgerMax(ctx, liveDB); err != nil || ok {
-		t.Fatalf("the live ledger survived a pre-M6 restore (%v, %v)", ok, err)
-	}
-	var chatRows, schedVersion int
-	if err := liveDB.QueryRow(`SELECT (SELECT count(*) FROM chat.schema_migrations), (SELECT version FROM sched.schema_migrations)`).Scan(&chatRows, &schedVersion); err != nil || chatRows != 99 || schedVersion != 77 {
-		t.Fatalf("legacy ledgers after the restore: chat %d rows, sched %d (%v)", chatRows, schedVersion, err)
-	}
-	// The next start adopts again.
-	if err := migrations.Up(ctx, liveDB); err != nil {
-		t.Fatalf("Up after a pre-M6 restore: %v", err)
-	}
-	if v, ok, err := migrations.LedgerMax(ctx, liveDB); err != nil || !ok || v != migrations.LegacyLatest {
-		t.Fatalf("re-adopted ledger: %d, %v, %v", v, ok, err)
+	if err := migrations.Up(ctx, dstDB); err != nil {
+		t.Fatalf("start after the restore: %v", err)
 	}
 
-	// Over a database that ran a migration from 200 on: refused, untouched.
-	if _, err := liveDB.ExecContext(ctx, `INSERT INTO core.schema_versions (version, name, checksum) VALUES (200, '0200_future', '')`); err != nil {
+	// A dump from M4/M5: legacy ledgers, no core.schema_versions.
+	old, oldDB := migrated()
+	exec(oldDB, `DROP TABLE core.schema_versions`)
+	preM6 := dumpAll(old, "pre-m6.dump")
+	if err := restore(dst, preM6); err != nil {
+		t.Fatalf("restore a pre-M6 dump below the boundary: %v", err)
+	}
+	if err := migrations.Up(ctx, dstDB); err != nil {
+		t.Fatalf("start after a pre-M6 restore (reconciles): %v", err)
+	}
+
+	// Past the boundary: refused, nothing changed.
+	exec(dstDB, `INSERT INTO core.schema_versions (version, name, checksum) VALUES (200, '0200_from_a_newer_fleet', 'x')`)
+	snap := func() string {
+		t.Helper()
+		var s string
+		if err := dstDB.QueryRow(`SELECT (SELECT string_agg(version || ':' || checksum, ',' ORDER BY version) FROM core.schema_versions)
+			|| '|' || (SELECT coalesce(string_agg(email || ':' || id, ',' ORDER BY email), '') FROM core.users)
+			|| '|' || (SELECT count(*) FROM chat.schema_migrations)`).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	before := snap()
+	if err := restore(dst, preM6); err == nil || !strings.Contains(err.Error(), "boundary") {
+		t.Fatalf("pre-M6 restore past the boundary = %v, want a refusal", err)
+	}
+	if after := snap(); after != before {
+		t.Fatalf("a refused restore changed the database:\nbefore %s\nafter  %s", before, after)
+	}
+	exec(dstDB, `DELETE FROM core.schema_versions WHERE version = 200`)
+
+	// A dump without legacy ledgers: none stays behind stale; the next
+	// start writes them again from the restored ledger.
+	bare, bareDB := migrated()
+	exec(bareDB, `DROP TABLE chat.schema_migrations; DROP TABLE sched.schema_migrations`)
+	bareDump := dumpAll(bare, "bare.dump")
+	if err := restore(dst, bareDump); err != nil {
 		t.Fatal(err)
 	}
-	err := runPgRestoreWith(ctx, config.WithSchema(live, config.ChatSchema), oldChat, restoreOpts{allowUnresolved: true})
-	if err == nil || !strings.Contains(err.Error(), "new, empty database") {
-		t.Fatalf("pre-M6 restore over version 200 = %v", err)
+	var legacy int
+	if err := dstDB.QueryRow(`SELECT count(*) FROM pg_tables WHERE tablename = 'schema_migrations'`).Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("legacy ledgers after restoring a dump without them: %d (%v)", legacy, err)
 	}
-	if v, _, _ := migrations.LedgerMax(ctx, liveDB); v != 200 {
-		t.Fatalf("the refused restore changed the ledger (max %d)", v)
+	if err := migrations.Up(ctx, dstDB); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstDB.QueryRow(`SELECT count(*) FROM chat.schema_migrations`).Scan(&legacy); err != nil || legacy != 99 {
+		t.Fatalf("legacy chat ledger rebuilt with %d rows (%v)", legacy, err)
+	}
+
+	// A dump from before the one identity table (no core.users).
+	preM4 := testdb.Empty(t)
+	preM4DB, err := sql.Open("pgx", preM4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preM4DB.Close()
+	exec(preM4DB, `CREATE SCHEMA chat; CREATE SCHEMA core; CREATE SCHEMA sched;
+		CREATE TABLE chat.users (email text); CREATE TABLE core.other (x int); CREATE TABLE sched.users (username text)`)
+	if err := restore(dst, dumpAll(preM4, "pre-m4.dump")); err == nil || !strings.Contains(err.Error(), "before the one identity table") {
+		t.Fatalf("pre-M4 restore = %v, want a refusal", err)
 	}
 }

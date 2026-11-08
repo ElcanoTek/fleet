@@ -828,6 +828,7 @@ var Operations = map[string]apispec.Operation{
 					apispec.Prop("version", apispec.Typed("integer")),
 					apispec.Prop("name", apispec.Typed("string")),
 				)}),
+				apispec.Prop("problem", &apispec.Schema{Type: "string", Description: "a refusal the legacy ledgers cause (adoption, or reconciliation below the boundary); fleet refuses to start"}),
 				apispec.Prop("unknown", &apispec.Schema{Type: "array", Description: "applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start", Items: apispec.Object(
 					apispec.Prop("version", apispec.Typed("integer")),
 					apispec.Prop("name", apispec.Typed("string")),
