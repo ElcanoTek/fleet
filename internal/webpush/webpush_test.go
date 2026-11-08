@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -768,6 +769,31 @@ func TestSendOne_TransportErrorLogsNoEndpoint(t *testing.T) {
 	}
 	if len(logged) != 1 || !strings.Contains(logged[0], "fcm.googleapis.com") || !strings.Contains(logged[0], "i/o timeout") || strings.Contains(logged[0], "secret-token") {
 		t.Errorf("log = %q, want the host and the cause without the endpoint", logged)
+	}
+}
+
+// Without the test seam, the service logs through the context logger: a
+// relay failure on a push sent for a turn or a task run carries that
+// context's correlation (#2074 review: it used to fall back to slog.Default).
+func TestSendOne_LogsWithTheContextCorrelation(t *testing.T) {
+	sub := testSubscription(t, "https://fcm.googleapis.com/fcm/send/secret-token")
+	svc := newTestService(t, &fakeStore{subs: []store.PushSubscription{sub}}, nil)
+	svc.client = failingRelay{}
+	svc.logger = nil
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx := logging.WithTask(logging.WithTurn(context.Background(), "conv-p", "turn-p"), "task-p", "run-p")
+	if err := svc.sendToUser(ctx, "u@x.com", "t", "", "", UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"msg":"webpush: send failed"`, `"turn_id":"turn-p"`, `"conv_id":"conv-p"`, `"task_id":"task-p"`, `"run_id":"run-p"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log %q lacks %s", out, want)
+		}
 	}
 }
 
