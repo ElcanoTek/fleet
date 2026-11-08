@@ -225,6 +225,7 @@ Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
+  fleet admin merge-report [--json]                   (what the one-time identity merge recorded: demoted admins, unknown roles; read-only)
   fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
                                                        Auth's import-teams reads)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
