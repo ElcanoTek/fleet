@@ -229,8 +229,10 @@ var sinkFailedHook = func(sink string, err error) {
 	// Asynchronous on purpose: this runs inside a sink's Write, which an slog
 	// handler may be calling with its own lock held — logging from here
 	// synchronously through the same handler would deadlock. The record
-	// reaches every sink that still works.
-	go slog.Default().LogAttrs(context.Background(), slog.LevelWarn,
+	// reaches every sink that still works. Through the ungated bridge
+	// logger, not the default one: lost log lines are something an operator
+	// running at FLEET_LOG_LEVEL=error must still be told about.
+	go bridgeLogger.LogAttrs(context.Background(), slog.LevelWarn,
 		"logging: a log sink write failed; its lines are dropped until it recovers",
 		slog.String("sink", sink), slog.String("err", err.Error()))
 }

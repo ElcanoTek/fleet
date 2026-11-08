@@ -354,10 +354,14 @@ func registerHostValues(out string, fromEnv [][2]int) {
 	if len(fromEnv) == 0 {
 		return
 	}
-	values := make([]string, 0, len(fromEnv))
+	values := make([]string, 0, len(fromEnv)+1)
 	for _, r := range fromEnv {
 		values = append(values, out[r[0]:r[1]])
 	}
+	// The assembled value too: ${AUTH_A}${AUTH_B} built from fragments each
+	// below the redactor's minimum literal length registers nothing piece by
+	// piece, yet the whole is the credential the connector is sent.
+	values = append(values, out)
 	logging.RegisterSecretLiterals("", false, values...)
 }
 

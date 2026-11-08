@@ -160,3 +160,27 @@ func TestTeeWriterIsolatesAFailingSink(t *testing.T) {
 		t.Fatalf("a new failure streak was not reported: %v", got)
 	}
 }
+
+// The sink-failure report goes through the ungated bridge logger, so it is
+// written even at FLEET_LOG_LEVEL=error, where the default logger would drop
+// a warn (#2074 review).
+func TestSinkFailureIsReportedAtLevelError(t *testing.T) {
+	var out childLog
+	prevBridge, prevDefault := bridgeLogger, slog.Default()
+	bridgeLogger = slog.New(NewHandler("json", &out, slog.LevelInfo))
+	slog.SetDefault(slog.New(NewHandler("json", &out, slog.LevelError)))
+	t.Cleanup(func() { bridgeLogger = prevBridge; slog.SetDefault(prevDefault) })
+
+	tee := newTee(teeSink{name: "file", w: failingWriter{}})
+	_, _ = tee.Write([]byte("a line the full disk refuses\n"))
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(out.String(), "a log sink write failed") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no sink-failure report at level error: %q", out.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(out.String(), `"sink":"file"`) {
+		t.Fatalf("report does not name the sink: %s", out.String())
+	}
+}

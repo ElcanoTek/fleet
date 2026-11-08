@@ -65,15 +65,15 @@ const minLiteralLen = 8
 // memory: the memory is bounded by the generation swap, not by this number.
 const literalRetireGrace = 15 * time.Minute
 
-// maxScopeGenerations bounds how many generations of ONE scope may sit in the
-// scan set at once (the live generation plus superseded ones still inside their
-// grace window). It is a backstop, not the primary mechanism: it engages only
-// when a scope rotates FASTER than literalRetireGrace, where the grace window
-// alone would let generations pile up (a refresh storm, a misconfigured
-// zero-lifetime token). It can never drop the live generation — a value it
-// drops has been superseded maxScopeGenerations-1 times over, and for a rotated
-// OAuth pair that means the authorization server itself has invalidated it.
-const maxScopeGenerations = 4
+// There is deliberately NO count cap on a scope's generations. Every
+// superseded generation stays scanned for the full literalRetireGrace, however
+// fast the scope rotates: a refresh storm is exactly when an in-flight request
+// still carrying an older token is likeliest to fail and echo it, and a cap
+// that retired the oldest early (an earlier backstop of 4 generations did)
+// turned the storm into a leak. The scan set is bounded by the rotation rate
+// times the grace window — a scope refreshing every second for 15 minutes holds
+// about 900 generations — and by the sweep, which drops each generation the
+// moment its own window ends.
 
 // pattern pairs a compiled regex with its replacement. Replacements that keep a
 // captured group (e.g. "${1}[REDACTED]") preserve a leading marker so the output
@@ -277,20 +277,13 @@ func (r *Redactor) addLiterals(scope string, rotated bool, values ...string) {
 }
 
 // retireOlderGenerationsLocked starts the grace clock on every literal of scope
-// older than gen. The cap backstop makes far-superseded generations due
-// immediately; everything else gets the full window.
+// older than gen. Each gets the full window from the moment it is superseded;
+// one already counting down keeps its earlier deadline (it was superseded
+// first), and nothing is made due early.
 func (r *Redactor) retireOlderGenerationsLocked(scope string, gen uint64, nowNano int64) {
 	graceDeadline := nowNano + literalRetireGrace.Nanoseconds()
-	var capFloor uint64 // generations at or below this are due now
-	if gen > maxScopeGenerations {
-		capFloor = gen - maxScopeGenerations
-	}
 	for _, l := range r.literals {
 		if l.scope != scope || l.gen >= gen {
-			continue
-		}
-		if l.gen <= capFloor {
-			l.retireAt = nowNano
 			continue
 		}
 		if l.retireAt == 0 {

@@ -41,3 +41,17 @@ func TestHostInterpolatedConnectorValuesAreRedactedLiterals(t *testing.T) {
 		t.Fatalf("a literal manifest value was registered as a secret: %s", got)
 	}
 }
+
+// A value assembled from host fragments each too short to register alone
+// (two 6-byte pieces) is registered whole (#2074 review).
+func TestAssembledHostValueIsRegisteredWhole(t *testing.T) {
+	t.Setenv("AUTH_A", "Qw7Zp2")
+	t.Setenv("AUTH_B", "Lm9Xc4")
+	env := resolveEnvMap(map[string]string{"AUTH": "${AUTH_A}${AUTH_B}"}, nil)
+	if env["AUTH"] != "Qw7Zp2Lm9Xc4" {
+		t.Fatalf("AUTH = %q", env["AUTH"])
+	}
+	if got := logging.Redact("connector sent Qw7Zp2Lm9Xc4"); strings.Contains(got, "Qw7Zp2Lm9Xc4") {
+		t.Fatalf("assembled host value not registered: %q", got)
+	}
+}
