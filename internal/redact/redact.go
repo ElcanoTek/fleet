@@ -23,6 +23,7 @@ package redact
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,24 @@ const literalRetireGrace = 15 * time.Minute
 type pattern struct {
 	re   *regexp.Regexp
 	repl string
+	// hint is a substring every match contains (lower-cased; matched
+	// case-insensitively when fold is set). ScrubLine skips the regex on a
+	// line without it — the backstop runs on every log line, and most lines
+	// carry no credential shape at all.
+	hint string
+	fold bool
+}
+
+// mayMatch reports whether p could match s (its hint is present).
+func (p pattern) mayMatch(s, lower string) bool {
+	switch {
+	case p.hint == "":
+		return true
+	case p.fold:
+		return strings.Contains(lower, p.hint)
+	default:
+		return strings.Contains(s, p.hint)
+	}
 }
 
 // literal is one registered secret VALUE in the scan set.
@@ -106,6 +125,9 @@ type literal struct {
 type Redactor struct {
 	patterns       []pattern
 	customPatterns []pattern
+	// shapePatterns is how many leading patterns are credential shapes
+	// (ScrubLine applies only those).
+	shapePatterns int
 
 	// mu guards literals, index and scopeGen. index mirrors literals for O(1)
 	// dedupe: runtime registration re-offers the same token on every
@@ -131,30 +153,30 @@ type Redactor struct {
 func canonicalPatterns() []pattern {
 	return []pattern{
 		// Entire PEM private-key blocks.
-		{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED PRIVATE KEY]"},
+		{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED PRIVATE KEY]", "PRIVATE KEY-----", false},
 		// Vendor API-key prefixes (specific → generic). Every prefix rule is
 		// anchored with \b so a hyphenated prose word that happens to END in a
 		// prefix ("desk-mounted-display-arm-…") is not eaten: the generic sk-
 		// rule below admits `-` and `_` because current OpenAI keys carry
 		// hyphenated sub-prefixes (sk-proj-…, sk-svcacct-…, sk-admin-…) that the
 		// old alnum-only tail never matched past the first hyphen.
-		{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}`), placeholder},           // Anthropic
-		{regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder},         // OpenRouter
-		{regexp.MustCompile(`\bsk-[A-Za-z0-9\-_]{20,}`), placeholder},               // OpenAI (incl. sk-proj-/sk-svcacct-) + generic sk-
-		{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`), placeholder},         // GitHub fine-grained PAT
-		{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), placeholder},           // GitHub classic PAT/OAuth/refresh
-		{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}`), placeholder},            // GitLab PAT
-		{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), placeholder},        // Slack bot/user/app/refresh/config tokens
-		{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}`), placeholder}, // Stripe secret / restricted keys
-		{regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}`), placeholder},               // Google API key
-		{regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`), placeholder},                     // AWS access key ID
+		{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-ant-", false},       // Anthropic
+		{regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-or-v1-", false},   // OpenRouter
+		{regexp.MustCompile(`\bsk-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-", false},               // OpenAI (incl. sk-proj-/sk-svcacct-) + generic sk-
+		{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`), placeholder, "github_pat_", false}, // GitHub fine-grained PAT
+		{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), placeholder, "gh", false},            // GitHub classic PAT/OAuth/refresh
+		{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}`), placeholder, "glpat-", false},         // GitLab PAT
+		{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), placeholder, "xox", false},        // Slack bot/user/app/refresh/config tokens
+		{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}`), placeholder, "k_", false},  // Stripe secret / restricted keys
+		{regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}`), placeholder, "AIza", false},              // Google API key
+		{regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`), placeholder, "AKIA", false},                    // AWS access key ID
 		// HTTP Authorization: Bearer <token> (e.g. in captured curl/wget output).
-		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder},
+		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder, "authorization", true},
 		// HTTP Authorization: Basic <base64(user:pass)>. A dedicated pattern
 		// because the scheme word ("Basic", 5 chars) sits where the generic
 		// marker rule expects the 8+-char value, so Basic credentials — which
 		// decode to the plaintext user:password — used to pass through.
-		{regexp.MustCompile(`(?i)(authorization:\s*basic\s+)([A-Za-z0-9+/\-._~]+=*)`), "${1}" + placeholder},
+		{regexp.MustCompile(`(?i)(authorization:\s*basic\s+)([A-Za-z0-9+/\-._~]+=*)`), "${1}" + placeholder, "authorization", true},
 		// Marker = value, including the JSON-quoted form {"api_key":"..."}: the
 		// separator class includes : = whitespace and quotes so the value after a
 		// recognized marker is scrubbed even with no spaces. Value is 8+ chars up
@@ -165,8 +187,40 @@ func canonicalPatterns() []pattern {
 		// the keyword, `_`/`-`-led name characters are allowed before the
 		// separator. Requiring that boundary keeps prose words that merely embed
 		// a keyword (secretary, tokenizer) from matching.
-		{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), "${1}" + placeholder},
+		{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), "${1}" + placeholder, "", false},
 	}
+}
+
+// ScrubLine is the line-level backstop for an already-encoded log record (a
+// JSON object or a logfmt line): the registered literals — in their raw and
+// their JSON- and Go-quoted forms (encodedForms) — and the vendor credential
+// shapes (PEM blocks, vendor key prefixes, Authorization: Bearer/Basic), but
+// not the generic marker=value rule or operator patterns, which decide by a
+// key name and could span the encoding's structure. Every placeholder is
+// free of quotes and backslashes, so a replacement inside a quoted value
+// keeps the line well-formed. Unlike Redact it never re-encodes: bytes it
+// does not replace are left exactly as they were.
+func (r *Redactor) ScrubLine(line string) string {
+	if line == "" || r == nil {
+		return line
+	}
+	r.sweepDue()
+	out := line
+	r.mu.RLock()
+	for _, lit := range r.literals {
+		if lit.value == "" {
+			continue
+		}
+		out = strings.ReplaceAll(out, lit.value, placeholder)
+	}
+	r.mu.RUnlock()
+	lower := strings.ToLower(out)
+	for _, p := range r.patterns[:r.shapePatterns] {
+		if p.mayMatch(out, lower) {
+			out = p.re.ReplaceAllString(out, p.repl)
+		}
+	}
+	return out
 }
 
 // NewRedactor returns a Redactor with the canonical patterns plus any extra
@@ -176,10 +230,12 @@ func NewRedactor(extraPatterns []string) *Redactor {
 	canonicalCount := len(pats)
 	for _, p := range extraPatterns {
 		if re, err := regexp.Compile(p); err == nil {
-			pats = append(pats, pattern{re, placeholder})
+			pats = append(pats, pattern{re: re, repl: placeholder})
 		}
 	}
-	return &Redactor{patterns: pats, customPatterns: pats[canonicalCount:]}
+	// Every canonical pattern but the last (the generic marker=value rule) is
+	// a credential SHAPE, safe for ScrubLine.
+	return &Redactor{patterns: pats, customPatterns: pats[canonicalCount:], shapePatterns: canonicalCount - 1}
 }
 
 // AddLiteral registers a raw value for PERMANENT literal redaction — a
@@ -230,6 +286,10 @@ func (r *Redactor) addLiterals(scope string, rotated bool, values ...string) {
 	for _, v := range values {
 		if len(v) >= minLiteralLen {
 			kept = append(kept, v)
+			// Its encoded forms too: a secret holding a quote, a backslash or
+			// a control character appears escaped in a JSON log line or a
+			// quoted logfmt value, which the raw bytes would never match.
+			kept = append(kept, encodedForms(v)...)
 		}
 		// A multi-line secret (a PEM key, a JSON service-account file) is also
 		// registered line by line: text that is scrubbed one line at a time
@@ -370,6 +430,32 @@ func (r *Redactor) nowNano() int64 {
 		return r.now().UnixNano()
 	}
 	return time.Now().UnixNano()
+}
+
+// encodedForms returns how v reads inside a JSON string (encoding/json,
+// HTML escaping off, as log/slog writes it) and inside a Go-quoted string
+// (strconv.Quote, as a logfmt value is quoted), where those differ from v.
+func encodedForms(v string) []string {
+	if !strings.ContainsFunc(v, func(r rune) bool { return r == '"' || r == '\\' || r < 0x20 || r == 0x7f }) {
+		return nil
+	}
+	var out []string
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) == nil {
+		if js := strings.TrimSuffix(buf.String(), "\n"); len(js) >= 2 {
+			if inner := js[1 : len(js)-1]; inner != v {
+				out = append(out, inner)
+			}
+		}
+	}
+	if q := strconv.Quote(v); len(q) >= 2 {
+		if inner := q[1 : len(q)-1]; inner != v && (len(out) == 0 || inner != out[0]) {
+			out = append(out, inner)
+		}
+	}
+	return out
 }
 
 // MaxLiteralLen is the byte length of the longest registered literal (0 for

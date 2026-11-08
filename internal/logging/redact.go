@@ -89,33 +89,34 @@ func Redact(s string) string {
 // Groups recurse: slog calls replaceAttr for each member with the group path,
 // and a member under a secret-named group is treated as secret-keyed.
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
-	if len(groups) == 0 {
-		switch a.Key {
-		case slog.TimeKey, slog.LevelKey, slog.SourceKey:
-			return a
-		case slog.MessageKey:
-			if a.Value.Kind() == slog.KindString {
-				return slog.String(a.Key, Redact(a.Value.String()))
-			}
-			return a
-		}
+	if builtIn, out := builtInAttr(groups, a); builtIn {
+		return out
 	}
+	// A key can carry a secret as well as a value (a token used as a field
+	// name); the secret-key rule below reads the key as written.
+	name := a.Key
+	a.Key = Redact(a.Key)
 	v := a.Value
 	switch v.Kind() {
 	case slog.KindString:
-		if secretAttrKey(a.Key) || secretGroupPath(groups) {
+		if secretAttrKey(name) || secretGroupPath(groups) {
 			return slog.String(a.Key, redactedValue)
 		}
 		return slog.String(a.Key, Redact(v.String()))
 	case slog.KindAny:
-		if secretAttrKey(a.Key) || secretGroupPath(groups) {
+		if secretAttrKey(name) || secretGroupPath(groups) {
 			return slog.String(a.Key, redactedValue)
 		}
 		switch x := v.Any().(type) {
 		case error:
-			return slog.String(a.Key, Redact(errorText(x)))
+			if !hidesSecretFields(x) {
+				if wrapsSecretError(x) {
+					return slog.String(a.Key, unloggable(x))
+				}
+				return slog.String(a.Key, Redact(errorText(x)))
+			}
 		case fmt.Stringer:
-			if !stringerHidesSecretKeys(x) {
+			if !hidesSecretFields(x) {
 				return slog.String(a.Key, Redact(stringText(x)))
 			}
 		case []byte:
@@ -127,7 +128,7 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 		// 12345678}, a numeric PIN or account secret). Under a secret-named
 		// key or group it is redacted unless the key is count-like
 		// (prompt_tokens, retry_count, latency_ms — countLikeKey).
-		if (secretAttrKey(a.Key) || secretGroupPath(groups)) && !countLikeKey(a.Key) {
+		if (secretAttrKey(name) || secretGroupPath(groups)) && !countLikeKey(name) {
 			return slog.String(a.Key, redactedValue)
 		}
 		return a
@@ -191,9 +192,20 @@ func redactComposite(v any) any {
 		}
 		return out
 	case error:
-		return Redact(errorText(x))
+		if !hidesSecretFields(x) {
+			if wrapsSecretError(x) {
+				return unloggable(x)
+			}
+			return Redact(errorText(x))
+		}
+		// An error type carrying a secret-named field: its Error() could
+		// print it with no key left to redact it by. Walked by structure
+		// below (exported fields, key-checked), or fails closed.
+		if marshalsItself(x) {
+			return unloggable(x)
+		}
 	case fmt.Stringer:
-		if !stringerHidesSecretKeys(x) {
+		if !hidesSecretFields(x) {
 			return Redact(stringText(x))
 		}
 		// A composite whose fields the secret-key rule names: walked by
@@ -272,15 +284,108 @@ func uniqueKey(seen map[string]bool, k string) string {
 	return c
 }
 
-// stringerHidesSecretKeys reports a fmt.Stringer that must not be logged by
-// its String(): a struct, map, slice or array (behind any pointers) whose
-// type carries a field or key the secret-key rule names — a Credential
-// field, a map keyed "api_key" — so String() could print that value with no
-// key left to redact it by. Such a value is walked structurally like any
-// composite. Every other Stringer (time.Time, a UUID, net.IP: values whose
-// String() is their meaning) keeps String(), which is still scrubbed by
-// pattern and literal.
-func stringerHidesSecretKeys(v any) bool {
+// wrapsSecretError reports an error whose chain (errors.Unwrap, and
+// Unwrap() []error for errors.Join) holds an error type with a secret-named
+// field: fmt.Errorf("…: %w", err) has already formatted that error's Error()
+// into its own text, so the wrapper's message is as unsafe as the wrapped
+// value and the whole error fails closed. The walk is bounded; past the
+// bound it fails closed too.
+func wrapsSecretError(err error) bool {
+	budget := 64
+	var visit func(error) bool
+	visit = func(e error) bool {
+		if e == nil {
+			return false
+		}
+		budget--
+		if budget < 0 {
+			return true
+		}
+		if hidesSecretFields(e) {
+			return true
+		}
+		for _, inner := range wrappedErrors(e) {
+			if visit(inner) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, inner := range wrappedErrors(err) {
+		if visit(inner) {
+			return true
+		}
+	}
+	return false
+}
+
+// wrappedErrors is the errors e directly wraps — Unwrap() error, or Unwrap()
+// []error for errors.Join — with a panicking or typed-nil Unwrap tolerated.
+func wrappedErrors(e error) (out []error) {
+	defer func() {
+		if recover() != nil {
+			out = nil
+		}
+	}()
+	if isNilPointer(e) {
+		return nil
+	}
+	//nolint:errorlint // walking the chain one link at a time is the point: errors.As would skip the links this checks
+	switch u := e.(type) {
+	case interface{ Unwrap() error }:
+		if inner := u.Unwrap(); inner != nil {
+			return []error{inner}
+		}
+	case interface{ Unwrap() []error }:
+		return u.Unwrap()
+	}
+	return nil
+}
+
+// builtInAttr handles the handler's own fields: time, level, source and msg
+// at the top level, and only with the value kind the handler itself emits
+// (a time, a slog.Level, a *slog.Source, a string message). A call site's
+// attribute that merely reuses one of those names — "level": "<secret>" in a
+// group or as a string — is not a built-in and is redacted like any other.
+func builtInAttr(groups []string, a slog.Attr) (bool, slog.Attr) {
+	if len(groups) != 0 {
+		return false, a
+	}
+	v := a.Value
+	switch a.Key {
+	case slog.TimeKey:
+		return v.Kind() == slog.KindTime, a
+	case slog.LevelKey:
+		if v.Kind() == slog.KindAny {
+			if _, ok := v.Any().(slog.Level); ok {
+				return true, a
+			}
+		}
+	case slog.SourceKey:
+		if v.Kind() == slog.KindAny {
+			if _, ok := v.Any().(*slog.Source); ok {
+				return true, a
+			}
+		}
+	case slog.MessageKey:
+		if v.Kind() == slog.KindString {
+			return true, slog.String(a.Key, Redact(v.String()))
+		}
+	}
+	return false, a
+}
+
+// hidesSecretFields reports a fmt.Stringer or error that must not be logged
+// by its own String()/Error(): a struct, map, slice or array (behind any
+// pointers) whose type carries a field — exported or not, since the type's
+// own method can read either — or a map key the secret-key rule names (a
+// Credential field, a map keyed "api_key"), so the method could print that
+// value with no key left to redact it by. Such a value is walked
+// structurally like any composite, or fails closed. Every other Stringer or
+// error (time.Time, a UUID, net.IP, *url.Error: values whose text is their
+// meaning) keeps its method, whose text is still scrubbed by pattern and
+// literal.
+func hidesSecretFields(v any) bool {
 	rv := reflect.ValueOf(v)
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
@@ -297,56 +402,11 @@ func stringerHidesSecretKeys(v any) bool {
 				}
 			}
 		}
-		return typeHasSecretPath(rv.Type().Elem())
+		return typeHasAnySecretField(rv.Type().Elem())
 	case reflect.Struct, reflect.Slice, reflect.Array:
-		return typeHasSecretPath(rv.Type())
+		return typeHasAnySecretField(rv.Type())
 	default:
 		// scalars, strings, funcs, chans: String() is all there is
-		return false
-	}
-}
-
-// secretPathTypes caches typeHasSecretPath per type.
-var secretPathTypes sync.Map // reflect.Type -> bool
-
-// typeHasSecretPath reports whether t (a struct, or a pointer, slice, array
-// or map reaching one) has an exported field whose name — or json tag name —
-// the secret-key rule matches, at any depth. Interface-typed fields cannot be
-// known statically and count as no match.
-func typeHasSecretPath(t reflect.Type) bool {
-	if hit, ok := secretPathTypes.Load(t); ok {
-		return hit.(bool)
-	}
-	hit := typeHasSecretPathVisit(t, map[reflect.Type]bool{})
-	secretPathTypes.Store(t, hit)
-	return hit
-}
-
-func typeHasSecretPathVisit(t reflect.Type, seen map[reflect.Type]bool) bool {
-	if seen[t] {
-		return false
-	}
-	seen[t] = true
-	switch t.Kind() {
-	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
-		return typeHasSecretPathVisit(t.Elem(), seen)
-	case reflect.Struct:
-		for i := range t.NumField() {
-			f := t.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			name := f.Name
-			if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag != "" && tag != "-" {
-				name = tag
-			}
-			if secretAttrKey(name) || secretAttrKey(f.Name) || typeHasSecretPathVisit(f.Type, seen) {
-				return true
-			}
-		}
-		return false
-	default:
-		// scalars, strings and interfaces carry no static field names
 		return false
 	}
 }
@@ -484,27 +544,46 @@ func selfMarshals(t reflect.Type) bool {
 // selfMarshalSecretTypes caches typeHasAnySecretField per type.
 var selfMarshalSecretTypes sync.Map // reflect.Type -> bool
 
-// typeHasAnySecretField is typeHasSecretPath counting unexported fields too:
-// a type's own MarshalJSON can print those.
+// typeHasAnySecretField reports a secret-named field — by name or json tag —
+// on EVERY field, exported or not, at any depth (through pointers, slices, arrays, maps and nested
+// structs): a type's own MarshalJSON, MarshalText, String() or Error() can
+// read and print an unexported one, nested or not.
 func typeHasAnySecretField(t reflect.Type) bool {
 	if hit, ok := selfMarshalSecretTypes.Load(t); ok {
 		return hit.(bool)
 	}
-	key := t
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
+	hit := anySecretFieldVisit(t, map[reflect.Type]bool{})
+	selfMarshalSecretTypes.Store(t, hit)
+	return hit
+}
+
+func anySecretFieldVisit(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if seen[t] {
+		return false
 	}
-	hit := typeHasSecretPath(t)
-	if !hit && t.Kind() == reflect.Struct {
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		if t.Kind() == reflect.Map && anySecretFieldVisit(t.Key(), seen) {
+			return true
+		}
+		return anySecretFieldVisit(t.Elem(), seen)
+	case reflect.Struct:
 		for i := range t.NumField() {
-			if secretAttrKey(t.Field(i).Name) {
-				hit = true
-				break
+			f := t.Field(i)
+			name := f.Name
+			if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag != "" && tag != "-" {
+				name = tag
+			}
+			if secretAttrKey(name) || secretAttrKey(f.Name) || anySecretFieldVisit(f.Type, seen) {
+				return true
 			}
 		}
+		return false
+	default:
+		// scalars, strings and interfaces carry no static field names
+		return false
 	}
-	selfMarshalSecretTypes.Store(key, hit)
-	return hit
 }
 
 // maxMarshalScan bounds hasSecretMarshaler's walk (depth and elements per
@@ -512,7 +591,8 @@ func typeHasAnySecretField(t reflect.Type) bool {
 const maxMarshalScan = 4096
 
 // hasSecretMarshaler reports whether v, or any value reachable from it
-// through exported fields, elements, map values, pointers and interfaces,
+// through fields (exported or not: a parent's own marshaler can serialise an
+// unexported one), elements, map keys and values, pointers and interfaces,
 // marshals itself and has a secret-named field. Pointer cycles are cut, and
 // a walk that runs past maxMarshalScan reports true (fail closed).
 func hasSecretMarshaler(v reflect.Value) bool {
@@ -546,7 +626,7 @@ func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uint
 		return secretMarshalerVisit(v.Elem(), depth+1, budget, seen)
 	case reflect.Struct:
 		for i := range t.NumField() {
-			if t.Field(i).IsExported() && secretMarshalerVisit(v.Field(i), depth+1, budget, seen) {
+			if secretMarshalerVisit(v.Field(i), depth+1, budget, seen) {
 				return true
 			}
 		}
@@ -562,7 +642,8 @@ func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uint
 	case reflect.Map:
 		iter := v.MapRange()
 		for iter.Next() {
-			if secretMarshalerVisit(iter.Value(), depth+1, budget, seen) {
+			// A key with a MarshalText is marshalled too (as the JSON key).
+			if secretMarshalerVisit(iter.Key(), depth+1, budget, seen) || secretMarshalerVisit(iter.Value(), depth+1, budget, seen) {
 				return true
 			}
 		}

@@ -519,7 +519,7 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, p
 		if tool != "" {
 			where = "or at " + tool
 		}
-		logging.From(ctx).Info(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", logSafeURL(url), where)))
+		logging.From(ctx).Warn(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", logSafeURL(url), where)))
 	}
 	return report, nil
 }

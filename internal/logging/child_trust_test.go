@@ -108,8 +108,9 @@ func TestChildStderrKeepsDrainingWhenTheSinkFails(t *testing.T) {
 	failures := captureSinkFailures(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	// ~1 MB of stderr in 100-byte lines: sixteen 64 KiB pipe buffers.
-	cmd := exec.CommandContext(ctx, "sh", "-c", `i=0; while [ $i -lt 100 ]; do head -c 10000 /dev/zero | tr '\0' 'a' | fold -w 100 >&2; i=$((i+1)); done`)
+	// ~400 KB of stderr in 100-byte lines: six 64 KiB pipe buffers, so a stopped
+	// drain would block the child.
+	cmd := exec.CommandContext(ctx, "sh", "-c", `i=0; while [ $i -lt 40 ]; do head -c 10000 /dev/zero | tr '\0' 'a' | fold -w 100 >&2; i=$((i+1)); done`)
 	w := ChildStderr("child")
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {

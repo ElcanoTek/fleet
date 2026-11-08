@@ -766,6 +766,37 @@ Operator notes:
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.
 
+### what the process log never contains
+
+Every line passes through two layers of redaction before it reaches stderr
+or `FLEET_LOG_FILE`. The first works on each attribute: secret-named keys,
+structured values, and objects that describe themselves. The second scrubs
+the finished, encoded line. As a result, the log never contains:
+
+- **A registered secret, in any position**: a value, a key, a group name, a
+  message, an error's text, or a self-marshalled field, whether written raw or
+  JSON- or Go-escaped. fleet registers every credential it loads: the
+  secret-named variables of its environment and env file, connector and
+  header values taken from the host (whatever their names), brokered account
+  values, and OAuth and API-key secrets as they are acquired or rotated. A
+  rotated secret stays registered for 15 minutes after its replacement.
+- **A recognised vendor credential shape**: PEM private-key blocks (also when a
+  subprocess prints one line by line), `sk-…`, `github_pat_…`/`gh?_…`,
+  `glpat-…`, `xox?-…`, Stripe `sk_/rk_` keys, `AIza…`, `AKIA…`, and the value
+  of an `Authorization: Bearer|Basic` header.
+- **The value of a secret-named field** (`token`, `password`, `secret`,
+  `api_key`, `authorization`, `credential`, `cookie`, …) in a plain struct, a
+  map, or a group, at any depth. A number under such a key is redacted too,
+  unless the key is a count (`prompt_tokens`, `token_count`, `…_ms`).
+- **The output of a self-describing type that carries a secret-named field.**
+  This covers a `String()`, `Error()`, `MarshalJSON` or `MarshalText` on a
+  type with such a field, exported or not, nested or wrapped. Such a value is
+  walked field by field, or logged as `[unloggable value: <type>]`.
+
+The limit: an unregistered value with no secret-like name and no recognisable
+shape cannot be told apart from ordinary text. That is why fleet registers
+every credential it loads.
+
 ## backup · restore — disaster recovery
 
 fleet keeps every conversation in the **chat** DB and every scheduled task in the
