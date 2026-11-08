@@ -460,8 +460,10 @@ linking it).
 | GitHub Actions, by commit SHA | every workflow | Dependabot `github-actions` (`/`) |
 | `COSIGN` — the verifier boxes and release.yml run | `internal/release/cosign.lock` | `update-pins.sh`: the new `cosign_checksums.txt` must carry Sigstore's keyless signature, verified by the cosign already pinned; both binaries hash-checked |
 | `GRYPE` | `ci.yml`, `grype-scheduled.yml`, `release.yml` | `update-pins.sh`: checksums file, its keyless signature (anchore's release workflow), the asset's SHA-256 |
-| `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature) |
+| `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM`, `GOLANGCI_LINT` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature) |
 | `RUFF`, `SEMGREP` (`pip install x==v`) | `ci.yml`, `semgrep.yml` | `update-pins.sh`: newest final PyPI release past the cooldown |
+
+Any tracked file that restates a pin's version (the golangci-lint and gitleaks versions in `ONBOARDING.md`, `docs/TESTING.md`, `docs/PR-STEWARDSHIP.md` and the steward skill; the actionlint and ruff install lines in the `Makefile`) is listed in `scripts/lib/pin-docs.tsv`, and `update-pins.sh` rewrites it in the same PR, so that PR needs no hand edits. `TestPinnedVersionsInDocsAreListedAndCurrent` (`scripts/check_versions_test.go`) fails on a listed copy that disagrees with its pin, and on any tracked file that states a pinned tool's version without being listed, except named historical exemptions.
 
 The Playwright browser is not a pin: the control-plane image never downloads
 one (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`); fleet's browser runner launches the
