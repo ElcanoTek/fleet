@@ -99,14 +99,26 @@ func planLedgerRestore(ctx context.Context, dsn, inPath, target string) (ledgerR
 		if target == "all" || (liveHas && liveMax == dumpMax) {
 			return ledgerRestore{}, nil
 		}
-		live := "has no " + migrations.Table + " yet"
-		if liveHas {
-			live = fmt.Sprintf("is at migration version %d", liveMax)
+		if !liveHas {
+			// No ledger here: an empty database, or one no M6 release has
+			// started on yet. A chat restore brings the dump's ledger with
+			// core, which is right only when the scheduler's schema is empty
+			// too; a sched restore brings none (core is chat's).
+			if target == config.ChatSchema {
+				busy, err := schemaHasTables(ctx, db, config.SchedSchema)
+				if err != nil || !busy {
+					return ledgerRestore{}, err
+				}
+			}
+			return ledgerRestore{}, fmt.Errorf("%s is at migration version %d but this database has no %s yet: restore the "+
+				"chat dump first into an empty database (it carries core and the ledger), restore a whole-fleet dump with --db=all "+
+				"(fleet backup --db=all makes one), or start this fleet release once on the database first (docs/BACKUP_RESTORE.md)",
+				inPath, dumpMax, migrations.Table)
 		}
-		return ledgerRestore{}, fmt.Errorf("%s is at migration version %d but this database %s: restoring only the %s store would leave "+
-			"the two stores' schemas at different versions under one ledger. Restore a whole-fleet dump with --db=all (fleet backup "+
-			"--db=all makes one), or restore with the fleet release whose database matches the dump (docs/BACKUP_RESTORE.md)",
-			inPath, dumpMax, live, target)
+		return ledgerRestore{}, fmt.Errorf("%s is at migration version %d but this database is at migration version %d: restoring only "+
+			"the %s store would leave the two stores' schemas at different versions under one ledger. Restore a whole-fleet dump "+
+			"with --db=all (fleet backup --db=all makes one), or restore with the fleet release whose database matches the dump "+
+			"(docs/BACKUP_RESTORE.md)", inPath, dumpMax, liveMax, target)
 	}
 	if !liveHas {
 		return ledgerRestore{}, nil
@@ -139,4 +151,13 @@ func (p ledgerRestore) finish(ctx context.Context, dsn string, opts restoreOpts)
 	}
 	opts.notef("the dump predates the one migration ledger: dropped %s, so the next fleet start adopts the legacy ledgers again", migrations.Table)
 	return nil
+}
+
+// schemaHasTables reports whether schema holds any table.
+func schemaHasTables(ctx context.Context, db *sql.DB, schema string) (bool, error) {
+	var ok bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = $1)`, schema).Scan(&ok); err != nil {
+		return false, fmt.Errorf("probe schema %s: %w", schema, err)
+	}
+	return ok, nil
 }

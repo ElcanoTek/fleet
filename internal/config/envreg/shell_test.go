@@ -35,6 +35,9 @@ var shellInternal = map[string]bool{
 	// release.yml's job env, set by the workflow for scripts/release-*.sh
 	// (not operator configuration)
 	"FLEET_IMAGE": true, "SANDBOX_IMAGE": true, "SIGNER_IDENTITY": true, "OIDC_ISSUER": true,
+	// ci.yml's upgrade-from-release job env, for scripts/upgrade-from-release.sh
+	// (a CI rehearsal of an upgrade, not operator configuration)
+	"FLEET_UPGRADE_LOG_DIR": true, "FLEET_UPGRADE_PG_CONTAINER": true,
 	// tools fleet's scripts drive, read under their own names
 	"GOPATH": true, "GOBIN": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOCACHE": true, "GOMODCACHE": true,
 	"PGPASSWORD":      true,

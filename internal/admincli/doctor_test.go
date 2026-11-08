@@ -123,6 +123,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		`bundle_report=advise`,
 		`"$bundle_report" "client bundle $bundle_dir is the generic bundle inside a fleet checkout`,
 		`"$bundle_report" "client bundle $bundle_dir is inside the fleet checkout`,
+		// The one migration ledger (#2049 M6): read through the CLI, a dirty
+		// ledger fails (fleet will not start on it), not adopted is advice.
+		`"$id_cli" migrate status --json`,
+		`core.schema_versions has a DIRTY version`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

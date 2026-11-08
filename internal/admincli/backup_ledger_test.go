@@ -114,7 +114,7 @@ func restoreAcrossVersions(t *testing.T, migrated func(int) (string, *sql.DB), c
 		{config.WithSchema(behind, config.SchedSchema), schedDump},
 	} {
 		err := runPgRestoreWith(ctx, c.dsn, c.dump, restoreOpts{allowUnresolved: true})
-		if err == nil || !strings.Contains(err.Error(), "--db=all") || !strings.Contains(err.Error(), "is at migration version 176") {
+		if err == nil || !strings.Contains(err.Error(), "--db=all") || !strings.Contains(err.Error(), "database is at migration version 176") {
 			t.Fatalf("one-store restore across versions = %v, want a refusal naming --db=all", err)
 		}
 	}

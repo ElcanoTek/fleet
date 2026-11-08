@@ -273,8 +273,8 @@ func DefaultPoolConfig() PoolConfig {
 
 // Open connects to Postgres using the given DSN (DATABASE_URL format or
 // keyword/value — anything pgx accepts), applies the pool settings, and runs any
-// pending migrations of the one database (internal/migrations). Fails loudly if the DB is newer than the binary knows
-// about (prevents accidental downgrade).
+// pending migrations of the one database (internal/migrations). Fails loudly if
+// the DB is newer than the binary knows about (prevents accidental downgrade).
 func Open(dsn string, pool PoolConfig) (*Store, error) {
 	if dsn == "" {
 		return nil, errors.New("empty database DSN (set DATABASE_URL)")

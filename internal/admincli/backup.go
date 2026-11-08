@@ -203,12 +203,6 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 	case !slices.Contains(got, want):
 		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
 	}
-	// The one migration ledger (#2049 M6) must stay true to the schemas the
-	// restore leaves: checked before anything is dropped.
-	ledger, err := planLedgerRestore(ctx, dsn, inPath, want)
-	if err != nil {
-		return err
-	}
 	// Other schemas in the archive (a whole-database dump) are left out by
 	// -n below: only the store's schema is restored — plus, for the chat
 	// store, the identity schema core its migrations own (#2049 M4).
@@ -240,6 +234,12 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 				return err
 			}
 		}
+	}
+	// The one migration ledger (#2049 M6) must stay true to the schemas the
+	// restore leaves: checked before anything is dropped.
+	ledger, err := planLedgerRestore(ctx, dsn, inPath, want)
+	if err != nil {
+		return err
 	}
 	if err := pgRestore(ctx, dsn, inPath, schemas, false); err != nil {
 		return err
