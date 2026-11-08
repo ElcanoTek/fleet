@@ -58,12 +58,6 @@ type Config struct {
 	// CatwalkURL is the catwalk model database base (CATWALK_URL).
 	CatwalkURL string
 
-	// ChatToken authenticates in-process calls to chat-server
-	// (FLEET_SERVER_TOKEN); OrchestratorToken the orchestrator's header-trust
-	// channel (the same secret unless ORCHESTRATOR_SERVER_TOKEN overrides it).
-	ChatToken         string
-	OrchestratorToken string
-
 	// TrustedProxies is config.Config.TrustedProxies (FLEET_TRUSTED_PROXIES),
 	// set by the caller: the proxies whose X-Forwarded-For the gateway reads
 	// to name a request's client, with the same resolver the backends use.
@@ -104,10 +98,8 @@ func ConfigFromEnv() Config {
 		ElcanoCookieDomain: get("AUTH_COOKIE_DOMAIN"),
 		AuthLoginURL:       get("AUTH_LOGIN_URL"),
 		CatwalkURL:         get("CATWALK_URL"),
-		ChatToken:          envreg.Get("FLEET_SERVER_TOKEN"),
 		DevServer:          get("FLEET_WEB_DEV_SERVER"),
 	}
-	c.OrchestratorToken = firstNonEmpty(envreg.Get("ORCHESTRATOR_SERVER_TOKEN"), c.ChatToken)
 	for _, k := range strings.Split(envreg.Get("AUTH_SIGNING_PREVIOUS_PUBKEYS"), ",") {
 		if k = strings.TrimSpace(k); k != "" {
 			c.PreviousPubKeys = append(c.PreviousPubKeys, k)

@@ -208,7 +208,7 @@ func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusOK {
@@ -289,7 +289,7 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 	s := &Server{agent: fake}
 	s.patrolDraftInFlight.Store(user, struct{}{})
 	req := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	rec := httptest.NewRecorder()
 	s.handlePatrolDraft(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -302,7 +302,7 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 	s.patrolDraftInFlight.Delete(user)
 	rec = httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
-	s.handlePatrolDraft(rec, req2.WithContext(context.WithValue(req2.Context(), ctxKeyUser, user)))
+	s.handlePatrolDraft(rec, req2.WithContext(asUser(req2.Context(), user)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("after the first finished, status = %d, want 200", rec.Code)
 	}
@@ -345,7 +345,7 @@ func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	var body struct {
@@ -391,7 +391,7 @@ func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
 	}
 	s.store = failingMultiplayerStore{s.store}
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusInternalServerError {
@@ -436,7 +436,7 @@ func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
 	calls := 0
 	s.store = countingMultiplayerStore{chatStore: s.store, calls: &calls}
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusOK {

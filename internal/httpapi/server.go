@@ -23,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -115,6 +116,9 @@ type Server struct {
 	// fixtures needn't provision every email; membership_test sets it back to
 	// nil to exercise the real GetUser gate.
 	isMember func(ctx context.Context, email string) (bool, error)
+	// dir overrides the account lookup membershipMiddleware resolves
+	// against (tests); nil uses the chat store's identity table.
+	dir principal.Directory
 
 	// inflight tracks the currently-running turn for each conversation.
 	// Lets the server keep generating after the SSE connection drops
@@ -703,6 +707,12 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 	if cfg.RateLimitEnabled {
 		s.rate = ratelimit.New(cfg.RatePerMinute, cfg.RatePerDay)
 		s.concurrent = ratelimit.NewConcurrencyLimiter(cfg.RateLimitConcurrent)
+	}
+	// The account lookup membershipMiddleware resolves against: the one
+	// identity table behind the concrete chat store (a test fake has none
+	// and uses the isMember seam or sets dir itself).
+	if cs, ok := st.(*store.Store); ok && cs != nil {
+		s.dir = cs.Identity()
 	}
 	for _, opt := range opts {
 		opt(s)

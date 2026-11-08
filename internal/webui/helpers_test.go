@@ -18,13 +18,12 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
 const (
 	testSecret     = "test-session-secret-0123456789abcdef"
-	testChatToken  = "chat-shared-secret"
-	testOrchToken  = "orch-shared-secret"
 	testIndexHTML  = `<!doctype html><html><head><script src="/theme-init.js"></script>` + headMarker + `<link rel="stylesheet" href="/api/theme"></head><body><div id="root"></div>` + bootstrapMarker + `<script type="module" src="/assets/index-abc123.js"></script></body></html>`
 	testBuildID    = "build-123"
 	testAssetJS    = "console.log('fleet')"
@@ -53,6 +52,9 @@ type recordedCall struct {
 	Header     http.Header
 	Body       string
 	RemoteAddr string
+	// Who is the principal the call carried; HasWho whether it carried one.
+	Who    principal.Principal
+	HasWho bool
 }
 
 // fakeBackend records requests and answers with respond (default: 200 {}).
@@ -65,7 +67,8 @@ type fakeBackend struct {
 func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
-	f.calls = append(f.calls, recordedCall{r.Method, r.RequestURI, r.URL.Path, r.URL.RawPath, r.Header.Clone(), string(body), r.RemoteAddr})
+	who, hasWho := principal.From(r.Context())
+	f.calls = append(f.calls, recordedCall{r.Method, r.RequestURI, r.URL.Path, r.URL.RawPath, r.Header.Clone(), string(body), r.RemoteAddr, who, hasWho})
 	f.mu.Unlock()
 	if f.respond != nil {
 		f.respond(w, r)
@@ -117,10 +120,8 @@ func newTestEnv(t *testing.T, opts ...envOpt) *testEnv {
 	}
 	e := &testEnv{chat: &fakeBackend{}, orch: &fakeBackend{}, priv: priv, pubB64: base64.StdEncoding.EncodeToString(pub)}
 	cfg := Config{
-		SessionSecret:     testSecret,
-		ElcanoPubKeyB64:   e.pubB64,
-		ChatToken:         testChatToken,
-		OrchestratorToken: testOrchToken,
+		SessionSecret:   testSecret,
+		ElcanoPubKeyB64: e.pubB64,
 	}
 	o := Options{Chat: e.chat, Orchestrator: e.orch, Bundle: testBundle()}
 	for _, fn := range opts {
@@ -207,3 +208,32 @@ func setCookies(res *response) string {
 }
 
 func newRecorder() *httptest.ResponseRecorder { return httptest.NewRecorder() }
+
+// isGateway reports whether c carried the gateway's own principal for email.
+func (c recordedCall) isGateway(email string) bool {
+	return c.HasWho && c.Who.AuthMethod == principal.MethodGateway && c.Who.Email == email
+}
+
+// isSession reports whether c carried a session principal for email.
+func (c recordedCall) isSession(email string) bool {
+	return c.HasWho && c.Who.AuthMethod == principal.MethodSession && c.Who.Email == email
+}
+
+// noIdentityHeaders reports whether c carried none of the retired identity
+// or service-token headers.
+func (c recordedCall) noIdentityHeaders() bool {
+	for _, h := range []string{"X-User-Email", "X-User-Session-Epoch", "X-User-Session-Source", "X-External-Issuer", "X-External-Subject", "X-Chat-Server-Token", "X-Orchestrator-Server-Token"} {
+		if c.Header.Get(h) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// gatewayOnly reports whether r carries the gateway's identity-less
+// principal and no identity or service-token header.
+func gatewayOnly(r *http.Request) bool {
+	p, ok := principal.From(r.Context())
+	return ok && p.AuthMethod == principal.MethodGateway && p.Email == "" &&
+		(recordedCall{Header: r.Header}).noIdentityHeaders()
+}

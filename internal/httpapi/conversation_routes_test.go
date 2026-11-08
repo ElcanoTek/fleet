@@ -358,7 +358,7 @@ func TestSubagentLogStoreErrorIs500(t *testing.T) {
 
 	s := &Server{store: failingGetStore{}}
 	req := httptest.NewRequest(http.MethodGet, "/conversations/"+uuid.NewString()+"/subagents/"+agentSubagentProbeID, nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "router@x.com"))
+	req = req.WithContext(asUser(req.Context(), "router@x.com"))
 	w := httptest.NewRecorder()
 	s.conversationByID(w, req)
 	if w.Code != http.StatusInternalServerError {

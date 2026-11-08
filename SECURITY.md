@@ -236,11 +236,12 @@ on the cookie path must carry an `Origin` header whose host matches the server's
 cross-origin `Origin` is rejected with `403 Cross-origin request blocked`.
 
 Requests authenticated with `X-API-Key`, `X-Registration-Token`,
-`Authorization: Bearer …`, or the Next-proxy `X-Orchestrator-Server-Token` are
+`Authorization: Bearer …`, or the loopback `X-Orchestrator-Server-Token` are
 **exempt** — browsers do not auto-attach custom headers cross-origin, so those
-paths are not CSRF-reachable. On the proxy path the browser's Origin has
-already been enforced by the Next.js layer (`web/src/app/lib/csrf.ts`), which
-does not forward the header upstream.
+paths are not CSRF-reachable. So is a call the browser gateway (`internal/webui`)
+makes in-process with a session or gateway principal in the request context
+(ADR-0108): the gateway enforced the browser's Origin itself before the call,
+and does not forward the header.
 
 Two operator-facing contracts make this defense-in-depth complete:
 

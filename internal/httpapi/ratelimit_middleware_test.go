@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,12 +17,12 @@ func okNext() http.Handler {
 
 func chatReq(user string) *http.Request {
 	req := httptest.NewRequest("POST", "/chat", nil)
-	return req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	return req.WithContext(asUser(req.Context(), user))
 }
 
 func attachReq(user string) *http.Request {
 	req := httptest.NewRequest("POST", "/attachments", nil)
-	return req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	return req.WithContext(asUser(req.Context(), user))
 }
 
 // TestChatRateLimitMiddleware_HeadersAnd429 verifies the RPM window blocks the

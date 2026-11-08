@@ -108,8 +108,8 @@ func TestIndexRenderedPerRequest(t *testing.T) {
 	e := newTestEnv(t, withOrigin(testOrigin))
 	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/brand/meta" {
-			if r.Header.Get("X-Chat-Server-Token") != testChatToken || r.Header.Get("X-User-Email") != "" {
-				t.Errorf("/brand/meta must be token-only: %v", r.Header)
+			if !gatewayOnly(r) {
+				t.Errorf("/brand/meta must carry only the gateway's principal: %v", r.Header)
 			}
 			_, _ = io.WriteString(w, `{"app_name":"Reklaim","login_title":"Reklaim it.","share_title":"","share_description":"<desc>","background_dark":"#0A0908","share_image_url":"https://evil.example/x.png"}`)
 			return
@@ -229,7 +229,7 @@ func TestChatMembershipGate(t *testing.T) {
 				probe = c
 			}
 		}
-		if probe.Header.Get("X-User-Email") != "x@omc.com" {
+		if !probe.isSession("x@omc.com") {
 			t.Errorf("%s: membership probe %v", source, probe.Header)
 		}
 		e.chat.respond = membership(200)
@@ -298,8 +298,8 @@ func TestSharedSnapshot(t *testing.T) {
 	e := newTestEnv(t)
 	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/shared/") {
-			if r.Header.Get("X-User-Email") != "" || r.Header.Get("X-Chat-Server-Token") != testChatToken {
-				t.Errorf("shared fetch must be token-only: %v", r.Header)
+			if !gatewayOnly(r) {
+				t.Errorf("shared fetch must carry only the gateway's principal: %v", r.Header)
 			}
 			if r.RequestURI != "/shared/tok%201" {
 				w.WriteHeader(404)

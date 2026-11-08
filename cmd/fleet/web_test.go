@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
@@ -46,21 +47,28 @@ func TestPrintWebBundleReportsTheEmbeddedBundle(t *testing.T) {
 	}
 }
 
-// A leftover ORCHESTRATOR_SERVER_TOKEN (the retired Next tier's env; an old
-// bootstrap even wrote ADMIN_API_KEY there) must not override the shared
-// secret the in-process orchestrator verifies, or every call would 403.
-func TestWebServerUsesTheSharedTokenForBothBackends(t *testing.T) {
+// The gateway's in-process calls carry their caller as a typed principal in
+// the request context and no shared secret or identity header (ADR-0108): a
+// leftover ORCHESTRATOR_SERVER_TOKEN (the retired Next tier's env; an old
+// bootstrap even wrote ADMIN_API_KEY there) cannot reach a backend at all.
+func TestWebServerCallsBothBackendsWithThePrincipal(t *testing.T) {
 	const secret = "web-test-session-secret-0123456789"
 	t.Setenv("APP_SESSION_SECRET", secret)
 	t.Setenv("ORCHESTRATOR_SERVER_TOKEN", "stale-admin-key")
 	t.Setenv("FLEET_WEB_ADDR", "")
-	var gotOrch, gotChat string
+	type seen struct {
+		who     principal.Principal
+		headers http.Header
+	}
+	var gotOrch, gotChat seen
 	orch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotOrch = r.Header.Get("X-Orchestrator-Server-Token")
+		gotOrch.who, _ = principal.From(r.Context())
+		gotOrch.headers = r.Header.Clone()
 		_, _ = io.WriteString(w, `{}`)
 	})
 	chat := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotChat = r.Header.Get("X-Chat-Server-Token")
+		gotChat.who, _ = principal.From(r.Context())
+		gotChat.headers = r.Header.Clone()
 		_, _ = io.WriteString(w, `{"epoch":"e1"}`)
 	})
 	srv, err := buildWebServer(&config.Config{SharedToken: "the-shared-token"}, chat, orch)
@@ -82,8 +90,15 @@ func TestWebServerUsesTheSharedTokenForBothBackends(t *testing.T) {
 		r.AddCookie(&http.Cookie{Name: websession.CookieName, Value: tok})
 		srv.Handler.ServeHTTP(httptest.NewRecorder(), r)
 	}
-	if gotOrch != "the-shared-token" || gotChat != "the-shared-token" {
-		t.Fatalf("orchestrator token %q, chat token %q; want the shared token for both", gotOrch, gotChat)
+	for name, got := range map[string]seen{"orchestrator": gotOrch, "chat": gotChat} {
+		if got.who.Email != "alice@example.com" || got.who.AuthMethod != principal.MethodSession || got.who.Session.Epoch != "e1" {
+			t.Errorf("%s principal %+v", name, got.who)
+		}
+		for _, h := range []string{"X-Chat-Server-Token", "X-Orchestrator-Server-Token", "X-User-Email"} {
+			if got.headers.Get(h) != "" {
+				t.Errorf("%s got %s", name, h)
+			}
+		}
 	}
 }
 

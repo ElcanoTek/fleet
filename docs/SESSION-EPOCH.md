@@ -37,10 +37,9 @@ salt, and not a credential `/auth/verify` would accept.
 | Step | Where | Behaviour |
 |---|---|---|
 | mint | `POST /api/auth/login`, `GET /api/auth/oidc/callback` | password login reads `/auth/session-epoch`; OIDC reads `/auth/external-session-epoch` and stamps issuer+subject+source with its independent claim; either failed read refuses login |
-| serve | `internal/httpapi` `/auth/session-epoch` | on `authMiddleware` alone (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
-| forward | `chatServerHeaders`, `orchestratorHeaders` | `X-User-Session-Epoch` beside `X-User-Email`; OIDC also forwards source, issuer, and subject over the same shared-token channel |
-| check (chat) | `membershipMiddleware` | compared inside the `GetUser` it already performs — no extra query |
-| check (ops center) | `headerTrustUser` → `checkSessionEpoch` | read straight from the one identity table, `core.users` / `core.external_auth_epochs` (`identity.SessionEpochSQL`; #2049 M4, [ADR-0105](adr/0105-one-identity-table.md)) — one query per header-trust request, no seam |
+| serve | `internal/httpapi` `/auth/session-epoch` | gateway-only and outside the membership gate (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
+| hand over | `internal/webui` `sessionPrincipal` | the claim rides the in-process call's typed `principal.Principal` (`Session.Epoch`; OIDC also `Source`, `Issuer`, `Subject`), never a header ([ADR-0108](adr/0108-typed-principal.md)) |
+| check (both planes) | `principal.Resolve`, from chat's `membershipMiddleware` and the Operations Center's `userPrincipal` | one read of the account's `core.users` row admits it and carries the live epoch (`identity.SessionEpochSQL`); an OIDC claim reads `core.external_auth_epochs` (#2049 M4, [ADR-0105](adr/0105-one-identity-table.md)) — no seam, and the same code on both planes |
 | verdict | both backends | `401 {"error":"session_revoked"}` + `X-Session-Revoked: 1`; both Next proxies then delete the cookie (`sessionRevocation.ts`), or the still-valid signature would bounce every visit to `/login` back into a 401 |
 
 Three rules keep the gate honest in the other direction:

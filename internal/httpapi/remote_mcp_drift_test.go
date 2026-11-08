@@ -85,7 +85,7 @@ func TestRemoteMCPServersListReportsCatalogDrift(t *testing.T) {
 		{Name: row.Name, URL: "https://mcp.github.example.com/v2", Auth: "oauth"},
 	}}
 	req := httptest.NewRequest("GET", "/remote-mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	srv.remoteMCPServers(w, req)
 	if w.Code != 200 {
@@ -114,7 +114,7 @@ func TestRemoteMCPServersListReportsCatalogDrift(t *testing.T) {
 		t.Fatalf("ShareServer: %v", err)
 	}
 	greq := httptest.NewRequest("GET", "/remote-mcp-servers", nil)
-	greq = greq.WithContext(context.WithValue(greq.Context(), ctxKeyUser, grantee))
+	greq = greq.WithContext(asUser(greq.Context(), grantee))
 	gw := httptest.NewRecorder()
 	srv.remoteMCPServers(gw, greq)
 	var shared struct {

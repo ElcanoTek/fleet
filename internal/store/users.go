@@ -1236,3 +1236,8 @@ func (s *Store) LastLogin(ctx context.Context, email string) (*time.Time, error)
 	}
 	return u.LastLogin, nil
 }
+
+// Identity is the identity-table store over the same connection: the account
+// lookup the request principal resolves against (principal.Resolve), shared
+// with the Operations Center so both planes read one row the same way.
+func (s *Store) Identity() *identity.Store { return identity.New(s.db) }

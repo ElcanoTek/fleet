@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -89,7 +88,7 @@ func TestChatToolsPicker_StartupCatalogOmitsInteractiveHiddenTools(t *testing.T)
 	hideFromChat(t, "ix_create_deal", "ox_create_deal", "email_send", "bq_query", "bq_list_tables")
 	srv := hiddenPickerServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.listMCPServerCatalog(w, req)
 	checkHiddenPicker(t, decodeServerCatalog(t, w))
@@ -115,7 +114,7 @@ func TestChatToolsPicker_NoHiddenListChangesNothing(t *testing.T) {
 	hideFromChat(t)
 	srv := hiddenPickerServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.listMCPServerCatalog(w, req)
 	servers := decodeServerCatalog(t, w)

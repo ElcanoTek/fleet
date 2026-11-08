@@ -113,8 +113,8 @@ func (g *Gateway) handleChatRoute(rt chatRoute) http.HandlerFunc {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
-		c := call{method: r.Method, target: rt.target(r), header: h, detach: true}
+		h, who := http.Header{}, sessionPrincipal(s)
+		c := call{method: r.Method, target: rt.target(r), header: h, who: who, detach: true}
 		switch rt.body {
 		case noBody:
 		case jsonBodyIfAny:
@@ -140,7 +140,7 @@ func (g *Gateway) resolveOrchAuth(r *http.Request) (orchAuth, bool) {
 		return orchAuth{bearer: tok}, true
 	}
 	if s := g.session(r); s != nil {
-		return orchAuth{id: identityOf(s)}, true
+		return orchAuth{who: sessionPrincipal(s)}, true
 	}
 	return orchAuth{}, false
 }
@@ -159,8 +159,8 @@ func (g *Gateway) handleOrchRoute(rt orchRoute) http.HandlerFunc {
 			unauthorized(w)
 			return
 		}
-		h := g.orchHeaders(auth)
-		c := call{method: r.Method, target: rt.target(r), header: h}
+		h, who := g.orchHeaders(auth), auth.who
+		c := call{method: r.Method, target: rt.target(r), header: h, who: who}
 		if mutating {
 			if r.Body != nil && r.Body != http.NoBody {
 				c.body, c.contentLength = r.Body, r.ContentLength
@@ -453,7 +453,7 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			}
 			target += "?focus=" + encodeURIComponent(focus)
 		}
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: g.chatHeaders(identityOf(s)), detach: true}, passthroughJSON)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: http.Header{}, who: sessionPrincipal(s), detach: true}, passthroughJSON)
 	})
 
 	// GET /api/conversations/{id}/team-view forwards If-None-Match so a
@@ -464,11 +464,11 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
+		h, who := http.Header{}, sessionPrincipal(s)
 		if v := r.Header.Get("If-None-Match"); v != "" {
 			h.Set("If-None-Match", v)
 		}
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: conv(r) + "/team-view", header: h, detach: true}, passthroughJSON)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: conv(r) + "/team-view", header: h, who: who, detach: true}, passthroughJSON)
 	})
 
 	g.registerStreams(mux)

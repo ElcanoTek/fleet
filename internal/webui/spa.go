@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -281,7 +282,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		// account Auth admits but fleet's user list does not gets one clear
 		// no-access page, not a shell whose every call 403s. chat-server's
 		// membership middleware remains the real boundary.
-		if sess != nil && (sess.Source == websession.SourceElcano || sess.Source == websession.SourceOIDC) && g.notAMember(identityOf(sess)) {
+		if sess != nil && (sess.Source == websession.SourceElcano || sess.Source == websession.SourceOIDC) && g.notAMember(sessionPrincipal(sess)) {
 			temporaryRedirect(w, g.redirectURL(r, "/no-access"))
 			return
 		}
@@ -297,9 +298,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 			status, boot.NotFound = http.StatusNotFound, true
 			break
 		}
-		h := http.Header{}
-		h.Set("X-Chat-Server-Token", g.cfg.ChatToken)
-		st, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/shared/" + encodeURIComponent(token), header: h}, maxBackendDocumentSize)
+		st, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/shared/" + encodeURIComponent(token), header: http.Header{}, who: gatewayPrincipal("")}, maxBackendDocumentSize)
 		if !ok || st < 200 || st > 299 || !json.Valid(body) {
 			status, boot.NotFound = http.StatusNotFound, true
 			break
@@ -338,8 +337,8 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 // notAMember asks chat-server whether a session minted elsewhere belongs to
 // a provisioned user. Only an explicit 403 counts: an unreachable or failing
 // backend must not trap the user on the no-access page.
-func (g *Gateway) notAMember(id identity) bool {
-	status, _, _, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/auth/membership", header: g.chatHeaders(id)})
+func (g *Gateway) notAMember(id principal.Principal) bool {
+	status, _, _, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/auth/membership", header: http.Header{}, who: id})
 	return ok && status == http.StatusForbidden
 }
 

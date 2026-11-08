@@ -279,7 +279,7 @@ func (g *Gateway) handleModelCheck(w http.ResponseWriter, r *http.Request) {
 	status, hdr, body, ok := g.callCapture(g.chat, call{
 		method: http.MethodGet,
 		target: "/llm-provider-models?slug=" + encodeURIComponent(slug),
-		header: g.chatHeaders(identityOf(s)),
+		header: http.Header{}, who: sessionPrincipal(s),
 	})
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "chat-server unreachable: no backend"})
