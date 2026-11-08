@@ -165,18 +165,27 @@ func EmitPanicWithMetadataContext(ctx context.Context, meta PanicMetadata, v any
 	// Only the metadata the boundary knows: an empty attribute names nothing,
 	// and the handler's context correlation (task_id, run_id, conv_id …)
 	// fills in what the caller did not (#2074 review).
+	// Keys are literals and each value is sanitized at its own append: a
+	// table of {key, value} pairs would mix the two in one array, which taint
+	// analysis (CodeQL go/log-injection) reads as tainting the keys too.
 	args := []any{"incident_id", LogSafe(meta.IncidentID), "goroutine", LogSafe(meta.Location)}
-	for _, kv := range [][2]string{
-		{"boundary", meta.Boundary},
-		{"tool_name", meta.ToolName},
-		{"tool_call_id", meta.ToolCallID},
-		{"run_mode", meta.RunMode},
-		{"task_id", meta.TaskID},
-		{"conversation_id", meta.ConversationID},
-	} {
-		if kv[1] != "" {
-			args = append(args, kv[0], LogSafe(kv[1]))
-		}
+	if meta.Boundary != "" {
+		args = append(args, "boundary", LogSafe(meta.Boundary))
+	}
+	if meta.ToolName != "" {
+		args = append(args, "tool_name", LogSafe(meta.ToolName))
+	}
+	if meta.ToolCallID != "" {
+		args = append(args, "tool_call_id", LogSafe(meta.ToolCallID))
+	}
+	if meta.RunMode != "" {
+		args = append(args, "run_mode", LogSafe(meta.RunMode))
+	}
+	if meta.TaskID != "" {
+		args = append(args, "task_id", LogSafe(meta.TaskID))
+	}
+	if meta.ConversationID != "" {
+		args = append(args, "conversation_id", LogSafe(meta.ConversationID))
 	}
 	args = append(args, "panic_class", class)
 	logPanic(ctx, "panic recovered", args...)
