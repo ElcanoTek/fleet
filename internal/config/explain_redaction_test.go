@@ -30,51 +30,46 @@ func unitExporting(t *testing.T, path string) *UnitEnv {
 	return u
 }
 
-// Codex P2 (#2057): an alias the registry marks reader-specific (only one
-// reader honours it; the server ignores it) must never be reported as the
-// setting's configured value — only as a note. Every such alias, from the
-// process env, the env file, and the systemd unit's environment.
-func TestExplainNeverSelectsAReaderSpecificAlias(t *testing.T) {
-	var checked int
-	for _, e := range envreg.All() {
-		for _, a := range e.Aliases {
-			if a.ReadBy == "" {
-				continue
-			}
-			checked++
-			for _, where := range []string{"process", "file", "unit"} {
-				t.Run(a.Name+"/"+where, func(t *testing.T) {
-					unsetForTest(t, e.Spellings()...)
-					path := filepath.Join(t.TempDir(), "fleet.env")
-					writeEnv(t, path, "")
-					var unit *UnitEnv
-					switch where {
-					case "process":
-						t.Setenv(a.Name, "reader-only-value")
-					case "file":
-						writeEnv(t, path, a.Name+"=reader-only-value\n")
-					case "unit":
-						writeEnv(t, path, a.Name+"=reader-only-value\n")
-						unit = unitExporting(t, path)
-					}
-					got, err := explainRun(path, []string{e.Name}, false, unit)
-					if err != nil {
-						t.Fatal(err)
-					}
-					x := got[0]
-					if x.Set || x.Source != SourceDefault || x.Value == "reader-only-value" {
-						t.Fatalf("%s = %+v; a reader-specific alias must not be the configured value", e.Name, x)
-					}
-					notes := strings.Join(x.Notes, "\n")
-					if !strings.Contains(notes, "set as "+a.Name) || !strings.Contains(notes, "ignores it") {
-						t.Errorf("notes %v do not report %s as read only by %s", x.Notes, a.Name, a.ReadBy)
-					}
-				})
-			}
+// ADR-0106: a removed CHAT_/CUTLASS_ (or bare DATA_DIR) spelling must never
+// be reported as the setting's configured value — only as a note naming the
+// FLEET_ key — from the process env, the env file, and the systemd unit's
+// environment alike.
+func TestExplainNeverSelectsARemovedAlias(t *testing.T) {
+	for _, alias := range []string{"CHAT_TLS_MODE", "CUTLASS_TLS_DOMAIN", "CHAT_SERVER_ADDR", "CUTLASS_MAX_ITERATIONS", "DATA_DIR"} {
+		canonical, ok := envreg.RetiredAlias(alias)
+		if !ok {
+			t.Fatalf("%s is not a removed alias", alias)
 		}
-	}
-	if checked < 7 {
-		t.Fatalf("checked only %d reader-specific aliases; the registry marks at least 7", checked)
+		e, _ := envreg.Find(canonical)
+		for _, where := range []string{"process", "file", "unit"} {
+			t.Run(alias+"/"+where, func(t *testing.T) {
+				unsetForTest(t, append(e.Spellings(), alias)...)
+				path := filepath.Join(t.TempDir(), "fleet.env")
+				writeEnv(t, path, "")
+				var unit *UnitEnv
+				switch where {
+				case "process":
+					t.Setenv(alias, "removed-alias-value")
+				case "file":
+					writeEnv(t, path, alias+"=removed-alias-value\n")
+				case "unit":
+					writeEnv(t, path, alias+"=removed-alias-value\n")
+					unit = unitExporting(t, path)
+				}
+				got, err := explainRun(path, []string{canonical}, false, unit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				x := got[0]
+				if x.Set || x.Source != SourceDefault || x.Value == "removed-alias-value" {
+					t.Fatalf("%s = %+v; a removed alias must not be the configured value", canonical, x)
+				}
+				notes := strings.Join(x.Notes, "\n")
+				if !strings.Contains(notes, alias+" is set") || !strings.Contains(notes, "rename it to "+canonical) {
+					t.Errorf("notes %v do not report %s as removed", x.Notes, alias)
+				}
+			})
+		}
 	}
 }
 
@@ -82,25 +77,25 @@ func TestExplainNeverSelectsAReaderSpecificAlias(t *testing.T) {
 // exports every line of the env file, so a spelling fleet's own loader does
 // not admit is configured there — explain reports the unit as the source.
 func TestExplainCountsLinesSystemdExports(t *testing.T) {
-	unsetForTest(t, "FLEET_MAX_ITERATIONS", "CHAT_MAX_ITERATIONS", "CUTLASS_MAX_ITERATIONS")
+	unsetForTest(t, "FLEET_IMAGE_MODEL")
 	path := filepath.Join(t.TempDir(), "fleet.env")
-	writeEnv(t, path, "CUTLASS_MAX_ITERATIONS=70\n")
+	writeEnv(t, path, "FLEET_IMAGE_MODEL=img-model\n")
 
-	off, err := explainRun(path, []string{"FLEET_MAX_ITERATIONS"}, false, nil)
+	off, err := explainRun(path, []string{"FLEET_IMAGE_MODEL"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if off[0].Set {
 		t.Errorf("no unit: %+v, want the default (fleet's loader ignores the spelling)", off[0])
 	}
-	on, err := explainRun(path, []string{"FLEET_MAX_ITERATIONS"}, false, unitExporting(t, path))
+	on, err := explainRun(path, []string{"FLEET_IMAGE_MODEL"}, false, unitExporting(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
 	x := on[0]
-	if !x.Set || x.Value != "70" || x.Spelling != "CUTLASS_MAX_ITERATIONS" || !x.Deprecated ||
+	if !x.Set || x.Value != "img-model" || x.Spelling != "FLEET_IMAGE_MODEL" ||
 		x.Source != SourceUnit || x.SourceDetail != "EnvironmentFile="+path {
-		t.Fatalf("with the unit: %+v, want 70 from the unit's EnvironmentFile= via the deprecated alias", x)
+		t.Fatalf("with the unit: %+v, want img-model from the unit's EnvironmentFile=", x)
 	}
 }
 

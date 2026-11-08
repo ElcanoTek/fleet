@@ -380,3 +380,35 @@ func TestChatScheduleHistoryNumbersOnlyCountedRuns(t *testing.T) {
 		t.Fatalf("history = %v, want %s (busy unnumbered, coalesced unrecorded)", got, want)
 	}
 }
+
+// A fire whose definition was edited after its turn was delivered still
+// counts: the run happened. The settle advances the slot — computed from the
+// definition as edited — counts the run and records it, so the edited
+// definition does not fire that slot again. (Superseding is delivery's job,
+// for a fire not yet delivered.)
+func TestChatScheduleSettleCountsADeliveredFireAfterAnEdit(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	insertChatSchedule(t, db, "p", "*/10 * * * *", 0, "active", now.Add(-time.Minute).Unix(), 0, 0)
+	fs, err := db.ClaimDueChatSchedules(ctx, now, time.Minute, 25, nil)
+	if err != nil || len(fs) != 1 || fs[0].DefVersion != 0 {
+		t.Fatalf("claim = %+v, %v", fs, err)
+	}
+	// ...the turn is delivered, then the definition is edited.
+	if _, err := db.conn.Exec(`UPDATE chat_schedules SET def_version = def_version + 1, cron_expr = '0 */3 * * *', prompt = 'edited' WHERE id = 'p'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.SettleChatScheduleFire(ctx, fs[0], models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: "in"}, now); err != nil || !ok {
+		t.Fatalf("settle = %v, %v", ok, err)
+	}
+	next, _ := models.NextChatScheduleRun("0 */3 * * *", "UTC", now)
+	after := chatScheduleStateOf(t, db, "p")
+	if after.runCount != 1 || after.nextRunAt != next.Unix() || after.leased {
+		t.Fatalf("after settling a delivered fire = %+v; want run 1 counted and the slot moved to the edited cadence (%d)", after, next.Unix())
+	}
+	if runs, _ := db.ListChatScheduleRuns(ctx, "p", 10); len(runs) != 1 || runs[0].InputID != "in" {
+		t.Fatalf("history = %+v, want the run", runs)
+	}
+}

@@ -1278,7 +1278,7 @@ func budgetWindDownStep(orch *orchestrationState, sink *streamSink) fantasy.Prep
 // stepStopConditions turns the configured per-round step cap into a fantasy
 // stop condition. Zero (or negative) means "no cap" — loop until the model
 // stops on its own (bounded by the per-turn timeout + cost ceiling). This is
-// what wires CHAT_MAX_ITERATIONS / a task's max_iterations into the loop; before
+// what wires FLEET_MAX_ITERATIONS / a task's max_iterations into the loop; before
 // it, the value was read into config but never applied, so a model that never
 // stopped calling tools ran unbounded within a round.
 func stepStopConditions(maxIterations int) []fantasy.StopCondition {

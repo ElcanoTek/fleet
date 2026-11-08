@@ -28,17 +28,35 @@ const chatSchedulesTable = config.SchedSchema + ".chat_schedules"
 // cascade, their run history). The scheduler's table may not exist yet when a
 // chat-only CLI verb (fleet chat user del, fleet admin rm) runs before the
 // first boot has migrated the sched schema; then there is nothing to erase.
+//
+// The legacy table matters too: on a database from the previous release that
+// a chat-only verb opened (the chat store migrates, the scheduler does not),
+// a user's schedules are still in chat.chat_schedules — some of them in other
+// people's conversations, which the conversation cascade does not reach — and
+// sched migration 077 would later move them under the erased identity. So
+// whichever of the two tables exists is cleaned; both, when both do.
 func deleteUserChatSchedulesTx(ctx context.Context, tx *sql.Tx, email string) error {
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, chatSchedulesTable).Scan(&exists); err != nil {
-		return err
+	for _, t := range []struct{ table, del string }{
+		{chatSchedulesTable, `DELETE FROM ` + chatSchedulesTable + ` WHERE user_email = $1`},
+		{legacyChatSchedulesTable, `DELETE FROM ` + legacyChatSchedulesTable + ` WHERE user_email = $1`},
+	} {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, t.table).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, t.del, email); err != nil {
+			return err
+		}
 	}
-	if !exists {
-		return nil
-	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM `+chatSchedulesTable+` WHERE user_email = $1`, email)
-	return err
+	return nil
 }
+
+// legacyChatSchedulesTable is where chat schedules lived before sched
+// migration 077 moved them (chat migrations 086 + 096).
+const legacyChatSchedulesTable = config.ChatSchema + ".chat_schedules"
 
 // ChatSchedule status values (the sched.chat_schedules CHECK constraint).
 const (
@@ -312,7 +330,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 				`UPDATE `+chatSchedulesTable+`
 				    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 				        duration_seconds = 0, status = 'active', next_run_at = $5,
-				        max_runs = $6, updated_at = $7
+				        max_runs = $6, updated_at = $7, def_version = def_version + 1
 				  WHERE id = $8
 				  RETURNING `+chatScheduleSelectCols,
 				title, prompt, cronSpec, normTZ, nextRunAt, maxRuns, nowUnix, existingID,
@@ -492,12 +510,13 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		`UPDATE `+chatSchedulesTable+`
 		    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 		        duration_seconds = $5, status = $6, next_run_at = $7,
-		        max_runs = $8, updated_at = $9
+		        max_runs = $8, updated_at = $9,
+		        def_version = def_version + CASE WHEN $11 THEN 1 ELSE 0 END
 		  WHERE id = $10
 		  RETURNING `+chatScheduleSelectCols,
 		cur.Title, cur.Prompt, cur.CronExpr, cur.Timezone,
 		cur.DurationSeconds, cur.Status, cur.NextRunAt,
-		cur.MaxRuns, nowUnix, cur.ID,
+		cur.MaxRuns, nowUnix, cur.ID, patch.editsDefinition(),
 	))
 	if err != nil {
 		return nil, err
@@ -519,7 +538,8 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE chat_input_queue
 			    SET state = 'cancelled', updated_at = $1
-			  WHERE conversation_id = $2 AND state = 'queued' AND client_input_id LIKE $3`,
+			  WHERE conversation_id = $2 AND state = 'queued' AND mode = 'patrol'
+			    AND client_input_id LIKE $3`,
 			nowUnix, convID, ChatPatrolInputKeyPrefix+scheduleID+":%",
 		); err != nil {
 			return nil, err
@@ -530,6 +550,15 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		return nil, err
 	}
 	return &updated, nil
+}
+
+// editsDefinition reports whether the patch edits the schedule's definition
+// (what a fire delivers or how the next slot is computed) rather than only
+// its status. Such an edit bumps def_version, superseding any fire claimed
+// under the old definition.
+func (p ChatSchedulePatch) editsDefinition() bool {
+	return p.Title != nil || p.Prompt != nil || p.CronExpr != nil || p.Timezone != nil ||
+		p.DurationSeconds != nil || p.MaxRuns != nil
 }
 
 func isNoOpTerminalSchedulePatch(curStatus string, patch ChatSchedulePatch) bool {
@@ -674,12 +703,15 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		return models.ChatScheduleDelivery{}, err
 	}
 
-	var status string
-	var lease sql.NullString
+	var (
+		status     string
+		lease      sql.NullString
+		defVersion int64
+	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT status, lease_owner FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`,
+		`SELECT status, lease_owner, def_version FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`,
 		fire.ScheduleID,
-	).Scan(&status, &lease)
+	).Scan(&status, &lease, &defVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return gone, nil
 	}
@@ -694,10 +726,27 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 	if status != ChatScheduleStatusActive && (!manual || status != ChatScheduleStatusPaused) {
 		return stale, nil
 	}
+	if defVersion != fire.DefVersion {
+		// The definition was edited after the claim (a new prompt, cadence or
+		// kind): this fire's snapshot is out of date. Queue nothing and end
+		// the fire; the scheduler records nothing and its next pass fires the
+		// definition as it is now.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE `+chatSchedulesTable+`
+			    SET lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL, fire_trigger = NULL,
+			        fire_run_number = NULL, fire_failures = 0, fire_def_version = NULL
+			  WHERE id = $1`, fire.ScheduleID); err != nil {
+			return models.ChatScheduleDelivery{}, err
+		}
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleSuperseded}, tx.Commit()
+	}
 
+	// Patrol provenance is the server-owned mode, never the caller-supplied
+	// client_input_id alone: a user input that borrows a chat-patrol: key is
+	// not this fire's turn.
 	key := ChatScheduleInputKey(fire)
 	if row, err := scanInputRow(tx.QueryRowContext(ctx,
-		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2`,
+		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2 AND mode = 'patrol'`,
 		fire.ConversationID, key)); err == nil {
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: row.ID}, tx.Commit()
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -710,9 +759,9 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		  WHERE conversation_id = $1
 		    AND user_email = $2
 		    AND state IN ('queued', 'running')
-		    AND (mode = 'patrol' OR client_input_id LIKE $3)
+		    AND mode = 'patrol'
 		  ORDER BY position ASC LIMIT 1`,
-		fire.ConversationID, fire.UserEmail, ChatPatrolInputKeyPrefix+"%",
+		fire.ConversationID, fire.UserEmail,
 	))
 	hasInFlight := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -767,6 +816,19 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 	if !manual {
 		if err := supersedePendingModelSuggestionsTx(ctx, tx, fire.ConversationID, nowUnix); err != nil {
 			return models.ChatScheduleDelivery{}, err
+		}
+	}
+	// Record, with the delivered turn, the slot this fire moves a patrol to.
+	// The settle computes it again; this copy is for 077's down migration,
+	// which must count a delivered-but-unsettled fire the way the old engine
+	// would (it cannot evaluate cron in SQL).
+	if strings.TrimSpace(fire.CronExpr) != "" {
+		if next, nerr := models.NextChatScheduleRun(fire.CronExpr, fire.Timezone, time.Now()); nerr == nil {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE `+chatSchedulesTable+` SET fire_next_run_at = $2 WHERE id = $1`,
+				fire.ScheduleID, next.Unix()); err != nil {
+				return models.ChatScheduleDelivery{}, err
+			}
 		}
 	}
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
@@ -828,10 +890,9 @@ func (s *Store) ListQueuedPatrolConversations(ctx context.Context) ([]string, er
 		`SELECT DISTINCT conversation_id
 		   FROM chat_input_queue
 		  WHERE state = 'queued'
-		    AND (mode = 'patrol' OR client_input_id LIKE $1)
+		    AND mode = 'patrol'
 		  ORDER BY conversation_id ASC
 		  LIMIT 25`,
-		ChatPatrolInputKeyPrefix+"%",
 	)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,10 +41,10 @@ func openBoth(t *testing.T, schedFirst bool) (*Database, *store.Store) {
 	return d, c
 }
 
-func countWhere(t *testing.T, conn *sql.DB, q string, args ...any) int {
+func countWhere(t *testing.T, conn *sql.DB, q string) int {
 	t.Helper()
 	var n int
-	if err := conn.QueryRow(q, args...).Scan(&n); err != nil {
+	if err := conn.QueryRow(q).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -120,5 +122,57 @@ func TestChatScheduleCascade_EitherMigrationOrder(t *testing.T) {
 				t.Fatal("the other conversation's schedule went too")
 			}
 		})
+	}
+}
+
+// TestKeepChatScheduleCascade_RetriesUntilInstalled: the startup step keeps
+// retrying with a growing backoff while it fails, and its first success
+// installs the cascade and removes the schedules orphaned meanwhile.
+func TestKeepChatScheduleCascade_RetriesUntilInstalled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d, chat := openBoth(t, true) // sched first: 077 could not install it
+	conv, err := chat.CreateConversation(ctx, "owner@elcanotek.com", "A", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	for _, row := range [][2]string{{"kept", conv.ID}, {"orphan", "deleted-while-failing"}} {
+		if _, err := d.conn.Exec(`INSERT INTO chat_schedules
+			(id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, created_at, updated_at)
+			VALUES ($1, $2, 'owner@elcanotek.com', 'P', '0 9 * * *', 'active', $3, $3, $3)`, row[0], row[1], now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attempts := 0
+	ensure := func(ctx context.Context) (bool, int, error) {
+		attempts++
+		if attempts <= 3 {
+			return false, 0, errors.New("injected: database unavailable")
+		}
+		return d.EnsureChatScheduleCascade(ctx)
+	}
+	var waits []time.Duration
+	var installed bool
+	var removed int
+	ok := KeepChatScheduleCascade(ctx, ensure, 10*time.Millisecond, 25*time.Millisecond,
+		func(i bool, o int, err error, retryIn time.Duration) {
+			if err != nil {
+				waits = append(waits, retryIn)
+				return
+			}
+			installed, removed = i, o
+		})
+	if !ok || attempts != 4 || !installed || removed != 1 {
+		t.Fatalf("ok=%v attempts=%d installed=%v removed=%d; want success on the 4th attempt, installing and removing the orphan", ok, attempts, installed, removed)
+	}
+	if want := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 25 * time.Millisecond}; fmt.Sprint(waits) != fmt.Sprint(want) {
+		t.Fatalf("backoff = %v, want %v (doubling, capped)", waits, want)
+	}
+	if err := chat.Delete(ctx, "owner@elcanotek.com", conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := countWhere(t, d.conn, `SELECT count(*) FROM chat_schedules`); n != 0 {
+		t.Fatalf("%d schedule(s) left after the conversation was deleted", n)
 	}
 }

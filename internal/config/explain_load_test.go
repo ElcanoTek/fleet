@@ -37,9 +37,9 @@ type explainVsLoadCase struct {
 // TestExplainMatchesLoad — Codex round 2 (#2057): explain must report the
 // value config.Load actually uses. For each setting below, every combination
 // of {absent, process env, process env present-but-empty, env file, process
-// empty + env file} across ALL its spellings (canonical, CHAT_/CUTLASS_
-// aliases, the bare PERSONA_DEFAULT, and the reader-specific CHAT_TLS_MODE /
-// DATA_DIR the server ignores) is applied; explain runs first (it changes
+// empty + env file} across ALL its spellings (canonical, the bare
+// PERSONA_DEFAULT, and the CHAT_/CUTLASS_/DATA_DIR spellings ADR-0106 removed,
+// which nothing may read) is applied; explain runs first (it changes
 // nothing), then Load, and the two must agree on the value and its source.
 // Values are unique per spelling and layer, so agreement on the value proves
 // agreement on which spelling and layer won.
@@ -60,7 +60,7 @@ func TestExplainMatchesLoad(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", tc.key)
 		}
-		spellings := e.Spellings()
+		spellings := append(e.Spellings(), envreg.RetiredAliasesOf(tc.key)...)
 		combos := 1
 		for range spellings {
 			combos *= int(numStates)
@@ -156,8 +156,8 @@ func TestExplainEmptyProcessValueMasksTheFile(t *testing.T) {
 }
 
 // Codex round 2 (#2057) finding 2: with no KEY, explain lists every entry
-// that carries a note even when it is not set — e.g. only CHAT_TLS_MODE,
-// which the server ignores.
+// that carries a note even when it is not set — e.g. only CHAT_TLS_MODE, a
+// removed alias nothing reads (ADR-0106).
 func TestExplainListsNoteOnlyEntries(t *testing.T) {
 	unsetForTest(t, "FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE")
 	t.Setenv("CHAT_TLS_MODE", "auto")

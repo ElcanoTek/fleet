@@ -16,7 +16,6 @@ import (
 
 func TestCheckModelKey(t *testing.T) {
 	t.Setenv("FLEET_MOCK_MODE", "")
-	t.Setenv("CHAT_MOCK_MODE", "")
 
 	t.Setenv("OPENROUTER_API_KEY", "sk-test-placeholder")
 	if c := checkModelKey(); c.Status != StatusOK {

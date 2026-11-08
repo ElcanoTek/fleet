@@ -76,6 +76,12 @@ const (
 	// — and Run now answers it as an error. (A scheduled fire meeting a full
 	// queue is busy instead: its slot is skipped, as the chat sweeper did.)
 	ChatScheduleRejected ChatScheduleOutcome = "rejected"
+	// ChatScheduleSuperseded: the schedule's definition (prompt, cadence,
+	// kind) was edited after the fire was claimed and before it was
+	// delivered. Nothing is delivered, counted or recorded; the next pass
+	// fires the definition as it is now. (An edit after delivery does not
+	// supersede: the run happened, and its settle counts it.)
+	ChatScheduleSuperseded ChatScheduleOutcome = "superseded"
 )
 
 // ChatScheduleFire is one claimed fire of a chat schedule: the definition as
@@ -103,6 +109,9 @@ type ChatScheduleFire struct {
 	// the recovery pass keeps it (a new LeaseToken, the same FireID), so its
 	// delivery's idempotency key is the same.
 	FireID string
+	// DefVersion is the schedule's def_version at the claim; a fire whose
+	// definition has since been edited is superseded.
+	DefVersion int64
 	// ClaimedAt is the claim time.
 	ClaimedAt time.Time
 }

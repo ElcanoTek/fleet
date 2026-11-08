@@ -44,7 +44,16 @@ are fired by it; the chat server is only the deliverer of a fire.**
 - **Storage.** The table moves to the scheduler's schema:
   `sched.chat_schedules` (same columns, ids and values) plus the engine's
   lease columns `lease_owner` / `lease_expires_at` and the fire a lease is
-  for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), and
+  for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), a
+  definition version (`def_version`, bumped by every edit of the prompt,
+  cadence or kind; recorded on the fire at its claim as `fire_def_version`:
+  a fire whose definition was edited between its claim and its delivery is
+  superseded — it delivers, counts and records nothing, and the next pass
+  fires the new definition. The scheduler checks before delivering and the
+  chat store's delivery transaction checks again under the row lock. Once a
+  turn is delivered, an edit no longer supersedes it: the run happened, and
+  the settle counts it and moves the slot by the edited definition),
+  and
   `sched.chat_schedule_runs`, the run history (one row per fire that ran
   or was turned away: `schedule`/`manual` trigger, outcome `queued` /
   `busy` / `gone`, the run number of a queued run, the input-queue row,
@@ -64,8 +73,16 @@ are fired by it; the chat server is only the deliverer of a fire.**
   pending fire's retry (lease expiry) — (and that the chat server
   requests when a schedule is created, edited or resumed; a request is kept
   when it is within one tick interval or five minutes, whichever is longer).
-  A pass drains everything due, bounded by the sweep's deadline (and a
-  10,000-fire backstop), never re-claiming a row it already attempted. The
+  A pass only claims — at most as many fires as a bounded pool of delivery
+  workers (4) has free — and returns to its select at once; each worker
+  delivers its fire under its own bounded context, records the result under
+  a fresh one (so a delivery that ran out of time still leaves its settle,
+  or its failure and backoff, on record), and asks for the next pass, which
+  claims more while any is due. A claimed row stays out of the claims until
+  something durable changes it, so a pass that finds nothing claimable asks
+  for nothing: the backlog drains without a deadline or cap, and never
+  spins. Promotion on the task loop likewise reruns at once past its
+  per-pass row cap only when the pass promoted something. The
   daily maintenance (run-history prunes, log archival) runs in its own
   single-flight goroutine, so its long sweeps never delay a tick or a
   wake-up; Stop cancels and waits for it. The
@@ -193,8 +210,10 @@ copies, and drops it in the same transaction:
   — present and future — is covered by one mechanism; it is a no-op while
   the sched table does not exist. On a database the scheduler initialised
   first (no chat schema yet when 077 ran), `fleet serve` installs the same
-  trigger at startup once both schemas exist and removes any schedule
-  orphaned in between (`db.EnsureChatScheduleCascade`). It is created by the
+  trigger once both schemas exist — retried in the background with backoff
+  (5s doubling to 5m) for the life of the process if it fails — and the
+  install removes any schedule orphaned in between
+  (`db.EnsureChatScheduleCascade`, `db.KeepChatScheduleCascade`). It is created by the
   sched side, not a chat migration, so 077's down drops it and a rollback never moves the chat
   schema's version (the previous release refuses a newer chat schema). Account erasure deletes a user's schedules
   the same way (and tolerates a chat-only database, for the chat-only CLI

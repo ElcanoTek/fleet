@@ -247,7 +247,7 @@ func TestRunStagedToolHoldsWindowsWhileArgumentsRetained(t *testing.T) {
 func TestRunStagedToolKeepsAttachmentCopiesWhileArgumentsRetained(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	st := newFakeChatStore()
 	conv, err := st.CreateConversation(context.Background(), "u@x.com", "t", "p", "", false)
 	if err != nil {

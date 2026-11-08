@@ -12,8 +12,7 @@ import (
 // The fleet systemd unit's own environment: what the SERVICE process starts
 // with on a systemd box. `fleet config explain` merges it in as a source that
 // outranks the operator's shell (the shell is not the service), and `fleet
-// doctor` / `fleet config migrate-env` use it to tell whether the env file is
-// exported (EnvironmentFile=). The operator CLI asks `systemctl show` first
+// doctor` reads it for removed CHAT_/CUTLASS_ spellings (ADR-0106). The operator CLI asks `systemctl show` first
 // (UnitEnvFromSystemctl) and falls back to parsing the unit files the way
 // systemd resolves them (UnitEnvFromFiles) when systemctl is unavailable.
 
@@ -305,15 +304,4 @@ func ParseSystemctlEnvironmentFiles(out string) []string {
 		}
 	}
 	return files
-}
-
-// EnvFileIn reports whether envFile is one of files (compared cleaned).
-func EnvFileIn(envFile string, files []string) bool {
-	want := filepath.Clean(envFile)
-	for _, f := range files {
-		if filepath.Clean(f) == want {
-			return true
-		}
-	}
-	return false
 }

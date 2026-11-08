@@ -573,13 +573,6 @@ func run() error {
 	schedStorage.SetDefaultTaskTimezone(defaultTaskTimezone())
 	log.Printf("sched DB connected + migrated")
 
-	// Both stores are migrated: make sure a deleted conversation takes its
-	// chat schedules with it (ADR-0104). Sched migration 077 installs the
-	// cascade when the chat schema already exists; on a database the
-	// scheduler initialised first, this installs it now and removes any
-	// schedule orphaned in between. A no-op on every later boot.
-	ensureChatScheduleCascade(schedStorage)
-
 	// Bootstrap operators (#458): provision/promote the configured emails as
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
@@ -746,8 +739,6 @@ func run() error {
 	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
-	// The chat server delivers each chat schedule fire the scheduler claims.
-	sch.SetChatScheduleDeliverer(chatSrv)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
 	// before the listeners come up, so the very first turn already reads a
@@ -868,8 +859,7 @@ func run() error {
 	// Paused-task expiry (#510): fail tasks stuck awaiting input past the
 	// window. Off (wait forever) when TaskPausedExpiryMinutes<=0.
 	sch.SetPausedExpiry(cfg.TaskPausedExpiryMinutes)
-	sch.Start()
-	defer sch.Stop()
+	// Started below, after the last boot step that can fail.
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
 	taskRunner := scheduledrun.New(scheduledrun.Options{
@@ -1058,6 +1048,16 @@ func run() error {
 		return err
 	}
 
+	// Every boot step that can fail has succeeded: only now does the
+	// scheduler start firing — promoting due tasks and delivering chat
+	// patrols and timers (the chat server is their deliverer). Started any
+	// earlier, a failed boot could leave a chat turn running, with its side
+	// effects, while fleet reports the failure and closes the stores under
+	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this.
+	sch.SetChatScheduleDeliverer(chatSrv)
+	sch.Start()
+	defer sch.Stop()
+
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
 	//     within FLEET_SHUTDOWN_GRACE_SECONDS, then force-cancel the stragglers.
@@ -1067,6 +1067,13 @@ func run() error {
 	// design) does NOT touch detached chat turns or in-flight tasks — those drain
 	// through their own decoupled contexts so the grace period is meaningful.
 	ctx, cancel := context.WithCancel(context.Background())
+	// Both stores are migrated: make sure a deleted conversation takes its
+	// chat schedules with it (ADR-0104). Sched migration 077 installs the
+	// cascade when the chat schema already exists; on a database the
+	// scheduler initialised first this installs it and removes any schedule
+	// orphaned in between — retried with backoff for the life of the process
+	// if it fails, so a boot-time error cannot leave it missing.
+	go keepChatScheduleCascade(ctx, schedStorage)
 	defer cancel()
 
 	// SLA monitor (#274): a 60s sweep that warns/fails in-flight tasks running
@@ -1165,20 +1172,20 @@ func run() error {
 	return nil
 }
 
-// ensureChatScheduleCascade installs the chat schedules' conversation-delete
-// cascade if a sched-first database is missing it (see
-// db.EnsureChatScheduleCascade). Failure is logged, not fatal: the next start
-// retries, and only hard-deleted chats are affected meanwhile.
-func ensureChatScheduleCascade(st *storage.Storage) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	installed, orphans, err := st.DB().EnsureChatScheduleCascade(ctx)
-	switch {
-	case err != nil:
-		log.Printf("WARNING: chat schedules: could not install the conversation-delete cascade: %v (deleted chats may leave schedules behind until the next start)", err)
-	case installed:
-		log.Printf("chat schedules: installed the conversation-delete cascade; removed %d orphaned schedule(s)", orphans)
-	}
+// keepChatScheduleCascade runs db.KeepChatScheduleCascade (5s doubling to a
+// 5m cap) until the cascade is in place or the process stops, logging each
+// failure and the install.
+func keepChatScheduleCascade(ctx context.Context, st *storage.Storage) {
+	defer safe.Recover("cmd.chat-schedule-cascade", nil)
+	scheddb.KeepChatScheduleCascade(ctx, st.DB().EnsureChatScheduleCascade, 5*time.Second, 5*time.Minute,
+		func(installed bool, orphans int, err error, retryIn time.Duration) {
+			switch {
+			case err != nil:
+				log.Printf("WARNING: chat schedules: could not install the conversation-delete cascade: %v (retrying in %s)", err, retryIn)
+			case installed:
+				log.Printf("chat schedules: installed the conversation-delete cascade; removed %d orphaned schedule(s)", orphans)
+			}
+		})
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant

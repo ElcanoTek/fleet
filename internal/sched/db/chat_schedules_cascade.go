@@ -2,8 +2,14 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 )
+
+// ErrChatScheduleCascadeNotReady: chat.conversations or this schema's
+// chat_schedules does not exist yet, so there is nothing to attach to.
+var ErrChatScheduleCascadeNotReady = errors.New("chat schedule cascade: chat.conversations or sched.chat_schedules does not exist yet")
 
 // The conversation-delete cascade for chat schedules (ADR-0104). The rows live
 // in this schema and their conversations in chat's, so there is no foreign key:
@@ -12,9 +18,9 @@ import (
 // schema's FK). Sched migration 077 installs it when chat.conversations
 // already exists — the normal order, the chat store migrating first. On a
 // database the scheduler initialised first (a sched-only CLI verb before any
-// `fleet serve`), 077 ran with no chat schema to attach to, so
-// EnsureChatScheduleCascade installs it at serve startup, once both schemas
-// exist. It is deliberately not a chat migration: a rollback (sched downs
+// `fleet serve`), 077 ran with no chat schema to attach to, so fleet serve
+// installs it with EnsureChatScheduleCascade once both schemas exist,
+// retrying through KeepChatScheduleCascade until it succeeds. It is deliberately not a chat migration: a rollback (sched downs
 // 077, 076) must leave the chat schema at a version the previous release
 // knows, and 077's down drops what either path installed.
 
@@ -42,7 +48,8 @@ CREATE TRIGGER conversations_delete_chat_schedules
 // chat.conversations and this schema's chat_schedules exist and the trigger
 // is missing, and in the same transaction deletes the schedules (and so their
 // history) whose conversation was deleted while it was missing. A no-op when
-// the trigger is already there or either table is absent. Idempotent.
+// the trigger is already there; ErrChatScheduleCascadeNotReady when either
+// table is absent. Idempotent.
 // Returns whether it installed the trigger and how many orphans it removed.
 func (db *Database) EnsureChatScheduleCascade(ctx context.Context) (installed bool, orphans int, err error) {
 	tx, err := db.conn.BeginTx(ctx, nil)
@@ -62,7 +69,7 @@ func (db *Database) EnsureChatScheduleCascade(ctx context.Context) (installed bo
 		return false, 0, err
 	}
 	if !ready {
-		return false, 0, nil
+		return false, 0, ErrChatScheduleCascadeNotReady
 	}
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM pg_trigger
@@ -88,4 +95,46 @@ func (db *Database) EnsureChatScheduleCascade(ctx context.Context) (installed bo
 		return false, 0, err
 	}
 	return true, int(n), nil
+}
+
+// KeepChatScheduleCascade runs ensure (EnsureChatScheduleCascade) until it
+// succeeds, retrying a failure after a backoff that starts at base and
+// doubles to max, until ctx ends. fleet serve runs it in the background for
+// the life of the process, so a database error at boot does not leave the
+// cascade missing — and schedules orphaned — until the next restart: the
+// first success installs it and removes whatever was orphaned meanwhile.
+// Once it is in, ensure is a cheap existence check and the loop ends.
+// report sees each attempt's outcome. Returns whether it succeeded.
+func KeepChatScheduleCascade(ctx context.Context, ensure func(context.Context) (bool, int, error), base, maxBackoff time.Duration,
+	report func(installed bool, orphans int, err error, retryIn time.Duration)) bool {
+	if base <= 0 {
+		base = 5 * time.Second
+	}
+	if maxBackoff < base {
+		maxBackoff = base
+	}
+	backoff := base
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		installed, orphans, err := ensure(attemptCtx)
+		cancel()
+		if err == nil {
+			if report != nil {
+				report(installed, orphans, nil, 0)
+			}
+			return true
+		}
+		if report != nil {
+			report(false, 0, err, backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }

@@ -131,6 +131,37 @@ type Scheduler struct {
 	// storeTimeout bounds one task-path storage statement (storeCtx);
 	// 0 means sweepTimeout. A field only so tests can shorten it.
 	storeTimeout time.Duration
+	// chatPassTimeoutOverride shortens a chat schedule pass's deadline
+	// (tests only; 0 = sweepTimeout).
+	chatPassTimeoutOverride time.Duration
+	// chatFireTimeoutOverride shortens a fire's delivery bound (tests only;
+	// 0 = chatScheduleFireTimeout).
+	chatFireTimeoutOverride time.Duration
+
+	// The chat schedule delivery workers (chat_schedules.go): chatSlots is
+	// the pool (capacity chatScheduleWorkers), chatWorkers lets Stop wait for
+	// fires in flight. chatPasses counts passes (tests). nextChatDueAt
+	// replaces the next-due lookup (tests inject failures; nil = storage).
+	chatSlots     chan struct{}
+	chatWorkers   sync.WaitGroup
+	chatPasses    atomic.Int64
+	nextChatDueAt func(ctx context.Context, after int64) (int64, bool, error)
+	// clock replaces time.Now for timing settles (tests; nil = time.Now).
+	clock func() time.Time
+
+	// promoteRetryArmed marks a pending promotion retry: a pass that passed
+	// over due rows another transaction held locked (SKIP LOCKED) asks for one
+	// more pass after promoteSkipRetry (0 = 5s; tests shorten it), at most
+	// one pending at a time.
+	promoteRetryArmed atomic.Bool
+	promoteSkipRetry  time.Duration
+
+	// promoteAgain asks the task loop for another promotion pass right away:
+	// ProcessScheduledTasks stopped at its per-tick row cap with due tasks
+	// left. Capacity 1, so requests coalesce. maxScheduledRows is that cap
+	// (0 = maxScheduledRowsPerTick; tests shorten it).
+	promoteAgain     chan struct{}
+	maxScheduledRows int
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -262,6 +293,8 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
 		gateInFlight:       make(map[uuid.UUID]struct{}),
 		chatWakeSig:        make(chan struct{}, 1),
+		promoteAgain:       make(chan struct{}, 1),
+		chatSlots:          make(chan struct{}, chatScheduleWorkers),
 	}
 }
 
@@ -312,6 +345,7 @@ func (s *Scheduler) Stop() {
 		if s.chatLoopStarted {
 			<-s.chatLoopDone
 		}
+		s.chatWorkers.Wait() // fires in flight (their contexts end with s.ctx)
 		s.gateWG.Wait()
 		s.maintWG.Wait()
 		close(settled)
@@ -321,6 +355,25 @@ func (s *Scheduler) Stop() {
 	case <-time.After(gateDrainTimeout):
 		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
+}
+
+// armPromoteRetry asks for one more promotion pass after promoteSkipRetry,
+// unless one is already pending.
+func (s *Scheduler) armPromoteRetry() {
+	if !s.promoteRetryArmed.CompareAndSwap(false, true) {
+		return
+	}
+	d := s.promoteSkipRetry
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	time.AfterFunc(d, func() {
+		s.promoteRetryArmed.Store(false)
+		select {
+		case s.promoteAgain <- struct{}{}:
+		default:
+		}
+	})
 }
 
 // storeCtx is a context for one storage call or pass off the sweep helper:
@@ -426,6 +479,11 @@ func (s *Scheduler) runLoop() {
 				// survive to be expired.
 				s.runStrandedWakeExpiry()
 				s.runRecurrenceReconciliation()
+				s.ProcessScheduledTasks()
+			}()
+		case <-s.promoteAgain:
+			func() {
+				defer safe.Recover("scheduler.promote", nil)
 				s.ProcessScheduledTasks()
 			}()
 		case <-cleanupC:
@@ -638,14 +696,31 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		cursorScheduledFor time.Time
 		cursorID           uuid.UUID
 		rowsThisTick       int
+		promotedThisPass   int
 	)
 
 	for {
 		// Defensive valve: bounds the per-tick work if an operator somehow
 		// accumulates an enormous due set. The next tick (30s) starts over and —
 		// promotions having emptied the front of the due set — reaches the rest.
-		if rowsThisTick >= maxScheduledRowsPerTick {
-			log.Printf("ProcessScheduledTasks: handled %d due rows this tick, deferring the rest to the next tick", rowsThisTick)
+		maxRows := s.maxScheduledRows
+		if maxRows <= 0 {
+			maxRows = maxScheduledRowsPerTick
+		}
+		if rowsThisTick >= maxRows {
+			// Another pass right away only if this one moved something: a
+			// capped prefix of rows that all stay put (gated tasks with every
+			// gate slot busy, say) would otherwise be rescanned in a hot loop.
+			// Without progress the rest waits for the next tick.
+			if promotedThisPass > 0 {
+				log.Printf("ProcessScheduledTasks: handled %d due rows this pass (%d promoted); another pass follows right away", rowsThisTick, promotedThisPass)
+				select {
+				case s.promoteAgain <- struct{}{}:
+				default: // one is already requested
+				}
+			} else {
+				log.Printf("ProcessScheduledTasks: handled %d due rows this pass, none promoted; the rest wait for the next tick", rowsThisTick)
+			}
 			return
 		}
 
@@ -699,6 +774,13 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		batchCtx, batchCancel := s.storeCtx()
 		promoted, err := s.storage.UpdateTasksStatusBatchCtx(batchCtx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		batchCancel()
+		if err == nil && promoted < len(promoteIDs) {
+			// Some rows were passed over: held locked by another transaction
+			// (SKIP LOCKED) or changed since the fetch. Try them again soon,
+			// not a whole tick later — bounded, so a row held locked for
+			// long cannot spin the loop.
+			s.armPromoteRetry()
+		}
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
@@ -716,10 +798,12 @@ func (s *Scheduler) ProcessScheduledTasks() {
 					continue
 				}
 				if n > 0 {
+					promotedThisPass += n
 					log.Printf("Task %s is now pending", taskID)
 				}
 			}
 		} else {
+			promotedThisPass += promoted
 			log.Printf("Successfully promoted %d of %d scheduled tasks to pending", promoted, len(promoteIDs))
 		}
 
