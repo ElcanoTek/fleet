@@ -172,25 +172,14 @@ func truncateLogSession(ctx context.Context, session *LogSession, maxSize int) [
 		return data
 	}
 
-	// Aux-usage records (#1118) survive truncation: they are tiny fixed-size
-	// accounting rows, not transcript bulk, and dropping them would silently
-	// unmeter the run's overhead exactly on the biggest (truncated) runs.
-	auxUsage := session.SnapshotAuxUsage()
+	// Only the transcript is truncated: the copy keeps every other field of
+	// the session (LogSession.Clone) — its correlation ids (#2052), outcome,
+	// output and the aux-usage records (#1118), tiny accounting rows whose
+	// loss would silently unmeter the biggest (truncated) runs.
 	clone := func(msgs []LogMessage) *LogSession {
-		return &LogSession{
-			ID:                  session.ID,
-			Title:               session.Title,
-			ParentTaskID:        session.ParentTaskID,
-			PromptTokens:        session.PromptTokens,
-			CompletionTokens:    session.CompletionTokens,
-			CachedTokens:        session.CachedTokens,
-			CacheCreationTokens: session.CacheCreationTokens,
-			Cost:                session.Cost,
-			CreatedAt:           session.CreatedAt,
-			UpdatedAt:           session.UpdatedAt,
-			Messages:            msgs,
-			AuxUsage:            auxUsage,
-		}
+		c := session.Clone()
+		c.Messages = msgs
+		return c
 	}
 
 	for endCount := len(original) - 1; endCount > 0; endCount-- {

@@ -943,10 +943,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// beat the transient-retry branches, which would otherwise re-queue a run
 	// that told us plainly it was done.
 	auditAborted := errors.Is(runErr, agentcore.ErrAuditAborted)
-	runSpanErr = runErr
-	if leaseLost {
-		runSpanErr = errTaskLeaseLost // the cause, whatever the driver returned
-	}
+	// The span records the outcome the switch below persists, classified the
+	// same way — a driver that swallowed its cancellation still failed.
+	runSpanErr = runSpanOutcome(taskCtx, runErr, wallExpired, leaseLost, auditAborted, interrupted)
 	switch {
 	case wallExpired:
 		p.failWallTimeout(taskCtx, task, session, token, start)
@@ -964,6 +963,28 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	default:
 		p.finishSuccess(taskCtx, task, session, outputJSON, artifactColl, token, start, terminalFrame)
 	}
+}
+
+// runSpanOutcome is the task.run span's error for the terminal branch
+// executeTask takes, in the same order: the wall-clock timeout and the lease
+// loss are their causes whatever the driver returned; an interruption is the
+// context's cause when the driver returned nil (it swallowed the cancel);
+// otherwise the driver's own error (nil for a success).
+func runSpanOutcome(taskCtx context.Context, runErr error, wallExpired, leaseLost, auditAborted, interrupted bool) error {
+	switch {
+	case wallExpired:
+		return errTaskWallTimeout
+	case leaseLost:
+		return errTaskLeaseLost
+	case auditAborted:
+		return runErr
+	case interrupted && runErr == nil:
+		if cause := context.Cause(taskCtx); cause != nil {
+			return cause
+		}
+		return context.Canceled
+	}
+	return runErr
 }
 
 // buildTaskRunContext derives one claimed task's run context from the decoupled
