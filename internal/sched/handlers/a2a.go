@@ -49,6 +49,7 @@ import (
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -350,7 +351,7 @@ func (h *Handlers) a2aPrincipal(r *http.Request) (principal, bool) {
 		return principal{isAdmin: true}, true
 	}
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" && h.apiKeys != nil {
-		if valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil); valid && key != nil {
+		if valid, key, _ := h.apiKeys.ValidateKeyOn(apikeys.SurfaceA2A, apiKey, nil, nil, nil); valid && key != nil {
 			return principal{apiKey: key}, true
 		}
 	}

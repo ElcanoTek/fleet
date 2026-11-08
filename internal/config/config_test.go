@@ -1231,7 +1231,7 @@ func TestLoadWithQuotedEnvFromPodman(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
-	os.Setenv("OPENROUTER_API_KEY", `"sk-or-v1-abc123def"`) // gitleaks:allow — a FAKE key fixture for quote stripping
+	os.Setenv("OPENROUTER_API_KEY", `"sk-or-v1-abc123def"`)
 
 	cfg, err := Load("/nonexistent/.env")
 	if err != nil {
@@ -1246,7 +1246,7 @@ func TestLoadWithSingleQuotedEnvFromPodman(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
-	os.Setenv("OPENROUTER_API_KEY", `'sk-or-v1-xyz789'`) // gitleaks:allow — a FAKE key fixture for quote stripping
+	os.Setenv("OPENROUTER_API_KEY", `'sk-or-v1-xyz789'`)
 
 	cfg, err := Load("/nonexistent/.env")
 	if err != nil {

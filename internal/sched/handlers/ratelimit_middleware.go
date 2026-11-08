@@ -9,6 +9,7 @@ import (
 	"time"
 
 	authn "github.com/ElcanoTek/fleet/internal/principal"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 )
 
 // SchedRateLimitMiddleware throttles the high-cost orchestrator endpoints
@@ -50,7 +51,7 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 		perDay := h.config.SchedRateLimitPerDay
 		identity := ""
 		if rawKey := r.Header.Get("X-API-Key"); rawKey != "" {
-			if keyID, override, ok := h.apiKeys.LookupKeyMeta(rawKey); ok {
+			if keyID, override, ok := h.apiKeys.LookupKeyMetaOn(apikeys.SurfaceOrchestrator, rawKey); ok {
 				identity = "key:" + keyID
 				if override > 0 {
 					perMin = override

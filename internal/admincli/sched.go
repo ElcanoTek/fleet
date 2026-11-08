@@ -507,6 +507,9 @@ func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLi
 	if strings.TrimSpace(email) == "" {
 		return errf(1, "--type user requires --user <email> (the account the key acts as)")
 	}
+	if rateLimit != 0 {
+		return errf(1, "--rate-limit-per-minute does not apply to a user key: its turns are limited by the chat's per-user limit, like its person's (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY)")
+	}
 	key, raw, err := mgr.CreateUserKey(name, email, rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)

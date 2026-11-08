@@ -61,7 +61,22 @@ spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
   `not_a_member`). A user key carries no Operations Center permission and
   reaches no scoped-key route; any other key type is refused on the chat API
   with 403 `not_a_user_key`. Rotation and revocation are the ordinary key
-  verbs. The HTTP `/keys` API refuses to mint one (the box's CLI names the
+  verbs, and take effect on the server's next request: the key store
+  re-reads `api_keys.json` whenever its mtime, size or (for a fresh write)
+  content changed, re-adopting every record, so a revoked key, a rotated-out
+  key past its grace and a deleted key stop authenticating, and a
+  rotated-in key starts, without a restart (this held for new keys only
+  before, and applies to every key type). A user key takes no per-key rate
+  limit (`--rate-limit-per-minute` is refused for it): that budget is charged
+  on every request, identity checks included, so its turns are limited by
+  the chat's per-user limit instead, like its person's.
+- **Which key authenticates where** is one table,
+  `apikeys.KeyType.AllowsSurface`: user keys on the chat API only; admin,
+  task, readonly and legacy keys on the orchestrator API and A2A; webhook
+  keys on triggers (and recognised on the orchestrator and A2A only to be
+  refused by their scope checks, as before). Every edge validates through
+  `ValidateKeyOn` / `LookupKeyTypeOn` / `LookupKeyMetaOn` with its surface,
+  and `TestKeyEdgesNameTheirSurface` fails on an edge that does not. The HTTP `/keys` API refuses to mint one (the box's CLI names the
   account), so its request schema is unchanged.
 - **Clients.** `fleet chat` and `fleet acp` read the key from `--key-file`,
   else `$FLEET_API_KEY`, else `~/.config/fleet/api-key`, never from argv, and

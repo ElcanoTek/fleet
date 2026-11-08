@@ -89,7 +89,13 @@ at Caddy.
    (`x-fleet-key-types.user` is `{permissions: [], methods: []}`); the other
    key types name no user and are refused on the chat API with 403
    `not_a_user_key`. The clients read the key from `--key-file`, else
-   `$FLEET_API_KEY`, else `~/.config/fleet/api-key`, never from argv;
+   `$FLEET_API_KEY`, else `~/.config/fleet/api-key`, never from argv; a
+   user key takes no per-key rate limit (the chat's per-user limit applies).
+   Which key type authenticates on which surface (chat, orchestrator, A2A,
+   triggers) is one table, `apikeys.KeyType.AllowsSurface`, that every edge
+   consults through `ValidateKeyOn`, so a user key cannot reach A2A or the
+   orchestrator; and the key store re-reads its file on any change, so a
+   revoke or rotate made by the CLI takes effect on the server's next request;
    `--email` only checks which account the key acts as. The HTTP `/keys`
    API does not mint user keys (the CLI on the box does), so the public
    API's request contract is unchanged.
@@ -104,6 +110,11 @@ at Caddy.
   as X-API-Key and as bearer) and `fleet chat`'s client against the real
   listener; `cmd/fleet/csrf_coverage_test.go` and
   `internal/sched/handlers/header_trust_test.go`: the orchestrator's 401.
+- `internal/sched/apikeys/sync_test.go` (a revoke, rotate, delete or edit by
+  another process takes effect at once; `TestKeyTypeSurfaces`),
+  `edge_guard_test.go` (`TestKeyEdgesNameTheirSurface`: no edge validates a
+  key without its surface), and `internal/sched/handlers/key_surface_test.go`
+  (key types × orchestrator edges).
 - `internal/config/envreg/retired_lookup_test.go`,
   `internal/config/retired_aliases_test.go`,
   `cmd/fleet/validate_config_test.go`

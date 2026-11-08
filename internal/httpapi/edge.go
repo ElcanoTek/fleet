@@ -15,7 +15,7 @@ import (
 // keyValidator is the API-key store the chat listener's edge checks a
 // presented key against (apikeys.Manager, the orchestrator's store).
 type keyValidator interface {
-	ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *apikeys.APIKey, string)
+	ValidateKeyOn(s apikeys.Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *apikeys.APIKey, string)
 }
 
 // WithAPIKeys lets the chat listener's own port accept user API keys
@@ -58,16 +58,17 @@ func (s *Server) edgePrincipal(w http.ResponseWriter, r *http.Request) (principa
 		})
 		return principal.Principal{}, false
 	}
-	ok, key, reason := s.apiKeys.ValidateKey(raw, nil, nil, nil)
-	if !ok || key == nil {
-		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_key", "message": reason})
-		return principal.Principal{}, false
-	}
-	if key.Type != apikeys.KeyTypeUser || strings.TrimSpace(key.UserEmail) == "" {
+	// SurfaceChat admits user keys only (apikeys.KeyType.AllowsSurface).
+	ok, key, reason := s.apiKeys.ValidateKeyOn(apikeys.SurfaceChat, raw, nil, nil, nil)
+	if (!ok && reason == apikeys.ReasonWrongSurface) || (ok && key != nil && strings.TrimSpace(key.UserEmail) == "") {
 		writeJSONStatus(w, http.StatusForbidden, map[string]string{
 			"error":   "not_a_user_key",
 			"message": "this key names no user; the chat API takes a user key (fleet sched apikey create <name> --type user --user <email>)",
 		})
+		return principal.Principal{}, false
+	}
+	if !ok || key == nil {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "invalid_api_key", "message": reason})
 		return principal.Principal{}, false
 	}
 	return principal.Principal{
