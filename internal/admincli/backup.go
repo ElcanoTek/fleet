@@ -127,21 +127,43 @@ var allSchemas = []string{config.ChatSchema, config.IdentitySchema, config.Sched
 // runPgDumpAll writes ONE custom-format dump of chat, core and sched: a
 // single pg_dump, so a single snapshot — the accounts in core and the chat
 // and sched rows that reference them are consistent with each other.
-func runPgDumpAll(ctx context.Context, dsn, outPath string) error {
-	return pgDump(ctx, dsn, outPath, allSchemas)
+//
+// Every one of the three must be in the archive: pg_dump runs with
+// --strict-names (a schema that is missing fails it), and the written
+// archive's table of contents is checked again before the backup reports
+// success — a "whole fleet" dump without core or sched is not one.
+func runPgDumpAll(ctx context.Context, dsn, outPath string) (err error) {
+	defer func() {
+		if err != nil {
+			_ = os.Remove(outPath) // no partial "backup" left for a restore to find
+		}
+	}()
+	if err := pgDump(ctx, dsn, outPath, allSchemas, "--strict-names"); err != nil {
+		return err
+	}
+	got, err := dumpSchemas(ctx, outPath)
+	if err != nil {
+		return err
+	}
+	for _, s := range allSchemas {
+		if !slices.Contains(got, s) {
+			return fmt.Errorf("the whole-fleet dump %s lacks schema %s (it holds %s): refusing to report it as a backup", outPath, s, strings.Join(got, ", "))
+		}
+	}
+	return nil
 }
 
 // pgDump runs one pg_dump of the given schemas. A pattern that matches no
 // schema is skipped (no --strict-names): core does not exist before the
 // chat store first migrates.
-func pgDump(ctx context.Context, dsn, outPath string, schemas []string) error {
+func pgDump(ctx context.Context, dsn, outPath string, schemas []string, extra ...string) error {
 	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
-	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}
+	args := append([]string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}, extra...)
 	for _, schema := range schemas {
 		args = append(args, "-n", schema)
 	}

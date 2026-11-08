@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"database/sql"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -111,6 +112,18 @@ func TestBackupAllIsOneSnapshot(t *testing.T) {
 	}
 	if got := read(`SELECT count(*)::text FROM pg_namespace WHERE nspname = 'other'`); got != "0" {
 		t.Errorf("--db=all restored a schema that is not fleet's")
+	}
+
+	// A database missing one of the three schemas is no whole-fleet backup:
+	// the dump fails and leaves no file (Codex 4505570171).
+	partial := testdb.Empty(t)
+	exec(partial, `CREATE SCHEMA chat; CREATE SCHEMA sched; CREATE TABLE chat.t (x int); CREATE TABLE sched.t (x int)`)
+	partialDump := filepath.Join(t.TempDir(), "fleet-all-partial.dump")
+	if err := runPgDumpAll(ctx, config.WithSchema(partial, config.ChatSchema), partialDump); err == nil {
+		t.Fatal("a whole-fleet dump of a database without core succeeded")
+	}
+	if _, err := os.Stat(partialDump); !os.IsNotExist(err) {
+		t.Errorf("the failed dump left %s behind (%v)", partialDump, err)
 	}
 
 	// --db=all needs both stores in one database.
