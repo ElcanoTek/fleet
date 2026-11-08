@@ -92,7 +92,7 @@ func rewritePrincipals(ctx context.Context, tx *sql.Tx, schema string, renames m
 		}
 		for from, to := range renames {
 			// Identifiers are the fixed principalColumns and the checked schema.
-			res, err := tx.ExecContext(ctx, `UPDATE `+schema+`.`+tc[0]+` SET `+tc[1]+` = $2 WHERE `+tc[1]+` = $1`, from, to)
+			res, err := tx.ExecContext(ctx, `UPDATE `+schema+`.`+tc[0]+` SET `+tc[1]+` = $2 WHERE `+tc[1]+` = $1`, from, to) //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 			if err != nil {
 				return fmt.Errorf("identity merge: %s.%s: %w", tc[0], tc[1], err)
 			}
@@ -108,7 +108,7 @@ func movePrompts(ctx context.Context, tx *sql.Tx, schema string, renames map[str
 		id          uuid.UUID
 		owner, name string
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, owner_username, name FROM `+schema+`.prompt_library ORDER BY created_at, id`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, owner_username, name FROM `+schema+`.prompt_library ORDER BY created_at, id`) //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func movePrompts(ctx context.Context, tx *sql.Tx, schema string, renames map[str
 			rep.RenamedPrompts = append(rep.RenamedPrompts, PromptRename{Owner: to, From: p.name, To: name})
 		}
 		taken[key(to, name)] = true
-		if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.prompt_library SET owner_username = $2, name = $3 WHERE id = $1`, p.id, to, name); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.prompt_library SET owner_username = $2, name = $3 WHERE id = $1`, p.id, to, name); err != nil { //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 			return err
 		}
 		rep.RewrittenPrincipals++
@@ -180,8 +180,8 @@ func moveBudgets(ctx context.Context, tx *sql.Tx, schema string, renames map[str
 		softUSD, hardUSD  sql.NullFloat64
 		softTok, hardTok  sql.NullInt64
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, principal_id, time_window, soft_usd, hard_usd, soft_tokens, hard_tokens
-		FROM `+schema+`.budgets WHERE scope = 'user' ORDER BY created_at, id`)
+	q := `SELECT id, principal_id, time_window, soft_usd, hard_usd, soft_tokens, hard_tokens FROM ` + schema + `.budgets WHERE scope = 'user' ORDER BY created_at, id` //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
+	rows, err := tx.QueryContext(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -213,7 +213,7 @@ func moveBudgets(ctx context.Context, tx *sql.Tx, schema string, renames map[str
 		}
 		into, collides := held[key(to, b.window)]
 		if !collides {
-			if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.budgets SET principal_id = $2, updated_at = now() WHERE id = $1`, b.id, to); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.budgets SET principal_id = $2, updated_at = now() WHERE id = $1`, b.id, to); err != nil { //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 				return err
 			}
 			b.principal = to
@@ -223,10 +223,10 @@ func moveBudgets(ctx context.Context, tx *sql.Tx, schema string, renames map[str
 		}
 		into.softUSD, into.hardUSD = stricterF(into.softUSD, b.softUSD), stricterF(into.hardUSD, b.hardUSD)
 		into.softTok, into.hardTok = stricterI(into.softTok, b.softTok), stricterI(into.hardTok, b.hardTok)
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+schema+`.budgets WHERE id = $1`, b.id); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+schema+`.budgets WHERE id = $1`, b.id); err != nil { //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.budgets SET soft_usd = $2, hard_usd = $3, soft_tokens = $4, hard_tokens = $5, updated_at = now() WHERE id = $1`,
+		if _, err := tx.ExecContext(ctx, `UPDATE `+schema+`.budgets SET soft_usd = $2, hard_usd = $3, soft_tokens = $4, hard_tokens = $5, updated_at = now() WHERE id = $1`, //nolint:gosec // G202: schema passed plainIdentifier; table/column names are fixed
 			into.id, into.softUSD, into.hardUSD, into.softTok, into.hardTok); err != nil {
 			return err
 		}
