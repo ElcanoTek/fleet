@@ -111,7 +111,9 @@ type Scheduler struct {
 	// let a schedule due before the next tick fire on time. See
 	// chat_schedules.go.
 	chatDeliverer   ChatScheduleDeliverer
-	chatWake        chan time.Time
+	chatWakeMu      sync.Mutex
+	chatWakeAt      time.Time     // earliest pending wake request; zero = none
+	chatWakeSig     chan struct{} // capacity 1: "chatWakeAt has a request"
 	chatLoopDone    chan struct{}
 	chatLoopStarted bool
 
@@ -259,7 +261,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		tickInterval:       defaultTickInterval,
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
 		gateInFlight:       make(map[uuid.UUID]struct{}),
-		chatWake:           make(chan time.Time, 16),
+		chatWakeSig:        make(chan struct{}, 1),
 	}
 }
 

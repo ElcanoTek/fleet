@@ -55,18 +55,35 @@ func (s *Scheduler) SetChatScheduleDeliverer(d ChatScheduleDeliverer) {
 
 // WakeChatSchedulesAt asks the loop to run a chat schedule pass at t, instead
 // of waiting for the next tick: a timer created for 30 seconds from now fires
-// at 30 seconds. Non-blocking. A request further out than the wake horizon
-// (the larger of chatScheduleWakeHorizon and the tick interval) is dropped —
-// some tick runs before it is due and re-arms it then — and so is one the
-// loop cannot take right now (the tick covers it).
+// at 30 seconds. Non-blocking and never lost: requests coalesce into the
+// earliest one pending (chatWakeAt), and a capacity-1 signal tells the loop
+// to take it, so however many arrive while the loop is busy in a pass, the
+// earliest survives and memory stays bounded. A request further out than the
+// wake horizon (the larger of chatScheduleWakeHorizon and the tick interval)
+// is dropped: some tick runs before it is due and re-arms it then.
 func (s *Scheduler) WakeChatSchedulesAt(t time.Time) {
 	if s == nil || t.IsZero() || time.Until(t) > s.chatWakeHorizon() {
 		return
 	}
-	select {
-	case s.chatWake <- t:
-	default:
+	s.chatWakeMu.Lock()
+	if s.chatWakeAt.IsZero() || t.Before(s.chatWakeAt) {
+		s.chatWakeAt = t
 	}
+	s.chatWakeMu.Unlock()
+	select {
+	case s.chatWakeSig <- struct{}{}:
+	default: // a signal is already pending; the loop will read chatWakeAt
+	}
+}
+
+// takeChatWake returns and clears the earliest pending wake request (zero
+// when there is none).
+func (s *Scheduler) takeChatWake() time.Time {
+	s.chatWakeMu.Lock()
+	defer s.chatWakeMu.Unlock()
+	t := s.chatWakeAt
+	s.chatWakeAt = time.Time{}
+	return t
 }
 
 // chatWakeHorizon: every tick re-arms the wake-up for a schedule due before
@@ -159,8 +176,10 @@ func (s *Scheduler) runChatLoop() {
 		select {
 		case <-ticker.C:
 			pass()
-		case t := <-s.chatWake:
-			wake.request(t)
+		case <-s.chatWakeSig:
+			if t := s.takeChatWake(); !t.IsZero() {
+				wake.request(t)
+			}
 		case <-wake.c():
 			wake.fired()
 			pass()
