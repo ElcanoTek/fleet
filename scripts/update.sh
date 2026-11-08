@@ -1073,6 +1073,20 @@ resolve_install_dir() {
 NEW_FLEET=""     # the verified binary this update installs
 RELEASE_DIR=""   # its staging dir (SHA256SUMS, signatures, release.json, binary)
 resolve_install_dir
+# fleet_update_retired_scan — refuse, before anything is installed, when a
+# bundle the restarted service could load uses a removed CHAT_/CUTLASS_
+# variable (ADR-0106), or when the new binary's scan of one fails.
+fleet_update_retired_scan() {
+  local svc_bundle rc=0
+  svc_bundle="$(env_get FLEET_CLIENT_CONFIG_DIR "$backend_env_file")"
+  fleet_retired_bundles_check "$NEW_FLEET" "$svc_bundle" "$CLIENT_DIR" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) die "a client bundle ${SERVICE_NAME} could load uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed and ${SERVICE_NAME} was not restarted; rename these in the client bundle and re-run fleet update" ;;
+    *) die "the removed-variable check of the client bundle failed (above) — nothing was installed and ${SERVICE_NAME} was not restarted" ;;
+  esac
+}
+
 step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
 # Staging lives under the root-owned release cache, never under the
 # checkout (which another user may own): it must be private — see
@@ -1110,8 +1124,11 @@ else
   # unset, so a bundle that still uses one could fail to load after the
   # restart. Ask the new binary's read-only scan (no load, no writes) and
   # refuse BEFORE installing anything (scripts/lib/retired-bundle.sh).
-  fleet_retired_bundle_check "$NEW_FLEET" "$CLIENT_DIR" \
-    || die "the client bundle ${CLIENT_DIR} uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed and ${SERVICE_NAME} was not restarted; rename these in the client bundle and re-run fleet update"
+  # Every bundle the restarted service could load is scanned: the one the
+  # service env file names (re-read now: step 2 may have repointed it) and
+  # the one this run updated when it differs (an explicit --client-config).
+  fleet_update_retired_scan
+
 fi
 
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────

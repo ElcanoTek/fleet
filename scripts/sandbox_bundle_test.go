@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -283,59 +284,171 @@ func TestSandboxScalarInterpolationIsShared(t *testing.T) {
 	}
 }
 
-// ADR-0106 (redesign on #2081): fleet update refuses a client bundle that
-// still uses a removed CHAT_/CUTLASS_ variable BEFORE installing anything, by
-// asking the NEW binary's read-only scan. This builds the real binary, runs
-// the shared check (scripts/lib/retired-bundle.sh) the way update.sh does,
-// and confirms the refusal stops the run before the install step; a clean
-// bundle proceeds. It also pins that update.sh runs the check before
-// `release install`.
-func TestUpdateRefusesARetiredBundleBeforeInstalling(t *testing.T) {
+// buildFleet builds the real fleet binary into the test's temp dir (the Go
+// build cache makes the second build cheap; the binary is removed with the
+// test).
+func buildFleet(t *testing.T) string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the fleet binary")
 	}
-	root := repoRoot(t)
 	bin := filepath.Join(t.TempDir(), "fleet")
 	build := exec.Command("go", "build", "-o", bin, "./cmd/fleet")
-	build.Dir = root
+	build.Dir = repoRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	run := func(manifest string) (installed bool, stderr string) {
+	return bin
+}
+
+// writeBundle writes a bundle dir holding manifest.
+func writeBundle(t *testing.T, manifest string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+const (
+	staleManifest = "name: test\nmcp_servers:\n  - name: s\n    type: http\n    url: \"https://${CHAT_TLS_DOMAIN}/mcp\"\n    always: true\n"
+	cleanManifest = "name: test\nsandbox:\n  image: \"${FLEET_SANDBOX_IMAGE:-}\"\n"
+)
+
+// runBundlesCheck runs fleet_retired_bundles_check BIN DIR… and returns its
+// exit code and stderr.
+func runBundlesCheck(t *testing.T, bin string, dirs ...string) (int, string) {
+	t.Helper()
+	cmd := exec.Command("bash", append([]string{"-c", `. "$ROOT/scripts/lib/retired-bundle.sh"; fleet_retired_bundles_check "$@"`, "bash", bin}, dirs...)...)
+	cmd.Env = append(os.Environ(), "ROOT="+repoRoot(t), "FLEET_ENV_FILE=/nonexistent")
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatal(err)
+	}
+	return cmd.ProcessState.ExitCode(), errb.String()
+}
+
+// fakeFleet writes a stand-in binary that prints msg and exits rc.
+func fakeFleet(t *testing.T, rc int, msg string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fleet")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nprintf '%s\\n' '"+msg+"' >&2\nexit "+strconv.Itoa(rc)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// ADR-0106 (Codex P2 on #2081): every outcome of the pre-install scan. A
+// finding refuses (1) with the list; a failed scan aborts (2) with the
+// scanner's output; ONLY a binary that rejects the flag itself (usage exit 2
+// naming -retired-only) is skipped; a clean bundle passes.
+func TestRetiredBundlesCheckBranches(t *testing.T) {
+	bin := buildFleet(t)
+	if rc, out := runBundlesCheck(t, bin, writeBundle(t, cleanManifest)); rc != 0 {
+		t.Errorf("clean: rc=%d\n%s", rc, out)
+	}
+	if rc, out := runBundlesCheck(t, bin, writeBundle(t, staleManifest)); rc != 1 || !strings.Contains(out, "mcp_servers[0].url references the removed variable ${CHAT_TLS_DOMAIN}; rename it to ${FLEET_TLS_DOMAIN}") {
+		t.Errorf("finding: rc=%d\n%s", rc, out)
+	}
+	if rc, out := runBundlesCheck(t, bin, writeBundle(t, "mcp_servers: [unclosed\n")); rc != 2 || !strings.Contains(out, "failed") {
+		t.Errorf("scan error: rc=%d\n%s", rc, out)
+	}
+	if rc, out := runBundlesCheck(t, fakeFleet(t, 2, "flag provided but not defined: -retired-only"), writeBundle(t, staleManifest)); rc != 0 || !strings.Contains(out, "predates the removed-variable check") {
+		t.Errorf("unsupported flag: rc=%d\n%s", rc, out)
+	}
+	if rc, out := runBundlesCheck(t, fakeFleet(t, 2, "some other usage problem"), writeBundle(t, cleanManifest)); rc != 2 {
+		t.Errorf("a usage error that is not the missing flag must abort: rc=%d\n%s", rc, out)
+	}
+	if rc, out := runBundlesCheck(t, fakeFleet(t, 139, "segfault"), writeBundle(t, cleanManifest)); rc != 2 {
+		t.Errorf("a crash must abort: rc=%d\n%s", rc, out)
+	}
+	// A finding and a scan error together: the scan error wins (abort).
+	if rc, _ := runBundlesCheck(t, bin, writeBundle(t, staleManifest), writeBundle(t, "mcp_servers: [unclosed\n")); rc != 2 {
+		t.Errorf("finding + error: rc=%d, want 2", rc)
+	}
+}
+
+// ADR-0106 (Codex P2 on #2081): fleet update scans EVERY bundle the restarted
+// service could load — the service env file's and, when it differs, the one
+// this run updated (an explicit --client-config) — and refuses before
+// installing when either is stale. Here only the service's bundle is stale.
+// It runs update.sh's own fleet_update_retired_scan with the real binary,
+// and pins that update.sh calls it before `release install`.
+func TestUpdateRefusesARetiredBundleBeforeInstalling(t *testing.T) {
+	bin := buildFleet(t)
+	root := repoRoot(t)
+	update := readFile(t, root, "scripts/update.sh")
+	fns := shellFunc(t, update, "env_get") + shellFunc(t, update, "fleet_update_retired_scan")
+	run := func(svcManifest, explicitManifest string) (installed bool, stderr string) {
 		t.Helper()
-		bundle := sandboxBundle(t, "", map[string]string{})
-		if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		svc, explicit := writeBundle(t, svcManifest), writeBundle(t, explicitManifest)
+		env := filepath.Join(t.TempDir(), "fleet.env")
+		if err := os.WriteFile(env, []byte("FLEET_CLIENT_CONFIG_DIR="+svc+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		marker := filepath.Join(t.TempDir(), "installed")
 		cmd := exec.Command("bash", "-c", `set -euo pipefail
 . "$ROOT/scripts/lib/retired-bundle.sh"
 die() { printf '%s\n' "$*" >&2; exit 1; }
-fleet_retired_bundle_check "$BIN" "$B" || die "nothing was installed; rename these in the client bundle and re-run"
+ENV_FILE=/nonexistent backend_env_file="$E" NEW_FLEET="$BIN" CLIENT_DIR="$C" SERVICE_NAME=fleet
+`+fns+`
+fleet_update_retired_scan
 touch "$MARKER"`)
-		cmd.Env = append(os.Environ(), "ROOT="+root, "BIN="+bin, "B="+bundle, "MARKER="+marker, "FLEET_ENV_FILE=/nonexistent")
+		cmd.Env = append(os.Environ(), "ROOT="+root, "BIN="+bin, "E="+env, "C="+explicit, "MARKER="+marker, "FLEET_ENV_FILE=/nonexistent")
 		var errb strings.Builder
 		cmd.Stderr = &errb
 		_ = cmd.Run()
 		_, statErr := os.Stat(marker)
 		return statErr == nil, errb.String()
 	}
-	installed, stderr := run("name: test\nmcp_servers:\n  - name: s\n    type: http\n    url: \"https://${CHAT_TLS_DOMAIN}/mcp\"\n    always: true\n")
+	installed, stderr := run(staleManifest, cleanManifest)
 	if installed {
-		t.Error("a bundle using a removed variable was installed over")
+		t.Error("update installed over a stale service bundle (the explicit bundle was clean)")
 	}
-	for _, want := range []string{"mcp_servers[0].url references the removed variable ${CHAT_TLS_DOMAIN}; rename it to ${FLEET_TLS_DOMAIN}", "nothing was installed"} {
+	for _, want := range []string{"references the removed variable ${CHAT_TLS_DOMAIN}; rename it to ${FLEET_TLS_DOMAIN}", "nothing was installed"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("refusal lacks %q:\n%s", want, stderr)
 		}
 	}
-	if installed, stderr := run("name: test\nsandbox:\n  image: \"${FLEET_SANDBOX_IMAGE:-}\"\n"); !installed {
-		t.Errorf("a clean bundle was refused:\n%s", stderr)
+	if installed, stderr := run(cleanManifest, staleManifest); installed {
+		t.Errorf("update installed over a stale explicit bundle:\n%s", stderr)
+	}
+	if installed, stderr := run(cleanManifest, cleanManifest); !installed {
+		t.Errorf("clean bundles were refused:\n%s", stderr)
 	}
 
-	update := readFile(t, root, "scripts/update.sh")
-	check, install := strings.Index(update, `fleet_retired_bundle_check "$NEW_FLEET"`), strings.Index(update, `"$NEW_FLEET" release install`)
+	check, install := strings.Index(update, "\n  fleet_update_retired_scan\n"), strings.Index(update, `"$NEW_FLEET" release install`)
 	if check < 0 || install < 0 || check > install {
-		t.Error("update.sh must run fleet_retired_bundle_check on the new binary before `release install`")
+		t.Error("update.sh must run fleet_update_retired_scan before `release install`")
+	}
+}
+
+// ADR-0106 (Codex P2 on #2081): bootstrap scans the bundle right after the
+// release is fetched and verified (both read-only) and BEFORE its first
+// host-changing step, so "nothing was installed and the host was not
+// changed" is true.
+func TestBootstrapScansTheBundleBeforeChangingTheHost(t *testing.T) {
+	boot := readFile(t, repoRoot(t), "scripts/bootstrap.sh")
+	scan := strings.Index(boot, `    fleet_bootstrap_scan_bundle "$CLIENT_CONFIG_DIR"`)
+	fetch := strings.Index(boot, `FLEET_RELEASE_BIN="$(fleet_release_fetch`)
+	if scan < 0 || fetch < 0 || fetch > scan {
+		t.Fatal("bootstrap.sh must fetch the release, then scan the bundle")
+	}
+	for _, mutating := range []string{
+		`step "Installing system dependencies`, "\ncockpit_uninstall\n", "\nssh_key_only\n",
+		`step "Ensuring credential env file`, `step "Resolving client config`, `step "Installing the fleet binary`,
+	} {
+		at := strings.Index(boot, mutating)
+		if at < 0 {
+			t.Errorf("bootstrap.sh no longer has %q; update this test", mutating)
+			continue
+		}
+		if at < scan {
+			t.Errorf("bootstrap.sh changes the host (%q) before the removed-variable scan", strings.TrimSpace(mutating))
+		}
 	}
 }

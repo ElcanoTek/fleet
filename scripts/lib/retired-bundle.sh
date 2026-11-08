@@ -7,16 +7,36 @@
 # no env-file application, no writes), so it is exactly what the binary about
 # to be installed will refuse.
 
-# fleet_retired_bundle_check BIN BUNDLE_DIR — 0 when BUNDLE_DIR uses no removed
-# variable; 1 (after printing each use and its FLEET_ replacement to stderr)
-# when it does. A binary that cannot run the scan (an older release without
-# --retired-only, which still reads the old spellings) only warns: 0.
-fleet_retired_bundle_check() {
-  local bin="$1" bundle="$2" out rc=0
-  out="$("$bin" validate-config --retired-only --bundle-path "$bundle" 2>&1)" || rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    7) printf '%s\n' "$out" >&2; return 1 ;;
-    *) printf '! could not run the release'"'"'s removed-variable check (exit %s); continuing: %s\n' "$rc" "$out" >&2; return 0 ;;
-  esac
+# fleet_retired_bundles_check BIN DIR… — scan each bundle dir (duplicates are
+# scanned once). Returns
+#   0  every bundle is clean — or BIN predates the scan: it rejects the flag
+#      itself (usage exit 2 with "flag provided but not defined:
+#      -retired-only"), and such a release still reads the old spellings;
+#   1  a bundle uses a removed variable (each use and its FLEET_ replacement
+#      printed to stderr);
+#   2  the scan itself failed (an unreadable or unparsable manifest, a crash
+#      — the scanner's output printed to stderr). Callers abort on 1 and 2.
+fleet_retired_bundles_check() {
+  local bin="$1" dir out rc worst=0 seen=" "
+  shift
+  for dir in "$@"; do
+    [[ -n "$dir" ]] || continue
+    [[ "$seen" == *" $dir "* ]] && continue
+    seen+="$dir "
+    rc=0
+    out="$("$bin" validate-config --retired-only --bundle-path "$dir" 2>&1)" || rc=$?
+    if [[ "$rc" == 0 ]]; then
+      continue
+    elif [[ "$rc" == 7 ]]; then
+      printf '%s\n' "$out" >&2
+      [[ "$worst" == 2 ]] || worst=1
+    elif [[ "$rc" == 2 && "$out" == *"flag provided but not defined: -retired-only"* ]]; then
+      printf '! %s predates the removed-variable check (no --retired-only); it still reads the old spellings — skipping the check\n' "$bin" >&2
+      return 0
+    else
+      printf 'the removed-variable check of %s failed (exit %s):\n%s\n' "$dir" "$rc" "$out" >&2
+      worst=2
+    fi
+  done
+  return "$worst"
 }

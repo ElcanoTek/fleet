@@ -66,11 +66,21 @@ spelling: it is refused before install, not tolerated at run time.
    - **`fleet update` refuses** a bundle with any use BEFORE installing: right
      after the new release verifies, it runs the NEW binary's
      `fleet validate-config --retired-only` (that scanner; exit 7 when it
-     finds a use) against the box's bundle, and on a finding dies with each
-     use, its field and its `FLEET_` replacement, "nothing was installed".
-     `bootstrap.sh` runs the same check (`scripts/lib/retired-bundle.sh`).
-     A release without `--retired-only` (a downgrade) still reads the old
-     spellings, so the check only warns when it cannot run.
+     finds a use) against every bundle the restarted service could load —
+     the one the service env file names and, when it differs, the one the
+     run updated (an explicit `--client-config`) — and on a finding dies with
+     each use, its field and its `FLEET_` replacement, "nothing was
+     installed". A scan that fails (an unreadable or unparsable manifest, a
+     crash) aborts the same way. Only a release that rejects the flag itself
+     (usage exit 2 naming `-retired-only`, i.e. a downgrade to a release
+     that still reads the old spellings) is skipped, with a note
+     (`scripts/lib/retired-bundle.sh`).
+   - **`bootstrap.sh`** fetches and verifies the release (read-only) and
+     runs the same scan before its first host-changing step; a git-URL
+     bundle is scanned from a temporary clone. Only when that is impossible
+     (a git-URL bundle on a box without git yet) does the scan run after the
+     real clone, and the message then lists what bootstrap had already
+     changed.
    - **`fleet doctor` and `fleet validate-config`** report a use as a
      blocking FAIL (the next upgrade refuses until it is renamed); doctor
      uses the scanner and never loads the bundle, so `--check` writes
