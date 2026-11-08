@@ -119,6 +119,10 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	fireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatScheduleFireTimeout)
 	defer cancel()
 	d, err := s.fireChatSchedule(fireCtx, fire)
+	// As a worker does: ask for a pass, which arms the wake-up for a fire
+	// this kept in flight (deferred, or a failed delivery's backoff) — its
+	// retry then runs on time instead of at the next tick.
+	s.WakeChatSchedulesAt(time.Now())
 	if err != nil {
 		return d, err
 	}
@@ -317,7 +321,20 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 // rather than one already past (which would fire again at once), and the run
 // history's fired_at is when the turn was actually queued.
 func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
-	d, derr := s.deliverChatSchedule(ctx, fire)
+	var (
+		d    models.ChatScheduleDelivery
+		derr error
+	)
+	// A fire claimed under a definition edited since (def_version moved) is
+	// superseded before anything is delivered. The deliverer repeats this
+	// check inside its delivery transaction (the authoritative one: an edit
+	// can land between the two); once a turn is delivered, an edit no longer
+	// supersedes it — the settle counts the run.
+	if live, err := s.storage.DB().ChatScheduleDefVersion(ctx, fire.ScheduleID); err == nil && live != fire.DefVersion {
+		d = models.ChatScheduleDelivery{Outcome: models.ChatScheduleSuperseded}
+	} else {
+		d, derr = s.deliverChatSchedule(ctx, fire)
+	}
 	now := s.now()
 	wctx, cancel := s.writeCtx()
 	defer cancel()

@@ -77,8 +77,10 @@ const (
 	// queue is busy instead: its slot is skipped, as the chat sweeper did.)
 	ChatScheduleRejected ChatScheduleOutcome = "rejected"
 	// ChatScheduleSuperseded: the schedule's definition (prompt, cadence,
-	// kind) was edited after the fire was claimed. Nothing is delivered,
-	// counted or recorded; the next pass fires the definition as it is now.
+	// kind) was edited after the fire was claimed and before it was
+	// delivered. Nothing is delivered, counted or recorded; the next pass
+	// fires the definition as it is now. (An edit after delivery does not
+	// supersede: the run happened, and its settle counts it.)
 	ChatScheduleSuperseded ChatScheduleOutcome = "superseded"
 )
 
