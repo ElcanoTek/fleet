@@ -519,3 +519,63 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 		t.Fatal("force did not record the build's files")
 	}
 }
+
+// TestForcePastTheBoundaryWritesSentinels: `fleet migrate force` to a version
+// at or past FirstNew records it as Up would, sentinels included, under both
+// legacy locks (Codex 4506235354); it also drops ledger rows this build does
+// not ship. And whenever the ledger has crossed FirstNew without its
+// sentinels (a restore, an older force), the fast path does not read as
+// current and Up writes them.
+func TestForcePastTheBoundaryWritesSentinels(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	legacyBuild(t, db, 99, 77)
+	plain := testEmbeddedRunner(t)
+	if err := plain.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO core.schema_versions (version, name, checksum) VALUES (150500, 'garbage', 'x')`)
+	r := runnerFor(t, embeddedPlus(t, "fixture"))
+	// A holder of a legacy lock blocks the force, like Up.
+	holder, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held bool
+	if err := holder.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, legacyChatLockKey).Scan(&held); err != nil || !held {
+		t.Fatal(held, err)
+	}
+	r.lockTimeout = 300 * time.Millisecond
+	if err := r.force(ctx, db, 200); err == nil || !strings.Contains(err.Error(), "legacy chat migration lock") {
+		t.Fatalf("force while a pre-M6 binary holds its lock = %v", err)
+	}
+	_, _ = holder.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, legacyChatLockKey)
+	_ = holder.Close()
+	r.lockTimeout = 20 * time.Second
+
+	if err := r.force(ctx, db, 200); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledgerVersions(t, db); got[len(got)-1] != 200 || len(got) != 177 {
+		t.Fatalf("after force 200 the ledger ends at %d with %d rows (the unshipped row must go)", got[len(got)-1], len(got))
+	}
+	chat, sched := legacyLedgers(t, db)
+	if !strings.Contains(strings.Join(chat, " "), "(100,"+ChatSentinelName) || !reflect.DeepEqual(sched, []string{"(178,f)"}) {
+		t.Fatalf("force 200 left no sentinels: chat %v… sched %v", chat[len(chat)-1:], sched)
+	}
+
+	// Sentinels lost (here by hand): not current; Up puts them back.
+	mustExec(t, db, `DELETE FROM chat.schema_migrations WHERE version = 100`)
+	mustExec(t, db, `UPDATE sched.schema_migrations SET version = 77`)
+	mustExec(t, db, `CREATE TABLE core.m6_fixture (id integer PRIMARY KEY, note text NOT NULL DEFAULT '')`) // what 0200 does, forced
+	if r.current(ctx, db) {
+		t.Fatal("a ledger past 200 without sentinels read as current")
+	}
+	if err := r.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, sched := legacyLedgers(t, db); !reflect.DeepEqual(sched, []string{"(178,f)"}) || !r.current(ctx, db) {
+		t.Fatalf("Up did not restore the sentinels: sched %v", sched)
+	}
+}

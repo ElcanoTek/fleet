@@ -56,9 +56,10 @@ built twice.
    a sched version outside 0–77; otherwise create the ledger with chat N as N
    (keeping `applied_at`) and sched 1..v as 101..100+v. The legacy ledgers
    stay; a box behind the latest release applies its backlog in the merged
-   order. The first version ≥ 200 writes sentinels into the legacy ledgers
-   (chat 100 `moved_to_core_schema_versions`, sched 178) so a pre-M6 binary
-   refuses the database.
+   order. Whenever the ledger crosses 200 — Up applying a version, `force`
+   recording one, or a ledger found past 200 without them — the sentinels go
+   into the legacy ledgers (chat 100 `moved_to_core_schema_versions`, sched
+   178) so a pre-M6 binary refuses the database; the fast path checks them.
 7. **Down migrations.** Every version ≥ 200 has both halves (the loader
    refuses a build without). `fleet migrate down --to <v> [--dry-run]
    [--no-confirm]` undoes versions above `v`, newest first, each in a
@@ -69,8 +70,10 @@ built twice.
    `layout: "unified"`; `fleet status`, `fleet doctor` and `fleet diagnose`
    read `core.schema_versions` and report adoption.
 9. **Lint.** `scripts/check-migrations.sh` covers `internal/migrations/sql/**`:
-   pure renames exempt, nothing added or changed under `legacy/`, no edit or
-   rename of a shipped `sql/NNNN_*` file, new files in
+   only the exact M6 move into `legacy/` exempt, nothing added, edited,
+   renamed or deleted under `legacy/` or in the former directories, no edit,
+   rename or deletion of a shipped `sql/NNNN_*` file, a new one numbered after
+   the last shipped, new files in
    `NNNN_name` `.up`/`.down` pairs, unqualified names flagged.
 10. **Backups.** Every dump carries `core`, ledger included. A one-store
     restore of a post-M6 dump is refused unless its ledger is at the live

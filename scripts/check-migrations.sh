@@ -100,12 +100,34 @@ normalize_sql() {
   ' "$1"
 }
 
+# The former migration directories (before ADR-0107) and the one-time move out
+# of them, file by file, into sql/legacy/.
+FORMER_CHAT_DIR='internal/store/migrations/'
+FORMER_SCHED_DIR='internal/sched/db/migrations/'
+
+# is_migration_path PATH — PATH is (or was) a migration file of the build.
+is_migration_path() {
+  [[ "$1" == "$MIGRATION_DIR"* || "$1" == "$FORMER_CHAT_DIR"* || "$1" == "$FORMER_SCHED_DIR"* ]]
+}
+
+# is_m6_move OLD NEW — exactly the M6 move of one file under its own name.
+is_m6_move() {
+  case "$1" in
+    "$FORMER_CHAT_DIR"*) [[ "$2" == "${MIGRATION_DIR}legacy/chat/${1#"$FORMER_CHAT_DIR"}" && "${1#"$FORMER_CHAT_DIR"}" != */* ]] ;;
+    "$FORMER_SCHED_DIR"*) [[ "$2" == "${MIGRATION_DIR}legacy/sched/${1#"$FORMER_SCHED_DIR"}" && "${1#"$FORMER_SCHED_DIR"}" != */* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- Collect the set of files to check -------------------------------------
 files=()
 # Paths (diff mode) whose file existed at the base and was changed or renamed.
 declare -A SHIPPED_CHANGED=()
 # Paths (diff mode) under the migration directory deleted (or moved out).
 DELETED=()
+# Paths (diff mode) added, and the highest sql/NNNN version at the base.
+declare -A ADDED=()
+BASE_MAX=0
 if [ "$#" -gt 0 ]; then
   files=("$@")
 else
@@ -131,17 +153,21 @@ else
       D*)
         # A migration that ran on a database cannot leave the build: that
         # database would then refuse to start (a version it does not ship).
-        [[ "$p1" == "$MIGRATION_DIR"* ]] && DELETED+=("$p1")
+        # The former directories count until every branch has moved.
+        is_migration_path "$p1" && DELETED+=("$p1")
         continue ;;
       R*)
         path="$p2"
-        if [[ "$p1" == "$MIGRATION_DIR"* && "$p2" != "$MIGRATION_DIR"* ]]; then
-          DELETED+=("$p1") # moved out of the directory: gone from the build
+        # The one exemption: the one-time M6 move of a file, byte for byte
+        # and under its own name, from a former migration directory into
+        # sql/legacy/ (ADR-0107). Any other rename of a migration — within
+        # legacy/ included, where the file name is the recorded migration
+        # name — is a change to a shipped file.
+        if [ "$status" = R100 ] && is_m6_move "$p1" "$p2"; then
           continue
         fi
-        # A pure rename INTO the directory (the M6 move) or within legacy/
-        # is not a change. A shipped new-layout migration renamed is.
-        if [ "$status" = R100 ] && { [[ "$p1" != "$MIGRATION_DIR"* ]] || [[ "$p1" == "$MIGRATION_DIR"legacy/* && "$p2" == "$MIGRATION_DIR"legacy/* ]]; }; then
+        if is_migration_path "$p1" && [[ "$p2" != "$MIGRATION_DIR"* ]]; then
+          DELETED+=("$p1") # moved out of the directory: gone from the build
           continue
         fi ;;
     esac
@@ -151,11 +177,19 @@ else
         # Shipped migrations are append-only: a file that existed at the
         # base (modified, or renamed away from its shipped name) is refused.
         case "$status" in
+          A*) ADDED["$path"]=1 ;;
           M*) SHIPPED_CHANGED["$path"]=1 ;;
-          R*) [[ "$p1" == "$MIGRATION_DIR"* ]] && SHIPPED_CHANGED["$path"]=1 ;;
+          R*) if is_migration_path "$p1"; then SHIPPED_CHANGED["$path"]=1; else ADDED["$path"]=1; fi ;;
         esac ;;
     esac
   done < <(git diff --name-status -M --diff-filter=AMRD "${base}...HEAD" 2>/dev/null || true)
+  # The highest new-layout version the base ships: an added migration must
+  # come after it (a database at that version would otherwise apply the new
+  # one out of order, behind versions it already has).
+  while IFS= read -r f; do
+    f="${f##*/}"
+    [[ "$f" =~ ^([0-9]{4})_ ]] && (( 10#${BASH_REMATCH[1]} > BASE_MAX )) && BASE_MAX=$((10#${BASH_REMATCH[1]}))
+  done < <(git ls-tree -r --name-only "$base" -- "$MIGRATION_DIR" 2>/dev/null | grep -v "^${MIGRATION_DIR}legacy/" || true)
 fi
 
 if [ "${#files[@]}" -eq 0 ] && [ "${#DELETED[@]}" -eq 0 ]; then
@@ -206,6 +240,9 @@ layout_checks() {
   fi
   if (( 10#${BASH_REMATCH[1]} < 200 )); then
     emit "new migrations start at version 0200 (1–199 are the legacy chat and sched files)"
+  fi
+  if [[ -n "${ADDED[$f]:-}" ]] && (( 10#${BASH_REMATCH[1]} <= BASE_MAX )); then
+    emit "a new migration must come after the last shipped one (version $(printf '%04d' "$BASE_MAX")): a database already past it would apply this one out of order"
   fi
   stem="${f%.*.sql}"
   case "$base" in

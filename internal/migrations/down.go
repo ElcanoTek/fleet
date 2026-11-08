@@ -129,7 +129,9 @@ func (r *runner) force(ctx context.Context, db *sql.DB, version int) error {
 	if _, ok := r.set.Get(version); !ok && version != 0 {
 		return fmt.Errorf("version %d is not a migration this build ships (use 0 for none)", version)
 	}
-	return r.locked(ctx, db, false, func(conn *sql.Conn) (err error) {
+	// Under both legacy locks too, like Up: a force at or past FirstNew writes
+	// the legacy ledgers' sentinels.
+	return r.locked(ctx, db, true, func(conn *sql.Conn) (err error) {
 		exists, err := ledgerExists(ctx, conn)
 		if err != nil {
 			return err
@@ -146,7 +148,15 @@ func (r *runner) force(ctx context.Context, db *sql.DB, version int) error {
 				_ = tx.Rollback()
 			}
 		}()
-		if _, err = tx.ExecContext(ctx, `DELETE FROM core.schema_versions WHERE version > $1`, version); err != nil {
+		// Exactly the build's versions up to version: rows above it, and rows
+		// at or below it this build does not ship, go.
+		shipped := make([]int64, 0, len(r.set.list))
+		for _, m := range r.set.list {
+			if m.Version <= version {
+				shipped = append(shipped, int64(m.Version))
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM core.schema_versions WHERE version > $1 OR NOT (version = ANY($2))`, version, shipped); err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE core.schema_versions SET dirty = false WHERE dirty`); err != nil {
@@ -163,6 +173,13 @@ func (r *runner) force(ctx context.Context, db *sql.DB, version int) error {
 				VALUES ($1, $2, $3, now(), false)
 				ON CONFLICT (version) DO UPDATE SET name = EXCLUDED.name, checksum = EXCLUDED.checksum`, m.Version, m.Name, m.Checksum); err != nil {
 				return fmt.Errorf("force: record %d: %w", m.Version, err)
+			}
+		}
+		// The ledger now crosses the compatibility boundary: a pre-M6 binary
+		// must refuse the database, exactly as after Up applied the version.
+		if version >= FirstNew {
+			if err = writeSentinels(ctx, tx); err != nil {
+				return fmt.Errorf("force: sentinels: %w", err)
 			}
 		}
 		return tx.Commit()

@@ -186,6 +186,25 @@ func TestCheckMigrations_DiffMode(t *testing.T) {
 		t.Fatalf("deleted migrations must be refused, each (err %v):\n%s", err, out)
 	}
 	git("reset", "-q", "--hard", "base")
+	// A rename within legacy/ is a change: the file name is the migration's
+	// recorded name (Codex 4506235349). Only the M6 move itself is exempt.
+	git("mv", "internal/migrations/sql/legacy/chat/002_more.sql", "internal/migrations/sql/legacy/chat/002_renamed.sql")
+	git("commit", "-qm", "rename a legacy migration")
+	if out, err := lint(); err == nil || !strings.Contains(out, "legacy migrations are frozen") {
+		t.Fatalf("a rename within legacy/ must be refused (err %v):\n%s", err, out)
+	}
+	git("reset", "-q", "--hard", "base")
+	// A new migration numbered at or below the last shipped one is refused.
+	write("internal/migrations/sql/0150_too_early.up.sql", "SELECT 1;\n")
+	write("internal/migrations/sql/0150_too_early.down.sql", "SELECT 1;\n")
+	write("internal/migrations/sql/0200_add_flags_again.up.sql", "SELECT 1;\n")
+	write("internal/migrations/sql/0200_add_flags_again.down.sql", "SELECT 1;\n")
+	git("add", ".")
+	git("commit", "-qm", "out of order")
+	if out, err := lint(); err == nil || strings.Count(out, "must come after the last shipped one") != 4 {
+		t.Fatalf("migrations at or below the last shipped version must be refused (err %v):\n%s", err, out)
+	}
+	git("reset", "-q", "--hard", "base")
 
 	write("internal/migrations/sql/legacy/chat/002_more.sql", "CREATE TABLE u (a int);\nCREATE TABLE v (a int);\n")
 	write("internal/migrations/sql/legacy/chat/003_late.sql", "SELECT 1;\n")

@@ -191,7 +191,9 @@ fleet migrate force <version>   # asks first; --no-confirm for scripts
 cleanly, as the files this build ships, and nothing above it", running nothing
 (0: nothing applied). It also rewrites the recorded names and checksums: after
 a checksum refusal, restore the original file if you can; force only once the
-database really is what the edited file says. A dirty
+database really is what the edited file says. Rows this build does not ship
+are dropped. Like Up, it holds both legacy locks, and a force to a version at or
+past 200 writes the sentinels in the same transaction. A dirty
 **legacy** sched row found at adoption is repaired with the previous release's
 `fleet migrate force`, or by hand (`UPDATE sched.schema_migrations SET version =
 <last good>, dirty = false`).
@@ -236,12 +238,16 @@ The reserved `-- fleet:no-transaction` directive is the planned way out
 `internal/migrations/sql/` (diffed against the merge-base with `origin/main`, or
 `MIGRATION_LINT_BASE`):
 
-- **Append-only.** A `sql/NNNN_*` file that exists at the base and is edited or
-  renamed is refused, and so is any file deleted from (or moved out of) the
-  directory, `legacy/` included: a database that ran it would refuse to start.
-- **Layout.** An added or edited file under `sql/legacy/` is refused. A pure
-  rename (100% similar) is not a change and is exempt — the M6 move itself was
-  one; a rename with edits is checked as a change. A new file must be
+- **Append-only.** A migration file that exists at the base and is edited or
+  renamed is refused — under `legacy/` too, where the file name is the
+  migration's recorded name — and so is any file deleted from (or moved out
+  of) the directory or the former directories: a database that ran it would
+  refuse to start. The one exemption is the M6 move itself: a file moved byte
+  for byte, under its own name, from `internal/store/migrations/` to
+  `sql/legacy/chat/` or from `internal/sched/db/migrations/` to
+  `sql/legacy/sched/`. A new migration must be numbered after the last one
+  the base ships, or a database already past it would apply it out of order.
+- **Layout.** An added or edited file under `sql/legacy/` is refused. A new file must be
   `NNNN_name.up.sql` / `NNNN_name.down.sql` (four digits from `0200`, lower-case
   name) and its other half must exist.
 - **Qualified names.** In new files (up and down), an unqualified name after

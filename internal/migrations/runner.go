@@ -124,8 +124,47 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 		if applied > 0 {
 			slog.Info("migrated the database", "applied", applied, "version", r.set.Latest())
 		}
-		return nil
+		// Whenever the ledger has crossed FirstNew the sentinels must be there
+		// (whoever wrote the ledger: a restore, an older force); idempotent.
+		return r.ensureSentinels(ctx, conn)
 	})
+}
+
+// ensureSentinels writes the legacy ledgers' sentinels when the ledger holds a
+// version at or past FirstNew. The caller holds both legacy locks.
+func (r *runner) ensureSentinels(ctx context.Context, conn *sql.Conn) (err error) {
+	var crossed bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM core.schema_versions WHERE version >= $1)`, FirstNew).Scan(&crossed); err != nil || !crossed {
+		return err
+	}
+	if ok, err := sentinelsPresent(ctx, conn); err != nil || ok {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = writeSentinels(ctx, tx); err != nil {
+		return fmt.Errorf("sentinels: %w", err)
+	}
+	return tx.Commit()
+}
+
+// sentinelsPresent reports whether both legacy ledgers carry their sentinel.
+func sentinelsPresent(ctx context.Context, q querier) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `SELECT to_regclass('chat.schema_migrations') IS NOT NULL AND to_regclass('sched.schema_migrations') IS NOT NULL`).Scan(&ok)
+	if err != nil || !ok {
+		return false, err
+	}
+	err = q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM chat.schema_migrations WHERE version = $1)
+		AND coalesce((SELECT max(version) FROM sched.schema_migrations), -1) = $2`, ChatSentinel, SchedSentinel).Scan(&ok)
+	return ok, err
 }
 
 // current is the fast path: one read of the ledger, no lock. Any error (the
@@ -137,7 +176,7 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	defer func() { _ = rows.Close() }()
-	seen := 0
+	seen, crossed := 0, false
 	for rows.Next() {
 		var row ledgerRow
 		if err := rows.Scan(&row.Version, &row.Name, &row.Checksum, &row.Dirty); err != nil {
@@ -147,9 +186,18 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 		if row.Dirty || !known || !matches(m, row) {
 			return false
 		}
+		crossed = crossed || row.Version >= FirstNew
 		seen++
 	}
-	return rows.Err() == nil && seen == len(r.set.list)
+	if rows.Err() != nil || seen != len(r.set.list) {
+		return false
+	}
+	if crossed {
+		// Past the boundary the sentinels must be in place (one more read).
+		ok, err := sentinelsPresent(ctx, db)
+		return err == nil && ok
+	}
+	return true
 }
 
 // matches reports whether a ledger row records exactly migration m: the same
@@ -345,6 +393,13 @@ func mirrorLegacy(ctx context.Context, tx *sql.Tx, m Migration) error {
 		var ok bool
 		if err := tx.QueryRowContext(ctx, `SELECT to_regclass('sched.schema_migrations') IS NOT NULL`).Scan(&ok); err != nil || !ok {
 			return err
+		}
+		var at sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT max(version) FROM sched.schema_migrations`).Scan(&at); err != nil {
+			return err
+		}
+		if at.Valid && at.Int64 == SchedSentinel {
+			return nil // never step back below the sentinel
 		}
 		if _, err := tx.ExecContext(ctx, `TRUNCATE sched.schema_migrations`); err != nil {
 			return err
