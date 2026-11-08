@@ -52,6 +52,24 @@ const (
 	headerExternalSubject = "X-External-Subject"
 )
 
+// loginRecorder stamps an account's last sign-in at a session mint
+// (store.Store.RecordLogin; core.users.last_login). Optional: a store without
+// it (a test fake) records nothing.
+type loginRecorder interface {
+	RecordLogin(ctx context.Context, email string, at time.Time) error
+}
+
+// recordLogin stamps the sign-in; a failure is logged, never fails the login.
+func (s *Server) recordLogin(ctx context.Context, email string) {
+	rec, ok := s.store.(loginRecorder)
+	if !ok || strings.TrimSpace(email) == "" {
+		return
+	}
+	if err := rec.RecordLogin(ctx, email, time.Now()); err != nil {
+		log.Printf("auth: record last login: %v", err)
+	}
+}
+
 type externalSessionStore interface {
 	// ExternalSessionEpoch creates or returns the generation; login mint only.
 	ExternalSessionEpoch(ctx context.Context, issuer, subject, email string) (string, error)
@@ -360,6 +378,9 @@ func (s *Server) handleExternalSessionEpoch(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "external session lookup failed", http.StatusInternalServerError)
 		return
 	}
+	// This is the OIDC login's mint step (the gateway asks for the epoch
+	// only when it is about to issue the session).
+	s.recordLogin(r.Context(), userFromCtx(r.Context()))
 	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
 }
 
