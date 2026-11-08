@@ -179,7 +179,8 @@ func TestUpRefusesUnknownVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(rep.Applied); n == 0 || rep.Applied[n-1].Version != 400 || *rep.CurrentVersion != 400 {
+	if n := len(rep.Applied); n == 0 || rep.Applied[n-1].Version != 400 || *rep.CurrentVersion != 400 ||
+		len(rep.Unknown) != 1 || rep.Unknown[0].Version != 400 || !rep.Refused() {
 		t.Fatalf("status = %+v", rep)
 	}
 }
@@ -502,6 +503,11 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 	if err := r.up(ctx, db); !errors.As(err, &ce) || len(ce.Rows) != 3 || ce.Rows[0].Version != 7 || ce.Rows[2].Version != 200 ||
 		!strings.Contains(err.Error(), "append-only") {
 		t.Fatalf("up = %v, want a ChecksumError naming 7, 150 and 200", err)
+	}
+	// Status reports what Up refuses (Codex 4506166386).
+	rep, err := r.status(ctx, db)
+	if err != nil || !rep.Refused() || len(rep.Mismatched) != 3 || rep.Mismatched[0].Version != 7 || len(rep.Unknown) != 0 {
+		t.Fatalf("status over an edited ledger = %+v, %v", rep.Mismatched, err)
 	}
 	if _, err := r.down(ctx, db, LegacyLatest, true); !errors.As(err, &ce) {
 		t.Fatalf("down over an edited ledger = %v, want the same refusal", err)

@@ -313,7 +313,12 @@ func describeMigrationReport(rep migrations.Report) string {
 		cur = strconv.Itoa(*rep.CurrentVersion)
 	}
 	state := "clean"
-	if rep.Dirty {
+	switch {
+	case len(rep.Unknown) > 0:
+		state = fmt.Sprintf("REFUSED: version(s) %s are not shipped by this build (a newer fleet migrated the database)", infoVersions(rep.Unknown))
+	case len(rep.Mismatched) > 0:
+		state = fmt.Sprintf("REFUSED: version(s) %s were recorded from a different file than this build ships (an edited migration; docs/MIGRATIONS.md)", infoVersions(rep.Mismatched))
+	case rep.Dirty:
 		state = "DIRTY (a migration was left half-applied: fleet migrate force)"
 	}
 	adopted := "adopted (" + rep.MigrationTable + ")"
@@ -398,4 +403,13 @@ func captureHealth(ctx context.Context, chatURL, schedURL, bundleDir, service st
 
 	_ = ctx // checks use their own short per-call timeouts; ctx reserved for parity with other collectors.
 	return buf.String()
+}
+
+// infoVersions lists the versions of a report's rows ("201, 202").
+func infoVersions(is []migrations.Info) string {
+	parts := make([]string, len(is))
+	for i, x := range is {
+		parts[i] = strconv.Itoa(x.Version)
+	}
+	return strings.Join(parts, ", ")
 }

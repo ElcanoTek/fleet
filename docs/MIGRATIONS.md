@@ -157,7 +157,9 @@ versions are listed under `applied`, so a downgrade is visible).
 `--json` emits the one report — `db: "fleet"`, `runner: "fleet"`,
 `migration_table: "core.schema_versions"`, `layout: "unified"`, `adopted`,
 `current_version`, `dirty`, `applied`, `pending` (each `{version, name,
-applied_at}`) — plus, **for one release**, the pre-M6 per-store reports under
+applied_at}`), and, when there are any, `unknown` (applied versions this build
+does not ship) and `mismatched` (applied versions recorded from another file
+than this build's) — with `dirty`, exactly what fleet refuses to start on — plus, **for one release**, the pre-M6 per-store reports under
 `chat` and `sched`, derived from it (legacy numbers and names: `sched` keeps
 `current_version` 1–77 and `runner: "golang-migrate"`). Move consumers to the
 top-level fields: the next release removes the two keys. When the database
@@ -168,8 +170,9 @@ cannot be read, every member carries `error`.
 `current_version`, `dirty`, `applied` and `pending` keep their shapes and it adds
 `layout: "unified"` ([openapi.yaml](openapi.yaml)).
 
-`fleet status` reports the ledger in a `migrations` line (dirty fails; not
-adopted yet or pending is an advisory), `fleet doctor` does the same, and
+`fleet status` reports the ledger in a `migrations` line (what fleet refuses
+to start on — dirty, unknown or mismatched versions — fails; not adopted yet or
+pending is an advisory), `fleet doctor` does the same, and
 `fleet diagnose` writes it to `db.txt`.
 
 ## A dirty ledger: `fleet migrate force`
@@ -234,7 +237,8 @@ The reserved `-- fleet:no-transaction` directive is the planned way out
 `MIGRATION_LINT_BASE`):
 
 - **Append-only.** A `sql/NNNN_*` file that exists at the base and is edited or
-  renamed is refused: a shipped migration never changes.
+  renamed is refused, and so is any file deleted from (or moved out of) the
+  directory, `legacy/` included: a database that ran it would refuse to start.
 - **Layout.** An added or edited file under `sql/legacy/` is refused. A pure
   rename (100% similar) is not a change and is exempt — the M6 move itself was
   one; a rename with edits is checked as a change. A new file must be

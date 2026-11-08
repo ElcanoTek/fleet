@@ -799,8 +799,9 @@ var Operations = map[string]apispec.Operation{
 			"until `fleet migrate force`), `adopted` whether the database has moved " +
 			"onto the one ledger yet (before it has, `applied` is what adoption will " +
 			"record from the legacy ledgers, described in `legacy`). Versions the " +
-			"build does not ship are listed under `applied`, so a downgrade is " +
-			"visible. Applies nothing — safe to call any time. Admin-only. The chat " +
+			"build does not ship are listed under `applied` (and `unknown`), so a " +
+			"downgrade is visible; `unknown`, `mismatched` (an edited migration) and " +
+			"`dirty` are what fleet refuses to start on. Applies nothing — safe to call any time. Admin-only. The chat " +
 			"server answers the same report at the same path on its port. The keys " +
 			"of the pre-M6 per-store reports are kept; `layout` is `unified`.",
 		Security:   adminKey,
@@ -826,6 +827,16 @@ var Operations = map[string]apispec.Operation{
 				apispec.Prop("pending", &apispec.Schema{Type: "array", Nullable: true, Items: apispec.Object(
 					apispec.Prop("version", apispec.Typed("integer")),
 					apispec.Prop("name", apispec.Typed("string")),
+				)}),
+				apispec.Prop("unknown", &apispec.Schema{Type: "array", Description: "applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start", Items: apispec.Object(
+					apispec.Prop("version", apispec.Typed("integer")),
+					apispec.Prop("name", apispec.Typed("string")),
+					apispec.Prop("applied_at", &apispec.Schema{Type: "integer", Description: "Unix seconds"}),
+				)}),
+				apispec.Prop("mismatched", &apispec.Schema{Type: "array", Description: "applied versions recorded with another name or checksum than this build's file (an edited migration); fleet refuses to start", Items: apispec.Object(
+					apispec.Prop("version", apispec.Typed("integer")),
+					apispec.Prop("name", apispec.Typed("string")),
+					apispec.Prop("applied_at", &apispec.Schema{Type: "integer", Description: "Unix seconds"}),
 				)}),
 			))),
 			apispec.RefResponse("500", "Error"),

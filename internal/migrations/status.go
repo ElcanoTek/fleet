@@ -34,6 +34,18 @@ type Report struct {
 	Pending        []Info `json:"pending"`
 	// Legacy describes the legacy ledgers when not adopted yet.
 	Legacy string `json:"legacy,omitempty"`
+	// Unknown lists applied versions this build does not ship (a newer fleet
+	// migrated the database) and Mismatched the applied versions whose
+	// recorded name or checksum is not this build's file (an edited shipped
+	// migration). fleet refuses to start on either, as on Dirty.
+	Unknown    []Info `json:"unknown,omitempty"`
+	Mismatched []Info `json:"mismatched,omitempty"`
+}
+
+// Refused reports whether migrations.Up would refuse this database: a dirty
+// row, a version this build does not ship, or an edited shipped migration.
+func (rep Report) Refused() bool {
+	return rep.Dirty || len(rep.Unknown) > 0 || len(rep.Mismatched) > 0
 }
 
 // Status reports applied vs pending migrations. It is strictly READ-ONLY: it
@@ -65,9 +77,21 @@ func (r *runner) status(ctx context.Context, db querier) (Report, error) {
 		}
 		for v, row := range ledger {
 			at := row.AppliedAt.Unix()
-			applied[v] = Info{Version: v, Name: row.Name, AppliedAt: &at}
+			info := Info{Version: v, Name: row.Name, AppliedAt: &at}
+			applied[v] = info
 			rep.Dirty = rep.Dirty || row.Dirty
+			switch m, ok := r.set.Get(v); {
+			case !ok:
+				rep.Unknown = append(rep.Unknown, info)
+			case !matches(m, row):
+				rep.Mismatched = append(rep.Mismatched, info)
+			}
 		}
+		byVersion := func(is []Info) func(i, j int) bool {
+			return func(i, j int) bool { return is[i].Version < is[j].Version }
+		}
+		sort.Slice(rep.Unknown, byVersion(rep.Unknown))
+		sort.Slice(rep.Mismatched, byVersion(rep.Mismatched))
 	} else {
 		st, err := readLegacy(ctx, db)
 		if err != nil {

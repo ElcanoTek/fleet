@@ -9,7 +9,9 @@
 #     bytes are what every installed database ran). A pure rename (100%
 #     similar) is not a change and is exempt — the move into this layout was one.
 #   - shipped migrations are append-only: a sql/NNNN_* file that existed at
-#     the base and is modified or renamed is refused (diff mode).
+#     the base and is modified or renamed is refused, and any file deleted
+#     from (or moved out of) the directory — legacy/ included — is refused
+#     (diff mode).
 #   - a new migration is a pair, sql/NNNN_name.up.sql + sql/NNNN_name.down.sql
 #     (four digits, from 0200, lower-case name): a misnamed or unpaired file is
 #     refused.
@@ -102,6 +104,8 @@ normalize_sql() {
 files=()
 # Paths (diff mode) whose file existed at the base and was changed or renamed.
 declare -A SHIPPED_CHANGED=()
+# Paths (diff mode) under the migration directory deleted (or moved out).
+DELETED=()
 if [ "$#" -gt 0 ]; then
   files=("$@")
 else
@@ -124,8 +128,17 @@ else
     [ -n "$status" ] || continue
     path="$p1"
     case "$status" in
+      D*)
+        # A migration that ran on a database cannot leave the build: that
+        # database would then refuse to start (a version it does not ship).
+        [[ "$p1" == "$MIGRATION_DIR"* ]] && DELETED+=("$p1")
+        continue ;;
       R*)
         path="$p2"
+        if [[ "$p1" == "$MIGRATION_DIR"* && "$p2" != "$MIGRATION_DIR"* ]]; then
+          DELETED+=("$p1") # moved out of the directory: gone from the build
+          continue
+        fi
         # A pure rename INTO the directory (the M6 move) or within legacy/
         # is not a change. A shipped new-layout migration renamed is.
         if [ "$status" = R100 ] && { [[ "$p1" != "$MIGRATION_DIR"* ]] || [[ "$p1" == "$MIGRATION_DIR"legacy/* && "$p2" == "$MIGRATION_DIR"legacy/* ]]; }; then
@@ -142,10 +155,10 @@ else
           R*) [[ "$p1" == "$MIGRATION_DIR"* ]] && SHIPPED_CHANGED["$path"]=1 ;;
         esac ;;
     esac
-  done < <(git diff --name-status -M --diff-filter=AMR "${base}...HEAD" 2>/dev/null || true)
+  done < <(git diff --name-status -M --diff-filter=AMRD "${base}...HEAD" 2>/dev/null || true)
 fi
 
-if [ "${#files[@]}" -eq 0 ]; then
+if [ "${#files[@]}" -eq 0 ] && [ "${#DELETED[@]}" -eq 0 ]; then
   echo "check-migrations: no changed migration files to check."
   exit 0
 fi
@@ -232,6 +245,12 @@ unqualified_names() {
     emit "unqualified name ${n} (new migrations run with search_path pg_catalog: write chat.${n}, core.${n} or sched.${n})"
   done
 }
+
+for f in "${DELETED[@]}"; do
+  current_file="$f"
+  file_hit=0
+  emit "a migration may not be deleted (or moved out of internal/migrations/sql): a database that ran it would refuse to start — shipped migrations are append-only"
+done
 
 for f in "${files[@]}"; do
   [ -f "$f" ] || [[ "$f" == *"$MIGRATION_DIR"legacy/* ]] || continue

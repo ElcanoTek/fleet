@@ -177,6 +177,15 @@ func TestCheckMigrations_DiffMode(t *testing.T) {
 		t.Fatalf("a renamed shipped migration must be refused (err %v):\n%s", err, out)
 	}
 	git("reset", "-q", "--hard", "base")
+	// Deleting shipped migrations — both halves of a pair, or a legacy file —
+	// is refused: a database that ran them would refuse to start.
+	git("rm", "-q", "internal/migrations/sql/0200_add_flags.up.sql", "internal/migrations/sql/0200_add_flags.down.sql",
+		"internal/migrations/sql/legacy/chat/001_initial.sql")
+	git("commit", "-qm", "delete shipped migrations")
+	if out, err := lint(); err == nil || strings.Count(out, "a migration may not be deleted") != 3 {
+		t.Fatalf("deleted migrations must be refused, each (err %v):\n%s", err, out)
+	}
+	git("reset", "-q", "--hard", "base")
 
 	write("internal/migrations/sql/legacy/chat/002_more.sql", "CREATE TABLE u (a int);\nCREATE TABLE v (a int);\n")
 	write("internal/migrations/sql/legacy/chat/003_late.sql", "SELECT 1;\n")

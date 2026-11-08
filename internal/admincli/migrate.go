@@ -269,6 +269,12 @@ func printMigrations(r migrations.Report) {
 		fmt.Printf("  adopted: not yet — the next fleet start moves the legacy ledgers into %s (%s)\n", r.MigrationTable, r.Legacy)
 	}
 	fmt.Printf("  current version: %s\n", cur)
+	for _, m := range r.Unknown {
+		fmt.Printf("  REFUSED: version %d (%s) is not shipped by this build: a newer fleet migrated this database\n", m.Version, m.Name)
+	}
+	for _, m := range r.Mismatched {
+		fmt.Printf("  REFUSED: version %d (%s) was recorded from a different file than this build ships (an edited migration; see docs/MIGRATIONS.md)\n", m.Version, m.Name)
+	}
 	if r.Dirty {
 		fmt.Printf("  DIRTY: a migration was left half-applied — inspect the database, then record the last good version:\n")
 		fmt.Printf("         fleet migrate force <version>\n")

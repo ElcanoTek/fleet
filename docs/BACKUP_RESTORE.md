@@ -63,8 +63,9 @@ schemas it leaves behind:
 
 - `--db=all` restores the dump's ledger with its schemas; nothing else to check.
 - `--db=chat` / `--db=sched` of a dump taken since M6 puts back one store while
-  the other stays live, so it is **refused unless the dump's ledger is at the
-  live ledger's version** (the highest version each records). Into an empty
+  the other stays live, so it is **refused unless the dump's ledger is the
+  live ledger** (the same versions, each with the same name and checksum — the
+  same migration history, not only the same highest version). Into an empty
   database, restore chat first (it carries `core`, ledger included), then
   sched. Across versions, restore a `fleet-all` dump with `--db=all`, or
   restore with the release whose database matches the dump.

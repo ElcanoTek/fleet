@@ -1050,6 +1050,10 @@ if [[ -z "$id_cli" ]] || ! command -v jq >/dev/null 2>&1; then
   advise "migration ledger check skipped (needs the fleet binary and jq)"
 elif ! mig_json="$(FLEET_ENV_FILE="$ENV_FILE" "$id_cli" migrate status --json 2>/dev/null)" || ! jq -e 'has("adopted")' >/dev/null 2>&1 <<<"$mig_json"; then
   advise "could not read the migration ledger — run: fleet migrate status"
+elif (( $(jq -r '(.unknown // []) | length' <<<"$mig_json") > 0 )); then
+  fail "migrations: core.schema_versions has version(s) $(jq -r '[.unknown[].version] | join(", ")' <<<"$mig_json") this release does not ship (a newer fleet migrated this database; fleet will not start) — run that release, or restore a backup taken before it"
+elif (( $(jq -r '(.mismatched // []) | length' <<<"$mig_json") > 0 )); then
+  fail "migrations: version(s) $(jq -r '[.mismatched[].version] | join(", ")' <<<"$mig_json") were recorded from a different file than this release ships (an edited migration; fleet will not start) — see docs/MIGRATIONS.md"
 elif [[ "$(jq -r '.dirty' <<<"$mig_json")" == "true" ]]; then
   fail "migrations: core.schema_versions has a DIRTY version (a migration was left half-applied; fleet will not start) — see docs/MIGRATIONS.md, then: fleet migrate force <version>"
 elif [[ "$(jq -r '.adopted' <<<"$mig_json")" != "true" ]]; then

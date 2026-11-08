@@ -200,7 +200,8 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 
 // checkMigrations reports the one migration ledger (#2049 M6), read-only:
 // whether the database adopted core.schema_versions, its current version and
-// anything pending. A dirty ledger fails (fleet refuses to start on it); not
+// anything pending. A ledger fleet refuses to start on fails: dirty, a version
+// this build does not ship, or one recorded from an edited migration; not
 // adopted yet or pending migrations are advisories (the next start of this
 // release does both); a ledger that cannot be read is an advisory too, since
 // the database check above already reports reachability.
@@ -222,7 +223,9 @@ func checkMigrations(r *report, flagURL string) {
 	switch {
 	case err != nil:
 		r.warnLine("migrations", "could not read the ledger: "+firstLine(err.Error()))
-	case rep.Dirty:
+	case rep.Refused():
+		// What migrations.Up refuses — dirty, unknown or edited versions —
+		// fleet will not start on.
 		r.fail("migrations", describeMigrationReport(rep))
 	case !rep.Adopted || len(rep.Pending) > 0:
 		r.warnLine("migrations", describeMigrationReport(rep))

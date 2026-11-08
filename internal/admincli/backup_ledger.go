@@ -1,9 +1,11 @@
 package admincli
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -35,29 +37,107 @@ type ledgerRestore struct {
 }
 
 // dumpLedger reports whether the dump holds core.schema_versions and, when
-// it does, the highest version it records.
-func dumpLedger(ctx context.Context, path string) (int, bool, error) {
+// it does, its rows (ascending) and highest version.
+func dumpLedger(ctx context.Context, path string) ([]migrations.LedgerEntry, int, bool, error) {
 	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv. --list is read-only.
 	out, err := exec.CommandContext(ctx, "pg_restore", "--list", path).Output()
 	if err != nil {
-		return 0, false, fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
+		return nil, 0, false, fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
 	}
 	if !tocHasTable(string(out), config.IdentitySchema, "schema_versions") {
-		return 0, false, nil
+		return nil, 0, false, nil
 	}
-	versions, err := dumpColumn(ctx, path, config.IdentitySchema, "schema_versions", "version")
+	rows, err := dumpRows(ctx, path, config.IdentitySchema, "schema_versions", []string{"version", "name", "checksum"})
 	if err != nil {
-		return 0, true, err
+		return nil, 0, true, err
 	}
+	entries := make([]migrations.LedgerEntry, 0, len(rows))
 	top := 0
-	for v := range versions {
-		n, err := strconv.Atoi(v)
+	for _, r := range rows {
+		n, err := strconv.Atoi(r[0])
 		if err != nil {
-			return 0, true, fmt.Errorf("the dump's %s holds a non-numeric version %q", migrations.Table, v)
+			return nil, 0, true, fmt.Errorf("the dump's %s holds a non-numeric version %q", migrations.Table, r[0])
 		}
 		top = max(top, n)
+		entries = append(entries, migrations.LedgerEntry{Version: n, Name: r[1], Checksum: r[2]})
 	}
-	return top, true, nil
+	return entries, top, true, nil
+}
+
+// dumpRows reads columns of one table out of a custom-format dump
+// (pg_restore --data-only to stdout; nothing is connected to or written).
+func dumpRows(ctx context.Context, path, schema, table string, columns []string) ([][]string, error) {
+	//nolint:gosec // G204: fixed "pg_restore" binary; path/schema/table are separate argv (no shell).
+	cmd := exec.CommandContext(ctx, "pg_restore", "--data-only", "-n", schema, "-t", table, "-f", "-", path)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	rows, perr := parseCopyRows(out, schema+"."+table, columns)
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("read %s.%s from %s: %w", schema, table, path, err)
+	}
+	if perr != nil {
+		return nil, fmt.Errorf("read %s.%s from %s: %w", schema, table, path, perr)
+	}
+	return rows, nil
+}
+
+// parseCopyRows collects the named columns of the COPY block for table in a
+// pg_restore SQL script (COPY text format; \N reads as ""). A column the
+// table does not have is an error.
+func parseCopyRows(r io.Reader, table string, columns []string) ([][]string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
+	var idx []int
+	var out [][]string
+	in := false
+	for sc.Scan() {
+		ln := sc.Text()
+		if !in {
+			rest, ok := strings.CutPrefix(ln, "COPY "+table+" (")
+			if !ok {
+				continue
+			}
+			cols, _, ok := strings.Cut(rest, ") FROM stdin;")
+			if !ok {
+				return nil, fmt.Errorf("unexpected COPY header %q", ln)
+			}
+			have := strings.Split(cols, ", ")
+			idx = idx[:0]
+			for _, want := range columns {
+				at := -1
+				for i, c := range have {
+					if strings.Trim(c, `"`) == want {
+						at = i
+					}
+				}
+				if at < 0 {
+					_ = drain(sc)
+					return nil, fmt.Errorf("%s has no column %s", table, want)
+				}
+				idx = append(idx, at)
+			}
+			in = true
+			continue
+		}
+		if ln == `\.` {
+			in = false
+			continue
+		}
+		f := strings.Split(ln, "\t")
+		row := make([]string, len(idx))
+		for i, at := range idx {
+			if at < len(f) && f[at] != `\N` {
+				row[i] = f[at]
+			}
+		}
+		out = append(out, row)
+	}
+	return out, sc.Err()
 }
 
 // tocHasTable reports whether a pg_restore --list output has a TABLE entry
@@ -83,7 +163,7 @@ func tocHasTable(toc, schema, table string) bool {
 // at another version than the live one — the case that needs no other
 // check's context, so it runs before anything can change the database.
 func checkLedgerVersions(ctx context.Context, dsn, inPath, target string) error {
-	dumpMax, dumpHas, err := dumpLedger(ctx, inPath)
+	dumpRows, _, dumpHas, err := dumpLedger(ctx, inPath)
 	if err != nil || !dumpHas {
 		return err
 	}
@@ -92,8 +172,8 @@ func checkLedgerVersions(ctx context.Context, dsn, inPath, target string) error 
 		return err
 	}
 	defer db.Close()
-	liveMax, liveHas, err := migrations.LedgerMax(ctx, db)
-	if err != nil || !liveHas || liveMax == dumpMax {
+	liveRows, liveHas, err := migrations.Ledger(ctx, db)
+	if err != nil || !liveHas || migrations.LedgerDiff(dumpRows, liveRows) == "" {
 		return err
 	}
 	_, err = planLedgerRestore(ctx, dsn, inPath, target)
@@ -103,7 +183,7 @@ func checkLedgerVersions(ctx context.Context, dsn, inPath, target string) error 
 // planLedgerRestore checks the dump's ledger against the live one before a
 // restore of target ("chat", "sched" or "all") touches anything.
 func planLedgerRestore(ctx context.Context, dsn, inPath, target string) (ledgerRestore, error) {
-	dumpMax, dumpHas, err := dumpLedger(ctx, inPath)
+	dumpEntries, dumpMax, dumpHas, err := dumpLedger(ctx, inPath)
 	if err != nil {
 		return ledgerRestore{}, err
 	}
@@ -112,12 +192,20 @@ func planLedgerRestore(ctx context.Context, dsn, inPath, target string) (ledgerR
 		return ledgerRestore{}, err
 	}
 	defer db.Close()
-	liveMax, liveHas, err := migrations.LedgerMax(ctx, db)
+	liveEntries, liveHas, err := migrations.Ledger(ctx, db)
 	if err != nil {
 		return ledgerRestore{}, err
 	}
+	liveMax := 0
+	for _, e := range liveEntries {
+		liveMax = max(liveMax, e.Version)
+	}
 	if dumpHas {
-		if target == "all" || (liveHas && liveMax == dumpMax) {
+		// One store restored next to the other live: both ledgers must record
+		// the same versions, names and checksums (the same schema), not just
+		// reach the same version.
+		diff := migrations.LedgerDiff(dumpEntries, liveEntries)
+		if target == "all" || (liveHas && diff == "") {
 			return ledgerRestore{}, nil
 		}
 		if !liveHas {
@@ -136,10 +224,10 @@ func planLedgerRestore(ctx context.Context, dsn, inPath, target string) (ledgerR
 				"(fleet backup --db=all makes one), or start this fleet release once on the database first (docs/BACKUP_RESTORE.md)",
 				inPath, dumpMax, migrations.Table)
 		}
-		return ledgerRestore{}, fmt.Errorf("%s is at migration version %d but this database is at migration version %d: restoring only "+
-			"the %s store would leave the two stores' schemas at different versions under one ledger. Restore a whole-fleet dump "+
-			"with --db=all (fleet backup --db=all makes one), or restore with the fleet release whose database matches the dump "+
-			"(docs/BACKUP_RESTORE.md)", inPath, dumpMax, liveMax, target)
+		return ledgerRestore{}, fmt.Errorf("%s's migration ledger (at version %d) is not this database's (at migration version %d; "+
+			"first difference: %s, dump vs database): restoring only the %s store would leave the two stores' schemas from different "+
+			"migration histories under one ledger. Restore a whole-fleet dump with --db=all (fleet backup --db=all makes one), or "+
+			"restore with the fleet release whose database matches the dump (docs/BACKUP_RESTORE.md)", inPath, dumpMax, liveMax, diff, target)
 	}
 	if !liveHas {
 		return ledgerRestore{}, nil

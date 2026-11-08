@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 )
 
 // What `fleet restore` needs to keep the one ledger true to the schemas a
@@ -120,4 +121,70 @@ func ForgetLedger(ctx context.Context, db *sql.DB, rewrite ...string) error {
 		}
 		return tx.Commit()
 	})
+}
+
+// LedgerEntry is one row of core.schema_versions as a restore compares it.
+type LedgerEntry struct {
+	Version  int
+	Name     string
+	Checksum string
+}
+
+// Ledger returns every row of core.schema_versions, ascending, and whether
+// the ledger exists.
+func Ledger(ctx context.Context, db *sql.DB) ([]LedgerEntry, bool, error) {
+	exists, err := ledgerExists(ctx, db)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	rows, err := readLedger(ctx, db)
+	if err != nil {
+		return nil, true, err
+	}
+	out := make([]LedgerEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, LedgerEntry{Version: r.Version, Name: r.Name, Checksum: r.Checksum})
+	}
+	sortEntries(out)
+	return out, true, nil
+}
+
+func sortEntries(es []LedgerEntry) {
+	sort.Slice(es, func(i, j int) bool { return es[i].Version < es[j].Version })
+}
+
+// LedgerDiff describes the first difference between two ledgers ("" when
+// they record the same versions, names and checksums).
+func LedgerDiff(a, b []LedgerEntry) string {
+	ma := map[int]LedgerEntry{}
+	for _, e := range a {
+		ma[e.Version] = e
+	}
+	mb := map[int]LedgerEntry{}
+	for _, e := range b {
+		mb[e.Version] = e
+	}
+	var versions []int
+	for v := range ma {
+		versions = append(versions, v)
+	}
+	for v := range mb {
+		if _, ok := ma[v]; !ok {
+			versions = append(versions, v)
+		}
+	}
+	sort.Ints(versions)
+	for _, v := range versions {
+		ea, inA := ma[v]
+		eb, inB := mb[v]
+		switch {
+		case !inA:
+			return fmt.Sprintf("version %d (%s) only in the second", v, eb.Name)
+		case !inB:
+			return fmt.Sprintf("version %d (%s) only in the first", v, ea.Name)
+		case ea.Name != eb.Name || ea.Checksum != eb.Checksum:
+			return fmt.Sprintf("version %d differs (%s %.12s vs %s %.12s)", v, ea.Name, ea.Checksum, eb.Name, eb.Checksum)
+		}
+	}
+	return ""
 }

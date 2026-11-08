@@ -80,8 +80,8 @@ func TestRestoreKeepsTheLedgerTrue(t *testing.T) {
 	if err := runPgDumpAll(ctx, config.WithSchema(src, config.ChatSchema), allDump); err != nil {
 		t.Fatal(err)
 	}
-	if v, ok, err := dumpLedger(ctx, chatDump); err != nil || !ok || v != migrations.LegacyLatest {
-		t.Fatalf("dumpLedger(chat dump) = %d, %v, %v", v, ok, err)
+	if rows, v, ok, err := dumpLedger(ctx, chatDump); err != nil || !ok || v != migrations.LegacyLatest || len(rows) != 176 || rows[0].Checksum == "" {
+		t.Fatalf("dumpLedger(chat dump) = %d rows, max %d, %v, %v", len(rows), v, ok, err)
 	}
 
 	restoreAcrossVersions(t, migrated, chatDump, schedDump, allDump)
@@ -102,6 +102,17 @@ func restoreAcrossVersions(t *testing.T, migrated func(int) (string, *sql.DB), c
 		t.Fatalf("ledger after the restore: %d, %v, %v", v, ok, err)
 	}
 
+	// The same highest version but a different history (here one row's
+	// checksum): a one-store restore is refused too (Codex 4506166384).
+	twin, twinDB := migrated(migrations.LegacyLatest)
+	if _, err := twinDB.ExecContext(ctx, `UPDATE core.schema_versions SET checksum = 'other' WHERE version = 42`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPgRestoreWith(ctx, config.WithSchema(twin, config.ChatSchema), chatDump, restoreOpts{allowUnresolved: true}); err == nil ||
+		!strings.Contains(err.Error(), "version 42 differs") || !strings.Contains(err.Error(), "--db=all") {
+		t.Fatalf("one-store restore over a ledger with the same max but another history = %v, want a refusal", err)
+	}
+
 	// Another version: one store is refused, the whole fleet is not. (The
 	// live ledger is made to read 176 by hand: a restore over a schema that
 	// differs is pg_restore --clean's own problem, not this check's.)
@@ -114,7 +125,7 @@ func restoreAcrossVersions(t *testing.T, migrated func(int) (string, *sql.DB), c
 		{config.WithSchema(behind, config.SchedSchema), schedDump},
 	} {
 		err := runPgRestoreWith(ctx, c.dsn, c.dump, restoreOpts{allowUnresolved: true})
-		if err == nil || !strings.Contains(err.Error(), "--db=all") || !strings.Contains(err.Error(), "database is at migration version 176") {
+		if err == nil || !strings.Contains(err.Error(), "--db=all") || !strings.Contains(err.Error(), "at migration version 176") {
 			t.Fatalf("one-store restore across versions = %v, want a refusal naming --db=all", err)
 		}
 	}
@@ -155,7 +166,7 @@ func restorePreM6Dump(t *testing.T, open func(string) *sql.DB, migrated func(int
 	if err := runPgDump(ctx, config.WithSchema(old, config.ChatSchema), oldChat); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := dumpLedger(ctx, oldChat); err != nil || ok {
+	if _, _, ok, err := dumpLedger(ctx, oldChat); err != nil || ok {
 		t.Fatalf("a pre-M6 dump read as having a ledger (%v, %v)", ok, err)
 	}
 	live, liveDB := migrated(migrations.LegacyLatest)

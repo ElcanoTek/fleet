@@ -384,7 +384,7 @@ export interface paths {
         };
         /**
          * Migration status — applied vs pending migrations of the one sequence (#256, #2049 M6).
-         * @description Read-only operator view of the database's schema migrations: one sequence (legacy chat 1–99, legacy sched as 101–177, new migrations from 200) recorded in one ledger, `core.schema_versions` (ADR-0107, docs/MIGRATIONS.md). `current_version` is the highest applied version, `dirty` says a migration was left half-applied (fleet refuses to start until `fleet migrate force`), `adopted` whether the database has moved onto the one ledger yet (before it has, `applied` is what adoption will record from the legacy ledgers, described in `legacy`). Versions the build does not ship are listed under `applied`, so a downgrade is visible. Applies nothing — safe to call any time. Admin-only. The chat server answers the same report at the same path on its port. The keys of the pre-M6 per-store reports are kept; `layout` is `unified`.
+         * @description Read-only operator view of the database's schema migrations: one sequence (legacy chat 1–99, legacy sched as 101–177, new migrations from 200) recorded in one ledger, `core.schema_versions` (ADR-0107, docs/MIGRATIONS.md). `current_version` is the highest applied version, `dirty` says a migration was left half-applied (fleet refuses to start until `fleet migrate force`), `adopted` whether the database has moved onto the one ledger yet (before it has, `applied` is what adoption will record from the legacy ledgers, described in `legacy`). Versions the build does not ship are listed under `applied` (and `unknown`), so a downgrade is visible; `unknown`, `mismatched` (an edited migration) and `dirty` are what fleet refuses to start on. Applies nothing — safe to call any time. Admin-only. The chat server answers the same report at the same path on its port. The keys of the pre-M6 per-store reports are kept; `layout` is `unified`.
          */
         get: {
             parameters: {
@@ -425,6 +425,20 @@ export interface paths {
                                 version?: number;
                                 name?: string;
                             }[] | null;
+                            /** @description applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start */
+                            unknown?: {
+                                version?: number;
+                                name?: string;
+                                /** @description Unix seconds */
+                                applied_at?: number;
+                            }[];
+                            /** @description applied versions recorded with another name or checksum than this build's file (an edited migration); fleet refuses to start */
+                            mismatched?: {
+                                version?: number;
+                                name?: string;
+                                /** @description Unix seconds */
+                                applied_at?: number;
+                            }[];
                         };
                     };
                 };
