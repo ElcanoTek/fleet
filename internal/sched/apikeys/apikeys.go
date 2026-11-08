@@ -233,12 +233,12 @@ func (m *Manager) generateKeyID() (string, error) {
 }
 
 // fileStamp identifies one version of the key file: its mtime and size (one
-// Stat, the steady-state check) and its content hash (the tie-breaker when
+// Stat, the steady-state check) and its raw bytes (the tie-breaker when
 // the Stat looks unchanged but cannot be trusted).
 type fileStamp struct {
 	mod  time.Time
 	size int64
-	sum  [sha256.Size]byte
+	raw  string
 	ok   bool
 }
 
@@ -324,7 +324,7 @@ func (m *Manager) stampLocked(data []byte) {
 		m.stamp = fileStamp{}
 		return
 	}
-	m.stamp = fileStamp{mod: st.ModTime(), size: st.Size(), sum: sha256.Sum256(data), ok: true}
+	m.stamp = fileStamp{mod: st.ModTime(), size: st.Size(), raw: string(data), ok: true}
 }
 
 // syncLocked makes this Manager observe every change another process (the
@@ -335,7 +335,7 @@ func (m *Manager) stampLocked(data []byte) {
 // authenticating on the very next request, and no write of ours overwrites a
 // change we have not seen. The steady state costs one Stat; the file is read
 // only when its mtime or size moved, or its mtime is too recent to trust
-// (stampSettle), and re-adopted only when its content hash changed.
+// (stampSettle), and re-adopted only when its bytes changed.
 //
 // A file that cannot be read or parsed leaves the in-memory state as it is:
 // writes are atomic renames, so that is a transient or operator error, not a
@@ -353,7 +353,7 @@ func (m *Manager) syncLocked() {
 	if err != nil {
 		return
 	}
-	if m.stamp.ok && sha256.Sum256(data) == m.stamp.sum {
+	if m.stamp.ok && string(data) == m.stamp.raw {
 		m.stamp.mod, m.stamp.size = st.ModTime(), st.Size()
 		return
 	}
