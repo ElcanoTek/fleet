@@ -90,8 +90,10 @@ database, which removes the reason for any of this.
   the chat password is kept (Operations-Center-only accounts keep theirs).
 - `fleet sched user` becomes a deprecated alias over the identity table;
   `rename` is refused (the email is the key of ~30 chat columns).
-- `POST /users` (admin key) creates an account with role viewer (or admin)
-  and refuses an email that is already an account.
+- `POST /users` (admin key) and `fleet sched user add` create an account with
+  role viewer (or admin); an existing account without Operations Center
+  access is granted it instead (its password kept), and one that has access
+  is refused (409).
 - Backups: the chat dump carries schema `core`; a pre-M4 chat dump restores
   only into a database without `core`.
 - Deferred: foreign keys from `tasks.created_by` / `datasets.created_by_user_id`

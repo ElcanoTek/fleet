@@ -112,8 +112,13 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   written). Responses add `ops_scope` and keep `ops_center_role` and
   `ops_center_admin`. Auth's `ops_role` contract is unchanged (it may also
   send `view`/`run`). The Operations Center's `/auth/me` and `POST /users`
-  keep admin | client | readonly; `POST /users` now makes a new account (role
-  viewer, or admin) and answers 409 for any existing account.
+  keep admin | client | readonly. `POST /users` (and `fleet sched user add`)
+  makes a new account (role viewer, or admin); for an email that is already
+  an enabled account with no Operations Center access (a chat user) it grants
+  that account the access instead — password and chat role untouched, except
+  that admin makes it a Fleet admin — as adding an Operations Center user for
+  a chat email did before. An account that already has access, or is
+  disabled, is a 409.
 - **CLI.** `fleet admin add|list|rm` act on the one row (`--sched-database-url`
   is accepted and ignored). `fleet sched user add|update|set-role|del|list`
   are deprecated aliases: `del` ends Operations Center access (scope none) and

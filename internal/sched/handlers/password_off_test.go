@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
 // TestPasswordBearerIsRetired pins #2049 M4 (ADR-0105): the Operations
@@ -147,5 +149,72 @@ func TestCreateUserRefusesNoneAndNonCanonicalRoles(t *testing.T) {
 	h.CreateUser(w, r)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("role view: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// An email that is already a chat account (no Operations Center access) is
+// promoted by POST /users — the e2e seed's `fleet sched user add` on its chat
+// user, and any script that added an Operations Center user for a chat email
+// before the one identity table — and then reaches the Operations Center
+// through the session cookie (header trust). Its chat password is unchanged.
+// One that already has access, or is disabled, is still a 409.
+func TestCreateUserPromotesAnExistingChatAccount(t *testing.T) {
+	t.Parallel()
+
+	h, store := setupTest(t)
+	ctx := t.Context()
+	hash, err := identity.HashPassword("chat-password-placeholder", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Identity().CreateAccount(ctx, identity.NewAccount{Email: "chat@x.com", PasswordHash: hash, Role: identity.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	me := func(email string) int {
+		req := httptest.NewRequest("GET", "/api/me", nil)
+		req.Header.Set("X-Orchestrator-Server-Token", testSharedToken)
+		req.Header.Set("X-User-Email", email)
+		w := httptest.NewRecorder()
+		h.AdminOrUserAuthMiddleware(ok).ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := me("chat@x.com"); code != http.StatusForbidden {
+		t.Fatalf("a chat member without Operations Center access: /me = %d, want 403", code)
+	}
+	create := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/users", bytes.NewBufferString(body))
+		r.Header.Set("X-API-Key", "admin-key")
+		w := httptest.NewRecorder()
+		h.CreateUser(w, r)
+		return w
+	}
+	if w := create(`{"username": "chat@x.com", "password": "another-password-1", "role": "admin"}`); w.Code != http.StatusCreated {
+		t.Fatalf("promote the chat account: %d %s", w.Code, w.Body.String())
+	}
+	acct, err := store.GetIdentity(ctx, "chat@x.com")
+	if err != nil || acct.Role != identity.RoleAdmin || acct.LegacyOpsRole() != "admin" {
+		t.Fatalf("promoted account = %+v, %v", acct, err)
+	}
+	if code := me("chat@x.com"); code != http.StatusOK {
+		t.Fatalf("the promoted account: /me = %d, want 200", code)
+	}
+	var stored string
+	if err := store.DB().Conn().QueryRowContext(ctx, `SELECT password_hash FROM core.users WHERE email = 'chat@x.com'`).Scan(&stored); err != nil || stored != hash {
+		t.Errorf("the promotion changed the chat password (%v)", err)
+	}
+	// Access already there: 409, nothing changed.
+	if w := create(`{"username": "chat@x.com", "password": "another-password-1", "role": "readonly"}`); w.Code != http.StatusConflict {
+		t.Fatalf("second add: %d %s", w.Code, w.Body.String())
+	}
+	// A non-admin grant keeps the chat role.
+	if _, err := store.Identity().CreateAccount(ctx, identity.NewAccount{Email: "viewer@x.com", Role: identity.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	if w := create(`{"username": "viewer@x.com", "password": "another-password-1", "role": "client"}`); w.Code != http.StatusCreated {
+		t.Fatalf("grant client: %d %s", w.Code, w.Body.String())
+	}
+	if acct, err := store.GetIdentity(ctx, "viewer@x.com"); err != nil || acct.Role != identity.RoleViewer || acct.OpsScope != identity.OpsRun {
+		t.Fatalf("client grant = %+v, %v", acct, err)
 	}
 }

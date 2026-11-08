@@ -220,6 +220,47 @@ func SetOpsAccess(ctx context.Context, q Querier, email, grant string) (*User, e
 	return GetByEmail(ctx, q, email)
 }
 
+// AddOpsAccess is what "create an Operations Center user" means on the one
+// identity table (the admin-key POST /users, `fleet sched user add`): before
+// it, the Operations Center had its own users, so an email that was already a
+// chat account could still be added there. Now that account is the same row:
+// when it is enabled and has no Operations Center access yet, the grant is
+// applied to it (its password and chat role untouched, except that "admin"
+// makes it a Fleet admin). An account that already has
+// Operations Center access, or is disabled, is left alone: ErrExists. A
+// missing account is ErrNotFound (the caller creates it).
+func (s *Store) AddOpsAccess(ctx context.Context, email, grant string) (u *User, err error) {
+	if _, _, ok := ParseOpsRole(grant); !ok {
+		return nil, inputErr("invalid Operations Center role %q", grant)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	email = NormalizeEmail(email)
+	var role, scope string
+	var enabled bool
+	switch err := tx.QueryRowContext(ctx, `SELECT role, ops_scope, enabled FROM core.users WHERE email = $1 FOR UPDATE`, email).Scan(&role, &scope, &enabled); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+	cur := User{Email: email, Role: Role(role), OpsScope: OpsScope(scope), Enabled: enabled}
+	if !enabled || cur.HasOpsAccess() {
+		return nil, fmt.Errorf("user %s %w", email, ErrExists)
+	}
+	if u, err = SetOpsAccess(ctx, tx, email, grant); err != nil {
+		return nil, err
+	}
+	return u, tx.Commit()
+}
+
 // SetOpsScope sets a non-admin row's scope (see SetOpsAccess).
 func (s *Store) SetOpsScope(ctx context.Context, email string, scope OpsScope) (*User, error) {
 	if !ValidOpsScope(string(scope)) {

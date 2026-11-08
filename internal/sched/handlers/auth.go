@@ -25,9 +25,12 @@ import (
 // admin | client | readonly. "admin" makes the account a Fleet admin, since
 // Operations Center admin is the Fleet admin role.
 //
-// An email that is already an account is refused (409), as an existing
-// username was: changing an existing account's access is the admin Users
-// page's or `fleet sched user set-role`'s job.
+// An email that is already an account with no Operations Center access (a
+// chat user) is given the requested access — its password and, unless admin
+// is requested, its chat role untouched — as adding an Operations Center user
+// for that email did before. One that already has access (or is disabled) is
+// refused (409), as an existing username was: changing that is the admin
+// Users page's or `fleet sched user set-role`'s job.
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if h.config.AccountsManagedByAuth {
 		writeError(w, http.StatusConflict, "This Fleet's accounts are managed in Auth. Grant Fleet and its Ops Center role there.")
@@ -65,11 +68,17 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		acct.Role, acct.OpsScope = identity.RoleAdmin, identity.OpsNone
 	}
 	u, err := h.storage.Identity().CreateAccount(r.Context(), acct)
-	if err != nil {
+	if errors.Is(err, identity.ErrExists) {
+		// Already an account (a chat user, say): give it the access, as
+		// adding an Operations Center user for that email did before the one
+		// identity table. Its password is not changed.
+		u, err = h.storage.Identity().AddOpsAccess(r.Context(), username, req.Role)
 		if errors.Is(err, identity.ErrExists) {
 			writeError(w, http.StatusConflict, "Username already exists")
 			return
 		}
+	}
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
