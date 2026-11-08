@@ -29,6 +29,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
@@ -272,7 +273,7 @@ func DefaultPoolConfig() PoolConfig {
 
 // Open connects to Postgres using the given DSN (DATABASE_URL format or
 // keyword/value — anything pgx accepts), applies the pool settings, and runs any
-// pending migrations. Fails loudly if the DB is newer than the binary knows
+// pending migrations of the one database (internal/migrations). Fails loudly if the DB is newer than the binary knows
 // about (prevents accidental downgrade).
 func Open(dsn string, pool PoolConfig) (*Store, error) {
 	if dsn == "" {
@@ -300,7 +301,9 @@ func Open(dsn string, pool PoolConfig) (*Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if err := applyMigrations(context.Background(), db); err != nil {
+	// The one migration runner (ADR-0107): every store open migrates the
+	// whole database (one read when it is current).
+	if err := migrations.Up(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

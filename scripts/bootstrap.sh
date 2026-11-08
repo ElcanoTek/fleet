@@ -445,7 +445,7 @@ fi
 gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
 # require_schema_privilege DSN WHAT [HINT] — die unless DSN's role can run
-# fleet's stores there: each store creates its schema (chat, sched) on first
+# fleet's stores there: each store creates its schema (chat, core, sched) on first
 # start, so a role that passes SELECT 1 but lacks CREATE on the database would
 # be reported ready and then fail at boot (lib/pgprovision.sh
 # fleet_db_store_readiness): it refuses a role that cannot create a missing
@@ -457,9 +457,9 @@ require_schema_privilege() {
   found="$(fleet_db_store_readiness "$1")" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    4) die "${2}'s role must OWN the existing store schemas (chat, sched) and everything in them, but found: ${found} — transfer them (ALTER SCHEMA … OWNER TO <role>, ALTER TABLE … OWNER TO <role>), or drop the schemas so fleet creates them${3:+, $3}" ;;
-    2) die "${2} names a database whose public schema already holds a fleet store (a database of the removed two-database layout) — fleet will not run its stores next to it. Point DATABASE_URL at the one database with the chat and sched schemas, or at a new database (docs/ONE-DATABASE.md)" ;;
-    1) die "${2}'s role cannot run fleet's stores there: it needs CREATE on the database for a schema (chat, sched) that does not exist yet (GRANT CREATE ON DATABASE <db> TO <role>), and must own each that does${3:+, $3}" ;;
+    4) die "${2}'s role must OWN the existing store schemas (chat, core, sched) and everything in them, but found: ${found} — transfer them (ALTER SCHEMA … OWNER TO <role>, ALTER TABLE … OWNER TO <role>), or drop the schemas so fleet creates them${3:+, $3}" ;;
+    2) die "${2} names a database whose public schema already holds a fleet store (a database of the removed two-database layout) — fleet will not run its stores next to it. Point DATABASE_URL at the one database with the chat, core and sched schemas, or at a new database (docs/ONE-DATABASE.md)" ;;
+    1) die "${2}'s role cannot run fleet's stores there: it needs CREATE on the database for a schema (chat, core, sched) that does not exist yet (GRANT CREATE ON DATABASE <db> TO <role>), and must own each that does${3:+, $3}" ;;
     *) die "${2}: could not check the role's privileges (psql failed)" ;;
   esac
 }
@@ -1445,12 +1445,12 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     info "--adopt-existing-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
     DB_URL="$ADOPTED_DB_URL"
     if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would validate the adopted DSN with: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat and sched schemas"
+      info "[dry-run] would validate the adopted DSN with: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat, core and sched schemas"
     else
       psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null \
         || die "adopted DSN failed SELECT 1 — supply the existing role's working DSN in DATABASE_URL (this script never rotates its password)"
       require_schema_privilege "$DB_URL" "the adopted DATABASE_URL"
-      ok "database adopted (existing role/database, SELECT 1 ok, may create the chat and sched schemas; password untouched)"
+      ok "database adopted (existing role/database, SELECT 1 ok, may create the chat, core and sched schemas; password untouched)"
     fi
   else
     guard_preexisting db "$FLEET_DB_USER" "$FLEET_DB_NAME" DATABASE_URL --adopt-existing-db --db-name --db-user
@@ -1504,7 +1504,7 @@ else
     unset _role_db
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would run: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat and sched schemas"
+    info "[dry-run] would run: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat, core and sched schemas"
   else
     psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null || die "DATABASE_URL failed SELECT 1"
     # fleet's stores create their schemas (chat, sched) on first start; a role

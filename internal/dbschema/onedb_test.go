@@ -9,6 +9,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/dbschema"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
@@ -24,10 +25,10 @@ func scratchDatabase(t *testing.T) string {
 // TestBothStoresInOneDatabase is the #2049 regression: both stores, with
 // their real migrations, in ONE database from ONE DSN — the configuration
 // DATABASE_URL alone resolves to. Each store must live in its own schema,
-// see only its own tables (both have a `schema_migrations` table of
-// incompatible shapes), share the ONE identity table in schema core (#2049
-// M4: the scheduler's own users table is merged and renamed away), and reopen
-// with no migration to run.
+// see only its own tables, share the ONE identity table in schema core (#2049
+// M4: the scheduler's own users table is merged and renamed away) and the
+// ONE migration ledger, core.schema_versions (#2049 M6: a fresh database has
+// no per-store ledger), and reopen with no migration to run.
 func TestBothStoresInOneDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -82,7 +83,7 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 	}
 
 	// Where everything landed: each store's tables in its schema, nothing in
-	// public, and each schema_migrations in the right shape.
+	// public, and one ledger in core.
 	raw, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -109,11 +110,11 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 		t.Error("a store's table leaked into the other store's schema")
 	}
 	checkIdentityPlacement(t, count, tables)
-	if count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'sched' AND table_name = 'schema_migrations' AND column_name = 'dirty'`) != 1 {
-		t.Error("sched.schema_migrations is not the sched runner's table")
+	if count(`SELECT count(*) FROM pg_tables WHERE tablename = 'schema_migrations'`) != 0 {
+		t.Error("a fresh database grew a legacy schema_migrations ledger")
 	}
-	if count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'chat' AND table_name = 'schema_migrations' AND column_name = 'applied_at'`) != 1 {
-		t.Error("chat.schema_migrations is not the chat runner's table")
+	if count(tables+` AND tablename = 'schema_versions'`, "core") != 1 {
+		t.Error("core.schema_versions is missing")
 	}
 
 	// Reopening runs no migration and keeps the data.
@@ -122,11 +123,8 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 	chat, sched = open()
 	defer chat.Close()
 	defer sched.Close()
-	if rep, err := chat.MigrationStatus(ctx); err != nil || len(rep.Pending) != 0 {
-		t.Errorf("chat migrations pending after reopen: %v, %v", rep.Pending, err)
-	}
-	if rep, err := scheddb.MigrationStatus(ctx, sched.Conn()); err != nil || len(rep.Pending) != 0 || rep.Dirty {
-		t.Errorf("sched migrations pending/dirty after reopen: %+v, %v", rep, err)
+	if rep, err := chat.MigrationStatus(ctx); err != nil || len(rep.Pending) != 0 || rep.Dirty || !rep.Adopted {
+		t.Errorf("migrations pending/dirty after reopen: %+v, %v", rep, err)
 	}
 	if n, err := sched.CountUsers(ctx); err != nil || n != 1 {
 		t.Errorf("sched CountUsers after reopen = %d, %v", n, err)
@@ -189,29 +187,29 @@ func TestEnsureRefusesALegacyDatabase(t *testing.T) {
 	}
 }
 
-// TestChatStoreRefusesPublic pins migration 099's guard (#2049 M4): the
-// identity table moves into schema core next to the stores of the one
-// database, so a chat store whose DSN names no schema (public) does not
-// migrate past 098 — it refuses, with the fix, and creates no core schema.
-func TestChatStoreRefusesPublic(t *testing.T) {
+// TestRunnerIgnoresThePoolSearchPath (#2049 M6): the one migration runner
+// sets each migration's search_path itself, so a pool whose DSN names no
+// schema (public) migrates the database into chat, core and sched exactly as
+// a store's pool does, and creates nothing in public.
+func TestRunnerIgnoresThePoolSearchPath(t *testing.T) {
 	t.Parallel()
 
 	dsn := scratchDatabase(t)
-	_, err := store.Open(dsn, store.DefaultPoolConfig())
-	if err == nil || !strings.Contains(err.Error(), "schema chat of the one database") {
-		t.Fatalf("chat store.Open in public = %v, want 099's refusal", err)
-	}
 	raw, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	var n int
-	if err := raw.QueryRow(`SELECT count(*) FROM pg_namespace WHERE nspname = 'core'`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("099's guard let it create schema core (%d, %v)", n, err)
+	if err := migrations.Up(t.Context(), raw); err != nil {
+		t.Fatalf("Up through a public pool: %v", err)
 	}
-	if err := raw.QueryRow(`SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'users'`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("the refused migration moved public.users (%d, %v)", n, err)
+	var public, inSchemas int
+	if err := raw.QueryRow(`SELECT count(*) FILTER (WHERE schemaname = 'public'),
+		count(*) FILTER (WHERE schemaname IN ('chat', 'core', 'sched')) FROM pg_tables`).Scan(&public, &inSchemas); err != nil {
+		t.Fatal(err)
+	}
+	if public != 0 || inSchemas < 50 {
+		t.Fatalf("tables: %d in public, %d in chat/core/sched", public, inSchemas)
 	}
 }
 
@@ -227,5 +225,15 @@ func checkIdentityPlacement(t *testing.T, count func(string, ...any) int, tables
 	}
 	if count(`SELECT count(*) FROM core.identity_merge WHERE step = 'm4_sched_users'`) != 1 {
 		t.Error("the identity merge did not record itself")
+	}
+}
+
+// TestSchemasMatchConfig: dbschema's list of fleet schemas is config's three
+// names, in byte order (the readiness check reports findings in that order).
+func TestSchemasMatchConfig(t *testing.T) {
+	t.Parallel()
+	want := []string{config.ChatSchema, config.IdentitySchema, config.SchedSchema}
+	if strings.Join(dbschema.Schemas, ",") != strings.Join(want, ",") {
+		t.Fatalf("dbschema.Schemas = %v, want %v", dbschema.Schemas, want)
 	}
 }

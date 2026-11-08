@@ -8,11 +8,16 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/ElcanoTek/fleet/internal/migrations"
 )
 
-// openRawDB opens a raw pgx connection, bypassing applyMigrations, on a
-// fresh migrated database of the test's own (dsn), so a test can inspect
-// schema_migrations directly or seed weird state.
+// The one migration runner's own tests live in internal/migrations; these
+// check that the chat store's Open runs it.
+
+// openRawDB opens a raw pgx connection, bypassing Open, on a fresh migrated
+// database of the test's own (dsn), so a test can inspect the ledger
+// directly or seed weird state.
 func openRawDB(t *testing.T) (db *sql.DB, dsn string) {
 	t.Helper()
 	dsn = newTestDSN(t)
@@ -29,15 +34,15 @@ func openRaw(t *testing.T, dsn string) *sql.DB {
 	return db
 }
 
-// maxAppliedVersion reads the highest version recorded in
-// schema_migrations. Zero means the table is empty or absent.
+// maxAppliedVersion reads the highest version recorded in the one ledger,
+// core.schema_versions. Zero means it is empty.
 func maxAppliedVersion(t *testing.T, db *sql.DB) int {
 	t.Helper()
 	var v sql.NullInt64
 	err := db.QueryRowContext(context.Background(),
-		`SELECT MAX(version) FROM schema_migrations`).Scan(&v)
+		`SELECT MAX(version) FROM core.schema_versions`).Scan(&v)
 	if err != nil {
-		t.Fatalf("read schema_migrations: %v", err)
+		t.Fatalf("read core.schema_versions: %v", err)
 	}
 	if !v.Valid {
 		return 0
@@ -84,34 +89,30 @@ func TestMigrations_SingleConnectionPool(t *testing.T) {
 	t.Parallel()
 
 	// An empty database: the whole migration set on one connection.
-	raw := openRaw(t, emptyTestDSN(t))
-	raw.SetMaxOpenConns(1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := applyMigrations(ctx, raw); err != nil {
-		t.Fatalf("applyMigrations with MaxOpenConns=1: %v", err)
+	pool := testPool()
+	pool.MaxOpenConns, pool.MaxIdleConns = 1, 1
+	start := time.Now()
+	s, err := Open(emptyTestDSN(t), pool)
+	if err != nil {
+		t.Fatalf("Open with MaxOpenConns=1: %v", err)
 	}
-	if err := ctx.Err(); err != nil {
-		t.Fatalf("single-connection migration exceeded deadline: %v", err)
+	_ = s.Close()
+	if d := time.Since(start); d > 60*time.Second {
+		t.Fatalf("single-connection migration took %s", d)
 	}
 }
 
 func TestMigrations_RefusesNewerDB(t *testing.T) {
 	t.Parallel()
 
-	// Poison schema_migrations with a version beyond what the binary knows
-	// about — Open must refuse rather than silently run older-schema code
-	// against newer data.
+	// Poison the ledger with a version beyond what the binary knows about —
+	// Open must refuse rather than silently run older-schema code against
+	// newer data.
 	raw, dsn := openRawDB(t)
 	ctx := context.Background()
-	if err := ensureSchemaMigrationsTable(ctx, raw); err != nil {
-		t.Fatalf("ensure table: %v", err)
-	}
 	if _, err := raw.ExecContext(ctx,
-		`INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)
-		 ON CONFLICT (version) DO NOTHING`,
-		999, "ghost", 0,
+		`INSERT INTO core.schema_versions (version, name, checksum) VALUES ($1, $2, '')`,
+		9999, "9999_ghost",
 	); err != nil {
 		t.Fatalf("seed version: %v", err)
 	}
@@ -145,86 +146,6 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].Email != "bob@example.com" {
 		t.Errorf("data didn't survive: %+v", users)
-	}
-}
-
-func TestMigrationStatusDB(t *testing.T) {
-	t.Parallel()
-
-	s := newTestStore(t) // opens + runs every migration
-	ctx := context.Background()
-
-	rep, err := MigrationStatusDB(ctx, s.db)
-	if err != nil {
-		t.Fatalf("MigrationStatusDB: %v", err)
-	}
-	if rep.DB != "chat" || rep.Runner != "hand-rolled" || rep.MigrationTable != "schema_migrations" {
-		t.Fatalf("unexpected metadata: %+v", rep)
-	}
-	embedded, err := loadMigrations()
-	if err != nil {
-		t.Fatalf("loadMigrations: %v", err)
-	}
-	if len(rep.Pending) != 0 {
-		t.Errorf("a fully-migrated DB should report 0 pending, got %d: %+v", len(rep.Pending), rep.Pending)
-	}
-	if len(rep.Applied) != len(embedded) {
-		t.Errorf("applied=%d, want=%d (every embedded migration)", len(rep.Applied), len(embedded))
-	}
-	for i, m := range rep.Applied {
-		if m.AppliedAt == nil {
-			t.Errorf("applied migration %q is missing applied_at", m.Name)
-		}
-		if i > 0 && rep.Applied[i-1].Version >= m.Version {
-			t.Errorf("Applied not strictly ascending at index %d (%d then %d)", i, rep.Applied[i-1].Version, m.Version)
-		}
-	}
-
-	// A schema_migrations row the running binary does not know about (a DB ahead
-	// of the build) must still surface under Applied so a downgrade is visible.
-	const future = 100000
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)`,
-		future, "100000_from_a_newer_build", int64(1700000000)); err != nil {
-		t.Fatalf("seed future migration row: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM schema_migrations WHERE version = $1`, future)
-	})
-	rep2, err := MigrationStatusDB(ctx, s.db)
-	if err != nil {
-		t.Fatalf("MigrationStatusDB (ahead): %v", err)
-	}
-	if len(rep2.Applied) != len(embedded)+1 {
-		t.Errorf("applied with a future row = %d, want %d", len(rep2.Applied), len(embedded)+1)
-	}
-	var found bool
-	for _, m := range rep2.Applied {
-		if m.Version == future {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("a schema_migrations row ahead of the embedded set must appear in Applied")
-	}
-}
-
-func TestMigrations_LoadOrderAndDedup(t *testing.T) {
-	t.Parallel()
-
-	ms, err := loadMigrations()
-	if err != nil {
-		t.Fatalf("loadMigrations: %v", err)
-	}
-	if len(ms) == 0 {
-		t.Fatal("expected at least one migration")
-	}
-	// Sorted ascending + no duplicate versions.
-	for i := 1; i < len(ms); i++ {
-		if ms[i].version <= ms[i-1].version {
-			t.Errorf("migrations not strictly ascending: [%d]=%d, [%d]=%d",
-				i-1, ms[i-1].version, i, ms[i].version)
-		}
 	}
 }
 
@@ -279,18 +200,8 @@ func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
 		}
 	}
 
-	var migrationSQL string
-	migrations, err := loadMigrations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range migrations {
-		if m.version == 46 {
-			migrationSQL = m.sql
-			break
-		}
-	}
-	if migrationSQL == "" {
+	migrationSQL, ok := migrations.Body(46)
+	if !ok {
 		t.Fatal("migration 046 not embedded")
 	}
 	if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
@@ -344,38 +255,5 @@ func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
 		 VALUES ('terminal-position', $1, 'u@example.com', 'terminal-position', '', '[]',
 		         'queued', 'completed', 1, 200, 200)`, conv.ID); err != nil {
 		t.Fatalf("terminal duplicate position should remain allowed: %v", err)
-	}
-}
-
-// TestMigrations_LockWaitIsBounded holds the chat migration lock on another
-// session and asserts applyMigrations gives up with a bounded error instead
-// of blocking forever (#2022).
-func TestMigrations_LockWaitIsBounded(t *testing.T) {
-	raw, _ := openRawDB(t)
-	ctx := context.Background()
-	holder, err := raw.Conn(ctx)
-	if err != nil {
-		t.Fatalf("holder conn: %v", err)
-	}
-	defer holder.Close()
-	// pg_try_advisory_lock, not the blocking form: scripts/go_test_script_test.go
-	// classifies a test file naming the blocking call as a sched-DSN user.
-	var held bool
-	if err := holder.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, migrationLockKey).Scan(&held); err != nil || !held {
-		t.Fatalf("hold lock: held=%v err=%v", held, err)
-	}
-	defer func() { _, _ = holder.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey) }()
-
-	oldTimeout, oldPoll := migrationLockTimeout, migrationLockPollInterval
-	migrationLockTimeout, migrationLockPollInterval = 300*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { migrationLockTimeout, migrationLockPollInterval = oldTimeout, oldPoll })
-
-	start := time.Now()
-	err = applyMigrations(ctx, raw)
-	if err == nil || !strings.Contains(err.Error(), "waiting for chat migration lock") {
-		t.Fatalf("applyMigrations with lock held = %v, want bounded lock-wait error", err)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("lock wait took %s, want ~%s", elapsed, migrationLockTimeout)
 	}
 }

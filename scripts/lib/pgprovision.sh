@@ -107,7 +107,7 @@ fleet_dsn_is_local_default() {
 
 # fleet_external_db_sql ROLE DATABASE — the superuser SQL external mode runs
 # with FLEET_DB_SUPERUSER_URL: create the database when missing, and grant
-# the role CONNECT + CREATE on it, so it can create the chat and sched
+# the role CONNECT + CREATE on it, so it can create the chat, core and sched
 # schemas even in a database the superuser owns. Names are validated by
 # fleet_dsn_role_db.
 fleet_external_db_sql() {
@@ -120,7 +120,7 @@ SQL
 
 # fleet_db_store_readiness DSN — can fleet's stores run in the database DSN
 # names, as DSN's role? Returns
-#   0  yes: each of the schemas chat and sched either does not exist and the
+#   0  yes: each of the schemas chat, core and sched either does not exist and the
 #      role has CREATE on the database (the store creates it on first
 #      start), or exists and is OWNED by the role, as is every table,
 #      sequence and view in it — the migrations ALTER and the stores write
@@ -142,14 +142,14 @@ fleet_db_store_readiness() {
         SELECT x FROM (
           SELECT format('schema %s is owned by %s', n2.nspname, pg_get_userbyid(n2.nspowner)) AS x
             FROM pg_catalog.pg_namespace n2
-           WHERE n2.nspname IN ('chat', 'sched') AND pg_get_userbyid(n2.nspowner) <> current_user
+           WHERE n2.nspname IN ('chat', 'core', 'sched') AND pg_get_userbyid(n2.nspowner) <> current_user
           UNION ALL
           SELECT format('%s.%s is owned by %s', n3.nspname, c.relname, pg_get_userbyid(c.relowner))
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n3 ON n3.oid = c.relnamespace
-           WHERE n3.nspname IN ('chat', 'sched') AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+           WHERE n3.nspname IN ('chat', 'core', 'sched') AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
              AND pg_get_userbyid(c.relowner) <> current_user
         ) f ORDER BY x COLLATE \"C\" LIMIT 5) l), '')
-    FROM (VALUES ('chat'), ('sched')) AS s(name)
+    FROM (VALUES ('chat'), ('core'), ('sched')) AS s(name)
     LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
   IFS="$sep" read -r legacy create owned <<< "$out"
   [[ "$legacy" == "t" ]] && return 2

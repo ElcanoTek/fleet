@@ -284,8 +284,11 @@ func MergeTx(ctx context.Context, tx *sql.Tx, schedSchema string) (MergeResult, 
 		return MergeResult{Report: rep, Ready: err == nil}, err
 	}
 	var coreReady, schedReady bool
+	// The scheduler is migrated once its legacy ledger exists (a pre-M6
+	// release) or the one ledger does (#2049 M6: one runner migrates chat,
+	// core and sched together, and a fresh database has no legacy ledger).
 	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('core.users') IS NOT NULL AND to_regclass('core.identity_merge') IS NOT NULL,
-		to_regclass($1) IS NOT NULL`, schedSchema+".schema_migrations").Scan(&coreReady, &schedReady); err != nil {
+		to_regclass($1) IS NOT NULL OR to_regclass('core.schema_versions') IS NOT NULL`, schedSchema+".schema_migrations").Scan(&coreReady, &schedReady); err != nil {
 		return MergeResult{}, err
 	}
 	if !coreReady || !schedReady {

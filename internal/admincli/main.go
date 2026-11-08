@@ -317,8 +317,9 @@ Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
     (git worktree prune + remove stale <workspace>/.fleet-worktrees/* dirs)
 
 Database migrations (#256):
-  fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending for the chat + sched DBs)
-  fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (sched DB: clear a dirty row after a failed migration)
+  fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending of the one migration sequence, core.schema_versions)
+  fleet migrate down --to <version> [--dry-run] [--no-confirm]   (undo migrations above <version> (>= 177), newest first; back up first)
+  fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (repair the ledger after a half-applied migration)
 
 Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched; prints the path)

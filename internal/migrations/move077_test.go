@@ -1,17 +1,16 @@
-package db
+package migrations_test
 
 import (
 	"context"
 	"database/sql"
-	"io/fs"
 	"reflect"
 	"strconv"
-	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/migrations"
+	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
@@ -45,29 +44,6 @@ func readChatScheduleRows(t *testing.T, conn *sql.DB) []chatScheduleRow {
 			t.Fatal(err)
 		}
 		out = append(out, r)
-	}
-	return out
-}
-
-// migrationsThrough is the embedded sched migration set up to and including
-// version last, as a directory "m" for migrateUp.
-func migrationsThrough(t *testing.T, last int) fstest.MapFS {
-	t.Helper()
-	out := fstest.MapFS{}
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
-		if err != nil || v > last {
-			continue
-		}
-		data, err := fs.ReadFile(migrationsFS, "migrations/"+e.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		out["m/"+e.Name()] = &fstest.MapFile{Data: data}
 	}
 	return out
 }
@@ -124,7 +100,7 @@ func seedOldChatSchedules(t *testing.T, chatConn *sql.DB, convA, convB string, n
 
 // assertBackfilledHistory: the due patrol's runs 6 and 7 and its Run now,
 // and nothing else.
-func assertBackfilledHistory(t *testing.T, d *Database) {
+func assertBackfilledHistory(t *testing.T, d *scheddb.Database) {
 	t.Helper()
 	hist, err := d.ListChatScheduleRuns(context.Background(), dueID, 10)
 	if err != nil {
@@ -151,37 +127,32 @@ func assertBackfilledHistory(t *testing.T, d *Database) {
 		t.Fatalf("backfilled history of new-engine keys = %v, want %v", got, want)
 	}
 	var total int
-	if err := d.conn.QueryRow(`SELECT count(*) FROM chat_schedule_runs`).Scan(&total); err != nil || total != 5 {
+	if err := d.Conn().QueryRow(`SELECT count(*) FROM chat_schedule_runs`).Scan(&total); err != nil || total != 5 {
 		t.Fatalf("history rows = %d (err %v), want 5", total, err)
 	}
 }
 
 // TestMigration077_MovesChatSchedules is the upgrade of a production box
-// (#2049 M5): the chat store holds chat.chat_schedules (old shape) and its
-// patrol turns in chat.chat_input_queue, the scheduler is at 076 (its empty
-// chat schedule tables). Migration 077 must move every schedule over losslessly, start each run history from
-// the queue, drop the chat table, be safe to re-run, round-trip through its
-// down migration — and the first engine pass after the upgrade must fire a
-// slot that fell due during the upgrade exactly once, with the run number the
-// old engine would have used.
+// (#2049 M5) through the one runner: the database at version 176 (chat 1–99
+// and sched 1–76: chat.chat_schedules in its old shape and its patrol turns
+// in chat.chat_input_queue, the scheduler's chat schedule tables empty).
+// Version 177 (sched 077), applied by the scheduler's open, must move every
+// schedule over losslessly, start each run history from the queue, drop the
+// chat table, be safe to re-run, round-trip through its down migration — and
+// the first engine pass after the upgrade must fire a slot that fell due
+// during the upgrade exactly once, with the run number the old engine would
+// have used.
 func TestMigration077_MovesChatSchedules(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := testdb.Empty(t)
-
-	// The chat store, fully migrated: chat.chat_schedules exists (086, 096).
-	chat, err := store.Open(config.WithSchema(base, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
-	if err != nil {
-		t.Fatalf("open chat: %v", err)
-	}
-	t.Cleanup(func() { _ = chat.Close() })
-	convA, err := chat.CreateConversation(ctx, ownerMv, "Deals", "victoria", "", false)
+	raw, err := sql.Open("pgx", base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	convB, err := chat.CreateConversation(ctx, teammateMv, "Inbox", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = raw.Close() })
+	if err := migrations.UpTo(ctx, raw, 176); err != nil {
+		t.Fatalf("migrate to 176: %v", err)
 	}
 
 	chatConn, err := sql.Open("pgx", config.WithSchema(base, config.ChatSchema))
@@ -189,23 +160,23 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chatConn.Close() })
-
+	const convA, convB = "conv-a", "conv-b"
+	for _, c := range [][2]string{{convA, ownerMv}, {convB, teammateMv}} {
+		if _, err := chatConn.Exec(`INSERT INTO conversations (id, user_email, title, created_at, updated_at) VALUES ($1, $2, 't', 1, 1)`, c[0], c[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
 	now := time.Now().Unix()
-	seedOldChatSchedules(t, chatConn, convA.ID, convB.ID, now)
+	seedOldChatSchedules(t, chatConn, convA, convB, now)
 	before := readChatScheduleRows(t, chatConn)
 
-	// The scheduler at 076 (the engine's tables, still empty), then the move.
-	schedConn, err := sql.Open("pgx", config.WithSchema(base, config.SchedSchema))
-	if err != nil {
-		t.Fatal(err)
+	// The scheduler's open applies 177 (and the identity merge after it).
+	d := scheddb.New()
+	if err := d.Init(config.WithSchema(base, config.SchedSchema), scheddb.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
+		t.Fatalf("open the scheduler (applies 177): %v", err)
 	}
-	t.Cleanup(func() { _ = schedConn.Close() })
-	if err := migrateUp(ctx, schedConn, migrationsThrough(t, 76), "m"); err != nil {
-		t.Fatalf("migrate to 076: %v", err)
-	}
-	if err := RunMigrations(schedConn); err != nil {
-		t.Fatalf("migrate to 077: %v", err)
-	}
+	t.Cleanup(func() { _ = d.Close() })
+	schedConn := d.Conn()
 
 	// Moved verbatim, and gone from the chat schema.
 	if after := readChatScheduleRows(t, schedConn); !reflect.DeepEqual(after, before) {
@@ -222,15 +193,18 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 	}
 
 	// Run history starts from the queue.
-	d := &Database{conn: schedConn}
 	assertBackfilledHistory(t, d)
 
 	// Re-running the migration's SQL is a no-op.
-	up, err := fs.ReadFile(migrationsFS, "migrations/077_move_chat_schedules.up.sql")
+	set, err := migrations.Embedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := schedConn.Exec(string(up)); err != nil {
+	m177, ok := set.Get(177)
+	if !ok || m177.Name != "sched/077_move_chat_schedules" {
+		t.Fatalf("177 = %+v", m177.Name)
+	}
+	if _, err := schedConn.Exec(m177.Up); err != nil {
 		t.Fatalf("re-run 077: %v", err)
 	}
 	if after := readChatScheduleRows(t, schedConn); !reflect.DeepEqual(after, before) {
@@ -239,11 +213,7 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 
 	// The down migration puts the old table back as it was; up again moves it
 	// back and rebuilds the same history.
-	down, err := fs.ReadFile(migrationsFS, "migrations/077_move_chat_schedules.down.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := schedConn.Exec(string(down)); err != nil {
+	if _, err := schedConn.Exec(m177.Down); err != nil {
 		t.Fatalf("077 down: %v", err)
 	}
 	if back := readChatScheduleRows(t, chatConn); !reflect.DeepEqual(back, before) {
@@ -252,7 +222,7 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 	if n := deleteTriggerCount(t, schedConn); n != 0 {
 		t.Fatalf("after 077 down the conversation-delete trigger/function remain (%d): a rollback must leave the chat schema as the previous release knows it", n)
 	}
-	if _, err := schedConn.Exec(string(up)); err != nil {
+	if _, err := schedConn.Exec(m177.Up); err != nil {
 		t.Fatalf("077 up after down: %v", err)
 	}
 	if n := deleteTriggerCount(t, schedConn); n != 2 {

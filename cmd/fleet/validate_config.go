@@ -1361,21 +1361,17 @@ func probeDB(ctx context.Context, dsn string) error {
 	if err := db.QueryRowContext(probeCtx, "SELECT 1").Scan(&one); err != nil {
 		return fmt.Errorf("SELECT 1: %w", err)
 	}
-	// #2055 review: the same read-only readiness check dbschema.Ensure runs on
-	// every store open (and bootstrap's shell gate mirrors), so a green
+	// #2055 review: the same read-only readiness check dbschema.Ensure runs
+	// before every migration (and bootstrap's shell gate mirrors), so a green
 	// validate-config predicts a boot — not only that the database answers.
-	// Configured reads the connection's own search_path, exactly as Ensure
-	// does, so a DSN that names no store schema is skipped as at boot.
-	schema, err := dbschema.Configured(probeCtx, db)
-	if err != nil || schema == "" {
-		return err
-	}
-	r, err := dbschema.CheckReadiness(probeCtx, db, []string{schema})
+	// The one runner creates all of fleet's schemas (chat, core, sched)
+	// whatever the DSN's search_path, so all of them are checked.
+	r, err := dbschema.CheckReadiness(probeCtx, db, dbschema.Schemas)
 	if err != nil {
 		return fmt.Errorf("schema readiness: %w", err)
 	}
 	if !r.OK() {
-		return fmt.Errorf("schema %s is not ready: %s", schema, r.Problem())
+		return fmt.Errorf("schemas %s are not ready: %s", strings.Join(dbschema.Schemas, ", "), r.Problem())
 	}
 	return nil
 }

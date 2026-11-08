@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -56,6 +57,7 @@ func cmdStatus(argv []string) int {
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
 	checkLayout(r, *chatURL, *schedURL)
+	checkMigrations(r, *chatURL)
 	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
 	checkPromptCache(r, *chatURL)
 
@@ -194,6 +196,39 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 		return
 	}
 	r.pass(label, "reachable ("+redactDSN(dsn)+")")
+}
+
+// checkMigrations reports the one migration ledger (#2049 M6), read-only:
+// whether the database adopted core.schema_versions, its current version and
+// anything pending. A dirty ledger fails (fleet refuses to start on it); not
+// adopted yet or pending migrations are advisories (the next start of this
+// release does both); a ledger that cannot be read is an advisory too, since
+// the database check above already reports reachability.
+func checkMigrations(r *report, flagURL string) {
+	dsn, err := chatDSN(flagURL)
+	if err != nil {
+		r.warnLine("migrations", "DSN unresolved: "+err.Error())
+		return
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		r.warnLine("migrations", "open: "+err.Error())
+		return
+	}
+	defer func() { _ = db.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rep, err := migrations.Status(ctx, db)
+	switch {
+	case err != nil:
+		r.warnLine("migrations", "could not read the ledger: "+firstLine(err.Error()))
+	case rep.Dirty:
+		r.fail("migrations", describeMigrationReport(rep))
+	case !rep.Adopted || len(rep.Pending) > 0:
+		r.warnLine("migrations", describeMigrationReport(rep))
+	default:
+		r.pass("migrations", describeMigrationReport(rep))
+	}
 }
 
 // checkActiveWork reports whether any scheduled task, chat turn, or detached

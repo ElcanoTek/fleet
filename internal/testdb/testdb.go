@@ -25,11 +25,12 @@
 //   - Empty(t): a fresh empty database (migration-runner tests and others
 //     that fill it themselves).
 //
-// The stores' own internal tests build their single-store templates through
-// New (internal/store, internal/sched/db, which cannot import a package that
-// imports them); every other package uses internal/testdb/fleetdb, which
-// clones the one-database template (both stores, schemas chat and sched —
-// the production layout, ADR-0098) and opens the stores on it.
+// Every DB package clones one template, internal/testdb/onedb.Spec: the whole
+// database migrated by the one runner (internal/migrations — schemas chat,
+// core and sched, the production layout, ADR-0098 and ADR-0107). The stores'
+// own internal tests use it through New directly (internal/store,
+// internal/sched/db, which cannot import a package that imports them); every
+// other package uses internal/testdb/fleetdb, which opens the stores on it.
 //
 // # Names and garbage collection
 //

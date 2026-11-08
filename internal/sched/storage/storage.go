@@ -20,6 +20,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -106,11 +107,10 @@ func (s *Storage) SetDatabase(database *db.Database) {
 	s.db = database
 }
 
-// MigrationStatus reports the orchestrator DB's applied vs pending migrations
-// (#256). Read-only; delegates to the db layer's status reader. The context
-// bounds the queries.
-func (s *Storage) MigrationStatus(ctx context.Context) (db.MigrationReport, error) {
-	return db.MigrationStatus(ctx, s.db.Conn())
+// MigrationStatus reports applied vs pending migrations of the one sequence
+// (#256, ADR-0107). Read-only. The context bounds the queries.
+func (s *Storage) MigrationStatus(ctx context.Context) (migrations.Report, error) {
+	return migrations.Status(ctx, s.db.Conn())
 }
 
 // SetTimezone sets the timezone for scheduling operations.
