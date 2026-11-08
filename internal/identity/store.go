@@ -256,6 +256,11 @@ type NewAccount struct {
 	OpsScope     OpsScope
 	// ID is the row's UUID; zero picks a new one.
 	ID uuid.UUID
+	// CreatedAt is when the account was made; zero means now. An import
+	// (fleet import of a legacy sched bundle) carries the source's.
+	CreatedAt time.Time
+	// LastLogin is the last sign-in the source recorded; nil for none.
+	LastLogin *time.Time
 }
 
 // UnusablePasswordHash is stored for an account that has no Fleet password.
@@ -289,8 +294,16 @@ func CreateAccount(ctx context.Context, q Querier, a NewAccount) (*User, error) 
 		a.ID = uuid.New()
 	}
 	now := time.Now().Unix()
-	_, err := q.ExecContext(ctx, `INSERT INTO core.users (id, email, password_hash, role, ops_scope, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $6)`, a.ID, a.Email, a.PasswordHash, string(a.Role), string(a.OpsScope), now)
+	created := now
+	if !a.CreatedAt.IsZero() {
+		created = a.CreatedAt.Unix()
+	}
+	var lastLogin any
+	if a.LastLogin != nil && !a.LastLogin.IsZero() {
+		lastLogin = a.LastLogin.UTC()
+	}
+	_, err := q.ExecContext(ctx, `INSERT INTO core.users (id, email, password_hash, role, ops_scope, created_at, updated_at, last_login)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, a.ID, a.Email, a.PasswordHash, string(a.Role), string(a.OpsScope), created, now, lastLogin)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

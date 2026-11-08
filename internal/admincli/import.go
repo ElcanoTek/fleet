@@ -845,6 +845,8 @@ func importSchedUsers(ctx context.Context, st *storage.Storage, users []bundleSc
 			if _, err := ids.CreateAccount(ctx, identity.NewAccount{
 				ID: u.ID, Email: username, PasswordHash: u.PasswordHash,
 				Role: identity.RoleViewer, OpsScope: scope,
+				// The source's account history, not the import's moment.
+				CreatedAt: u.CreatedAt, LastLogin: u.LastLogin,
 			}); err != nil {
 				stats.errorf("sched user %q: %v", username, err)
 				continue

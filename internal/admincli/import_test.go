@@ -165,13 +165,14 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	liveID := uuid.New()
 	doneID := uuid.New()
 	result := "42"
-	past := time.Now().Add(-48 * time.Hour).UTC()
+	past := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+	lastLogin := past.Add(3 * time.Hour)
 	bundle := migrationBundle{
 		Format: migrationBundleFormat, Version: 1, Source: "moc test",
 		Sched: &schedSection{
 			Users: []bundleSchedUser{{
 				ID: userID, Username: "brad", PasswordHash: "$2a$10$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUV1234567890",
-				Role: "admin", CreatedAt: past,
+				Role: "admin", CreatedAt: past, LastLogin: &lastLogin,
 			}},
 			Tasks: []bundleTask{
 				{
@@ -208,6 +209,18 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	// imported Operations Center admin gets ops_scope run (role client).
 	if u.ID != userID || u.Role != "client" {
 		t.Errorf("sched user lost fidelity: id=%s role=%s", u.ID, u.Role)
+	}
+	// The account keeps the source's history (Codex 4504695152 on #2083):
+	// created_at and last_login are the bundle's, not the import's moment.
+	acct, err := st.GetIdentity(ctx, "brad")
+	if err != nil {
+		t.Fatalf("imported account: %v", err)
+	}
+	if acct.CreatedAt != past.Unix() {
+		t.Errorf("created_at = %s, want the bundle's %s", time.Unix(acct.CreatedAt, 0).UTC(), past)
+	}
+	if acct.LastLogin == nil || !acct.LastLogin.Equal(lastLogin) {
+		t.Errorf("last_login = %v, want the bundle's %s", acct.LastLogin, lastLogin)
 	}
 
 	live, err := st.GetTask(liveID)
