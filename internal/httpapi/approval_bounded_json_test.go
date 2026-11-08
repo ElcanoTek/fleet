@@ -28,9 +28,10 @@ func allocatedBy(f func()) uint64 {
 // (about 12 MiB, inside the group body cap) are refused after the 101st, with
 // a few kilobytes allocated, not the hundreds of megabytes a materialized
 // slice would take.
+//
+// Do not call t.Parallel(): allocatedBy reads process-wide MemStats.TotalAlloc,
+// which concurrent parallel tests in this package would inflate.
 func TestBoundedDecoding_RefusesPastTheBoundWhileReading(t *testing.T) {
-	t.Parallel()
-
 	raw := manyEmptyStrings(4_000_000)
 	var ids approvalIDList
 	var err error
