@@ -117,6 +117,16 @@ demoted split admin with `fleet admin add <email>`.
   are deprecated aliases: `del` ends Operations Center access (scope none) and
   keeps the account; `update` sets the one Fleet password; `rename` is refused.
   `fleet import` maps sched users onto accounts (never making an admin).
+  The account verbs (`sched user …`, `sched task set-owner`, `sched task
+  import`, and `fleet import` of a bundle with sched users or tasks) need the
+  identity table, which the chat store creates: run first on a fresh database,
+  or mid-upgrade before the chat store migrated, they stop with "the identity
+  table (core.users) does not exist yet" and ask you to start `fleet serve`
+  once (or run a chat verb such as `fleet chat user list`). They do not migrate
+  the chat store themselves. `fleet serve` migrates chat before sched.
+- Grants are exact strings: `admin`, `client`, `readonly`, `none`, `view`,
+  `run`. Padded or re-cased values (`" none "`, `Admin`) are refused, not
+  trimmed.
 - **Boot seed.** `FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS` makes each email a Fleet
   admin (creating the account, with no usable password, if missing): a
   bootstrap admin is a chat admin too.

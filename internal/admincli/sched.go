@@ -50,6 +50,32 @@ func openSchedStorage(dbURL string) (*storage.Storage, int) {
 	return st, 0
 }
 
+// errIdentityNotReady is what an identity-dependent sched verb says when the
+// one identity table does not exist yet: the chat store creates core.users
+// (chat migration 099) and the scheduler's open merges its legacy accounts
+// into it (#2049 M4). A sched-only verb on a fresh database, or mid-upgrade
+// before the chat store migrated, gets here. The CLI does not migrate the
+// chat store itself: a newer chat schema under a still-running older server
+// is the operator's call, not a side effect of `fleet sched user`.
+const errIdentityNotReady = "the identity table (core.users) does not exist yet: the chat store creates it. " +
+	"Start `fleet serve` once against this database (or run a chat verb such as `fleet chat user list`), then retry"
+
+// openSchedIdentityStorage is openSchedStorage for the verbs that read or
+// write accounts (`fleet sched user …`, a bundle import with Operations
+// Center users): it refuses up front, with what to do, when the identity
+// table is not there yet, instead of failing later on a missing relation.
+func openSchedIdentityStorage(dbURL string) (*storage.Storage, int) {
+	st, code := openSchedStorage(dbURL)
+	if st == nil {
+		return nil, code
+	}
+	if !st.DB().IdentityMerge().Ready {
+		_ = st.Close()
+		return nil, errf(1, "%s", errIdentityNotReady)
+	}
+	return st, 0
+}
+
 const validRolesMsg = "role must be one of: admin, client, readonly"
 
 func validRole(role string) bool {
@@ -124,7 +150,7 @@ func schedUserAdd(argv []string) int {
 		return errf(1, "password must be at least 8 characters (use --password -)")
 	}
 
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -170,7 +196,7 @@ func schedUserUpdatePassword(argv []string) int {
 	if len(password) < 8 {
 		return errf(1, "password must be at least 8 characters (use --password -)")
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -202,7 +228,7 @@ func schedUserSetRole(argv []string) int {
 	if !validRole(*role) {
 		return errf(1, validRolesMsg)
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -231,7 +257,7 @@ func schedUserDel(argv []string) int {
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -263,7 +289,7 @@ func schedUserList(argv []string) int {
 	if fs.NArg() > 0 {
 		return errf(1, "sched user list takes no arguments (got %q)", fs.Args())
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
