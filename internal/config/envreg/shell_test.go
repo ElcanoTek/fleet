@@ -41,6 +41,9 @@ var shellInternal = map[string]bool{
 	"DEBIAN_FRONTEND": true, "SSH_AUTH_SOCK": true, "SSH_CONNECTION": true, "SSH_TTY": true,
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 	"XDG_DATA_HOME": true, "XDG_STATE_HOME": true, "MAINPID": true,
+	// maintainer knob for scripts/update-pins.sh (run one pins.tsv row);
+	// a repo-maintenance setting, never read by fleet on a box
+	"PINS_ONLY": true,
 }
 
 var (

@@ -44,7 +44,7 @@ func loadPins(t *testing.T) map[string]pinRow {
 			t.Fatalf("pins.tsv: %q has %d columns, want 7", line, len(cols))
 		}
 		switch cols[1] {
-		case "github", "pypi", "cosign":
+		case "github", "pypi", "cosign", "codeql":
 		default:
 			t.Errorf("pins.tsv: %s has unknown kind %q", cols[0], cols[1])
 		}
@@ -137,7 +137,7 @@ func TestEveryWorkflowPinHasAnUpdater(t *testing.T) {
 		}
 	}
 	for name, p := range pins {
-		if p.kind != "cosign" && !seen[name] {
+		if p.kind != "cosign" && p.kind != "codeql" && !seen[name] {
 			t.Errorf("pins.tsv lists %s but no workflow pins %s_VERSION — drop the stale row", name, name)
 		}
 	}

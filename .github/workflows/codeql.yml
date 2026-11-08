@@ -154,15 +154,21 @@ jobs:
           - language: go
             build-mode: autobuild
             queries: security-extended
+            # bundle: the per-language CodeQL bundle (.github/codeql-bundle.lock)
+            # init would pick for this language; see "Read the pinned CodeQL bundle".
+            bundle: go
           - language: python
             build-mode: none
             queries: security-extended
+            bundle: python
           - language: javascript-typescript
             build-mode: none
             queries: security-extended
+            bundle: javascript
           - language: actions
             build-mode: none
             queries: security-extended
+            bundle: actions
 
     steps:
       - name: Checkout
@@ -178,12 +184,73 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # THE CODEQL BUNDLE, from a pin rather than from init's own download.
+      # Left to itself, init fetches codeql-bundle-<lang>-linux64.tar.zst from
+      # github/codeql-action's release assets on every run, and when that CDN
+      # returns HTTP 504 (run 42470808260: three attempts, all 504) every leg
+      # fails before analyzing anything, `CodeQL gate` refuses the scan that
+      # never ran, and `CI gate` blocks every PR. So the bundle comes from
+      # .github/codeql-bundle.lock (version + per-language SHA-256): an
+      # actions/cache hit first, else a verified download with retries
+      # (scripts/install-pinned-tool.sh), and init is handed the local
+      # tarball through `tools:`, which the pinned action accepts as "a local
+      # path to a CodeQL Bundle tarball" (init/action.yml). The bundle is the
+      # same per-language one init would pick itself, at the version the
+      # pinned action's defaults.json names (scripts/check_codeql_bundle_test.go
+      # holds the lock to the action SHA), so languages, queries and the gate
+      # below are unchanged.
+      - name: Read the pinned CodeQL bundle
+        id: bundle
+        env:
+          BUNDLE_LANGUAGE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          lock=.github/codeql-bundle.lock
+          version="$(awk '$1=="version"{print $2}' "$lock")"
+          sha="$(L="$BUNDLE_LANGUAGE" awk '$1==ENVIRON["L"]{print $2}' "$lock")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$lock has no plain version line"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::$lock has no SHA-256 for the $BUNDLE_LANGUAGE bundle"; exit 1; }
+          {
+            echo "version=$version"
+            echo "sha256=$sha"
+            echo "asset=codeql-bundle-$BUNDLE_LANGUAGE-linux64.tar.zst"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache the verified CodeQL bundle
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/codeql-bundle-${{ matrix.bundle }}
+          key: pinned-tool-codeql-bundle-${{ matrix.bundle }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.bundle.outputs.version }}-${{ steps.bundle.outputs.sha256 }}
+
+      - name: Install the pinned CodeQL bundle
+        # Cache, then the release asset (curl's own retries, and retry.sh
+        # around the whole fetch: the 504s come and go over minutes). A hash
+        # mismatch is fatal, never retried into acceptance. There is no third
+        # source: no other host serves these bytes.
+        env:
+          CODEQL_BUNDLE_VERSION: ${{ steps.bundle.outputs.version }}
+          CODEQL_BUNDLE_SHA256: ${{ steps.bundle.outputs.sha256 }}
+          BUNDLE_ASSET: ${{ steps.bundle.outputs.asset }}
+          BUNDLE_LANGUAGE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/codeql-bundle"
+          scripts/retry.sh --attempts 3 --delay 30 --what "the CodeQL ${CODEQL_BUNDLE_VERSION} ${BUNDLE_LANGUAGE} bundle" -- \
+            scripts/install-pinned-tool.sh \
+              --url "https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_BUNDLE_VERSION}/${BUNDLE_ASSET}" \
+              --sha256 "${CODEQL_BUNDLE_SHA256}" \
+              --cache-dir "${HOME}/.cache/fleet-pinned-tools/codeql-bundle-${BUNDLE_LANGUAGE}" \
+              --dest "${RUNNER_TEMP}/codeql-bundle" \
+              "${BUNDLE_ASSET}"
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: ${{ matrix.queries }}
+          # The verified bundle from the steps above, never a download.
+          tools: ${{ runner.temp }}/codeql-bundle/${{ steps.bundle.outputs.asset }}
           # security-extended (see the matrix note). The SCOPE note in the
           # header still applies to `code-quality` — do not re-add that one.
 
