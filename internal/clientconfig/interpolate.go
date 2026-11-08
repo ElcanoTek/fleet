@@ -185,15 +185,12 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 				manifestPath, expr, name, name)
 		}
 	}
-	// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed takes a
-	// NON-FATAL path in every form: its value is never read, ${X:-d} yields d,
-	// and ${X} / ${X:?msg} yield "" instead of deferring or failing the load,
-	// so a bundle written before the removal can never stop a box from
-	// starting. The load warns about each such reference
-	// (warnRetiredManifestRefs).
-	if text, ok := retiredExpr(expr); ok {
-		return expandResult{text: text}, nil
-	}
+	// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed reads as
+	// UNSET (lookupNonEmpty never reads its value), so it behaves exactly
+	// like any unset variable: ${X:-d} yields d, ${X:?m} fails the load and a
+	// bare ${X} where a value is required fails it too — with the rename
+	// spelled out (retiredRefError). `fleet update` refuses such a bundle
+	// before installing (validate-config --retired-only).
 	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
 	// name itself never contains ':', so the first ':' (if any) starts the op.
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
@@ -209,6 +206,9 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		case '?': // ${VAR:?message}
 			if v, ok := lookupNonEmpty(name); ok {
 				return expandResult{text: v, fromEnv: true}, nil
+			}
+			if err := retiredRefError(manifestPath, name); err != nil {
+				return expandResult{}, err
 			}
 			msg := strings.TrimSpace(body)
 			if msg == "" {
@@ -233,25 +233,23 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 	return expandResult{deferred: true}, nil
 }
 
-// retiredExpr resolves a ${...} body whose variable is a spelling ADR-0106
-// removed: the :- default when one is given, else "" (for the bare and :?
-// forms alike). ok is false for any other variable. It never reads the
-// environment.
-func retiredExpr(expr string) (text string, ok bool) {
-	name, op, body := expr, byte(0), ""
-	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
-		name = expr[:idx]
-		if idx+1 < len(expr) {
-			op, body = expr[idx+1], expr[idx+2:]
-		}
+// retiredRefMessage is the load error for a required reference to a spelling
+// ADR-0106 removed, or "" when name is not one.
+func retiredRefMessage(name string) string {
+	canonical, ok := envreg.RetiredAlias(strings.TrimSpace(name))
+	if !ok {
+		return ""
 	}
-	if _, retired := envreg.RetiredAlias(strings.TrimSpace(name)); !retired {
-		return "", false
+	return fmt.Sprintf("manifest references removed variable %s; rename it to %s (ADR-0106)", strings.TrimSpace(name), canonical)
+}
+
+// retiredRefError wraps retiredRefMessage as a load error naming the
+// manifest, or nil when name is not a removed spelling.
+func retiredRefError(manifestPath, name string) error {
+	if msg := retiredRefMessage(name); msg != "" {
+		return fmt.Errorf("client config manifest %s: %s", manifestPath, msg)
 	}
-	if op == '-' {
-		return body, true
-	}
-	return "", true
+	return nil
 }
 
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
@@ -402,9 +400,6 @@ func resolveSpawnExpr(expr, token string) (text string, fromEnv bool) {
 	}
 	if reservedRuntimeVar(strings.TrimSpace(head)) {
 		return token, false
-	}
-	if text, ok := retiredExpr(expr); ok {
-		return text, false
 	}
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
 		name := expr[:idx]

@@ -2094,10 +2094,11 @@ func TestCheckDatabaseProbesSched(t *testing.T) {
 	}
 }
 
-// ADR-0106: a removed CHAT_/CUTLASS_ spelling still set, in the env or as a
-// ${…} reference in the bundle, is a non-blocking advisory in
-// validate-config, never a failure, so it cannot block an upgrade.
-func TestValidateConfigRemovedAliasesAreAdvisory(t *testing.T) {
+// ADR-0106: a removed CHAT_/CUTLASS_ spelling still SET in the env is a
+// non-blocking advisory (nothing reads it); one the BUNDLE uses is blocking
+// (`fleet update` refuses the bundle until it is renamed), whether the load
+// failed on it or not.
+func TestValidateConfigRemovedAliases(t *testing.T) {
 	clearKnobEnv(t)
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("CHAT_MAX_COST_USD=5\n"), 0o600); err != nil {
@@ -2117,34 +2118,47 @@ func TestValidateConfigRemovedAliasesAreAdvisory(t *testing.T) {
 		t.Fatalf("env_vars = %q blocking=%v %q; want a non-blocking warn naming FLEET_MAX_COST_USD", res.Status, res.Blocking, res.Detail)
 	}
 
+	// A use the load tolerates (a :- default) still blocks the preflight.
 	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
   - name: local
-    command: "python3${CHAT_TLS_MODE:?required}"
-    always: true
-`))
-	if err != nil {
-		t.Fatalf("a removed ${CHAT_TLS_MODE:?} reference failed the bundle load: %v", err)
-	}
-	mres := checkManifest(bundle, nil, &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"})
-	if mres.Status != statusWarn || mres.Blocking || !strings.Contains(mres.Detail, "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") {
-		t.Fatalf("manifest = %q blocking=%v %q; want a non-blocking warn naming FLEET_TLS_MODE", mres.Status, mres.Blocking, mres.Detail)
-	}
-}
-
-// ADR-0106: an entry the load disabled (a removed reference emptied its
-// required command) is a non-blocking manifest advisory in validate-config.
-func TestValidateConfigReportsRetiredDisabledEntries(t *testing.T) {
-	t.Setenv("CHAT_TLS_MODE", "")
-	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
-  - name: stale
-    command: "${CHAT_TLS_MODE}"
+    command: python3
+    args: ["${CUTLASS_TEMPERATURE:-0.3}"]
     always: true
 `))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	res := checkManifest(bundle, nil, &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"})
-	if res.Status != statusWarn || res.Blocking || !strings.Contains(res.Detail, `mcp_servers["stale"] is disabled`) {
-		t.Fatalf("manifest = %q blocking=%v %q; want a non-blocking warn naming the disabled entry", res.Status, res.Blocking, res.Detail)
+	mres := checkManifest(bundle, nil, &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"})
+	if mres.Status != statusFail || !mres.Blocking || !strings.Contains(mres.Detail, "references the removed variable ${CUTLASS_TEMPERATURE}; rename it to ${FLEET_TEMPERATURE}") {
+		t.Fatalf("manifest = %q blocking=%v %q; want a blocking failure naming FLEET_TEMPERATURE", mres.Status, mres.Blocking, mres.Detail)
+	}
+
+	// A required use fails the load itself, with the rename.
+	_, err = clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: stale
+    command: "${CHAT_TLS_MODE}"
+    always: true
+`))
+	if err == nil || !strings.Contains(err.Error(), "manifest references removed variable CHAT_TLS_MODE; rename it to FLEET_TLS_MODE") {
+		t.Fatalf("Load error = %v; want the rename", err)
+	}
+}
+
+// `validate-config --retired-only` (fleet update's pre-install check) scans
+// read-only and exits 7 when the bundle uses a removed variable, 0 otherwise.
+func TestValidateConfigRetiredOnly(t *testing.T) {
+	stale := mcpTestBundle(t, `mcp_servers:
+  - name: stale
+    type: http
+    url: "https://${CHAT_TLS_DOMAIN}/mcp"
+    always: true
+`)
+	var out strings.Builder
+	if rc := runRetiredOnly(&out, stale); rc != exitRetiredRefs || !strings.Contains(out.String(), "mcp_servers[0].url references the removed variable ${CHAT_TLS_DOMAIN}; rename it to ${FLEET_TLS_DOMAIN}") {
+		t.Fatalf("rc=%d output:\n%s", rc, out.String())
+	}
+	out.Reset()
+	if rc := runRetiredOnly(&out, repoConfigDefault(t)); rc != 0 {
+		t.Fatalf("the generic bundle: rc=%d output:\n%s", rc, out.String())
 	}
 }

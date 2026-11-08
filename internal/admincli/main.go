@@ -178,10 +178,11 @@ Serve an ACP client (Agent Client Protocol over stdio — Zed, JetBrains, Neovim
   fleet acp [--email …] [--server …] [--model <slug>] [--timeout 4h]
 
 Preflight & diagnostics (in-binary; no server needed):
-  fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json]
+  fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json] [--retired-only]
                                                       (dry-run the boot: every env knob, the bundle manifest, MCP catalog,
                                                        personas; --skip-network-checks omits the DB/MCP/model-API probes;
-                                                       exit 0 = would boot, 1 = refused, 2 = usage)
+                                                       exit 0 = would boot, 1 = refused, 2 = usage. --retired-only: only the
+                                                       read-only scan for removed CHAT_/CUTLASS_ variables, exit 7 when found)
   fleet mcp test [--all | <server> ...] [--deep] [--bundle-path <dir>] [--timeout 30s] [--json]
                                                       (per-server smoke: spawn it host-side like the broker, handshake,
                                                        tools/list; --deep also calls its auth-status/probe tool — docs/MCP-TESTING.md)

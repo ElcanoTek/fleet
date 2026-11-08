@@ -51,7 +51,14 @@ type validateOptions struct {
 	bundlePath        string
 	skipNetworkChecks bool
 	jsonOutput        bool
+	retiredOnly       bool
 }
+
+// exitRetiredRefs is `validate-config --retired-only`'s exit code when the
+// bundle uses a removed CHAT_/CUTLASS_ variable (ADR-0106). It is distinct
+// from every other outcome so `fleet update` can refuse on exactly this and
+// nothing else (a usage error from an older binary without the flag is 2).
+const exitRetiredRefs = 7
 
 // checkStatus is one check's outcome. "ok" passed, "warn" failed but does not
 // affect the exit code, "fail" is a blocking failure (exit 1).
@@ -95,6 +102,9 @@ func runValidateConfig(args []string) int {
 	}
 	// --bundle-path overrides FLEET_CLIENT_CONFIG_DIR for this run, exactly as a
 	// boot would resolve it (clientconfig.Dir reads the env var).
+	if opts.retiredOnly {
+		return runRetiredOnly(os.Stdout, opts.bundlePath)
+	}
 	if strings.TrimSpace(opts.bundlePath) != "" {
 		_ = os.Setenv(clientconfig.EnvDir, opts.bundlePath)
 	}
@@ -123,7 +133,36 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
 	fs.BoolVar(&opts.skipNetworkChecks, "skip-network-checks", false, "skip the DB live probe, MCP HTTP ping, and OpenRouter key check (CI with no outbound access)")
 	fs.BoolVar(&opts.jsonOutput, "json", false, "emit the report as JSON for CI parsing")
+	fs.BoolVar(&opts.retiredOnly, "retired-only", false, "only scan the bundle for removed CHAT_/CUTLASS_ variables (ADR-0106), read-only; exit 7 when it uses any (fleet update's pre-install check)")
 	return fs
+}
+
+// runRetiredOnly is `validate-config --retired-only`: the read-only scan
+// `fleet update` runs with the NEW binary before installing anything. It
+// resolves the bundle dir the way the service does (--bundle-path, else
+// FLEET_CLIENT_CONFIG_DIR from the process env, else the server env file),
+// scans its manifest (clientconfig.RetiredManifestRefs — no load, no env-file
+// application, no writes), prints each use with its replacement, and exits
+// exitRetiredRefs when there is any.
+func runRetiredOnly(w io.Writer, bundlePath string) int {
+	dir := strings.TrimSpace(bundlePath)
+	if dir == "" {
+		dir = clientconfig.DirFromEnvFile(config.ResolveEnvFile(""))
+	}
+	refs, err := clientconfig.RetiredManifestRefs(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "validate-config: scan %s: %v\n", dir, err)
+		return 1
+	}
+	if len(refs) == 0 {
+		fmt.Fprintf(w, "ok: the client bundle %s uses no removed CHAT_/CUTLASS_ variable\n", dir)
+		return 0
+	}
+	fmt.Fprintf(w, "the client bundle %s uses removed CHAT_/CUTLASS_ variables (ADR-0106):\n", dir)
+	for _, r := range refs {
+		fmt.Fprintf(w, "  - %s\n", r)
+	}
+	return exitRetiredRefs
 }
 
 // preflightEnvFile resolves the env file the in-binary preflight verbs
@@ -336,14 +375,11 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 	for _, p := range bundle.PluginProblems() {
 		advisories = append(advisories, "plugin: "+p)
 	}
-	// ${CHAT_X} references ADR-0106 removed: they interpolate as empty and
-	// never fail the load, so they are advisory.
+	// A removed CHAT_/CUTLASS_ variable (ADR-0106) anywhere in the bundle is
+	// blocking: `fleet update` refuses the bundle until it is renamed.
 	if refs, err := clientconfig.RetiredManifestRefWarnings(bundle.Dir); err == nil {
-		advisories = append(advisories, refs...)
+		problems = append(problems, refs...)
 	}
-	// Entries the load disabled because such a reference emptied a field
-	// they require: the bundle runs without them.
-	advisories = append(advisories, bundle.RetiredDisabledItems()...)
 
 	if len(problems) > 0 {
 		res.Status = statusFail

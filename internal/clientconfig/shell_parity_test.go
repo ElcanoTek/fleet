@@ -12,7 +12,9 @@ import (
 // (fleet_sandbox_resolve_scalar, scripts/lib/sandbox-bundle.sh) and the Go
 // loader agree on every interpolation form: ${X}, ${X:-d}, ${X:?m}, for a live
 // and a removed (ADR-0106) name, set, set-empty and unset. Where the loader
-// refuses the bundle, the shell resolver fails (non-zero exit).
+// refuses the bundle, the shell resolver fails (non-zero exit) — and for a
+// removed name both name the FLEET_ replacement; a removed name is unset on
+// both sides whatever its value.
 func TestShellResolverMatchesGo(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -47,6 +49,8 @@ func TestShellResolverMatchesGo(t *testing.T) {
 				}
 
 				cmd := exec.Command(bash, "-c", `set -u; . "$1"; fleet_sandbox_resolve_scalar image "$2" fleet_shell_env_value`, "bash", lib, filepath.Join(dir, "manifest.yaml"))
+				var stderr strings.Builder
+				cmd.Stderr = &stderr
 				out, shErr := cmd.Output()
 				shOut := strings.TrimSpace(string(out))
 
@@ -55,6 +59,10 @@ func TestShellResolverMatchesGo(t *testing.T) {
 				}
 				if goErr == nil && goOut != shOut {
 					t.Fatalf("go %q, shell %q", goOut, shOut)
+				}
+				const rename = "rename it to FLEET_SANDBOX_IMAGE"
+				if goErr != nil && strings.Contains(goErr.Error(), rename) != strings.Contains(stderr.String(), rename) {
+					t.Fatalf("rename message: go %v, shell %q", goErr, stderr.String())
 				}
 			})
 		}

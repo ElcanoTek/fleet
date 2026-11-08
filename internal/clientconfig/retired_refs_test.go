@@ -8,16 +8,6 @@ import (
 	"testing"
 )
 
-// ADR-0106: a manifest reference to a removed CHAT_/CUTLASS_ spelling is
-// reported with its FLEET_ name; the canonical connector wire key
-// CUTLASS_ALLOWED_DIRS (every client bundle interpolates it) is not.
-func TestRetiredManifestRefWarnings(t *testing.T) {
-	got := retiredManifestRefWarnings([]string{"CUTLASS_ALLOWED_DIRS", "FLEET_WORKSPACE_ROOT", "CHAT_WORKSPACE_ROOT", "PROVIDER_API_KEY"})
-	if len(got) != 1 || !strings.Contains(got[0], "${CHAT_WORKSPACE_ROOT}, a removed alias of FLEET_WORKSPACE_ROOT") {
-		t.Fatalf("warnings = %q, want exactly one for CHAT_WORKSPACE_ROOT", got)
-	}
-}
-
 // ADR-0106 (Codex P2 on #2081): a bundle that references a removed spelling
 // set only in FLEET_ENV_FILE gets a warning, and the value is neither
 // admitted into the process env nor interpolated — even when the process env
@@ -63,8 +53,8 @@ mcp_servers:
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"${CHAT_MAX_COST_USD}, a removed alias of FLEET_MAX_COST_USD",
-		"${CUTLASS_TEMPERATURE}, a removed alias of FLEET_TEMPERATURE",
+		"references the removed variable ${CHAT_MAX_COST_USD}; rename it to ${FLEET_MAX_COST_USD}",
+		"references the removed variable ${CUTLASS_TEMPERATURE}; rename it to ${FLEET_TEMPERATURE}",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("load log lacks %q:\n%s", want, out)
@@ -72,74 +62,6 @@ mcp_servers:
 	}
 	if strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") || strings.Contains(out, "7.5") || strings.Contains(out, "0.9") {
 		t.Errorf("load log flagged a canonical key or printed a value:\n%s", out)
-	}
-}
-
-// Codex P2 on #2081: a removed spelling never fails the load, in any form —
-// ${X:?msg}, a bare ${X} in a non-lazy field, ${X:-d} — whether the variable
-// is absent, in the env file, in the process env or both; its value is never
-// used (bare and :? yield "", :- yields its default), and the load warns.
-func TestRetiredManifestRefNeverFailsTheLoad(t *testing.T) {
-	const manifest = `
-mcp_servers:
-  - name: remote
-    type: http
-    url: "https://mcp.example/${CHAT_TLS_DOMAIN}/x"
-    always: true
-  - name: local
-    command: "python3${CHAT_TLS_MODE:?set CHAT_TLS_MODE}"
-    args: ["${CUTLASS_TEMPERATURE:-d}", "${CUTLASS_ALLOWED_DIRS:-none}"]
-    always: true
-`
-	for _, where := range []string{"absent", "file", "process", "both"} {
-		t.Run(where, func(t *testing.T) {
-			names := []string{"CHAT_TLS_DOMAIN", "CHAT_TLS_MODE", "CUTLASS_TEMPERATURE", "CUTLASS_ALLOWED_DIRS"}
-			unsetTracked(t, names...)
-			body := "CUTLASS_ALLOWED_DIRS=/srv/drops\n"
-			if where == "file" || where == "both" {
-				body += "CHAT_TLS_DOMAIN=stale.example\nCHAT_TLS_MODE=stale\nCUTLASS_TEMPERATURE=stale\n"
-			}
-			armEnvFile(t, body)
-			if where == "process" || where == "both" {
-				t.Setenv("CHAT_TLS_DOMAIN", "stale.example")
-				t.Setenv("CHAT_TLS_MODE", "stale")
-				t.Setenv("CUTLASS_TEMPERATURE", "stale")
-			}
-			var buf bytes.Buffer
-			orig, flags := log.Writer(), log.Flags()
-			log.SetOutput(&buf)
-			log.SetFlags(0)
-			t.Cleanup(func() { log.SetOutput(orig); log.SetFlags(flags) })
-
-			b, err := Load(writeManifest(t, manifest))
-			if err != nil {
-				t.Fatalf("a removed spelling failed the load: %v", err)
-			}
-			cfgs := b.MCPServerConfigs()
-			if got := cfgs["remote"].URL; got != "https://mcp.example//x" {
-				t.Errorf("url = %q, want the bare removed reference as empty", got)
-			}
-			local := cfgs["local"]
-			if local.Command != "python3" {
-				t.Errorf("command = %q, want the :? removed reference as empty", local.Command)
-			}
-			if len(local.Args) != 2 || local.Args[0] != "d" || local.Args[1] != "/srv/drops" {
-				t.Errorf("args = %q, want [d /srv/drops]", local.Args)
-			}
-			out := buf.String()
-			for _, n := range []string{"CHAT_TLS_DOMAIN", "CHAT_TLS_MODE", "CUTLASS_TEMPERATURE"} {
-				if !strings.Contains(out, "${"+n+"}, a removed alias of FLEET_") {
-					t.Errorf("no warning for ${%s}:\n%s", n, out)
-				}
-			}
-			if strings.Contains(out, "stale") || strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") {
-				t.Errorf("log printed a value or flagged a canonical key:\n%s", out)
-			}
-			refs, err := RetiredManifestRefWarnings(b.Dir)
-			if err != nil || len(refs) != 3 {
-				t.Errorf("RetiredManifestRefWarnings = %q, %v; want 3 warnings", refs, err)
-			}
-		})
 	}
 }
 
@@ -176,101 +98,121 @@ providers:
 	if _, on := b.MCPServerConfigs()["gated"]; on {
 		t.Error("a connector gated on a removed spelling must stay disabled")
 	}
-	if !strings.Contains(buf.String(), "names the variable CHAT_SERVER_TOKEN, a removed alias of FLEET_SERVER_TOKEN") || strings.Contains(buf.String(), "stale-token") {
+	if !strings.Contains(buf.String(), "names the removed variable CHAT_SERVER_TOKEN; rename it to FLEET_SERVER_TOKEN") || strings.Contains(buf.String(), "stale-token") {
 		t.Errorf("load log:\n%s", buf.String())
 	}
-	if ws, err := RetiredManifestRefWarnings(dir); err != nil || len(ws) != 1 {
-		t.Errorf("RetiredManifestRefWarnings = %q, %v; want the one literal-name warning", ws, err)
+	if ws, err := RetiredManifestRefWarnings(dir); err != nil || len(ws) != 2 {
+		t.Errorf("RetiredManifestRefWarnings = %q, %v; want the two literal-name uses (enabled_env, api_key_env)", ws, err)
 	}
 }
 
-// Codex P2 on #2081 (ADR-0106): a removed reference that empties a REQUIRED
-// field disables only the entry that owns it — never the load. A live unset
-// reference in the same position still fails the load.
-func TestRetiredRefEmptyingARequiredFieldDisablesOnlyThatEntry(t *testing.T) {
-	unsetTracked(t, "CHAT_TLS_MODE", "CHAT_TLS_DOMAIN", "PARITY_LIVE_CMD")
-	armEnvFile(t, "")
-	t.Setenv("CHAT_TLS_MODE", "python3") // a stale exported value is never used
-	var buf bytes.Buffer
-	orig, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() { log.SetOutput(orig); log.SetFlags(flags) })
-
-	dir := writeManifest(t, `
+// ADR-0106 (redesign on #2081): a removed spelling is read as unset, exactly
+// like any unset variable. A required reference — a bare ${X} in a field the
+// load resolves, whole or embedded in a larger string, or ${X:?m} — fails the
+// load with the rename spelled out; ${X:-d} yields d. The stale value is never
+// used, wherever it is set.
+func TestRetiredRefIsAnUnsetVariable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		manifest string
+		wantErr  string
+	}{
+		"bare whole field": {`
 mcp_servers:
-  - name: stale_cmd
+  - name: s
     command: "${CHAT_TLS_MODE}"
     always: true
-  - name: stale_url
-    type: http
-    url: "${CHAT_TLS_DOMAIN:?set the url}"
-    always: true
-  - name: fine
-    command: python3
-    always: true
-`)
-	b, err := Load(dir)
-	if err != nil {
-		t.Fatalf("a removed reference in a required field failed the load: %v", err)
-	}
-	cfgs := b.MCPServerConfigs()
-	if _, ok := cfgs["stale_cmd"]; ok {
-		t.Error("stale_cmd should be disabled")
-	}
-	if _, ok := cfgs["stale_url"]; ok {
-		t.Error("stale_url should be disabled")
-	}
-	if _, ok := cfgs["fine"]; !ok {
-		t.Error("the other server must still load")
-	}
-	disabled := b.RetiredDisabledItems()
-	if len(disabled) != 2 {
-		t.Fatalf("RetiredDisabledItems = %q, want 2", disabled)
-	}
-	for _, want := range []string{
-		`mcp_servers["stale_cmd"] is disabled: command (${CHAT_TLS_MODE}: use ${FLEET_TLS_MODE})`,
-		`mcp_servers["stale_url"] is disabled: url (${CHAT_TLS_DOMAIN}: use ${FLEET_TLS_DOMAIN})`,
-	} {
-		if !strings.Contains(buf.String(), want) {
-			t.Errorf("load log lacks %q:\n%s", want, buf.String())
-		}
-	}
-
-	live := writeManifest(t, `
+`, "manifest references removed variable CHAT_TLS_MODE; rename it to FLEET_TLS_MODE"},
+		"embedded in a url": {`
 mcp_servers:
-  - name: live_cmd
-    command: "${PARITY_LIVE_CMD}"
+  - name: s
+    type: http
+    url: "https://${CHAT_TLS_DOMAIN}/api"
     always: true
-`)
-	if _, err := Load(live); err == nil {
-		t.Error("a LIVE unset reference in command must still fail the load")
+`, "manifest references removed variable CHAT_TLS_DOMAIN; rename it to FLEET_TLS_DOMAIN"},
+		"required form": {`
+mcp_servers:
+  - name: s
+    command: "python3${CHAT_TLS_MODE:?set it}"
+    always: true
+`, "manifest references removed variable CHAT_TLS_MODE; rename it to FLEET_TLS_MODE"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			unsetTracked(t, "CHAT_TLS_MODE", "CHAT_TLS_DOMAIN")
+			armEnvFile(t, "CHAT_TLS_MODE=stale\nCHAT_TLS_DOMAIN=stale.example\n")
+			t.Setenv("CHAT_TLS_MODE", "stale") // exported by the unit: never used
+			_, err := Load(writeManifest(t, tc.manifest))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load error = %v; want one containing %q", err, tc.wantErr)
+			}
+			if strings.Contains(err.Error(), "stale") {
+				t.Errorf("the error printed a value: %v", err)
+			}
+		})
 	}
+	t.Run("default form loads", func(t *testing.T) {
+		unsetTracked(t, "CUTLASS_TEMPERATURE")
+		armEnvFile(t, "CUTLASS_TEMPERATURE=0.9\n")
+		b, err := Load(writeManifest(t, `
+mcp_servers:
+  - name: s
+    command: python3
+    args: ["${CUTLASS_TEMPERATURE:-0.3}"]
+    always: true
+`))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := b.MCPServerConfigs()["s"].Args; len(got) != 1 || got[0] != "0.3" {
+			t.Errorf("args = %q, want the :- default", got)
+		}
+	})
 }
 
-// A provider whose required base_url a removed reference emptied is disabled,
-// and leaves the fallback chain with it; the other provider still loads.
-func TestRetiredRefDisablesAProviderAndItsFallbackEntry(t *testing.T) {
-	unsetTracked(t, "CHAT_OPENROUTER_BASE_URL")
-	armEnvFile(t, "")
+// The read-only scanner finds every use: whole and embedded ${...} references
+// in any section (servers, personas, pricing, sandbox), and literal names in
+// env-name fields — but not a canonical CUTLASS_ wire key, nor an ordinary
+// scalar equal to a removed name.
+func TestRetiredManifestRefsFindsEveryUse(t *testing.T) {
 	dir := writeManifest(t, `
-providers:
-  - name: local
-    type: openaicompat
-    base_url: "${CHAT_OPENROUTER_BASE_URL}"
-  - name: main
-    type: openrouter
-    api_key_env: PARITY_PROVIDER_KEY
-fallback_providers: [main, local]
+mcp_servers:
+  - name: s
+    type: http
+    url: "https://${CHAT_TLS_DOMAIN}/api"
+    description: "CHAT_SERVER_TOKEN"
+    env:
+      CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}"
+      TEMP: "${CUTLASS_TEMPERATURE:-0.3}"
+    enabled_env: ["CHAT_SERVER_TOKEN"]
+personas:
+  - name: p
+    model: "${CHAT_TITLE_MODEL}"
+pricing:
+  overrides:
+    - model: "${CHAT_METADATA_MODEL:-x}"
+sandbox:
+  image: "${CHAT_SANDBOX_IMAGE:-}"
 `)
-	b, err := Load(dir)
+	refs, err := RetiredManifestRefs(dir)
 	if err != nil {
-		t.Fatalf("load: %v", err)
+		t.Fatal(err)
 	}
-	if len(b.Providers) != 1 || b.Providers[0].Name != "main" || len(b.FallbackProviders) != 1 || b.FallbackProviders[0] != "main" {
-		t.Fatalf("providers %+v fallback %v; want only main", b.Providers, b.FallbackProviders)
+	got := map[string]string{}
+	for _, r := range refs {
+		got[r.Name] = r.Path
 	}
-	if len(b.RetiredDisabledItems()) != 1 {
-		t.Errorf("RetiredDisabledItems = %q", b.RetiredDisabledItems())
+	for name, path := range map[string]string{
+		"CHAT_TLS_DOMAIN":     "mcp_servers[0].url",
+		"CUTLASS_TEMPERATURE": "mcp_servers[0].env.TEMP",
+		"CHAT_SERVER_TOKEN":   "mcp_servers[0].enabled_env[0]",
+		"CHAT_TITLE_MODEL":    "personas[0].model",
+		"CHAT_METADATA_MODEL": "pricing.overrides[0].model",
+		"CHAT_SANDBOX_IMAGE":  "sandbox.image",
+	} {
+		if got[name] != path {
+			t.Errorf("%s found at %q, want %q (all: %+v)", name, got[name], path, refs)
+		}
+	}
+	if len(refs) != 6 {
+		t.Errorf("found %d uses, want 6: %+v", len(refs), refs)
 	}
 }

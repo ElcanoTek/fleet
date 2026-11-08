@@ -192,6 +192,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/bundle.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
+# shellcheck source=lib/retired-bundle.sh
+. "$SCRIPT_DIR/lib/retired-bundle.sh"
 # Uninstall Cockpit (bootstrap only).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
@@ -1130,6 +1132,15 @@ resolve_sandbox_image() {
   [[ -f "$1" ]] || return 0
   fleet_sandbox_resolve_scalar image "$1" fleet_shell_env_value || die "client bundle $1: fleet refuses this sandbox.image at startup (see above)"
 }
+
+# ── removed CHAT_/CUTLASS_ variables (ADR-0106) ──
+# The verified release binary reads them as unset, so a bundle that still
+# uses one may not load: its read-only scan refuses the install up front
+# (scripts/lib/retired-bundle.sh).
+if [[ -n "${FLEET_RELEASE_BIN:-}" && -x "${FLEET_RELEASE_BIN}" ]]; then
+  fleet_retired_bundle_check "$FLEET_RELEASE_BIN" "$CLIENT_CONFIG_DIR" \
+    || die "the client bundle ${CLIENT_CONFIG_DIR} uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed; rename these in the client bundle and re-run"
+fi
 
 # ── sandbox image ──
 # The release publishes the generic bundle's sandbox image, signed. A bundle

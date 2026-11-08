@@ -3,7 +3,9 @@ package admincli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,7 +148,7 @@ func TestDoctorWarnsAboutRemovedAliases(t *testing.T) {
 }
 
 // ADR-0106: fleet doctor also reports a ${CHAT_X} reference in the client
-// bundle, naming the FLEET_ key, without loading the bundle.
+// bundle as a FAIL, naming the FLEET_ key, without loading the bundle.
 func TestDoctorWarnsAboutRemovedManifestRefs(t *testing.T) {
 	stubSystemd(t, t.TempDir(), "", false)
 	dir := t.TempDir()
@@ -157,9 +159,11 @@ func TestDoctorWarnsAboutRemovedManifestRefs(t *testing.T) {
 	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
 	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
 	var buf bytes.Buffer
-	warnRetiredEnvAliases(&buf)
+	if !warnRetiredEnvAliases(&buf) {
+		t.Error("a bundle using a removed variable must fail the doctor run")
+	}
 	out := buf.String()
-	if !strings.Contains(out, "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") || strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") {
+	if !strings.Contains(out, "FAIL the client bundle") || !strings.Contains(out, "mcp_servers[0].command references the removed variable ${CHAT_TLS_MODE}; rename it to ${FLEET_TLS_MODE}") || strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") {
 		t.Errorf("doctor output:\n%s", out)
 	}
 }
@@ -182,26 +186,50 @@ func TestDoctorFindsTheBundleThroughTheEnvFile(t *testing.T) {
 	t.Setenv("FLEET_ENV_FILE", envFile)
 	var buf bytes.Buffer
 	warnRetiredEnvAliases(&buf)
-	if !strings.Contains(buf.String(), "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") {
+	if !strings.Contains(buf.String(), "references the removed variable ${CHAT_TLS_MODE}; rename it to ${FLEET_TLS_MODE}") {
 		t.Errorf("doctor did not scan the env file's bundle:\n%s", buf.String())
 	}
 }
 
-// ADR-0106: doctor names an entry the bundle loads without because a removed
-// reference emptied a field it requires.
-func TestDoctorReportsEntriesARemovedRefDisables(t *testing.T) {
+// Codex P2 on #2081: the doctor's bundle check is a read-only scan — it never
+// loads the bundle (which applies the env file and materialises skills), so
+// `fleet doctor --check` writes nothing: the bundle dir, the data dir and the
+// env file are unchanged, and no skills tree appears.
+func TestDoctorBundleCheckWritesNothing(t *testing.T) {
 	stubSystemd(t, t.TempDir(), "", false)
-	dir := t.TempDir()
+	bundle := t.TempDir()
 	manifest := "mcp_servers:\n  - name: stale\n    command: \"${CHAT_TLS_MODE}\"\n    always: true\n"
-	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	clearEnvNames(t, "CHAT_TLS_MODE")
-	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
-	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	data := t.TempDir()
+	envDir := t.TempDir()
+	envFile := filepath.Join(envDir, "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+bundle+"\nFLEET_DATA_DIR="+data+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearEnvNames(t, "FLEET_CLIENT_CONFIG_DIR", "FLEET_DATA_DIR", "CHAT_TLS_MODE")
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	snapshot := func() string {
+		var b strings.Builder
+		for _, d := range []string{bundle, data, envDir} {
+			_ = filepath.WalkDir(d, func(p string, e fs.DirEntry, _ error) error {
+				info, _ := e.Info()
+				fmt.Fprintf(&b, "%s %d %v\n", p, info.Size(), info.ModTime().UnixNano())
+				return nil
+			})
+		}
+		return b.String()
+	}
+	before := snapshot()
 	var buf bytes.Buffer
-	warnRetiredEnvAliases(&buf)
-	if !strings.Contains(buf.String(), `mcp_servers["stale"] is disabled: command (${CHAT_TLS_MODE}: use ${FLEET_TLS_MODE})`) {
-		t.Errorf("doctor output:\n%s", buf.String())
+	if !warnRetiredEnvAliases(&buf) {
+		t.Errorf("the stale bundle must fail the run:\n%s", buf.String())
+	}
+	if after := snapshot(); after != before {
+		t.Errorf("the doctor bundle check wrote files:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if v, ok := os.LookupEnv("FLEET_DATA_DIR"); ok && v != "" {
+		t.Errorf("the doctor bundle check applied the env file into the process env (FLEET_DATA_DIR=%q)", v)
 	}
 }

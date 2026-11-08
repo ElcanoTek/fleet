@@ -250,10 +250,12 @@ leftover is reported rather than silently ignored:
 - **`fleet config explain FLEET_<X>`** notes a removed spelling that is set,
   and `fleet config explain CHAT_<X>` is an error naming `FLEET_<X>`;
 - **`fleet config set-env CHAT_<X>`** refuses, naming `FLEET_<X>`;
-- **a client bundle referencing `${CHAT_<X>}`** still loads: the reference
-  interpolates as empty (or its `:-` default, never failing even as `:?`),
-  the load warns, and `fleet doctor` / `fleet validate-config` report it as
-  a non-blocking advisory.
+- **a client bundle using `${CHAT_<X>}`** (or naming `CHAT_<X>` in an
+  env-name field) treats it as unset: `:-` gives the default, a required use
+  fails the load with `rename it to FLEET_<X>`. `fleet update` refuses such a
+  bundle before installing (the new binary's read-only
+  `fleet validate-config --retired-only`), and `fleet doctor` /
+  `fleet validate-config` report it as a blocking failure.
 
 None of them prints a value. The canonical `CHAT_`/`CUTLASS_` settings
 (`CHAT_RATE_PER_*`, the `CUTLASS_*` connector wire keys, the `CHAT_DB_*`

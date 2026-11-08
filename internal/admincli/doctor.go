@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -18,48 +18,41 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 )
 
-// warnRetiredEnvAliases prints one warning per removed CHAT_/CUTLASS_ (or bare
-// DATA_DIR) spelling set in the process environment, the systemd unit's
-// environment or the server env file (ADR-0106): nothing reads them any more,
-// so the setting silently falls back to its default. It is read-only and
-// never prints a value.
-func warnRetiredEnvAliases(w io.Writer) {
+// warnRetiredEnvAliases reports removed CHAT_/CUTLASS_ (or bare DATA_DIR)
+// spellings (ADR-0106) and returns true when the client bundle still uses
+// one. A bundle use is a FAIL: a required reference fails the load, and
+// `fleet update` refuses the bundle before installing, so it must be renamed.
+// A spelling still SET in the process environment, the systemd unit or the
+// server env file is a WARN: nothing reads it. Read-only — the bundle is
+// scanned (clientconfig.RetiredManifestRefs), never loaded — and it never
+// prints a value.
+func warnRetiredEnvAliases(w io.Writer) (bundleFails bool) {
 	path := serverEnvFile("")
-	// Bundle references (${CHAT_X} in the client manifest): they interpolate
-	// as empty and never stop a load, but the bundle owner must rename them.
-	// The bundle dir is resolved as the server sees it: on a packaged install
-	// FLEET_CLIENT_CONFIG_DIR lives only in the server env file.
+	// The bundle dir is resolved as the server sees it: on a packaged
+	// install FLEET_CLIENT_CONFIG_DIR lives only in the server env file.
 	bundleDir := clientconfig.DirFromEnvFile(path)
-	if refs, err := clientconfig.RetiredManifestRefWarnings(bundleDir); err != nil {
+	if refs, err := clientconfig.RetiredManifestRefs(bundleDir); err != nil {
 		fmt.Fprintf(w, "fleet doctor: could not check the client bundle for removed env aliases: %v\n", err)
 	} else if len(refs) > 0 {
-		fmt.Fprintf(w, "WARN the client bundle references removed CHAT_/CUTLASS_ env aliases (ADR-0106):\n")
+		bundleFails = true
+		fmt.Fprintf(w, "FAIL the client bundle (%s) uses removed CHAT_/CUTLASS_ variables (ADR-0106); `fleet update` refuses it until each is renamed:\n", bundleDir)
 		for _, r := range refs {
 			fmt.Fprintf(w, "  - %s\n", r)
-		}
-		// Entries such a reference disables (it emptied a field they
-		// require). Loading is quiet here: the load's own warnings are the
-		// server's to print; a bundle that does not load is validate-config's
-		// to report.
-		if disabled := retiredDisabledEntries(bundleDir); len(disabled) > 0 {
-			fmt.Fprintf(w, "WARN the client bundle loads without these entries (ADR-0106):\n")
-			for _, d := range disabled {
-				fmt.Fprintf(w, "  - %s\n", d)
-			}
 		}
 	}
 	findings, err := config.RetiredAliasFindings(path, loadUnitEnv())
 	if err != nil {
 		fmt.Fprintf(w, "fleet doctor: could not check %s for removed env aliases: %v\n", path, err)
-		return
+		return bundleFails
 	}
 	if len(findings) == 0 {
-		return
+		return bundleFails
 	}
 	fmt.Fprintf(w, "WARN removed CHAT_/CUTLASS_ env aliases are set (ADR-0106); nothing reads them, so rename each to its FLEET_ name (fleet config set-env / fleet env edit):\n")
 	for _, f := range findings {
 		fmt.Fprintf(w, "  - %s\n", f)
 	}
+	return bundleFails
 }
 
 // cmdDoctor wraps scripts/doctor.sh — the box-level diagnose-AND-REPAIR pass.
@@ -83,9 +76,19 @@ func warnRetiredEnvAliases(w io.Writer) {
 // found; rather than failing uselessly we degrade to the in-process status
 // report so `fleet doctor` is never a dead verb.
 func cmdDoctor(argv []string) int {
-	// Removed CHAT_/CUTLASS_ env spellings (ADR-0106): warn first, on every
-	// path (script or status fallback); read-only, never a value.
-	warnRetiredEnvAliases(os.Stdout)
+	// Removed CHAT_/CUTLASS_ spellings (ADR-0106): reported first, on every
+	// path (script or status fallback); read-only, never a value. A bundle
+	// that still uses one fails the doctor run (exit 1 when the rest passed).
+	bundleFails := warnRetiredEnvAliases(os.Stdout)
+	rc := cmdDoctorChecks(argv)
+	if bundleFails && rc == 0 && !slices.Contains(argv, "--dry-run") {
+		rc = 1
+	}
+	return rc
+}
+
+// cmdDoctorChecks runs doctor.sh, or the status fallback without it.
+func cmdDoctorChecks(argv []string) int {
 	script := findScript("doctor.sh")
 	if script == "" {
 		fmt.Fprintln(os.Stderr, "fleet doctor: scripts/doctor.sh not found (no checkout — set FLEET_ROOT or run from the repo); falling back to the read-only `fleet status` checks.")
@@ -127,18 +130,4 @@ func cmdDoctor(argv []string) int {
 		return errf(5, "doctor: %v", err)
 	}
 	return 0
-}
-
-// retiredDisabledEntries loads the bundle in dir with logging silenced and
-// returns the entries the load disabled for a removed reference (nil when it
-// does not load).
-func retiredDisabledEntries(dir string) []string {
-	orig := log.Writer()
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(orig)
-	b, err := clientconfig.Load(dir)
-	if err != nil {
-		return nil
-	}
-	return b.RetiredDisabledItems()
 }

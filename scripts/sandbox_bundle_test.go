@@ -282,3 +282,60 @@ func TestSandboxScalarInterpolationIsShared(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0106 (redesign on #2081): fleet update refuses a client bundle that
+// still uses a removed CHAT_/CUTLASS_ variable BEFORE installing anything, by
+// asking the NEW binary's read-only scan. This builds the real binary, runs
+// the shared check (scripts/lib/retired-bundle.sh) the way update.sh does,
+// and confirms the refusal stops the run before the install step; a clean
+// bundle proceeds. It also pins that update.sh runs the check before
+// `release install`.
+func TestUpdateRefusesARetiredBundleBeforeInstalling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the fleet binary")
+	}
+	root := repoRoot(t)
+	bin := filepath.Join(t.TempDir(), "fleet")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/fleet")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	run := func(manifest string) (installed bool, stderr string) {
+		t.Helper()
+		bundle := sandboxBundle(t, "", map[string]string{})
+		if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(t.TempDir(), "installed")
+		cmd := exec.Command("bash", "-c", `set -euo pipefail
+. "$ROOT/scripts/lib/retired-bundle.sh"
+die() { printf '%s\n' "$*" >&2; exit 1; }
+fleet_retired_bundle_check "$BIN" "$B" || die "nothing was installed; rename these in the client bundle and re-run"
+touch "$MARKER"`)
+		cmd.Env = append(os.Environ(), "ROOT="+root, "BIN="+bin, "B="+bundle, "MARKER="+marker, "FLEET_ENV_FILE=/nonexistent")
+		var errb strings.Builder
+		cmd.Stderr = &errb
+		_ = cmd.Run()
+		_, statErr := os.Stat(marker)
+		return statErr == nil, errb.String()
+	}
+	installed, stderr := run("name: test\nmcp_servers:\n  - name: s\n    type: http\n    url: \"https://${CHAT_TLS_DOMAIN}/mcp\"\n    always: true\n")
+	if installed {
+		t.Error("a bundle using a removed variable was installed over")
+	}
+	for _, want := range []string{"mcp_servers[0].url references the removed variable ${CHAT_TLS_DOMAIN}; rename it to ${FLEET_TLS_DOMAIN}", "nothing was installed"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, stderr)
+		}
+	}
+	if installed, stderr := run("name: test\nsandbox:\n  image: \"${FLEET_SANDBOX_IMAGE:-}\"\n"); !installed {
+		t.Errorf("a clean bundle was refused:\n%s", stderr)
+	}
+
+	update := readFile(t, root, "scripts/update.sh")
+	check, install := strings.Index(update, `fleet_retired_bundle_check "$NEW_FLEET"`), strings.Index(update, `"$NEW_FLEET" release install`)
+	if check < 0 || install < 0 || check > install {
+		t.Error("update.sh must run fleet_retired_bundle_check on the new binary before `release install`")
+	}
+}

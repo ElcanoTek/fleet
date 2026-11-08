@@ -47,8 +47,9 @@ fleet_sandbox_manifest_value() {
 #   ${X:?m}    X's value, else an error carrying m
 #   ${X:<other>…} the whole text is the name (as in Go): unset → an error
 # Values are trimmed; empty counts as unset. A spelling ADR-0106 removed is
-# never looked up: ${X} and ${X:?m} give "" and ${X:-d} gives d, without an
-# error, exactly as fleet reads it (envreg.RetiredAlias; retired-env.sh).
+# never looked up — it is unset, exactly as fleet reads it: ${X:-d} gives d,
+# and ${X} / ${X:?m} fail with the rename spelled out (envreg.RetiredAlias;
+# retired-env.sh).
 # Anything that is not a single whole-value ${...} is returned literally.
 # LOOKUP is the name of a function printing a variable's value — the caller
 # picks the source: bootstrap and doctor read their shell
@@ -69,9 +70,12 @@ fleet_sandbox_resolve_scalar() {
       name="${expr%%:*}" op="${rest:0:1}" body="${rest:1}"
     fi
   fi
+  local retired=""
   if fleet_env_name_retired "$(fleet__trim "$name")"; then
-    [[ "$op" == "-" ]] && printf '%s' "$(fleet__trim "$body")"
-    return 0
+    retired="$(fleet__trim "$name")"
+    [[ "$op" == "-" ]] && { printf '%s' "$(fleet__trim "$body")"; return 0; }
+    printf 'sandbox.%s: manifest references removed variable %s; rename it to %s (ADR-0106)\n' "$key" "$retired" "$(fleet_env_canonical_name "$retired")" >&2
+    return 1
   fi
   case "$op" in
     -|\?) ;;
@@ -92,6 +96,16 @@ fleet_sandbox_resolve_scalar() {
     *)
       printf 'sandbox.%s: ${%s} is unset or empty (set it, or use ${%s:-default})\n' "$key" "$name" "$name" >&2
       return 1 ;;
+  esac
+}
+
+# fleet_env_canonical_name NAME — the FLEET_ name a removed spelling maps to
+# (CHAT_X / CUTLASS_X → FLEET_X; the bare DATA_DIR → FLEET_DATA_DIR).
+fleet_env_canonical_name() {
+  case "$1" in
+    CHAT_*) printf 'FLEET_%s' "${1#CHAT_}" ;;
+    CUTLASS_*) printf 'FLEET_%s' "${1#CUTLASS_}" ;;
+    *) printf 'FLEET_%s' "$1" ;;
   esac
 }
 

@@ -135,6 +135,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/release.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
+# shellcheck source=lib/retired-bundle.sh
+. "$SCRIPT_DIR/lib/retired-bundle.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same
 # implementation bootstrap.sh writes from and doctor.sh repairs against.
 # shellcheck source=lib/caddyfile.sh
@@ -1083,6 +1085,7 @@ _fetch_flags=()
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
   info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
+  info "[dry-run] would refuse before installing if the client bundle uses a removed CHAT_/CUTLASS_ variable (fleet validate-config --retired-only, ADR-0106)"
 else
   # Only the release being installed is staged: earlier releases' staging
   # dirs (~100 MB each) are dropped first — the previous binary lives on as
@@ -1103,6 +1106,12 @@ else
   NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
     || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
   ok "verified ${RELEASE_TAG}: $("$NEW_FLEET" version 2>/dev/null || echo "$NEW_FLEET")"
+  # Removed CHAT_/CUTLASS_ variables (ADR-0106): the NEW binary reads them as
+  # unset, so a bundle that still uses one could fail to load after the
+  # restart. Ask the new binary's read-only scan (no load, no writes) and
+  # refuse BEFORE installing anything (scripts/lib/retired-bundle.sh).
+  fleet_retired_bundle_check "$NEW_FLEET" "$CLIENT_DIR" \
+    || die "the client bundle ${CLIENT_DIR} uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed and ${SERVICE_NAME} was not restarted; rename these in the client bundle and re-run fleet update"
 fi
 
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────

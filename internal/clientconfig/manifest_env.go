@@ -379,8 +379,11 @@ func unresolvedManifestRefs(sites []manifestRefSite) []string {
 		if site.lazy {
 			continue
 		}
-		if _, retired := envreg.RetiredAlias(site.ref.name); retired {
-			continue // ADR-0106: interpolates as "" and only warns (warnRetiredManifestRefs)
+		if msg := retiredRefMessage(site.ref.name); msg != "" {
+			// ADR-0106: read as unset, so it fails here like any unset
+			// variable — with the rename spelled out.
+			problems = append(problems, fmt.Sprintf("%s: %s", site.path, msg))
+			continue
 		}
 		if _, ok := lookupNonEmpty(site.ref.name); !ok {
 			problems = append(problems, fmt.Sprintf(

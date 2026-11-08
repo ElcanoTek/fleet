@@ -46,14 +46,11 @@
 package clientconfig
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -280,9 +277,7 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.resolveBranding(); err != nil {
 		return nil, err
 	}
-	// A removed CHAT_/CUTLASS_ reference that empties a required field
-	// disables only the entry that owns it (ADR-0106, retired_disable.go).
-	if err := b.validateDisablingRetired(manifestPath, raw); err != nil {
+	if err := b.validate(); err != nil {
 		return nil, err
 	}
 	// Agent Plugins (plugins.go, ADR-0054): translate each plugin's mcp.json
@@ -999,144 +994,4 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
-}
-
-// retiredManifestRefWarnings names every ${VAR} the manifest references that
-// is a CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed. envreg
-// reads every such name as unset whatever the environment holds, so the
-// reference interpolates as "" (or its :- default) in every form, ${X:?msg}
-// included (retiredExpr), and it is not admitted from the env file
-// (config.RegisterAllowedEnvVars). The canonical CUTLASS_ wire keys
-// (CUTLASS_ALLOWED_DIRS, …) are settings of their own and are never reported.
-// The load goes on: a warning, not a refusal, so a bundle cannot take a box
-// down at boot.
-func retiredManifestRefWarnings(refNames []string) []string {
-	var out []string
-	for _, n := range refNames {
-		if canonical, ok := envreg.RetiredAlias(n); ok {
-			out = append(out, fmt.Sprintf("the manifest references ${%s}, a removed alias of %s (ADR-0106): fleet never reads it, so the reference interpolates as empty (or its :- default) and the load goes on — reference ${%s} instead", n, canonical, canonical))
-		}
-	}
-	return out
-}
-
-// envNameFields are the manifest fields (by YAML key) whose VALUE is the name
-// of an environment variable fleet reads — the fields literalEnvVarNames
-// admits to the .env allowlist and the readers resolve through envreg:
-// a provider's API key, a connector's enable gates and account/identity
-// variables, a webhook trigger's signing secret. It is the ONE list: the
-// ADR-0106 literal-name warning walks exactly these keys, and
-// TestEnvNameFieldsCoverTheSchema fails when a manifest type gains a *_env /
-// *_vars field that is in neither this list nor envKeyFields.
-var envNameFields = map[string]bool{
-	"api_key_env":      true, // providers[]
-	"enabled_env":      true, // mcp_servers[]
-	"enabled_groups":   true, // mcp_servers[] (lists of names)
-	"account_vars":     true, // mcp_servers[]
-	"identity_env":     true, // mcp_servers[] (their <VAR>_<ACCOUNT> forms are read)
-	"hmac_secret_env":  true, // webhook_triggers[]
-	"token_secret_env": true, // webhook_triggers[]
-}
-
-// envKeyFields are *_env fields whose values are KEYS of a connector's own
-// env map — the wire names fleet hands to the MCP server — not variables
-// fleet reads, so a CHAT_/CUTLASS_ value there is legitimate.
-var envKeyFields = map[string]string{
-	"optional_env": "names keys of the connector's env map to drop when empty; never read from fleet's environment",
-}
-
-// retiredLiteralNameWarnings names every removed spelling the manifest uses
-// as a literal variable NAME in an envNameFields field. Every such field is
-// read through envreg, which reports a removed name as unset, so the
-// credential is absent and the gate stays closed (its default applies).
-// Ordinary scalars elsewhere (a description, a command argument) are never
-// inspected: only ${...} references there are read, and those are checked
-// separately.
-func retiredLiteralNameWarnings(tree any) []string {
-	seen := map[string]bool{}
-	var names []string
-	var collect func(n any)
-	collect = func(n any) {
-		switch v := n.(type) {
-		case []any:
-			for _, c := range v {
-				collect(c)
-			}
-		case string:
-			name := strings.TrimSpace(v)
-			if _, ok := envreg.RetiredAlias(name); ok && !seen[name] {
-				seen[name] = true
-				names = append(names, name)
-			}
-		}
-	}
-	var walk func(n any)
-	walk = func(n any) {
-		switch v := n.(type) {
-		case map[string]any:
-			for k, c := range v {
-				if envNameFields[k] {
-					collect(c)
-					continue
-				}
-				walk(c)
-			}
-		case []any:
-			for _, c := range v {
-				walk(c)
-			}
-		}
-	}
-	walk(tree)
-	sort.Strings(names)
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		canonical, _ := envreg.RetiredAlias(n)
-		out = append(out, fmt.Sprintf("the manifest names the variable %s, a removed alias of %s (ADR-0106): fleet never reads it, so it counts as unset (no credential, gate closed) and the load goes on — name %s instead", n, canonical, canonical))
-	}
-	return out
-}
-
-// retiredManifestWarnings is every ADR-0106 warning for raw manifest bytes:
-// ${...} references, then literal variable names.
-func retiredManifestWarnings(raw []byte) ([]string, error) {
-	_, refNames, err := scanManifestEnvRefs(raw)
-	if err != nil {
-		return nil, err
-	}
-	var tree any
-	if err := yaml.Unmarshal(raw, &tree); err != nil {
-		return nil, err
-	}
-	return append(retiredManifestRefWarnings(refNames), retiredLiteralNameWarnings(tree)...), nil
-}
-
-// warnRetiredManifestRefs logs retiredManifestWarnings at bundle load.
-func warnRetiredManifestRefs(manifestPath string, raw []byte) {
-	ws, err := retiredManifestWarnings(raw)
-	if err != nil {
-		return // the load reports the parse error itself
-	}
-	for _, w := range ws {
-		log.Printf("Warning: %s: %s", manifestPath, w)
-	}
-}
-
-// RetiredManifestRefWarnings reads the manifest of the bundle in dir and
-// returns one warning per removed spelling it references or names (see
-// retiredManifestWarnings). It is the read-only check `fleet doctor` and
-// `fleet validate-config` print; it does not load the bundle. A missing
-// manifest yields no warnings.
-func RetiredManifestRefWarnings(dir string) ([]string, error) {
-	if strings.TrimSpace(dir) == "" {
-		dir = Dir()
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "manifest.yaml")) // #nosec G304 — operator-supplied bundle path.
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return retiredManifestWarnings(raw)
 }
