@@ -16,16 +16,16 @@ func TestSecretNamedGroupRedactsItsMembers(t *testing.T) {
 	const opaque = "grpOpaqueValueNoShape1"
 	cases := map[string]func(l *slog.Logger){
 		"group attr": func(l *slog.Logger) {
-			l.Info("x", slog.Group("credentials", "value", opaque, "count", 3))
+			l.Info("x", slog.Group("credentials", "value", opaque, "token_count", 3))
 		},
 		"nested group": func(l *slog.Logger) {
-			l.Info("x", slog.Group("connector", slog.Group("api_token", slog.Group("inner", "v", opaque), "count", 3)))
+			l.Info("x", slog.Group("connector", slog.Group("api_token", slog.Group("inner", "v", opaque), "token_count", 3)))
 		},
 		"WithGroup": func(l *slog.Logger) {
-			l.WithGroup("Auth-Secret").Info("x", "value", opaque, "count", 3)
+			l.WithGroup("Auth-Secret").Info("x", "value", opaque, "token_count", 3)
 		},
 		"WithGroup then With": func(l *slog.Logger) {
-			l.WithGroup("credential").With("value", opaque).Info("x", "count", 3)
+			l.WithGroup("credential").With("value", opaque).Info("x", "token_count", 3)
 		},
 	}
 	for _, format := range []string{"json", "text"} {

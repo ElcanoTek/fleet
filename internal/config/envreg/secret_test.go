@@ -15,6 +15,7 @@ var notSecret = map[string]string{
 	"FLEET_SENTRY_DSN":       "a public ingest identifier; explain still strips its userinfo (the key part) like any URL",
 
 	"FLEET_TLS_KEY_FILE":                  "a PATH to the key file, not the key",
+	"FLEET_OTEL_CLIENT_KEY_FILE":          "a PATH to the trace-export mTLS key file, not the key",
 	"FLEET_OIDC_ALLOW_PASSWORD":           "a boolean break-glass switch",
 	"FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET": "the NAME of a Kubernetes Secret object, not its content",
 }

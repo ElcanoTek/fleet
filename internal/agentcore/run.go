@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 
 	"charm.land/fantasy"
 
@@ -401,6 +405,15 @@ func runAnswer(policy Policy, roundText string) string {
 	return roundText
 }
 
+// endRunSpan ends Run's agentcore.run span with the run's final error. It is
+// deferred before the panic backstop, so it reads err after the backstop set
+// it; span is nil when Run panicked before starting it.
+func endRunSpan(span *trace.Span, err *error) {
+	if *span != nil {
+		telemetry.End(*span, *err)
+	}
+}
+
 // Run drives a single agent run to completion. It is the shared body both modes
 // use; Mode + the seams are the only divergence axes.
 func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Result, err error) {
@@ -410,7 +423,27 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		conversationID: cfg.ConversationID,
 		ctx:            ctx,
 	}
+	// The run span ends LAST (deferred first, so it unwinds after the panic
+	// backstop): a contained panic has set err to ErrRunBoundaryPanic by then,
+	// so the span records the failure instead of a nil-error success.
+	var runSpan trace.Span
+	defer endRunSpan(&runSpan, &err)
 	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
+
+	// Correlation (#2052): the run's ids ride the context, so every log line
+	// below (logging.From(ctx)) and in the tools, sandbox and broker calls the
+	// loop makes carries them; and the run is one span, the parent of every
+	// model.* and tool.call span it makes (telemetry.go).
+	ctx = logging.WithAttrs(ctx,
+		slog.String(logging.KeyTaskID, cfg.TaskID),
+		slog.String(logging.KeyConvID, cfg.ConversationID))
+	ctx, runSpan = telemetry.Start(ctx, "agentcore.run", trace.WithAttributes(
+		telemetry.AttrRunMode.String(mode.String()),
+		telemetry.AttrConvID.String(cfg.ConversationID),
+		telemetry.AttrTaskID.String(cfg.TaskID),
+		telemetry.AttrTurnID.String(logging.Value(ctx, logging.KeyTurnID)),
+		telemetry.AttrRunID.String(logging.Value(ctx, logging.KeyRunID)),
+	))
 
 	if deps.Model == nil {
 		return Result{}, fmt.Errorf("no language model configured")
@@ -450,6 +483,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if logSession == nil {
 		logSession = NewLogSession()
 	}
+	// The persisted run log names the run and its trace, so an operator can go
+	// from a run in the admin view to its log lines and its trace (#2052).
+	logSession.SetCorrelation(telemetry.TraceID(ctx), logging.Value(ctx, logging.KeyRunID), logging.Value(ctx, logging.KeyTurnID))
 
 	eng := newRunEngine(ctx, cfg, deps, logSession)
 	eng.logger = logging.From(ctx)
@@ -588,7 +624,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	eng.setModelContextPrefix(systemPrompt, fantasyTools)
 
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
-		return fantasy.NewAgent(m,
+		return fantasy.NewAgent(withModelTracing(m),
 			fantasy.WithSystemPrompt(systemPrompt),
 			fantasy.WithTools(fantasyTools...),
 		)

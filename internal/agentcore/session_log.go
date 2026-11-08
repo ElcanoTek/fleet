@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -98,6 +99,57 @@ type LogSession struct {
 	// where that spend is visible, per call, with a distinguishing label.
 	// omitempty keeps a run with no aux calls byte-identical to before.
 	AuxUsage []AuxUsageRecord `json:"aux_usage,omitempty"`
+	// TraceID / RunID / TurnID correlate the run log with the process log and
+	// the trace (#2052): the trace this run's spans joined (empty when
+	// tracing is off), the scheduled run's id (the claim's lease token) and
+	// the chat turn's id. Set once, by the first agentcore.Run that uses this
+	// session; omitempty keeps an uncorrelated log byte-identical.
+	TraceID string `json:"trace_id,omitempty"`
+	RunID   string `json:"run_id,omitempty"`
+	TurnID  string `json:"turn_id,omitempty"`
+}
+
+// Clone returns a copy of the session: every exported field, with the
+// message and aux-usage slices copied, so the copy can be edited (redacted)
+// without touching the live session. Fields are copied by reflection, so a
+// field added to LogSession is carried without a change here.
+func (ls *LogSession) Clone() *LogSession {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := &LogSession{}
+	src, dst := reflect.ValueOf(ls).Elem(), reflect.ValueOf(out).Elem()
+	for i := 0; i < src.NumField(); i++ {
+		if src.Type().Field(i).IsExported() {
+			dst.Field(i).Set(src.Field(i))
+		}
+	}
+	out.Messages = append([]LogMessage{}, ls.Messages...)
+	out.AuxUsage = append([]AuxUsageRecord(nil), ls.AuxUsage...)
+	return out
+}
+
+// SetCorrelation records the run's trace, run and turn ids on first use; a
+// later run sharing the session (a scheduled loop's next iteration) keeps the
+// first run's ids, which name the same task run.
+func (ls *LogSession) SetCorrelation(traceID, runID, turnID string) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if ls.TraceID == "" {
+		ls.TraceID = traceID
+	}
+	if ls.RunID == "" {
+		ls.RunID = runID
+	}
+	if ls.TurnID == "" {
+		ls.TurnID = turnID
+	}
+}
+
+// SnapshotCorrelation returns the ids SetCorrelation recorded.
+func (ls *LogSession) SnapshotCorrelation() (traceID, runID, turnID string) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.TraceID, ls.RunID, ls.TurnID
 }
 
 // Labels for the AuxUsage ledger (#1118), exported so the recording call sites

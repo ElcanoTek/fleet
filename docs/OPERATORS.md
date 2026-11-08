@@ -703,17 +703,26 @@ not replace — so journald/Docker log drivers keep working alongside the file. 
 file directory must be writable by the service user (the systemd unit's
 `StateDirectory`/`ReadWritePaths` model); a bad path fails loudly at startup.
 
-### structured JSON format (#178)
+### structured format and correlation ids (#178, #2052)
 
-As of #178 the `fleet serve` process log is emitted as **structured `log/slog`
-JSON by default** — every line is a JSON object (`time`/`level`/`msg`), which
-log aggregators (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index
-natively. This applies to both stderr and the rotating file above.
+The `fleet serve` process log is **structured `log/slog`** — by default one JSON
+object per line (`time`/`level`/`msg` plus attributes), which log aggregators
+(Loki, Datadog, CloudWatch, journald JSON mode) ingest and index natively. This
+applies to both stderr and the rotating file above, and to the MCP broker
+child's lines, which the parent pipes into the same destination.
 
 ```
-FLEET_LOG_FORMAT=json                      # default; structured JSON. "text" is logfmt (key=value), for reading by eye.
+FLEET_LOG_FORMAT=json                      # default; one JSON object per line. "text" = logfmt (key=value), for reading by eye
 FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
 ```
+
+Every line about a request, turn or task run carries the ids that tie it
+together — `request_id`, `user_id`, `conv_id`, `turn_id`, `task_id`, `run_id`,
+and `trace_id`/`span_id` when tracing is on — so
+`journalctl -u fleet -o cat | jq 'select(.turn_id=="…")'` is the whole story of
+one turn. Secret-shaped values are redacted by the same rules that scrub tool
+output. Tracing (OTLP over TLS, `FLEET_OTEL_*`) and a local Collector setup:
+[`TELEMETRY.md`](TELEMETRY.md).
 
 Operator notes:
 

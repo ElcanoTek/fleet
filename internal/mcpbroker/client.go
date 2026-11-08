@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/telemetry"
+
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
@@ -73,7 +75,24 @@ func (c *Client) CallMCP(ctx context.Context, server, tool string, args map[stri
 	return c.callMCP(ctx, "", server, tool, args)
 }
 
-func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args map[string]any) (string, bool, error) {
+func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args map[string]any) (text string, isErr bool, err error) {
+	// The parent's span for the delegated call; the child's mcpbroker.call
+	// span continues it (stampCorrelation in roundtrip).
+	ctx, span := startClientSpan(ctx, "mcpbroker.call", server, tool, scope)
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if err == nil && isErr {
+			// A tool-level error is no transport error, but the call still
+			// failed: mark the span the way the child's mcpbroker.call span
+			// and the agent's tool.call span are marked (endServeSpan).
+			endToolErrorSpan(span)
+			return
+		}
+		telemetry.End(span, err)
+	}()
 	req := request{
 		ID:     c.nextID.Add(1),
 		Method: methodCall,
@@ -454,8 +473,8 @@ func (c *Client) Close() error {
 // the caller's ctx, or the connection dying — whichever comes first. On ctx
 // cancellation it best-effort tells the server to cancel the in-flight call.
 func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
+	stampCorrelation(ctx, &req)
 	ch := make(chan response, 1)
-	req.Correlation = correlationFrom(ctx)
 
 	c.mu.Lock()
 	if c.closed {

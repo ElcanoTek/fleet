@@ -62,6 +62,26 @@ func TestFromCarriesCorrelationAttrs(t *testing.T) {
 	}
 }
 
+// A call site that names an id itself wins over the context's copy: one key,
+// never a duplicate JSON field.
+func TestFromCallSiteAttrWinsOverContext(t *testing.T) {
+	var buf bytes.Buffer
+	withDefault(t, &buf)
+	ctx := WithTask(context.Background(), "ctx-task", "run-1")
+	From(ctx).Info("acted on another task", "task_id", "other-task")
+	if n := strings.Count(buf.String(), `"task_id"`); n != 1 {
+		t.Fatalf("task_id appears %d times: %s", n, buf.String())
+	}
+	if m := decodeLast(t, &buf); m["task_id"] != "other-task" || m["run_id"] != "run-1" {
+		t.Errorf("record = %v", m)
+	}
+	buf.Reset()
+	From(ctx).With("task_id", "bound").Info("x")
+	if n := strings.Count(buf.String(), `"task_id"`); n != 1 {
+		t.Fatalf("With-bound task_id duplicated: %s", buf.String())
+	}
+}
+
 func TestFromWithoutAttrsIsDefault(t *testing.T) {
 	if From(context.Background()) != slog.Default() {
 		t.Error("From on a bare context should return slog.Default() itself")

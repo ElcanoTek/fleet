@@ -32,6 +32,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 
@@ -202,6 +206,11 @@ type EmailReplier interface {
 type Pool struct {
 	store  *storage.Storage
 	runner TaskRunner
+
+	// runIDs holds each in-flight run's correlation (runCorrelation, by task
+	// id) from the start of executeTask to its return, so submitLog can name
+	// the run and its trace on a session the runner never produced (#2052).
+	runIDs sync.Map
 
 	// streams holds the live per-task SSE event buffers (#200). executeTask
 	// registers a buffer before a run and seals it after, tee'ing the run's event
@@ -765,8 +774,25 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	defer cancelWall()
 
 	// Correlation (#2052): every log line of this run carries task_id and
-	// run_id (the claim's lease token, unique per attempt).
+	// run_id (the claim's lease token, unique per attempt), and the run is one
+	// trace — the task.run span is its root, the agent loop, model, tool,
+	// sandbox, broker and DB spans its descendants.
 	taskCtx = logging.WithTask(taskCtx, task.ID.String(), token.String())
+	taskCtx, runSpan := telemetry.Start(taskCtx, "task.run", trace.WithAttributes(
+		telemetry.AttrTaskID.String(task.ID.String()),
+		telemetry.AttrRunID.String(token.String()),
+		attribute.Int("fleet.attempt", task.AttemptCount),
+	))
+	var runSpanErr error
+	defer func() { telemetry.End(runSpan, runSpanErr) }()
+	// A panic in the run or its bookkeeping is recovered by tryClaim's
+	// safe.Recover, after this function has returned and the span has ended.
+	// Record it on the span first, then re-panic so that handling (the
+	// errored task, the incident) is unchanged.
+	defer recordRunPanic(&runSpanErr)
+	// An early failure (worktree, sandbox or MCP-scope prep) returns no
+	// session; the synthetic one submitLog stores names this run and trace.
+	defer p.untrackRun(task.ID, p.trackRun(taskCtx, task.ID, token))
 
 	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
 	// event in the Sentry UI shows what the runner did immediately before the
@@ -878,6 +904,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// If our lease was recovered out from under us (another claim now owns the
 	// task), do not clobber its state.
 	if !p.stillOwns(task.ID, token) {
+		// The span records the lease loss: this stale run's outcome is not
+		// written, so it must not be exported as a success.
+		runSpanErr = errTaskLeaseLost
 		terminalFrame["status"] = "failed"
 		logging.From(runCtx).Warn("runner: task lease no longer held (recovered); skipping terminal write", "task_id", task.ID)
 		return
@@ -918,6 +947,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// beat the transient-retry branches, which would otherwise re-queue a run
 	// that told us plainly it was done.
 	auditAborted := errors.Is(runErr, agentcore.ErrAuditAborted)
+	// The span records the outcome the switch below persists, classified the
+	// same way — a driver that swallowed its cancellation still failed.
+	runSpanErr = runSpanOutcome(taskCtx, runErr, wallExpired, leaseLost, auditAborted, interrupted)
 	switch {
 	case wallExpired:
 		p.failWallTimeout(taskCtx, task, session, token, start)
@@ -935,6 +967,28 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	default:
 		p.finishSuccess(taskCtx, task, session, outputJSON, artifactColl, token, start, terminalFrame)
 	}
+}
+
+// runSpanOutcome is the task.run span's error for the terminal branch
+// executeTask takes, in the same order: the wall-clock timeout and the lease
+// loss are their causes whatever the driver returned; an interruption is the
+// context's cause when the driver returned nil (it swallowed the cancel);
+// otherwise the driver's own error (nil for a success).
+func runSpanOutcome(taskCtx context.Context, runErr error, wallExpired, leaseLost, auditAborted, interrupted bool) error {
+	switch {
+	case wallExpired:
+		return errTaskWallTimeout
+	case leaseLost:
+		return errTaskLeaseLost
+	case auditAborted:
+		return runErr
+	case interrupted && runErr == nil:
+		if cause := context.Cause(taskCtx); cause != nil {
+			return cause
+		}
+		return context.Canceled
+	}
+	return runErr
 }
 
 // buildTaskRunContext derives one claimed task's run context from the decoupled
@@ -1729,9 +1783,45 @@ func (p *Pool) recordArtifactsForLease(ctx context.Context, taskID, leaseOwner u
 	}
 }
 
+// errTaskRunPanicked is the task.run span's error for a run that panicked;
+// only its class reaches the span.
+var errTaskRunPanicked = errors.New("task run panicked")
+
+// recordRunPanic, deferred inside the task.run span, marks the span failed
+// when the run panics and re-panics with the same value, so tryClaim's
+// recovery still handles it.
+func recordRunPanic(spanErr *error) {
+	if r := recover(); r != nil {
+		*spanErr = errTaskRunPanicked
+		panic(r)
+	}
+}
+
+// trackRun records this execution's correlation for submitLog and returns it
+// for untrackRun.
+func (p *Pool) trackRun(ctx context.Context, taskID, token uuid.UUID) runCorrelation {
+	corr := runCorrelation{runID: token.String(), traceID: telemetry.TraceID(ctx)}
+	p.runIDs.Store(taskID, corr)
+	return corr
+}
+
+// untrackRun drops this execution's entry — and only this execution's: after a
+// lease reclaim a fresh attempt of the same task may already have replaced it,
+// and a stale execution's late return must not remove the fresh one's ids.
+func (p *Pool) untrackRun(taskID uuid.UUID, corr runCorrelation) {
+	p.runIDs.CompareAndDelete(taskID, corr)
+}
+
+// runCorrelation is one in-flight run's ids (Pool.runIDs): the claim's lease
+// token as run_id, and the task.run span's trace id ("" with tracing off).
+type runCorrelation struct {
+	runID, traceID string
+}
+
 // submitLog persists the run's session log. When the runner produced no
 // session (early failure), a synthetic one-message log is stored so the failure
-// is visible, mirroring gig's submitSyntheticErrorLog.
+// is visible, mirroring gig's submitSyntheticErrorLog. The synthetic log names
+// the run and its trace like a session the agent loop built (#2052).
 func (p *Pool) submitLog(ctx context.Context, task *models.Task, session *models.LogSession, failureReason string) {
 	if session == nil {
 		now := time.Now().Unix()
@@ -1743,6 +1833,10 @@ func (p *Pool) submitLog(ctx context.Context, task *models.Task, session *models
 			Messages: []models.LogMessage{
 				{ID: task.ID.String() + "-0", Role: "user", Content: task.Prompt, CreatedAt: now},
 			},
+		}
+		if c, ok := p.runIDs.Load(task.ID); ok {
+			corr := c.(runCorrelation)
+			session.RunID, session.TraceID = corr.runID, corr.traceID
 		}
 		if failureReason != "" {
 			et := "error"

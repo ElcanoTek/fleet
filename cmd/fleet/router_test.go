@@ -219,6 +219,7 @@ func TestOrchestratorMiddlewareChainOrder(t *testing.T) {
 		"httpmw.TrustedProxies.Middleware.func1", // client IP (FLEET_TRUSTED_PROXIES)
 		"httpmw.Recoverer",
 		"otelsetup.Middleware", // tracing span + X-Request-Id
+		"httpmw.Recoverer",
 		"fleet.orchestratorMetricsMiddleware",
 		"handlers.(*Handlers).SecurityHeadersMiddleware",
 		"handlers.(*Handlers).BodySizeLimitMiddleware",

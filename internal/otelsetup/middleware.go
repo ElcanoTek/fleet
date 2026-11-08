@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ElcanoTek/fleet/internal/httpmw"
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // healthPaths are low-value, high-frequency probe endpoints excluded from
@@ -54,7 +55,15 @@ func Middleware(next http.Handler) http.Handler {
 
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		ctx, span := otel.Tracer(tracerName).Start(ctx, r.Method, trace.WithSpanKind(trace.SpanKindServer))
-		defer span.End()
+		// Ended on every path: a handler panic (recovered further out, by
+		// recoverMiddleware) is recorded on the server span, then re-raised.
+		defer func() {
+			if rec := recover(); rec != nil {
+				telemetry.EndPanicked(span)
+				panic(rec)
+			}
+			span.End()
+		}()
 
 		reqID := requestIDFromSpan(span)
 		w.Header().Set("X-Request-Id", reqID)

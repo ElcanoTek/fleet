@@ -6,10 +6,17 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os/signal"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/version"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -17,7 +24,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
-	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
@@ -38,7 +44,11 @@ const (
 // here, so "in-process" means only where the loop runs, not where secrets live.
 //
 // Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
-// so it never corrupts the frame stream the parent decodes.
+// so it never corrupts the frame stream the parent decodes. The child exports its
+// spans to the parent's collector as service "<FLEET_SERVICE_NAME>" with
+// fleet.process=mcp-broker, so a delegated call's span lands in the trace of
+// the turn or run that made it (#2052, internal/mcpbroker/telemetry.go).
+//
 // mcpBrokerLogConfig is the broker child's logging: always JSON, at the
 // parent's level (FLEET_LOG_LEVEL), and NO file of its own. JSON is the wire
 // format between the two processes, not the operator's choice: the parent
@@ -52,12 +62,40 @@ func mcpBrokerLogConfig() logging.Config {
 	}
 }
 
+// mcpBrokerServeContext is the broker's serve context: cancelled by SIGTERM,
+// so a signalled broker returns from Serve and runs its deferred shutdown
+// (backend close, bounded span flush) rather than dying mid-flush.
+func mcpBrokerServeContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGTERM)
+}
+
 func runMCPBroker() error {
 	// Same handler and redactor as the parent, in JSON: the parent parses each
 	// line and re-logs it in the operator's format (mcpBrokerLogConfig).
 	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
 		return fmt.Errorf("configure broker logging: %w", err)
 	}
+	shutdownTracing, err := otelsetup.InitWith(context.Background(), otelsetup.Options{ServiceVersion: version.String(), Process: "mcp-broker"})
+	if err != nil {
+		// Tracing is optional observability, exactly as in the parent: a bad
+		// exporter configuration disables it rather than the broker.
+		slog.Error("mcp-broker: otel init failed, tracing disabled", "err", err)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		// Bounded below the parent's SIGTERM-to-SIGKILL grace
+		// (mcpbroker.SpawnClient), so the flush finishes before a kill.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			slog.Warn("mcp-broker: otel shutdown error", "err", err)
+		}
+	}()
+	// SIGTERM (the parent's teardown, or a supervisor's) ends Serve like EOF
+	// does, so the deferred backend close and span flush run instead of the
+	// process dying mid-flush.
+	serveCtx, stopSignals := mcpBrokerServeContext()
+	defer stopSignals()
 	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
 		return err
@@ -95,7 +133,7 @@ func runMCPBroker() error {
 		remoteMCP:   remoteMCP,
 		remoteStore: remoteStore,
 	}
-	serveErr := mcpbroker.ServeStdio(context.Background(), backend)
+	serveErr := mcpbroker.ServeStdio(serveCtx, backend)
 	return errors.Join(serveErr, backend.Close())
 }
 

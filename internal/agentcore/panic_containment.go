@@ -169,6 +169,12 @@ func (t *panicContainedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 
 func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (resp fantasy.ToolResponse, err error) {
 	noteToolStart(ctx, call.ID)
+	// One tool.call span per dispatch (#2052), opened at the outermost
+	// boundary so it covers policy gates, output screening and the sandbox or
+	// broker work underneath. Its deferred end is registered FIRST so it runs
+	// LAST, after the panic recovery below has settled resp/err.
+	ctx, span := startToolSpan(ctx, t.name, call)
+	defer func() { endToolSpan(span, resp, err) }()
 	state := &toolPanicState{phase: panicPhaseToolExecute}
 	ctx = context.WithValue(ctx, toolPanicStateKey{}, state)
 	defer func() {

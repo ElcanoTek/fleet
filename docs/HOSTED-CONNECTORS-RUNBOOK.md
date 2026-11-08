@@ -197,10 +197,10 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 
 ## When something fails
 
-Read `fleet.log` first (one structured line per event — JSON by default; every
-line of a chat turn carries its `conv_id` and `turn_id`, every line of a
-scheduled run its `task_id` and `run_id`, and both carry `trace_id` when
-tracing is on). The lines that matter, by message:
+Read `fleet.log` first (one structured line per event — JSON by default, see
+[TELEMETRY.md](TELEMETRY.md); every line of a chat turn carries its `conv_id`
+and `turn_id`, every line of a scheduled run its `task_id` and `run_id`, and
+both carry `trace_id` when tracing is on). The lines that matter, by message:
 
 - `remote-mcp: skipping server — token unavailable` (`reg_name`, `user`) —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
