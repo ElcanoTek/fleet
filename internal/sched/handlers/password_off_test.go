@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -115,5 +116,36 @@ func TestAccountsManagedByAuthRefusesOpsUserCreation(t *testing.T) {
 	acct, err = store.GetIdentity(t.Context(), "cli@x.com")
 	if w.Code != http.StatusCreated || err != nil || acct.Role != "viewer" || acct.OpsScope != "run" {
 		t.Fatalf("client create: %d %s / %+v %v", w.Code, w.Body.String(), acct, err)
+	}
+}
+
+// POST /users judges the parsed grant, not the raw string: "none" in any
+// spelling is refused, and padded/re-cased roles are invalid rather than
+// trimmed past the check (Codex 4504695158).
+func TestCreateUserRefusesNoneAndNonCanonicalRoles(t *testing.T) {
+	t.Parallel()
+
+	h, store := setupTest(t)
+	for i, role := range []string{"none", " none ", "none ", "\tnone", " client ", "Admin", "view ", ""} {
+		email := fmt.Sprintf("pad%d@x.com", i)
+		body := fmt.Sprintf(`{"username": %q, "password": "testpassword123", "role": %q}`, email, role)
+		r := httptest.NewRequest("POST", "/users", bytes.NewBufferString(body))
+		r.Header.Set("X-API-Key", "admin-key")
+		w := httptest.NewRecorder()
+		h.CreateUser(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("role %q: status %d %s, want 400", role, w.Code, w.Body.String())
+		}
+		if acct, err := store.GetIdentity(t.Context(), email); err == nil && acct != nil {
+			t.Errorf("role %q created an account: %+v", role, acct)
+		}
+	}
+	// The new scope names are accepted as written.
+	r := httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "viewer@x.com", "password": "testpassword123", "role": "view"}`))
+	r.Header.Set("X-API-Key", "admin-key")
+	w := httptest.NewRecorder()
+	h.CreateUser(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("role view: %d %s", w.Code, w.Body.String())
 	}
 }

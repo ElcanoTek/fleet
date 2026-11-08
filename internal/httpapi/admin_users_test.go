@@ -219,6 +219,21 @@ func TestAdminUserOpsRole(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid ops_role: status %d", w.Code)
 	}
+	// Padded or re-cased grants are refused, not trimmed into a different
+	// grant than the one validated (Codex 4504695158).
+	for _, field := range []string{"ops_role", "ops_scope"} {
+		for _, v := range []string{" none ", " run", "Admin", "client\n"} {
+			w = do(t, h, http.MethodPost, "/admin/users",
+				map[string]any{"email": "pad@x.com", "password": "pad-pw-12345", field: v}, "boss@x.com")
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("create %s %q: status %d", field, v, w.Code)
+			}
+			w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{field: v}, "boss@x.com")
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("patch %s %q: status %d", field, v, w.Code)
+			}
+		}
+	}
 
 	// chat promote → implied ops admin; chat demote → implied row dropped
 	do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"role": "admin"}, "boss@x.com")

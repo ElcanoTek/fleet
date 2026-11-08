@@ -48,8 +48,10 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Password must be at least 8 characters")
 		return
 	}
+	// Judge the parsed grant, not the raw string: "none" (in either
+	// vocabulary) is no access and has no place on a create.
 	scope, admin, ok := identity.ParseOpsRole(req.Role)
-	if !ok || req.Role == identity.LegacyOpsNone {
+	if !ok || (!admin && scope == identity.OpsNone) {
 		writeError(w, http.StatusBadRequest, "Invalid role. Must be one of: admin, client, readonly")
 		return
 	}

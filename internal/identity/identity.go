@@ -111,8 +111,13 @@ func LegacyOpsRole(role Role, scope OpsScope) string {
 // none | readonly | client | admin (legacy) or none | view | run (ops_scope).
 // admin reports admin=true and scope none: Operations Center admin is the
 // Fleet admin role, not a scope. ok is false for anything else.
+//
+// Matching is exact, like ValidRole and ValidOpsScope: there is one spelling
+// of each grant, so a caller comparing the raw input against a constant
+// (e.g. refusing "none") sees the same value the parser accepted. " none " or
+// "Admin" are refused, not trimmed or folded.
 func ParseOpsRole(s string) (scope OpsScope, admin, ok bool) {
-	switch strings.TrimSpace(s) {
+	switch s {
 	case LegacyOpsNone:
 		return OpsNone, false, true
 	case LegacyOpsReadonly, string(OpsView):
