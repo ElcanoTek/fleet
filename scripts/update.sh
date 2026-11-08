@@ -985,9 +985,11 @@ ref_prev=""
 # entirely; empty — the generic bundle's "${FLEET_SANDBOX_IMAGE:-}" with the
 # var absent from the env file — means build-on-box.
 service_env_value() { env_get "$1" "$backend_env_file"; }
+# A reference the service would refuse (unset ${X}, or ${X:?m}) stops the
+# update BEFORE anything is installed, with the loader's reason.
 resolve_sandbox_image() {
   [[ -f "$1" ]] || return 0
-  fleet_sandbox_resolve_scalar image "$1" service_env_value
+  fleet_sandbox_resolve_scalar image "$1" service_env_value || die "client bundle $1: fleet would refuse this sandbox.image at startup (see above) — nothing was installed"
 }
 sandbox_image_ref="$(resolve_sandbox_image "$CLIENT_DIR/manifest.yaml")"
 

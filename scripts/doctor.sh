@@ -1414,18 +1414,28 @@ if [[ -z "$sandbox_img" ]]; then
   [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
   [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
   # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-  # bare ${VAR} / ${VAR:-default} interpolated against the process env
-  # (fleet_sandbox_resolve_scalar, shared with bootstrap.sh and update.sh; a
-  # spelling ADR-0106 removed reads as unset).
+  # ${...} reference interpolated against the service's env file, as the
+  # service resolves it (fleet_sandbox_resolve_scalar, shared with
+  # bootstrap.sh and update.sh; a spelling ADR-0106 removed reads as unset).
+  # A reference the service would refuse (unset ${X}, or ${X:?m}) is a doctor
+  # failure with the loader's reason, not an abort.
+  doctor_env_value() { env_get "$1"; }
+  # manifest_sandbox_scalar KEY — sets $sandbox_scalar (fail()s, leaving it
+  # empty, when the service would refuse the reference).
   manifest_sandbox_scalar() {
-    fleet_sandbox_resolve_scalar "$1" "$bundle_dir/manifest.yaml" fleet_shell_env_value
+    local m="$bundle_dir/manifest.yaml"
+    if ! sandbox_scalar="$(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>/dev/null)"; then
+      sandbox_scalar=""
+      fail "client bundle $(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>&1 >/dev/null) — fleet refuses this bundle at startup; set the variable in $ENV_FILE or fix the manifest"
+    fi
   }
-  sandbox_img="$(manifest_sandbox_scalar image)"
+  manifest_sandbox_scalar image
+  sandbox_img="$sandbox_scalar"
   if [[ -n "$sandbox_img" ]]; then
     sandbox_img_prebuilt=1
   else
-    sandbox_img="$(manifest_sandbox_scalar tag)"
-    sandbox_img="${sandbox_img:-localhost/fleet-sandbox:latest}"
+    manifest_sandbox_scalar tag
+    sandbox_img="${sandbox_scalar:-localhost/fleet-sandbox:latest}"
   fi
 fi
 

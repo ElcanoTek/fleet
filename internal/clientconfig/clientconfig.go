@@ -1018,33 +1018,70 @@ func retiredManifestRefWarnings(refNames []string) []string {
 	return out
 }
 
+// envNameFields are the manifest fields (by YAML key) whose VALUE is the name
+// of an environment variable fleet reads — the fields literalEnvVarNames
+// admits to the .env allowlist and the readers resolve through envreg:
+// a provider's API key, a connector's enable gates and account/identity
+// variables, a webhook trigger's signing secret. It is the ONE list: the
+// ADR-0106 literal-name warning walks exactly these keys, and
+// TestEnvNameFieldsCoverTheSchema fails when a manifest type gains a *_env /
+// *_vars field that is in neither this list nor envKeyFields.
+var envNameFields = map[string]bool{
+	"api_key_env":      true, // providers[]
+	"enabled_env":      true, // mcp_servers[]
+	"enabled_groups":   true, // mcp_servers[] (lists of names)
+	"account_vars":     true, // mcp_servers[]
+	"identity_env":     true, // mcp_servers[] (their <VAR>_<ACCOUNT> forms are read)
+	"hmac_secret_env":  true, // webhook_triggers[]
+	"token_secret_env": true, // webhook_triggers[]
+}
+
+// envKeyFields are *_env fields whose values are KEYS of a connector's own
+// env map — the wire names fleet hands to the MCP server — not variables
+// fleet reads, so a CHAT_/CUTLASS_ value there is legitimate.
+var envKeyFields = map[string]string{
+	"optional_env": "names keys of the connector's env map to drop when empty; never read from fleet's environment",
+}
+
 // retiredLiteralNameWarnings names every removed spelling the manifest uses
-// as a literal variable NAME — providers[].api_key_env, enabled_env,
-// enabled_groups, the webhook *_secret_env fields, account_vars and any other
-// field whose value is a variable name. Every such field is read through
-// envreg, which reports a removed name as unset, so the credential is absent
-// and the gate stays closed (its default applies). Only scalar VALUES that are
-// exactly a removed name count; map keys (a connector's own env keys) are the
-// names fleet hands to the MCP server, never reads.
+// as a literal variable NAME in an envNameFields field. Every such field is
+// read through envreg, which reports a removed name as unset, so the
+// credential is absent and the gate stays closed (its default applies).
+// Ordinary scalars elsewhere (a description, a command argument) are never
+// inspected: only ${...} references there are read, and those are checked
+// separately.
 func retiredLiteralNameWarnings(tree any) []string {
 	seen := map[string]bool{}
 	var names []string
-	var walk func(n any)
-	walk = func(n any) {
+	var collect func(n any)
+	collect = func(n any) {
 		switch v := n.(type) {
-		case map[string]any:
-			for _, c := range v {
-				walk(c)
-			}
 		case []any:
 			for _, c := range v {
-				walk(c)
+				collect(c)
 			}
 		case string:
 			name := strings.TrimSpace(v)
 			if _, ok := envreg.RetiredAlias(name); ok && !seen[name] {
 				seen[name] = true
 				names = append(names, name)
+			}
+		}
+	}
+	var walk func(n any)
+	walk = func(n any) {
+		switch v := n.(type) {
+		case map[string]any:
+			for k, c := range v {
+				if envNameFields[k] {
+					collect(c)
+					continue
+				}
+				walk(c)
+			}
+		case []any:
+			for _, c := range v {
+				walk(c)
 			}
 		}
 	}

@@ -38,25 +38,68 @@ fleet_sandbox_manifest_value() {
 }
 
 # fleet_sandbox_resolve_scalar KEY MANIFEST LOOKUP — the sandbox.KEY scalar
-# with a single bare ${VAR} or ${VAR:-default} interpolated (the only shapes
-# the bundles use; anything else is returned literally). LOOKUP is the name
-# of a function that prints VAR's value — the caller decides the source:
-# bootstrap and doctor read their shell (fleet_shell_env_value), update reads
-# the service's env file. A spelling ADR-0106 removed is never looked up in
-# any source: it reads as unset (so the default applies), exactly as fleet
-# itself reads it (envreg.RetiredAlias; scripts/lib/retired-env.sh).
+# with a whole-value ${...} reference interpolated the way the Go loader does
+# (internal/clientconfig expandExpr / retiredExpr; TestShellResolverMatchesGo
+# runs both over the same table):
+#   ${X}       X's value; X unset or empty → an error (the loader refuses an
+#              unresolved reference in this field)
+#   ${X:-d}    X's value, else d
+#   ${X:?m}    X's value, else an error carrying m
+#   ${X:<other>…} the whole text is the name (as in Go): unset → an error
+# Values are trimmed; empty counts as unset. A spelling ADR-0106 removed is
+# never looked up: ${X} and ${X:?m} give "" and ${X:-d} gives d, without an
+# error, exactly as fleet reads it (envreg.RetiredAlias; retired-env.sh).
+# Anything that is not a single whole-value ${...} is returned literally.
+# LOOKUP is the name of a function printing a variable's value — the caller
+# picks the source: bootstrap and doctor read their shell
+# (fleet_shell_env_value), update reads the service's env file. On an error
+# it prints the reason to stderr and returns 1.
 fleet_sandbox_resolve_scalar() {
-  local key="$1" file="$2" lookup="$3" raw var def val=""
+  local key="$1" file="$2" lookup="$3" raw expr name op="" body="" val=""
   raw="$(fleet_sandbox_manifest_value "$key" "$file")"
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-    if ! fleet_env_name_retired "$var"; then
-      val="$("$lookup" "$var")"
-    fi
-    printf '%s' "${val:-$def}"
-  else
+  if [[ ! "$raw" =~ ^\$\{([^{}]*)\}$ ]]; then
     printf '%s' "$raw"
+    return 0
   fi
+  expr="${BASH_REMATCH[1]}"
+  name="$expr"
+  if [[ "$expr" == *:* ]]; then
+    local rest="${expr#*:}"
+    if [[ -n "$rest" ]]; then
+      name="${expr%%:*}" op="${rest:0:1}" body="${rest:1}"
+    fi
+  fi
+  if fleet_env_name_retired "$(fleet__trim "$name")"; then
+    [[ "$op" == "-" ]] && printf '%s' "$(fleet__trim "$body")"
+    return 0
+  fi
+  case "$op" in
+    -|\?) ;;
+    *) op="" name="$expr" ;;
+  esac
+  name="$(fleet__trim "$name")"
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && val="$(fleet__trim "$("$lookup" "$name")")"
+  if [[ -n "$val" ]]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  case "$op" in
+    -) printf '%s' "$(fleet__trim "$body")" ;;
+    \?)
+      body="$(fleet__trim "$body")"
+      printf 'sandbox.%s: ${%s:?...}: %s\n' "$key" "$name" "${body:-required value is unset or empty}" >&2
+      return 1 ;;
+    *)
+      printf 'sandbox.%s: ${%s} is unset or empty (set it, or use ${%s:-default})\n' "$key" "$name" "$name" >&2
+      return 1 ;;
+  esac
+}
+
+# fleet__trim TEXT — TEXT without leading/trailing whitespace.
+fleet__trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
 }
 
 # fleet_shell_env_value NAME — NAME's value in this shell's environment.

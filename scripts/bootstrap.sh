@@ -1124,9 +1124,11 @@ fi
 # against the process env (fleet_sandbox_resolve_scalar, shared with update.sh
 # and doctor.sh). An empty result => build-on-box (the default-bundle value
 # "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
+# A reference the loader would refuse (unset ${X}, or ${X:?m}) stops the
+# install with the loader's reason: fleet would not start with this bundle.
 resolve_sandbox_image() {
   [[ -f "$1" ]] || return 0
-  fleet_sandbox_resolve_scalar image "$1" fleet_shell_env_value
+  fleet_sandbox_resolve_scalar image "$1" fleet_shell_env_value || die "client bundle $1: fleet refuses this sandbox.image at startup (see above)"
 }
 
 # ── sandbox image ──
