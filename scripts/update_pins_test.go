@@ -5,6 +5,7 @@ package scripts
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -204,5 +205,107 @@ func TestUpdatePinsRefusesAMajorBumpOfAGoInstallFallback(t *testing.T) {
 	wf, _ = os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
 	if !strings.Contains(string(wf), "FOO_VERSION: '1.1.0'") {
 		t.Fatalf("minor bump not applied:\n%s", wf)
+	}
+}
+
+// codeqlPinsFixture lays out a repo whose codeql.yml pins github/codeql-action
+// at commit `action`, with a .github/codeql-bundle.lock taken from an older
+// commit, and an upstream whose `action` commit names CLI 2.28.0 and publishes
+// that bundle with the digest `digest` (the real one when empty).
+func codeqlPinsFixture(t *testing.T, action, digest string) (root string, run func(env ...string) (string, error)) {
+	t.Helper()
+	src := repoRoot(t)
+	root = t.TempDir()
+	for _, rel := range []string{"scripts/update-pins.sh", "scripts/lib/release.sh", "internal/release/cosign.lock"} {
+		b, err := os.ReadFile(filepath.Join(src, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(root, rel), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(root, "scripts/lib/pins.tsv"),
+		[]byte("CODEQL_BUNDLE\tcodeql\tgithub/codeql-action\tcodeql-bundle-{lang}-linux64.tar.zst\t-\t-\t-\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, ".github/workflows"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, ".github/workflows/codeql.yml"),
+		[]byte("jobs:\n  analyze:\n    steps:\n      - uses: github/codeql-action/init@"+action+" # v9\n      - uses: github/codeql-action/analyze@"+action+" # v9\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".github/codeql-bundle.lock"),
+		[]byte("# header\naction "+strings.Repeat("1", 40)+"\nversion 2.27.4\ngo "+strings.Repeat("a", 64)+"\n"), 0o644)
+
+	bundle := []byte("codeql go bundle 2.28.0")
+	sum := sha256.Sum256(bundle)
+	if digest == "" {
+		digest = hex.EncodeToString(sum[:])
+	}
+	defaults := base64.StdEncoding.EncodeToString([]byte(`{"bundleVersion":"codeql-bundle-v2.28.0","cliVersion":"2.28.0"}`))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/github/codeql-action/contents/src/defaults.json" && r.URL.Query().Get("ref") == action:
+			// GitHub wraps the base64 content at 60 columns.
+			fmt.Fprintf(w, `{"content":%q,"encoding":"base64"}`, defaults[:20]+"\n"+defaults[20:])
+		case r.URL.Path == "/repos/github/codeql-action/releases/tags/codeql-bundle-v2.28.0":
+			fmt.Fprintf(w, `{"assets":[{"name":"codeql-bundle-go-linux64.tar.zst","digest":"sha256:%s"},{"name":"codeql-bundle-linux64.tar.zst","digest":"sha256:%s"}]}`,
+				digest, strings.Repeat("c", 64))
+		case r.URL.Path == "/github/codeql-action/releases/download/codeql-bundle-v2.28.0/codeql-bundle-go-linux64.tar.zst":
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	run = func(env ...string) (string, error) {
+		cmd := exec.Command("bash", filepath.Join(root, "scripts/update-pins.sh"))
+		cmd.Env = append(append(os.Environ(), "PINS_GITHUB_API="+srv.URL, "PINS_GITHUB_DOWNLOAD="+srv.URL, "GITHUB_OUTPUT=", "GITHUB_STEP_SUMMARY="), env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	return root, run
+}
+
+// TestUpdatePinsMovesTheCodeQLBundleWithTheAction — when Dependabot has moved
+// github/codeql-action, the lock follows: the new commit's defaults.json names
+// the version, the bundle must match GitHub's digest, comments survive.
+func TestUpdatePinsMovesTheCodeQLBundleWithTheAction(t *testing.T) {
+	action := strings.Repeat("2", 40)
+	root, run := codeqlPinsFixture(t, action, "")
+	out, err := run()
+	if err != nil {
+		t.Fatalf("update-pins: %v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, ".github/codeql-bundle.lock"))
+	sum := sha256.Sum256([]byte("codeql go bundle 2.28.0"))
+	want := "# header\naction " + action + "\nversion 2.28.0\ngo " + hex.EncodeToString(sum[:]) + "\n"
+	if string(got) != want {
+		t.Fatalf("lock:\n got %q\nwant %q\n--- output ---\n%s", got, want, out)
+	}
+}
+
+func TestUpdatePinsRefusesACodeQLBundleThatDoesNotMatchItsDigest(t *testing.T) {
+	root, run := codeqlPinsFixture(t, strings.Repeat("2", 40), strings.Repeat("b", 64))
+	out, err := run()
+	if err == nil || !strings.Contains(out, "GitHub's digest says") {
+		t.Fatalf("want a digest mismatch, got err=%v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, ".github/codeql-bundle.lock"))
+	if !strings.Contains(string(got), "version 2.27.4") || !strings.Contains(string(got), "action "+strings.Repeat("1", 40)) {
+		t.Fatalf("the lock moved to an unverified bundle:\n%s", got)
+	}
+}
+
+func TestUpdatePinsLeavesACurrentCodeQLBundleAndHonoursPinsOnly(t *testing.T) {
+	root, run := codeqlPinsFixture(t, strings.Repeat("1", 40), "")
+	before, _ := os.ReadFile(filepath.Join(root, ".github/codeql-bundle.lock"))
+	if out, err := run(); err != nil || !strings.Contains(out, "CODEQL_BUNDLE: 2.27.4 is current") {
+		t.Fatalf("want current, got err=%v\n%s", err, out)
+	}
+	root, run = codeqlPinsFixture(t, strings.Repeat("2", 40), "")
+	if out, err := run("PINS_ONLY=FOO"); err != nil || strings.Contains(out, "CODEQL_BUNDLE") {
+		t.Fatalf("PINS_ONLY=FOO touched CODEQL_BUNDLE: err=%v\n%s", err, out)
+	}
+	after, _ := os.ReadFile(filepath.Join(root, ".github/codeql-bundle.lock"))
+	if string(after) != string(before) {
+		t.Fatalf("PINS_ONLY=FOO rewrote the lock:\n%s", after)
 	}
 }

@@ -14,7 +14,11 @@
 #   * cosign: verify cosign_checksums.txt's keyless signature with the
 #     CURRENTLY pinned cosign (the trust chain carries forward, never resets),
 #     download both linux binaries, require their SHA-256 to match, rewrite
-#     internal/release/cosign.lock.
+#     internal/release/cosign.lock;
+#   * codeql: follow the github/codeql-action commit codeql.yml pins (Dependabot
+#     moves it): read that commit's defaults.json for the bundle version,
+#     download each per-language bundle, require GitHub's published SHA-256
+#     digest for it, rewrite .github/codeql-bundle.lock.
 # Nothing is rewritten for a pin whose verification fails; the script then
 # exits non-zero after trying the rest.
 #
@@ -22,6 +26,7 @@
 #        scripts/update-pins.sh --check    report what would move; change nothing
 # Env:   GH_TOKEN (optional) raises the GitHub API rate limit.
 #        PINS_COOLDOWN_DAYS (default 7).
+#        PINS_ONLY=NAME — move only that pins.tsv row.
 #        PINS_GITHUB_API / PINS_GITHUB_DOWNLOAD / PINS_PYPI — upstream base URLs
 #        (defaults: api.github.com, github.com, pypi.org); the tests point them
 #        at fixtures. What is trusted is the checksum match and the signature,
@@ -271,12 +276,61 @@ update_cosign() { # REPO ASSET SUMS ID ISS
   note "COSIGN: $cur → $tag (checksums signature verified by cosign $cur; both binaries hash-checked)"
 }
 
+# update_codeql NAME REPO ASSET — .github/codeql-bundle.lock follows the
+# github/codeql-action commit Dependabot pins in codeql.yml: the bundle is the
+# one that commit's src/defaults.json names, and each per-language asset ({lang}
+# in ASSET) must hash to the digest GitHub publishes for it. No cooldown of its
+# own: the action's version, and so its cooldown, is Dependabot's.
+update_codeql() {
+  local name="$1" repo="$2" asset_t="$3" lock wf shas sha cur_sha cur v tag lang asset want got out
+  lock="$ROOT/.github/codeql-bundle.lock"
+  wf="$ROOT/.github/workflows/codeql.yml"
+  [[ -f "$lock" && -f "$wf" ]] || { fail "$name: needs .github/codeql-bundle.lock and .github/workflows/codeql.yml"; return; }
+  shas="$(grep -o "$repo/init@[0-9a-f]\{40\}" "$wf" | sed 's/.*@//' | sort -u)"
+  [[ "$(printf '%s\n' "$shas" | grep -c .)" == 1 ]] || { fail "$name: codeql.yml must pin $repo/init to exactly one commit SHA"; return; }
+  sha="$shas"
+  cur_sha="$(awk '$1=="action"{print $2}' "$lock")"
+  cur="$(awk '$1=="version"{print $2}' "$lock")"
+  [[ "$sha" == "$cur_sha" ]] && { note "$name: $cur is current (action ${sha:0:12})"; return; }
+  v="$(api "$GH_API/repos/$repo/contents/src/defaults.json?ref=$sha" \
+        | jq -r '.content | gsub("\\s"; "") | @base64d | fromjson | .cliVersion // empty')" \
+    || { fail "$name: could not read $repo src/defaults.json at $sha"; return; }
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { fail "$name: $repo defaults.json cliVersion is not a plain version — refusing it"; return; }
+  if [[ "$CHECK" == "1" ]]; then note "$name: action ${cur_sha:0:12} → ${sha:0:12}, bundle $cur → $v (would update)"; return; fi
+  tag="codeql-bundle-v$v"
+  api "$GH_API/repos/$repo/releases/tags/$tag" > "$WORK/codeql-release.json" \
+    || { fail "$name: could not read the $tag release"; return; }
+  out="$WORK/codeql-bundle.lock"
+  awk '/^#/' "$lock" > "$out"
+  printf 'action %s\nversion %s\n' "$sha" "$v" >> "$out"
+  for lang in $(awk '!/^#/ && NF==2 && $1!="action" && $1!="version" {print $1}' "$lock"); do
+    [[ "$lang" =~ ^[a-z]+$ ]] || { fail "$name: odd language $lang in codeql-bundle.lock"; return; }
+    asset="${asset_t//\{lang\}/$lang}"
+    want="$(A="$asset" jq -r '.assets[] | select(.name == env.A) | .digest // empty' "$WORK/codeql-release.json" | head -n1)"
+    want="${want#sha256:}"
+    valid_sha "$want" || { fail "$name: GitHub publishes no sha256 digest for $asset in $tag — not updating"; return; }
+    fleet_release_get "$GH_DL/$repo/releases/download/$tag/$asset" "$WORK/asset" "$FLEET_RELEASE_MAX_BINARY" \
+      || { fail "$name: could not download $asset from $tag"; return; }
+    got="$(sha256sum "$WORK/asset" | awk '{print $1}')"
+    rm -f "$WORK/asset"
+    [[ "$got" == "$want" ]] || { fail "$name: $asset hashes to $got, GitHub's digest says $want — not updating"; return; }
+    printf '%s %s\n' "$lang" "$got" >> "$out"
+  done
+  cp "$out" "$lock"
+  CHANGES+=("$name $cur → $v")
+  note "$name: $cur → $v for $repo ${sha:0:12} (each bundle hash-checked against GitHub's asset digest)"
+}
+
 while IFS=$'\t' read -r name kind source asset sums id iss; do
   [[ -z "$name" || "$name" == \#* ]] && continue
+  # PINS_ONLY=NAME moves one pin, e.g. CODEQL_BUNDLE on a Dependabot PR that
+  # bumped github/codeql-action.
+  [[ -n "${PINS_ONLY:-}" && "$name" != "$PINS_ONLY" ]] && continue
   case "$kind" in
     github) update_github "$name" "$source" "$asset" "$sums" "$id" "$iss" ;;
     pypi)   update_pypi "$name" "$source" ;;
     cosign) update_cosign "$source" "$asset" "$sums" "$id" "$iss" ;;
+    codeql) update_codeql "$name" "$source" "$asset" ;;
     *)      fail "$name: unknown kind $kind" ;;
   esac
 done < "$ROOT/scripts/lib/pins.tsv"
