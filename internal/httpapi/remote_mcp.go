@@ -293,8 +293,8 @@ type oauthCallbackRequest struct {
 
 // remoteMCPOAuthCallback completes an OAuth flow. The browser-facing web-tier
 // callback route relays the AS's redirect (code + state, or an error) here; we
-// never expose chat-server to the browser directly. The completing user
-// (X-User-Email) must equal the user who initiated the flow — enforced in the
+// never expose chat-server to the browser directly. The completing user (the
+// request principal) must equal the user who initiated the flow — enforced in the
 // service via the stored, single-use state.
 func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if !s.remoteMCPReady(w) {

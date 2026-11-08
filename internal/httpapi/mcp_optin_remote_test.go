@@ -90,7 +90,7 @@ func TestConversationMCPServersPOSTAcceptsRemoteServer(t *testing.T) {
 
 	body := strings.NewReader(`{"enabled_optional":["GitHub","gamma","nope"]}`)
 	req := httptest.NewRequest("POST", "/conversations/"+conv.ID+"/mcp-servers", body)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	srv.conversationByID(w, req)
 	if w.Code != 200 {
@@ -136,7 +136,7 @@ func TestConversationMCPServersPOSTScopedToCaller(t *testing.T) {
 		t.Helper()
 		body := strings.NewReader(`{"enabled_optional":["GitHub"]}`)
 		req := httptest.NewRequest("POST", "/conversations/"+conv.ID+"/mcp-servers", body)
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, other))
+		req = req.WithContext(asUser(req.Context(), other))
 		w := httptest.NewRecorder()
 		srv.conversationByID(w, req)
 		if w.Code != 200 {
@@ -187,7 +187,7 @@ func TestConversationMCPServersGETListsRemoteServer(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/conversations/"+conv.ID+"/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	srv.conversationByID(w, req)
 	if w.Code != 200 {

@@ -83,11 +83,17 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
   connection test): [`docs/API-CLIENTS.md`](API-CLIENTS.md) +
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
+- **Generated HTTP contracts** (`docs/openapi.yaml` generated from the router
+  plus the `internal/apispec` route catalog, the web types generated from it
+  by `openapi-typescript`, `make api-contracts`, the `contracts` CI drift
+  gate, and what phase 3/4 of #2050 still adds): [`docs/HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) +
+  [ADR-0109](adr/0109-generated-http-contracts.md)
 - **Reading auth facts from the spec** (`x-fleet-permission` per operation,
   `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
 - **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **One identity table** (one `core.users` row per person, role plus Operations Center scope, the merge of the scheduler's users, the retired Operations Center bearer): [`docs/IDENTITY.md`](IDENTITY.md) + [ADR-0105](adr/0105-one-identity-table.md)
+- **Who is calling** (the typed request principal, the one account lookup both planes share, why no handler reads an identity header): [`docs/PRINCIPAL.md`](PRINCIPAL.md) + [ADR-0108](adr/0108-typed-principal.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
 - **The browser tier** (the fleet binary serves the Vite SPA and every
@@ -294,6 +300,7 @@ above fails otherwise.
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
+- [`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) — Generated HTTP contracts: what is generated from the router and the route catalog, the drift gate, and what phase 3/4 of #2050 adds (ADR-0109)
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plans: enhancements (all shipped)
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)

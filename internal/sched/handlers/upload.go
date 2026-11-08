@@ -33,7 +33,7 @@ const maxUploadSize = 1 << 30 // 1 GiB
 // HandleUpload handles file uploads.
 func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Authentication
-	// Admin API key, a create_task-scoped key, or header trust (the password
+	// Admin API key, a create_task-scoped key, or a gateway session (the password
 	// bearer is retired, #2049 M4).
 	// This mirrors logic in CreateTask but slightly simpler as we just need "any valid user"
 
@@ -43,13 +43,12 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// 1. API Key
 	if h.verifyAdminKey(r) {
 		isAuthed = true
-		identity = bootstrapAdminIdentity
-	} else if user, handled := h.headerTrustUser(w, r); handled {
-		// 1a. web-tier header-trust path (#157): /upload sits outside the
-		// AdminOrUserAuthMiddleware group like POST /tasks, so the cookie
-		// user's proxied identity must be honored here too (an upload is only
-		// usable via a subsequent task create). Fail-closed: a rejected token
-		// has already written its response.
+	} else if user, _, handled := h.userPrincipal(w, r); handled {
+		// 1a. The user principal (#2050): /upload sits outside the
+		// AdminOrUserAuthMiddleware group like POST /tasks, so the gateway
+		// session's principal must be honored here too (an upload is only
+		// usable via a subsequent task create). Fail-closed: a refused
+		// principal has already written its response.
 		if user == nil {
 			return
 		}

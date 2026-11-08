@@ -22,10 +22,11 @@ func (s *Server) Routes() http.Handler {
 	// /v1/api-info via the apiversion.Router wrapper in cmd/fleet.
 	mux.HandleFunc("/api-info", apiversion.InfoHandler(version.Version()))
 
-	// auth = shared-secret + X-User-Email (identity). member adds the
-	// scoped-tier user-list gate. /auth/verify stays on auth alone so the
-	// password pre-login path can answer for not-yet-known emails without
-	// leaking the user-list (see membershipMiddleware).
+	// auth = a request principal naming a user (the gateway's, or one the
+	// listener edge resolved). member adds the scoped-tier user-list gate.
+	// The /auth/* sign-in legs stay off member so the password pre-login path
+	// can answer for not-yet-known emails without leaking the user-list (see
+	// membershipMiddleware), and are gateway-only (gatewayMiddleware).
 	auth := s.authMiddleware
 	member := s.membershipMiddleware
 	// mutate adds the read-only-role gate (#237): a "viewer" account may read
@@ -140,14 +141,14 @@ func (s *Server) Routes() http.Handler {
 	// mutate keeps a read-only viewer read-only here too.
 	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
-	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
-	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
+	mux.Handle("/auth/verify", s.gatewayUserMiddleware(http.HandlerFunc(s.handleAuthVerify)))
+	// /auth/session-epoch is off member for the same reason as /auth/verify:
 	// the web tier's mint paths call it before a session exists, and it must answer
 	// for a not-yet-provisioned email without leaking the user-list.
-	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
-	mux.Handle("/auth/external-session-epoch", auth(http.HandlerFunc(s.handleExternalSessionEpoch)))
-	mux.Handle("/auth/external-session-revoke", auth(http.HandlerFunc(s.handleExternalSessionRevoke)))
-	mux.Handle("/auth/external-access", auth(http.HandlerFunc(s.handleExternalAccess)))
+	mux.Handle("/auth/session-epoch", s.gatewayUserMiddleware(http.HandlerFunc(s.handleSessionEpoch)))
+	mux.Handle("/auth/external-session-epoch", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalSessionEpoch)))
+	mux.Handle("/auth/external-session-revoke", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalSessionRevoke)))
+	mux.Handle("/auth/external-access", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalAccess)))
 	mux.Handle("/auth/external-team-rename", s.providerEventMiddleware(http.HandlerFunc(s.handleExternalTeamRename)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/decision-models", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminDecisionModels)))))

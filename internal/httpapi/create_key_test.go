@@ -22,7 +22,7 @@ func TestCreateConversation_IdempotencyKey(t *testing.T) {
 	create := func(body string) (int, string) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/conversations", strings.NewReader(body))
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+		req = req.WithContext(asUser(req.Context(), me))
 		rec := httptest.NewRecorder()
 		s.listOrCreateConversations(rec, req)
 		var out struct {
@@ -77,7 +77,7 @@ func TestCreateConversation_IdempotencyKey(t *testing.T) {
 
 	// Another user's identical key is theirs alone.
 	req := httptest.NewRequest(http.MethodPost, "/conversations", strings.NewReader(`{"title":"P","client_request_id":"k-2"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "other@x.com"))
+	req = req.WithContext(asUser(req.Context(), "other@x.com"))
 	rec := httptest.NewRecorder()
 	s.listOrCreateConversations(rec, req)
 	var theirs struct {

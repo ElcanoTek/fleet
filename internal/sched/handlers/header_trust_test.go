@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
 // The web-tier header-trust path (#157) is what lets a /chat-cookie user reach
@@ -236,7 +238,10 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 			req.Header.Set("X-User-Email", email)
 		}
 		if epoch != "" {
-			req.Header.Set("X-User-Session-Epoch", epoch)
+			// A session claim comes only with a gateway session principal.
+			req = req.WithContext(authn.With(req.Context(), authn.Principal{
+				Email: email, AuthMethod: authn.MethodSession, Session: authn.Session{Epoch: epoch},
+			}))
 		}
 		rr := httptest.NewRecorder()
 		h.EstimateTask(rr, req)
@@ -266,7 +271,7 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 
 	t.Run("revoked session epoch is 401", func(t *testing.T) {
 		h := newEstimateHandler(t)
-		rr := do(h, "topsecret", "alice@elcanotek.com", "stale-epoch")
+		rr := do(h, "", "alice@elcanotek.com", "stale-epoch")
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("status %d want 401 (session-epoch revocation must apply to estimate too)", rr.Code)
 		}
@@ -281,7 +286,7 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rr := do(h, "topsecret", "alice@elcanotek.com", live)
+		rr := do(h, "", "alice@elcanotek.com", live)
 		if rr.Code != http.StatusOK {
 			t.Errorf("status %d want 200: %s", rr.Code, rr.Body.String())
 		}

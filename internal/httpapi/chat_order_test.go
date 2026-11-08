@@ -35,7 +35,7 @@ func TestConversationOrder(t *testing.T) {
 	do := func(method, body string) (int, string) {
 		t.Helper()
 		req := httptest.NewRequest(method, "/conversations/order", strings.NewReader(body))
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+		req = req.WithContext(asUser(req.Context(), me))
 		rec := httptest.NewRecorder()
 		s.conversationByID(rec, req)
 		return rec.Code, rec.Body.String()

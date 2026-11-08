@@ -60,7 +60,7 @@ type uploadedAttachment struct {
 // An empty identity hashes to its own bucket rather than to the uploads root,
 // so a caller with no email still cannot reach anyone else's subtree. That is
 // a test-only shape: every route reaching here sits behind the auth + member
-// middleware, which refuses a request with no X-User-Email.
+// middleware, which refuses a request whose principal names no user.
 func userUploadsRoot(baseDir, userEmail string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
 	return filepath.Join(baseDir, "uploads", hex.EncodeToString(sum[:])[:32])

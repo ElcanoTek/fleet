@@ -112,8 +112,8 @@ func (h *Handlers) scopedKeyCannotCreate(r *http.Request) bool {
 }
 
 // authorizeTaskCreator is the SAME authorization as CreateTask: an admin API
-// key, a scoped key carrying PermissionCreateTask, or the web tier's
-// header-trust identity (a session cookie) (which must resolve to a provisioned member). On
+// key, a scoped key carrying PermissionCreateTask, or a gateway session's
+// principal (which must resolve to a provisioned member). On
 // failure it writes the appropriate error response and returns ok=false; the
 // caller must stop. It is read-only with respect to authorization state — it
 // calls ValidateKey (which DOES consume one rate-limit token, matching
@@ -157,13 +157,12 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 	if h.verifyAdminKey(r) {
 		return taskCreator{hasAdminPermission: true}, bootstrapAdminIdentity, true
 	}
-	// web-tier header-trust path (#157): POST /tasks (and /tasks/batch,
+	// The user principal (#2050): POST /tasks (and /tasks/batch,
 	// /tasks/estimate) sit outside the AdminOrUserAuthMiddleware group, so the
-	// cookie user's proxied identity (X-User-Email + shared token) must be
-	// honored here too — otherwise the web UI's elcano-cookie login path can
-	// never create tasks. Fail-closed like the middleware: a present-but-wrong
-	// token is rejected outright, never falling through to weaker paths.
-	if user, handled := h.headerTrustUser(w, r); handled {
+	// gateway session's principal must be honored here too — otherwise the
+	// web UI's cookie sign-in could never create tasks. Fail-closed like the
+	// middleware: a refused principal is never retried on weaker paths.
+	if user, _, handled := h.userPrincipal(w, r); handled {
 		if user == nil {
 			return taskCreator{}, "", false
 		}
@@ -196,7 +195,7 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 	}
 
 	// The Operations Center password bearer is retired (#2049 M4, ADR-0105):
-	// programs use API keys, people the session cookie (header trust above).
+	// programs use API keys, people the session cookie (the principal above).
 	writeError(w, http.StatusUnauthorized, "Unauthorized")
 	return taskCreator{}, "", false
 }

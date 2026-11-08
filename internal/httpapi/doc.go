@@ -2,14 +2,19 @@
 //
 // # Trust model
 //
-// chat-server never talks to browsers directly. Every request arrives from
-// the web tier (internal/webui) carrying two headers:
+// chat-server never talks to browsers directly. Every handler reads the
+// caller's identity from the request context's [principal.Principal]
+// (#2050, ADR-0108), never from a header:
 //
-//   - X-Chat-Server-Token: a shared secret set in both .env.local files.
-//     Constant-time-compared in [Server.authMiddleware].
-//   - X-User-Email: the authenticated user's email, pulled from the signed
-//     session cookie by the web tier before proxying. Used for
-//     row-level scoping on every SQL query.
+//   - the web tier (internal/webui) calls these handlers in-process and
+//     attaches the principal itself — the session it verified, or its own
+//     principal for the sign-in legs and the public brand assets;
+//   - a request on the chat listener's own port carries none until the edge
+//     (edge.go) resolves the credential it presented.
+//
+// [Server.membershipMiddleware] then resolves the account
+// ([principal.Resolve]); the email it carries is the row-level scope of every
+// SQL query.
 //
 // The only unauthenticated endpoint is GET /healthz.
 //

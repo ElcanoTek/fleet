@@ -2,13 +2,12 @@ package handlers
 
 import (
 	"context"
-	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
-	"github.com/ElcanoTek/fleet/internal/logging"
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -33,15 +32,16 @@ const (
 func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.verifyAdminKey(r) {
-			next.ServeHTTP(w, withAuthIdentity(r, bootstrapAdminIdentity))
+			ctx := authn.With(r.Context(), authn.Principal{AuthMethod: authn.MethodAdminKey})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 			valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil)
 			if valid && key != nil {
 				if key.Type == apikeys.KeyTypeAdmin {
-					// user_id for an API-key call is the key's id — never the key (#2052).
-					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), apiKeyIdentity(key.KeyID))
+					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					ctx = authn.With(ctx, keyPrincipal(key))
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -53,61 +53,8 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// headerTrustUser resolves the web-tier header-trust path (#157). The web tier
-// layer is the SOLE client that sets these headers: it verifies the user's
-// session cookie, then forwards the identity as X-User-Email guarded by the
-// shared X-Orchestrator-Server-Token (the chat-server token; see
-// Config.SharedToken). This is what lets a /chat-cookie user use the Operations
-// Center without a second (moc bearer) login. The token is
-// impersonation-load-bearing, so this is fail-closed: a PRESENT-but-wrong token
-// is rejected outright (no fall-through to the weaker scoped-key/bearer/cookie
-// paths). Mirrors chat-server's authMiddleware (shared token + X-User-Email,
-// then the membership gate, then the session-epoch claim — see
-// session_epoch.go, which is what makes a chat password reset end the cookie's
-// access to THIS plane too).
-//
-// Returns (nil, false) when no token is present — the caller should try its
-// other auth paths. Returns handled=true when the token was present and this
-// helper wrote the response on rejection (user == nil) or resolved the member
-// (user != nil). Shared by AdminOrUserAuthMiddleware, authorizeTaskCreator, and
-// HandleUpload so the fail-closed semantics cannot drift between them.
-func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*models.User, bool) {
-	tok := r.Header.Get("X-Orchestrator-Server-Token")
-	if tok == "" {
-		return nil, false
-	}
-	if subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) != 1 {
-		writeError(w, http.StatusForbidden, "Forbidden")
-		return nil, true
-	}
-	email := strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email")))
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "missing X-User-Email")
-		return nil, true
-	}
-	account, err := h.lookupMember(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Membership check failed")
-		return nil, true
-	}
-	user := headerTrustMember(account, isPromptLibraryPath(r.URL.Path))
-	if user == nil {
-		writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-		return nil, true
-	}
-	// Membership outranks the session: a deleted account gets the 403 the UI keys
-	// on, not a "log in again" verdict it cannot act on.
-	if !h.checkSessionEpoch(w, r, email) {
-		return nil, true
-	}
-	if refuseReadonlyUserMutation(w, r, user) {
-		return nil, true
-	}
-	return user, true
-}
-
-// userMayMutate is the ONE role gate for a user principal (a web-tier
-// header-trust session; the password bearer is retired, #2049 M4) on the
+// userMayMutate is the ONE role gate for a user principal (a gateway
+// session; the password bearer is retired, #2049 M4) on the
 // orchestrator API. Reads are open to
 // every role; a mutating method needs a role whose permission set
 // (models.RolePermissions) carries PermissionCreateTask — admin and client do,
@@ -119,7 +66,7 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 // role at all: per-handler permission checks covered some routes, but POST
 // /tasks, /tasks/batch, /tasks/estimate, /upload, task feedback and own-task
 // cancel/delete/resume accepted a readonly user outright. The gate runs
-// wherever a user principal is resolved — headerTrustUser, which every user
+// wherever a user principal is resolved — userPrincipal, which every user
 // path goes through — so no handler can forget it. API keys never reach it: their
 // scope is the key type's, decided on the key paths, unchanged.
 func userMayMutate(r *http.Request, user *models.User) bool {
@@ -139,7 +86,7 @@ func refuseReadonlyUserMutation(w http.ResponseWriter, r *http.Request, user *mo
 	return true
 }
 
-// headerTrustMember is the membership verdict for a header-trusted identity:
+// headerTrustMember is the membership verdict for a user principal:
 // the account's one identity row (nil when there is none) decides, as the
 // Operations Center user it is (Role = the legacy Operations Center role), or
 // nil for not_a_member.
@@ -164,22 +111,22 @@ func headerTrustMember(account *identity.User, promptLibrary bool) *models.User 
 }
 
 // AdminOrUserAuthMiddleware allows access with an admin API key, a scoped API
-// key, or the web tier's header-trust identity (a session cookie).
+// key, or a user principal (a gateway session).
 func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check admin API key first
 		if h.verifyAdminKey(r) {
-			next.ServeHTTP(w, withAuthIdentity(r, bootstrapAdminIdentity))
+			ctx := authn.With(r.Context(), authn.Principal{AuthMethod: authn.MethodAdminKey})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		// web-tier header-trust path (#157): see headerTrustUser.
-		if user, handled := h.headerTrustUser(w, r); handled {
+		// The user principal (#2050): see userPrincipal.
+		if user, r2, handled := h.userPrincipal(w, r); handled {
 			if user == nil {
 				return // rejected fail-closed; response already written
 			}
-			ctx := logging.WithUser(context.WithValue(r.Context(), userContextKey, user), user.Username)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r2)
 			return
 		}
 
@@ -210,8 +157,8 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 				}
 				if authorized {
 					// Store the API key in context for the handler to use.
-					// user_id for an API-key call is the key's id — never the key (#2052).
-					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), apiKeyIdentity(key.KeyID))
+					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					ctx = authn.With(ctx, keyPrincipal(key))
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -339,14 +286,22 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Skip for the web-tier header-trust path (#157). Like X-API-Key and
-		// Bearer above, a custom header cannot be attached to a cross-site
-		// browser request (it would require a CORS preflight we never grant),
-		// so its presence proves a programmatic caller — and the only caller
-		// that sets it, the web tier, has already enforced the browser's
-		// Origin itself (web/src/app/lib/csrf.ts) before forwarding, WITHOUT
-		// forwarding the Origin header. Presence is enough here: the auth
-		// middleware fail-closed rejects a wrong token value.
+		// Skip for the gateway's in-process calls (#2050). A principal in the
+		// context can only have been put there by fleet code — no network peer
+		// writes a request context — and the gateway attaches one only after it
+		// enforced the browser's Origin itself (internal/webui), WITHOUT
+		// forwarding the Origin header.
+		if p, ok := authn.From(r.Context()); ok && p.IsBrowserSession() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip for the legacy internal service token on this listener's own
+		// port. Like X-API-Key and Bearer above, a custom header cannot be
+		// attached to a cross-site browser request (it would require a CORS
+		// preflight we never grant), so its presence proves a programmatic
+		// caller. Presence is enough here: the auth paths fail-closed reject a
+		// wrong token value.
 		if r.Header.Get("X-Orchestrator-Server-Token") != "" {
 			next.ServeHTTP(w, r)
 			return
@@ -387,4 +342,14 @@ func originMatchesHost(r *http.Request) bool {
 		expected = r.Host
 	}
 	return strings.EqualFold(u.Host, expected)
+}
+
+// keyPrincipal is the principal of a validated API key: a key names no user,
+// so it carries its id and permissions only.
+func keyPrincipal(key *apikeys.APIKey) authn.Principal {
+	scopes := make([]string, 0, len(key.Permissions))
+	for _, perm := range key.Permissions {
+		scopes = append(scopes, string(perm))
+	}
+	return authn.Principal{AuthMethod: authn.MethodAPIKey, KeyID: key.KeyID, Scopes: scopes}
 }

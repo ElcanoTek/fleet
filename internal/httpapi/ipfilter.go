@@ -13,7 +13,7 @@ import (
 // IP access control (#314).
 //
 // A config-driven, network-level allow/deny filter applied as defense-in-depth
-// IN FRONT OF the shared-token auth — it does NOT replace it. The order of the
+// IN FRONT OF the request-principal auth — it does NOT replace it. The order of the
 // checks below encodes the precedence rule the operator relies on:
 //
 //	denylist  → deny overrides everything (always blocked)

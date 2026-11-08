@@ -1,0 +1,808 @@
+openapi: 3.1.0
+info:
+  title: fleet orchestrator API
+  version: "1.0.0"
+  description: |
+    HTTP API for the fleet **orchestrator** (the scheduling engine):
+    scheduled-task lifecycle, API-key administration, the notes wiki, run logs,
+    dashboard stats, and auth.
+
+    The `paths` of this document are **generated** (ADR-0109,
+    docs/HTTP-CONTRACTS.md): `internal/apispec` walks the real chi router
+    (`buildOrchestratorMux`) and joins every registered route with its entry
+    in the route catalog (`internal/apispec/orchestrator`), failing when a
+    route has no entry or an entry has no route, and when an operation names
+    a security scheme, schema or response not defined below. Everything above
+    `paths` is `internal/apispec/orchestrator/base.yaml`, copied unchanged.
+    `TestOpenAPIGenerated` and the CI `contracts` job fail when this file
+    differs from what the generator produces; edit the sources and run
+    `make api-contracts`, never this file.
+
+    A second gate (`TestOpenAPISchemaDrift`) statically cross-checks the reusable
+    `components.schemas.*` against their backing Go models via reflection: every
+    documented property must exist as a json field on the model, every `required:`
+    field must exist and not be `omitempty`, and scalar types must agree. It does
+    NOT verify status codes, runtime population, or inline (anonymous, non-`$ref`)
+    operation bodies — those remain documentary. Undocumented model fields are
+    surfaced as test warnings, not failures. See the test's block comment for the
+    exact scope and its limits.
+
+    The interactive chat HTTP/SSE API (`internal/httpapi`) is a separate surface
+    and is not described here.
+
+    ## Machine-readable auth facts (vendor extensions)
+
+    External consumers (e.g. an intake app's contract check) should read these
+    instead of grepping fleet's Go source; `docs/MANIFEST-CONTRACT.md` maps each
+    fact to its path here.
+
+    - **`x-fleet-api-version`** (top level): the HTTP API major version, equal to
+      `apiversion.Version` — what `GET /api-info` reports as `api_version` and
+      every `/v1` response carries in `X-Fleet-API-Version`. `servers[0].url` is
+      the version prefix (`/v1`).
+    - **`x-fleet-permission`** (on EVERY operation): ONE value — the
+      `models.Permission` an `X-API-Key` principal must hold to be admitted to
+      the operation at all. `admin` implies every other permission. The
+      non-permission values: `none` (the operation REQUIRES no credential: it
+      admits a request that carries none; always paired with `security: []`.
+      It does not promise a presented credential is ignored); `authenticated` (any valid API key is admitted at the
+      HTTP layer and the permission is checked per JSON-RPC method inside the
+      dispatcher: the A2A endpoint only); `webhook` (`POST /triggers/{slug}`:
+      EITHER a typed `webhook` key whose allowed trigger slugs include the
+      path slug, as X-API-Key or Authorization: Bearer — a webhook key for
+      another slug is 403 — OR a valid per-trigger HMAC signature; no other
+      key type, admin included, is honoured; security schemes `webhookKey`,
+      `webhookKeyBearer`, `triggerSignature`); `hmac`
+      (`POST /triggers/email/{slug}`: the per-trigger HMAC signature only,
+      `triggerSignature`; no API key of any type). It is
+      deliberately a single value, not an any-of list: no operation is
+      admitted by one of several permissions.
+      What it does NOT capture, so read it as "necessary, and sufficient up to
+      these rules": (1) per-row rules applied after admission — own-rows task
+      visibility, creator-only transcripts and workspaces (`view_all_logs`
+      widens those), creator-or-`cancel_task` for stop/delete; a request that
+      clears the permission can still get a 403 for a row it may not touch.
+      (2) Key TYPE rules, in `x-fleet-key-types`: a typed key holds its type's
+      fixed permission set, a `readonly` key is refused (403) on any non-safe
+      method even where it holds the permission, and the admin-only routes
+      accept only the bootstrap `ADMIN_API_KEY` or a typed `admin` key.
+      (3) Legacy untyped `sk-` keys additionally need `view_tasks` on the routes
+      behind the scoped-key group middleware (every operation whose `security`
+      lists `scopedApiKey`, except `POST /tasks`, `/tasks/batch`,
+      `/tasks/estimate`, `/upload` and the A2A endpoint), and a legacy key is
+      never admitted to an `AdminAuthMiddleware` route even when it carries
+      `admin`. (4) `GET /files/{filename}` accepts the bootstrap
+      `ADMIN_API_KEY` only — a typed admin key is 401 there. (5) Human
+      principals (a signed-in session, forwarded by the web gateway; the
+      Operations Center has no password bearer since #2049 M4) are authorised
+      by the role their account grants (`models.RolePermissions`) through the
+      same handler checks.
+      The value is proven against enforcement by
+      `TestOpenAPIPermissionEnforcement` (cmd/fleet), which drives real
+      requests through the real router with keys that hold, and lack, it;
+      `none` by `TestOpenAPINoneOperationsTakeNoCredential` and `webhook` /
+      `hmac` by `TestOpenAPITriggerAuthEnforcement`.
+    - **`x-fleet-key-types`** (top level): each typed key class
+      (`fleet_<type>_…`) with the permission set it carries and the HTTP methods
+      it may use on the scoped-key route group; pinned to `internal/sched/apikeys`
+      by `TestOpenAPIKeyTypes`.
+
+servers:
+  - url: /v1
+    description: >-
+      The versioned orchestrator API (#321) — the stability-guaranteed surface
+      for external consumers. Every response carries an X-Fleet-API-Version
+      header. Prefer this base; path keys below are relative to it.
+  - url: /
+    description: >-
+      Legacy unversioned paths, served by the SAME handlers for backward
+      compatibility. Responses carry Deprecation + Link (successor-version)
+      headers; migrate to the /v1 base. (The version prefix is applied by a
+      wrapper, so both bases resolve to the identical routes.)
+
+# The HTTP API major version (apiversion.Version). See info.description.
+x-fleet-api-version: "1"
+
+# Typed API-key classes (internal/sched/apikeys): the permission set each type
+# carries (KeyType.Permissions) and the HTTP methods it may use on the
+# scoped-key route group (TypeAllowsMethod). `any` = every method. Webhook keys
+# reach no scoped-key route: they authenticate POST /triggers/{slug} only, for
+# their own slugs (x-fleet-permission: webhook).
+x-fleet-key-types:
+  admin: { permissions: [admin], methods: any }
+  task: { permissions: [create_task, view_tasks, view_logs], methods: any }
+  readonly: { permissions: [view_tasks, view_logs], methods: [GET, HEAD, OPTIONS] }
+  webhook: { permissions: [], methods: [] }
+
+components:
+  headers:
+    XFleetApiVersion:
+      description: >-
+        The HTTP API major version (#321). Present on every /v1 response;
+        increments only on a breaking API change (independent of the fleet
+        binary semver). Clients may assert it to confirm compatibility.
+      schema: { type: string, example: "1" }
+  securitySchemes:
+    adminApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        The bootstrap ADMIN_API_KEY or a typed admin API key
+        (fleet_admin_…, #1081). Full access; other key types are rejected
+        on admin-only routes.
+    scopedApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: A non-admin API key; access limited to its permission set.
+    elcanoAuthCookie:
+      type: apiKey
+      in: cookie
+      name: elcano_auth
+      description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
+    webhookKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        A typed webhook key (fleet_webhook_…, #190), accepted ONLY on
+        POST /triggers/{slug} and only for a slug in the key's allowed trigger
+        slugs (x-fleet-permission: webhook).
+    webhookKeyBearer:
+      type: http
+      scheme: bearer
+      description: >-
+        The same fleet_webhook_ key sent as Authorization: Bearer (checked after
+        X-API-Key). Not a user token.
+    triggerSignature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: >-
+        "sha256=" + hex HMAC-SHA256 of the raw request body under the trigger's
+        own secret (GitHub-compatible). X-Fleet-Signature-256 is read when
+        X-Hub-Signature-256 is absent. OpenAPI cannot express a body signature;
+        this scheme names the header, and the value is a signature, not a
+        static key.
+
+  schemas:
+    PromptLibraryWrite:
+      type: object
+      required: [name, content, visibility]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1024 }
+        content: { type: string, minLength: 1, maxLength: 262144 }
+        visibility: { type: string, enum: [private, workspace] }
+    PromptLibraryItem:
+      allOf:
+        - { $ref: "#/components/schemas/PromptLibraryWrite" }
+        - type: object
+          required: [id, source, read_only, owned_by_caller]
+          properties:
+            id: { type: string }
+            source: { type: string, enum: [git, workspace] }
+            read_only: { type: boolean }
+            owned_by_caller: { type: boolean }
+            owner_username: { type: string }
+            path: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+            fields:
+              type: array
+              description: >
+                Present only on a Git entry whose YAML declares a valid form
+                (docs/PROMPT-LIBRARY.md, "Form prompts"). The picker collects
+                these inputs and inserts prompt_template rendered with them
+                instead of content. Workspace (database) prompts never carry it.
+              items: { $ref: "#/components/schemas/PromptField" }
+            prompt_template:
+              type: string
+              description: >
+                The form's template; each {key} token names one of fields.
+                Present exactly when fields is. content stays the raw file.
+    PromptField:
+      type: object
+      description: >
+        One input of a form prompt. The same shape as an empty-state card field.
+        default takes the type's value shape: a string for text, textarea and
+        select (one of options), a number for number, a boolean for toggle, and
+        an object with from/to YYYY-MM-DD strings for daterange.
+      required: [key, label, type]
+      properties:
+        key: { type: string, pattern: "^\\w+$" }
+        label: { type: string }
+        type: { type: string, enum: [text, textarea, select, number, daterange, toggle] }
+        required: { type: boolean }
+        placeholder: { type: string }
+        hint: { type: string }
+        default: {}
+        options: { type: array, items: { type: string } }
+        advanced: { type: boolean }
+        min: { type: number }
+    TaskFeedback:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        rating: { type: string, enum: [up, down] }
+        critique: { type: string }
+        consumed: { type: boolean }
+        created_at: { type: integer }
+        created_by: { type: string }
+    TaskLearnedInstruction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        version: { type: integer }
+        content: { type: string }
+        status: { type: string, enum: [proposed, active, archived] }
+        signal_count: { type: integer }
+        created_at: { type: integer }
+        activated_at: { type: integer }
+        activated_by: { type: string }
+    DatasetColumn:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [text, number, boolean] }
+        output: { type: boolean }
+        description: { type: string }
+    Dataset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        goal: { type: string }
+        columns:
+          type: array
+          items: { $ref: "#/components/schemas/DatasetColumn" }
+        model: { type: string }
+        persona: { type: string }
+        status: { type: string, enum: [idle, running, paused] }
+        concurrency: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_by_user_id:
+          type: string
+          format: uuid
+          description: The user that created the dataset, when a user created it.
+        created_by_key_id:
+          type: string
+          description: The API key that created the dataset, when a key created it.
+        row_counts:
+          type: object
+          additionalProperties: { type: integer }
+    DatasetRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        dataset_id: { type: string, format: uuid }
+        row_index: { type: integer }
+        cells: {}
+        status: { type: string, enum: [pending, running, proposed, approved, failed] }
+        proposed: {}
+        result_note: { type: string }
+        error: { type: string }
+        attempts: { type: integer }
+        cost_usd: { type: number }
+        updated_at: { type: string, format: date-time }
+    ErrorResponse:
+      type: object
+      properties:
+        detail: { type: string, description: "Human-readable error message (the handler's writeError body)." }
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+    MCPChoice:
+      type: object
+      properties:
+        server: { type: string }
+        account: { type: string }
+      required: [server]
+    MCPSelection:
+      type: array
+      items: { $ref: "#/components/schemas/MCPChoice" }
+    CostRange:
+      type: object
+      properties:
+        min: { type: number }
+        max: { type: number }
+      required: [min, max]
+    ModelPrice:
+      type: object
+      properties:
+        input_per_m: { type: number, description: "USD per 1M input (prompt) tokens" }
+        output_per_m: { type: number, description: "USD per 1M output (completion) tokens" }
+    CostForecast:
+      type: object
+      description: >
+        Pre-submission cost forecast for a scheduled task (#233). All cost fields
+        are null when the model's pricing is unknown; the token estimates are
+        still populated. Advisory only — the forecast never gates task creation.
+      properties:
+        model: { type: string }
+        estimated_prompt_tokens: { type: integer }
+        system_prompt_tokens: { type: integer }
+        tool_definitions_tokens: { type: integer }
+        avg_output_tokens: { type: integer }
+        max_iterations: { type: integer }
+        pricing_known: { type: boolean }
+        per_iteration_cost_usd: { type: number, nullable: true }
+        estimated_total_cost_usd: { type: number, nullable: true }
+        estimated_total_cost_range: { allOf: [{ $ref: "#/components/schemas/CostRange" }], nullable: true }
+        max_cost_ceiling_usd: { type: number }
+        would_hit_ceiling: { type: boolean }
+        price: { allOf: [{ $ref: "#/components/schemas/ModelPrice" }], nullable: true }
+        note: { type: string }
+      required:
+        - model
+        - estimated_prompt_tokens
+        - system_prompt_tokens
+        - tool_definitions_tokens
+        - avg_output_tokens
+        - max_iterations
+        - pricing_known
+        - per_iteration_cost_usd
+        - estimated_total_cost_usd
+        - estimated_total_cost_range
+        - max_cost_ceiling_usd
+        - would_hit_ceiling
+        - note
+    TaskCreate:
+      type: object
+      properties:
+        prompt: { type: string, description: "Task prompt, 3 to 250000 bytes (UTF-8 byte length after trimming, not characters)." }
+        name: { type: string, description: "Optional, human-readable label; the identity key for the definition import/export endpoints (#238). A non-empty name must be unique across tasks. Never injected into the agent prompt." }
+        title: { type: string, description: "Optional short display label shown wherever the task is listed. Unlike name it is NOT unique and IS carried onto every occurrence, re-run and clone, so all the runs of one job share it. Single line, max 120 characters. Never injected into the agent prompt." }
+        model: { type: string }
+        fallback_model: { type: string }
+        max_iterations: { type: integer }
+        max_cost_usd: { type: number, description: "This task's own per-run cost ceiling in USD (#1533). Omit to inherit the deployment ceiling; a value above the deployment ceiling requires admin permission." }
+        max_total_tokens: { type: integer, nullable: true, description: "This task's own per-run uncached-token ceiling (#1533). On create, omit or pass null to inherit the deployment ceiling; on PUT /tasks/{task_id}, omit to preserve the task's stored ceiling or pass null to clear it back to inherit. A value above the deployment ceiling requires admin permission." }
+        mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
+        credential_allowlist:
+          type: array
+          description: >-
+            Per-task least-privilege credential scoping (#184): which
+            (server, account) MCP pairs this task may call. Omitted/null
+            inherits the global credential policy; an explicit list narrows it.
+            Every entry must name a server; account is optional (empty = the
+            default/shared seat).
+          items:
+            type: object
+            properties:
+              server: { type: string }
+              account: { type: string }
+            required: [server]
+        persona: { type: string, description: "Per-task persona override (#221): a bundle persona name (personas/<name>.yaml, named without the extension). Empty = the global default persona. An unknown name is rejected with 400 at create time listing the bundle's valid personas (#720); a task whose persona later disappears from the bundle still dispatches on the global default." }
+        tags: { type: array, items: { type: string }, description: "User-defined labels for organizing/filtering tasks (#212): lowercase alphanumeric plus '-'/'.', ≤64 chars each, ≤20 per task (normalized at create)." }
+        timezone: { type: string, description: "IANA timezone name (e.g. America/New_York) recurrence is evaluated in. Empty falls back to the server default (then UTC) at create time; the stored scheduled_for instant is always UTC." }
+        description: { type: string, description: "Optional operator documentation (Markdown: why the task exists, runbook, owner). Never injected into agent prompts; capped at 10000 characters." }
+        max_retries: { type: integer, description: "ADDITIONAL whole-task attempts after the first when a run fails with a retryable class. Omitted = the deployment default (FLEET_TASK_DEFAULT_MAX_RETRIES, 1 unless configured); an explicit 0 = no retries." }
+        retry_policy:
+          type: object
+          description: >-
+            Optional whole-task retry classification/backoff. Structured-output
+            failures are non-retryable by default; explicitly opt in with
+            retry_on values structured_output_format and/or
+            structured_output_persistence, with the usual whole-task
+            side-effect caveat.
+          properties:
+            backoff: { type: string, enum: [exponential, fixed], default: exponential }
+            initial_delay_seconds: { type: integer, minimum: 0, default: 30 }
+            max_delay_seconds: { type: integer, minimum: 0, default: 600 }
+            retry_on:
+              type: array
+              items: { type: string, enum: [transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, connector_unavailable, terminal] }
+            no_retry_on:
+              type: array
+              items: { type: string, enum: [transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, connector_unavailable, terminal] }
+        output_schema:
+          type: object
+          additionalProperties: true
+          description: >-
+            Required terminal machine-output contract. Must be a self-contained
+            JSON Schema object no larger than 65,536 encoded bytes, 32 nesting
+            levels, or 2,048 JSON nodes. A structured task reaches success only
+            when schema-valid output_json is committed atomically with success.
+        carry_context: { type: boolean, default: false, description: "Recurring runs carry a bounded handoff from the prior run (#504). Default false = each run starts fresh." }
+        priority: { type: integer, description: "Queue priority in [1, 100] (lower = more urgent; 10=critical, 25=high, 50=normal, 75=low, 90=bulk). 0 is the unset sentinel normalized to 50. On create, omit or pass 0 for normal (50); on PUT /tasks/{task_id}, omit to preserve the task's stored priority or pass 0 to reset it to normal (50)." }
+        instruction_self_improve: { type: boolean, default: false, description: "Captain's Log: give this scheduled task persistent memory across runs (the remember/recall tools + run-start injection, stored in fleet's DB and scoped to this task). Default false = each run starts fresh. Never touches the operator-owned config bundle." }
+        allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
+        allow_task_creation: { type: boolean, default: false, description: "Grant this task's SCHEDULED runs the built-in create_task tool so they can enqueue follow-up tasks. Default false: the tool is never registered, so interactive/unprivileged runs cannot self-schedule (no privilege escalation)." }
+        allow_recurring_task_creation: { type: boolean, default: false, description: "Stricter, separately-toggled grant that additionally lets create_task set a cron recurrence on a spawned task. Meaningless without allow_task_creation; default false." }
+        scheduled_for: { type: string, format: date-time }
+        recurrence: { type: string, description: "5-field cron expression" }
+        files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string }, description: "Optional logical names paired 1:1 with files. Inputs are materialized under these prompt-visible basenames in the dedicated connector workspace." }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token (#709). Fleet guarantees at most one task per key is ACTIVE (leased/running) at a time: a queued task whose key matches an active task is skipped at claim time — it stays queued and is retried on a later pass, never failed. Fleet never interprets the key's contents; its meaning is owned by the intake caller (e.g. \"client:<id>\"). Recurring occurrences inherit the key, so successive runs stay mutually exclusive with same-key tasks. Absent/empty/whitespace-only = unserialized (the default, and the behavior of every pre-existing task), unless the prompt's EXECUTION REQUIREMENTS line declares a serialization_key, which a task created without one takes. An explicit value always wins. Immutable after creation." }
+      required: [prompt]
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: "Import/export identity key (#238); unique across tasks when non-empty. Cleared on every copy (recurrence occurrence, re-run, clone)." }
+        title: { type: string, description: "Optional short display label shown wherever the task is listed. Unlike name it is NOT unique and IS carried onto every occurrence, re-run and clone, so all the runs of one job share it. Single line, max 120 characters. Never injected into the agent prompt." }
+        prompt: { type: string }
+        model: { type: string }
+        fallback_model: { type: string }
+        max_iterations: { type: integer }
+        max_cost_usd: { type: number, nullable: true }
+        max_total_tokens: { type: integer, nullable: true }
+        mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
+        priority: { type: integer }
+        allow_network: { type: boolean, description: "Whether this task's execution sandbox is allowed outbound network egress (default false = sealed)." }
+        status: { type: string, enum: [pending, scheduled, leased, running, paused_awaiting_input, paused_awaiting_wake, success, error, cancelled, dead_lettered], description: "models.AllTaskStatuses, in lifecycle order." }
+        created_at: { type: string, format: date-time }
+        scheduled_for: { type: string, format: date-time }
+        recurrence: { type: string }
+        result: { type: string }
+        output_schema: { type: object, additionalProperties: true, description: "Declared terminal JSON Schema contract, when structured-output mode is enabled." }
+        output_json: { nullable: true, description: "Locally schema-validated result. Non-null on every successful task that declares output_schema." }
+        error_message: { type: string }
+        recurrence_parked_at: { type: string, format: date-time, description: "Set on the dead-lettered occurrence whose recurring schedule the dead-letter breaker stopped (ADR-0070/0073). Absent = not parked. Read-only." }
+        recurrence_parked_reason: { type: string, description: "Why the schedule stopped, in words the owner can act on: a malformed EXECUTION REQUIREMENTS line's validation message, or two consecutive dead-lettered occurrences. Absent when not parked or when no reason was recorded. Read-only." }
+        run_outcome: { type: string, enum: [blocked, connector_unavailable], description: "How a terminal run ended beyond its status. blocked: a success whose EXECUTION REQUIREMENTS completion.blocked_when matched the call that completed it (the run decided not to publish). connector_unavailable: a dead-letter caused by a declared connector that failed to connect, which the recurrence park breaker exempts up to three consecutive occurrences (run_outcome_detail names the connectors). Absent for every other run. Read-only." }
+        run_outcome_detail: { type: string, description: "The short reason that goes with run_outcome (for blocked: the declared outcome value and the call's own detail). Read-only." }
+        infra_retry_count: { type: integer, description: "How many times the runner re-ran this occurrence because a declared connector was unavailable; counted apart from attempt_count, so it never spends max_retries. Read-only." }
+        files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string } }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token: at most one task per key is active at a time. Absent = unserialized. See TaskCreate.serialization_key." }
+        created_by: { type: string, format: uuid }
+        workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
+        allow_task_creation: { type: boolean, description: "Whether this task's scheduled runs may enqueue follow-up tasks via create_task (default false)." }
+        allow_recurring_task_creation: { type: boolean, description: "Whether create_task may set a cron recurrence on a task this one spawns (default false)." }
+        created_by_task_id: { type: string, format: uuid, description: "The task whose scheduled run spawned this one via create_task. Set server-side for lineage/audit; null for tasks not spawned by a task." }
+      required: [id, prompt, status]
+    WorkspaceEntry:
+      type: object
+      properties:
+        name: { type: string, description: "Slash-joined path relative to the workspace root; directories carry a trailing slash." }
+        size_bytes: { type: integer, format: int64 }
+        modified_at: { type: string, format: date-time }
+        is_dir: { type: boolean }
+      required: [name, size_bytes, modified_at, is_dir]
+    WorkspaceListing:
+      type: object
+      properties:
+        files: { type: array, items: { $ref: "#/components/schemas/WorkspaceEntry" } }
+        workspace_path: { type: string, description: "The resolved workspace root the listing is rooted at." }
+        truncated: { type: boolean, description: "True when the listing was capped (very large workspace)." }
+      required: [files, workspace_path]
+    APIKeyCreate:
+      type: object
+      properties:
+        name: { type: string }
+        role: { type: string, enum: [admin, client, readonly] }
+        permissions:
+          type: array
+          items: { type: string, enum: [create_task, view_tasks, cancel_task, view_logs, view_all_logs, manage_keys, admin] }
+          description: >-
+            Explicit permission set for the legacy (role-based) path, for grants
+            no role expresses — chiefly view_all_logs, the fleet-wide transcript
+            read. Rejected with 400 when combined with role or type (a typed key
+            derives its permissions from its type), or when it names an unknown
+            permission.
+        rate_limit: { type: integer }
+        expires_in_days: { type: integer }
+        description: { type: string }
+        max_cost_per_day_usd:
+          type: number
+          deprecated: true
+          description: >-
+            RETIRED. Sending this (or max_cost_per_month_usd) is rejected with
+            400 — the per-key accumulator that would have enforced it never
+            existed. Use a rolling budget instead:
+            POST /admin/budgets {"scope":"key","principal_id":"<key_id>","window":"day","hard_usd":…}.
+        max_cost_per_month_usd:
+          type: number
+          deprecated: true
+          description: 'RETIRED — see max_cost_per_day_usd. Use POST /admin/budgets with window "month".'
+      required: [name]
+    APIKeyCreated:
+      type: object
+      description: "The created key's metadata (the embedded APIKeyResponse) plus the one-time plaintext api_key."
+      properties:
+        api_key: { type: string, description: "The plaintext key — shown ONCE at creation." }
+        key_id: { type: string }
+        name: { type: string }
+        key_prefix: { type: string }
+        permissions: { type: array, items: { type: string } }
+        rate_limit: { type: integer }
+        created_at: { type: string, format: date-time }
+        enabled: { type: boolean }
+        description: { type: string }
+    UserCreate:
+      type: object
+      properties:
+        username: { type: string }
+        password: { type: string }
+        role: { type: string, enum: [admin, client, readonly] }
+      required: [username, password]
+    UserResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { type: string }
+    CurrentUserResponse:
+      type: object
+      description: >-
+        The GET /api/me probe body. `username` and `role` are present only when
+        the credential resolves to a user record (a signed-in session, the Elcano
+        cookie); an API-key credential yields just `authenticated: true`.
+      properties:
+        authenticated: { type: boolean }
+        username: { type: string }
+        role: { type: string }
+      required: [authenticated]
+    DashboardStats:
+      type: object
+      properties:
+        pending_tasks: { type: integer }
+        running_tasks: { type: integer }
+        completed_tasks_today: { type: integer }
+        failed_tasks_today: { type: integer }
+    LogSession:
+      type: object
+      description: A captain's-log session (the recorded transcript of one task run).
+    SLAReport:
+      type: object
+      description: >-
+        The GET /sla-report response (#274): per-bucket SLA actuals over a
+        window. The bucket key is the task's prompt (fleet has no separate
+        `name` column).
+      properties:
+        period: { type: string, description: "Human label, e.g. last_7_days." }
+        window_days: { type: integer, description: "Numeric window bound (1–90)." }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/SLAReportTask" }
+      required: [period, window_days, tasks]
+    SLAReportTask:
+      type: object
+      description: One row of the SLA report (#274).
+      properties:
+        task_name: { type: string }
+        expected_minutes: { type: integer }
+        p50_actual_minutes: { type: number }
+        p95_actual_minutes: { type: number }
+        breach_rate_pct: { type: number }
+        sample_count: { type: integer }
+      required: [task_name, expected_minutes, p50_actual_minutes, p95_actual_minutes, breach_rate_pct, sample_count]
+
+    UsageReport:
+      type: object
+      description: >-
+        The GET /admin/usage response (#601 part 1): cost + token totals over
+        [from, to) grouped by group_by, sourced from the already-persisted
+        metering (task_iterations ⋈ tasks in the sched DB, plus the chat
+        turn_metrics log). `sources` lists which meters contributed ("tasks"
+        always; "chat" when the chat store is wired). `note` carries the
+        honest-scope caveat: dollar figures cover only runs with model pricing
+        available (#289) — token totals are complete regardless.
+      properties:
+        group_by: { type: string, enum: [user, key, project, model, day, week] }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/UsageBucket" }
+        totals: { $ref: "#/components/schemas/UsageBucket" }
+        sources:
+          type: array
+          items: { type: string }
+        note: { type: string }
+      required: [group_by, from, to, buckets, totals, sources, note]
+    UsageBucket:
+      type: object
+      description: >-
+        One aggregated usage row (#601 part 1). `key` is the grouping value
+        (user email/username, API key id, project id, model slug, or the
+        YYYY-MM-DD bucket start for day/week); the empty key collects rows
+        without that dimension (tasks have no project; chat turns have no API
+        key). Per-source splits (task_* / chat_*) are kept alongside the
+        combined totals; cached_tokens is chat-only (task iterations do not
+        persist a cached-token count).
+      properties:
+        key: { type: string }
+        label: { type: string, description: "Human-friendly name when one exists (project name)." }
+        cost_usd: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        chat_prompt_tokens: { type: integer, description: "Prompt tokens from chat turns alone: the denominator of the cache-hit rate. Omitted when zero." }
+        uncached_tokens: { type: integer, description: "Prompt tokens not served from the provider's prompt cache. 0 when no cache-eligible prompt tokens were metered." }
+        cache_hit_rate_pct: { type: number, description: "cached_tokens as a percentage of the cache-eligible prompt tokens. 0 when there were none." }
+        task_cost_usd: { type: number }
+        chat_cost_usd: { type: number }
+        task_iterations: { type: integer }
+        chat_turns: { type: integer }
+      required: [key, cost_usd, prompt_tokens, completion_tokens, cached_tokens, uncached_tokens, cache_hit_rate_pct, task_cost_usd, chat_cost_usd, task_iterations, chat_turns]
+    AdoptionReport:
+      type: object
+      description: >-
+        The GET /admin/usage/adoption response: the per-user AI-adoption read
+        model behind the Operations Center's exec Adoption view. Aggregates
+        the same persisted metering as /admin/usage on (user, UTC day) at
+        once: per-user merged totals with a daily token series aligned to
+        `days`, equal-length previous-window comparators (`prev_from` marks
+        that window's start), a daily activity trend, and the
+        provisioned-account roster ("who hasn't adopted yet"). `sources`
+        lists the meters that contributed ("tasks" always; "chat" and
+        "accounts" when their seams are wired). `note` carries the
+        honest-scope caveats (pricing coverage #289; token volume is an
+        adoption signal, not a performance grade).
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        prev_from: { type: string, format: date-time }
+        days:
+          type: array
+          items: { type: string }
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionUser" }
+        inactive_users:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionSeat" }
+        daily:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionDay" }
+        totals: { $ref: "#/components/schemas/AdoptionTotals" }
+        sources:
+          type: array
+          items: { type: string }
+        note: { type: string }
+      required: [from, to, prev_from, days, users, inactive_users, daily, totals, sources, note]
+    AdoptionUser:
+      type: object
+      description: >-
+        One user's adoption-report row: merged task+chat spend and activity
+        over the window, previous-window comparators, and `daily_tokens`
+        (prompt+completion per day, index-aligned to the report's `days`).
+        The empty `user` collects unattributed spend (deleted-user task rows)
+        — listed so no spend disappears, never counted as an active user.
+      properties:
+        user: { type: string }
+        cost_usd: { type: number }
+        task_cost_usd: { type: number }
+        chat_cost_usd: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        task_iterations: { type: integer }
+        chat_turns: { type: integer }
+        active_days: { type: integer }
+        last_active: { type: string, description: "Latest active UTC day (YYYY-MM-DD); omitted when never active in the window." }
+        prev_cost_usd: { type: number }
+        prev_tokens: { type: integer }
+        daily_tokens:
+          type: array
+          items: { type: integer }
+      required: [user, cost_usd, task_cost_usd, chat_cost_usd, prompt_tokens, completion_tokens, cached_tokens, task_iterations, chat_turns, active_days, prev_cost_usd, prev_tokens, daily_tokens]
+    AdoptionSeat:
+      type: object
+      description: >-
+        One provisioned chat account in the adoption roster. Seats with no
+        metered activity in the window are listed under `inactive_users`.
+      properties:
+        email: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [email, created_at]
+    AdoptionDay:
+      type: object
+      description: >-
+        One day of the adoption trend: merged cost, prompt+completion tokens,
+        work units (task iterations + chat turns), and distinct active users.
+      properties:
+        day: { type: string }
+        cost_usd: { type: number }
+        tokens: { type: integer }
+        actions: { type: integer }
+        active_users: { type: integer }
+      required: [day, cost_usd, tokens, actions, active_users]
+    AdoptionTotals:
+      type: object
+      description: >-
+        The adoption report's roll-up. `registered_users` is 0 when the
+        accounts roster isn't wired — check `sources` for "accounts" to tell
+        that apart from an empty roster.
+      properties:
+        active_users: { type: integer }
+        prev_active_users: { type: integer }
+        new_active_users: { type: integer }
+        registered_users: { type: integer }
+        cost_usd: { type: number }
+        prev_cost_usd: { type: number }
+        tokens: { type: integer }
+        prev_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        chat_turns: { type: integer }
+        task_iterations: { type: integer }
+      required: [active_users, prev_active_users, new_active_users, registered_users, cost_usd, prev_cost_usd, tokens, prev_tokens, cached_tokens, chat_turns, task_iterations]
+    BudgetCreate:
+      type: object
+      description: >-
+        POST /admin/budgets body (#601 part 2): create or replace the rolling
+        budget for one (scope, principal_id, window). scope=user is keyed by
+        the sched username (an email on a standard deployment), scope=key by
+        the scoped API key id. Any other scope (including the legacy
+        project) is rejected: tasks carry no project dimension, so such a
+        budget could never be enforced.
+        Bounds are optional individually but at least one must be set, soft
+        must not exceed hard per measure, and budgets bound TOKENS as well as
+        dollars because dollar coverage depends on pricing configuration
+        (#289). An upsert resets the once-per-window soft-alert marker.
+      properties:
+        scope: { type: string, enum: [user, key] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month], description: "UTC calendar window (weeks start Monday 00:00 UTC)." }
+        soft_usd: { type: number, description: "Dollar spend that fires the once-per-window notify alert." }
+        hard_usd: { type: number, description: "Dollar spend at which new task creation is refused (402)." }
+        soft_tokens: { type: integer, description: "Token (prompt+completion) spend that fires the alert." }
+        hard_tokens: { type: integer, description: "Token spend at which new task creation is refused (402)." }
+      required: [scope, principal_id, window]
+    Budget:
+      type: object
+      description: >-
+        One persisted per-principal rolling budget (#601 part 2). Holds only
+        configuration plus the soft-alert dedup marker — spend is recomputed
+        from the persisted metering (the part-1 usage read model) at each
+        check, never accumulated here.
+      properties:
+        id: { type: string, format: uuid }
+        scope: { type: string, enum: [user, key, project] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month] }
+        soft_usd: { type: number }
+        hard_usd: { type: number }
+        soft_tokens: { type: integer }
+        hard_tokens: { type: integer }
+        soft_alert_window_start: { type: string, format: date-time, description: "UTC start of the window the one soft alert fired for (dedup marker)." }
+        soft_alert_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, scope, principal_id, window, created_at, updated_at]
+    BudgetStatus:
+      type: object
+      description: >-
+        One GET /admin/budgets row (#601 part 2): the configured budget plus
+        its live evaluation — current window [start, end), spend recomputed
+        from the persisted metering, the EFFECTIVE hard bounds after the
+        fail-safe clamp against the live global ceilings (#286; a budget can
+        only narrow FLEET_MAX_COST_USD / FLEET_MAX_TOTAL_TOKENS, never exceed
+        them), and whether this window's soft alert has fired.
+      properties:
+        id: { type: string, format: uuid }
+        scope: { type: string, enum: [user, key, project] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month] }
+        soft_usd: { type: number }
+        hard_usd: { type: number }
+        soft_tokens: { type: integer }
+        hard_tokens: { type: integer }
+        soft_alert_window_start: { type: string, format: date-time }
+        soft_alert_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        spend_usd: { type: number }
+        spend_tokens: { type: integer }
+        effective_hard_usd: { type: number }
+        effective_hard_tokens: { type: integer }
+        soft_alerted: { type: boolean }
+      required: [id, scope, principal_id, window, created_at, updated_at, window_start, window_end, spend_usd, spend_tokens, soft_alerted]
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+

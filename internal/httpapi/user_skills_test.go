@@ -161,7 +161,7 @@ func userSkillsReq(t *testing.T, _ *Server, handler http.HandlerFunc, method, ta
 	} else {
 		r = httptest.NewRequest(method, target, strings.NewReader(body))
 	}
-	r = r.WithContext(context.WithValue(r.Context(), ctxKeyUser, "u@x.com"))
+	r = r.WithContext(asUser(r.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	handler(w, r)
 	return w

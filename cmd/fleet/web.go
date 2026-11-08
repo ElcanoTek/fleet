@@ -75,14 +75,8 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 // server itself decided.
 func gatewayConfig(cfg *config.Config) webui.Config {
 	wc := webui.ConfigFromEnv()
-	// The in-process channel uses the server's own shared secret, which
-	// config.Validate guarantees is set — for BOTH backends, unconditionally:
-	// they verify the header-trust token against that same secret, so any
-	// other value (a leftover ORCHESTRATOR_SERVER_TOKEN from the retired Next
-	// tier's env, which an old bootstrap even set to ADMIN_API_KEY) would make
-	// every orchestrator call a 403.
-	wc.ChatToken = cfg.SharedToken
-	wc.OrchestratorToken = cfg.SharedToken
+	// The in-process calls carry their caller as a typed principal in the
+	// request context (#2050, ADR-0108): no shared secret is involved.
 	// Decided once by config.Load so the gateway and both backends agree.
 	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
 	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth

@@ -520,9 +520,9 @@ func (g *Gateway) handleBackchannel(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) backchannelCall(w http.ResponseWriter, email, target string, payload any) {
 	raw, _ := json.Marshal(payload)
-	h := g.chatHeaders(identity{Email: email})
+	h, who := http.Header{}, gatewayPrincipal(email)
 	h.Set("Content-Type", "application/json")
-	status, _, _, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: target, header: h, body: bytes.NewReader(raw), contentLength: int64(len(raw))})
+	status, _, _, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: target, header: h, who: who, body: bytes.NewReader(raw), contentLength: int64(len(raw))})
 	if ok && status >= 200 && status < 300 {
 		w.WriteHeader(http.StatusNoContent)
 		return

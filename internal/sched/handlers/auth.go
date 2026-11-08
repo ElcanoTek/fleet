@@ -14,8 +14,8 @@ import (
 
 // The Operations Center's own password sign-in (POST /auth/login) and the
 // bearer token it minted are retired (#2049 M4, ADR-0105): people reach the
-// Operations Center with the one Fleet session cookie (header trust,
-// middleware.go), and programs with API keys.
+// Operations Center with the one Fleet session cookie (the gateway's
+// principal, user_principal.go), and programs with API keys.
 
 // CreateUser handles POST /users (admin key only): give an account
 // Operations Center access. The account is a row of the one identity table

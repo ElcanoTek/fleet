@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -180,7 +179,7 @@ func TestHandleApproval_IdempotentEchoesExecutionOutcome(t *testing.T) {
 			s := &Server{store: fake}
 			req := httptest.NewRequest(http.MethodPost, "/conversations/c/approvals/a",
 				strings.NewReader(`{"approved":true}`))
-			req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+			req = req.WithContext(asUser(req.Context(), "u@example.com"))
 			rec := httptest.NewRecorder()
 			s.handleApproval(rec, req, "c", "a")
 			if rec.Code != http.StatusOK {

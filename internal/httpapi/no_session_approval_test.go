@@ -26,7 +26,7 @@ func noSessionPolicy(t *testing.T) {
 func postScope(s *Server, scope string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/conversations/c1/approvals/ap1",
 		strings.NewReader(`{"approved":true,"scope":"`+scope+`"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 	return rec
@@ -59,7 +59,7 @@ func TestHandleApproval_RefusesSessionScopeForNoSessionTool(t *testing.T) {
 		ToolName: "mcp_deals_create_deal", Status: "pending"}}
 	s := &Server{store: st, sessionApprovals: NewSessionApprovalRegistry()}
 	req := httptest.NewRequest(http.MethodPost, "/conversations/c1/approvals/ap1", strings.NewReader(`{"approved":false,"scope":"session"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 	if rec.Code != http.StatusBadRequest {

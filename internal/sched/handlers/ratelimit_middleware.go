@@ -3,12 +3,12 @@
 package handlers
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
 // SchedRateLimitMiddleware throttles the high-cost orchestrator endpoints
@@ -25,9 +25,9 @@ import (
 // The process-wide window is charged only for a request the per-identity
 // window admitted, so a request refused per identity never counts against
 // anyone else. It is split in two buckets of the same size: one for callers
-// that presented a credential (a resolvable API key, the gateway's server
-// token, a password-login bearer token, or an identity an auth middleware
-// already established), and one for everything else — so unauthenticated
+// that presented a credential (a resolvable API key, a principal the
+// gateway attached, the legacy service token, or an identity an auth
+// middleware already established), and one for everything else — so unauthenticated
 // traffic draws only on its own bucket and never on the budget of
 // authenticated callers.
 //
@@ -90,19 +90,18 @@ const (
 )
 
 // rateLimitCallerAuthenticated reports whether r carries a credential other
-// than an API key (which the caller resolves itself): an identity an auth
-// middleware already put on the context, or the web gateway's server token.
-// It only chooses a rate-limit bucket; it
+// than an API key (which the caller resolves itself): a principal the
+// gateway attached in-process or an auth middleware already established, or
+// the legacy internal service token. It only chooses a rate-limit bucket; it
 // authorizes nothing.
 func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
 	if GetUserFromContext(r.Context()) != nil || GetAPIKeyFromContext(r.Context()) != nil {
 		return true
 	}
-	if tok := r.Header.Get("X-Orchestrator-Server-Token"); tok != "" && h.config.SharedToken != "" &&
-		subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) == 1 {
+	if _, ok := authn.From(r.Context()); ok {
 		return true
 	}
-	return false
+	return h.edgeServiceToken(r)
 }
 
 // writeRateLimited emits a 429 with the full rate-limit header set and the

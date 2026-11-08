@@ -158,8 +158,8 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enc := p(r, "taskId")
-	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
-	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
+	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
+	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
 	if !ok1 || !ok2 {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "orchestrator unreachable: no backend"})
 		return
@@ -193,13 +193,13 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	if u := utf16.Encode([]rune(preview)); len(u) > 60 {
 		preview = string(utf16.Decode(u[:60]))
 	}
-	h := g.chatHeaders(identityOf(s))
+	h, who := http.Header{}, sessionPrincipal(s)
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(struct {
 		Title string `json:"title"`
 		Seed  string `json:"seed"`
 	}{"Discuss run: " + preview, formatDigest(task, log)})
-	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/conversations", header: h, body: body, contentLength: n})
+	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/conversations", header: h, who: who, body: body, contentLength: n})
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "chat-server unreachable: no backend"})
 		return

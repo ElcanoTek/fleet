@@ -5,16 +5,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
 // The Operations Center authenticates with the SAME elcano_session cookie chat
 // does, so a password reset that only evicted the cookie from chat left the
 // attacker every /api/orchestrator/* route for the rest of its 14 days. These
-// pin the header-trust path's half of the revocation: the forwarded claim is
-// compared against the chat plane's live epoch, and only a genuine MISMATCH
-// ends the session.
+// pin the Operations Center's half of the revocation: the session principal's
+// claim is compared against the account's live epoch (principal.Resolve), and
+// only a genuine MISMATCH ends the session.
 //
-// All three headerTrustUser callers are covered, because the check has to hold
+// All three userPrincipal callers are covered, because the check has to hold
 // for the routes outside the auth middleware too (task create, upload).
 
 // Since the one identity table (#2049 M4) the live epoch is the account's own
@@ -34,16 +36,17 @@ func epochHandler(t *testing.T) (*Handlers, string) {
 	return h, live
 }
 
-// epochRequest is a header-trust request carrying an epoch claim; an empty
-// epoch sends no claim at all (the elcano_auth case).
+// epochRequest is a session request for alice carrying an epoch claim; an
+// empty epoch carries no claim at all (the elcano_auth case).
 func epochRequest(method, path, epoch string) *http.Request {
+	return sessionRequest(method, path, "alice@elcanotek.com", authn.Session{Epoch: epoch})
+}
+
+// sessionRequest is a request the gateway makes for a browser session of
+// email carrying claim s.
+func sessionRequest(method, path, email string, s authn.Session) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
-	req.Header.Set("X-Orchestrator-Server-Token", "topsecret")
-	req.Header.Set("X-User-Email", "alice@elcanotek.com")
-	if epoch != "" {
-		req.Header.Set(headerSessionEpoch, epoch)
-	}
-	return req
+	return req.WithContext(authn.With(req.Context(), authn.Principal{Email: email, AuthMethod: authn.MethodSession, Session: s}))
 }
 
 func TestHeaderTrust_SessionEpoch(t *testing.T) {
@@ -123,8 +126,7 @@ func TestHeaderTrust_SessionEpoch(t *testing.T) {
 	// the UI keys on, not a "log in again" verdict it cannot act on.
 	t.Run("a non-member is still 403", func(t *testing.T) {
 		h, _ := epochHandler(t)
-		req := epochRequest(http.MethodGet, "/api/me", staleEpoch)
-		req.Header.Set("X-User-Email", "stranger@example.com")
+		req := sessionRequest(http.MethodGet, "/api/me", "stranger@example.com", authn.Session{Epoch: staleEpoch})
 		rr := httptest.NewRecorder()
 		h.AdminOrUserAuthMiddleware(ok).ServeHTTP(rr, req)
 		if rr.Code != http.StatusForbidden {
@@ -144,20 +146,19 @@ func TestHeaderTrust_ExternalSessionEpoch(t *testing.T) {
 	}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	req := epochRequest(http.MethodGet, "/api/me", "external-live")
-	req.Header.Set("X-User-Session-Source", "oidc")
-	req.Header.Set("X-External-Issuer", "https://auth.example.com")
-	req.Header.Set("X-External-Subject", "account-123")
+	external := func(epoch string) *http.Request {
+		return sessionRequest(http.MethodGet, "/api/me", "alice@elcanotek.com", authn.Session{
+			Epoch: epoch, Source: authn.SourceOIDC, Issuer: "https://auth.example.com", Subject: "account-123",
+		})
+	}
+	req := external("external-live")
 	rr := httptest.NewRecorder()
 	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("fresh external session status = %d body %q", rr.Code, rr.Body.String())
 	}
 
-	req = epochRequest(http.MethodGet, "/api/me", "stale-external")
-	req.Header.Set("X-User-Session-Source", "oidc")
-	req.Header.Set("X-External-Issuer", "https://auth.example.com")
-	req.Header.Set("X-External-Subject", "account-123")
+	req = external("stale-external")
 	rr = httptest.NewRecorder()
 	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
@@ -166,7 +167,7 @@ func TestHeaderTrust_ExternalSessionEpoch(t *testing.T) {
 }
 
 // POST /tasks and POST /upload live OUTSIDE AdminOrUserAuthMiddleware. They
-// share headerTrustUser precisely so a gate cannot hold on one and not the
+// share userPrincipal precisely so a gate cannot hold on one and not the
 // others — task create/rerun and the upload staging area are the highest-value
 // routes on this plane.
 func TestHeaderTrust_SessionEpochOnRoutesOutsideTheAuthMiddleware(t *testing.T) {

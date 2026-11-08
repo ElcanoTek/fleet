@@ -95,16 +95,12 @@ type Config struct {
 	SchedRateLimitPerDay          int // default 500
 	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
-	// SharedToken is the chat-server shared secret (FLEET_SERVER_TOKEN), reused as
-	// the orchestrator's channel authenticator. The web tier — the SOLE
-	// client of this backend — verifies the user's session cookie, then forwards
-	// the resolved identity as X-User-Email guarded by this token in
-	// X-Orchestrator-Server-Token. This is what lets a /chat-cookie user reach the
-	// Operations Center without a second (moc bearer) login (#157). Reused rather
-	// than a distinct secret because both backends run in ONE process and the
-	// trust boundary is identical; it is impersonation-load-bearing, so the
-	// orchestrator MUST stay bound to 127.0.0.1. Empty is impossible in
-	// production (config.Validate makes FLEET_SERVER_TOKEN fatal-if-empty).
+	// SharedToken is the legacy internal service token (FLEET_SERVER_TOKEN):
+	// a caller holding it may name a user by header on this listener's own
+	// port (edge.go). The browser gateway no longer uses it — it calls these
+	// handlers in-process with a typed principal (ADR-0108). It is
+	// impersonation-load-bearing, so the orchestrator MUST stay bound to
+	// 127.0.0.1 and Caddy strips the header (ADR-0053).
 	SharedToken string
 
 	// AccountsManagedByAuth mirrors config.Config.AccountsManagedByAuth:
@@ -2154,7 +2150,7 @@ func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
 // Admin-only, but reachable from the web UI: it is registered behind
 // AdminOrUserAuthMiddleware (which resolves the caller into a principal) and
 // gated HERE on PermissionAdmin (#458). The admin API key OR an admin-role user
-// (the role the web tier's header-trust/bearer path conveys) passes; a
+// (the role the gateway session's principal resolves to) passes; a
 // non-admin member gets 403. This is the only gate that lets a web-authenticated
 // admin reach the report — the proxy can never send the admin X-API-Key that the
 // bare AdminAuthMiddleware demanded, so the report was previously unreachable
