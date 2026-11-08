@@ -87,8 +87,8 @@ func liveCreators(ctx context.Context, dsn string) (map[string]bool, error) {
 		if !ok {
 			continue
 		}
-		// Identifiers are the fixed creatorColumns, not input.
-		q := `SELECT DISTINCT ` + c.column + `::text FROM ` + config.SchedSchema + `.` + c.table + ` WHERE ` + c.column + ` IS NOT NULL` //nolint:gosec // G202: fixed identifiers
+		// Identifiers are the fixed creatorColumns and SchedSchema, not input.
+		q := `SELECT DISTINCT ` + c.column + `::text FROM ` + config.SchedSchema + `.` + c.table + ` WHERE ` + c.column + ` IS NOT NULL`
 		if err := collect(ctx, db, q, out); err != nil {
 			return nil, fmt.Errorf("read %s.%s: %w", c.table, c.column, err)
 		}
@@ -180,7 +180,7 @@ func parseCopyColumn(r io.Reader, table, column string) (map[string]bool, error)
 }
 
 func drain(sc *bufio.Scanner) error {
-	for sc.Scan() { //nolint:revive // drain the pipe so pg_restore exits
+	for sc.Scan() { // drain the pipe so pg_restore exits
 	}
 	return sc.Err()
 }
