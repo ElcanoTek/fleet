@@ -366,21 +366,34 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 // or "cosign verify ...:v2026.11.07" are not read as tool versions.
 func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 	root := repoRoot(t)
-	pins := loadPins(t)
-
-	// Tracked files allowed to name a pinned tool's version without being
-	// rewritten, each with the reason. Keys are paths or directory prefixes.
-	exempt := map[string]string{
-		"docs/CODEQL.md": "a historical record: it names the golangci-lint that was current then (v2.13.1), which the updater must not rewrite",
-		"internal/release/testdata/sigstore-vector/": "upstream's signed cosign_checksums.txt, kept byte-for-byte as a signature test vector",
+	version := pinnedVersions(t, root, loadPins(t))
+	listed := checkListedDocCopies(t, root, version)
+	if len(listed) == 0 {
+		t.Fatal("pin-docs.tsv lists nothing — the matcher is broken or the table was emptied")
 	}
-	// The pins' own declarations, and tests that carry fixture versions.
-	skip := func(rel string) bool {
-		return strings.HasPrefix(rel, ".github/workflows/") || strings.HasSuffix(rel, "_test.go") ||
-			rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock"
-	}
+	checkNoUnlistedDocCopies(t, root, version, listed)
+}
 
-	// The pinned version of each tool.
+// pinDocExemptions are tracked files allowed to name a pinned tool's version
+// without being rewritten, each with the reason. Keys are paths or directory
+// prefixes.
+var pinDocExemptions = map[string]string{
+	"docs/CODEQL.md": "a historical record: it names the golangci-lint that was current then (v2.13.1), which the updater must not rewrite",
+	"internal/release/testdata/sigstore-vector/": "upstream's signed cosign_checksums.txt, kept byte-for-byte as a signature test vector",
+}
+
+// skipPinDocScan reports the pins' own declarations, and tests that carry
+// fixture versions.
+func skipPinDocScan(rel string) bool {
+	return strings.HasPrefix(rel, ".github/workflows/") || strings.HasSuffix(rel, "_test.go") ||
+		rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock"
+}
+
+func pinMarker(name string) string { return strings.ToLower(strings.ReplaceAll(name, "_", "-")) }
+
+// pinnedVersions returns the pinned X.Y.Z of each tool in pins.tsv.
+func pinnedVersions(t *testing.T, root string, pins map[string]pinRow) map[string]string {
+	t.Helper()
 	version := map[string]string{}
 	var workflows strings.Builder
 	for _, body := range workflowFiles(t) {
@@ -402,17 +415,22 @@ func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 		}
 		version[name] = m[1]
 	}
-	marker := func(name string) string { return strings.ToLower(strings.ReplaceAll(name, "_", "-")) }
+	return version
+}
 
-	// 1. Every listed copy names the tool's version, and it is the pinned one.
+// checkListedDocCopies checks every pin-docs.tsv copy names the tool's
+// version and that it is the pinned one; it returns the listed (pin, file)
+// pairs.
+func checkListedDocCopies(t *testing.T, root string, version map[string]string) map[[2]string]bool {
+	t.Helper()
 	listed := map[[2]string]bool{}
 	for _, row := range loadPinDocs(t) {
 		want, ok := version[row.name]
 		if !ok {
 			continue // loadPinDocs reported the unknown pin
 		}
-		if row.marker != marker(row.name) {
-			t.Errorf("pin-docs.tsv: the %s row for %s has marker %q, want %q", row.name, row.file, row.marker, marker(row.name))
+		if row.marker != pinMarker(row.name) {
+			t.Errorf("pin-docs.tsv: the %s row for %s has marker %q, want %q", row.name, row.file, row.marker, pinMarker(row.name))
 		}
 		prefix := row.prefix
 		if prefix == "-" {
@@ -433,22 +451,25 @@ func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 			}
 		}
 	}
-	if len(listed) == 0 {
-		t.Fatal("pin-docs.tsv lists nothing — the matcher is broken or the table was emptied")
-	}
+	return listed
+}
 
-	// 2. No tracked file states a pinned tool's version without being listed.
+// checkNoUnlistedDocCopies fails when a tracked file states a pinned tool's
+// version without a pin-docs.tsv row (an unlisted copy would rot), unless it is
+// exempt, and when an exemption no longer matches anything.
+func checkNoUnlistedDocCopies(t *testing.T, root string, version map[string]string, listed map[[2]string]bool) {
+	t.Helper()
 	out, err := exec.Command("git", "-C", root, "ls-files").Output()
 	if err != nil {
 		t.Skipf("git ls-files unavailable: %v", err)
 	}
 	scan := map[string]*regexp.Regexp{}
 	for name := range version {
-		scan[name] = regexp.MustCompile(`(?i)` + regexp.QuoteMeta(marker(name)) + `\D{0,40}?v?(\d+)\.\d+\.\d+`)
+		scan[name] = regexp.MustCompile(`(?i)` + regexp.QuoteMeta(pinMarker(name)) + `\D{0,40}?v?(\d+)\.\d+\.\d+`)
 	}
 	used := map[string]bool{}
 	for _, rel := range strings.Fields(string(out)) {
-		if skip(rel) {
+		if skipPinDocScan(rel) {
 			continue
 		}
 		if fi, err := os.Lstat(filepath.Join(root, rel)); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
@@ -456,29 +477,45 @@ func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 		}
 		body := readFile(t, root, rel)
 		for name, want := range version {
-			major := strings.SplitN(want, ".", 2)[0]
-			for _, m := range scan[name].FindAllStringSubmatch(body, -1) {
-				if m[1] != major || listed[[2]string{name, rel}] {
+			if m := firstUnlistedMention(scan[name], body, want, listed[[2]string{name, rel}]); m != "" {
+				if k := pinDocExemptionFor(rel); k != "" {
+					used[k] = true
 					continue
 				}
-				why := ""
-				for k := range exempt {
-					if rel == k || (strings.HasSuffix(k, "/") && strings.HasPrefix(rel, k)) {
-						why, used[k] = k, true
-					}
-				}
-				if why == "" {
-					t.Errorf("%s states %s (%q) but has no %s row in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at %s_VERSION instead", rel, marker(name), m[0], name, name)
-				}
-				break
+				t.Errorf("%s states %s (%q) but has no %s row in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at %s_VERSION instead", rel, pinMarker(name), m, name, name)
 			}
 		}
 	}
-	for k, why := range exempt {
+	for k, why := range pinDocExemptions {
 		if !used[k] {
 			t.Errorf("exemption %s (%s) no longer matches anything — drop it", k, why)
 		}
 	}
+}
+
+// firstUnlistedMention returns the first mention in body whose major matches
+// the pin, or "" when there is none or the file is already listed.
+func firstUnlistedMention(re *regexp.Regexp, body, want string, isListed bool) string {
+	if isListed {
+		return ""
+	}
+	major := strings.SplitN(want, ".", 2)[0]
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		if m[1] == major {
+			return m[0]
+		}
+	}
+	return ""
+}
+
+// pinDocExemptionFor returns the exemption key covering rel, or "".
+func pinDocExemptionFor(rel string) string {
+	for k := range pinDocExemptions {
+		if rel == k || (strings.HasSuffix(k, "/") && strings.HasPrefix(rel, k)) {
+			return k
+		}
+	}
+	return ""
 }
 
 type pinDocRow struct{ name, marker, prefix, file string }
