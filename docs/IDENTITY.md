@@ -92,7 +92,9 @@ the scheduler's first open on this release): `merged`, `created[]`,
 `demoted_split_admins[]`, `admins_gaining_ops[]`, `unknown_roles[]`,
 `duplicate_usernames[]`, `dangling_task_creators`, `dangling_dataset_creators`,
 `at`. Each entry is `{email, sched_role, chat_role, ops_scope}`. Re-grant a
-demoted split admin with `fleet admin add <email>`.
+demoted split admin with `fleet admin add <email>`. `fleet admin merge-report`
+prints the stored report (`--json` for scripts; read-only), and `fleet doctor`
+advises on each demoted split admin, unknown role and duplicate username in it.
 
 ## What changes for operators and users
 
@@ -184,8 +186,9 @@ If the merge has not run yet (the scheduler never opened on this release),
 - No `ops_session_token` columns: the bearer is retired instead.
 - The merge runs on every scheduler open, not only from `fleet serve`, so a
   CLI verb cannot read a half-migrated identity table.
-- The merge report is printed in the server's log when the merge runs and
-  stored in `core.identity_merge`; `fleet doctor` does not show it yet.
+- The merge report is printed in the server's log when the merge runs,
+  stored in `core.identity_merge`, shown by `fleet admin merge-report`, and
+  advised on by `fleet doctor`.
 - `dbschema`'s readiness check (and bootstrap's shell mirror) does not check
   ownership of schema `core`: the chat store creates it as the same role.
 - Deferred: `NOT VALID` foreign keys to `core.users(id)` (the merge reports

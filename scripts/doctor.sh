@@ -999,6 +999,42 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVIC
   fi
 fi
 
+# ── Identity merge report (#2049 M4, ADR-0105) ───────────────────────────────
+# The scheduler's first start on this release folded its accounts into the one
+# identity table and recorded what needs an operator: Operations Center admins
+# demoted because their chat role was not admin (split admin states fail
+# closed), sched rows with an unknown role (no access now), and usernames that
+# differed only in case (the later ones' tasks no longer resolve). Advisories:
+# the box is healthy; a person may need a grant back.
+id_cli="$INSTALL_DIR/fleet"
+[[ -x "$id_cli" ]] || id_cli="$(command -v fleet 2>/dev/null || true)"
+if [[ -z "$id_cli" ]] || ! command -v jq >/dev/null 2>&1; then
+  advise "identity merge report skipped (needs the fleet binary and jq)"
+elif ! merge_json="$(FLEET_ENV_FILE="$ENV_FILE" "$id_cli" admin merge-report --json 2>/dev/null)" || ! jq -e 'has("ran")' >/dev/null 2>&1 <<<"$merge_json"; then
+  advise "could not read the identity merge report — run: fleet admin merge-report"
+elif [[ "$(jq -r '.ran' <<<"$merge_json")" != "true" ]]; then
+  pass "identity merge: not run on this database yet (the scheduler merges on its first start)"
+else
+  merge_notes=0
+  while IFS=$'\t' read -r m_kind m_email m_detail; do
+    merge_notes=$((merge_notes+1))
+    case "$m_kind" in
+      demoted) advise "identity merge: $m_email was an Operations Center admin but not a chat admin, so it is NOT an admin any more (chat role $m_detail, ops_scope run) — re-grant with: fleet admin add $m_email" ;;
+      unknown) advise "identity merge: $m_email had unknown Operations Center role \"$m_detail\" and has no Operations Center access now — grant it in Settings → Admin → Users if intended" ;;
+      duplicate) advise "identity merge: $m_email differed only in case from an Operations Center username merged first; its tasks no longer resolve to an account" ;;
+    esac
+  done < <(jq -r '
+      (.report.demoted_split_admins // [] | .[] | ["demoted", .email, (.chat_role // "")]),
+      (.report.unknown_roles // [] | .[] | ["unknown", .email, (.sched_role // "")]),
+      (.report.duplicate_usernames // [] | .[] | ["duplicate", .email, ""])
+      | @tsv' <<<"$merge_json")
+  if (( merge_notes == 0 )); then
+    pass "identity merge: no demoted admins, unknown roles or duplicate usernames"
+  else
+    info "details: fleet admin merge-report"
+  fi
+fi
+
 # ── 7. scheduled maintenance + disk headroom ─────────────────────────────────
 step "7/9  Scheduled maintenance + disk headroom"
 

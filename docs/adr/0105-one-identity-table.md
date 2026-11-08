@@ -81,7 +81,9 @@ database, which removes the reason for any of this.
 
 - An Operations-Center-only person can sign in to chat, read-only (accepted).
 - A split admin loses Operations Center admin until re-granted with
-  `fleet admin add` (reported by the merge and `fleet doctor`).
+  `fleet admin add` (reported in the merge's log lines and
+  `core.identity_merge`, shown by `fleet admin merge-report`, and advised on
+  by `fleet doctor`, with unknown roles and case-duplicate usernames).
 - A disabled chat account no longer reaches the Operations Center through an
   enabled sched row (it is one account).
 - An Operations Center password differing from the chat password is dropped;
