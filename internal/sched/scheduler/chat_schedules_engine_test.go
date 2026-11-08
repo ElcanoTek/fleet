@@ -599,9 +599,18 @@ func TestChatSchedules_BacklogBeyondOnePassDrainsWithoutWaitingForTick(t *testin
 	if got != n {
 		t.Fatalf("%d of %d due schedules fired; the rest wait for the next tick", got, n)
 	}
+	// The last deliveries are settling on their workers: give them a moment.
 	var leased int
-	if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL`).Scan(&leased); err != nil || leased != 0 {
-		t.Fatalf("%d fire(s) left leased (err %v)", leased, err)
+	for settleBy := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL`).Scan(&leased); err != nil {
+			t.Fatal(err)
+		}
+		if leased == 0 || time.Now().After(settleBy) {
+			break
+		}
+	}
+	if leased != 0 {
+		t.Fatalf("%d fire(s) left leased", leased)
 	}
 }
 
