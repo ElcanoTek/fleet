@@ -132,24 +132,56 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 // ledger does not exist yet, a role that cannot read it) is not current, and
 // the locked path then does the work or reports the error properly.
 func (r *runner) current(ctx context.Context, db *sql.DB) bool {
-	rows, err := db.QueryContext(ctx, `SELECT version, dirty FROM core.schema_versions`)
+	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum, dirty FROM core.schema_versions`)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = rows.Close() }()
 	seen := 0
 	for rows.Next() {
-		var v int
-		var dirty bool
-		if err := rows.Scan(&v, &dirty); err != nil {
+		var row ledgerRow
+		if err := rows.Scan(&row.Version, &row.Name, &row.Checksum, &row.Dirty); err != nil {
 			return false
 		}
-		if _, known := r.set.byVersion[v]; dirty || !known {
+		m, known := r.set.Get(row.Version)
+		if row.Dirty || !known || !matches(m, row) {
 			return false
 		}
 		seen++
 	}
 	return rows.Err() == nil && seen == len(r.set.list)
+}
+
+// matches reports whether a ledger row records exactly migration m: the same
+// name and the checksum of the same .up.sql bytes. A shipped migration is
+// append-only; one edited after it ran would leave every database that ran
+// it on the old SQL and every fresh install on the new.
+func matches(m Migration, row ledgerRow) bool {
+	return row.Name == m.Name && row.Checksum == m.Checksum
+}
+
+// ChecksumError is the refusal of ledger rows that do not record this
+// build's migration of the same version: the file was edited (or renamed)
+// after the database ran it.
+type ChecksumError struct{ Rows []ChecksumMismatch }
+
+// ChecksumMismatch is one row ChecksumError names.
+type ChecksumMismatch struct {
+	Version               int
+	LedgerName, BuildName string
+	LedgerSum, BuildSum   string
+}
+
+func (e ChecksumError) Error() string {
+	parts := make([]string, 0, len(e.Rows))
+	for _, r := range e.Rows {
+		parts = append(parts, fmt.Sprintf("%d (ledger %s %.12s, build %s %.12s)", r.Version, r.LedgerName, r.LedgerSum, r.BuildName, r.BuildSum))
+	}
+	return fmt.Sprintf("%s records version(s) %s with a different name or checksum than this build ships: a shipped "+
+		"migration was edited after this database ran it, so its schema is not what the file now says. Shipped migrations "+
+		"are append-only — restore the original file and add a new migration instead. If the database has been brought "+
+		"to what the edited file does by hand, record that with `fleet migrate force <version>` (docs/MIGRATIONS.md)",
+		Table, strings.Join(parts, ", "))
 }
 
 // ledgerRow is one row of core.schema_versions.
@@ -233,6 +265,16 @@ func (r *runner) checkLedger(ledger map[int]ledgerRow) error {
 	if len(unknown) > 0 {
 		sort.Ints(unknown)
 		return UnknownVersionError{Versions: unknown, Latest: r.set.Latest()}
+	}
+	var changed ChecksumError
+	for v, row := range ledger {
+		if m, _ := r.set.Get(v); !matches(m, row) {
+			changed.Rows = append(changed.Rows, ChecksumMismatch{Version: v, LedgerName: row.Name, BuildName: m.Name, LedgerSum: row.Checksum, BuildSum: m.Checksum})
+		}
+	}
+	if len(changed.Rows) > 0 {
+		sort.Slice(changed.Rows, func(i, j int) bool { return changed.Rows[i].Version < changed.Rows[j].Version })
+		return changed
 	}
 	if len(dirty) > 0 {
 		sort.Ints(dirty)

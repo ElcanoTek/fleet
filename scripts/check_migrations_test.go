@@ -158,11 +158,31 @@ func TestCheckMigrations_DiffMode(t *testing.T) {
 		t.Fatalf("a well-formed new pair must pass:\n%s", out)
 	}
 
+	// Shipped migrations are append-only: once 0200 is at the base, editing
+	// it (or renaming it) is refused; a new 0201 pair is fine.
+	git("tag", "-f", "base")
+	write("internal/migrations/sql/0200_add_flags.up.sql", "CREATE TABLE core.flags (name text, on_by_default boolean);\n")
+	write("internal/migrations/sql/0201_more_flags.up.sql", "CREATE TABLE core.more_flags (name text);\n")
+	write("internal/migrations/sql/0201_more_flags.down.sql", "DROP TABLE core.more_flags;\n")
+	git("add", ".")
+	git("commit", "-qm", "edit a shipped migration")
+	out, err := lint()
+	if err == nil || strings.Count(out, "shipped migrations are append-only") != 1 || !strings.Contains(out, "FAIL: internal/migrations/sql/0200_add_flags.up.sql") {
+		t.Fatalf("an edited shipped migration must be refused, and only it (err %v):\n%s", err, out)
+	}
+	git("reset", "-q", "--hard", "base")
+	git("mv", "internal/migrations/sql/0200_add_flags.down.sql", "internal/migrations/sql/0200_add_flags_renamed.down.sql")
+	git("commit", "-qm", "rename a shipped migration")
+	if out, err := lint(); err == nil || !strings.Contains(out, "shipped migrations are append-only") {
+		t.Fatalf("a renamed shipped migration must be refused (err %v):\n%s", err, out)
+	}
+	git("reset", "-q", "--hard", "base")
+
 	write("internal/migrations/sql/legacy/chat/002_more.sql", "CREATE TABLE u (a int);\nCREATE TABLE v (a int);\n")
 	write("internal/migrations/sql/legacy/chat/003_late.sql", "SELECT 1;\n")
 	git("add", ".")
 	git("commit", "-qm", "edit legacy")
-	out, err := lint()
+	out, err = lint()
 	if err == nil || strings.Count(out, "legacy migrations are frozen") != 2 {
 		t.Fatalf("an edited and an added legacy file must both be refused (err %v):\n%s", err, out)
 	}

@@ -472,3 +472,44 @@ func TestSentinels(t *testing.T) {
 		t.Fatalf("re-adoption past the sentinels = %v", err)
 	}
 }
+
+// TestUpRefusesAnEditedMigration: a ledger row whose checksum (or name) is
+// not the build's file of that version — a shipped migration edited after
+// the database ran it — is refused, on the fast path too; legacy rows are
+// verified like the rest. `force` records the build's files again.
+func TestUpRefusesAnEditedMigration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	r := runnerFor(t, embeddedPlus(t, "fixture"))
+	if err := r.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		version int
+		set     string
+	}{
+		{200, `checksum = 'edited'`},
+		{7, `checksum = md5('x')`},
+		{150, `name = 'sched/050_renamed'`},
+	} {
+		mustExec(t, db, `UPDATE core.schema_versions SET `+c.set+` WHERE version = $1`, c.version)
+	}
+	if r.current(ctx, db) {
+		t.Fatal("a ledger with edited rows read as current")
+	}
+	var ce ChecksumError
+	if err := r.up(ctx, db); !errors.As(err, &ce) || len(ce.Rows) != 3 || ce.Rows[0].Version != 7 || ce.Rows[2].Version != 200 ||
+		!strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("up = %v, want a ChecksumError naming 7, 150 and 200", err)
+	}
+	if _, err := r.down(ctx, db, LegacyLatest, true); !errors.As(err, &ce) {
+		t.Fatalf("down over an edited ledger = %v, want the same refusal", err)
+	}
+	if err := r.force(ctx, db, 200); err != nil {
+		t.Fatal(err)
+	}
+	if !r.current(ctx, db) {
+		t.Fatal("force did not record the build's files")
+	}
+}

@@ -8,6 +8,8 @@
 #   - sql/legacy/** is frozen: a file added or modified there is refused (its
 #     bytes are what every installed database ran). A pure rename (100%
 #     similar) is not a change and is exempt — the move into this layout was one.
+#   - shipped migrations are append-only: a sql/NNNN_* file that existed at
+#     the base and is modified or renamed is refused (diff mode).
 #   - a new migration is a pair, sql/NNNN_name.up.sql + sql/NNNN_name.down.sql
 #     (four digits, from 0200, lower-case name): a misnamed or unpaired file is
 #     refused.
@@ -98,6 +100,8 @@ normalize_sql() {
 
 # --- Collect the set of files to check -------------------------------------
 files=()
+# Paths (diff mode) whose file existed at the base and was changed or renamed.
+declare -A SHIPPED_CHANGED=()
 if [ "$#" -gt 0 ]; then
   files=("$@")
 else
@@ -120,10 +124,24 @@ else
     [ -n "$status" ] || continue
     path="$p1"
     case "$status" in
-      R100) continue ;;
-      R*) path="$p2" ;;
+      R*)
+        path="$p2"
+        # A pure rename INTO the directory (the M6 move) or within legacy/
+        # is not a change. A shipped new-layout migration renamed is.
+        if [ "$status" = R100 ] && { [[ "$p1" != "$MIGRATION_DIR"* ]] || [[ "$p1" == "$MIGRATION_DIR"legacy/* && "$p2" == "$MIGRATION_DIR"legacy/* ]]; }; then
+          continue
+        fi ;;
     esac
-    case "$path" in "$MIGRATION_DIR"*) files+=("$path") ;; esac
+    case "$path" in
+      "$MIGRATION_DIR"*)
+        files+=("$path")
+        # Shipped migrations are append-only: a file that existed at the
+        # base (modified, or renamed away from its shipped name) is refused.
+        case "$status" in
+          M*) SHIPPED_CHANGED["$path"]=1 ;;
+          R*) [[ "$p1" == "$MIGRATION_DIR"* ]] && SHIPPED_CHANGED["$path"]=1 ;;
+        esac ;;
+    esac
   done < <(git diff --name-status -M --diff-filter=AMR "${base}...HEAD" 2>/dev/null || true)
 fi
 
@@ -166,6 +184,9 @@ layout_checks() {
     *.sql) ;;
     *) return 0 ;;
   esac
+  if [[ -n "${SHIPPED_CHANGED[$f]:-}" ]]; then
+    emit "shipped migrations are append-only: this file existed at the base and was edited or renamed — restore it and add a new sql/NNNN_name.up.sql + .down.sql instead"
+  fi
   if ! [[ "$base" =~ ^([0-9]{4})_[a-z0-9_]+\.(up|down)\.sql$ ]]; then
     emit "migration file name must be NNNN_name.up.sql / NNNN_name.down.sql (four digits, lower-case name)"
     return 0

@@ -38,7 +38,9 @@ built twice.
    applied_at, dirty default false)`. Each migration runs in an explicit
    transaction on the locked connection and inserts its row in it; pending is
    the set difference, applied ascending; a version the build does not ship is
-   refused (no downgrades). The loader refuses a `-- fleet:no-transaction`
+   refused (no downgrades), and so is a row whose name or SHA-256 checksum is
+   not the build's file of that version (shipped migrations are append-only;
+   legacy rows are verified too — adoption records the build's checksums). The loader refuses a `-- fleet:no-transaction`
    directive for now.
 4. **One lock.** A new session advisory key; whenever the runner has work it
    also holds both legacy runners' keys, so a pre-M6 binary booting at the same
@@ -67,7 +69,8 @@ built twice.
    `layout: "unified"`; `fleet status`, `fleet doctor` and `fleet diagnose`
    read `core.schema_versions` and report adoption.
 9. **Lint.** `scripts/check-migrations.sh` covers `internal/migrations/sql/**`:
-   pure renames exempt, nothing added or changed under `legacy/`, new files in
+   pure renames exempt, nothing added or changed under `legacy/`, no edit or
+   rename of a shipped `sql/NNNN_*` file, new files in
    `NNNN_name` `.up`/`.down` pairs, unqualified names flagged.
 10. **Backups.** Every dump carries `core`, ledger included. A one-store
     restore of a post-M6 dump is refused unless its ledger is at the live

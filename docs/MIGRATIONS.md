@@ -54,7 +54,11 @@ edited file under `sql/legacy/`.
    leaves nothing behind.
 4. The `.down.sql` undoes exactly what the `.up.sql` did, so
    `fleet migrate down` can step back one release.
-5. Never rename or edit a shipped migration — add a new one.
+5. Never rename or edit a shipped migration — add a new one. Shipped
+   migrations are append-only: the ledger records each file's name and
+   SHA-256, the runner refuses a database whose recorded name or checksum
+   differs from the build's file (on every start, the fast path included), and
+   the linter refuses a change to a `sql/NNNN_*` file that exists at the base.
 
 The `-- fleet:no-transaction` directive (for `CREATE INDEX CONCURRENTLY` and
 the like) is reserved: the loader refuses it today; see ADR-0107's future work.
@@ -76,8 +80,9 @@ schema itself, whatever the pool's `search_path`):
    two-database layout, a role that cannot create a missing schema, or an
    existing schema the role does not own.
 4. **Adoption** (below), the first time.
-5. It refuses a dirty row and a version this build does not ship (a newer fleet
-   migrated the database: no downgrades), then applies every version the ledger
+5. It refuses a dirty row, a version this build does not ship (a newer fleet
+   migrated the database: no downgrades), and a row whose name or checksum is
+   not this build's file of that version (an edited shipped migration), then applies every version the ledger
    lacks, ascending, each in its own transaction with its ledger row.
 
 ## Adoption
@@ -180,7 +185,10 @@ fleet migrate force <version>   # asks first; --no-confirm for scripts
 ```
 
 `force` makes the ledger say "every version up to `<version>` is applied,
-cleanly, and nothing above it", running nothing (0: nothing applied). A dirty
+cleanly, as the files this build ships, and nothing above it", running nothing
+(0: nothing applied). It also rewrites the recorded names and checksums: after
+a checksum refusal, restore the original file if you can; force only once the
+database really is what the edited file says. A dirty
 **legacy** sched row found at adoption is repaired with the previous release's
 `fleet migrate force`, or by hand (`UPDATE sched.schema_migrations SET version =
 <last good>, dirty = false`).
@@ -225,6 +233,8 @@ The reserved `-- fleet:no-transaction` directive is the planned way out
 `internal/migrations/sql/` (diffed against the merge-base with `origin/main`, or
 `MIGRATION_LINT_BASE`):
 
+- **Append-only.** A `sql/NNNN_*` file that exists at the base and is edited or
+  renamed is refused: a shipped migration never changes.
 - **Layout.** An added or edited file under `sql/legacy/` is refused. A pure
   rename (100% similar) is not a change and is exempt — the M6 move itself was
   one; a rename with edits is checked as a change. A new file must be

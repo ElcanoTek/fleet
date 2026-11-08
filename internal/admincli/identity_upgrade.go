@@ -8,6 +8,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -35,8 +36,8 @@ func openChatStoreDSN(dsn string) (*store.Store, error) {
 	return st, nil
 }
 
-// completeIdentityMerge runs the identity merge on the database of chatDSN
-// when it is pending: the scheduler's legacy sched.users is there next to
+// completeIdentityMerge migrates the database of chatDSN and runs the
+// identity merge on it when the merge is pending: the scheduler's legacy sched.users is there next to
 // core.users. A database without either (empty), or already merged, is left
 // alone.
 func completeIdentityMerge(ctx context.Context, chatDSN string) error {
@@ -49,8 +50,15 @@ func completeIdentityMerge(ctx context.Context, chatDSN string) error {
 		return err
 	}
 	defer db.Close()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
+	// The merge reads the scheduler's legacy table in its latest legacy shape
+	// (sched 072's enabled, …): migrate first, under the migration lock, so it
+	// never runs against a partly migrated database (a box from before M6
+	// whose scheduler is behind, here for a restore). One read when current.
+	if err := migrations.Up(ctx, db); err != nil {
+		return fmt.Errorf("migrate the database before merging the scheduler's accounts: %w", err)
+	}
 	res, err := identity.MergeLegacySchedUsers(ctx, db, config.SchedSchema)
 	if err != nil {
 		return fmt.Errorf("complete the upgrade to the one identity table (merge the scheduler's accounts into core.users): %w — start fleet once to complete it, then retry", err)

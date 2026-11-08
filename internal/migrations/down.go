@@ -111,7 +111,8 @@ func (r *runner) undo(ctx context.Context, conn *sql.Conn, m Migration) (err err
 }
 
 // Force makes the ledger say exactly "every version this build ships up to
-// version is applied, cleanly, and nothing above it", running no migration —
+// version is applied, cleanly, as the files this build ships, and nothing
+// above it", running no migration —
 // the repair after a migration was left half-applied (a dirty row), once the
 // operator has inspected and fixed the database by hand. version 0 records
 // nothing applied. Rows above version are deleted, missing rows at or below
@@ -151,12 +152,16 @@ func (r *runner) force(ctx context.Context, db *sql.DB, version int) error {
 		if _, err = tx.ExecContext(ctx, `UPDATE core.schema_versions SET dirty = false WHERE dirty`); err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
+		// Every row at or below version is recorded as this build's file
+		// (name and checksum included): force is also how an operator accepts
+		// a database brought by hand to what an edited migration now says.
 		for _, m := range r.set.list {
 			if m.Version > version {
 				break
 			}
 			if _, err = tx.ExecContext(ctx, `INSERT INTO core.schema_versions (version, name, checksum, applied_at, dirty)
-				VALUES ($1, $2, $3, now(), false) ON CONFLICT (version) DO NOTHING`, m.Version, m.Name, m.Checksum); err != nil {
+				VALUES ($1, $2, $3, now(), false)
+				ON CONFLICT (version) DO UPDATE SET name = EXCLUDED.name, checksum = EXCLUDED.checksum`, m.Version, m.Name, m.Checksum); err != nil {
 				return fmt.Errorf("force: record %d: %w", m.Version, err)
 			}
 		}
