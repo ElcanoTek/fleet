@@ -191,7 +191,7 @@ CLI:
 fleet backup --db=all --out ./backups   # pg_dump -Fc, one file per DB
 ```
 
-and restore with `fleet restore --db=chat|sched <dump-file>` if needed.
+and restore with `fleet restore --db=all|chat|sched <dump-file>` if needed.
 
 ## Not yet implemented (honest scope)
 

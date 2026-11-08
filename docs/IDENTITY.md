@@ -131,8 +131,15 @@ demoted split admin with `fleet admin add <email>`.
   admin (creating the account, with no usable password, if missing): a
   bootstrap admin is a chat admin too.
 - **Web.** Settings → Admin → Users reads and writes `ops_scope`.
-- **Backup/restore.** The chat dump includes schema `core`. A chat dump from
-  before this release restores only into a database without `core`.
+- **Backup/restore.** `fleet backup` (`--db=all`, the default) is now one
+  file, `fleet-all-<stamp>.dump`: one `pg_dump` of `chat`, `core` and `sched`,
+  so one snapshot in which the accounts and the rows naming them agree;
+  `fleet restore --db=all` restores it in one transaction. Per-store dumps
+  (`--db=chat` / `--db=sched`) include `core`, so each is self-contained;
+  restoring `--db=chat` brings `core` back, `--db=sched` restores only
+  `sched`. Older two-file backups restore one store at a time as before. A
+  chat dump from before this release restores only into a database without
+  `core`. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Rolling back
 

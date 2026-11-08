@@ -25,8 +25,22 @@ files they reference (history replay silently drops a missing file).
 custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 `fleet` binary; the `fleet-admin` spelling was removed with the shim —
 [ADR-0060](adr/0060-remove-the-fleet-admin-shim.md).)
-Each store is dumped to its **own** file — its schema (`pg_dump -n chat` /
-`-n sched`) — so you can restore one store without touching the other.
+Both stores and the identity schema between them live in the one database:
+`chat`, `sched`, and `core` (the one users table, #2049 M4 —
+[IDENTITY.md](IDENTITY.md)), which both stores' rows reference.
+
+- **`fleet backup` (`--db=all`, the default and the backup timer's)** writes
+  **one** file, `fleet-all-<stamp>.dump`: a single `pg_dump -n chat -n core
+  -n sched`, so a single snapshot. The accounts and the chat and sched rows
+  that name them are consistent with each other.
+- **`--db=chat` / `--db=sched`** dump that store's schema **plus `core`**, so
+  each per-store dump is self-contained.
+
+`fleet restore --db=all` restores a `fleet-all` dump — all three schemas, in
+one transaction. `--db=chat` / `--db=sched` restore one store from any dump
+that holds it (a `fleet-all` dump, a per-store dump, or an older two-file
+backup's file): chat brings `core` with it (its migrations own it); sched
+restores `sched` only and leaves the accounts as they are.
 `fleet restore` reads the dump's table of contents first and establishes its
 schemas from its SCHEMA and TABLE entries; it refuses a dump that does not
 contain the schema the target store uses (the other store's dump, or an old
@@ -74,17 +88,19 @@ line is redacted.
 ## Back up
 
 ```sh
-# Both databases into the current directory:
+# The whole fleet (chat, core, sched; one snapshot) into the current directory:
 fleet backup
-# → fleet-chat-20260623T140506Z.dump
-# → fleet-sched-20260623T140506Z.dump
+# → fleet-all-20260623T140506Z.dump
 
-# One database, into a chosen directory:
+# One store (plus core), into a chosen directory:
 fleet backup --db=chat  --out /var/backups/fleet
 fleet backup --db=sched --out /var/backups/fleet
 ```
 
-`--db` accepts `chat`, `sched`, or `all` (the default). The dump filename is
+`--db` accepts `chat`, `sched`, or `all` (the default). `--db=all` needs the
+chat and sched DSNs to reach the same database (they do unless overridden
+with `--chat-database-url` / `--sched-database-url`); otherwise it refuses and
+asks for one store at a time. The dump filename is
 `fleet-<db>-<UTC timestamp>.dump`, so successive backups never clobber one
 another. Each dump path is printed on **stdout** (the human-readable progress
 line goes to stderr), so a script can capture the paths.
@@ -97,7 +113,7 @@ non-zero rather than reporting a false success.
 current directory.
 
 **Retention pruning** — `--prune` deletes this tool's own dumps
-(`fleet-{chat,sched}-*.dump`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
+(`fleet-{all,chat,sched}-*.dump`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
 30) from the output directory after a successful backup. The knob must be a
 positive whole number: since #1273 it is a row in the one env-knob registry
 (`internal/config/knobs.go`), and a malformed or non-positive value **fails the
@@ -108,20 +124,27 @@ fails, with the usual config-error exit code 1:
 
 ```sh
 fleet backup --db=all --out /var/backups/fleet --prune
-# backed up chat DB → …/fleet-chat-…dump (verified)
-# backed up sched DB → …/fleet-sched-…dump (verified)
+# backed up whole fleet database (chat, core, sched) → …/fleet-all-…dump (verified)
 # pruned 3 old backup(s) older than 30 days
 ```
 
 ## Restore
 
-Restore is **single-database on purpose** — it overwrites a live database, so you
-name the target explicitly; there is no `--db=all`.
+Restore overwrites a live database, so `--db` has no default: you name the
+target explicitly.
 
 ```sh
+# A fleet-all dump: chat, core and sched, in one transaction.
+fleet restore --db=all   /var/backups/fleet/fleet-all-20260623T140506Z.dump
+
+# One store (from a fleet-all dump, a per-store dump, or an older two-file backup):
 fleet restore --db=chat  /var/backups/fleet/fleet-chat-20260623T140506Z.dump
 fleet restore --db=sched /var/backups/fleet/fleet-sched-20260623T140506Z.dump
 ```
+
+`--db=all` refuses a dump that lacks any of `chat`, `core` and `sched` (a
+per-store dump, or a file of an older two-file backup): restore those one
+store at a time.
 
 Restore runs `pg_restore --clean --if-exists --no-owner --no-acl`: it drops the
 existing objects first, then recreates them from the dump, so it is idempotent
@@ -142,8 +165,10 @@ or CI) without `--no-confirm`, restore refuses rather than silently overwriting.
 
 ```sh
 fleet stop
-fleet restore --db=chat  fleet-chat-….dump
-fleet restore --db=sched fleet-sched-….dump
+fleet restore --db=all fleet-all-….dump
+# or, from an older two-file backup:
+#   fleet restore --db=chat  fleet-chat-….dump
+#   fleet restore --db=sched fleet-sched-….dump
 fleet restart
 fleet status        # both DBs answer SELECT 1, unit healthy
 ```
