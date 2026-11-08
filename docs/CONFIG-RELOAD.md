@@ -98,7 +98,7 @@ effect on the next turn or task:
 These are bound at startup and cannot change without a restart. A change to one
 is reported under `skipped` (with a reason) so you know a restart is needed. The
 list below is the curated set the reload explicitly watches; other startup-only
-settings (e.g. `DATA_DIR`, the sandbox image, listener TLS files) likewise
+settings (e.g. `FLEET_DATA_DIR`, the sandbox image, listener TLS files) likewise
 require a restart even though they are not individually echoed back.
 
 | Env var | Why a restart is required |

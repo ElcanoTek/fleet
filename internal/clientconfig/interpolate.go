@@ -237,8 +237,16 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // manifest shows only ${OWNER_ID}) and then be filled with whoever is at the
 // keyboard — in an identity_env key, a seat or money would follow the user.
 // The token is honoured only where the bundle itself writes it.
+//
+// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed counts as
+// UNSET too, whatever the environment holds: fleet reads none of them, and
+// the manifest load warns about the reference (warnRetiredManifestRefs), so a
+// stale value can never quietly feed a connector.
 func lookupNonEmpty(name string) (string, bool) {
 	name = strings.TrimSpace(name)
+	if _, retired := envreg.RetiredAlias(name); retired {
+		return "", false
+	}
 	v := strings.TrimSpace(envreg.Unregistered(name))
 	if v == "" {
 		return "", false

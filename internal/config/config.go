@@ -126,10 +126,17 @@ var (
 // process environment. Call once at startup, before Load. Names are matched
 // exactly AND participate in the per-account "<BASE>_<SUFFIX>" rule, so an
 // account variant of a registered base var is admitted too.
+//
+// A removed CHAT_/CUTLASS_ (or bare DATA_DIR) spelling is never admitted, even
+// when a bundle references it (ADR-0106): the bundle loader warns about the
+// reference instead, and the boot warning names the FLEET_ key.
 func RegisterAllowedEnvVars(names ...string) {
 	registerMu.Lock()
 	defer registerMu.Unlock()
 	for _, n := range names {
+		if _, retired := envreg.RetiredAlias(strings.TrimSpace(n)); retired {
+			continue
+		}
 		if n = strings.TrimSpace(n); n != "" {
 			registeredEnvVars[n] = true
 		}

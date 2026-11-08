@@ -692,7 +692,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 // scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
 // audits and large interactive workflows are bounded by the per-turn cost
 // and iteration ceilings rather than a 30-minute wall-clock cutoff.
-// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
 const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling

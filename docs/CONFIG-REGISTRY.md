@@ -72,7 +72,7 @@ drift suites pass unchanged.
 | --- | --- |
 | `envreg.Get(name)` / `envreg.Lookup(name)` | a registered name (canonical or alias) |
 | `envreg.Unregistered(name)` / `envreg.LookupUnregistered(name)` | a name that comes from **data** — the client bundle's manifest (connector credentials, webhook signing secrets, provider API keys, `${VAR}` interpolation), a per-account suffix variant, a name passed on a flag |
-| `envreg.ChainSpellings(canonical)` | the legacy-prefix family of a `Chain` setting |
+| `envreg.RetiredAlias(name)` | whether `name` is a removed `CHAT_`/`CUTLASS_` (or bare `DATA_DIR`) spelling, and the `FLEET_` key to use instead (ADR-0106) |
 
 `Get` of an unregistered name **panics in a test binary** (`testing.Testing()`)
 and, in production, **logs a `BUG:` line once per name** and returns the value

@@ -216,7 +216,7 @@ type ContainerConfig struct {
 	// view via view_file works fine.
 	//
 	// Empty / nonexistent paths are silently skipped — operators running
-	// without supporting docs (e.g. CHAT_MOCK_MODE=1 tests) shouldn't
+	// without supporting docs (e.g. FLEET_MOCK_MODE=1 tests) shouldn't
 	// have to populate this list.
 	ReadOnlyMounts []string
 

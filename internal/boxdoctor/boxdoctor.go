@@ -87,7 +87,7 @@ type Options struct {
 	// the process actually uses rather than a DSN re-derived here (#2018).
 	SchedPing func(context.Context) error
 	// SandboxImage is the resolved sandbox image ref (config/bundle); empty
-	// falls back to the FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE env vars.
+	// falls back to the FLEET_SANDBOX_IMAGE env var.
 	SandboxImage string
 	// ServiceName is the systemd unit basename (default FLEET_SERVICE_NAME
 	// or "fleet").

@@ -18,7 +18,7 @@ import (
 
 // keyStore is where `fleet sched apikey …` reads and writes api_keys.json.
 //
-// The service resolves its store as FLEET_DATA_DIR (else DATA_DIR, else
+// The service resolves its store as FLEET_DATA_DIR (else
 // ./data) RELATIVE TO ITS WORKING DIRECTORY — /var/lib/fleet under the shipped
 // unit, so the live store is /var/lib/fleet/data/api_keys.json. The CLI used to
 // resolve the same env vars against ITS cwd and fall back to ./data there, so a
@@ -43,8 +43,8 @@ func (k keyStore) Path() string { return filepath.Join(k.Dir, "api_keys.json") }
 // keyStoreInputs are the environment facts chooseKeyStore decides from; split
 // out so the decision is unit-testable without systemd or a filesystem.
 type keyStoreInputs struct {
-	explicit    string // FLEET_DATA_DIR / DATA_DIR from the CLI's own environment
-	envFileDir  string // FLEET_DATA_DIR / DATA_DIR read from the service's env FILE ("" = unset)
+	explicit    string // FLEET_DATA_DIR from the CLI's own environment
+	envFileDir  string // FLEET_DATA_DIR read from the service's env FILE ("" = unset)
 	unitWorkDir string // the unit's WorkingDirectory ("" = unit unknown)
 	cwd         string
 }
@@ -127,7 +127,7 @@ func (k keyStore) announce() {
 	fmt.Fprintf(os.Stderr, "key store: %s (%s)\n", k.Path(), k.Source)
 	if k.ServiceDir != "" && k.ServiceDir != k.Dir {
 		fmt.Fprintf(os.Stderr, "WARNING: this is NOT the fleet.service store (%s) — keys minted here are invisible to the running service (its callers get 401).\n", filepath.Join(k.ServiceDir, "api_keys.json"))
-		fmt.Fprintf(os.Stderr, "         unset FLEET_DATA_DIR/DATA_DIR, or set FLEET_DATA_DIR=%s, to write the store the service reads.\n", k.ServiceDir)
+		fmt.Fprintf(os.Stderr, "         unset FLEET_DATA_DIR, or set FLEET_DATA_DIR=%s, to write the store the service reads.\n", k.ServiceDir)
 	}
 }
 

@@ -244,7 +244,7 @@ func redactScheduledTaskTitle(item string) string {
 }
 
 // checkSandbox resolves the image ref the running process would consume
-// (FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE env wins, else the bundle's
+// (FLEET_SANDBOX_IMAGE env wins, else the bundle's
 // ResolvedImageRef) and runs a throwaway `podman run --rm <ref> true` to confirm
 // the image is present + the runtime can launch it.
 func checkSandbox(r *report, bundle *clientconfig.Bundle) {
