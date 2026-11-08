@@ -280,7 +280,9 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.resolveBranding(); err != nil {
 		return nil, err
 	}
-	if err := b.validate(); err != nil {
+	// A removed CHAT_/CUTLASS_ reference that empties a required field
+	// disables only the entry that owns it (ADR-0106, retired_disable.go).
+	if err := b.validateDisablingRetired(manifestPath, raw); err != nil {
 		return nil, err
 	}
 	// Agent Plugins (plugins.go, ADR-0054): translate each plugin's mcp.json

@@ -183,3 +183,94 @@ providers:
 		t.Errorf("RetiredManifestRefWarnings = %q, %v; want the one literal-name warning", ws, err)
 	}
 }
+
+// Codex P2 on #2081 (ADR-0106): a removed reference that empties a REQUIRED
+// field disables only the entry that owns it — never the load. A live unset
+// reference in the same position still fails the load.
+func TestRetiredRefEmptyingARequiredFieldDisablesOnlyThatEntry(t *testing.T) {
+	unsetTracked(t, "CHAT_TLS_MODE", "CHAT_TLS_DOMAIN", "PARITY_LIVE_CMD")
+	armEnvFile(t, "")
+	t.Setenv("CHAT_TLS_MODE", "python3") // a stale exported value is never used
+	var buf bytes.Buffer
+	orig, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(orig); log.SetFlags(flags) })
+
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: stale_cmd
+    command: "${CHAT_TLS_MODE}"
+    always: true
+  - name: stale_url
+    type: http
+    url: "${CHAT_TLS_DOMAIN:?set the url}"
+    always: true
+  - name: fine
+    command: python3
+    always: true
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("a removed reference in a required field failed the load: %v", err)
+	}
+	cfgs := b.MCPServerConfigs()
+	if _, ok := cfgs["stale_cmd"]; ok {
+		t.Error("stale_cmd should be disabled")
+	}
+	if _, ok := cfgs["stale_url"]; ok {
+		t.Error("stale_url should be disabled")
+	}
+	if _, ok := cfgs["fine"]; !ok {
+		t.Error("the other server must still load")
+	}
+	disabled := b.RetiredDisabledItems()
+	if len(disabled) != 2 {
+		t.Fatalf("RetiredDisabledItems = %q, want 2", disabled)
+	}
+	for _, want := range []string{
+		`mcp_servers["stale_cmd"] is disabled: command (${CHAT_TLS_MODE}: use ${FLEET_TLS_MODE})`,
+		`mcp_servers["stale_url"] is disabled: url (${CHAT_TLS_DOMAIN}: use ${FLEET_TLS_DOMAIN})`,
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("load log lacks %q:\n%s", want, buf.String())
+		}
+	}
+
+	live := writeManifest(t, `
+mcp_servers:
+  - name: live_cmd
+    command: "${PARITY_LIVE_CMD}"
+    always: true
+`)
+	if _, err := Load(live); err == nil {
+		t.Error("a LIVE unset reference in command must still fail the load")
+	}
+}
+
+// A provider whose required base_url a removed reference emptied is disabled,
+// and leaves the fallback chain with it; the other provider still loads.
+func TestRetiredRefDisablesAProviderAndItsFallbackEntry(t *testing.T) {
+	unsetTracked(t, "CHAT_OPENROUTER_BASE_URL")
+	armEnvFile(t, "")
+	dir := writeManifest(t, `
+providers:
+  - name: local
+    type: openaicompat
+    base_url: "${CHAT_OPENROUTER_BASE_URL}"
+  - name: main
+    type: openrouter
+    api_key_env: PARITY_PROVIDER_KEY
+fallback_providers: [main, local]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Providers) != 1 || b.Providers[0].Name != "main" || len(b.FallbackProviders) != 1 || b.FallbackProviders[0] != "main" {
+		t.Fatalf("providers %+v fallback %v; want only main", b.Providers, b.FallbackProviders)
+	}
+	if len(b.RetiredDisabledItems()) != 1 {
+		t.Errorf("RetiredDisabledItems = %q", b.RetiredDisabledItems())
+	}
+}

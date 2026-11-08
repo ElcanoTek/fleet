@@ -2130,3 +2130,21 @@ func TestValidateConfigRemovedAliasesAreAdvisory(t *testing.T) {
 		t.Fatalf("manifest = %q blocking=%v %q; want a non-blocking warn naming FLEET_TLS_MODE", mres.Status, mres.Blocking, mres.Detail)
 	}
 }
+
+// ADR-0106: an entry the load disabled (a removed reference emptied its
+// required command) is a non-blocking manifest advisory in validate-config.
+func TestValidateConfigReportsRetiredDisabledEntries(t *testing.T) {
+	t.Setenv("CHAT_TLS_MODE", "")
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: stale
+    command: "${CHAT_TLS_MODE}"
+    always: true
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	res := checkManifest(bundle, nil, &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"})
+	if res.Status != statusWarn || res.Blocking || !strings.Contains(res.Detail, `mcp_servers["stale"] is disabled`) {
+		t.Fatalf("manifest = %q blocking=%v %q; want a non-blocking warn naming the disabled entry", res.Status, res.Blocking, res.Detail)
+	}
+}

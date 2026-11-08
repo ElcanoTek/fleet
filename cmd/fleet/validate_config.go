@@ -341,6 +341,9 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 	if refs, err := clientconfig.RetiredManifestRefWarnings(bundle.Dir); err == nil {
 		advisories = append(advisories, refs...)
 	}
+	// Entries the load disabled because such a reference emptied a field
+	// they require: the bundle runs without them.
+	advisories = append(advisories, bundle.RetiredDisabledItems()...)
 
 	if len(problems) > 0 {
 		res.Status = statusFail

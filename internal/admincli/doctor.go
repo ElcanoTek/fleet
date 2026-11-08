@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,12 +29,23 @@ func warnRetiredEnvAliases(w io.Writer) {
 	// as empty and never stop a load, but the bundle owner must rename them.
 	// The bundle dir is resolved as the server sees it: on a packaged install
 	// FLEET_CLIENT_CONFIG_DIR lives only in the server env file.
-	if refs, err := clientconfig.RetiredManifestRefWarnings(clientconfig.DirFromEnvFile(path)); err != nil {
+	bundleDir := clientconfig.DirFromEnvFile(path)
+	if refs, err := clientconfig.RetiredManifestRefWarnings(bundleDir); err != nil {
 		fmt.Fprintf(w, "fleet doctor: could not check the client bundle for removed env aliases: %v\n", err)
 	} else if len(refs) > 0 {
 		fmt.Fprintf(w, "WARN the client bundle references removed CHAT_/CUTLASS_ env aliases (ADR-0106):\n")
 		for _, r := range refs {
 			fmt.Fprintf(w, "  - %s\n", r)
+		}
+		// Entries such a reference disables (it emptied a field they
+		// require). Loading is quiet here: the load's own warnings are the
+		// server's to print; a bundle that does not load is validate-config's
+		// to report.
+		if disabled := retiredDisabledEntries(bundleDir); len(disabled) > 0 {
+			fmt.Fprintf(w, "WARN the client bundle loads without these entries (ADR-0106):\n")
+			for _, d := range disabled {
+				fmt.Fprintf(w, "  - %s\n", d)
+			}
 		}
 	}
 	findings, err := config.RetiredAliasFindings(path, loadUnitEnv())
@@ -115,4 +127,18 @@ func cmdDoctor(argv []string) int {
 		return errf(5, "doctor: %v", err)
 	}
 	return 0
+}
+
+// retiredDisabledEntries loads the bundle in dir with logging silenced and
+// returns the entries the load disabled for a removed reference (nil when it
+// does not load).
+func retiredDisabledEntries(dir string) []string {
+	orig := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(orig)
+	b, err := clientconfig.Load(dir)
+	if err != nil {
+		return nil
+	}
+	return b.RetiredDisabledItems()
 }

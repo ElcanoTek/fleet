@@ -179,6 +179,9 @@ type Bundle struct {
 	// PluginRoots are the manifest's extra plugin roots, absolutized.
 	PluginRoots    []string
 	pluginProblems []string // entry-level: decided by the bundle's own files
+	// retiredDisabled: entries the load disabled because a removed
+	// CHAT_/CUTLASS_ reference emptied a field they require (ADR-0106).
+	retiredDisabled []string
 	// pluginRootProblems are about this machine (a plugin_roots dir missing or
 	// unreadable here); see pluginLoadResult for why they are kept apart.
 	pluginRootProblems []string

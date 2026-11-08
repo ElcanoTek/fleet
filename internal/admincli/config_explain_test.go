@@ -186,3 +186,22 @@ func TestDoctorFindsTheBundleThroughTheEnvFile(t *testing.T) {
 		t.Errorf("doctor did not scan the env file's bundle:\n%s", buf.String())
 	}
 }
+
+// ADR-0106: doctor names an entry the bundle loads without because a removed
+// reference emptied a field it requires.
+func TestDoctorReportsEntriesARemovedRefDisables(t *testing.T) {
+	stubSystemd(t, t.TempDir(), "", false)
+	dir := t.TempDir()
+	manifest := "mcp_servers:\n  - name: stale\n    command: \"${CHAT_TLS_MODE}\"\n    always: true\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearEnvNames(t, "CHAT_TLS_MODE")
+	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	var buf bytes.Buffer
+	warnRetiredEnvAliases(&buf)
+	if !strings.Contains(buf.String(), `mcp_servers["stale"] is disabled: command (${CHAT_TLS_MODE}: use ${FLEET_TLS_MODE})`) {
+		t.Errorf("doctor output:\n%s", buf.String())
+	}
+}

@@ -67,6 +67,14 @@ compatibility window.
      `${FLEET_<X>}`, and `fleet doctor` and `fleet validate-config` report
      it as a non-blocking advisory (as they do a removed spelling still set
      in the environment).
+     When the emptied field is one validation requires (a stdio server's
+     `command`, an http server's or A2A peer's URL, a provider's `base_url`,
+     …), only the entry that owns it is disabled — dropped as if it were not
+     in the manifest, a disabled provider leaving `fallback_providers` too —
+     with a warning naming the entry, the field and the `FLEET_` key; the
+     rest of the bundle loads. A live variable that is unset still fails the
+     load as before. `fleet doctor` and `fleet validate-config` list the
+     disabled entries as advisories.
    None of these prints a value.
 5. **`fleet config migrate-env` is removed**, with its tests and docs. The
    boxes are migrated; an operator who finds a leftover line renames it by
