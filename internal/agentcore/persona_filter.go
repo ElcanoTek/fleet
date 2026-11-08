@@ -7,6 +7,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Per-persona tool allowlist (#294): different personas see different tool
@@ -89,7 +90,7 @@ func resolvePersonaTools(ctx context.Context, persona string, policy PersonaTool
 		}
 		out = append(out, t)
 	}
-	logging.From(ctx).Info("persona tool policy applied", "persona", persona, "offered", len(out), "total", len(all), "blocked", blocked)
+	logging.From(ctx).Info("persona tool policy applied", "persona", safe.LogSafe(persona), "offered", len(out), "total", len(all), "blocked", blocked)
 	return out
 }
 

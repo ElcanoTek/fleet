@@ -121,6 +121,10 @@ var (
 	// os_Stat exists so it can be mocked out by tests.
 	osStat = os.Stat
 
+	// osLstat is os.Lstat, for backupName's existence check; tests replace
+	// it to fail the way an unreadable directory does.
+	osLstat = os.Lstat
+
 	// megabyte is the conversion factor between MaxSize and bytes.  It is a
 	// variable so tests can mock it out and not need to write megabytes of data
 	// to disk.
@@ -149,8 +153,17 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 	}
 
 	if l.size+writeLen > l.maxBytes() {
-		if err := l.rotate(); err != nil {
-			return 0, err
+		if rerr := l.rotate(); rerr != nil {
+			// A rotation that failed (an unreadable or full directory) must
+			// not drop the record: rotate reopened the current file, so it is
+			// written there — past MaxSize — and the error still goes back to
+			// the caller, whose sink-failure path reports it.
+			if l.file == nil {
+				return 0, rerr
+			}
+			n, err = l.file.Write(p)
+			l.size += int64(n)
+			return n, errors.Join(rerr, err)
 		}
 	}
 
@@ -197,15 +210,34 @@ func (l *Logger) Rotate() error {
 // rotate closes the current file, moves it aside with a timestamp in the name,
 // (if it exists), opens a new file with the original filename, and then runs
 // post-rotation processing and removal.
+//
+// When the file cannot be moved aside (no free backup name, an unreadable
+// directory, a failed rename), the current file is reopened for appending, so
+// logging carries on in it, and the error is returned.
 func (l *Logger) rotate() error {
 	if err := l.close(); err != nil {
 		return err
 	}
 	if err := l.openNew(); err != nil {
+		if l.file == nil {
+			l.reopenCurrent()
+		}
 		return err
 	}
 	l.mill()
 	return nil
+}
+
+// reopenCurrent reopens the log file for appending after a failed rotation.
+func (l *Logger) reopenCurrent() {
+	f, err := os.OpenFile(l.filename(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return
+	}
+	l.file = f
+	if info, err := f.Stat(); err == nil {
+		l.size = info.Size()
+	}
 }
 
 // openNew opens a new log file for writing, moving any old log file out of the
@@ -223,7 +255,10 @@ func (l *Logger) openNew() error {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file, never over an existing backup
-		newname := backupName(name)
+		newname, err := backupName(name)
+		if err != nil {
+			return fmt.Errorf("can't name a backup for the log file: %w", err)
+		}
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %w", err)
 		}
@@ -252,28 +287,55 @@ func (l *Logger) openNew() error {
 // within the clock's resolution), a counter is appended to the timestamp
 // ("-1", "-2", …): a rotation must never rename over a backup, and a
 // compression must never truncate another backup's .gz.
-func backupName(name string) string {
+//
+// Only a name that does not exist (ErrNotExist) is free. Any other error
+// checking a name (an unreadable directory) is returned, as is running out
+// of maxBackupNameAttempts names: the caller holds the rotator's lock and the
+// process log lock, so the search must end.
+func backupName(name string) (string, error) {
 	dir := filepath.Dir(name)
 	filename := filepath.Base(name)
 	ext := filepath.Ext(filename)
 	prefix := filename[:len(filename)-len(ext)]
 	timestamp := currentTime().UTC().Format(backupTimeFormat)
-	for n := 0; ; n++ {
+	for n := 0; n < maxBackupNameAttempts; n++ {
 		stamp := timestamp
 		if n > 0 {
 			stamp += "-" + strconv.Itoa(n)
 		}
 		candidate := filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, stamp, ext))
-		if !pathExists(candidate) && !pathExists(candidate+compressSuffix) {
-			return candidate
+		free, err := pathFree(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !free {
+			continue
+		}
+		if free, err = pathFree(candidate + compressSuffix); err != nil {
+			return "", err
+		}
+		if free {
+			return candidate, nil
 		}
 	}
+	return "", fmt.Errorf("no free backup name after %d attempts", maxBackupNameAttempts)
 }
 
-// pathExists reports whether anything (a file, a link) is at path.
-func pathExists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil || !errors.Is(err, fs.ErrNotExist)
+// maxBackupNameAttempts bounds backupName's search.
+const maxBackupNameAttempts = 10000
+
+// pathFree reports whether nothing is at path; an error other than
+// ErrNotExist is returned as is.
+func pathFree(path string) (bool, error) {
+	_, err := osLstat(path)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	default:
+		return false, err
+	}
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
