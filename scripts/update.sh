@@ -969,43 +969,25 @@ ref_prev=""
 [[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
 
 # resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image,
-# the SAME way the running SERVICE does: extract the scalar under the sandbox:
-# block (the awk mirrors bootstrap.sh — keep that part in sync), then
-# interpolate a bare ${VAR:-default} / ${VAR} reference against the service's
-# env file (env_get), NOT this shell's environment. The service resolves the
-# var from EnvironmentFile=$backend_env_file, which update.sh deliberately
-# never sources — resolving from the shell diverged both ways: a var set only
-# in the env file forced a pointless on-box build every update (and could trip
-# the missing-image die spuriously), while a var exported only in the
-# operator's shell skipped the sandbox gate entirely, absence probe included.
-# (bootstrap.sh legitimately interpolates from ITS shell: at bootstrap time
-# the operator's env is the source the env file is being written from.)
+# the SAME way the running SERVICE does (fleet_sandbox_resolve_scalar, shared
+# with bootstrap.sh and doctor.sh), interpolating a bare ${VAR:-default} /
+# ${VAR} reference against the service's env file (env_get), NOT this shell's
+# environment. The service resolves the var from
+# EnvironmentFile=$backend_env_file, which update.sh deliberately never
+# sources — resolving from the shell diverged both ways: a var set only in the
+# env file forced a pointless on-box build every update (and could trip the
+# missing-image die spuriously), while a var exported only in the operator's
+# shell skipped the sandbox gate entirely, absence probe included. A spelling
+# ADR-0106 removed reads as unset, as it does in the service, so a stale
+# CHAT_SANDBOX_IMAGE line cannot make update skip the pull/build.
 # A non-empty result means the service pulls/uses that prebuilt ref (image WINS
 # over tag) and never reads an on-box build, so the sandbox step skips
 # entirely; empty — the generic bundle's "${FLEET_SANDBOX_IMAGE:-}" with the
 # var absent from the env file — means build-on-box.
+service_env_value() { env_get "$1" "$backend_env_file"; }
 resolve_sandbox_image() {
-  local file="$1" raw
-  [[ -f "$file" ]] || return 0
-  raw="$(awk '
-    /^sandbox:[[:space:]]*$/ { in_block=1; next }
-    /^[^[:space:]]/          { in_block=0 }
-    in_block && $0 ~ "^[[:space:]]+image:" {
-      sub("^[[:space:]]+image:[[:space:]]*", "")
-      sub(/[[:space:]]+#.*$/, "")
-      gsub(/^["'\'']|["'\'']$/, "")
-      print; exit
-    }
-  ' "$file")"
-  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
-  # default bundle uses). Anything else is treated as a literal image ref.
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}" val
-    val="$(env_get "$var" "$backend_env_file")"
-    printf '%s' "${val:-$def}"
-  else
-    printf '%s' "$raw"
-  fi
+  [[ -f "$1" ]] || return 0
+  fleet_sandbox_resolve_scalar image "$1" service_env_value
 }
 sandbox_image_ref="$(resolve_sandbox_image "$CLIENT_DIR/manifest.yaml")"
 

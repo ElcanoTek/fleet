@@ -42,8 +42,11 @@ compatibility window.
    `${…}` references and literal variable-name fields (`api_key_env`,
    `enabled_env`, `enabled_groups`, the webhook `*_secret_env` fields, …),
    which read as unset (no key, gate closed). The shell scripts that
-   interpolate a manifest value (`doctor.sh`, `bootstrap.sh`) do the same
-   through the generated `scripts/lib/retired-env.sh`.
+   interpolate a manifest value (`bootstrap.sh`, `update.sh`, `doctor.sh`)
+   share one resolver, `fleet_sandbox_resolve_scalar` in
+   `scripts/lib/sandbox-bundle.sh`, which never looks a removed spelling up in
+   the shell or the env file (the list is the generated
+   `scripts/lib/retired-env.sh`).
 4. **A removed spelling is reported, never silently ignored.**
    `envreg.RetiredAlias` recognises one: `CHAT_<X>` or `CUTLASS_<X>` when
    `FLEET_<X>` is a registered setting and the name is not a setting of its

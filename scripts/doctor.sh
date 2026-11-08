@@ -63,8 +63,8 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
-# shellcheck source=lib/retired-env.sh
-. "$SCRIPT_DIR/lib/retired-env.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
@@ -1414,23 +1414,11 @@ if [[ -z "$sandbox_img" ]]; then
   [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
   [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
   # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
-  # only shapes the default bundle uses; mirrors bootstrap's
-  # resolve_sandbox_image — keep them in sync).
+  # bare ${VAR} / ${VAR:-default} interpolated against the process env
+  # (fleet_sandbox_resolve_scalar, shared with bootstrap.sh and update.sh; a
+  # spelling ADR-0106 removed reads as unset).
   manifest_sandbox_scalar() {
-    local key="$1" raw
-    raw="$(awk -v key="$key" '
-      /^sandbox:[[:space:]]*$/ { b=1; next }
-      /^[^[:space:]]/          { b=0 }
-      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-      # A spelling ADR-0106 removed reads as unset, as it does in fleet.
-      if fleet_env_name_retired "$var"; then printf '%s' "$def"; else printf '%s' "${!var:-$def}"; fi
-    else
-      printf '%s' "$raw"
-    fi
+    fleet_sandbox_resolve_scalar "$1" "$bundle_dir/manifest.yaml" fleet_shell_env_value
   }
   sandbox_img="$(manifest_sandbox_scalar image)"
   if [[ -n "$sandbox_img" ]]; then

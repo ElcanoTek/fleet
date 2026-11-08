@@ -7,6 +7,14 @@
 # (relative to the bundle) when set, else sandbox/Containerfile. A bundle that
 # names its own path must never be mistaken for one that ships no Containerfile
 # and get the generic release image tagged over its own.
+#
+# It is also the ONE place a script resolves a manifest sandbox scalar that
+# names an env variable (fleet_sandbox_resolve_scalar): bootstrap.sh, update.sh
+# and doctor.sh each used to carry a copy, and the copies drifted (#2081).
+
+fleet__sandbox_bundle_scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=retired-env.sh
+. "$fleet__sandbox_bundle_scripts/lib/retired-env.sh"
 
 # fleet_sandbox_manifest_value KEY MANIFEST — a scalar under the top-level
 # `sandbox:` block. Tiny purpose-built parser (no yq dependency): finds the
@@ -28,6 +36,31 @@ fleet_sandbox_manifest_value() {
     }
   ' "$file"
 }
+
+# fleet_sandbox_resolve_scalar KEY MANIFEST LOOKUP — the sandbox.KEY scalar
+# with a single bare ${VAR} or ${VAR:-default} interpolated (the only shapes
+# the bundles use; anything else is returned literally). LOOKUP is the name
+# of a function that prints VAR's value — the caller decides the source:
+# bootstrap and doctor read their shell (fleet_shell_env_value), update reads
+# the service's env file. A spelling ADR-0106 removed is never looked up in
+# any source: it reads as unset (so the default applies), exactly as fleet
+# itself reads it (envreg.RetiredAlias; scripts/lib/retired-env.sh).
+fleet_sandbox_resolve_scalar() {
+  local key="$1" file="$2" lookup="$3" raw var def val=""
+  raw="$(fleet_sandbox_manifest_value "$key" "$file")"
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+    var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+    if ! fleet_env_name_retired "$var"; then
+      val="$("$lookup" "$var")"
+    fi
+    printf '%s' "${val:-$def}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+# fleet_shell_env_value NAME — NAME's value in this shell's environment.
+fleet_shell_env_value() { printf '%s' "${!1:-}"; }
 
 # fleet_sandbox_containerfile BUNDLE_DIR — the bundle's Containerfile path.
 fleet_sandbox_containerfile() {

@@ -204,3 +204,81 @@ func TestBootstrapBuildsTheSameContainerfile(t *testing.T) {
 		t.Error("build-sandbox-image.sh does not use fleet_sandbox_build_containerfile")
 	}
 }
+
+// shellFunc extracts a top-level `name() { … }` (through its closing `}` at
+// column 0) or a one-line `name() { …; }` from a script.
+func shellFunc(t *testing.T, script, name string) string {
+	t.Helper()
+	lines := strings.Split(script, "\n")
+	for i, ln := range lines {
+		if !strings.HasPrefix(ln, name+"() {") {
+			continue
+		}
+		if strings.HasSuffix(strings.TrimSpace(ln), "}") {
+			return ln + "\n"
+		}
+		for j := i + 1; j < len(lines); j++ {
+			if lines[j] == "}" {
+				return strings.Join(lines[i:j+1], "\n") + "\n"
+			}
+		}
+	}
+	t.Fatalf("function %s() not found", name)
+	return ""
+}
+
+// ADR-0106 (Codex P2 on #2081): update.sh resolves the bundle's sandbox.image
+// from the SERVICE env file. A stale CHAT_SANDBOX_IMAGE line there (or in the
+// operator's shell) must read as unset, as it does in the service, so the
+// manifest default applies and update takes the tag (pull/build) path instead
+// of believing the bundle names a prebuilt image. The canonical
+// FLEET_SANDBOX_IMAGE in the env file still wins.
+func TestUpdateResolveSandboxImageIgnoresRemovedSpellings(t *testing.T) {
+	root := repoRoot(t)
+	update := readFile(t, root, "scripts/update.sh")
+	fns := shellFunc(t, update, "env_get") + shellFunc(t, update, "service_env_value") + shellFunc(t, update, "resolve_sandbox_image")
+	run := func(manifestImage, envFile string) string {
+		t.Helper()
+		bundle := sandboxBundle(t, "", map[string]string{})
+		m := "name: test\nsandbox:\n  image: \"" + manifestImage + "\"\n  tag: localhost/fleet-sandbox:latest\n"
+		if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(m), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		env := filepath.Join(t.TempDir(), "fleet.env")
+		if err := os.WriteFile(env, []byte(envFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "-c", `set -u; . "$ROOT/scripts/lib/sandbox-bundle.sh"; ENV_FILE=/nonexistent; backend_env_file="$E"; `+fns+` resolve_sandbox_image "$B/manifest.yaml"`)
+		cmd.Env = append(os.Environ(), "ROOT="+root, "B="+bundle, "E="+env, "CHAT_SANDBOX_IMAGE=shell/stale:1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("resolve_sandbox_image: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	if got := run("${CHAT_SANDBOX_IMAGE:-}", "CHAT_SANDBOX_IMAGE=registry.example/stale:1\n"); got != "" {
+		t.Errorf("stale CHAT_SANDBOX_IMAGE resolved to %q; want empty (the tag/build path)", got)
+	}
+	if got := run("${CHAT_SANDBOX_IMAGE:-registry.example/default:2}", "CHAT_SANDBOX_IMAGE=registry.example/stale:1\n"); got != "registry.example/default:2" {
+		t.Errorf("stale CHAT_SANDBOX_IMAGE with a default resolved to %q; want the manifest default", got)
+	}
+	if got := run("${FLEET_SANDBOX_IMAGE:-}", "FLEET_SANDBOX_IMAGE=registry.example/live:3\n"); got != "registry.example/live:3" {
+		t.Errorf("canonical FLEET_SANDBOX_IMAGE resolved to %q; want the env-file value", got)
+	}
+}
+
+// The three scripts that resolve a manifest sandbox scalar share ONE
+// implementation (fleet_sandbox_resolve_scalar), so none can drift back to
+// reading a removed spelling on its own (#2081).
+func TestSandboxScalarInterpolationIsShared(t *testing.T) {
+	root := repoRoot(t)
+	for _, s := range []string{"scripts/bootstrap.sh", "scripts/update.sh", "scripts/doctor.sh"} {
+		body := readFile(t, root, s)
+		if strings.Contains(body, `BASH_REMATCH[3]`) || strings.Contains(body, `${!var`) {
+			t.Errorf("%s interpolates a manifest ${VAR} itself; use fleet_sandbox_resolve_scalar (scripts/lib/sandbox-bundle.sh)", s)
+		}
+		if !strings.Contains(body, "fleet_sandbox_resolve_scalar") {
+			t.Errorf("%s no longer resolves its sandbox scalar through fleet_sandbox_resolve_scalar", s)
+		}
+	}
+}

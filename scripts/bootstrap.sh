@@ -190,8 +190,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
-# shellcheck source=lib/retired-env.sh
-. "$SCRIPT_DIR/lib/retired-env.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Uninstall Cockpit (bootstrap only).
@@ -1121,34 +1119,14 @@ if [[ "$ENABLE_SERVICE" == "1" && "$DRY_RUN" != "1" && -d "$CLIENT_CONFIG_DIR" \
   fi
 fi
 
-# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image, the
-# SAME way the Go loader (internal/clientconfig) does: extract the scalar under
-# the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
-# against the process env. An empty result => build-on-box (the default-bundle
-# value "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
-# Mirrored in scripts/update.sh — keep the two copies in sync.
+# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image,
+# the SAME way the Go loader (internal/clientconfig) does, interpolated
+# against the process env (fleet_sandbox_resolve_scalar, shared with update.sh
+# and doctor.sh). An empty result => build-on-box (the default-bundle value
+# "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
 resolve_sandbox_image() {
-  local file="$1" raw
-  [[ -f "$file" ]] || return 0
-  raw="$(awk '
-    /^sandbox:[[:space:]]*$/ { in_block=1; next }
-    /^[^[:space:]]/          { in_block=0 }
-    in_block && $0 ~ "^[[:space:]]+image:" {
-      sub("^[[:space:]]+image:[[:space:]]*", "")
-      sub(/[[:space:]]+#.*$/, "")
-      gsub(/^["'\'']|["'\'']$/, "")
-      print; exit
-    }
-  ' "$file")"
-  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
-  # default bundle uses). Anything else is treated as a literal image ref.
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-    # A spelling ADR-0106 removed reads as unset, as it does in fleet.
-    if fleet_env_name_retired "$var"; then printf '%s' "$def"; else printf '%s' "${!var:-$def}"; fi
-  else
-    printf '%s' "$raw"
-  fi
+  [[ -f "$1" ]] || return 0
+  fleet_sandbox_resolve_scalar image "$1" fleet_shell_env_value
 }
 
 # ── sandbox image ──
