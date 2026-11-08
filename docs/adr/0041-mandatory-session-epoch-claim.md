@@ -1,6 +1,6 @@
 # ADR-0041: Session cookies carry a mandatory session-epoch claim
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0105](0105-one-identity-table.md) (one row, no seam; same derivation)
 - **Date:** 2026-08-04
 - **Deciders:** fleet maintainers
 

@@ -216,9 +216,12 @@ the same issue, each updating this note:
   `go test` ([TEST-DATABASES.md](TEST-DATABASES.md)). Phase 2 then removed
   its legacy-layout helpers (`testdb.LegacyPair`, `testdb.Reserve`).
 
+**M4 — one identity table** ([IDENTITY.md](IDENTITY.md), ADR-0105): one
+`core.users` table, in a third schema `core` the chat migrations create, and
+one role vocabulary; the shadow sync and the identity seams are gone. The
+chat store's backup carries schema `core` (`pg_dump -n chat -n core`).
+
 Still to come:
 
-1. **M4 — one identity table:** one `users` table and one role vocabulary;
-   the shadow sync and the identity seams go.
-2. **M5 — one scheduler:** chat patrols run on the sched engine.
-3. **One migration runner** and one migration layout.
+1. **M5 — one scheduler:** chat patrols run on the sched engine.
+2. **One migration runner** and one migration layout.
