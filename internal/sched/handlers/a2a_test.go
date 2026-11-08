@@ -64,7 +64,7 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		DefaultTaskModel: "test/model",
 		AdminAPIKey:      "admin-key",
 		DataDir:          tmpDir,
@@ -103,6 +103,7 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 // newA2ATestMux mounts the two A2A routes the way buildOrchestratorMux does.
 func newA2ATestMux(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Get("/.well-known/agent-card.json", h.A2AAgentCard)
 	r.Post("/a2a", h.A2ARPC)
 	return r
@@ -181,7 +182,7 @@ func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, st
 func TestA2ADisabledAnswers501(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken}, nil, nil)
 	for _, route := range []struct{ method, path string }{
 		{"GET", "/.well-known/agent-card.json"},
 		{"POST", "/a2a"},

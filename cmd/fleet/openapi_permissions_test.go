@@ -29,7 +29,6 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/sched"
@@ -499,24 +498,9 @@ func specSchemeHeader(t *testing.T, scheme string) string {
 // key, no bearer, no cookie, no signature) without a 401 or 403. A mutating
 // request carries a same-origin Origin header, as a browser sends it: that is
 // the CSRF check every cookie-capable POST passes, not a credential.
-//
-// POST /auth/login is the one `none` operation that authenticates anything: it
-// checks the username/password in its BODY and issues a token. It is probed
-// with a real user's credentials (admitted) and a wrong password (401), so
-// "none" there means "no credential is presented to it", nothing more.
 func TestOpenAPINoneOperationsTakeNoCredential(t *testing.T) {
 	env := newProbeEnv(t)
 	prefix := specServerPrefix(t)
-
-	const username, password = "openapi-probe-user", "openapi-probe-password"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	if _, err := env.store.AddUser(&models.User{ID: uuid.New(), Username: username, PasswordHash: string(hash),
-		Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("add user: %v", err)
-	}
 
 	send := func(op specOp, body string) int {
 		req := httptest.NewRequest(op.method, prefix+fillPath(op.path, uuid.NewString()), strings.NewReader(body))
@@ -538,17 +522,6 @@ func TestOpenAPINoneOperationsTakeNoCredential(t *testing.T) {
 		body := ""
 		if op.method == http.MethodPost || op.method == http.MethodPut {
 			body = "{}"
-		}
-		if op.String() == "POST /auth/login" {
-			good, _ := json.Marshal(models.UserLogin{Username: username, Password: password})
-			bad, _ := json.Marshal(models.UserLogin{Username: username, Password: "wrong-password"})
-			if code := send(op, string(good)); code != http.StatusOK {
-				t.Errorf("%s with the right username/password in the body: %d, want 200", op, code)
-			}
-			if code := send(op, string(bad)); code != http.StatusUnauthorized {
-				t.Errorf("%s with a wrong password: %d, want 401", op, code)
-			}
-			continue
 		}
 		if code := send(op, body); code == http.StatusUnauthorized || code == http.StatusForbidden {
 			t.Errorf("%s declares x-fleet-permission none but answered %d with no credential", op, code)

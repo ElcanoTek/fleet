@@ -4,105 +4,33 @@
 package handlers
 
 import (
-	"crypto/rand"
-	"encoding/base64"
+	"errors"
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
-
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// errPasswordLoginDisabled is the refusal a password login or a password
-// bearer gets on a Fleet that signs in through central Auth only.
-const errPasswordLoginDisabled = "Password sign-in is turned off on this Fleet. Sign in through SSO."
+// The Operations Center's own password sign-in (POST /auth/login) and the
+// bearer token it minted are retired (#2049 M4, ADR-0105): people reach the
+// Operations Center with the one Fleet session cookie (header trust,
+// middleware.go), and programs with API keys.
 
-// Login handles user login.
-func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
-	if h.config.PasswordLoginDisabled {
-		writeError(w, http.StatusForbidden, errPasswordLoginDisabled)
-		return
-	}
-	clientIP := getClientIP(r)
-	if ok, _ := h.loginRL.Allow(clientIP); !ok {
-		writeError(w, http.StatusTooManyRequests, "Too many login attempts. Try again later.")
-		return
-	}
-
-	var creds models.UserLogin
-	if err := readJSON(r, &creds); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	user, err := h.storage.GetUserByUsername(creds.Username)
-	if err != nil || user == nil {
-		// Generic error to prevent enumeration
-		writeError(w, http.StatusUnauthorized, "Invalid credentials")
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(creds.Password)); err != nil {
-		writeError(w, http.StatusUnauthorized, "Invalid credentials")
-		return
-	}
-
-	// Generate session token and update last login
-	now := time.Now().UTC()
-	token, err := generateToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to generate session token")
-		return
-	}
-	tokenHash := models.HashToken(token)
-	tokenExpiry := now.Add(models.SessionTokenDuration)
-	user.LastLogin = &now
-	user.SessionToken = &tokenHash
-	user.TokenExpiresAt = &tokenExpiry
-
-	// Store token and last_login in database
-	if _, err := h.storage.AddUser(user); err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to update session")
-		return
-	}
-
-	writeJSON(w, r, http.StatusOK, models.LoginResponse{
-		Token: token,
-		User: models.UserResponse{
-			ID:        user.ID,
-			Username:  user.Username,
-			Role:      user.Role,
-			CreatedAt: user.CreatedAt,
-		},
-	})
-}
-
-// userFromPasswordToken resolves a bearer minted by Login. It is the only way
-// the handlers accept one, so the central-Auth-only switch covers every
-// consumer (the auth middleware, task creation and upload): with passwords off
-// no such token authenticates, however recently it was issued.
-func (h *Handlers) userFromPasswordToken(token string) *models.User {
-	if h.config.PasswordLoginDisabled || token == "" {
-		return nil
-	}
-	user, err := h.storage.GetUserByToken(token)
-	if err != nil {
-		return nil
-	}
-	return user
-}
-
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(b), nil
-}
-
-// CreateUser handles creating a new user (Admin only).
+// CreateUser handles POST /users (admin key only): give an account
+// Operations Center access. The account is a row of the one identity table
+// (internal/identity): a new email becomes a new account with role viewer —
+// so the person can also sign in to chat, read-only — and the requested
+// Operations Center access. The request still speaks the legacy roles:
+// admin | client | readonly. "admin" makes the account a Fleet admin, since
+// Operations Center admin is the Fleet admin role.
+//
+// An email that is already an account with no Operations Center access (a
+// chat user) is given the requested access — its password and, unless admin
+// is requested, its chat role untouched — as adding an Operations Center user
+// for that email did before. One that already has access (or is disabled) is
+// refused (409), as an existing username was: changing that is the admin
+// Users page's or `fleet sched user set-role`'s job.
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if h.config.AccountsManagedByAuth {
 		writeError(w, http.StatusConflict, "This Fleet's accounts are managed in Auth. Grant Fleet and its Ops Center role there.")
@@ -114,55 +42,50 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate username
-	if len(req.Username) < 3 || len(req.Username) > 64 {
+	username := identity.NormalizeEmail(req.Username)
+	if len(username) < 3 || len(username) > 64 {
 		writeError(w, http.StatusBadRequest, "Username must be between 3 and 64 characters")
 		return
 	}
-
-	// Validate password
 	if len(req.Password) < 8 {
 		writeError(w, http.StatusBadRequest, "Password must be at least 8 characters")
 		return
 	}
-
-	// Validate role
-	validRoles := map[string]bool{"admin": true, "client": true, "readonly": true}
-	if !validRoles[req.Role] {
+	// Judge the parsed grant, not the raw string: "none" (in either
+	// vocabulary) is no access and has no place on a create.
+	scope, admin, ok := identity.ParseOpsRole(req.Role)
+	if !ok || (!admin && scope == identity.OpsNone) {
 		writeError(w, http.StatusBadRequest, "Invalid role. Must be one of: admin, client, readonly")
 		return
 	}
-
-	// Check if user exists
-	existing, _ := h.storage.GetUserByUsername(req.Username)
-	if existing != nil {
-		writeError(w, http.StatusConflict, "Username already exists")
-		return
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := identity.HashPassword(req.Password, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to hash password")
 		return
 	}
-
-	user := &models.User{
-		ID:           uuid.New(),
-		Username:     req.Username,
-		PasswordHash: string(hash),
-		Role:         req.Role,
-		CreatedAt:    time.Now().UTC(),
+	acct := identity.NewAccount{Email: username, PasswordHash: hash, Role: identity.RoleViewer, OpsScope: scope}
+	if admin {
+		acct.Role, acct.OpsScope = identity.RoleAdmin, identity.OpsNone
 	}
-
-	if _, err := h.storage.AddUser(user); err != nil {
+	u, err := h.storage.Identity().CreateAccount(r.Context(), acct)
+	if errors.Is(err, identity.ErrExists) {
+		// Already an account (a chat user, say): give it the access, as
+		// adding an Operations Center user for that email did before the one
+		// identity table. Its password is not changed.
+		u, err = h.storage.Identity().AddOpsAccess(r.Context(), username, req.Role)
+		if errors.Is(err, identity.ErrExists) {
+			writeError(w, http.StatusConflict, "Username already exists")
+			return
+		}
+	}
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
-
 	writeJSON(w, r, http.StatusCreated, models.UserResponse{
-		ID:        user.ID,
-		Username:  user.Username,
-		Role:      user.Role,
-		CreatedAt: user.CreatedAt,
+		ID:        u.ID,
+		Username:  u.Email,
+		Role:      u.LegacyOpsRole(),
+		CreatedAt: time.Unix(u.CreatedAt, 0).UTC(),
 	})
 }

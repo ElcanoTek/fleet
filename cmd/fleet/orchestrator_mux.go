@@ -289,8 +289,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// limit as the webhook trigger; the email-kind security controls (approved
 	// senders, DKIM/SPF, attachments, dedup) run inside the handler.
 	r.With(h.SchedRateLimitMiddleware).Post("/triggers/email/{slug}", h.HandleEmailTrigger)
-	r.Post("/auth/login", h.Login)
-	r.Post("/auth/logout", h.ElcanoLogout)
+	// No /auth/login or /auth/logout: the Operations Center's password bearer
+	// is retired (#2049 M4, ADR-0105). People sign in and out at the web
+	// gateway (/api/auth/*); programs use API keys.
 
 	return r
 }

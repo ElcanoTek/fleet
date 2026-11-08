@@ -198,7 +198,7 @@ func (s *Store) mutateConversationMultiplayer(
 	}
 	var ownerTeam sql.NullString
 	if err := tx.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, ownerEmail,
+		`SELECT team_id FROM core.users WHERE email = $1 FOR UPDATE`, ownerEmail,
 	).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -477,7 +477,7 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, q rowQueryer, c
 	// conversation.
 	var callerTeam sql.NullString
 	if err := q.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE AND role <> 'viewer'`, callerEmail,
+		`SELECT team_id FROM core.users WHERE email = $1 AND enabled = TRUE AND role <> 'viewer'`, callerEmail,
 	).Scan(&callerTeam); err != nil {
 		return false
 	}
@@ -526,12 +526,12 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 	team := strings.TrimSpace(sharedTeam.String)
 	if !conv.Multiplayer && team == "" {
 		var ownerTeam sql.NullString
-		_ = s.db.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, normalizeEmail(conv.UserEmail)).Scan(&ownerTeam)
+		_ = s.db.QueryRowContext(ctx, `SELECT team_id FROM core.users WHERE email = $1`, normalizeEmail(conv.UserEmail)).Scan(&ownerTeam)
 		team = strings.TrimSpace(ownerTeam.String)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT email FROM users
+		SELECT email FROM core.users
 		WHERE enabled = TRUE
 		  AND role <> 'viewer'
 		  AND ($1 = '' OR team_id = $1)
@@ -555,7 +555,7 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 			return
 		}
 		var isEligible bool
-		if err := s.db.QueryRowContext(ctx, `SELECT (enabled = TRUE AND role <> 'viewer') FROM users WHERE email = $1`, e).Scan(&isEligible); err == nil && isEligible {
+		if err := s.db.QueryRowContext(ctx, `SELECT (enabled = TRUE AND role <> 'viewer') FROM core.users WHERE email = $1`, e).Scan(&isEligible); err == nil && isEligible {
 			add(e)
 		}
 	}

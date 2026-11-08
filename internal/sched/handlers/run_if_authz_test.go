@@ -33,9 +33,10 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 	if err != nil {
 		t.Fatalf("key mgr: %v", err)
 	}
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/tasks", h.CreateTask)
 	r.Post("/tasks/batch", h.CreateTaskBatch)
 	r.Group(func(r chi.Router) {
@@ -47,12 +48,7 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 		{"runif-admin", "admin", "runif-admin-token"},
 		{"runif-client", "client", "runif-client-token"},
 	} {
-		hash := models.HashToken(u.token)
-		if _, err := store.AddUser(&models.User{
-			ID: uuid.New(), Username: u.username, Role: u.role, CreatedAt: time.Now(), SessionToken: &hash,
-		}); err != nil {
-			t.Fatalf("AddUser(%s): %v", u.username, err)
-		}
+		seedOpsUser(t, store, uuid.New(), u.username, u.role, u.token)
 	}
 	return r, keyMgr, store
 }

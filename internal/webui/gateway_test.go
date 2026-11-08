@@ -72,11 +72,6 @@ func TestGateServesLoginAndPublicRoutesWithoutSession(t *testing.T) {
 			t.Errorf("%s was gated: %d %q", p, res.StatusCode, res.Header.Get("Location"))
 		}
 	}
-	// The moc orchestrator login must be reachable to obtain a bearer at all.
-	res := e.do(req("POST", "/api/orchestrator/auth/login", `{"username":"u"}`, "Origin", "http://fleet.example.com"))
-	if res.StatusCode == http.StatusUnauthorized {
-		t.Fatal("orchestrator login gated")
-	}
 }
 
 func TestGateAdmitsBearerOnly(t *testing.T) {

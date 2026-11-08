@@ -242,8 +242,6 @@ var schemaModelRegistry = map[string]any{
 	"APIKeyCreated":  models.APIKeyCreated{},
 	"UserCreate":     models.UserCreate{},
 	"UserResponse":   models.UserResponse{},
-	"LoginRequest":   models.UserLogin{},
-	"LoginResponse":  models.LoginResponse{},
 	"DashboardStats": models.DashboardStats{},
 	// SLA report (#274): GET /admin/sla-report returns these two reusable
 	// schemas verbatim via writeJSON, backed by exported reflectable models.

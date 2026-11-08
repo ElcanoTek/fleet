@@ -562,8 +562,6 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 		mux.HandleFunc(rt.pattern, g.handleOrchRoute(rt))
 	}
 	mux.HandleFunc("POST /api/orchestrator/tasks/{taskId}/discuss", g.handleDiscuss)
-	mux.HandleFunc("POST /api/orchestrator/auth/login", g.handleOrchLogin)
-	mux.HandleFunc("POST /api/orchestrator/auth/logout", g.handleOrchLogout)
 	mux.HandleFunc("GET /api/orchestrator/auth/elcano-login", func(w http.ResponseWriter, r *http.Request) {
 		g.elcanoLoginRedirect(w, r, "/orchestrator")
 	})

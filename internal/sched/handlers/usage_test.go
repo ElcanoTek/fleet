@@ -27,22 +27,12 @@ func TestUsageReportAdminGate(t *testing.T) {
 
 	addUser := func(username, role, token string) {
 		t.Helper()
-		hash := models.HashToken(token)
-		u := &models.User{
-			ID:           uuid.New(),
-			Username:     username,
-			Role:         role,
-			CreatedAt:    time.Now(),
-			SessionToken: &hash,
-		}
-		if _, err := store.AddUser(u); err != nil {
-			t.Fatalf("AddUser(%s): %v", username, err)
-		}
+		seedOpsUser(t, store, uuid.New(), username, role, token)
 	}
 	addUser("usage-admin", "admin", "usage-admin-token")
 	addUser("usage-client", "client", "usage-client-token")
 
-	gated := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetUsageReport))
+	gated := asSeededSession(h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetUsageReport)))
 
 	cases := []struct {
 		name   string
@@ -160,9 +150,7 @@ func TestUsageReportMergesChatSource(t *testing.T) {
 
 	// Task side: one iteration by alice, $2, 200/20 tokens.
 	alice := uuid.New()
-	if err := store.DB().AddUser(ctx, &models.User{ID: alice, Username: "alice@example.com", Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("AddUser: %v", err)
-	}
+	seedOpsUser(t, store, alice, "alice@example.com", "client", "")
 	task := &models.Task{ID: uuid.New(), Prompt: "t", Status: models.TaskStatusSuccess, CreatedAt: time.Now().UTC(), CreatedBy: &alice}
 	if err := store.DB().AddTask(ctx, task); err != nil {
 		t.Fatalf("AddTask: %v", err)

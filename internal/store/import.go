@@ -77,7 +77,7 @@ func (s *Store) ImportUser(ctx context.Context, u ImportedUser) (bool, error) {
 		return false, fmt.Errorf("import user %s: empty password_hash", email)
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (email, password_hash, created_at, updated_at)
+		`INSERT INTO core.users (email, password_hash, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT (email) DO NOTHING`,
 		email, u.PasswordHash, u.CreatedAt, u.UpdatedAt,

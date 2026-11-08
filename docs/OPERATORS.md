@@ -818,23 +818,26 @@ every credential it loads.
 
 ## backup · restore — disaster recovery
 
-fleet keeps every conversation in the **chat** DB and every scheduled task in the
-**sched** DB. Both are backed up and restored per-database with `pg_dump -Fc` /
-`pg_restore` (one custom-format dump file each — the two DBs have independent
-DSNs, so a single cluster-wide dump would not fit the credential model):
+fleet keeps every conversation in schema **chat**, every scheduled task in schema
+**sched**, and the accounts both name in schema **core** — all three in the one
+database (`DATABASE_URL`). `fleet backup` takes them with `pg_dump -Fc` /
+`pg_restore`:
 
 ```
-fleet backup                          # dump BOTH DBs into the cwd (fleet-<db>-<UTC>.dump)
-fleet backup --db=chat --out /backups # dump just chat into /backups
-fleet restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
+fleet backup                          # ONE dump of chat, core and sched (one snapshot): fleet-all-<UTC>.dump
+fleet backup --db=chat --out /backups # dump just chat (+ core) into /backups
+fleet restore --db=all FILE.dump      # restore the whole fleet from a fleet-all dump (one transaction)
+fleet restore --db=chat FILE.dump     # restore one store (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout. `restore`
-is deliberately single-DB — it overwrites a live database, so the target is named
-explicitly (no `--db=all`). Connection params, including the password, are passed
-to the child processes through the environment, never argv.
+`backup` prints each dump path on stdout. `restore` has no default `--db`: it
+overwrites a live database, so the target is named explicitly. Only `--db=all`
+is self-contained; a sched-only restore needs the accounts already in the
+database (restore chat first) — see BACKUP_RESTORE.md. Connection params,
+including the password, are passed to the child processes through the
+environment, never argv.
 
-A **daily timer** (`deploy/fleet-backup.timer`, dumping both DBs to
+A **daily timer** (`deploy/fleet-backup.timer`, one whole-fleet dump to
 `/var/backups/fleet` with a 30-day prune) is installed and enabled by
 `bootstrap --enable-service` unless you pass `--no-backup-timer`, `fleet
 doctor` advises when no timer is present, and `sudo fleet timers install

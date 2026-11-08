@@ -3,14 +3,12 @@ package handlers
 import (
 	"context"
 	"crypto/subtle"
-	"database/sql"
-	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
-
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -87,21 +85,12 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 		writeError(w, http.StatusBadRequest, "missing X-User-Email")
 		return nil, true
 	}
-	user, err := h.lookupMember(r.Context(), email)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	account, err := h.lookupMember(r.Context(), email)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Membership check failed")
 		return nil, true
 	}
-	if (user == nil || user.Role == "readonly") && isPromptLibraryPath(r.URL.Path) {
-		chatUser, chatErr := h.lookupChatMemberForPrompts(r.Context(), email)
-		if chatErr != nil {
-			writeError(w, http.StatusInternalServerError, "Membership check failed")
-			return nil, true
-		}
-		if user == nil || (chatUser != nil && chatUser.Role != "readonly") {
-			user = chatUser
-		}
-	}
+	user := headerTrustMember(account, isPromptLibraryPath(r.URL.Path))
 	if user == nil {
 		writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "not_a_member"})
 		return nil, true
@@ -117,8 +106,9 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 	return user, true
 }
 
-// userMayMutate is the ONE role gate for a user principal (a bearer token or a
-// web-tier header-trust session) on the orchestrator API. Reads are open to
+// userMayMutate is the ONE role gate for a user principal (a web-tier
+// header-trust session; the password bearer is retired, #2049 M4) on the
+// orchestrator API. Reads are open to
 // every role; a mutating method needs a role whose permission set
 // (models.RolePermissions) carries PermissionCreateTask — admin and client do,
 // readonly does not. "Mutating" is exactly the method set a readonly typed key
@@ -129,9 +119,8 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 // role at all: per-handler permission checks covered some routes, but POST
 // /tasks, /tasks/batch, /tasks/estimate, /upload, task feedback and own-task
 // cancel/delete/resume accepted a readonly user outright. The gate runs
-// wherever a user principal is resolved — headerTrustUser and the three
-// bearer resolutions (AdminOrUserAuthMiddleware, authorizeTaskCreator,
-// HandleUpload) — so no handler can forget it. API keys never reach it: their
+// wherever a user principal is resolved — headerTrustUser, which every user
+// path goes through — so no handler can forget it. API keys never reach it: their
 // scope is the key type's, decided on the key paths, unchanged.
 func userMayMutate(r *http.Request, user *models.User) bool {
 	if apikeys.TypeAllowsMethod(apikeys.KeyTypeReadonly, r.Method) {
@@ -150,7 +139,32 @@ func refuseReadonlyUserMutation(w http.ResponseWriter, r *http.Request, user *mo
 	return true
 }
 
-// AdminOrUserAuthMiddleware allows access with either an admin API key, a scoped API key, or a user token.
+// headerTrustMember is the membership verdict for a header-trusted identity:
+// the account's one identity row (nil when there is none) decides, as the
+// Operations Center user it is (Role = the legacy Operations Center role), or
+// nil for not_a_member.
+//
+// The Prompt Library is shared with chat (composer picker, "Save as
+// workflow…", Settings → Prompts), so on /prompts a signed-in chat user with
+// no — or only view — Operations Center access is authorized by their Fleet
+// role: member as run-like, viewer as view-like. That is the rule the old
+// chat-role seam applied, now read from the same row (#2049 M4). Pure, so the
+// authorization differential test runs every account state through it.
+func headerTrustMember(account *identity.User, promptLibrary bool) *models.User {
+	var user *models.User
+	if account.HasOpsAccess() {
+		user = opsModel(account)
+	}
+	if (user == nil || user.Role == identity.LegacyOpsReadonly) && promptLibrary {
+		if chatUser := promptLibraryUser(account); chatUser != nil && (user == nil || chatUser.Role != identity.LegacyOpsReadonly) {
+			user = chatUser
+		}
+	}
+	return user
+}
+
+// AdminOrUserAuthMiddleware allows access with an admin API key, a scoped API
+// key, or the web tier's header-trust identity (a session cookie).
 func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check admin API key first
@@ -205,19 +219,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Check for user Bearer token (username/password login path).
-		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if user := h.userFromPasswordToken(token); user != nil {
-				if refuseReadonlyUserMutation(w, r, user) {
-					return
-				}
-				ctx := logging.WithUser(context.WithValue(r.Context(), userContextKey, user), user.Username)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-		}
-
+		// No password bearer: it is retired (#2049 M4, ADR-0105).
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 	})
 }
@@ -314,12 +316,6 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 		// Skip for Bearer token authentication
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Skip CSRF for login endpoint (it creates a session, doesn't require one)
-		if r.URL.Path == "/auth/login" {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -27,7 +26,7 @@ func okHandler() http.Handler {
 func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 2, SchedGlobalRateLimitPerMinute: 1000}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 2, SchedGlobalRateLimitPerMinute: 1000}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	do := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/tasks", nil)
@@ -71,7 +70,7 @@ func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
 func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "admin-secret", SchedRateLimitPerMinute: 1, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "admin-secret", SchedRateLimitPerMinute: 1, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest("POST", "/tasks", nil)
@@ -90,7 +89,7 @@ func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
 func TestSchedRateLimitMiddleware_GlobalCap(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 1000, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 1000, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 
 	req1 := httptest.NewRequest("POST", "/tasks", nil)
@@ -134,7 +133,7 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 		t.Fatalf("CreateKey: %v", err)
 	}
 
-	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 100, SchedGlobalRateLimitPerMinute: 1000}, nil, mgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 100, SchedGlobalRateLimitPerMinute: 1000}, nil, mgr)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	do := func() int {
 		req := httptest.NewRequest("POST", "/tasks", nil)
@@ -149,34 +148,6 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 	}
 	if c := do(); c != http.StatusTooManyRequests {
 		t.Fatalf("2nd request should hit the key's override cap (1/min): got %d", c)
-	}
-}
-
-// TestLogin_RateLimitedPerIP pins the login throttle on the shared limiter:
-// 20 attempts per minute per client IP, the 21st refused with 429, and another
-// IP unaffected. The bodies are malformed so the allowed attempts stop at the
-// 400 before any storage lookup — the throttle runs first either way.
-func TestLogin_RateLimitedPerIP(t *testing.T) {
-	t.Parallel()
-
-	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
-	login := func(remote string) int {
-		req := httptest.NewRequest("POST", "/login", strings.NewReader("not json"))
-		req.RemoteAddr = remote
-		w := httptest.NewRecorder()
-		h.Login(w, req)
-		return w.Code
-	}
-	for i := 1; i <= loginRateLimitPerMinute; i++ {
-		if code := login("203.0.113.20:1000"); code != http.StatusBadRequest {
-			t.Fatalf("login %d: got %d, want 400 (allowed through to body parsing)", i, code)
-		}
-	}
-	if code := login("203.0.113.20:1001"); code != http.StatusTooManyRequests {
-		t.Fatalf("login %d from the same IP: got %d, want 429", loginRateLimitPerMinute+1, code)
-	}
-	if code := login("203.0.113.21:1000"); code != http.StatusBadRequest {
-		t.Fatalf("another IP: got %d, want 400 (not throttled)", code)
 	}
 }
 
@@ -197,7 +168,7 @@ func TestSchedRateLimitMiddleware_GlobalChargedAfterPerIdentity(t *testing.T) {
 		t.Fatalf("CreateKey: %v", err)
 	}
 	// The production defaults: 60/min per identity, 200/min process-wide.
-	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 60, SchedGlobalRateLimitPerMinute: 200}, nil, mgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 60, SchedGlobalRateLimitPerMinute: 200}, nil, mgr)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 
 	for i := 0; i < 201; i++ {

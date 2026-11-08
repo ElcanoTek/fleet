@@ -27,7 +27,7 @@ it instead of grepping Go source.
 | Every scheme named in an operation's `security` is defined | `TestOpenAPISecuritySchemesDefined` |
 | `components.schemas.*` properties exist on the backing Go model, `required` ones are not `omitempty`, scalar types agree | `TestOpenAPISchemaDrift` (only spec ⊆ Go: a Go field missing from the spec is a warning, not a failure) |
 | Every operation has `x-fleet-permission`, its value comes from the allowed set, `none` appears exactly when `security: []`, and `webhook`/`hmac` appear exactly with their trigger security schemes | `TestOpenAPIPermissionDeclared` |
-| Every `none` operation answers a request with no credential without 401/403 (`POST /auth/login` is checked with right and wrong body credentials instead) | `TestOpenAPINoneOperationsTakeNoCredential` |
+| Every `none` operation answers a request with no credential without 401/403 | `TestOpenAPINoneOperationsTakeNoCredential` |
 | `webhook` (`POST /triggers/{slug}`): a webhook key scoped to the slug is admitted as `X-API-Key` and as a bearer, a webhook key for another slug gets 403, a valid HMAC signature alone is admitted; no credential, a bad signature, and any other key type get 401. `hmac` (`POST /triggers/email/{slug}`): only a valid signature is admitted; a webhook key gets 401 | `TestOpenAPITriggerAuthEnforcement` (real trigger rows) |
 | **Each declared `x-fleet-permission` is the permission the code enforces** | `TestOpenAPIPermissionEnforcement` (needs the sched DB, `DATABASE_URL`, as CI sets it) |
 | `x-fleet-api-version` equals `apiversion.Version`. A request under `servers[0].url` reaches the inner route and carries `X-Fleet-API-Version`. `GET <servers[0].url>/api-info` answers 200 with no credentials | `TestOpenAPIAPIVersion` |
@@ -62,10 +62,9 @@ probe also fails if any operation manifest reads is ever left out.
   `models.Permission` value an `X-API-Key` principal must hold to use the
   operation (`admin` implies every permission). Four other values exist:
   - `none`: the operation requires no credential (`security: []`): a request
-    carrying none is admitted. It does not mean a presented credential is
-    ignored: `POST /auth/logout` revokes the session of a Bearer token it is
-    given, and `POST /auth/login` checks a username and password in its body
-    and issues a token.
+    carrying none is admitted. (The Operations Center's password login and its
+    bearer token — `POST /auth/login`, `POST /auth/logout` — are retired,
+    #2049 M4, [ADR-0105](adr/0105-one-identity-table.md).)
   - `webhook`: `POST /triggers/{slug}` accepts EITHER a typed
     `fleet_webhook_` key whose allowed slugs include the path slug (as
     `X-API-Key` or `Authorization: Bearer`; schemes `webhookKey` and

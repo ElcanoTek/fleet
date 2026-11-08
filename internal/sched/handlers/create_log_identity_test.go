@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -70,13 +69,7 @@ func TestCreateTaskLogLineCarriesTheCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", SharedToken: "topsecret", Version: "0.1.0"}, store, keyMgr)
-	member := &models.User{ID: uuid.New(), Username: "alice@elcanotek.com", Role: "client"}
-	h.memberLookup = func(_ context.Context, email string) (*models.User, error) {
-		if email == member.Username {
-			return member, nil
-		}
-		return nil, sql.ErrNoRows
-	}
+	member := seedOpsUser(t, store, uuid.New(), "alice@elcanotek.com", "client", "")
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
 

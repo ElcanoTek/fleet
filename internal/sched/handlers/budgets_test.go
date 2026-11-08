@@ -100,13 +100,14 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		now: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC),
 	}
 
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)
 	h.SetBudgetGate(env.newEnforcer())
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/tasks", h.CreateTask)
 	r.Post("/tasks/batch", h.CreateTaskBatch)
 	// Import is the third bulk-create path and runs the same budget gate, so
@@ -379,9 +380,10 @@ func TestBudgetSoftAlert_OncePerWindow_AcrossRestart(t *testing.T) {
 
 	// "Restart": a brand-new enforcer over the same database must see the
 	// persisted marker and stay silent.
-	h2 := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
+	h2 := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
 	h2.SetBudgetGate(env.newEnforcer())
 	r2 := chi.NewRouter()
+	r2.Use(asSeededSession)
 	r2.Post("/tasks", h2.CreateTask)
 	req := httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(`{"prompt":"create after restart"}`))
 	req.Header.Set("Content-Type", "application/json")

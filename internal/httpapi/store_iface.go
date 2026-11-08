@@ -302,6 +302,7 @@ type chatStore interface {
 	// provisioned account, and PATCH a single account's role/team.
 	ListUsers(ctx context.Context) ([]store.User, error)
 	SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*store.User, error)
+	SetUserAccess(ctx context.Context, email string, role, teamID, opsGrant *string) (*store.User, error)
 	// SetOwnTeam is the member-facing team write (#1157): the caller sets its
 	// OWN team_id. Creating a team and leaving one are self-serve; joining a
 	// team that already has members is refused with store.ErrTeamExists unless

@@ -301,7 +301,7 @@ func TestSessionEpochSQLMatchesGo(t *testing.T) {
 	}
 	var stored string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = $1`, "u@x.com").Scan(&stored); err != nil {
+		`SELECT password_hash FROM core.users WHERE email = $1`, "u@x.com").Scan(&stored); err != nil {
 		t.Fatalf("read password_hash: %v", err)
 	}
 	if want := sessionEpochFor(stored, ""); created.SessionEpoch != want {
@@ -355,7 +355,7 @@ func TestLookupExternalSessionEpochNeverWrites(t *testing.T) {
 		t.Fatalf("lookup of unknown identity = %q, %v", got, err)
 	}
 	var rows int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_auth_epochs`).Scan(&rows); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM core.external_auth_epochs`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {

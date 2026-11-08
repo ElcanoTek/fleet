@@ -24,24 +24,10 @@ func TestAdoptionReportAdminGate(t *testing.T) {
 
 	h, store := setupTest(t)
 
-	addUser := func(username, role, token string) {
-		t.Helper()
-		hash := models.HashToken(token)
-		u := &models.User{
-			ID:           uuid.New(),
-			Username:     username,
-			Role:         role,
-			CreatedAt:    time.Now(),
-			SessionToken: &hash,
-		}
-		if _, err := store.AddUser(u); err != nil {
-			t.Fatalf("AddUser(%s): %v", username, err)
-		}
-	}
-	addUser("adopt-admin", "admin", "adopt-admin-token")
-	addUser("adopt-client", "client", "adopt-client-token")
+	seedOpsUser(t, store, uuid.New(), "adopt-admin", "admin", "adopt-admin-token")
+	seedOpsUser(t, store, uuid.New(), "adopt-client", "client", "adopt-client-token")
 
-	gated := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetAdoptionReport))
+	gated := asSeededSession(h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetAdoptionReport)))
 
 	cases := []struct {
 		name   string
@@ -125,9 +111,10 @@ func TestAdoptionReportParamValidation(t *testing.T) {
 		if got := rep.From.Sub(rep.PrevFrom); got != 30*24*time.Hour {
 			t.Errorf("prev window = %v, want 720h", got)
 		}
-		// Chat + accounts seams not wired → tasks-only, and the report says so.
-		if len(rep.Sources) != 1 || rep.Sources[0] != "tasks" {
-			t.Errorf("sources = %v, want [tasks]", rep.Sources)
+		// The chat seam not wired → no chat source, and the report says so;
+		// the seat roster is the identity table itself (#2049 M4), always read.
+		if strings.Join(rep.Sources, ",") != "tasks,accounts" {
+			t.Errorf("sources = %v, want [tasks accounts]", rep.Sources)
 		}
 		if rep.Note == "" || !strings.Contains(rep.Note, "adoption signal") {
 			t.Errorf("honest-scope note missing or incomplete: %q", rep.Note)
@@ -170,9 +157,23 @@ func TestAdoptionReportMergesSources(t *testing.T) {
 	const query = "?from=2026-06-01&to=2026-07-01"
 
 	// Task side: alice runs one iteration on June 2 — $2, 200/20 tokens.
+	// The seat roster is the identity table itself (#2049 M4): the three
+	// actives-or-formers plus dave, who has never used it.
 	alice := uuid.New()
-	if err := store.DB().AddUser(ctx, &models.User{ID: alice, Username: "alice@example.com", Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("AddUser: %v", err)
+	for _, seat := range []struct {
+		id      uuid.UUID
+		email   string
+		created time.Time
+	}{
+		{alice, "alice@example.com", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{uuid.New(), "bob@example.com", time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+		{uuid.New(), "carol@example.com", time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)},
+		{uuid.New(), "dave@example.com", time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		seedOpsUser(t, store, seat.id, seat.email, "client", "")
+		if _, err := store.DB().Conn().ExecContext(ctx, `UPDATE core.users SET created_at = $2 WHERE email = $1`, seat.email, seat.created.Unix()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	task := &models.Task{ID: uuid.New(), Prompt: "t", Status: models.TaskStatusSuccess, CreatedAt: time.Now().UTC(), CreatedBy: &alice}
 	if err := store.DB().AddTask(ctx, task); err != nil {
@@ -196,15 +197,6 @@ func TestAdoptionReportMergesSources(t *testing.T) {
 		return []models.UserDayUsage{
 			{User: "alice@example.com", Day: "2026-05-10", CostUSD: 3.0, PromptTokens: 300, CompletionTokens: 30, Units: 2},
 			{User: "carol@example.com", Day: "2026-05-12", CostUSD: 1.0, PromptTokens: 100, CompletionTokens: 10, Units: 1},
-		}, nil
-	})
-	// Roster: the three actives-or-formers plus dave, who has never used it.
-	h.SetChatAccountsProvider(func(context.Context) ([]models.AdoptionSeat, error) {
-		return []models.AdoptionSeat{
-			{Email: "dave@example.com", CreatedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
-			{Email: "alice@example.com", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-			{Email: "bob@example.com", CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
-			{Email: "carol@example.com", CreatedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)},
 		}, nil
 	})
 
@@ -332,9 +324,7 @@ func TestAdoptionReportSeamFailures(t *testing.T) {
 
 	t.Run("roster failure → 500, not a zero denominator", func(t *testing.T) {
 		h.SetChatUserDayUsageProvider(nil)
-		h.SetChatAccountsProvider(func(context.Context) ([]models.AdoptionSeat, error) {
-			return nil, errors.New("chat store down")
-		})
+		_ = h.storage.DB().Conn().Close()
 		if code := do(); code != http.StatusInternalServerError {
 			t.Fatalf("got %d, want 500", code)
 		}

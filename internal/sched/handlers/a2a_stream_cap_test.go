@@ -48,7 +48,7 @@ func TestA2AStreamCounter_PerPrincipalCap(t *testing.T) {
 func TestA2AReserveStream_RefusesPastPerPrincipalCap(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model"}, nil, nil)
 	p := principal{apiKey: &apikeys.APIKey{KeyID: "a"}}
 	for i := 0; i < a2aMaxConcurrentStreamsPerPrincipal; i++ {
 		if !h.a2aStreamsBy.acquire(a2aStreamKey(p)) {
@@ -75,7 +75,7 @@ func TestA2AReserveStream_RefusesPastPerPrincipalCap(t *testing.T) {
 func TestA2AReserveStream_ReleaseIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model"}, nil, nil)
 	p := principal{apiKey: &apikeys.APIKey{KeyID: "a"}}
 	slot := h.a2aReserveStream(httptest.NewRecorder(), nil, p, json.RawMessage(`1`))
 	if slot == nil {

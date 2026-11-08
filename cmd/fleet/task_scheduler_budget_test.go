@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
@@ -34,8 +35,8 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	// part-1 usage model aggregates.
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	alice := &schedmodels.User{ID: uuid.New(), Username: "alice@example.com", Role: "client", CreatedAt: now}
-	if _, err := store.AddUser(alice); err != nil {
-		t.Fatalf("AddUser: %v", err)
+	if _, err := store.Identity().CreateAccount(t.Context(), identity.NewAccount{ID: alice.ID, Email: alice.Username, Role: identity.RoleViewer, OpsScope: identity.OpsRun}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
 	}
 	task := &schedmodels.Task{ID: uuid.New(), Prompt: "seed", Status: schedmodels.TaskStatusSuccess, CreatedAt: now, CreatedBy: &alice.ID}
 	if _, err := store.AddTask(task); err != nil {
@@ -88,8 +89,8 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	// otherwise its own author cannot read its transcript.
 	t.Run("attributes the task to the approving chat user", func(t *testing.T) {
 		erin := &schedmodels.User{ID: uuid.New(), Username: "erin@example.com", Role: "client", CreatedAt: now}
-		if _, err := store.AddUser(erin); err != nil {
-			t.Fatalf("AddUser: %v", err)
+		if _, err := store.Identity().CreateAccount(t.Context(), identity.NewAccount{ID: erin.ID, Email: erin.Username, Role: identity.RoleViewer, OpsScope: identity.OpsRun}); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
 		}
 		res, err := provider(ctx, httpapi.TaskScheduleRequest{
 			Prompt: "attributed to erin", RequestedBy: "Erin@Example.com", // case-insensitive lookup

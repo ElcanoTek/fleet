@@ -1,0 +1,30 @@
+# The CodeQL bundle .github/workflows/codeql.yml analyzes with, pinned by
+# SHA-256 so the scan survives a GitHub release-asset outage: each Analyze leg
+# restores its bundle from actions/cache (keyed by version + SHA-256), and only
+# on a miss downloads it with retries and requires the hash below, then hands
+# the local tarball to `github/codeql-action/init` through `tools:`.
+#
+#   action   the github/codeql-action commit the bundle was taken from — the
+#            SHA every github/codeql-action/* step in codeql.yml is pinned to
+#   version  that commit's src/defaults.json `cliVersion`: the bundle the
+#            action would have downloaded itself (codeql-bundle-v<version>)
+#   <lang>   SHA-256 of codeql-bundle-<lang>-linux64.tar.zst, the per-language
+#            bundle the action picks for a single-language job on a hosted
+#            runner (javascript-typescript's is "javascript")
+#
+# Dependabot bumps the action SHA; scripts/update-pins.sh (pins.tsv row
+# CODEQL_BUNDLE, run monthly by pins-update.yml) checks this whole file on
+# every run, not only when the action moves: the version against the pinned
+# commit's defaults.json and each hash against the digest GitHub publishes for
+# the asset. When anything differs it downloads each bundle, requires that
+# digest, and rewrites this file (`--check` fails on a wrong lock for the
+# pinned action). On a Dependabot PR that
+# moves codeql-action, run `PINS_ONLY=CODEQL_BUNDLE scripts/update-pins.sh`
+# and commit the result: scripts/check_codeql_bundle_test.go fails until the
+# action line here names the same commit as the workflow.
+action 33d7b85da1a04171e211befe2c739303b9a4c066
+version 2.27.4
+actions f12b84c1ed3540c54691257ddea1b72b62f785c8bb3eca907562c6a8a2361d32
+go d79b33f86ec8b20af73d3456041349a2780c1081ee8c0eca624b9a25c5cb2e15
+javascript 082e798c97831283a2a5f69e9198c51270e5767013d5333daeeab6520af9ce72
+python d862cb11aff035988f178703b69751be072f2aa7e76616f16bb725a207b50b7d

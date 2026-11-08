@@ -1,16 +1,12 @@
 package handlers
 
 import (
-	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 // The web-tier header-trust path (#157) is what lets a /chat-cookie user reach
@@ -18,25 +14,24 @@ import (
 // X-User-Email guarded by the shared X-Orchestrator-Server-Token. It must mirror
 // chat-server: token-first (fail-closed, no fall-through), then a non-empty
 // email, then the membership gate.
-func newHeaderTrustHandler() *Handlers {
-	member := &models.User{ID: uuid.New(), Username: "alice@elcanotek.com", Role: "client"}
+//
+// Membership is the identity table itself (#2049 M4): alice is an account with
+// ops_scope run (the old "client"); nobody else is.
+func newHeaderTrustHandler(t *testing.T) *Handlers {
+	st := identityTestStorage(t)
+	seedOpsUser(t, st, uuid.New(), "alice@elcanotek.com", "client", "")
 	return &Handlers{
 		// AdminAPIKey non-empty so verifyAdminKey doesn't fail-open on the
 		// empty/empty hash match (matches the elcano cookie test's setup).
-		config: Config{AdminAPIKey: "admin-secret", SharedToken: "topsecret"},
-		memberLookup: func(_ context.Context, email string) (*models.User, error) {
-			if email == "alice@elcanotek.com" {
-				return member, nil
-			}
-			return nil, sql.ErrNoRows
-		},
+		config:  Config{AdminAPIKey: "admin-secret", SharedToken: "topsecret"},
+		storage: st,
 	}
 }
 
 func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
 	t.Parallel()
 
-	h := newHeaderTrustHandler()
+	h := newHeaderTrustHandler(t)
 	var seenUser string
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenUser = ""
@@ -115,7 +110,7 @@ func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
 func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 	t.Parallel()
 
-	h := newHeaderTrustHandler()
+	h := newHeaderTrustHandler(t)
 	do := func(token, email string) (*httptest.ResponseRecorder, taskCreator, bool) {
 		req := httptest.NewRequest(http.MethodPost, "/tasks", nil)
 		if token != "" {
@@ -176,7 +171,7 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 func TestHandleUpload_HeaderTrust(t *testing.T) {
 	t.Parallel()
 
-	h := newHeaderTrustHandler()
+	h := newHeaderTrustHandler(t)
 	do := func(token, email string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/upload", nil)
 		if token != "" {
@@ -224,8 +219,8 @@ func TestHandleUpload_HeaderTrust(t *testing.T) {
 func TestEstimateTask_HeaderTrust(t *testing.T) {
 	t.Parallel()
 
-	newEstimateHandler := func() *Handlers {
-		h := newHeaderTrustHandler()
+	newEstimateHandler := func(t *testing.T) *Handlers {
+		h := newHeaderTrustHandler(t)
 		h.config.DefaultTaskModel = "anthropic/claude-haiku-4-5"
 		h.config.DefaultMaxIterations = 5
 		return h
@@ -249,29 +244,28 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 	}
 
 	t.Run("valid token + member gets a forecast", func(t *testing.T) {
-		rr := do(newEstimateHandler(), "topsecret", "alice@elcanotek.com", "")
+		rr := do(newEstimateHandler(t), "topsecret", "alice@elcanotek.com", "")
 		if rr.Code != http.StatusOK {
 			t.Fatalf("status %d want 200 (header-trust user must be able to estimate): %s", rr.Code, rr.Body.String())
 		}
 	})
 
 	t.Run("wrong token fails closed with 403", func(t *testing.T) {
-		rr := do(newEstimateHandler(), "wrong", "alice@elcanotek.com", "")
+		rr := do(newEstimateHandler(t), "wrong", "alice@elcanotek.com", "")
 		if rr.Code != http.StatusForbidden {
 			t.Errorf("status %d want 403", rr.Code)
 		}
 	})
 
 	t.Run("valid token + non-member is 403", func(t *testing.T) {
-		rr := do(newEstimateHandler(), "topsecret", "stranger@example.com", "")
+		rr := do(newEstimateHandler(t), "topsecret", "stranger@example.com", "")
 		if rr.Code != http.StatusForbidden {
 			t.Errorf("status %d want 403 (not_a_member)", rr.Code)
 		}
 	})
 
 	t.Run("revoked session epoch is 401", func(t *testing.T) {
-		h := newEstimateHandler()
-		h.chatSessionEpoch = func(_ context.Context, _ string) (string, error) { return "live-epoch", nil }
+		h := newEstimateHandler(t)
 		rr := do(h, "topsecret", "alice@elcanotek.com", "stale-epoch")
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("status %d want 401 (session-epoch revocation must apply to estimate too)", rr.Code)
@@ -282,9 +276,12 @@ func TestEstimateTask_HeaderTrust(t *testing.T) {
 	})
 
 	t.Run("matching session epoch is admitted", func(t *testing.T) {
-		h := newEstimateHandler()
-		h.chatSessionEpoch = func(_ context.Context, _ string) (string, error) { return "live-epoch", nil }
-		rr := do(h, "topsecret", "alice@elcanotek.com", "live-epoch")
+		h := newEstimateHandler(t)
+		live, err := h.storage.Identity().SessionEpoch(t.Context(), "alice@elcanotek.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rr := do(h, "topsecret", "alice@elcanotek.com", live)
 		if rr.Code != http.StatusOK {
 			t.Errorf("status %d want 200: %s", rr.Code, rr.Body.String())
 		}

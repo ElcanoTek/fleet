@@ -33,7 +33,8 @@ const maxUploadSize = 1 << 30 // 1 GiB
 // HandleUpload handles file uploads.
 func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Authentication
-	// Check for Admin API Key or User Token
+	// Admin API key, a create_task-scoped key, or header trust (the password
+	// bearer is retired, #2049 M4).
 	// This mirrors logic in CreateTask but slightly simpler as we just need "any valid user"
 
 	isAuthed := false
@@ -72,25 +73,6 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
 				identity = apiKeyIdentity(key.KeyID)
-			}
-		}
-
-		// 2. User Token. A readonly user may not stage an upload, exactly as it
-		// may not create the task that would use it (userMayMutate).
-		authHeader := r.Header.Get("Authorization")
-		if !isAuthed && authHeader != "" {
-			token := ""
-			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-				token = authHeader[7:]
-			} else {
-				token = authHeader
-			}
-			if user := h.userFromPasswordToken(token); user != nil {
-				if refuseReadonlyUserMutation(w, r, user) {
-					return
-				}
-				isAuthed = true
-				identity = user.Username
 			}
 		}
 	}

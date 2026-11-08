@@ -133,10 +133,11 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 		}
 	})
 
-	t.Run("/auth/login is exempt (issues a session, no cookie to forge)", func(t *testing.T) {
+	// /auth/login is retired (#2049 M4): no path exemption is left for it.
+	t.Run("/auth/login is no longer exempt", func(t *testing.T) {
 		rr := do("POST", "/auth/login", nil) // no Origin, no token
-		if rr.Code != http.StatusOK || !reached {
-			t.Fatalf("/auth/login should bypass CSRF: code=%d", rr.Code)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("/auth/login bypassed CSRF: code=%d", rr.Code)
 		}
 	})
 

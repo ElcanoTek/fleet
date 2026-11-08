@@ -668,10 +668,6 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-		// Admin Users tab two-plane writes (grant/revoke Operations Center
-		// admin alongside chat-role changes) — same composition `fleet admin
-		// add` does, triggered over HTTP.
-		httpapi.WithOpsAdmins(opsAdminsService{st: schedStorage}),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -784,7 +780,6 @@ func run() error {
 		SchedRateLimitPerMinute:       rl.perMinute,
 		SchedRateLimitPerDay:          rl.perDay,
 		SchedGlobalRateLimitPerMinute: rl.globalPerMinute,
-		ElcanoCookieName:              "elcano_auth",
 		// Reuse the chat shared token so the Next proxy's X-User-Email path is
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
 		// non-empty by config.Validate.
@@ -801,12 +796,9 @@ func run() error {
 		DefaultMaxRetries:    cfg.TaskDefaultMaxRetries,
 		// Per-task sandbox-limit ceilings (#205): validateSandboxLimits rejects an
 		// override above these. 0 = no ceiling.
-		SandboxMemoryMaxMB: cfg.SandboxMemoryMaxMB,
-		SandboxCPUsMax:     cfg.SandboxCPUsMax,
-		SandboxPidsMax:     cfg.SandboxPidsMax,
-		// Central Auth only: the Operations Center refuses its own password
-		// login and the bearer it minted, like the other two planes.
-		PasswordLoginDisabled: cfg.PasswordLoginDisabled,
+		SandboxMemoryMaxMB:    cfg.SandboxMemoryMaxMB,
+		SandboxCPUsMax:        cfg.SandboxCPUsMax,
+		SandboxPidsMax:        cfg.SandboxPidsMax,
 		AccountsManagedByAuth: cfg.AccountsManagedByAuth,
 	}
 	warnIfNoAdminKey(hcfg.AdminAPIKey)
@@ -834,27 +826,17 @@ func run() error {
 	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
 	// read-only) and merges it with sched-DB private/workspace entries.
 	h.SetPromptCatalogProvider(bundle.Prompts)
-	// Signed-in Chat users whose independent Operations Center role (ops_role) is
-	// "none" still use the shared Prompt Library in Chat and Settings → Prompts.
-	h.SetChatMemberRoleProvider(chatMemberRoleProvider(chatStore))
+	// Identity — membership, roles, the Prompt Library fallback, session
+	// epochs and the adoption roster — needs no wiring: the Operations Center
+	// reads the one identity table, core.users, directly (#2049 M4, ADR-0105).
+	//
+	// Chat's usage data stays a seam (#2049 M4 step 9, kept on purpose): the
+	// usage and adoption reports read chat.turn_metrics through the chat
+	// store's own queries rather than this plane reading the chat schema.
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
-	// Wire the chat side of the adoption report (the exec Adoption view):
-	// per-user-per-day chat metering + the provisioned-account roster, both
-	// read-only aggregations over what the chat store already records.
+	// Per-user-per-day chat metering for the adoption report.
 	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
-	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
-	// Both planes are reached with the SAME session cookie, so the Operations
-	// Center checks the same revocation claim chat does. The epoch lives in the
-	// chat users table, which this plane does not read (separate stores, ADR-0098) — hand it the
-	// lookup, not the schema. Wired unconditionally: the chat store is open by
-	// the time these handlers exist, and a nil seam would silently stop checking.
-	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
-	// Read-only on the request path; rows are created by the web tier's mint via
-	// httpapi's /auth/external-session-epoch.
-	h.SetExternalSessionEpochProvider(func(ctx context.Context, issuer, subject, _ string) (string, error) {
-		return chatStore.LookupExternalSessionEpoch(ctx, issuer, subject)
-	})
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
@@ -1403,14 +1385,15 @@ func defaultTaskTimezone() string {
 	return "UTC"
 }
 
-// seedBootstrapAdmins provisions (or promotes) the configured emails as
-// orchestrator admins at boot (#458). The list
-// (FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS, comma-separated emails) is authoritative
-// on every boot and idempotent; empty = no bootstrap. This is the ONLY automatic
-// orchestrator grant: a non-bootstrap chat user is still NOT a member (they get a
-// clear "ask an admin" page, never silent admin), preserving the deliberate
-// chat/orchestrator membership separation (separate stores, ADR-0098). Extracted from run() to
-// keep it within the cyclomatic budget.
+// seedBootstrapAdmins makes the configured emails Fleet admins at boot (#458):
+// role admin on their one identity row, created (with no usable password: they
+// sign in with a session cookie) when missing, re-enabled when disabled. The
+// list (FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS, comma-separated emails) is
+// authoritative on every boot and idempotent; empty = no bootstrap. Since the
+// one identity table (#2049 M4) Operations Center admin IS Fleet admin, so a
+// bootstrap admin is a chat admin too. Every other account's Operations Center
+// access is its ops_scope — none unless granted. Extracted from run() to keep
+// it within the cyclomatic budget.
 func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) error {
 	admins := bootstrapAdmins()
 	if len(admins) == 0 {
@@ -1425,7 +1408,7 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, email := range admins {
-		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
+		if err := schedStorage.Identity().EnsureAdmin(ctx, email); err != nil {
 			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
 		}
 	}
@@ -2173,42 +2156,6 @@ func chatUserDayUsageProvider(chatStore *store.Store) handlers.ChatUserDayUsageP
 				CompletionTokens: r.CompletionTokens,
 				CachedTokens:     r.CachedTokens,
 				Units:            r.Turns,
-			})
-		}
-		return out, nil
-	}
-}
-
-// chatMemberRoleProvider resolves a chat-plane user's RBAC role ("admin",
-// "member", or "viewer") by email for /prompts authorization when the caller's
-// independent Operations Center role (ops_role) is "none".
-func chatMemberRoleProvider(chatStore *store.Store) handlers.ChatMemberRoleProvider {
-	return func(ctx context.Context, email string) (string, error) {
-		u, err := chatStore.GetUser(ctx, email)
-		if errors.Is(err, store.ErrUserNotFound) || u == nil {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return u.Role, nil
-	}
-}
-
-// chatAccountsProvider adapts the chat store's provisioned-user roster into
-// the adoption report's seat list — the denominator for the adoption rate and
-// the "not yet active" roster. Read-only; emails only, never credentials.
-func chatAccountsProvider(chatStore *store.Store) handlers.ChatAccountsProvider {
-	return func(ctx context.Context) ([]schedmodels.AdoptionSeat, error) {
-		users, err := chatStore.ListUsers(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]schedmodels.AdoptionSeat, 0, len(users))
-		for _, u := range users {
-			out = append(out, schedmodels.AdoptionSeat{
-				Email:     u.Email,
-				CreatedAt: time.Unix(u.CreatedAt, 0).UTC(),
 			})
 		}
 		return out, nil

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -196,30 +197,36 @@ type adminUser struct {
 	TeamID    string `json:"team_id"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
-	// OpsCenterAdmin reports whether the same email also holds the
-	// Operations Center (sched-plane) admin role — the two-plane view the
-	// `fleet admin list` CLI prints. Always false when no orchestrator seam
-	// is wired (WithOpsAdmins), so it never claims access that can't exist.
+	// OpsScope is the account's Operations Center access for a non-admin:
+	// "none" | "view" | "run" (#2049 M4). An admin has full Operations Center
+	// access and reports "none" here: read OpsCenterRole.
+	OpsScope string `json:"ops_scope"`
+	// OpsCenterAdmin reports whether the account is an Operations Center
+	// admin — since the one identity table, exactly whether role is admin.
 	// Kept alongside OpsCenterRole for older clients.
 	OpsCenterAdmin bool `json:"ops_center_admin"`
-	// OpsCenterRole is the sched-plane role for the same email:
-	// "admin" | "client" | "readonly" | "" (no Operations Center access).
+	// OpsCenterRole is the account's Operations Center access in its legacy
+	// names: "admin" | "client" (run) | "readonly" (view) | "" (none).
 	OpsCenterRole string `json:"ops_center_role"`
 }
 
 func toAdminUser(u store.User) adminUser {
+	opsRole := u.LegacyOpsRole()
 	return adminUser{
-		Email:     u.Email,
-		Role:      u.Role,
-		TeamID:    u.TeamID,
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
+		Email:          u.Email,
+		Role:           u.Role,
+		TeamID:         u.TeamID,
+		CreatedAt:      u.CreatedAt,
+		UpdatedAt:      u.UpdatedAt,
+		OpsScope:       u.OpsScope,
+		OpsCenterAdmin: opsRole == "admin",
+		OpsCenterRole:  opsRole,
 	}
 }
 
 // handleAdminUsers serves the /admin/users collection (#237): GET lists every
-// provisioned account with its role + team (+ the ops-center annotation when
-// the orchestrator seam is wired), POST creates one. Admin-gated.
+// provisioned account with its role, team and Operations Center access (all
+// one row since #2049 M4), POST creates one. Admin-gated.
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -236,20 +243,9 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// One batched ops-center lookup for the whole table (never per-row).
-	// Best-effort: a briefly unreachable sched DB must not blank the user list.
-	opsRoles := map[string]string{}
-	if s.opsAdmins != nil {
-		if roles, err := s.opsAdmins.Roles(r.Context()); err == nil {
-			opsRoles = roles
-		}
-	}
 	out := make([]adminUser, 0, len(users))
 	for _, u := range users {
-		au := toAdminUser(u)
-		au.OpsCenterRole = opsRoles[strings.ToLower(u.Email)]
-		au.OpsCenterAdmin = au.OpsCenterRole == "admin"
-		out = append(out, au)
+		out = append(out, toAdminUser(u))
 	}
 	writeJSON(w, r, map[string]any{"users": out})
 }
@@ -296,32 +292,31 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 //
 //	{ "role": "viewer", "team_id": "growth" }
 //
-// Role writes carry the two-plane semantics of `fleet admin add`: promoting to
-// admin also ensures the Operations Center admin row; demoting removes it.
+// Role, team and Operations Center access are written to the one identity row
+// in ONE transaction (store.SetUserAccess, #2049 M4): admin is full Operations
+// Center access; demoting an admin with no ops_role ends it. ops_role takes
+// either vocabulary: none | view | run, or none | readonly | client | admin.
 // Demoting YOURSELF is refused — the same lockout guard as self-deletion.
 func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, email string) {
 	var body struct {
 		Role   *string `json:"role"`
 		TeamID *string `json:"team_id"`
-		// OpsRole sets the Operations Center (sched-plane) role explicitly:
-		// "none" | "readonly" | "client" | "admin". Independent of the chat
-		// role except that chat admin implies ops admin (below).
-		OpsRole *string `json:"ops_role"`
+		// OpsRole sets the Operations Center access explicitly, in either
+		// vocabulary (identity.ParseOpsRole). OpsScope is the new name of the
+		// same field (none | view | run); when both are sent OpsScope wins.
+		OpsRole  *string `json:"ops_role"`
+		OpsScope *string `json:"ops_scope"`
 	}
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if body.Role == nil && body.TeamID == nil && body.OpsRole == nil {
-		http.Error(w, "nothing to update (provide role, team_id and/or ops_role)", http.StatusBadRequest)
+	opsGrant, ok := opsGrantFromBody(w, body.OpsRole, body.OpsScope)
+	if !ok {
 		return
 	}
-	if body.OpsRole != nil {
-		switch *body.OpsRole {
-		case "none", "readonly", "client", "admin":
-		default:
-			http.Error(w, "invalid ops_role (want none|readonly|client|admin)", http.StatusBadRequest)
-			return
-		}
+	if body.Role == nil && body.TeamID == nil && opsGrant == nil {
+		http.Error(w, "nothing to update (provide role, team_id and/or ops_scope)", http.StatusBadRequest)
+		return
 	}
 	// Self-lockout guard. It fires on an ACTUAL demotion only: the Users tab
 	// PATCHes role and team together, so editing your OWN team arrives carrying
@@ -350,7 +345,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	if body.TeamID != nil || body.Role != nil {
 		affectedConvIDs = s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	}
-	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
+	u, err := s.store.SetUserAccess(r.Context(), email, body.Role, body.TeamID, opsGrant)
 	if err != nil {
 		switch {
 		case store.IsInputError(err):
@@ -365,26 +360,29 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	if body.TeamID != nil || body.Role != nil {
 		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	}
-	if body.Role != nil {
-		if *body.Role == store.RoleAdmin {
-			s.ensureOpsAdmin(r, u.Email)
-		} else if body.OpsRole == nil {
-			// Chat demote: drop an ops-ADMIN row (the implied grant), but leave
-			// an explicit client/readonly grant standing — those are granted
-			// deliberately via ops_role, not implied by the chat role.
-			if roles, rerr := s.opsRolesBestEffort(r); rerr == nil && roles[strings.ToLower(u.Email)] == "admin" {
-				s.removeOpsAdmin(r, u.Email)
-			}
+	if body.Role != nil || opsGrant != nil {
+		logging.From(r.Context()).Info("admin users: set role", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "ops_scope", safe.LogSafe(u.OpsScope), "actor", safe.LogSafe(userFromCtx(r.Context())))
+	}
+	writeJSON(w, r, toAdminUser(*u))
+}
+
+// opsGrantFromBody validates the request's Operations Center grant: ops_scope
+// (none | view | run) wins over the legacy ops_role (none | readonly | client
+// | admin, or the new names). nil when neither was sent; ok=false when it
+// wrote a 400.
+func opsGrantFromBody(w http.ResponseWriter, opsRole, opsScope *string) (*string, bool) {
+	if opsScope != nil {
+		if !identity.ValidOpsScope(*opsScope) {
+			http.Error(w, "invalid ops_scope (want none|view|run)", http.StatusBadRequest)
+			return nil, false
 		}
-		logging.From(r.Context()).Info("admin users: set role", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "actor", safe.LogSafe(userFromCtx(r.Context())))
+		return opsScope, true
 	}
-	// Same precedence as POST /admin/users: Chat Admin is the unified grant
-	// and wins over any narrower ops_role in the same request, so
-	// {role:"admin", ops_role:"readonly"} ends as ops admin on both endpoints
-	// instead of the PATCH quietly downgrading the grant it just made.
-	if body.OpsRole != nil && (body.Role == nil || *body.Role != store.RoleAdmin) {
-		s.setOpsRole(r, u.Email, *body.OpsRole)
-		logging.From(r.Context()).Info("admin users: set ops role", "email", safe.LogSafe(u.Email), "ops_role", safe.LogSafe(*body.OpsRole), "actor", safe.LogSafe(userFromCtx(r.Context())))
+	if opsRole != nil {
+		if _, _, ok := identity.ParseOpsRole(*opsRole); !ok {
+			http.Error(w, "invalid ops_role (want none|readonly|client|admin, or none|view|run)", http.StatusBadRequest)
+			return nil, false
+		}
 	}
-	writeJSON(w, r, s.toAdminUserAnnotated(r, *u))
+	return opsRole, true
 }

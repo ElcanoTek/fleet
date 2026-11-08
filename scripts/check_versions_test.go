@@ -348,7 +348,8 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 }
 
 // TestPinnedVersionsInDocsAreListedAndCurrent: every pin in scripts/lib/pins.tsv
-// is declared once (<NAME>_VERSION in the workflows, or cosign.lock), but some
+// is declared once (<NAME>_VERSION in the workflows, cosign.lock, or
+// codeql-bundle.lock), but some
 // are RESTATED in prose or a Makefile that tells a contributor which version
 // to install. Those copies drift exactly the way you would expect: the
 // golangci-lint v2.12.2 -> v2.13.1 bump that Go 1.27 forced updated
@@ -386,7 +387,8 @@ var pinDocExemptions = map[string]string{
 // fixture versions.
 func skipPinDocScan(rel string) bool {
 	return strings.HasPrefix(rel, ".github/workflows/") || strings.HasSuffix(rel, "_test.go") ||
-		rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock"
+		rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock" ||
+		rel == ".github/codeql-bundle.lock"
 }
 
 func pinMarker(name string) string { return strings.ToLower(strings.ReplaceAll(name, "_", "-")) }
@@ -404,6 +406,14 @@ func pinnedVersions(t *testing.T, root string, pins map[string]pinRow) map[strin
 			m := regexp.MustCompile(`(?m)^version v?(\d+\.\d+\.\d+)$`).FindStringSubmatch(readFile(t, root, "internal/release/cosign.lock"))
 			if m == nil {
 				t.Fatal("internal/release/cosign.lock: no version line")
+			}
+			version[name] = m[1]
+			continue
+		}
+		if p.kind == "codeql" {
+			m := regexp.MustCompile(`(?m)^version (\d+\.\d+\.\d+)$`).FindStringSubmatch(readFile(t, root, ".github/codeql-bundle.lock"))
+			if m == nil {
+				t.Fatal(".github/codeql-bundle.lock: no version line")
 			}
 			version[name] = m[1]
 			continue

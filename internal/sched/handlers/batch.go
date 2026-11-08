@@ -6,7 +6,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -113,8 +112,8 @@ func (h *Handlers) scopedKeyCannotCreate(r *http.Request) bool {
 }
 
 // authorizeTaskCreator is the SAME authorization as CreateTask: an admin API
-// key, a scoped key carrying PermissionCreateTask, a user bearer token, or the
-// Elcano scoped-tier cookie (which must resolve to a provisioned member). On
+// key, a scoped key carrying PermissionCreateTask, or the web tier's
+// header-trust identity (a session cookie) (which must resolve to a provisioned member). On
 // failure it writes the appropriate error response and returns ok=false; the
 // caller must stop. It is read-only with respect to authorization state — it
 // calls ValidateKey (which DOES consume one rate-limit token, matching
@@ -196,21 +195,10 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 		}
 	}
 
-	var user *models.User
-	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		user = h.userFromPasswordToken(strings.TrimPrefix(authHeader, "Bearer "))
-	}
-	if user == nil {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return taskCreator{}, "", false
-	}
-	if refuseReadonlyUserMutation(w, r, user) {
-		return taskCreator{}, "", false
-	}
-	creator.creatorID = &user.ID
-	creator.creatorUsername = user.Username
-	creator.hasAdminPermission = userHasPermission(user, models.PermissionAdmin)
-	return creator, user.Username, true
+	// The Operations Center password bearer is retired (#2049 M4, ADR-0105):
+	// programs use API keys, people the session cookie (header trust above).
+	writeError(w, http.StatusUnauthorized, "Unauthorized")
+	return taskCreator{}, "", false
 }
 
 // CreateTaskBatch handles POST /tasks/batch (#227): it accepts a slice of

@@ -54,7 +54,7 @@ func (s *Store) ApplyExternalTeamRename(ctx context.Context, r ExternalTeamRenam
 		return false, 0, err
 	}
 	var last int64
-	switch scanErr := tx.QueryRowContext(ctx, `SELECT version FROM external_team_renames WHERE issuer = $1`, r.Issuer).Scan(&last); {
+	switch scanErr := tx.QueryRowContext(ctx, `SELECT version FROM core.external_team_renames WHERE issuer = $1`, r.Issuer).Scan(&last); {
 	case errors.Is(scanErr, sql.ErrNoRows):
 	case scanErr != nil:
 		err = scanErr
@@ -70,7 +70,7 @@ func (s *Store) ApplyExternalTeamRename(ctx context.Context, r ExternalTeamRenam
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO external_team_renames(issuer, version, event_id, from_team, to_team, applied_at)
+		INSERT INTO core.external_team_renames(issuer, version, event_id, from_team, to_team, applied_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (issuer) DO UPDATE SET version = excluded.version, event_id = excluded.event_id,
 		  from_team = excluded.from_team, to_team = excluded.to_team, applied_at = excluded.applied_at

@@ -4,15 +4,12 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
-	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 )
@@ -27,8 +24,10 @@ func scratchDatabase(t *testing.T) string {
 // TestBothStoresInOneDatabase is the #2049 regression: both stores, with
 // their real migrations, in ONE database from ONE DSN — the configuration
 // DATABASE_URL alone resolves to. Each store must live in its own schema,
-// see only its own tables (both have a `users` and a `schema_migrations`
-// table of incompatible shapes), and reopen with no migration to run.
+// see only its own tables (both have a `schema_migrations` table of
+// incompatible shapes), share the ONE identity table in schema core (#2049
+// M4: the scheduler's own users table is merged and renamed away), and reopen
+// with no migration to run.
 func TestBothStoresInOneDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -62,21 +61,24 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 	}
 	chat, sched := open()
 
-	// The cross-store shape that broke the old shared database: a user in
-	// each store's `users` table, under the same name.
+	// One account, read by both stores: chat creates it; the Operations
+	// Center sees it once it has Operations Center access.
 	if _, err := chat.CreateUser(ctx, "alice@example.com", "placeholder-password-1"); err != nil {
 		t.Fatalf("chat CreateUser: %v", err)
 	}
-	if err := sched.AddUser(ctx, &models.User{ID: uuid.New(), Username: "alice@example.com", PasswordHash: "x", Role: "user", CreatedAt: time.Now()}); err != nil {
-		t.Fatalf("sched AddUser: %v", err)
-	}
 	cu, err := chat.ListUsers(ctx)
 	if err != nil || len(cu) != 1 {
-		t.Fatalf("chat ListUsers = %d users, %v; want exactly its own one", len(cu), err)
+		t.Fatalf("chat ListUsers = %d users, %v; want exactly one", len(cu), err)
+	}
+	if su, err := sched.ListUsers(ctx); err != nil || len(su) != 0 {
+		t.Fatalf("sched ListUsers = %d users, %v; want none before the grant", len(su), err)
+	}
+	if _, err := sched.Identity().SetOpsAccess(ctx, "alice@example.com", "client"); err != nil {
+		t.Fatal(err)
 	}
 	su, err := sched.ListUsers(ctx)
-	if err != nil || len(su) != 1 {
-		t.Fatalf("sched ListUsers = %d users, %v; want exactly its own one", len(su), err)
+	if err != nil || len(su) != 1 || su[0].ID.String() != cu[0].ID {
+		t.Fatalf("sched ListUsers = %+v, %v; want alice, with the chat row's UUID", su, err)
 	}
 
 	// Where everything landed: each store's tables in its schema, nothing in
@@ -106,6 +108,7 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 	if count(tables+` AND tablename = 'tasks'`, "chat") != 0 || count(tables+` AND tablename = 'conversations'`, "sched") != 0 {
 		t.Error("a store's table leaked into the other store's schema")
 	}
+	checkIdentityPlacement(t, count, tables)
 	if count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'sched' AND table_name = 'schema_migrations' AND column_name = 'dirty'`) != 1 {
 		t.Error("sched.schema_migrations is not the sched runner's table")
 	}
@@ -137,13 +140,21 @@ func TestEnsureRefusesALegacyDatabase(t *testing.T) {
 	t.Parallel()
 
 	dsn := scratchDatabase(t)
-	legacy, err := store.Open(dsn, store.DefaultPoolConfig()) // a legacy chat database: tables in public
-	if err != nil {
-		t.Fatalf("open legacy chat store: %v", err)
+	// A legacy store's database: a fleet store's ledger in public (what the
+	// probe looks for). The chat store itself can no longer be migrated in
+	// public (migration 099 refuses), so the ledger is made by hand.
+	{
+		raw, err := sql.Open("pgx", dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := raw.Exec(`CREATE TABLE public.schema_migrations (version BIGINT PRIMARY KEY)`); err != nil {
+			t.Fatal(err)
+		}
+		_ = raw.Close()
 	}
-	_ = legacy.Close()
 
-	_, err = store.Open(config.WithSchema(dsn, config.ChatSchema), store.DefaultPoolConfig())
+	_, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.DefaultPoolConfig())
 	if !dbschema.IsLegacyDatabase(err) {
 		t.Fatalf("store.Open in schema mode over a legacy database = %v, want the legacy refusal", err)
 	}
@@ -175,5 +186,46 @@ func TestEnsureRefusesALegacyDatabase(t *testing.T) {
 	_ = sched.Close()
 	if !dbschema.IsLegacyDatabase(err) {
 		t.Fatalf("sched Init with an existing sched schema over a legacy database = %v, want the legacy refusal", err)
+	}
+}
+
+// TestChatStoreRefusesPublic pins migration 099's guard (#2049 M4): the
+// identity table moves into schema core next to the stores of the one
+// database, so a chat store whose DSN names no schema (public) does not
+// migrate past 098 — it refuses, with the fix, and creates no core schema.
+func TestChatStoreRefusesPublic(t *testing.T) {
+	t.Parallel()
+
+	dsn := scratchDatabase(t)
+	_, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err == nil || !strings.Contains(err.Error(), "schema chat of the one database") {
+		t.Fatalf("chat store.Open in public = %v, want 099's refusal", err)
+	}
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var n int
+	if err := raw.QueryRow(`SELECT count(*) FROM pg_namespace WHERE nspname = 'core'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("099's guard let it create schema core (%d, %v)", n, err)
+	}
+	if err := raw.QueryRow(`SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'users'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the refused migration moved public.users (%d, %v)", n, err)
+	}
+}
+
+// checkIdentityPlacement: the identity table is core.users and nowhere else;
+// the scheduler's legacy table is merged and renamed (#2049 M4).
+func checkIdentityPlacement(t *testing.T, count func(string, ...any) int, tables string) {
+	t.Helper()
+	// The identity table: in core, nowhere else; the scheduler's legacy table
+	// merged and renamed.
+	if count(tables+` AND tablename = 'users'`, "core") != 1 || count(tables+` AND tablename = 'users'`, "chat") != 0 ||
+		count(tables+` AND tablename = 'users'`, "sched") != 0 || count(tables+` AND tablename = 'users_premerge_m4'`, "sched") != 1 {
+		t.Error("users is not exactly core.users (with sched.users renamed users_premerge_m4)")
+	}
+	if count(`SELECT count(*) FROM core.identity_merge WHERE step = 'm4_sched_users'`) != 1 {
+		t.Error("the identity merge did not record itself")
 	}
 }

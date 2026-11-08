@@ -267,7 +267,7 @@ func TestExportImportDefinitions_DB(t *testing.T) {
 	}
 
 	// Wipe, then import the export back.
-	fleetdb.DeleteRows(t, database, "logs", "tasks", "users")
+	fleetdb.DeleteRows(t, database, "logs", "tasks", "core.users")
 	resp, err := importTaskDefinitions(ctx, st, bytes.NewReader(buf.Bytes()), "", false, models.TaskImportConflictError)
 	if err != nil {
 		t.Fatalf("import: %v", err)

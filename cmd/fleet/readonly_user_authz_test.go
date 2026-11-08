@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -36,10 +37,10 @@ var ownerMayAct = map[string]bool{
 }
 
 // TestOrchestratorUserRoleCannotMutateWhenReadonly drives every operation a
-// user principal can reach (security lists bearerToken) through the real
-// router, as a sched user of each role on both user paths — a password-login
-// bearer token and the web tier's header-trust session (shared token +
-// X-User-Email) — and pins the role gate:
+// user principal can reach (security lists elcanoAuthCookie) through the real
+// router, as an account of each Operations Center role on the user path — the
+// web tier's header-trust session (shared token + X-User-Email; the password
+// bearer is retired, #2049 M4) — and pins the role gate:
 //
 //   - readonly on any mutating method (POST/PUT/PATCH/DELETE) is a definitive
 //     403, the same line a fleet_readonly_ key draws (apikeys.TypeAllowsMethod);
@@ -59,26 +60,32 @@ func TestOrchestratorUserRoleCannotMutateWhenReadonly(t *testing.T) {
 	prefix := specServerPrefix(t)
 
 	type actor struct {
-		user  *models.User
-		token string
+		user *models.User
 	}
 	actors := map[string]actor{}
 	for _, role := range []string{"readonly", "client", "admin"} {
-		token := "probe-" + role + "-token-" + uuid.NewString()
-		hash := models.HashToken(token)
-		u := &models.User{ID: uuid.New(), Username: role + "-user@probe.example", Role: role,
-			CreatedAt: time.Now().UTC(), SessionToken: &hash}
-		if _, err := env.store.AddUser(u); err != nil {
+		// One identity table (#2049 M4): the legacy role is what the
+		// account's Fleet role and ops_scope grant.
+		acct := identity.NewAccount{Email: role + "-user@probe.example", Role: identity.RoleViewer}
+		switch role {
+		case "admin":
+			acct.Role = identity.RoleAdmin
+		case "client":
+			acct.OpsScope = identity.OpsRun
+		case "readonly":
+			acct.OpsScope = identity.OpsView
+		}
+		created, err := env.store.Identity().CreateAccount(context.Background(), acct)
+		if err != nil {
 			t.Fatalf("add %s user: %v", role, err)
 		}
-		actors[role] = actor{user: u, token: token}
+		actors[role] = actor{user: &models.User{ID: created.ID, Username: created.Email, Role: role}}
 	}
 
 	credentials := []struct {
 		name  string
 		apply func(r *http.Request, a actor)
 	}{
-		{"bearer", func(r *http.Request, a actor) { r.Header.Set("Authorization", "Bearer "+a.token) }},
 		{"session", func(r *http.Request, a actor) {
 			r.Header.Set("X-Orchestrator-Server-Token", env.sharedToken)
 			r.Header.Set("X-User-Email", a.user.Username)
@@ -112,7 +119,7 @@ func TestOrchestratorUserRoleCannotMutateWhenReadonly(t *testing.T) {
 
 	var mutating, reads int
 	for _, op := range specOps(t) {
-		if !slices.Contains(op.security, "bearerToken") {
+		if !slices.Contains(op.security, "elcanoAuthCookie") {
 			continue // not reachable by a user principal
 		}
 		perm := models.Permission(op.permission)

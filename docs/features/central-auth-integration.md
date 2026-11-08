@@ -51,9 +51,9 @@ chat-server and the Operations Center all apply them:
 - A session cookie minted by a password login stops working at once, whether
   it predates the switch or not. A browser that also holds a valid
   `elcano_auth` cookie is signed in by that one instead.
-- The Operations Center's `POST /auth/login` (and its public `/v1/auth/login`)
-  answers 403, and a bearer it minted earlier is refused by the auth
-  middleware, task creation and upload alike.
+- The Operations Center has no password login of its own at all since the
+  one identity table (#2049 M4, ADR-0105): `POST /auth/login` and its bearer
+  are retired on every Fleet, not only here.
 - **Accounts, roles and teams are managed in Auth.** Settings → Admin → Users
   is the view-only usage list (no Add user, no row editor with roles, team,
   password reset or delete, no Rename team) with a link to Auth's console,

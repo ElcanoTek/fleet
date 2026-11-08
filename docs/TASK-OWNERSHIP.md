@@ -40,7 +40,7 @@ dashboard.
 
 | Caller | `created_by` of the copy | `created_by_key_id` of the copy |
 |---|---|---|
-| A user (bearer token, session cookie) | the caller (unchanged since #270) | none |
+| A user (session cookie) | the caller (unchanged since #270) | none |
 | A scoped API key | **the source's owner** | the calling key |
 | The bootstrap admin key | **the source's owner** | **the source's key** |
 

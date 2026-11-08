@@ -407,11 +407,16 @@ describe("AdminUsersPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows one badge for unified admins and an ops badge for an ops-only admin", async () => {
+  it("shows one badge for admins and an ops badge for a Background tasks scope", async () => {
     mockFetch(
       listImpl([
-        { ...USERS[0], ops_center_admin: true, ops_center_role: "admin" },
-        { ...USERS[1], ops_center_admin: true, ops_center_role: "admin" },
+        {
+          ...USERS[0],
+          ops_center_admin: true,
+          ops_center_role: "admin",
+          ops_scope: "none",
+        },
+        { ...USERS[1], ops_center_role: "readonly", ops_scope: "view" },
       ]),
     );
     render(<AdminUsersPage />);
@@ -420,13 +425,13 @@ describe("AdminUsersPage", () => {
       .getByText("alice@x.com")
       .closest("tr") as HTMLElement;
     expect(within(aliceRow).getAllByText("Admin")).toHaveLength(1);
-    expect(within(aliceRow).queryByText("ops: admin")).toBeNull();
+    expect(within(aliceRow).queryByText(/^ops: /)).toBeNull();
 
     const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
     expect(
-      within(bobRow).getByTitle("Background tasks admin"),
+      within(bobRow).getByTitle("Background tasks viewer (read-only)"),
     ).toBeInTheDocument();
-    expect(within(bobRow).getByText("ops: admin")).toBeInTheDocument();
+    expect(within(bobRow).getByText("ops: viewer")).toBeInTheDocument();
   });
 
   it("presents Fleet Admin once and grants both permission planes", async () => {
@@ -518,10 +523,8 @@ describe("AdminUsersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(JSON.parse(calls[0].body)).toEqual({
-      role: "admin",
-      ops_role: "admin",
-    });
+    // Fleet Admin is the role: full Background tasks access needs no scope.
+    expect(JSON.parse(calls[0].body)).toEqual({ role: "admin" });
     const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
     await waitFor(() =>
       expect(within(bobRow).getAllByText("Admin")).toHaveLength(1),
@@ -571,7 +574,7 @@ describe("AdminUsersPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(JSON.parse(calls[0].body)).toEqual({ role: "member", ops_role: "none" });
+    expect(JSON.parse(calls[0].body)).toEqual({ role: "member", ops_scope: "none" });
   });
 
   it("leaves unified Admin safely when a narrower Chat role is selected", async () => {
@@ -625,7 +628,7 @@ describe("AdminUsersPage", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(JSON.parse(calls[0].body)).toEqual({
       role: "viewer",
-      ops_role: "none",
+      ops_scope: "none",
     });
   });
 
@@ -642,6 +645,7 @@ describe("AdminUsersPage", () => {
             created_at: 3,
             updated_at: 3,
             ops_center_role: "client",
+            ops_scope: "run",
           }),
           { status: 201 },
         );
@@ -708,7 +712,7 @@ describe("AdminUsersPage", () => {
       email: "carol@x.com",
       password: "carol-pw-123",
       role: "viewer",
-      ops_role: "client",
+      ops_scope: "run",
       team_id: "platform",
     });
     // New row appears (the email also shows in the "created" footer, so expect
@@ -761,7 +765,6 @@ describe("AdminUsersPage", () => {
       email: "dana@x.com",
       password: "dana-pw-123",
       role: "admin",
-      ops_role: "admin",
       team_id: "",
     });
   });

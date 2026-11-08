@@ -281,12 +281,6 @@ type Server struct {
 	// scheduleTask: httpapi stays sched-agnostic and main.go supplies the
 	// adapter. nil = the capability is unconfigured and the tool reports so.
 	manageTasks func(context.Context, TaskMutationRequest) (*TaskMutationResult, error)
-
-	// opsAdmins grants/revokes/lists Operations-Center admin rows by email so
-	// the admin Users tab carries `fleet admin add`'s two-plane semantics.
-	// Injected (WithOpsAdmins) so httpapi stays sched-agnostic; nil → role
-	// writes touch the chat plane only and the list reports no annotation.
-	opsAdmins OpsAdmins
 }
 
 // TaskScheduleRequest is the sched-agnostic payload the chat approval path hands

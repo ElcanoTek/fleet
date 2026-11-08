@@ -59,6 +59,7 @@ func seedWorkspaceTask(t *testing.T, store *storage.Storage, status models.TaskS
 
 func workspaceRouter(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/tasks/{task_id}/workspace", h.TaskWorkspace)

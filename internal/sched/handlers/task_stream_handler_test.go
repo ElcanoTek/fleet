@@ -63,6 +63,7 @@ func (r *flushRecorder) Body() string {
 
 func streamRouter(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Get("/tasks/{task_id}/stream", h.StreamTaskLogs)
 	return r
 }
