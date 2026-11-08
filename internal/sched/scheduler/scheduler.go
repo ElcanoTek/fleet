@@ -134,6 +134,18 @@ type Scheduler struct {
 	// chatPassTimeoutOverride shortens a chat schedule pass's deadline
 	// (tests only; 0 = sweepTimeout).
 	chatPassTimeoutOverride time.Duration
+	// chatFireTimeoutOverride shortens a fire's delivery bound (tests only;
+	// 0 = chatScheduleFireTimeout).
+	chatFireTimeoutOverride time.Duration
+
+	// The chat schedule delivery workers (chat_schedules.go): chatSlots is
+	// the pool (capacity chatScheduleWorkers), chatWorkers lets Stop wait for
+	// fires in flight. chatPasses counts passes (tests). nextChatDueAt
+	// replaces the next-due lookup (tests inject failures; nil = storage).
+	chatSlots     chan struct{}
+	chatWorkers   sync.WaitGroup
+	chatPasses    atomic.Int64
+	nextChatDueAt func(ctx context.Context, after int64) (int64, bool, error)
 
 	// promoteAgain asks the task loop for another promotion pass right away:
 	// ProcessScheduledTasks stopped at its per-tick row cap with due tasks
@@ -273,6 +285,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		gateInFlight:       make(map[uuid.UUID]struct{}),
 		chatWakeSig:        make(chan struct{}, 1),
 		promoteAgain:       make(chan struct{}, 1),
+		chatSlots:          make(chan struct{}, chatScheduleWorkers),
 	}
 }
 
@@ -323,6 +336,7 @@ func (s *Scheduler) Stop() {
 		if s.chatLoopStarted {
 			<-s.chatLoopDone
 		}
+		s.chatWorkers.Wait() // fires in flight (their contexts end with s.ctx)
 		s.gateWG.Wait()
 		s.maintWG.Wait()
 		close(settled)
@@ -654,6 +668,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		cursorScheduledFor time.Time
 		cursorID           uuid.UUID
 		rowsThisTick       int
+		promotedThisPass   int
 	)
 
 	for {
@@ -665,10 +680,18 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			maxRows = maxScheduledRowsPerTick
 		}
 		if rowsThisTick >= maxRows {
-			log.Printf("ProcessScheduledTasks: handled %d due rows this pass; another pass follows right away", rowsThisTick)
-			select {
-			case s.promoteAgain <- struct{}{}:
-			default: // one is already requested
+			// Another pass right away only if this one moved something: a
+			// capped prefix of rows that all stay put (gated tasks with every
+			// gate slot busy, say) would otherwise be rescanned in a hot loop.
+			// Without progress the rest waits for the next tick.
+			if promotedThisPass > 0 {
+				log.Printf("ProcessScheduledTasks: handled %d due rows this pass (%d promoted); another pass follows right away", rowsThisTick, promotedThisPass)
+				select {
+				case s.promoteAgain <- struct{}{}:
+				default: // one is already requested
+				}
+			} else {
+				log.Printf("ProcessScheduledTasks: handled %d due rows this pass, none promoted; the rest wait for the next tick", rowsThisTick)
 			}
 			return
 		}
@@ -740,10 +763,12 @@ func (s *Scheduler) ProcessScheduledTasks() {
 					continue
 				}
 				if n > 0 {
+					promotedThisPass += n
 					log.Printf("Task %s is now pending", taskID)
 				}
 			}
 		} else {
+			promotedThisPass += promoted
 			log.Printf("Successfully promoted %d of %d scheduled tasks to pending", promoted, len(promoteIDs))
 		}
 
