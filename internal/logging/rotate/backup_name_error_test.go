@@ -58,6 +58,37 @@ func TestUnreadableBackupDirFailsRotationAndKeepsLogging(t *testing.T) {
 	}
 }
 
+// A log file already over its size at startup, whose rotation then fails,
+// still takes the first record: the reopened file gets it, and the error is
+// returned with the byte count (#2074 review: the first record was dropped).
+func TestFailedStartupRotationKeepsTheFirstRecord(t *testing.T) {
+	currentTime = fakeTime
+	megabyte = 1
+	prev := osLstat
+	t.Cleanup(func() { osLstat = prev })
+	dir := t.TempDir()
+	name := filepath.Join(dir, "foobar.log")
+	if err := os.WriteFile(name, []byte("already-large\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	osLstat = func(string) (os.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: dir, Err: fs.ErrPermission}
+	}
+	l := &Logger{Filename: name, MaxSize: 8} // 8 bytes: the file is already over
+	defer l.Close()
+	n, err := l.Write([]byte("first\n"))
+	if err == nil || n != len("first\n") {
+		t.Fatalf("Write = %d, %v; want the record written and the rotation error", n, err)
+	}
+	data, rerr := os.ReadFile(name)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(data) != "already-large\nfirst\n" {
+		t.Fatalf("log file = %q", data)
+	}
+}
+
 // The search for a free backup name is bounded: with every name taken it
 // gives up with an error rather than looping.
 func TestBackupNameSearchIsBounded(t *testing.T) {

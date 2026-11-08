@@ -404,3 +404,42 @@ func TestConfigureLosesNoConcurrentStdlibLine(t *testing.T) {
 		t.Fatal("a line written through the startup bridge after the replay was lost")
 	}
 }
+
+// slog.SetDefault points the stdlib log package at the new default handler
+// at once; until Configure's log.SetOutput a log.Printf takes that path. It
+// must reach the ungated bridge, not the level-gated handler (#2074 review:
+// at FLEET_LOG_LEVEL=error such a line was filtered as info). The window is
+// held open here by re-running slog.SetDefault after Configure.
+func TestStdlibLineInTheSetDefaultWindowIsNotGated(t *testing.T) {
+	restoreLogging(t)
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = devnull
+	defer func() { os.Stderr = prevStderr; _ = devnull.Close() }()
+
+	slog.SetDefault(slog.Default()) // the state between slog.SetDefault and log.SetOutput
+	log.Printf("window line.")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var m map[string]any
+		if json.Unmarshal(line, &m) == nil && m["msg"] == "window line." {
+			found = m["level"] == "INFO" && m[StdlibLogKey] == true
+		}
+	}
+	if !found {
+		t.Fatalf("the stdlib line in the window was gated or mislabelled:\n%s", data)
+	}
+}

@@ -147,8 +147,15 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 	}
 
 	if l.file == nil {
-		if err = l.openExistingOrNew(len(p)); err != nil {
-			return 0, err
+		if oerr := l.openExistingOrNew(len(p)); oerr != nil {
+			// The startup rotation of an over-size file failed: rotate
+			// reopened the file, so the record goes there, with the error.
+			if l.file == nil {
+				return 0, oerr
+			}
+			n, err = l.file.Write(p)
+			l.size += int64(n)
+			return n, errors.Join(oerr, err)
 		}
 	}
 

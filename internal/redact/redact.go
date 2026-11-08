@@ -304,6 +304,9 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 		}
 	}
 	r.mu.RUnlock()
+	// Longest form first, for the same reason the literals are kept longest
+	// first: an encoded form can be longer than another literal's.
+	slices.SortStableFunc(present, func(a, b string) int { return len(b) - len(a) })
 	switch {
 	case len(present) == 0:
 	case jsonEncoding:
@@ -580,7 +583,17 @@ func (r *Redactor) upsertLocked(value, scope string, gen uint64) {
 	l, ok := r.index[value]
 	if !ok {
 		l = newLiteral(value)
-		r.literals = append(r.literals, l)
+		// Longest first: a literal that contains another must be replaced
+		// before it, or the shorter one's replacement leaves the rest of the
+		// longer secret in the text ("[REDACTED]-rest"). Redact and ScrubLine
+		// scan in this order.
+		at, _ := slices.BinarySearchFunc(r.literals, len(value), func(e *literal, n int) int {
+			return n - len(e.value) // descending by length
+		})
+		for at < len(r.literals) && len(r.literals[at].value) >= len(value) {
+			at++ // after the equal-length ones, so insertion order breaks ties
+		}
+		r.literals = slices.Insert(r.literals, at, l)
 		r.index[value] = l
 	}
 	switch {

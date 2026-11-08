@@ -589,7 +589,7 @@ func (p *Pool) admitClaims(ctx context.Context) bool {
 	if p.shedLogged.CompareAndSwap(false, true) {
 		// reason is operator-facing text from the gate itself (see
 		// Config.AdmitScheduled), never request input — no log-forgery risk.
-		logging.From(ctx).Info("runner: holding back scheduled task claims", "reason", reason)
+		logging.From(ctx).Warn("runner: holding back scheduled task claims", "reason", reason)
 	}
 	return false
 }

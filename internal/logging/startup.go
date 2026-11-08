@@ -72,6 +72,9 @@ func BufferStartup() {
 		return
 	}
 	startup = &startupBuffer{}
+	// The buffer handler takes a stdlib line arriving before log.SetOutput
+	// below too: it comes at stdlibLogLevel and is buffered as bridged.
+	slog.SetLogLoggerLevel(stdlibLogLevel)
 	slog.SetDefault(slog.New(&bufferHandler{buf: startup}))
 	// After slog.SetDefault, so the stdlib log package writes here rather
 	// than into the buffer as an ordinary info record.
@@ -113,8 +116,9 @@ func (b *startupBuffer) add(r bufferedRecord) {
 // too.
 func FlushStartup() {
 	h := emergencyHandler()
-	if replayStartup(h, newBridgeHandler("json", lockedStderr)) {
-		slog.SetDefault(slog.New(h))
+	bridge := newBridgeHandler("json", lockedStderr)
+	if replayStartup(h, bridge) {
+		setDefaultRouted(h, bridge)
 	}
 }
 
@@ -190,7 +194,13 @@ func (h *bufferHandler) Handle(ctx context.Context, r slog.Record) error {
 	// A record marked ungated (ungatedAttr: a subprocess's stderr line) is
 	// buffered as a bridged line: replayed through the ungated bridge, which
 	// adds the marker back, not gated by the configured level.
-	bridged := false
+	// A stdlib line through slog's own adapter (stdlibLogLevel) is a
+	// bridged line too.
+	bridged := r.Level == stdlibLogLevel
+	level := r.Level
+	if bridged {
+		level = slog.LevelInfo
+	}
 	cur = slices.DeleteFunc(cur, func(a slog.Attr) bool {
 		if isUngatedAttr(a) {
 			bridged = true
@@ -198,7 +208,7 @@ func (h *bufferHandler) Handle(ctx context.Context, r slog.Record) error {
 		}
 		return false
 	})
-	rec := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	rec := slog.NewRecord(r.Time, level, r.Message, r.PC)
 	rec.AddAttrs(cur...)
 	h.buf.add(bufferedRecord{ctx: context.WithoutCancel(ctx), rec: rec, bridged: bridged})
 	return nil

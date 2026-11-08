@@ -28,6 +28,7 @@ func restoreLogging(t *testing.T) {
 		safe.SetPanicHandler(nil)
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
+		slog.SetLogLoggerLevel(slog.LevelInfo)
 	})
 }
 

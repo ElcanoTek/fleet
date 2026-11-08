@@ -137,10 +137,14 @@ func Configure(cfg Config) (io.Closer, error) {
 	configured.Store(true)
 	levelVar.Set(ParseLevel(cfg.Level))
 	setOutput(dest)
-	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
+	// The bridge first: slog.SetDefault points the stdlib log package at the
+	// new default handler at once, and until log.SetOutput below a stdlib
+	// line takes that path — the router sends it to this ungated bridge, not
+	// the level-gated handler.
+	bridgeLogger = slog.New(newBridgeHandler(format, dest))
+	setDefaultRouted(newHandler(dest, levelVar), bridgeLogger.Handler())
 	// Lines logged before Configure (BufferStartup) go out now, through the
 	// configured format, level and file sink.
-	bridgeLogger = slog.New(newBridgeHandler(format, dest))
 	// replayStartup seals the buffer as it reads it for the last time: a
 	// stdlib line still arriving through the startup bridge (before the
 	// log.SetOutput below), or a record through a captured buffering logger,
@@ -152,6 +156,50 @@ func Configure(cfg Config) (io.Closer, error) {
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
+}
+
+// stdlibLogLevel is the level slog's own stdlib-log adapter stamps on a
+// log.Printf line while slog.Default is installed but log.SetOutput has not
+// yet pointed the log package at logBridge (slog.SetDefault rewires it to the
+// default handler at once). No call site logs at it: a record carrying it is a
+// stdlib line, and the routed default handler (stdlibRouter) sends it to the
+// ungated bridge at info instead of gating it. slog.SetLogLoggerLevel sets it
+// in setDefaultRouted, before any slog.SetDefault of this package.
+const stdlibLogLevel = slog.Level(1 << 20)
+
+// setDefaultRouted installs h as the default handler, with stdlib-log lines
+// routed to bridge (stdlibRouter).
+func setDefaultRouted(h, bridge slog.Handler) {
+	slog.SetLogLoggerLevel(stdlibLogLevel)
+	slog.SetDefault(slog.New(stdlibRouter{inner: h, bridge: bridge}))
+}
+
+// stdlibRouter is a default handler that hands a stdlib-log line (a record
+// at stdlibLogLevel, from slog's adapter) to the ungated bridge, at info, and
+// every other record to inner.
+type stdlibRouter struct{ inner, bridge slog.Handler }
+
+func (h stdlibRouter) Enabled(ctx context.Context, l slog.Level) bool {
+	if l == stdlibLogLevel {
+		return true
+	}
+	return h.inner.Enabled(ctx, l)
+}
+
+func (h stdlibRouter) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == stdlibLogLevel {
+		r.Level = slog.LevelInfo
+		return h.bridge.Handle(ctx, r)
+	}
+	return h.inner.Handle(ctx, r)
+}
+
+func (h stdlibRouter) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return stdlibRouter{inner: h.inner.WithAttrs(attrs), bridge: h.bridge}
+}
+
+func (h stdlibRouter) WithGroup(name string) slog.Handler {
+	return stdlibRouter{inner: h.inner.WithGroup(name), bridge: h.bridge}
 }
 
 // bridgeLogger emits bridged standard-library log lines. Fleet's own code no
