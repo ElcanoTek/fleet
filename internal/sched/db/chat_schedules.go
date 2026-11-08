@@ -411,6 +411,21 @@ func (db *Database) NextChatScheduleDueAt(ctx context.Context, after int64) (int
 	return next.Int64, next.Valid, nil
 }
 
+// OverdueChatScheduleWork reports whether any chat schedule work is already
+// due and unclaimed: an active, unleased schedule whose slot has passed, or a
+// fire whose lease has expired. After a pass this means a claim passed it
+// over (another transaction held the row; or every worker was busy).
+func (db *Database) OverdueChatScheduleWork(ctx context.Context) (bool, error) {
+	var overdue bool
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM chat_schedules
+		                WHERE status = 'active' AND lease_owner IS NULL AND next_run_at <= $1)
+		    OR EXISTS (SELECT 1 FROM chat_schedules
+		                WHERE lease_owner IS NOT NULL AND lease_expires_at <= now())`,
+		time.Now().Unix()).Scan(&overdue)
+	return overdue, err
+}
+
 // ListChatScheduleRuns returns a schedule's run history, newest first.
 func (db *Database) ListChatScheduleRuns(ctx context.Context, scheduleID string, limit int) ([]models.ChatScheduleRun, error) {
 	if limit <= 0 {

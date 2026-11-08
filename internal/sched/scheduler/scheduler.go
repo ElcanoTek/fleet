@@ -146,6 +146,15 @@ type Scheduler struct {
 	chatWorkers   sync.WaitGroup
 	chatPasses    atomic.Int64
 	nextChatDueAt func(ctx context.Context, after int64) (int64, bool, error)
+	// clock replaces time.Now for timing settles (tests; nil = time.Now).
+	clock func() time.Time
+
+	// promoteRetryArmed marks a pending promotion retry: a pass that passed
+	// over due rows another transaction held locked (SKIP LOCKED) asks for one
+	// more pass after promoteSkipRetry (0 = 5s; tests shorten it), at most
+	// one pending at a time.
+	promoteRetryArmed atomic.Bool
+	promoteSkipRetry  time.Duration
 
 	// promoteAgain asks the task loop for another promotion pass right away:
 	// ProcessScheduledTasks stopped at its per-tick row cap with due tasks
@@ -346,6 +355,25 @@ func (s *Scheduler) Stop() {
 	case <-time.After(gateDrainTimeout):
 		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
+}
+
+// armPromoteRetry asks for one more promotion pass after promoteSkipRetry,
+// unless one is already pending.
+func (s *Scheduler) armPromoteRetry() {
+	if !s.promoteRetryArmed.CompareAndSwap(false, true) {
+		return
+	}
+	d := s.promoteSkipRetry
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	time.AfterFunc(d, func() {
+		s.promoteRetryArmed.Store(false)
+		select {
+		case s.promoteAgain <- struct{}{}:
+		default:
+		}
+	})
 }
 
 // storeCtx is a context for one storage call or pass off the sweep helper:
@@ -746,6 +774,13 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		batchCtx, batchCancel := s.storeCtx()
 		promoted, err := s.storage.UpdateTasksStatusBatchCtx(batchCtx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		batchCancel()
+		if err == nil && promoted < len(promoteIDs) {
+			// Some rows were passed over: held locked by another transaction
+			// (SKIP LOCKED) or changed since the fetch. Try them again soon,
+			// not a whole tick later — bounded, so a row held locked for
+			// long cannot spin the loop.
+			s.armPromoteRetry()
+		}
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
