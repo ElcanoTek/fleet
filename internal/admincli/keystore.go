@@ -18,7 +18,7 @@ import (
 
 // keyStore is where `fleet sched apikey …` reads and writes api_keys.json.
 //
-// The service resolves its store as FLEET_DATA_DIR (else DATA_DIR, else
+// The service resolves its store as FLEET_DATA_DIR (else
 // ./data) RELATIVE TO ITS WORKING DIRECTORY — /var/lib/fleet under the shipped
 // unit, so the live store is /var/lib/fleet/data/api_keys.json. The CLI used to
 // resolve the same env vars against ITS cwd and fall back to ./data there, so a
@@ -43,8 +43,8 @@ func (k keyStore) Path() string { return filepath.Join(k.Dir, "api_keys.json") }
 // keyStoreInputs are the environment facts chooseKeyStore decides from; split
 // out so the decision is unit-testable without systemd or a filesystem.
 type keyStoreInputs struct {
-	explicit    string // FLEET_DATA_DIR / DATA_DIR from the CLI's own environment
-	envFileDir  string // FLEET_DATA_DIR / DATA_DIR read from the service's env FILE ("" = unset)
+	explicit    string // FLEET_DATA_DIR from the CLI's own environment
+	envFileDir  string // FLEET_DATA_DIR read from the service's env FILE ("" = unset)
 	unitWorkDir string // the unit's WorkingDirectory ("" = unit unknown)
 	cwd         string
 }
@@ -70,7 +70,7 @@ func chooseKeyStore(in keyStoreInputs) keyStore {
 		serviceDir = abs(in.unitWorkDir, dd)
 	}
 	if e := strings.TrimSpace(in.explicit); e != "" {
-		return keyStore{Dir: abs(in.cwd, e), ServiceDir: serviceDir, Source: "FLEET_DATA_DIR/DATA_DIR in your environment"}
+		return keyStore{Dir: abs(in.cwd, e), ServiceDir: serviceDir, Source: "FLEET_DATA_DIR in your environment"}
 	}
 	if serviceDir != "" {
 		return keyStore{Dir: serviceDir, ServiceDir: serviceDir, Source: "the fleet.service store (unit WorkingDirectory + its env file)"}
@@ -82,9 +82,6 @@ func chooseKeyStore(in keyStoreInputs) keyStore {
 func resolveKeyStore() keyStore {
 	in := keyStoreInputs{}
 	in.explicit = strings.TrimSpace(envreg.Get("FLEET_DATA_DIR"))
-	if in.explicit == "" {
-		in.explicit = strings.TrimSpace(envreg.Get("DATA_DIR"))
-	}
 	if cwd, err := os.Getwd(); err == nil {
 		in.cwd = cwd
 	} else {
@@ -93,14 +90,11 @@ func resolveKeyStore() keyStore {
 	in.unitWorkDir = unitProperty(serviceName(""), "WorkingDirectory")
 	if in.unitWorkDir != "" {
 		// The unit's EnvironmentFile is the same file serverEnvFile resolves
-		// (FLEET_ENV_FILE / /etc/fleet/fleet.env). Read the two keys the store
+		// (FLEET_ENV_FILE / /etc/fleet/fleet.env). Read the key the store
 		// hangs on without sourcing it; an unreadable file (not root) just means
 		// the default applies, which is also what the unit gets when unset.
-		if vals, err := creds.ReadEnvValues(serverEnvFile(""), "FLEET_DATA_DIR", "DATA_DIR"); err == nil {
+		if vals, err := creds.ReadEnvValues(serverEnvFile(""), "FLEET_DATA_DIR"); err == nil {
 			in.envFileDir = vals["FLEET_DATA_DIR"]
-			if in.envFileDir == "" {
-				in.envFileDir = vals["DATA_DIR"]
-			}
 		}
 	}
 	return chooseKeyStore(in)
@@ -133,7 +127,7 @@ func (k keyStore) announce() {
 	fmt.Fprintf(os.Stderr, "key store: %s (%s)\n", k.Path(), k.Source)
 	if k.ServiceDir != "" && k.ServiceDir != k.Dir {
 		fmt.Fprintf(os.Stderr, "WARNING: this is NOT the fleet.service store (%s) — keys minted here are invisible to the running service (its callers get 401).\n", filepath.Join(k.ServiceDir, "api_keys.json"))
-		fmt.Fprintf(os.Stderr, "         unset FLEET_DATA_DIR/DATA_DIR, or set FLEET_DATA_DIR=%s, to write the store the service reads.\n", k.ServiceDir)
+		fmt.Fprintf(os.Stderr, "         unset FLEET_DATA_DIR, or set FLEET_DATA_DIR=%s, to write the store the service reads.\n", k.ServiceDir)
 	}
 }
 

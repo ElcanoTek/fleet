@@ -321,3 +321,45 @@ describe("DatasetsPanel create modal columns", () => {
     expect(screen.queryByLabelText("Column 2 name")).toBeNull();
   });
 });
+
+// A readonly Operations Center user is refused every dataset write with 403,
+// so the panel offers none of them; browsing, the row filter and the CSV
+// export (a GET) stay.
+describe("DatasetsPanel for a readonly user", () => {
+  it("hides New dataset and every write in the toolbar and the rows", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    datasetRows.mockResolvedValue({
+      rows: [
+        { ...row("r1", "Alpha Inc"), status: "proposed", proposed: { company: "Alpha Corp" } },
+        { ...row("r2", "Beta Inc"), status: "failed", error: "boom" },
+      ],
+      row_counts: { proposed: 1, failed: 1, pending: 2 },
+    });
+    render(<DatasetsPanel readOnly />);
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    const toolbar = await screen.findByRole("toolbar", { name: "Dataset actions" });
+    await screen.findByText("Beta Inc");
+
+    expect(screen.queryByRole("button", { name: "New dataset" })).toBeNull();
+    for (const name of [/^Run /, /^Pause$/, /^Approve/, /^Retry/, /^Import CSV$/, /^Delete$/]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(toolbar).toContainElement(screen.getByTestId("dataset-export-csv"));
+    expect(screen.getByLabelText("Filter rows by status")).toBeInTheDocument();
+  });
+
+  it("keeps the writes for everyone else", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    datasetRows.mockResolvedValue({
+      rows: [{ ...row("r1", "Alpha Inc"), status: "proposed", proposed: { company: "Alpha Corp" } }],
+      row_counts: { proposed: 1, pending: 1 },
+    });
+    render(<DatasetsPanel />);
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    await screen.findByRole("toolbar", { name: "Dataset actions" });
+    expect(screen.getByRole("button", { name: "New dataset" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import CSV" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+});

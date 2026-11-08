@@ -18,7 +18,8 @@ import (
 //     EnvironmentFile=, minus UnsetEnvironment=): what the service starts with;
 //   - the process environment of the shell running explain;
 //   - the env file, as fleet's own loader reads it;
-//   - the setting's alias spellings;
+//   - the setting's alias spellings (and, as a note only, a CHAT_/CUTLASS_
+//     spelling ADR-0106 removed, which nothing reads);
 //   - its default, including one inherited from another setting.
 //
 // It is not the running server's in-memory configuration: admin overrides
@@ -82,8 +83,6 @@ type Explanation struct {
 	// Spelling is the variable name that supplied the value (the canonical
 	// name or an alias); empty for a default.
 	Spelling string `json:"spelling,omitempty"`
-	// Deprecated reports that Spelling is a deprecated legacy alias.
-	Deprecated bool `json:"deprecated"`
 	// InheritedFrom is the chain of settings an inherited default came
 	// through, nearest first (FLEET_MEMORY_GRAPH_MODEL ← FLEET_MEMORY_MODEL ←
 	// FLEET_METADATA_MODEL ← FLEET_TITLE_MODEL).
@@ -98,7 +97,8 @@ type Explanation struct {
 }
 
 // Explain resolves the requested settings from the sources in opts. An
-// unknown key is an error naming it. A missing env file is not an error.
+// unknown key is an error naming it (a removed CHAT_/CUTLASS_ spelling is
+// an error naming the FLEET_ key). A missing env file is not an error.
 func Explain(opts ExplainOptions) (*ExplainReport, error) {
 	rep := &ExplainReport{Sources: ExplainSources{
 		ProcessEnv:  "the shell running fleet config explain",
@@ -126,6 +126,9 @@ func Explain(opts ExplainOptions) (*ExplainReport, error) {
 		for _, k := range opts.Keys {
 			e, ok := envreg.Find(strings.TrimSpace(k))
 			if !ok {
+				if c, retired := envreg.RetiredAlias(strings.TrimSpace(k)); retired {
+					k += " (a removed alias of " + c + ", ADR-0106: nothing reads it; use " + c + ")"
+				}
 				unknown = append(unknown, k)
 				continue
 			}
@@ -182,9 +185,6 @@ func explainEntry(e *envreg.Entry, layers envLayers) Explanation {
 	switch {
 	case sv.set:
 		x.Set, x.Source, x.SourceDetail, x.Spelling = true, sv.layer.source, sv.layer.detail, sv.spelling
-		if a, _, isAlias := envreg.AliasOf(sv.spelling); isAlias {
-			x.Deprecated = a.Deprecated
-		}
 		if sv.layer.shellDiffers {
 			x.Notes = append(x.Notes, fmt.Sprintf("your shell sets %s to a different value, but the service uses the systemd unit's", sv.spelling))
 		}
@@ -200,15 +200,12 @@ func explainEntry(e *envreg.Entry, layers envLayers) Explanation {
 	}
 
 	// Notes: every other spelling that is set, and why it does not count.
-	for _, a := range e.Aliases {
-		if a.ReadBy == "" {
-			continue
-		}
-		if where := setSomewhere(layers, a.Name); where != "" {
-			x.Notes = append(x.Notes, fmt.Sprintf("set as %s (%s), which only %s reads; the code resolving this setting ignores it", a.Name, where, a.ReadBy))
+	for _, name := range envreg.RetiredAliasesOf(e.Name) {
+		if where := setSomewhere(layers, name); where != "" {
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is set (%s), but it is a removed alias (ADR-0106) and nothing reads it: rename it to %s", name, where, e.Name))
 		}
 	}
-	for _, name := range serverSpellings(e) {
+	for _, name := range e.Spellings() {
 		lv := layers.get(name)
 		if name == x.Spelling {
 			if lv.miss == fileMasked {

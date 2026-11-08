@@ -44,12 +44,6 @@ func TestUnitEnvironmentFilesFollowsSystemdOrder(t *testing.T) {
 	if got := strings.Join(files, ","); got != "/after-reset.env,/a.env,/b.env" {
 		t.Fatalf("with drop-ins: %s", got)
 	}
-	if EnvFileIn("/etc/fleet/fleet.env", files) {
-		t.Error("the reset drop-in removed /etc/fleet/fleet.env")
-	}
-	if !EnvFileIn("/a.env", files) || !EnvFileIn("/b.env", files) {
-		t.Error("EnvFileIn misses a listed file")
-	}
 
 	if _, found := UnitEnvironmentFiles(dirs, "absent.service"); found {
 		t.Error("an absent unit must report found=false")
@@ -61,8 +55,5 @@ func TestParseSystemctlEnvironmentFiles(t *testing.T) {
 	got := ParseSystemctlEnvironmentFiles(out)
 	if strings.Join(got, ",") != "/etc/fleet/fleet.env,/srv/extra.env" {
 		t.Fatalf("got %v", got)
-	}
-	if !EnvFileIn("/etc/fleet/./fleet.env", got) || EnvFileIn(".env.local", got) {
-		t.Error("EnvFileIn must compare cleaned paths")
 	}
 }

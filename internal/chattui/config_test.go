@@ -78,7 +78,7 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
-	t.Run("token-file is read and trimmed; CHAT_SERVER_TOKEN fallback", func(t *testing.T) {
+	t.Run("token-file is read and trimmed; CHAT_SERVER_TOKEN is not read", func(t *testing.T) {
 		rf := func(p string) ([]byte, error) {
 			if p == "/secret" {
 				return []byte("  filetoken\n"), nil
@@ -89,10 +89,9 @@ func TestResolve(t *testing.T) {
 		if err != nil || cfg.Token != "filetoken" {
 			t.Fatalf("token-file: token=%q err=%v", cfg.Token, err)
 		}
-		// env fallback to CHAT_SERVER_TOKEN when no file.
-		cfg2, _ := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{"CHAT_SERVER_TOKEN": "chattok"}), noFile, noEnvFile)
-		if cfg2.Token != "chattok" {
-			t.Errorf("CHAT_SERVER_TOKEN fallback = %q", cfg2.Token)
+		// The removed CHAT_SERVER_TOKEN alias (ADR-0106) is not a fallback.
+		if cfg2, err := Resolve(Flags{Email: "a@b.co"}, envMap(map[string]string{"CHAT_SERVER_TOKEN": "chattok"}), noFile, noEnvFile); err == nil {
+			t.Errorf("CHAT_SERVER_TOKEN was read: token = %q", cfg2.Token)
 		}
 	})
 }
@@ -133,13 +132,12 @@ func TestResolveEnvFileDiscovery(t *testing.T) {
 		}
 	})
 
-	t.Run("CHAT_SERVER_TOKEN in the env file is honored", func(t *testing.T) {
+	t.Run("CHAT_SERVER_TOKEN in the env file is not read", func(t *testing.T) {
 		evf := envFileFrom(map[string]map[string]string{
 			".env.local": {"CHAT_SERVER_TOKEN": "legacytok"},
 		})
-		cfg, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, evf)
-		if err != nil || cfg.Token != "legacytok" {
-			t.Fatalf("legacy env-file token: token=%q err=%v", cfg.Token, err)
+		if cfg, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, evf); err == nil {
+			t.Fatalf("removed CHAT_SERVER_TOKEN alias was read: token=%q", cfg.Token)
 		}
 	})
 

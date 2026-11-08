@@ -3,8 +3,7 @@ package config
 // ── Typed env-knob registry (#1119, extended by #1273) ──
 //
 // One table describes every numeric/bool/duration env knob the BINARY parses,
-// wherever it parses it: the knob's canonical name, how it resolves (the
-// FLEET_→CHAT_→CUTLASS_ alias chain vs a direct key), its kind, and any range
+// wherever it parses it: the knob's canonical name, its kind, and any range
 // constraints. The table is the SINGLE parse implementation behind the three
 // paths that read these knobs — boot (Load, via the loadParser collector),
 // hot-reload (reload.go's reloadFleet* helpers), and the `fleet
@@ -124,16 +123,8 @@ const (
 type envKnob struct {
 	// key is the canonical env-var name, as reported in error messages
 	// (e.g. "FLEET_MAX_COST_USD", "CONVERSATION_TTL_DAYS").
-	key string
-	// fleet marks a knob that resolves through the FLEET_→CHAT_→CUTLASS_
-	// alias chain (lookupFleet on the suffix after "FLEET_"). A non-fleet
-	// knob reads exactly key from the process env. Set it ONLY when the
-	// consumer honors the aliases too (the loader always does; an external
-	// consumer does when it reads through agentcore's fleetEnv reader,
-	// and does NOT when it calls os.Getenv("FLEET_…") directly) — otherwise
-	// boot would refuse over a spelling nothing ever reads.
-	fleet bool
-	kind  knobKind
+	key  string
+	kind knobKind
 	// min/max are optional INCLUSIVE bounds (nil = unbounded), expressed as
 	// float64 so one pair covers every numeric kind. They mirror the bounds
 	// the hot-reload path has always enforced (plus the two validate-config
@@ -167,7 +158,6 @@ var envKnobs = func() []envKnob {
 		}
 		k := envKnob{
 			key:     e.Name,
-			fleet:   e.Chain, // LEGACY-ENV-ALIAS: remove after migrate-env
 			kind:    knobKindOf(e.Type),
 			min:     e.Knob.Min,
 			max:     e.Knob.Max,
@@ -218,12 +208,10 @@ var envKnobByKey = func() map[string]*envKnob {
 	return m
 }()
 
-// lookup resolves the knob's raw value from the environment; ok is false when
-// no spelling is set (non-empty).
+// lookup reads the knob's raw value from the environment (its canonical name
+// only: ADR-0106 removed the CHAT_/CUTLASS_ aliases); ok is false when it is
+// unset or empty.
 func (k *envKnob) lookup() (string, bool) {
-	if k.fleet {
-		return lookupFleet(strings.TrimPrefix(k.key, canonicalPrefix))
-	}
 	v := os.Getenv(k.key)
 	return v, v != ""
 }
@@ -378,8 +366,7 @@ func (k *envKnob) check(raw string) error {
 
 // ValidateEnvKnobs preflights every registered STRICT numeric/bool/duration
 // env knob — the loader's own (#1119) and, since #1273, the out-of-loader ones
-// too: each knob that is SET (non-blank after quote stripping, any alias
-// spelling it is actually read under) gets the exact parse + range check boot
+// too: each knob that is SET (non-blank after quote stripping) gets the exact parse + range check boot
 // enforces, and each problem string names the env var, the offending value,
 // and the expected format. Unset knobs are fine — the default applies.
 // `fleet validate-config` calls this so its preflight is table-driven from the

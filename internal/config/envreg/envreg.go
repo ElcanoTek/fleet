@@ -5,19 +5,17 @@
 // Every setting fleet, its operator CLI, its harness binaries or its scripts
 // read from the environment has exactly one Entry in the table (table.go):
 // its canonical name, type, documented default, description, section, scope,
-// whether it is a secret, its alias spellings (the legacy CHAT_/CUTLASS_ ones
-// marked deprecated), whether the deployment env file may set it, the Helm
+// whether it is a secret, its alias spellings (the bare PERSONA ones), whether
+// the deployment env file may set it, the Helm
 // value that sets it, and — for a typed knob the boot gate validates — its
 // bounds. Everything else is derived:
 //
-//   - internal/config's env-file allowlist (allowedEnvVars) and the
-//     FLEET_→CHAT_→CUTLASS_ alias resolution (lookupFleet), until the legacy
-//     aliases are removed (ADR-0099);
+//   - internal/config's env-file allowlist (allowedEnvVars);
 //   - internal/config's typed-knob table (envKnobs: kind, bounds, scope);
 //   - docs/CONFIGURATION.md and the config.env part of the Helm chart's
 //     values.schema.json (both generated, both drift-checked by tests);
-//   - `fleet config explain`, `fleet config migrate-env` and the alias
-//     warnings `fleet doctor` prints.
+//   - `fleet config explain`, and the warnings boot and `fleet doctor` print
+//     for a removed CHAT_/CUTLASS_ spelling (RetiredAlias, ADR-0106).
 //
 // # Reading the environment
 //
@@ -48,6 +46,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -58,14 +57,18 @@ import (
 // with.
 const CanonicalPrefix = "FLEET_"
 
-// LegacyPrefixes lists the deprecated prefixes (the chat-server's and
-// cutlass's) in the order a Chain entry tries them after the canonical
-// spelling. The first non-empty value wins. ADR-0099 deprecates them; they
-// are removed once every deployment has run `fleet config migrate-env
-// --write` (docs/CONFIG-REGISTRY.md "Removing the aliases").
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env
-var LegacyPrefixes = []string{"CHAT_", "CUTLASS_"}
+// RetiredPrefixes are the chat-server's and cutlass's prefixes. Until
+// ADR-0106 a FLEET_<X> setting could also be spelled CHAT_<X> or CUTLASS_<X>;
+// nothing reads those spellings any more. They are kept only so a leftover
+// one is reported (RetiredAlias) instead of silently ignored, and so the MCP
+// broker keeps a stale copy of a parent-owned secret away from connectors.
+var RetiredPrefixes = []string{"CHAT_", "CUTLASS_"}
+
+// retiredBare maps the removed spellings that are not CHAT_/CUTLASS_ +
+// suffix to their canonical name.
+var retiredBare = map[string]string{
+	"DATA_DIR": "FLEET_DATA_DIR", // read by `fleet sched apikey` until ADR-0106
+}
 
 // Type is the value type of a setting, as the docs describe it. The typed
 // knob kinds (Int … StrictBool) are the ones internal/config's knob parser
@@ -117,25 +120,11 @@ const (
 type Alias struct {
 	// Name is the alias spelling.
 	Name string
-	// Deprecated marks a legacy CHAT_/CUTLASS_ spelling (ADR-0099): `fleet
-	// doctor` warns about it and `fleet config migrate-env` rewrites it. An
-	// alias without it is a permanent alternate spelling (the bare PERSONA).
-	//
-	// LEGACY-ENV-ALIAS: remove after migrate-env
-	Deprecated bool
 	// EnvFile reports whether fleet's own env-file loader admits this
 	// spelling. One it does not admit still reaches the server when something
 	// exports it into the process environment — on the standard install,
 	// systemd's EnvironmentFile= exports every line of the env file.
 	EnvFile bool
-	// ReadBy, when set, makes this a READER-SPECIFIC alias: only the named
-	// reader honours the spelling (e.g. the operator CLI's local health
-	// probe) and the server's own resolution of the setting ignores it. `fleet
-	// config explain` never takes it as the effective value (it reports it in
-	// a note), and `fleet config migrate-env` does not rename it, because that
-	// would start applying it to the server. Empty means every reader of the
-	// setting honours the alias.
-	ReadBy string
 }
 
 // Knob marks an entry as a typed knob the boot gate validates
@@ -187,28 +176,14 @@ type Entry struct {
 	// Scope says which process reads it.
 	Scope Scope
 	// Secret marks a credential or signing secret: always redacted by
-	// `fleet config explain`, never printed by `fleet config migrate-env`.
+	// `fleet config explain`.
 	Secret bool
 	// ProcessOnly: the deployment env file does not admit this name; it is
 	// read from the process environment only (e.g. FLEET_ENV_FILE itself,
 	// values systemd or Kubernetes inject).
 	ProcessOnly bool
-	// Chain: the server resolves this setting through the legacy-prefix
-	// chain — FLEET_<X>, then CHAT_<X>, then CUTLASS_<X>, first non-empty
-	// wins. The table never spells the chain aliases out: they are derived
-	// (deprecated) when the registry is built.
-	//
-	// LEGACY-ENV-ALIAS: remove after migrate-env
-	Chain bool
-	// ChainFile names the legacy prefixes ("CHAT_", "CUTLASS_") whose chain
-	// spelling the env file admits. The others work from the process
-	// environment only.
-	//
-	// LEGACY-ENV-ALIAS: remove after migrate-env
-	ChainFile []string
-	// Aliases lists alias spellings. After the registry is built, a Chain
-	// entry's derived aliases come first, in resolution order, then the
-	// explicitly declared ones.
+	// Aliases lists alias spellings, in resolution order after the canonical
+	// name.
 	Aliases []Alias
 	// Enum lists the accepted values of a TypeEnum setting.
 	Enum []string
@@ -219,19 +194,6 @@ type Entry struct {
 	// does not set it (operators pass it through config.env or
 	// config.existingSecret).
 	Helm string
-}
-
-// DeprecatedAliases returns e's legacy CHAT_/CUTLASS_ spellings.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env
-func (e *Entry) DeprecatedAliases() []Alias {
-	var out []Alias
-	for _, a := range e.Aliases {
-		if a.Deprecated {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 // FileSettable reports whether the deployment env file admits the canonical
@@ -259,9 +221,9 @@ type registry struct {
 
 var reg = build(table)
 
-// build expands the chain aliases and indexes every spelling. A malformed
-// table (duplicate spelling, unknown chain prefix, knob on a non-knob type)
-// panics at package init: it is a programming error the first test catches.
+// build indexes every spelling. A malformed table (duplicate spelling, a
+// removed CHAT_/CUTLASS_ alias spelling, knob on a non-knob type) panics at
+// package init: it is a programming error the first test catches.
 func build(in []Entry) *registry {
 	r := &registry{
 		entries: make([]Entry, len(in)),
@@ -279,10 +241,12 @@ func build(in []Entry) *registry {
 		if e.Knob != nil && !e.Type.IsKnobKind() {
 			panic(fmt.Sprintf("envreg: %s has a Knob but type %q is not a knob kind", e.Name, e.Type))
 		}
-		e.Aliases = expandChain(e) // LEGACY-ENV-ALIAS: remove after migrate-env
 		claim(e.Name)
 		r.byName[e.Name] = i
 		for _, a := range e.Aliases {
+			if _, bare := retiredBare[a.Name]; bare || retiredPrefixed(a.Name) {
+				panic("envreg: " + e.Name + " declares alias " + a.Name + ", a spelling ADR-0106 removed")
+			}
 			claim(a.Name)
 			r.byAlias[a.Name] = i
 		}
@@ -305,39 +269,11 @@ func build(in []Entry) *registry {
 	return r
 }
 
-// expandChain derives a Chain entry's CHAT_/CUTLASS_ aliases (deprecated, in
-// lookup order) ahead of its declared ones.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env
-func expandChain(e Entry) []Alias {
-	if !e.Chain {
-		if len(e.ChainFile) > 0 {
-			panic("envreg: " + e.Name + " sets ChainFile without Chain")
-		}
-		return e.Aliases
-	}
-	suffix, ok := strings.CutPrefix(e.Name, CanonicalPrefix)
-	if !ok || suffix == "" {
-		panic("envreg: chain entry " + e.Name + " is not FLEET_-prefixed")
-	}
-	fileOK := map[string]bool{}
-	for _, p := range e.ChainFile {
-		if !isLegacyPrefix(p) {
-			panic("envreg: " + e.Name + " ChainFile names unknown prefix " + p)
-		}
-		fileOK[p] = true
-	}
-	out := make([]Alias, 0, len(LegacyPrefixes)+len(e.Aliases))
-	for _, p := range LegacyPrefixes {
-		out = append(out, Alias{Name: p + suffix, Deprecated: true, EnvFile: fileOK[p]})
-	}
-	return append(out, e.Aliases...)
-}
-
-// LEGACY-ENV-ALIAS: remove after migrate-env
-func isLegacyPrefix(p string) bool {
-	for _, l := range LegacyPrefixes {
-		if l == p {
+// retiredPrefixed reports whether name is CHAT_<X> or CUTLASS_<X> with a
+// non-empty <X>.
+func retiredPrefixed(name string) bool {
+	for _, p := range RetiredPrefixes {
+		if suffix, ok := strings.CutPrefix(name, p); ok && suffix != "" {
 			return true
 		}
 	}
@@ -423,28 +359,100 @@ func EnvFileNames() []string {
 	return out
 }
 
-// ChainSpellings returns the spellings the legacy-prefix chain resolves for
-// canonical (FLEET_<X>, CHAT_<X>, CUTLASS_<X>), in lookup order. canonical
-// must be a registered Chain entry: anything else is reported like an
-// unregistered read (panic in tests, logged once in production) and the
-// generic prefix family is returned so behaviour never changes.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env (callers then read the
-// canonical name with Get).
-func ChainSpellings(canonical string) []string {
-	if i, ok := reg.byName[canonical]; ok && reg.entries[i].Chain {
-		e := &reg.entries[i]
-		out := make([]string, 0, 1+len(LegacyPrefixes))
-		out = append(out, e.Name)
-		for _, a := range e.Aliases[:len(LegacyPrefixes)] {
-			out = append(out, a.Name)
-		}
-		return out
+// RetiredAlias reports whether name is a spelling ADR-0106 removed, and the
+// canonical name to set instead. It is CHAT_<X> or CUTLASS_<X> when FLEET_<X>
+// is a registered setting and the name is not itself registered (CHAT_RATE_PER_MIN,
+// CUTLASS_ALLOWED_DIRS and the other canonical CHAT_/CUTLASS_ names stay
+// settings), or a bare spelling in retiredBare — or such a spelling with a
+// per-account suffix, <BASE>_<ACCOUNT> as creds.ApplyClientSuffix forms it
+// (ACCOUNT is upper-case letters, digits and underscores), which maps to
+// the canonical name with the same suffix (CHAT_SERVER_TOKEN_ACME →
+// FLEET_SERVER_TOKEN_ACME). A registered name, a live FLEET_ name, or a
+// suffixed variant of a canonical CHAT_/CUTLASS_ setting is never retired.
+// Nothing reads such a name: boot and `fleet doctor` warn when one is set,
+// and `fleet config explain` refuses it with the canonical name.
+func RetiredAlias(name string) (canonical string, ok bool) {
+	if IsRegistered(name) {
+		return "", false
 	}
-	unregistered(canonical, "is not a registered legacy-prefix chain setting")
-	suffix := strings.TrimPrefix(canonical, CanonicalPrefix)
-	out := []string{CanonicalPrefix + suffix}
-	for _, p := range LegacyPrefixes {
+	if c, ok := retiredExact(name); ok {
+		return c, true
+	}
+	for i := strings.IndexByte(name, '_'); i > 0 && i < len(name)-1; {
+		if c, ok := retiredExact(name[:i]); ok && accountSuffix.MatchString(name[i+1:]) {
+			return c + name[i:], true
+		}
+		next := strings.IndexByte(name[i+1:], '_')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return "", false
+}
+
+// accountSuffix is the per-account suffix grammar creds.ApplyClientSuffix
+// produces: the account upper-cased with separators folded to '_'.
+var accountSuffix = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]*$`)
+
+// retiredExact is RetiredAlias without the account suffix.
+func retiredExact(name string) (string, bool) {
+	if IsRegistered(name) {
+		return "", false
+	}
+	if c, ok := retiredBare[name]; ok {
+		return c, true
+	}
+	for _, p := range RetiredPrefixes {
+		if suffix, ok := strings.CutPrefix(name, p); ok && suffix != "" && IsCanonical(CanonicalPrefix+suffix) {
+			return CanonicalPrefix + suffix, true
+		}
+	}
+	return "", false
+}
+
+// RetiredAliasesOf returns the removed spellings RetiredAlias maps to
+// canonical: its CHAT_/CUTLASS_ spellings (unless one is a setting of its
+// own), then any bare one, sorted.
+func RetiredAliasesOf(canonical string) []string {
+	var out []string
+	if suffix, ok := strings.CutPrefix(canonical, CanonicalPrefix); ok && suffix != "" {
+		for _, p := range RetiredPrefixes {
+			if c, ok := RetiredAlias(p + suffix); ok && c == canonical {
+				out = append(out, p+suffix)
+			}
+		}
+	}
+	var bare []string
+	for n, c := range retiredBare {
+		if c == canonical {
+			bare = append(bare, n)
+		}
+	}
+	sort.Strings(bare)
+	return append(out, bare...)
+}
+
+// RetiredSpellings returns name plus the CHAT_/CUTLASS_ spellings of the same
+// suffix when name is FLEET_<X>, CHAT_<X> or CUTLASS_<X> (canonical first),
+// and name alone otherwise. It is generic (any name, registered or not). The
+// MCP broker uses it to keep a parent-owned name's stale retired spelling,
+// which may still hold the same secret on a box, out of connector env.
+func RetiredSpellings(name string) []string {
+	suffix, ok := strings.CutPrefix(name, CanonicalPrefix)
+	if !ok {
+		for _, p := range RetiredPrefixes {
+			if suffix, ok = strings.CutPrefix(name, p); ok {
+				break
+			}
+		}
+	}
+	if !ok || suffix == "" {
+		return []string{name}
+	}
+	out := make([]string, 0, 1+len(RetiredPrefixes))
+	out = append(out, CanonicalPrefix+suffix)
+	for _, p := range RetiredPrefixes {
 		out = append(out, p+suffix)
 	}
 	return out
@@ -458,7 +466,16 @@ func Get(name string) string {
 }
 
 // Lookup is os.LookupEnv for a registered name.
+//
+// A spelling ADR-0106 removed (RetiredAlias) always reads as unset, from this
+// and every other lookup in this package, whatever the process environment
+// holds: the shipped systemd unit exports every env-file line, so a stale
+// CHAT_SERVER_TOKEN can sit in os.Environ, and no reader — fleet's own code
+// or a name the client bundle supplies — may pick it up.
 func Lookup(name string) (string, bool) {
+	if _, retired := RetiredAlias(name); retired {
+		return "", false
+	}
 	if !IsRegistered(name) {
 		unregistered(name, "is not declared in the configuration registry (internal/config/envreg/table.go)")
 	}
@@ -468,13 +485,19 @@ func Lookup(name string) (string, bool) {
 // Unregistered reads a variable whose NAME comes from data — the client
 // bundle's manifest, a per-account suffix, an operator's flag — and so
 // cannot be declared in the table. Never pass it a literal.
+//
+// A removed spelling reads as unset (see Lookup).
 func Unregistered(name string) string {
-	return os.Getenv(name)
+	v, _ := LookupUnregistered(name)
+	return v
 }
 
 // LookupUnregistered is os.LookupEnv for a data-named variable (see
-// Unregistered).
+// Unregistered). A removed spelling reads as unset (see Lookup).
 func LookupUnregistered(name string) (string, bool) {
+	if _, retired := RetiredAlias(strings.TrimSpace(name)); retired {
+		return "", false
+	}
 	return os.LookupEnv(name)
 }
 

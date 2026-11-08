@@ -1,6 +1,6 @@
 # ADR-0099: The CHAT_/CUTLASS_ env aliases are deprecated, migrated, then removed
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0106](0106-remove-the-chat-cutlass-env-aliases.md) (the aliases, the doctor warning and `migrate-env` are removed; the alias/canonical distinction below stands)
 - **Date:** 2026-11-07
 - **Deciders:** Fleet maintainers (owner direction, #2053)
 - **Relates to:** [ADR-0012](0012-unified-fleet-cli.md) (one `fleet` binary),

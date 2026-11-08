@@ -285,10 +285,9 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 	t.Parallel()
 
 	const user = "busy@x.com"
-	patrolDraftInFlight.Store(user, struct{}{})
-	defer patrolDraftInFlight.Delete(user)
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p"}}
 	s := &Server{agent: fake}
+	s.patrolDraftInFlight.Store(user, struct{}{})
 	req := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
 	rec := httptest.NewRecorder()
@@ -300,14 +299,14 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 		t.Error("a refused draft must not reach the model")
 	}
 	// Once the first finishes, the next is accepted.
-	patrolDraftInFlight.Delete(user)
+	s.patrolDraftInFlight.Delete(user)
 	rec = httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
 	s.handlePatrolDraft(rec, req2.WithContext(context.WithValue(req2.Context(), ctxKeyUser, user)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("after the first finished, status = %d, want 200", rec.Code)
 	}
-	if _, still := patrolDraftInFlight.Load(user); still {
+	if _, still := s.patrolDraftInFlight.Load(user); still {
 		t.Error("the in-flight mark must be released when the draft returns")
 	}
 }

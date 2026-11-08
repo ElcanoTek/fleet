@@ -354,9 +354,7 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 		}
 	})
 	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, func(v int) { c.MaxIterations = v })
-	// One temperature knob covers interactive and scheduled sampling (#1079);
-	// the FLEET_/CHAT_/CUTLASS_ chain still picks up a legacy CUTLASS_TEMPERATURE
-	// spelling as the last-resort alias.
+	// One temperature knob covers interactive and scheduled sampling (#1079).
 	reloadFleetFloat(result, "TEMPERATURE", c.Temperature, func(v float64) { c.Temperature = v })
 }
 
@@ -398,7 +396,7 @@ func (c *Config) collectSkipped(result *ReloadResult) {
 	}
 }
 
-// reloadFleetFloat resolves a FLEET_/CHAT_/CUTLASS_-prefixed float setting
+// reloadFleetFloat resolves a FLEET_-prefixed float setting
 // through the shared envKnobs registry (#1119) — the SAME parse + range rules
 // boot enforces. When the value is set, well-formed, and differs from cur, it
 // applies it via set and records the change; a parse/range failure records an
@@ -431,7 +429,7 @@ func reloadFleetFloat(result *ReloadResult, suffix string, cur float64, set func
 	}
 }
 
-// reloadFleetInt resolves a FLEET_/CHAT_/CUTLASS_-prefixed int setting through
+// reloadFleetInt resolves a FLEET_-prefixed int setting through
 // the shared envKnobs registry. Semantics otherwise match reloadFleetFloat.
 func reloadFleetInt(result *ReloadResult, suffix string, cur int, set func(int)) {
 	raw, ok := lookupFleet(suffix)

@@ -10,41 +10,28 @@ import (
 // Env-var prefix handling.
 //
 // chat and cutlass each baked a compile-time prefix into their env-var
-// names (CHAT_* and CUTLASS_*). The unified runtime is configured once with
-// a canonical prefix — FLEET_ — but keeps the two legacy prefixes alive as
-// back-compat aliases so a deployment that still sets CHAT_DISABLE_PROMPT_CACHE
-// or CUTLASS_RETRY_MAX_ATTEMPTS keeps working, and so the lifted parity tests
-// (which set the legacy names) stay green. The legacy prefixes are deprecated
-// (ADR-0099) and the spellings come from the configuration registry
-// (envreg.ChainSpellings), so every suffix read here is a declared setting.
+// names (CHAT_* and CUTLASS_*). The unified runtime reads one canonical
+// prefix, FLEET_; the CHAT_/CUTLASS_ aliases were removed (ADR-0106).
 //
-// Every env lookup goes through fleetEnv, which tries the canonical FLEET_
-// name first and then the legacy aliases. The prefix never varies by run
-// (#1936), so there is no per-run configuration to carry.
+// Every env lookup goes through fleetEnv, which reads FLEET_<suffix> through
+// the configuration registry (envreg.Get), so every suffix read here is a
+// declared setting. The prefix never varies by run (#1936), so there is no
+// per-run configuration to carry.
 
 // CanonicalEnvPrefix is the default env-var prefix for the unified runtime.
 const CanonicalEnvPrefix = "FLEET"
 
 // envReader reads agentcore's env knobs. It has no state: it exists so every
 // read is spelled fleetEnv.lookup(suffix) — the shape internal/config's knob
-// sweep (knobs_sweep_test.go) recognizes as a FLEET_-chain read.
+// sweep (knobs_sweep_test.go) recognizes as a FLEET_ read.
 type envReader struct{}
 
 // fleetEnv is the one envReader.
 var fleetEnv envReader
 
-// lookup returns the value of FLEET_<suffix>, falling back to the legacy
-// CHAT_/CUTLASS_ aliases when it is unset. The first non-empty value wins.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env (read the canonical name alone).
+// lookup returns the trimmed value of FLEET_<suffix> ("" when unset).
 func (envReader) lookup(suffix string) string {
-	suffix = strings.TrimLeft(suffix, "_")
-	for _, name := range envreg.ChainSpellings(CanonicalEnvPrefix + "_" + suffix) {
-		if v := strings.TrimSpace(envreg.Get(name)); v != "" {
-			return v
-		}
-	}
-	return ""
+	return strings.TrimSpace(envreg.Get(CanonicalEnvPrefix + "_" + strings.TrimLeft(suffix, "_")))
 }
 
 // Typed knobs read through the two helpers below are ALSO registered as
@@ -94,8 +81,7 @@ func (p envReader) lookupFloatDefault(suffix string, def float64) float64 {
 	return v
 }
 
-// hasExplicitFraction reports whether <PREFIX>_<suffix> (or its legacy alias)
-// is explicitly set to a valid fraction in (0,1].
+// hasExplicitFraction reports whether FLEET_<suffix> is explicitly set to a valid fraction in (0,1].
 func (p envReader) hasExplicitFraction(suffix string) bool {
 	raw := fleetEnv.lookup(suffix)
 	if raw == "" {

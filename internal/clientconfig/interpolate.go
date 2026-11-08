@@ -185,6 +185,12 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 				manifestPath, expr, name, name)
 		}
 	}
+	// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed reads as
+	// UNSET (lookupNonEmpty never reads its value), so it behaves exactly
+	// like any unset variable: ${X:-d} yields d, ${X:?m} fails the load and a
+	// bare ${X} where a value is required fails it too — with the rename
+	// spelled out (retiredRefError). `fleet update` refuses such a bundle
+	// before installing (validate-config --retired-only).
 	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
 	// name itself never contains ':', so the first ':' (if any) starts the op.
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
@@ -200,6 +206,9 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		case '?': // ${VAR:?message}
 			if v, ok := lookupNonEmpty(name); ok {
 				return expandResult{text: v, fromEnv: true}, nil
+			}
+			if err := retiredRefError(manifestPath, name); err != nil {
+				return expandResult{}, err
 			}
 			msg := strings.TrimSpace(body)
 			if msg == "" {
@@ -224,6 +233,25 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 	return expandResult{deferred: true}, nil
 }
 
+// retiredRefMessage is the load error for a required reference to a spelling
+// ADR-0106 removed, or "" when name is not one.
+func retiredRefMessage(name string) string {
+	canonical, ok := envreg.RetiredAlias(strings.TrimSpace(name))
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("manifest references removed variable %s; rename it to %s (ADR-0106)", strings.TrimSpace(name), canonical)
+}
+
+// retiredRefError wraps retiredRefMessage as a load error naming the
+// manifest, or nil when name is not a removed spelling.
+func retiredRefError(manifestPath, name string) error {
+	if msg := retiredRefMessage(name); msg != "" {
+		return fmt.Errorf("client config manifest %s: %s", manifestPath, msg)
+	}
+	return nil
+}
+
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
 // set AND non-empty (empty env counts as unset, matching POSIX ${VAR:-default}
 // and the legacy getEnvOrDefault, which treated an empty value as "use default").
@@ -237,8 +265,16 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // manifest shows only ${OWNER_ID}) and then be filled with whoever is at the
 // keyboard — in an identity_env key, a seat or money would follow the user.
 // The token is honoured only where the bundle itself writes it.
+//
+// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed counts as
+// UNSET too, whatever the environment holds: fleet reads none of them, and
+// the manifest load warns about the reference (warnRetiredManifestRefs), so a
+// stale value can never quietly feed a connector.
 func lookupNonEmpty(name string) (string, bool) {
 	name = strings.TrimSpace(name)
+	if _, retired := envreg.RetiredAlias(name); retired {
+		return "", false
+	}
 	v := strings.TrimSpace(envreg.Unregistered(name))
 	if v == "" {
 		return "", false

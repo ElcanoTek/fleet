@@ -63,6 +63,8 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
@@ -682,9 +684,8 @@ else
   # model key from ✗ to an advisory on a production box. Same token set the
   # Go side accepts (config truthy()).
   mock_on=0
-  for _mv in "$(env_get FLEET_MOCK_MODE)" "${CHAT_MOCK_MODE:-}" "$(env_get CHAT_MOCK_MODE)"; do # LEGACY-ENV-ALIAS: remove after migrate-env
-    case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
-  done
+  _mv="$(env_get FLEET_MOCK_MODE)"
+  case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
   if [[ -n "$(env_get OPENROUTER_API_KEY)" ]]; then
     pass "OPENROUTER_API_KEY set"
   elif [[ "$mock_on" == "1" ]]; then
@@ -1407,36 +1408,34 @@ fi
 # fail this check forever: doctor said "build it: sudo fleet update", and
 # update correctly skipped the build because the manifest names an image.
 sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
-[[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)" # LEGACY-ENV-ALIAS: remove after migrate-env
 sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
   [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
   [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
   # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
-  # only shapes the default bundle uses; mirrors bootstrap's
-  # resolve_sandbox_image — keep them in sync).
+  # ${...} reference interpolated against the service's env file, as the
+  # service resolves it (fleet_sandbox_resolve_scalar, shared with
+  # bootstrap.sh and update.sh; a spelling ADR-0106 removed reads as unset).
+  # A reference the service would refuse (unset ${X}, or ${X:?m}) is a doctor
+  # failure with the loader's reason, not an abort.
+  doctor_env_value() { env_get "$1"; }
+  # manifest_sandbox_scalar KEY — sets $sandbox_scalar (fail()s, leaving it
+  # empty, when the service would refuse the reference).
   manifest_sandbox_scalar() {
-    local key="$1" raw
-    raw="$(awk -v key="$key" '
-      /^sandbox:[[:space:]]*$/ { b=1; next }
-      /^[^[:space:]]/          { b=0 }
-      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-      printf '%s' "${!var:-$def}"
-    else
-      printf '%s' "$raw"
+    local m="$bundle_dir/manifest.yaml"
+    if ! sandbox_scalar="$(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>/dev/null)"; then
+      sandbox_scalar=""
+      fail "client bundle $(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>&1 >/dev/null) — fleet refuses this bundle at startup; set the variable in $ENV_FILE or fix the manifest"
     fi
   }
-  sandbox_img="$(manifest_sandbox_scalar image)"
+  manifest_sandbox_scalar image
+  sandbox_img="$sandbox_scalar"
   if [[ -n "$sandbox_img" ]]; then
     sandbox_img_prebuilt=1
   else
-    sandbox_img="$(manifest_sandbox_scalar tag)"
-    sandbox_img="${sandbox_img:-localhost/fleet-sandbox:latest}"
+    manifest_sandbox_scalar tag
+    sandbox_img="${sandbox_scalar:-localhost/fleet-sandbox:latest}"
   fi
 fi
 

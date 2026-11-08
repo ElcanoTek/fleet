@@ -37,7 +37,11 @@ function emptyColumn(output: boolean): ColumnDraft {
   return { draftId: nextDraftId++, name: "", type: "text", output };
 }
 
-export function DatasetsPanel() {
+// readOnly (a readonly Operations Center user) hides every dataset write —
+// New dataset, run / pause, approve, retry, CSV import, delete — because the
+// orchestrator refuses each with 403 for that role. Browsing, filtering and
+// the CSV export (a GET) stay.
+export function DatasetsPanel({ readOnly = false }: { readOnly?: boolean } = {}) {
   const { showToast } = useToast();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   // null until the first list response: the empty state must not flash "No
@@ -221,9 +225,11 @@ export function DatasetsPanel() {
     <div className="section" role="region" aria-label="Datasets">
       <div className="section-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>Datasets</h2>
-        <button type="button" className="btn btn-primary" onClick={() => setCreateOpen(true)}>
-          New dataset
-        </button>
+        {readOnly ? null : (
+          <button type="button" className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+            New dataset
+          </button>
+        )}
       </div>
 
       {!listLoaded ? (
@@ -257,64 +263,70 @@ export function DatasetsPanel() {
         <>
           <p style={{ margin: "0.5rem 0", color: "var(--color-text-secondary)" }}>{selected.goal}</p>
           <div className="tasks-filter-bar" role="toolbar" aria-label="Dataset actions">
-            {selected.status === "running" ? (
-              <button type="button" className="btn" disabled={busy} onClick={() => void act("Pause", () => orchestratorApi.pauseDataset(selected.id))}>
-                Pause
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy || (rowCounts["pending"] ?? 0) === 0}
-                onClick={() => void act("Run", () => orchestratorApi.runDataset(selected.id))}
-              >
-                Run {rowCounts["pending"] ?? 0} pending
-              </button>
+            {readOnly ? null : (
+              <>
+                {selected.status === "running" ? (
+                  <button type="button" className="btn" disabled={busy} onClick={() => void act("Pause", () => orchestratorApi.pauseDataset(selected.id))}>
+                    Pause
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy || (rowCounts["pending"] ?? 0) === 0}
+                    onClick={() => void act("Run", () => orchestratorApi.runDataset(selected.id))}
+                  >
+                    Run {rowCounts["pending"] ?? 0} pending
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || (rowCounts["proposed"] ?? 0) === 0}
+                  onClick={() => void act("Approve", async () => {
+                    const res = await orchestratorApi.approveDatasetRows(selected.id);
+                    showToast(`Approved ${plural(res.approved, "row")}`, "success");
+                  })}
+                >
+                  Approve all proposed ({rowCounts["proposed"] ?? 0})
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || (rowCounts["failed"] ?? 0) === 0}
+                  onClick={() => void act("Retry", () => orchestratorApi.rerunDatasetRows(selected.id))}
+                >
+                  Retry failed ({rowCounts["failed"] ?? 0})
+                </button>
+                <button type="button" className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
+                  Import CSV
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void uploadCSV(f);
+                    e.target.value = "";
+                  }}
+                />
+              </>
             )}
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || (rowCounts["proposed"] ?? 0) === 0}
-              onClick={() => void act("Approve", async () => {
-                const res = await orchestratorApi.approveDatasetRows(selected.id);
-                showToast(`Approved ${plural(res.approved, "row")}`, "success");
-              })}
-            >
-              Approve all proposed ({rowCounts["proposed"] ?? 0})
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || (rowCounts["failed"] ?? 0) === 0}
-              onClick={() => void act("Retry", () => orchestratorApi.rerunDatasetRows(selected.id))}
-            >
-              Retry failed ({rowCounts["failed"] ?? 0})
-            </button>
-            <button type="button" className="btn" disabled={busy} onClick={() => fileRef.current?.click()}>
-              Import CSV
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadCSV(f);
-                e.target.value = "";
-              }}
-            />
             <button type="button" className="btn" data-testid="dataset-export-csv" onClick={exportCSV}>
               Export CSV
             </button>
-            <button
-              type="button"
-              className="btn btn-danger"
-              disabled={busy || selected.status === "running"}
-              onClick={() => setDeleteOpen(true)}
-            >
-              Delete
-            </button>
+            {readOnly ? null : (
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={busy || selected.status === "running"}
+                onClick={() => setDeleteOpen(true)}
+              >
+                Delete
+              </button>
+            )}
             <select
               aria-label="Filter rows by status"
               value={statusFilter}
@@ -370,7 +382,7 @@ export function DatasetsPanel() {
                     </td>
                     <td style={{ maxWidth: "18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.error || row.result_note}>
                       {row.error || row.result_note || ""}
-                      {row.status === "proposed" || row.status === "failed" ? (
+                      {!readOnly && (row.status === "proposed" || row.status === "failed") ? (
                         <button
                           type="button"
                           className="btn btn-small"
@@ -399,7 +411,7 @@ export function DatasetsPanel() {
                 Loading rows…
               </p>
             ) : rows.length === 0 ? (
-              <p className="empty-state">No rows{statusFilter ? ` with status "${statusFilter}"` : ""} — import a CSV to get started.</p>
+              <p className="empty-state">No rows{statusFilter ? ` with status "${statusFilter}"` : ""}{readOnly ? "." : " — import a CSV to get started."}</p>
             ) : null}
           </div>
           {rowsTotal > 0 ? (
@@ -457,7 +469,7 @@ export function DatasetsPanel() {
         </>
       ) : null}
 
-      {createOpen ? (
+      {createOpen && !readOnly ? (
         <DatasetCreateModal
           onClose={() => setCreateOpen(false)}
           onCreated={(d) => {

@@ -18,7 +18,7 @@ func TestMaterializeContentFileInlinesWorkspaceFile(t *testing.T) {
 
 	// Point the workspace root at a temp dir so we don't pollute ./workspace.
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestMaterializeContentFileAbsolutePathInsideWorkspace(t *testing.T) {
 	// workspace — agents often echo back the absolute path a previous tool
 	// returned. Absolute paths outside it are rejected (see the traversal test).
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-abs"
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -84,7 +84,7 @@ func TestMaterializeContentFileAbsolutePathInsideWorkspace(t *testing.T) {
 // nor via a '..'-escaping relative path.
 func TestMaterializeContentFileRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-escape"
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -118,7 +118,7 @@ func TestMaterializeContentFileRejectsEscapes(t *testing.T) {
 // through os.ExpandEnv + UserHomeDir).
 func TestMaterializeContentFileNoEnvOrTildeExpansion(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-noexpand"
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -151,7 +151,7 @@ func TestMaterializeContentFileNoEnvOrTildeExpansion(t *testing.T) {
 
 func TestMaterializeContentFileMissingFileErrors(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 
 	raw := `{"to_email":"x@y.com","subject":"s","content_file":"nope.html"}`
 	_, err := MaterializeContentFile("conv-missing", raw)
@@ -168,7 +168,7 @@ func TestMaterializeContentFilePrefersFileOverInlineContent(t *testing.T) {
 	// matching the tool descriptions and MCP server. The file is read and replaces
 	// inline content.
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-pref"
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -205,7 +205,7 @@ func TestMaterializeContentFileNoopWithoutContentFile(t *testing.T) {
 
 func TestMaterializeAttachmentPathsRewritesRelativePaths(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-attach"
 
 	raw := `{"to_email":"brad@x.com","subject":"s","content":"<img src=\"cid:chart\">","inline_attachments":[{"path":"daily_performance.png","cid":"chart"}],"attachments":[{"path":"report.csv"}]}`
@@ -236,7 +236,7 @@ func TestMaterializeAttachmentPathsRewritesRelativePaths(t *testing.T) {
 
 func TestMaterializeAttachmentPathsLeavesAbsolutePathsAlone(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	// Absolute and already inside the workspace root (a shared-library file
 	// staged directly under the root, say): passes through unchanged.
 	abs := filepath.Join(root, "shared", "already-absolute.png")
@@ -262,7 +262,7 @@ func TestMaterializeAttachmentPathsLeavesAbsolutePathsAlone(t *testing.T) {
 // (every connector secret the host holds) into the persisted approval args.
 func TestMaterializeAttachmentPathsRefusesEscapes(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	t.Setenv("FLEET_TEST_FAKE_SECRET", "leaked-host-env-value")
 
 	cases := map[string]string{
@@ -317,7 +317,7 @@ func TestMaterializeAttachmentPathsNoopWithoutAttachments(t *testing.T) {
 
 func TestMaterializeContentFileSizeCap(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-big"
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -351,7 +351,7 @@ func TestIsEmailToolName(t *testing.T) {
 func attachmentWorkspace(t *testing.T) (root, outside string) {
 	t.Helper()
 	root = t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	for _, conv := range []string{"conv-a", "conv-b"} {
 		if err := os.MkdirAll(filepath.Join(root, conv), 0o755); err != nil {
 			t.Fatal(err)

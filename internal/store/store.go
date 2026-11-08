@@ -129,7 +129,7 @@ type Conversation struct {
 	// Lockdown is set at conversation creation and never changes. When
 	// true: the per-turn sandbox is cold-started fresh with
 	// --network=none and the model slug must be in
-	// CHAT_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
+	// FLEET_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
 	// containers (default mode), but reuse the warm pool and inherit
 	// rootless slirp4netns. Drives the "Lockdown chat" badge on the
 	// frontend.

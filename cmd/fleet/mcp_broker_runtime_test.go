@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 )
@@ -244,9 +245,10 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 
 	for _, name := range []string{
 		"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS",
-		// Legacy spellings the parent resolves lazily after broker boot: the
-		// shared server auth secret plus the per-run lookups through the
-		// alias machinery (config.lookupFleet, agentcore.fleetEnv).
+		// Removed (ADR-0106) spellings of names the parent resolves after
+		// broker boot: the shared server auth secret plus the per-run
+		// lookups (config.lookupFleet, agentcore.fleetEnv). A stale copy on
+		// a box holds the same value, so a connector may not claim it.
 		"CUTLASS_SERVER_TOKEN",
 		"CUTLASS_OPENROUTER_BASE_URL", "CUTLASS_MODEL_CACHE_TTL_MINUTES",
 		"CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD", "CUTLASS_CONTEXT_COMPACTION_THRESHOLD",
@@ -269,17 +271,17 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 	}
 }
 
-// Walks the alias machinery over the whole parent-owned enumeration: every
-// spelling config's FLEET_/CHAT_/CUTLASS_ prefix aliasing resolves for a
-// parent-owned name must be refused, so a name added to the enumeration later
-// cannot silently escape in one of its legacy spellings.
+// Walks the whole parent-owned enumeration: every FLEET_ name and its removed
+// CHAT_/CUTLASS_ spellings (envreg.RetiredSpellings) must be refused, so a
+// name added to the enumeration later cannot silently escape in a stale
+// legacy spelling.
 func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testing.T) {
 	t.Parallel()
 
 	spellings := map[string]bool{}
 	var refs strings.Builder
 	for _, name := range parentOwnedRuntimeEnvNames(nil) {
-		for _, spelling := range config.EnvAliases(name) {
+		for _, spelling := range envreg.RetiredSpellings(name) {
 			if spellings[spelling] {
 				continue
 			}
@@ -289,7 +291,7 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 			// at launch and the loader keeps the name out of
 			// ConnectorEnvVarNames — so it is the one parent-owned spelling
 			// that must NOT be refused (pinned separately below). Its
-			// CHAT_/CUTLASS_ alias spellings are ordinary claims and still are.
+			// CHAT_/CUTLASS_ spellings are ordinary claims and still are.
 			if spelling == "FLEET_WORKSPACE_ROOT" {
 				continue
 			}

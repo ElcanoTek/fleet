@@ -192,6 +192,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/bundle.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
+# shellcheck source=lib/retired-bundle.sh
+. "$SCRIPT_DIR/lib/retired-bundle.sh"
 # Uninstall Cockpit (bootstrap only).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
@@ -854,29 +856,6 @@ if [[ "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
   fi
 fi
 
-# ── system dependencies: the runtime + sandbox toolchain ──
-# So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
-# end: podman (the execution sandbox), python3 + pip (host-side Python MCP
-# servers), chromium-headless (built-in browser automation), plus
-# git/curl/jq/rsync/gcc. No Go and no Node: the fleet binary is a signed release
-# artifact with the web UI embedded (docs/RELEASE-ARTIFACTS.md, ADR-0100).
-# Postgres-server is installed per-mode below (local only). Non-Fedora hosts:
-# install these yourself, then re-run.
-#
-# slirp4netns is here because FLEET_DEFAULT_NETWORK_MODE=allowlisted requires
-# it: podman >= 5.0 defaults to pasta and a stock modern host ships pasta
-# WITHOUT slirp4netns, which makes every allowlisted container start fail
-# (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
-# to install unconditionally so the mode is available if an operator picks it.
-step "Installing system dependencies (runtime + sandbox toolchain)"
-FLEET_DEPS=(git curl jq rsync python3 python3-pip chromium-headless gcc podman slirp4netns)
-if command -v dnf >/dev/null 2>&1; then
-  run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
-  [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
-else
-  warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
-fi
-
 # ── the fleet release: download + verify BEFORE anything uses it ──
 # The binary every later step runs (`fleet release sandbox` below, the service
 # with --enable-service). Verified by scripts/lib/release.sh with the pinned
@@ -906,6 +885,69 @@ else
     || die "the verified binary reports the host executor compiled in — refusing it"
   "$FLEET_RELEASE_BIN" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
   ok "verified ${RELEASE_TAG}: $("$FLEET_RELEASE_BIN" version)"
+fi
+
+# ── removed CHAT_/CUTLASS_ variables (ADR-0106): refuse BEFORE any host change ──
+# The verified release binary reads them as unset, so a bundle that still uses
+# one may not load. Its read-only scan (scripts/lib/retired-bundle.sh) runs
+# here — after the release is fetched and verified (both read-only), before
+# the first step that changes the host. A path (or the default) bundle is
+# scanned in place; a git URL is cloned into a temporary dir for the scan
+# (the real clone happens later). Without git on a bare box the URL bundle is
+# scanned after its real clone instead (below).
+fleet_bootstrap_scan_bundle() {
+  local dir="$1" rc=0
+  fleet_retired_bundles_check "$FLEET_RELEASE_BIN" "$dir" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) die "the client bundle ${2:-$dir} uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed and the host was not changed; rename these in the client bundle and re-run" ;;
+    *) die "the removed-variable check of the client bundle ${2:-$dir} failed (above) — nothing was installed and the host was not changed" ;;
+  esac
+}
+BUNDLE_SCANNED_EARLY=0
+if [[ -n "${FLEET_RELEASE_BIN:-}" ]]; then
+  if [[ -z "$CLIENT_CONFIG_ARG" ]]; then
+    fleet_bootstrap_scan_bundle "$CLIENT_CONFIG_DIR"
+    BUNDLE_SCANNED_EARLY=1
+  elif [[ "$CLIENT_CONFIG_ARG" == *://* || "$CLIENT_CONFIG_ARG" == *@*:* ]]; then
+    if command -v git >/dev/null 2>&1; then
+      _scan_url="${CLIENT_CONFIG_ARG%#*}" _scan_ref=""
+      [[ "$CLIENT_CONFIG_ARG" == *#* ]] && _scan_ref="${CLIENT_CONFIG_ARG##*#}"
+      _scan_tmp="$(mktemp -d)"
+      if git clone --quiet "$_scan_url" "$_scan_tmp/bundle" 2>/dev/null \
+        && { [[ -z "$_scan_ref" ]] || git -C "$_scan_tmp/bundle" checkout --quiet "$_scan_ref" 2>/dev/null; }; then
+        ( fleet_bootstrap_scan_bundle "$_scan_tmp/bundle" "$CLIENT_CONFIG_ARG" ) || { rm -rf "$_scan_tmp"; exit 1; }
+        BUNDLE_SCANNED_EARLY=1
+      fi
+      rm -rf "$_scan_tmp"
+    fi
+  elif [[ -d "$CLIENT_CONFIG_ARG" ]]; then
+    fleet_bootstrap_scan_bundle "$CLIENT_CONFIG_ARG"
+    BUNDLE_SCANNED_EARLY=1
+  fi
+fi
+
+# ── system dependencies: the runtime + sandbox toolchain ──
+# So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
+# end: podman (the execution sandbox), python3 + pip (host-side Python MCP
+# servers), chromium-headless (built-in browser automation), plus
+# git/curl/jq/rsync/gcc. No Go and no Node: the fleet binary is a signed release
+# artifact with the web UI embedded (docs/RELEASE-ARTIFACTS.md, ADR-0100).
+# Postgres-server is installed per-mode below (local only). Non-Fedora hosts:
+# install these yourself, then re-run.
+#
+# slirp4netns is here because FLEET_DEFAULT_NETWORK_MODE=allowlisted requires
+# it: podman >= 5.0 defaults to pasta and a stock modern host ships pasta
+# WITHOUT slirp4netns, which makes every allowlisted container start fail
+# (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
+# to install unconditionally so the mode is available if an operator picks it.
+step "Installing system dependencies (runtime + sandbox toolchain)"
+FLEET_DEPS=(git curl jq rsync python3 python3-pip chromium-headless gcc podman slirp4netns)
+if command -v dnf >/dev/null 2>&1; then
+  run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
+  [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
+else
+  warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
 fi
 
 # The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
@@ -1119,34 +1161,32 @@ if [[ "$ENABLE_SERVICE" == "1" && "$DRY_RUN" != "1" && -d "$CLIENT_CONFIG_DIR" \
   fi
 fi
 
-# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image, the
-# SAME way the Go loader (internal/clientconfig) does: extract the scalar under
-# the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
-# against the process env. An empty result => build-on-box (the default-bundle
-# value "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
-# Mirrored in scripts/update.sh — keep the two copies in sync.
+# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image,
+# the SAME way the Go loader (internal/clientconfig) does, interpolated
+# against the process env (fleet_sandbox_resolve_scalar, shared with update.sh
+# and doctor.sh). An empty result => build-on-box (the default-bundle value
+# "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
+# A reference the loader would refuse (unset ${X}, or ${X:?m}) stops the
+# install with the loader's reason: fleet would not start with this bundle.
 resolve_sandbox_image() {
-  local file="$1" raw
-  [[ -f "$file" ]] || return 0
-  raw="$(awk '
-    /^sandbox:[[:space:]]*$/ { in_block=1; next }
-    /^[^[:space:]]/          { in_block=0 }
-    in_block && $0 ~ "^[[:space:]]+image:" {
-      sub("^[[:space:]]+image:[[:space:]]*", "")
-      sub(/[[:space:]]+#.*$/, "")
-      gsub(/^["'\'']|["'\'']$/, "")
-      print; exit
-    }
-  ' "$file")"
-  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
-  # default bundle uses). Anything else is treated as a literal image ref.
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-    printf '%s' "${!var:-$def}"
-  else
-    printf '%s' "$raw"
-  fi
+  [[ -f "$1" ]] || return 0
+  fleet_sandbox_resolve_scalar image "$1" fleet_shell_env_value || die "client bundle $1: fleet refuses this sandbox.image at startup (see above)"
 }
+
+# ── removed CHAT_/CUTLASS_ variables (ADR-0106), when the early scan could not run ──
+# Only a git-URL bundle on a box that had no git before the system
+# dependencies were installed gets here: it is scanned after its clone, so the
+# message says what bootstrap has already changed.
+if [[ -n "${FLEET_RELEASE_BIN:-}" && "$BUNDLE_SCANNED_EARLY" != "1" ]]; then
+  _late_rc=0
+  fleet_retired_bundles_check "$FLEET_RELEASE_BIN" "$CLIENT_CONFIG_DIR" || _late_rc=$?
+  _late_changed="system dependencies installed, Cockpit removed, SSH and hostname settings applied, the service user, ${ENV_FILE} and the client config clone at ${CLIENT_CONFIG_DIR} set up"
+  case "$_late_rc" in
+    0) ;;
+    1) die "the client bundle ${CLIENT_CONFIG_DIR} uses removed CHAT_/CUTLASS_ variables (above) — the fleet binary and service were NOT installed, but bootstrap had already changed the host (${_late_changed}); rename these in the client bundle and re-run" ;;
+    *) die "the removed-variable check of ${CLIENT_CONFIG_DIR} failed (above) — the fleet binary and service were NOT installed, but bootstrap had already changed the host (${_late_changed})" ;;
+  esac
+fi
 
 # ── sandbox image ──
 # The release publishes the generic bundle's sandbox image, signed. A bundle
