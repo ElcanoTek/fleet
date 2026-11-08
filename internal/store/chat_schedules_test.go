@@ -553,3 +553,67 @@ func TestChatScheduleEditSupersedesAClaimedFire(t *testing.T) {
 		}
 	}
 }
+
+// TestChatScheduleEditAfterDeliveryCountsTheRun: an edit that lands after a
+// fire's turn was delivered but before it settled does not supersede it:
+// exactly one turn runs for that slot (the old prompt), it is counted and
+// recorded, the slot advances by the edited cadence, and the next slot fires
+// the edited definition.
+func TestChatScheduleEditAfterDeliveryCountsTheRun(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	sd := openSchedOn(t, dsn)
+	const user = "late-editor@elcanotek.com"
+	conv, err := s.CreateConversation(ctx, user, "c", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: user, Prompt: "Check the OLD thing.", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Unix(sc.NextRunAt+1, 0)
+	fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
+	if err != nil || len(fires) != 1 {
+		t.Fatalf("claim = %+v, %v", fires, err)
+	}
+	d, err := s.DeliverChatScheduleFire(ctx, fires[0], 20)
+	if err != nil || d.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("deliver = %+v, %v", d, err)
+	}
+	newPrompt, newCron := "Check the NEW thing.", "0 */3 * * *"
+	if _, err := s.UpdateChatSchedule(ctx, user, conv.ID, sc.ID, ChatSchedulePatch{Prompt: &newPrompt, CronExpr: &newCron}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := sd.SettleChatScheduleFire(ctx, fires[0], d, at); err != nil || !ok {
+		t.Fatalf("settle = %v, %v", ok, err)
+	}
+	all, _ := s.ListChatSchedules(ctx, user, conv.ID, true)
+	next, _ := models.NextChatScheduleRun(newCron, "UTC", at)
+	if len(all) != 1 || all[0].RunCount != 1 || all[0].NextRunAt != next.Unix() {
+		t.Fatalf("schedule = %+v; want the run counted and the slot at %d (edited cadence)", all, next.Unix())
+	}
+	if runs, _ := sd.ListChatScheduleRuns(ctx, sc.ID, 10); len(runs) != 1 || runs[0].InputID != d.InputID {
+		t.Fatalf("history = %+v; want the run", runs)
+	}
+	// That slot is not fired again (by the edited definition or otherwise).
+	if again := fireDueChatSchedules(t, s, dsn, at); len(again) != 0 {
+		t.Fatalf("the slot fired again: %+v", again)
+	}
+	row := inputByID(t, s, conv.ID, d.InputID)
+	if !strings.Contains(row.Message, "OLD thing") {
+		t.Fatalf("the delivered turn = %q; want the old prompt", row.Message)
+	}
+	// The old turn finishes; the next slot fires the edited definition.
+	if _, err := s.db.Exec(`UPDATE chat_input_queue SET state = 'completed' WHERE id = $1`, d.InputID); err != nil {
+		t.Fatal(err)
+	}
+	fired := fireDueChatSchedules(t, s, dsn, time.Unix(all[0].NextRunAt+1, 0))
+	if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("next slot = %+v", fired)
+	}
+	if row := inputByID(t, s, conv.ID, fired[0].delivery.InputID); !strings.Contains(row.Message, "NEW thing") {
+		t.Fatalf("the next slot's turn = %q; want the edited prompt", row.Message)
+	}
+}
