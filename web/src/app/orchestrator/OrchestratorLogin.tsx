@@ -1,7 +1,6 @@
 // Orchestrator sign-in card. Cookie/OIDC is the only operator path: the
-// leftover moc username/password form is gone (EnsureAdminUser mints an
-// unusable random password, so that form could not admit a real operator).
-// Backend POST /auth/login + the bearer proxy stay for API clients.
+// leftover moc username/password form is gone, and so is the backend's
+// POST /auth/login and its bearer (#2049 M4): programs use API keys.
 //
 // A genuinely signed-out visitor almost never sees this card: the Next gate
 // bounces them to /login first. This is the safety-net for a 401 /me after

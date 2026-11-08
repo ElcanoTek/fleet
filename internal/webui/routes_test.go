@@ -101,8 +101,8 @@ func TestRetiredNextRoutesAreNotForwarded(t *testing.T) {
 		m, p, _ := strings.Cut(rest, " ")
 		retired = append(retired, nextRoute{m, p})
 	}
-	if len(retired) != 4 {
-		t.Fatalf("found %d retired rows; want the 4 credential-account routes", len(retired))
+	if len(retired) != 6 {
+		t.Fatalf("found %d retired rows; want the 4 credential-account routes and the 2 orchestrator password-login routes", len(retired))
 	}
 	e := newTestEnv(t)
 	for _, rt := range retired {

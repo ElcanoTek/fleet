@@ -26,6 +26,7 @@ func TestUpdateTask_TimezoneChangeMovesNextRun(t *testing.T) {
 	store, h, cleanup := setupFullHandler(t)
 	defer cleanup()
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(rr chi.Router) {
 		rr.Use(h.AdminOrUserAuthMiddleware)
 		rr.Put("/tasks/{task_id}", h.UpdateTask)

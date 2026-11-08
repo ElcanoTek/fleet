@@ -548,7 +548,7 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 		SELECT DISTINCT email FROM (
 			SELECT p.owner_email AS email FROM projects p WHERE p.id = $1
 			UNION
-			SELECT u.email FROM users u
+			SELECT u.email FROM core.users u
 			JOIN projects p ON p.id = $1
 			WHERE p.team_id <> '' AND u.team_id = p.team_id AND u.enabled = TRUE
 		) m ORDER BY email`, projectID)
@@ -659,7 +659,7 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	}
 	var targetTeam sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE FOR SHARE`, newOwner).Scan(&targetTeam)
+		`SELECT team_id FROM core.users WHERE email = $1 AND enabled = TRUE FOR SHARE`, newOwner).Scan(&targetTeam)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotAProjectMember
 	}

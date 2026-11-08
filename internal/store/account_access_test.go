@@ -16,7 +16,7 @@ func TestAccountAccessIncludesDisabledRows(t *testing.T) {
 	if _, err := st.CreateUser(ctx, "d@x.com", "password-123"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.db.ExecContext(ctx, `UPDATE users SET enabled = FALSE WHERE email = 'd@x.com'`); err != nil {
+	if _, err := st.db.ExecContext(ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'd@x.com'`); err != nil {
 		t.Fatal(err)
 	}
 	a, found, err := st.AccountAccess(ctx, "D@x.com")

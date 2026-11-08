@@ -106,8 +106,8 @@ func TestSelectDBs(t *testing.T) {
 	cases := map[string][]string{
 		"chat":  {"chat"},
 		"sched": {"sched"},
-		"all":   {"chat", "sched"},
-		"":      {"chat", "sched"},
+		"all":   {"all"},
+		"":      {"all"},
 	}
 	for in, want := range cases {
 		got, err := selectDBs(in)

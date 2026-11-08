@@ -19,12 +19,23 @@ import (
 )
 
 // Backup/restore wrap pg_dump -Fc / pg_restore for the chat and sched Postgres
-// stores (chat: conversations + turn events + users; sched: tasks + nodes + API
-// keys). We dump PER STORE (custom-format, one file each): each store is a
-// schema of the one database (#2049) and its dump is that schema (pg_dump
-// -n). Restore targets one store at a time. The custom (-Fc)
-// format is what pg_restore consumes and supports --clean/--if-exists for an
-// idempotent restore-over-existing-DB.
+// stores (chat: conversations + turn events; sched: tasks + nodes + API keys)
+// and the identity schema core both reference (#2049 M4: the one users
+// table). Every store is a schema of the one database (#2049):
+//
+//   - --db=all (the default, and the backup timer's) is ONE pg_dump of
+//     chat, core and sched: one snapshot, so the accounts and the chat and
+//     sched rows that name them are consistent with each other.
+//   - --db=chat / --db=sched dump that store's schema plus core, so each
+//     dump records the accounts its rows name. A sched dump still does not
+//     restore alone into an empty database: a sched restore never writes
+//     core (see planSchedRestore).
+//
+// Restore takes --db=all for a whole-database dump (all three schemas, in
+// one transaction), or one store: its schema, plus core for chat (whose
+// migrations own it). Old two-file backups restore one store at a time as
+// before. The custom (-Fc) format is what pg_restore consumes and supports
+// --clean/--if-exists for an idempotent restore-over-existing-DB.
 //
 // Credentials never reach argv: the DSN is parsed and the password is passed to
 // the child via PGPASSWORD in its environment (visible only to the same user via
@@ -92,23 +103,70 @@ func (c pgConn) env() []string {
 	return e
 }
 
-// runPgDump writes a custom-format (-Fc) dump of the DSN's database to outPath.
-// Connection params (incl. password) travel via the environment, not argv.
+// runPgDump writes a custom-format (-Fc) dump of one store to outPath: the
+// DSN's schema plus the identity schema core, which both stores' rows
+// reference (#2049 M4), so the dump records the accounts its rows name (a
+// sched restore reads them to check creators; it does not restore them). One pg_dump is one
+// snapshot. Connection params (incl. password) travel via the environment,
+// not argv.
 func runPgDump(ctx context.Context, dsn, outPath string) error {
+	// A store's dump is its schema and core, nothing else (the database
+	// holds the other store's schema too, and may hold schemas that are not
+	// fleet's). chatDSN / schedDSN always give the DSN its store's schema.
+	schema := config.DSNSchema(dsn)
+	if schema == "" {
+		return fmt.Errorf("pg_dump %s: the DSN names no store schema", redactDSN(dsn))
+	}
+	return pgDump(ctx, dsn, outPath, []string{schema, config.IdentitySchema})
+}
+
+// allSchemas are the schemas of a whole-fleet dump (--db=all), in one
+// snapshot: the stores and the identity schema between them.
+var allSchemas = []string{config.ChatSchema, config.IdentitySchema, config.SchedSchema}
+
+// runPgDumpAll writes ONE custom-format dump of chat, core and sched: a
+// single pg_dump, so a single snapshot — the accounts in core and the chat
+// and sched rows that reference them are consistent with each other.
+//
+// Every one of the three must be in the archive: pg_dump runs with
+// --strict-names (a schema that is missing fails it), and the written
+// archive's table of contents is checked again before the backup reports
+// success — a "whole fleet" dump without core or sched is not one.
+func runPgDumpAll(ctx context.Context, dsn, outPath string) (err error) {
+	defer func() {
+		if err != nil {
+			_ = os.Remove(outPath) // no partial "backup" left for a restore to find
+		}
+	}()
+	if err := pgDump(ctx, dsn, outPath, allSchemas, "--strict-names"); err != nil {
+		return err
+	}
+	got, err := dumpSchemas(ctx, outPath)
+	if err != nil {
+		return err
+	}
+	for _, s := range allSchemas {
+		if !slices.Contains(got, s) {
+			return fmt.Errorf("the whole-fleet dump %s lacks schema %s (it holds %s): refusing to report it as a backup", outPath, s, strings.Join(got, ", "))
+		}
+	}
+	return nil
+}
+
+// pgDump runs one pg_dump of the given schemas. A pattern that matches no
+// schema is skipped (no --strict-names): core does not exist before the
+// chat store first migrates.
+func pgDump(ctx context.Context, dsn, outPath string, schemas []string, extra ...string) error {
 	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
-	// A store's dump is its schema and nothing else (the database holds the
-	// other store's schema too, and may hold schemas that are not fleet's).
-	// chatDSN / schedDSN always give the DSN its store's schema.
-	schema := config.DSNSchema(dsn)
-	if schema == "" {
-		return fmt.Errorf("pg_dump %s: the DSN names no store schema", redactDSN(dsn))
+	args := append([]string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}, extra...)
+	for _, schema := range schemas {
+		args = append(args, "-n", schema)
 	}
-	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath, "-n", schema}
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
 	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = c.env()
@@ -144,10 +202,16 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 //     entry itself is not selected, so the schema is never dropped). The
 //     store's schema is created first if it is missing.
 func runPgRestore(ctx context.Context, dsn, inPath string) error {
-	c, err := parsePGConn(dsn)
-	if err != nil {
-		return err
-	}
+	return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{notes: os.Stderr})
+}
+
+// runPgRestoreWith is runPgRestore with the operator's choices. Besides the
+// schema checks above, a store restore never leaves task or dataset
+// creators naming no account without the operator saying so
+// (backup_identity.go): --db=sched refuses a dump whose creators are not
+// accounts of this database (restore chat first, or --db=all); --db=chat
+// refuses accounts that would orphan live sched creators.
+func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts) error {
 	want := config.DSNSchema(dsn)
 	if want == "" {
 		return fmt.Errorf("pg_restore %s: the DSN names no store schema", redactDSN(dsn))
@@ -164,15 +228,87 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	case !slices.Contains(got, want):
 		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
 	}
-	// Other schemas in the archive (a whole-database dump) are left out by -n
-	// below: only the store's schema is restored.
-	if want != config.PublicSchema {
-		if err := ensureRestoreSchema(ctx, dsn, want); err != nil {
+	// Other schemas in the archive (a whole-database dump) are left out by
+	// -n below: only the store's schema is restored — plus, for the chat
+	// store, the identity schema core its migrations own (#2049 M4).
+	schemas := []string{want}
+	if want == config.SchedSchema {
+		if err := planSchedRestore(ctx, dsn, inPath, slices.Contains(got, config.IdentitySchema), opts); err != nil {
 			return err
 		}
 	}
-	//nolint:gosec // G204: fixed "pg_restore" binary; dbname comes from the parsed operator DSN, want is a validated plain identifier and inPath is an operator-supplied path, all separate argv (no shell interpolation); connection params ride in the env.
-	cmd := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "-n", want, "-d", c.dbname, inPath)
+	if want == config.ChatSchema {
+		switch hasCore := slices.Contains(got, config.IdentitySchema); {
+		case hasCore:
+			schemas = append(schemas, config.IdentitySchema)
+		default:
+			// A chat dump from before the one identity table: its users table
+			// is chat.users, and its migration ledger stops before 099, which
+			// moves that table into core. Restored next to an existing core
+			// it could never migrate again.
+			exists, err := schemaExists(ctx, dsn, config.IdentitySchema)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
+			}
+		}
+		if slices.Contains(schemas, config.IdentitySchema) {
+			if err := checkChatRestoreMergeOrder(ctx, dsn, inPath); err != nil {
+				return err
+			}
+			if !opts.allowUnresolved {
+				if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return pgRestore(ctx, dsn, inPath, schemas, false)
+}
+
+// runPgRestoreAll restores a whole-fleet dump (--db=all: chat, core and
+// sched, taken in one snapshot) in ONE transaction, so the restored accounts
+// and the rows that reference them are consistent too. A dump missing any of
+// the three — a per-store dump, an old two-file backup's — is refused: those
+// restore one store at a time (--db=chat / --db=sched).
+func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
+	got, err := dumpSchemas(ctx, inPath)
+	if err != nil {
+		return err
+	}
+	var missing []string
+	for _, s := range allSchemas {
+		if !slices.Contains(got, s) {
+			missing = append(missing, s)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): restore it with --db=chat or --db=sched", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
+	}
+	return pgRestore(ctx, dsn, inPath, allSchemas, true)
+}
+
+// pgRestore runs one pg_restore of the given schemas, creating each first if
+// missing (pg_restore -n restores a schema's objects, not the schema).
+func pgRestore(ctx context.Context, dsn, inPath string, schemas []string, oneTx bool) error {
+	c, err := parsePGConn(dsn)
+	if err != nil {
+		return err
+	}
+	args := []string{"--clean", "--if-exists", "--no-owner", "--no-acl"}
+	if oneTx {
+		args = append(args, "--single-transaction")
+	}
+	for _, schema := range schemas {
+		if err := ensureRestoreSchema(ctx, dsn, schema); err != nil {
+			return err
+		}
+		args = append(args, "-n", schema)
+	}
+	args = append(args, "-d", c.dbname, inPath)
+	cmd := exec.CommandContext(ctx, "pg_restore", args...)
 	cmd.Env = c.env()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -198,6 +334,20 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
 	}
 	return nil
+}
+
+// schemaExists reports whether the DSN's database has the schema.
+func schemaExists(ctx context.Context, dsn, schema string) (bool, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	var ok bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&ok); err != nil {
+		return false, fmt.Errorf("probe schema %s: %w", schema, err)
+	}
+	return ok, nil
 }
 
 // dumpSchemas lists the schemas a custom-format dump holds — the names of its
@@ -252,7 +402,7 @@ func backupFileName(db string, now time.Time) string {
 
 // backupFilePattern matches the dump files this tool writes (fleet-{chat,sched}-*.dump),
 // so prune only ever deletes our own artifacts — never an unrelated file in the dir.
-var backupFilePattern = regexp.MustCompile(`^fleet-(chat|sched)-.*\.dump$`)
+var backupFilePattern = regexp.MustCompile(`^fleet-(all|chat|sched)-.*\.dump$`)
 
 // verifyDump confirms a freshly-written file is a valid pg custom-format archive
 // by listing its table of contents (pg_restore --list: no connection, no data
@@ -373,8 +523,12 @@ func cmdBackup(argv []string) int {
 		if err != nil {
 			return errf(1, "%v", err)
 		}
+		dump := runPgDump
+		if name == "all" {
+			dump = runPgDumpAll
+		}
 		path := filepath.Join(outDir, backupFileName(name, now))
-		if err := runPgDump(ctx, dsn, path); err != nil {
+		if err := dump(ctx, dsn, path); err != nil {
 			return errf(5, "backup %s: %v", name, err)
 		}
 		// Always verify the freshly-written dump is restorable before reporting
@@ -382,7 +536,7 @@ func cmdBackup(argv []string) int {
 		if err := verifyDump(ctx, path); err != nil {
 			return errf(5, "%v", err)
 		}
-		fmt.Fprintf(os.Stderr, "backed up %s DB → %s (verified)\n", name, path)
+		fmt.Fprintf(os.Stderr, "backed up %s → %s (verified)\n", storeLabel(name), path)
 		fmt.Println(path)
 	}
 	if *prune {
@@ -399,24 +553,27 @@ func cmdBackup(argv []string) int {
 	return 0
 }
 
-// cmdRestore handles `fleet restore --db=chat|sched FILE`. Restore is
-// single-DB on purpose: it overwrites a live database, so the operator names the
-// target explicitly (no --db=all foot-gun).
+// cmdRestore handles `fleet restore --db=all|chat|sched FILE`. There is no
+// default: it overwrites a live database, so the operator names the target.
+// --db=all takes a whole-fleet dump (fleet-all-*.dump) and restores chat,
+// core and sched in one transaction; --db=chat / --db=sched restore one
+// store (an old two-file backup restores this way, one file each).
 func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	db := fs.String("db", "", "which database to restore into: chat|sched (required)")
+	db := fs.String("db", "", "what to restore: all (a fleet-all dump) | chat | sched (required)")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
+	allowUnresolved := fs.Bool("allow-unresolved-creators", false, "restore one store even when task/dataset creators would then name no account (default: refuse)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
-	if *db != "chat" && *db != "sched" {
-		return errf(1, "--db must be chat or sched (restore is single-DB; it overwrites a live database)")
+	if *db != "all" && *db != "chat" && *db != "sched" {
+		return errf(1, "--db must be all, chat or sched (required: restore overwrites a live database)")
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet restore --db=chat|sched <dump-file>")
+		return errf(1, "usage: fleet restore --db=all|chat|sched <dump-file>")
 	}
 	inPath := rest[0]
 	if _, err := os.Stat(inPath); err != nil {
@@ -436,9 +593,9 @@ func cmdRestore(argv []string) int {
 	// non-TTY without --no-confirm is refused rather than silently proceeding.
 	if !*noConfirm {
 		if !isTerminal(os.Stdin) {
-			return errf(1, "refusing to overwrite the %s database without confirmation: pass --no-confirm for scripted restores", *db)
+			return errf(1, "refusing to overwrite the %s without confirmation: pass --no-confirm for scripted restores", storeLabel(*db))
 		}
-		fmt.Fprintf(os.Stderr, "WARNING: this will OVERWRITE the live %s database from %s. Continue? [y/N]: ", *db, inPath)
+		fmt.Fprintf(os.Stderr, "WARNING: this will OVERWRITE the live %s from %s. Continue? [y/N]: ", storeLabel(*db), inPath)
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
@@ -446,15 +603,21 @@ func cmdRestore(argv []string) int {
 			return 1
 		}
 	}
-	if err := runPgRestore(ctx, dsn, inPath); err != nil {
+	restore := func(ctx context.Context, dsn, inPath string) error {
+		return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{allowUnresolved: *allowUnresolved, notes: os.Stderr})
+	}
+	if *db == "all" {
+		restore = runPgRestoreAll
+	}
+	if err := restore(ctx, dsn, inPath); err != nil {
 		return errf(5, "restore %s: %v", *db, err)
 	}
-	fmt.Fprintf(os.Stderr, "restored %s DB from %s\n", *db, inPath)
+	fmt.Fprintf(os.Stderr, "restored %s from %s\n", storeLabel(*db), inPath)
 	return 0
 }
 
-// selectDBs maps the --db flag to the concrete DB list (deterministic order so
-// --db=all backs up chat then sched).
+// selectDBs maps the --db flag to the dumps to write. --db=all is one dump of
+// the whole fleet (one snapshot), not one per store.
 func selectDBs(db string) ([]string, error) {
 	switch db {
 	case "chat":
@@ -462,16 +625,39 @@ func selectDBs(db string) ([]string, error) {
 	case "sched":
 		return []string{"sched"}, nil
 	case "all", "":
-		return []string{"chat", "sched"}, nil
+		return []string{"all"}, nil
 	default:
 		return nil, fmt.Errorf("--db must be chat, sched, or all (got %q)", db)
 	}
 }
 
 // dsnFor resolves the DSN for a named DB, reusing the same precedence the other
-// fleet verbs use (flag → FLEET_<DB>_DATABASE_URL → DATABASE_URL).
+// fleet verbs use (flag → FLEET_<DB>_DATABASE_URL → DATABASE_URL). "all" is
+// the one database both stores live in: the chat and sched DSNs must reach
+// the same database, or there is no one snapshot of both.
 func dsnFor(name, chatURL, schedURL string) (string, error) {
 	switch name {
+	case "all":
+		chat, err := chatDSN(chatURL)
+		if err != nil {
+			return "", err
+		}
+		sched, err := schedDSN(schedURL)
+		if err != nil {
+			return "", err
+		}
+		ct, err := config.ParseConnTarget(chat)
+		if err != nil {
+			return "", fmt.Errorf("parse chat DSN: %w", err)
+		}
+		st, err := config.ParseConnTarget(sched)
+		if err != nil {
+			return "", fmt.Errorf("parse sched DSN: %w", err)
+		}
+		if ct.Host != st.Host || ct.Port != st.Port || ct.DB() != st.DB() {
+			return "", fmt.Errorf("the chat and sched DSNs reach different databases (%s, %s): --db=all is one snapshot of the one database; back each store up with --db=chat / --db=sched", redactDSN(chat), redactDSN(sched))
+		}
+		return chat, nil
 	case "chat":
 		return chatDSN(chatURL)
 	case "sched":
@@ -479,4 +665,12 @@ func dsnFor(name, chatURL, schedURL string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown database %q", name)
 	}
+}
+
+// storeLabel names what a --db value backs up or restores, for messages.
+func storeLabel(db string) string {
+	if db == "all" {
+		return "whole fleet database (chat, core, sched)"
+	}
+	return db + " database"
 }

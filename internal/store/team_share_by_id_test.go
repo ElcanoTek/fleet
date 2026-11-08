@@ -112,7 +112,7 @@ func TestJoiningAnUnheldTeamNameRetiresTheOldTeam(t *testing.T) {
 	// Simulate the members vanishing without the unshare path running (an
 	// account removed out of band): nobody holds "quant" any more.
 	if _, err := f.s.db.ExecContext(f.ctx,
-		`UPDATE users SET team_id = NULL WHERE team_id = 'quant'`); err != nil {
+		`UPDATE core.users SET team_id = NULL WHERE team_id = 'quant'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.db.ExecContext(f.ctx,
@@ -198,7 +198,7 @@ func TestMigration084StampsIDsAndUnsharesRenameOrphans(t *testing.T) {
 	for _, q := range []string{
 		`UPDATE conversations SET team_shared_with_id = NULL`,
 		`DELETE FROM teams`,
-		`UPDATE users SET team_id = 'research' WHERE team_id = 'quant'`,
+		`UPDATE core.users SET team_id = 'research' WHERE team_id = 'quant'`,
 		`UPDATE projects SET team_id = 'research' WHERE team_id = 'quant'`,
 	} {
 		if _, err := tx.ExecContext(f.ctx, q); err != nil {
@@ -206,6 +206,11 @@ func TestMigration084StampsIDsAndUnsharesRenameOrphans(t *testing.T) {
 		}
 	}
 	sqlText := embeddedMigrationSQL(t, 84)
+	// Written before users moved to schema core (migration 099): replayed now,
+	// it finds the table there.
+	if _, err := tx.ExecContext(f.ctx, `SET LOCAL search_path = chat, core`); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ { // idempotent
 		if _, err := tx.ExecContext(f.ctx, sqlText); err != nil {
 			t.Fatalf("apply migration 084 (pass %d): %v", i+1, err)
@@ -355,7 +360,7 @@ func TestTeamMoveRacingRenameDoesNotDeadlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = holder.Rollback() }()
-	if _, err := holder.ExecContext(f.ctx, `SELECT 1 FROM users WHERE email = 'bob@x.com' FOR UPDATE`); err != nil {
+	if _, err := holder.ExecContext(f.ctx, `SELECT 1 FROM core.users WHERE email = 'bob@x.com' FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
 

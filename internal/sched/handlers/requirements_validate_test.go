@@ -54,6 +54,7 @@ func TestTaskWritesRejectMalformedExecutionRequirements(t *testing.T) {
 	store, h, cleanup := setupFullHandler(t)
 	defer cleanup()
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/tasks", h.CreateTask)
 	r.Group(func(rr chi.Router) {
 		rr.Use(h.AdminOrUserAuthMiddleware)

@@ -109,7 +109,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_WEB_DEV_SERVER` | url | — | server | Development only (`make dev`): proxy the SPA to this Vite dev server instead of serving the embedded bundle. |
 | `NEXT_PUBLIC_PUBLIC_ORIGIN` | url | — | server | Fallback for FLEET_PUBLIC_BASE_URL on a box whose env file predates the move off the Next.js tier (ADR-0091). |
 | `ADMIN_EMAILS` | csv | — | server | Comma-separated emails that are chat admins. |
-| `FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS` | csv | — | server | Comma-separated emails provisioned (or promoted) as orchestrator admins at every boot. Ignored when central Auth manages accounts. |
+| `FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS` | csv | — | server | Comma-separated emails made Fleet admins (chat and Operations Center: one role, ADR-0105) at every boot, created with no usable password when missing. Ignored when central Auth manages accounts. |
 
 ## Databases
 
@@ -503,7 +503,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `WEB_PORT` | int | `3100` | test | e2e-boot-server.sh: browser-tier port of the e2e server. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_DATABASE_DSN` | dsn | — | test | e2e-boot-server.sh: base Postgres DSN with CREATEDB rights; unset uses a local instance. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_TEST_PASSWORD` | string | `e2e-test-password` | test | e2e-boot-server.sh: password of the e2e test user. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `E2E_SCHED_USERNAME` | string | `e2e` | test | e2e-boot-server.sh: orchestrator user of the e2e run. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_ENV_FILE` | path | `web/.e2e-live.env` | test | e2e-boot-server.sh: where the resolved env for the Playwright suite is written. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_WORKSPACE_BASE` | path | (/tmp/fleet-e2e-<uid>) | test | e2e-boot-server.sh: parent directory of the run's unique workspace. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_LOG_DIR` | path | `.e2e-run/logs` | test | e2e-boot-server.sh: log directory of the e2e servers. *Process env only* (fleet's env-file loader does not admit it; export it). |

@@ -35,7 +35,7 @@ func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "admin-key",
 		DataDir:     tmpDir,
 	}, store, keyMgr)
@@ -79,92 +79,13 @@ func TestUpload(t *testing.T) {
 	}
 }
 
-func TestUserLogin(t *testing.T) {
-	t.Parallel()
-
-	h, store := setupTest(t)
-
-	// First create a user
-	createBody := `{"username": "testlogin", "password": "testpassword123", "role": "client"}`
-	req := httptest.NewRequest("POST", "/users", bytes.NewBufferString(createBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", "admin-key")
-	w := httptest.NewRecorder()
-	h.CreateUser(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("Failed to create user: %d - %s", w.Code, w.Body.String())
-	}
-
-	// Test login with wrong password
-	loginBody := `{"username": "testlogin", "password": "wrongpassword"}`
-	req = httptest.NewRequest("POST", "/auth/login", bytes.NewBufferString(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status 401 for wrong password, got %d", w.Code)
-	}
-
-	// Test login with non-existent user
-	loginBody = `{"username": "nonexistent", "password": "anypassword"}`
-	req = httptest.NewRequest("POST", "/auth/login", bytes.NewBufferString(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status 401 for non-existent user, got %d", w.Code)
-	}
-
-	// Test login with correct credentials
-	loginBody = `{"username": "testlogin", "password": "testpassword123"}`
-	req = httptest.NewRequest("POST", "/auth/login", bytes.NewBufferString(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200 for correct login, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var loginResp models.LoginResponse
-	if err := json.NewDecoder(w.Body).Decode(&loginResp); err != nil {
-		t.Fatalf("Failed to decode login response: %v", err)
-	}
-
-	if loginResp.Token == "" {
-		t.Error("Expected token in login response, got empty string")
-	}
-
-	if loginResp.User.Username != "testlogin" {
-		t.Errorf("Expected username 'testlogin', got '%s'", loginResp.User.Username)
-	}
-
-	// Verify token can be used for authentication
-	user, err := store.GetUserByToken(loginResp.Token)
-	if err != nil || user == nil {
-		t.Errorf("Failed to retrieve user by token: %v", err)
-	}
-}
-
 func TestDashboardStatsWithUserToken(t *testing.T) {
 	t.Parallel()
 
 	h, store := setupTest(t)
 
-	// Create a user with a session token
-	user := &models.User{
-		ID:        uuid.New(),
-		Username:  "dashboard-user",
-		Role:      "client",
-		CreatedAt: time.Now(),
-	}
-	token := "dashboard-test-token"
-	tokenHash := models.HashToken(token)
-	user.SessionToken = &tokenHash
-	store.AddUser(user)
+	// An account with ops_scope run, signed in as a session (seededSessions).
+	seedOpsUser(t, store, uuid.New(), "dashboard-user", "client", "dashboard-test-token")
 
 	// Test dashboard stats without auth - should fail
 	req := httptest.NewRequest("GET", "/stats", nil)
@@ -176,7 +97,7 @@ func TestDashboardStatsWithUserToken(t *testing.T) {
 	// Test that user token authentication works in middleware
 
 	// Test the middleware directly
-	middlewareHandler := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetDashboardStats))
+	middlewareHandler := asSeededSession(h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetDashboardStats)))
 
 	// Without auth
 	req = httptest.NewRequest("GET", "/stats", nil)
@@ -218,80 +139,14 @@ func TestDashboardStatsWithUserToken(t *testing.T) {
 	}
 }
 
-func TestLoginToDashboardFlow(t *testing.T) {
-	t.Parallel()
-
-	h, _ := setupTest(t)
-
-	// Step 1: Create a user (admin creates it)
-	createBody := `{"username": "flowtest", "password": "securepassword123", "role": "client"}`
-	req := httptest.NewRequest("POST", "/users", bytes.NewBufferString(createBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", "admin-key")
-	w := httptest.NewRecorder()
-	h.CreateUser(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("Failed to create user: %d - %s", w.Code, w.Body.String())
-	}
-
-	// Step 2: Login
-	loginBody := `{"username": "flowtest", "password": "securepassword123"}`
-	req = httptest.NewRequest("POST", "/auth/login", bytes.NewBufferString(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("Login failed: %d - %s", w.Code, w.Body.String())
-	}
-
-	var loginResp models.LoginResponse
-	json.NewDecoder(w.Body).Decode(&loginResp)
-	userToken := loginResp.Token
-
-	// Step 3: Access dashboard stats with the bearer token. CSRF is enforced
-	// via the stateless Origin check (see TestCSRFMiddlewareOrigin), not a
-	// token, and GET is a safe method anyway — so no CSRF token is involved.
-	middlewareHandler := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetDashboardStats))
-
-	req = httptest.NewRequest("GET", "/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+userToken)
-	w = httptest.NewRecorder()
-	middlewareHandler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Dashboard stats failed with valid token: %d - %s", w.Code, w.Body.String())
-	}
-
-	var stats models.DashboardStats
-	if err := json.NewDecoder(w.Body).Decode(&stats); err != nil {
-		t.Fatalf("Failed to decode stats: %v", err)
-	}
-
-	// Verify stats structure is valid (should have zero values since DB is empty).
-	if stats.PendingTasks != 0 {
-		t.Logf("Note: Expected 0 pending tasks in clean test DB, got %d", stats.PendingTasks)
-	}
-}
-
 func TestGetLogsWithUserAuth(t *testing.T) {
 	t.Parallel()
 
 	h, store := setupTest(t)
 
-	// Create an admin user with session token
-	adminUser := &models.User{
-		ID:           uuid.New(),
-		Username:     "log-viewer-user",
-		PasswordHash: "hashed-password",
-		Role:         "admin",
-		CreatedAt:    time.Now(),
-	}
+	// An admin account, signed in as a session (seededSessions).
 	userToken := "logs-test-token"
-	tokenHash := models.HashToken(userToken)
-	adminUser.SessionToken = &tokenHash
-	store.AddUser(adminUser)
+	adminUser := seedOpsUser(t, store, uuid.New(), "log-viewer-user", "admin", userToken)
 
 	// Create a task owned by the admin user (GetLogs visibility is gated on
 	// created_by/scope; the admin user sees every task regardless).
@@ -342,6 +197,7 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 
 	// Create a chi router with the logs endpoint using AdminOrUserAuthMiddleware
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/logs/{task_id}", h.GetLogs)
@@ -446,6 +302,7 @@ func TestGetLogsForScheduledTaskReturns404(t *testing.T) {
 	}
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/logs/{task_id}", h.GetLogs)

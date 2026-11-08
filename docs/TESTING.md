@@ -304,6 +304,9 @@ the server and the role and prints the export line.
   gone is garbage), or by hand with `scripts/test-db-setup.sh --gc`
   (`--templates` drops the templates too). Neither ever touches a database
   that does not start with `fleet_t_` / `fleet_tmpl_`, or one a live run owns.
+- **The identity table** (`core.users`, #2049 M4) is created by the chat
+  migrations, so it is in the `fleet` and `chat` templates. The scheduler's
+  own `sched` template migrates the chat store first, for the same reason.
 - **The legacy two-database layout** is gone (#2049 phase 2); what is tested
   is its refusal — a retired per-store DSN key fails resolution, bootstrap
   and doctor, and `fleet restore` refuses an old `public`-schema dump.

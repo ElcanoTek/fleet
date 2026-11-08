@@ -20,9 +20,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// SessionTokenDuration is how long session tokens are valid.
-const SessionTokenDuration = 7 * 24 * time.Hour
-
 // HashToken creates a SHA-256 hash for storing tokens securely.
 func HashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
@@ -537,16 +534,17 @@ type TaskIteration struct {
 	Status              string     `json:"status"`
 }
 
-// User represents a system user.
+// User is an account with Operations Center access as this plane sees it: a
+// row of the one identity table, core.users (#2049 M4, internal/identity).
+// Username is the account's email; Role is the legacy Operations Center role
+// its Fleet role and ops_scope grant — admin | client | readonly — so the
+// permission checks (RolePermissions) read as they did over the old table.
 type User struct {
-	ID             uuid.UUID  `json:"id"`
-	Username       string     `json:"username"`
-	PasswordHash   string     `json:"-"`
-	Role           string     `json:"role"`
-	CreatedAt      time.Time  `json:"created_at"`
-	LastLogin      *time.Time `json:"last_login,omitempty"`
-	SessionToken   *string    `json:"-"`
-	TokenExpiresAt *time.Time `json:"-"`
+	ID        uuid.UUID  `json:"id"`
+	Username  string     `json:"username"`
+	Role      string     `json:"role"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
 }
 
 // UserCreate represents the request to create a user.
@@ -556,24 +554,12 @@ type UserCreate struct {
 	Role     string `json:"role"`
 }
 
-// UserLogin represents a login request.
-type UserLogin struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
 // UserResponse represents the public user data.
 type UserResponse struct {
 	ID        uuid.UUID `json:"id"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
-}
-
-// LoginResponse represents the response after successful login.
-type LoginResponse struct {
-	Token string       `json:"token"`
-	User  UserResponse `json:"user"`
 }
 
 // TaskStatus represents the status of a task in the system.

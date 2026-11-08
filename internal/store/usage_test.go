@@ -273,7 +273,7 @@ func TestUsageSummaryGroupByDimensions(t *testing.T) {
 	})
 
 	t.Run("invalid group_by errors", func(t *testing.T) {
-		if _, err := s.UsageSummary(ctx, from, to, "email; DROP TABLE users"); err == nil {
+		if _, err := s.UsageSummary(ctx, from, to, "email; DROP TABLE core.users"); err == nil {
 			t.Fatal("want error for invalid group_by")
 		}
 	})

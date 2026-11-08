@@ -122,8 +122,8 @@ POST /api/orchestrator/admin/budgets
 GET /api/orchestrator/admin/usage/adoption
 GET /api/orchestrator/admin/usage
 GET /api/orchestrator/auth/elcano-login
-POST /api/orchestrator/auth/login
-POST /api/orchestrator/auth/logout
+# retired: POST /api/orchestrator/auth/login
+# retired: POST /api/orchestrator/auth/logout
 GET /api/orchestrator/config
 POST /api/orchestrator/datasets/{datasetId}/approve
 GET /api/orchestrator/datasets/{datasetId}/export

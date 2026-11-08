@@ -86,8 +86,9 @@ func TestHandleWebhookTrigger_Integration(t *testing.T) {
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
-	h := New(Config{DefaultTaskModel: "test/model", Version: "0.1.0"}, store, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", Version: "0.1.0"}, store, nil)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/triggers/{slug}", h.HandleWebhookTrigger)
 
 	// Seed an inert webhook template task.

@@ -737,7 +737,7 @@ func (s *Store) userIsProjectMember(ctx context.Context, email, projectID string
 			SELECT 1 FROM projects p
 			WHERE p.id = $1
 			  AND (p.owner_email = $2
-			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM users WHERE email = $2)))
+			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM core.users WHERE email = $2)))
 		)`, projectID, normalizeEmail(email)).Scan(&member)
 	if err != nil {
 		return false, err
@@ -1691,7 +1691,7 @@ func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, owner
 	}
 	var ownerTeam sql.NullString
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, ownerEmail).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT team_id FROM core.users WHERE email = $1`, ownerEmail).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
 	team := strings.TrimSpace(ownerTeam.String)

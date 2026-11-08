@@ -104,7 +104,10 @@ Auth when your deployment signs in through it. Background tasks
 offers **None**, **Viewer** (read-only), and **Contributor** (can create and run
 tasks). **Fleet Admin** grants full Chat and Background tasks permissions;
 selecting it again turns it off and defaults to Chat Contributor plus Background
-tasks None. Central Auth account
+tasks None. These choices belong to one Fleet account: Background tasks has no
+sign-in, users, or password of its own, so people reach it signed in to Fleet
+(programs use an API key). Someone who had Background tasks access but no Chat
+account before their Fleet was upgraded is a Chat **Viewer** now. Central Auth account
 grants apply these selected roles to Fleet automatically.
 
 ### Anatomy of a task row

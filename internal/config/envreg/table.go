@@ -165,7 +165,7 @@ var table = []Entry{
 	{Name: "ADMIN_EMAILS", Group: GroupAuth, Scope: ScopeServer, Type: TypeCSV,
 		Description: "Comma-separated emails that are chat admins."},
 	{Name: "FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS", Group: GroupAuth, Scope: ScopeServer, Type: TypeCSV,
-		Description: "Comma-separated emails provisioned (or promoted) as orchestrator admins at every boot. Ignored when central Auth manages accounts."},
+		Description: "Comma-separated emails made Fleet admins (chat and Operations Center: one role, ADR-0105) at every boot, created with no usable password when missing. Ignored when central Auth manages accounts."},
 
 	// ───────────────────────────── Databases ─────────────────────────────
 	// The DSN keys are resolved by internal/config/dsn.go (ResolveDSNs), read
@@ -919,8 +919,6 @@ var table = []Entry{
 		Description: "e2e-boot-server.sh: base Postgres DSN with CREATEDB rights; unset uses a local instance."},
 	{Name: "E2E_TEST_PASSWORD", Group: GroupTest, Scope: ScopeTest, Type: TypeString, ProcessOnly: true, Secret: true, Default: "e2e-test-password",
 		Description: "e2e-boot-server.sh: password of the e2e test user."},
-	{Name: "E2E_SCHED_USERNAME", Group: GroupTest, Scope: ScopeTest, Type: TypeString, ProcessOnly: true, Default: "e2e",
-		Description: "e2e-boot-server.sh: orchestrator user of the e2e run."},
 	{Name: "E2E_ENV_FILE", Group: GroupTest, Scope: ScopeTest, Type: TypePath, ProcessOnly: true, Default: "web/.e2e-live.env",
 		Description: "e2e-boot-server.sh: where the resolved env for the Playwright suite is written."},
 	{Name: "E2E_WORKSPACE_BASE", Group: GroupTest, Scope: ScopeTest, Type: TypePath, ProcessOnly: true, Default: "(/tmp/fleet-e2e-<uid>)",

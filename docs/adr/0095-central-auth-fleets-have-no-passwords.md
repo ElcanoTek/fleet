@@ -1,6 +1,6 @@
 # ADR-0095: A Fleet that signs in through central Auth has no passwords or account management of its own
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0105](0105-one-identity-table.md) (one password table; the Operations Center bearer is retired)
 - **Date:** 2026-10-28
 - **Deciders:** Fleet maintainers, Elcano Auth owner
 - **Amends:** [ADR-0076](0076-fleet-publishes-account-events.md) for

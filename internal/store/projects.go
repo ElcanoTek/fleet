@@ -224,7 +224,7 @@ func unfileChatsWithoutProjectAccessTx(ctx context.Context, tx *sql.Tx, projectI
 			 WHERE p.id = $1
 			   AND (p.owner_email = c.user_email
 			        OR (p.team_id <> '' AND p.team_id = (
-			              SELECT u.team_id FROM users u WHERE u.email = c.user_email)))
+			              SELECT u.team_id FROM core.users u WHERE u.email = c.user_email)))
 		  )`,
 		projectID, time.Now().Unix())
 	return err
@@ -412,7 +412,7 @@ func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail stri
 		WHERE p.id = $1
 		  AND (p.owner_email = $2
 		       OR (p.team_id <> '' AND p.team_id = (
-		             SELECT COALESCE(TRIM(u.team_id), '') FROM users u WHERE u.email = $2)))
+		             SELECT COALESCE(TRIM(u.team_id), '') FROM core.users u WHERE u.email = $2)))
 		FOR SHARE OF p`, id, normalizeEmail(userEmail)).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrProjectNotAccessible

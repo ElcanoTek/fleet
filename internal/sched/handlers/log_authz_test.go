@@ -45,13 +45,14 @@ func setupLogAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) 
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		DefaultTaskModel: "test/model",
 		AdminAPIKey:      "admin-key",
 		DataDir:          tmpDir,
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/logs/{task_id}", h.GetLogs)
@@ -95,23 +96,7 @@ func addLoggedTask(t *testing.T, store *storage.Storage, createdBy *uuid.UUID, c
 
 func addLogUser(t *testing.T, store *storage.Storage, username, role, token string) *models.User {
 	t.Helper()
-	hash := models.HashToken(token)
-	user := &models.User{
-		ID:           uuid.New(),
-		Username:     username,
-		PasswordHash: "hashed",
-		Role:         role,
-		SessionToken: &hash,
-		CreatedAt:    time.Now().UTC(),
-	}
-	stored, err := store.AddUser(user)
-	if err != nil {
-		t.Fatalf("add user %s: %v", username, err)
-	}
-	if stored != nil {
-		return stored
-	}
-	return user
+	return seedOpsUser(t, store, uuid.New(), username, role, token)
 }
 
 // logRequest issues one transcript read with the given credential header.

@@ -26,7 +26,7 @@
 //	fleet config explain [KEY...] [--all] [--json]   (the configuration registry, #2053)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
-//	fleet sched user add|update|set-role|rename|del|list
+//	fleet sched user add|update|set-role|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
 //	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
 //	fleet sched trigger create|list|delete|rotate
@@ -40,7 +40,7 @@
 //	fleet notes proposal publish|reject
 //	fleet worktree list|prune [--workspace DIR] [--older-than DUR]
 //	fleet backup  [--db=chat|sched|all] [--out DIR]
-//	fleet restore  --db=chat|sched <dump-file>
+//	fleet restore  --db=all|chat|sched <dump-file>
 //	fleet import <bundle.json> [--dry-run] [--live-only]
 //
 // The operator lifecycle is bootstrap → update → status/doctor: bootstrap
@@ -226,6 +226,7 @@ Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
+  fleet admin merge-report [--json]                   (what the one-time identity merge recorded: demoted admins, unknown roles; read-only)
   fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
                                                        Auth's import-teams reads)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
@@ -253,7 +254,6 @@ Users, credentials, notes:
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly
-  fleet sched user rename <username> <new-username>
   fleet sched user del <username>
   fleet sched user list
   fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]
@@ -318,9 +318,9 @@ Database migrations (#256):
   fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending for the chat + sched DBs)
   fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (sched DB: clear a dirty row after a failed migration)
 
-Backup / restore (pg_dump -Fc / pg_restore; one dump file per store):
-  fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
-  fleet restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live store)
+Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
+  fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched; prints the path)
+  fleet restore  --db=all|chat|sched <dump-file>     (--clean --if-exists; overwrites the live store)
 
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)
