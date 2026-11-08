@@ -120,8 +120,9 @@
 # Re-run safe (idempotent): re-installing the release that is already live is a
 # verified no-op swap and restart; the published sandbox image is pulled only
 # when its digest changed or the service user's store lacks it; an on-box
-# sandbox build is gated on the Containerfile hash + resolved image tag + base
-# digest (and the tag's presence in the store) — except the max-age freshness
+# sandbox build is gated on the build-context hash (the Containerfile and the
+# files beside it) + resolved image tag + base digest (and the tag's presence
+# in the store) — except the max-age freshness
 # backstop above, which deliberately re-fires once an on-box image ages past
 # the threshold.
 
@@ -188,7 +189,7 @@ NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 # user flag). It means "the fleet checkout is ALREADY fast-forwarded to the
 # target — skip re-fetching it (and the self-update detection, so we don't loop),
 # but otherwise run a NORMAL update: the client-config bundle still pulls, the
-# sandbox-rebuild gate still compares Containerfile hashes." Distinct from
+# sandbox-rebuild gate still compares build-context hashes." Distinct from
 # NO_PULL, which is the user's "reinstall the current checkouts, pull NOTHING".
 # Conflating the two used to make the re-exec skip the client-bundle pull too, so
 # an update that changed update.sh itself never advanced the bundle.
@@ -929,9 +930,16 @@ if [[ -d "$CLIENT_DIR/.git" && "$CLIENT_DIR" != "$SRC_DIR"/* && "$CLIENT_DIR" !=
   fi
 fi
 
-# ── record the pre-build sandbox gate inputs (Containerfile hash + tag) ──
-# Compare a stored hash of the bundle's Containerfile AND the image tag the
-# build would produce so the ~2-3min image build only runs when either changed.
+# ── record the pre-build sandbox gate inputs (build-context hash + tag) ──
+# Compare a stored hash of the bundle's sandbox build context AND the image tag
+# the build would produce so the ~2-3min image build only runs when either
+# changed. The hash covers the whole context directory, not just the
+# Containerfile (fleet_sandbox_context_hash): a bundle that edits only its
+# sandbox/requirements.txt changes the image as surely as one that edits the
+# Containerfile. The stamp file keeps its historical name; a stamp written by
+# an earlier release (a bare Containerfile sha256) never equals a context hash,
+# so the first update after the switch rebuilds once — through the same
+# survivable path as any other rebuild.
 # The tag matters as much as the content: a bundle that renames sandbox.tag
 # with an unchanged Containerfile still needs a build, or the service resolves
 # a tag that exists nowhere and every sandboxed tool call fails at runtime
@@ -949,9 +957,14 @@ mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"
 mcp_reqs_now="$(hash_file "$mcp_reqs")"
 mcp_reqs_prev="absent"
 [[ -f "$MCP_REQS_STAMP" ]] && mcp_reqs_prev="$(tr -d '[:space:]' < "$MCP_REQS_STAMP")"
-cf_now="$(hash_file "$sandbox_cf")"
+# A context that cannot be hashed (an unreadable file, say) falls back to the
+# Containerfile alone — a stamp mismatch rebuilds; it must never abort the update.
+cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")" || cf_now=""
+[[ -n "$cf_now" ]] || cf_now="cf-$(hash_file "$sandbox_cf")"
+[[ "$cf_now" == "cf-absent" ]] && cf_now="absent"
 cf_prev="absent"
-[[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
+[[ -f "$STAMP_FILE" ]] && cf_prev="$(tr -d '[:space:]' < "$STAMP_FILE")"
+[[ -n "$cf_prev" ]] || cf_prev="absent"
 # Keep the resolver's stderr instead of discarding it. --print-tag ALWAYS
 # prints a name:tag when it runs at all (it falls back to
 # localhost/fleet-sandbox:latest when the manifest names no sandbox.tag), so an
@@ -1175,6 +1188,14 @@ elif [[ "$sandbox_published" == "1" ]]; then
       # unchanged Containerfile) must not read as "already built".
       printf 'release-image\n' > "$STAMP_FILE"
       ok "sandbox image ${ref_now} = ${pub_ref} (verified, pulled by digest)"
+      # The previous release image keeps its own @sha256 name from its pull, so
+      # it is never dangling and `image prune` alone never reclaims it (~1.5 GB
+      # per release). Remove it by that name — only when it is a different
+      # image from the one just tagged, and never forced, so an image a
+      # container still uses stays (fleet_sandbox_reclaim_release_image).
+      if [[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]]; then
+        fleet_sandbox_reclaim_release_image "$pub_prev" "$pub_ref" "$ref_now"
+      fi
       sandbox_podman image prune -f >/dev/null 2>&1 || true
     elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
       warn "pulling ${pub_ref} failed — the restarted service keeps the existing ${ref_now}; re-run: sudo fleet update --no-pull"
@@ -1190,9 +1211,9 @@ elif [[ "$DRY_RUN" == "1" ]]; then
   if grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
     info "[dry-run] the bundle's Containerfile declares FLEET_SANDBOX_BASE — the build would layer on the release's verified sandbox image (fleet release sandbox), and a new base digest triggers a rebuild"
   fi
-  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
+  info "[dry-run] would rebuild if the build-context hash (the Containerfile and every file beside it) or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh (--no-cache when age-triggered)"
-  info "[dry-run] would record the new Containerfile hash + tag under ${STATE_DIR}"
+  info "[dry-run] would record the new build-context hash + tag under ${STATE_DIR}"
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
 else
@@ -1220,9 +1241,13 @@ else
   if [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
     build_reason="the release's sandbox base moved to ${sandbox_base##*@} — rebuilding the bundle's layers on it"
   elif [[ "$cf_prev" == "absent" ]]; then
-    build_reason="no stored Containerfile hash yet — establishing the baseline"
+    build_reason="no stored build-context hash yet — establishing the baseline"
+  elif [[ "$cf_prev" =~ ^[0-9a-f]{64}$ ]]; then
+    # A stamp from before the context hash: it covered the Containerfile only,
+    # so it cannot say whether the files beside it changed. Rebuild once.
+    build_reason="the stored hash covers the Containerfile only (an earlier release) — rebuilding once to record the whole build context"
   elif [[ "$cf_now" != "$cf_prev" ]]; then
-    build_reason="Containerfile changed (${cf_prev:0:12} → ${cf_now:0:12})"
+    build_reason="sandbox build context changed (${cf_prev:0:17} → ${cf_now:0:17})"
   elif [[ -n "$ref_now" && -n "$ref_prev" && "$ref_now" != "$ref_prev" ]]; then
     # An empty ref_prev is a pre-tag-stamp box, not a rename — the store probe
     # below still covers it without forcing a fleet-wide rebuild.
@@ -1274,7 +1299,7 @@ else
       fi
       warn "  check the box: fleet doctor   —   rebuild by hand: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
     else
-      ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now}) — skipping the image build."
+      ok "sandbox image up to date (build context ${cf_now:0:17}, ${ref_now}) — skipping the image build."
     fi
   else
     info "${build_reason} — building the sandbox image."
@@ -1284,7 +1309,7 @@ else
       printf '%s\n' "$cf_now" > "$STAMP_FILE"
       printf '%s\n' "$sandbox_base" > "$SANDBOX_BASE_FILE"
       [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"
-      ok "sandbox image rebuilt (${ref_now:-see build output}); recorded hash ${cf_now:0:12}"
+      ok "sandbox image rebuilt (${ref_now:-see build output}); recorded build-context hash ${cf_now:0:17}"
       # Each rebuild strands the previous image's layers as dangling cruft
       # (~1.3 GB per rebuild) in the store the build targeted; prune THAT
       # store so regular updates can't fill the disk. Dangling-only: any

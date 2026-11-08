@@ -303,7 +303,7 @@ releases. Retention counts published releases.
 
 | Bundle ships | What the box runs |
 | --- | --- |
-| no Containerfile (none at `sandbox/Containerfile` and none named by `sandbox.containerfile`), or the generic build context unchanged (its Containerfile and `requirements.txt`) | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
+| no Containerfile (none at `sandbox/Containerfile` and none named by `sandbox.containerfile`), or the generic build context unchanged (its Containerfile, `requirements.txt` and `requirements.in`, and no other file) | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
 | its own Containerfile starting `ARG FLEET_SANDBOX_BASE` / `FROM ${FLEET_SANDBOX_BASE}` | built on the box on top of the verified release image; rebuilt when a release moves the base |
 | any other Containerfile | built on the box from its own base, as before (with the max-age freshness backstop) |
 | `sandbox.image` in its manifest | that image; nothing is pulled or built here |
@@ -330,6 +330,16 @@ A bundle that **does** ship its own Containerfile is still a supported
 feature, and it is still built on the box (layered on the release image when
 it declares `ARG FLEET_SANDBOX_BASE`). That build is of the bundle's sandbox
 image, not of fleet, and needs only podman; ADR-0101 left it in place.
+`update` rebuilds it when anything in its build context changes — the
+Containerfile or any file beside it (a `requirements.txt`, a script it
+copies), compared by one hash of the whole directory that ignores VCS
+metadata and whatever the context's `.containerignore` / `.dockerignore`
+excludes. The first update from a release that hashed only the Containerfile
+rebuilds once.
+
+After pulling a new release image by digest, `update` removes the previous
+one (it keeps its `@sha256` name, so `podman image prune` never would),
+without `--force`: an image a container still uses stays.
 
 A bundle Containerfile that only adds packages should become:
 
