@@ -83,6 +83,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
   connection test): [`docs/API-CLIENTS.md`](API-CLIENTS.md) +
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
+- **Generated HTTP contracts** (`docs/openapi.yaml` generated from the router
+  plus the `internal/apispec` route catalog, the web types generated from it
+  by `openapi-typescript`, `make api-contracts`, the `contracts` CI drift
+  gate, and what phase 3/4 of #2050 still adds): [`docs/HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) +
+  [ADR-0109](adr/0109-generated-http-contracts.md)
 - **Reading auth facts from the spec** (`x-fleet-permission` per operation,
   `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
@@ -295,6 +300,7 @@ above fails otherwise.
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
+- [`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md) — Generated HTTP contracts: what is generated from the router and the route catalog, the drift gate, and what phase 3/4 of #2050 adds (ADR-0109)
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plans: enhancements (all shipped)
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)

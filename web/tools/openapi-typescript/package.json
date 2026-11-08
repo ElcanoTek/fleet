@@ -1,0 +1,13 @@
+{
+  "name": "fleet-openapi-typescript",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build-time only: generates web/src/api/generated from docs/openapi.yaml. A workspace of its own because openapi-typescript drives the TypeScript 5 compiler API, which TypeScript 7 (web's compiler) no longer ships.",
+  "scripts": {
+    "generate": "openapi-typescript ../../../docs/openapi.yaml --default-non-nullable false --output ../../src/api/generated/orchestrator.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

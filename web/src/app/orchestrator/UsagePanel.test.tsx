@@ -29,6 +29,8 @@ function bucket(overrides: Partial<UsageBucket>): UsageBucket {
     prompt_tokens: 0,
     completion_tokens: 0,
     cached_tokens: 0,
+    uncached_tokens: 0,
+    cache_hit_rate_pct: 0,
     task_cost_usd: 0,
     chat_cost_usd: 0,
     task_iterations: 0,
@@ -231,6 +233,8 @@ describe("UsagePanel (#601)", () => {
       spend_usd: 10,
       spend_tokens: 1000,
       soft_alerted: false,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
     };
     budgets.mockResolvedValue({ budgets: [row] });
     render(<UsagePanel />);
