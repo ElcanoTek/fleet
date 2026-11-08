@@ -18,6 +18,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
@@ -78,6 +80,29 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `{}`)
 }
 
+// fakeOrchestrator is a fakeBackend that routes like the orchestrator: the
+// mount asks it which routes exist (chi's Find), and it registers the routes
+// the browser has always reached (orchQueryPolicy's keys) plus the two the
+// gateway serves with its own response shape.
+type fakeOrchestrator struct {
+	*fakeBackend
+	routes *chi.Mux
+}
+
+func newFakeOrchestrator(b *fakeBackend) *fakeOrchestrator {
+	mux := chi.NewRouter()
+	keys := append(OrchestratorQueryPolicyRoutes(), "GET /tasks/{task_id}/stream", "GET /tasks/{task_id}/workspace/*")
+	for _, k := range keys {
+		method, pattern, _ := strings.Cut(k, " ")
+		mux.Method(method, pattern, b)
+	}
+	return &fakeOrchestrator{fakeBackend: b, routes: mux}
+}
+
+func (f *fakeOrchestrator) Find(rctx *chi.Context, method, path string) string {
+	return f.routes.Find(rctx, method, path)
+}
+
 func (f *fakeBackend) last(t *testing.T) recordedCall {
 	t.Helper()
 	f.mu.Lock()
@@ -123,7 +148,7 @@ func newTestEnv(t *testing.T, opts ...envOpt) *testEnv {
 		SessionSecret:   testSecret,
 		ElcanoPubKeyB64: e.pubB64,
 	}
-	o := Options{Chat: e.chat, Orchestrator: e.orch, Bundle: testBundle()}
+	o := Options{Chat: e.chat, Orchestrator: newFakeOrchestrator(e.orch), Bundle: testBundle()}
 	for _, fn := range opts {
 		fn(&cfg, &o)
 	}

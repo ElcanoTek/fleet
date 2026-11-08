@@ -180,6 +180,13 @@ func (g *Gateway) dispatch(w http.ResponseWriter, r *http.Request, h http.Handle
 	if c.header != nil {
 		req.Header = c.header
 	}
+	g.serveBackend(w, r, h, req, o)
+}
+
+// serveBackend runs the backend request req against h and re-emits its
+// response to the browser per o. r is the browser's request (its cookie is
+// cleared on a revoked-session verdict).
+func (g *Gateway) serveBackend(w http.ResponseWriter, r *http.Request, h http.Handler, req *http.Request, o out) {
 	pw := &proxyWriter{w: w, hdr: http.Header{}, o: &o, revoke: func() { g.clearSessionCookie(w, r) }}
 	h.ServeHTTP(pw, req)
 	if !pw.wrote {

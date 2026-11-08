@@ -1,8 +1,13 @@
 // Command fleet is THE single fleet process. It boots, in ONE process:
 //
-//   - the chat HTTP/SSE server (httpapi) on :8080, driven by the concrete
-//     interactive turnEngine (agent.Manager over agentcore.Run);
-//   - the orchestrator HTTP server (sched/handlers) on :8000;
+//   - the public listener on :3000 (FLEET_WEB_ADDR): one chi tree serving
+//     the web UI, every /api/* route, the /v1 API and the chat webhooks
+//     (router.go, ADR-0110);
+//   - the chat HTTP/SSE server (httpapi) on loopback :8080, driven by the
+//     concrete interactive turnEngine (agent.Manager over agentcore.Run);
+//   - the orchestrator HTTP server (sched/handlers) on loopback :8000. Both
+//     serve the same handlers the public tree mounts, for the local CLIs and
+//     for a front proxy that routes the API paths to them;
 //   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending,
 //     recovers expired leases and fires in-chat patrols/timers (ADR-0104);
 //   - the capped in-process worker pool (internal/runner) whose TaskRunner is
@@ -1040,14 +1045,21 @@ func run() error {
 	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
 	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
 	// /healthz stays unversioned + untagged. Route registration is untouched.
-	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatSrv.Routes()), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
+	chatRoutes := chatSrv.Routes()
+	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatRoutes), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
 	orchHandlerWithProbes := withHealthProbes(apiversion.Router(orchHandler), startTime, chatSrv.IsDraining, readinessChecks)
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
-	// The browser tier (ADR-0091): the SPA and every /api/* route, calling the
-	// two backends in-process. nil when FLEET_WEB_ADDR=off.
-	webServer, err := buildWebServer(cfg, chatSrv.Routes(), orchHandler)
+	// The public listener (ADR-0091, ADR-0110): one chi tree serving the SPA,
+	// every /api/* route, the /v1 API and the chat webhooks — the browser
+	// paths calling the two backends in-process, the API paths answered by
+	// exactly the handlers the two listeners above serve. nil when
+	// FLEET_WEB_ADDR=off.
+	webServer, err := buildWebServer(cfg, backendHandlers{
+		chat: chatRoutes, orch: orchHandler,
+		chatListener: chatHandler, orchListener: orchHandlerWithProbes,
+	})
 	if err != nil {
 		return err
 	}
