@@ -163,3 +163,26 @@ func TestDoctorWarnsAboutRemovedManifestRefs(t *testing.T) {
 		t.Errorf("doctor output:\n%s", out)
 	}
 }
+
+// Codex P2 on #2081: on a packaged install FLEET_CLIENT_CONFIG_DIR is set only
+// in the server env file; doctor must resolve the bundle from there, not from
+// the CLI's own (empty) environment.
+func TestDoctorFindsTheBundleThroughTheEnvFile(t *testing.T) {
+	stubSystemd(t, t.TempDir(), "", false)
+	bundle := t.TempDir()
+	manifest := "mcp_servers:\n  - name: x\n    command: \"python3${CHAT_TLS_MODE:?x}\"\n"
+	if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+bundle+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearEnvNames(t, "FLEET_CLIENT_CONFIG_DIR")
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	var buf bytes.Buffer
+	warnRetiredEnvAliases(&buf)
+	if !strings.Contains(buf.String(), "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") {
+		t.Errorf("doctor did not scan the env file's bundle:\n%s", buf.String())
+	}
+}

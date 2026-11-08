@@ -59,6 +59,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -102,6 +103,35 @@ func Dir() string {
 		return v
 	}
 	return DefaultDir
+}
+
+// DirFromEnvFile resolves the bundle directory the way the server sees it on a
+// packaged install, where FLEET_CLIENT_CONFIG_DIR may live only in the server
+// env file: the process env first, then envFile's value, then the generic
+// default. A missing or unreadable env file (0600, not ours) just falls
+// through to the default, so a caller's diagnostics never fail on their own
+// bootstrap.
+func DirFromEnvFile(envFile string) string {
+	if v := strings.TrimSpace(envreg.Get(EnvDir)); v != "" {
+		return v
+	}
+	if v := EnvFileDir(envFile); v != "" {
+		return v
+	}
+	return DefaultDir
+}
+
+// EnvFileDir returns FLEET_CLIENT_CONFIG_DIR as envFile sets it, or "" when the
+// file is missing, unreadable or does not set it.
+func EnvFileDir(envFile string) string {
+	if strings.TrimSpace(envFile) == "" {
+		return ""
+	}
+	values, err := creds.ReadEnvValues(envFile, EnvDir)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values[EnvDir])
 }
 
 // Load reads + validates the bundle at dir (absolutized). A blank dir resolves

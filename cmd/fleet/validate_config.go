@@ -42,7 +42,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
-	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -180,11 +179,7 @@ func pinBundleDirFromEnvFile(path string) {
 	if strings.TrimSpace(envreg.Get(clientconfig.EnvDir)) != "" {
 		return
 	}
-	values, err := creds.ReadEnvValues(path, clientconfig.EnvDir)
-	if err != nil {
-		return
-	}
-	if dir := strings.TrimSpace(values[clientconfig.EnvDir]); dir != "" {
+	if dir := clientconfig.EnvFileDir(path); dir != "" {
 		_ = os.Setenv(clientconfig.EnvDir, dir)
 	}
 }
