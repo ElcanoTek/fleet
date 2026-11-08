@@ -342,3 +342,31 @@ func checkReport(t *testing.T, rep *identity.MergeReport) {
 		t.Errorf("report lines = %q", rep.Lines())
 	}
 }
+
+// TestMergeKeepsSchedOnlyAccountHistory: an Operations-Center-only account the
+// merge creates keeps its sched created_at and last_login; only updated_at
+// is the merge's moment (Codex 4504789445 on #2083).
+func TestMergeKeepsSchedOnlyAccountHistory(t *testing.T) {
+	l := newLegacy(t)
+	created := time.Date(2024, 3, 4, 5, 6, 7, 0, time.UTC)
+	lastLogin := time.Date(2025, 6, 7, 8, 9, 10, 0, time.UTC)
+	id := uuid.New()
+	if _, err := l.raw.Exec(`INSERT INTO sched.users (id, username, password_hash, role, created_at, enabled, last_login)
+		VALUES ($1, 'old-ops@x.test', 'sched-hash-placeholder', 'client', $2, true, $3)`, id, created, lastLogin); err != nil {
+		t.Fatalf("seed sched user: %v", err)
+	}
+	before := time.Now().Unix()
+	if res := l.merge(); !res.Ran || len(res.Report.Created) != 1 {
+		t.Fatalf("merge = %+v", res)
+	}
+	u := l.account("old-ops@x.test")
+	if u.CreatedAt != created.Unix() {
+		t.Errorf("created_at = %s, want the sched row's %s", time.Unix(u.CreatedAt, 0).UTC(), created)
+	}
+	if u.LastLogin == nil || !u.LastLogin.Equal(lastLogin) {
+		t.Errorf("last_login = %v, want %s", u.LastLogin, lastLogin)
+	}
+	if u.UpdatedAt < before {
+		t.Errorf("updated_at = %d, want the merge's moment (>= %d)", u.UpdatedAt, before)
+	}
+}

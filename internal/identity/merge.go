@@ -265,6 +265,9 @@ type legacyRow struct {
 	role      string
 	enabled   bool
 	lastLogin sql.NullTime
+	// createdAt is sched.users.created_at as Unix seconds (NULL-safe: the
+	// column is NOT NULL, but a hand-edited row should not fail the merge).
+	createdAt sql.NullInt64
 }
 
 // MergeTx is MergeLegacySchedUsers inside the caller's transaction (which it
@@ -322,14 +325,14 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE core.users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, username, password_hash, role, enabled, last_login FROM `+legacy+` ORDER BY created_at, id`) //nolint:gosec // G202: see above
+	rows, err := tx.QueryContext(ctx, `SELECT id, username, password_hash, role, enabled, last_login, EXTRACT(EPOCH FROM created_at)::bigint FROM `+legacy+` ORDER BY created_at, id`) //nolint:gosec // G202: see above
 	if err != nil {
 		return err
 	}
 	var legacyRows []legacyRow
 	for rows.Next() {
 		var r legacyRow
-		if err := rows.Scan(&r.id, &r.username, &r.hash, &r.role, &r.enabled, &r.lastLogin); err != nil {
+		if err := rows.Scan(&r.id, &r.username, &r.hash, &r.role, &r.enabled, &r.lastLogin, &r.createdAt); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -380,8 +383,14 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 			if hash == "" {
 				hash = UnusablePasswordHash
 			}
+			// The account keeps its history: created_at and last_login are
+			// the sched row's; updated_at is the merge's moment.
+			created := now
+			if r.createdAt.Valid {
+				created = r.createdAt.Int64
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO core.users (id, email, password_hash, role, ops_scope, enabled, last_login, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`, r.id, email, hash, string(m.Role), string(m.OpsScope), m.Enabled, r.lastLogin, now); err != nil {
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, r.id, email, hash, string(m.Role), string(m.OpsScope), m.Enabled, r.lastLogin, created, now); err != nil {
 				return fmt.Errorf("identity merge: create %s: %w", email, err)
 			}
 			rep.Created = append(rep.Created, MergeEntry{Email: email, SchedRole: schedRole, ChatRole: string(m.Role), OpsScope: string(m.OpsScope)})
