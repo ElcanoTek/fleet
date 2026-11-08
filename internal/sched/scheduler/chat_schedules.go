@@ -134,7 +134,7 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 		}
 		return d, fmt.Errorf("%w: %s", models.ErrChatScheduleNotRunnable, d.Reason)
 	case models.ChatScheduleQueued, models.ChatScheduleBusy, models.ChatScheduleGone,
-		models.ChatScheduleStale, models.ChatScheduleDeferred:
+		models.ChatScheduleStale, models.ChatScheduleDeferred, models.ChatScheduleSuperseded:
 	}
 	return d, nil
 }
@@ -338,7 +338,7 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 		return d, nil
 	}
 	switch d.Outcome {
-	case models.ChatScheduleStale, models.ChatScheduleDeferred, models.ChatScheduleRejected:
+	case models.ChatScheduleStale, models.ChatScheduleDeferred, models.ChatScheduleRejected, models.ChatScheduleSuperseded:
 		// Nothing changed that a client could see.
 	case models.ChatScheduleQueued:
 		log.Printf("audit: chat schedule %q (run #%d) queued for conversation %q as input %q",
