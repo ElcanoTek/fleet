@@ -67,8 +67,17 @@ func logPassed(ctx context.Context, op, detail string, err error, told string) {
 // duplicates are ignored, so re-registering on every acquisition is free.
 // The value is retained only inside the redactor and is never logged.
 func RegisterSecretLiteral(value string) {
-	brokerRedactor().AddLiteral(value)
+	// One registration point: the log and every subscribed redactor — this
+	// package's broker redactor among them (addBrokerLiterals) — learn it.
 	logging.RegisterSecretLiterals("", false, value)
+}
+
+func init() { logging.OnSecretLiterals(addBrokerLiterals) }
+
+// addBrokerLiterals is the broker redactor's subscription to
+// logging.RegisterSecretLiterals.
+func addBrokerLiterals(scope string, rotated bool, values []string) {
+	brokerRedactor().RegisterSecrets(scope, rotated, values...)
 }
 
 // RedactSecrets scrubs text with the broker's process-wide redactor — the one
@@ -90,7 +99,6 @@ func RedactSecrets(text string) string {
 // ~2-3 literals per refresh per server for its whole lifetime. An empty scope
 // registers permanently, like RegisterSecretLiteral.
 func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
-	brokerRedactor().RegisterSecrets(scope, rotated, values...)
 	logging.RegisterSecretLiterals(scope, rotated, values...)
 }
 
@@ -103,10 +111,9 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 func brokerRedactor() *redact.Redactor {
 	redactorOnce.Do(func() {
 		r := redact.NewRedactor(nil)
-		environ := os.Environ()
-		r.RegisterEnvLiterals(environ)
-		// The process log redacts by the same literal set (#2052).
-		logging.RegisterEnvLiterals(environ)
+		// The process's own secret-named env values. (The process log seeds
+		// the same set itself, at Configure.)
+		r.RegisterEnvLiterals(os.Environ())
 		sharedRedactor = r
 	})
 	return sharedRedactor

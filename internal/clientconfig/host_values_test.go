@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
@@ -78,5 +79,31 @@ func TestInterpolatedHostPathsAreNotRegistered(t *testing.T) {
 	}
 	if strings.Contains(got, "acmeSessionOpaque-Qw81Zr") {
 		t.Fatalf("the interpolated credential was not registered: %q", got)
+	}
+}
+
+// A connector value interpolated from an innocently named host variable is
+// scrubbed from a tool result before it reaches the model — the tool-output
+// redactor learns it from the same registration as the process log — while
+// an interpolated path list is left readable there too (#2074 review: it was
+// registered only for the log).
+func TestHostValueIsScrubbedFromToolResults(t *testing.T) {
+	t.Setenv("SOME_HOST_VAR", "hostSessionOpaque-Lp93Xc")
+	t.Setenv("ACME_DIRS", "/srv/toolDrops91:/var/lib/toolWork91")
+	env := resolveEnvMap(map[string]string{
+		"SESSION": "${SOME_HOST_VAR}",
+		"DIRS":    "${ACME_DIRS}",
+	}, nil)
+	if env["SESSION"] != "hostSessionOpaque-Lp93Xc" {
+		t.Fatalf("SESSION = %q", env["SESSION"])
+	}
+	// What an MCP tool result passes through before it reaches the model
+	// (mcp_tools: toolRedactor().Redact).
+	got := agentcore.RedactSecrets("connector echoed hostSessionOpaque-Lp93Xc and wrote /srv/toolDrops91/out.csv")
+	if strings.Contains(got, "hostSessionOpaque-Lp93Xc") {
+		t.Fatalf("a host-derived connector value reached a tool result: %q", got)
+	}
+	if !strings.Contains(got, "/srv/toolDrops91/out.csv") {
+		t.Fatalf("an interpolated path list was scrubbed from a tool result: %q", got)
 	}
 }

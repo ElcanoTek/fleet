@@ -11,7 +11,13 @@ import (
 
 // show_ui validates the card the browser will draw, which is the redacted
 // tool input (see onToolCall).
-func init() { tools.ShowUIRedactor = func(s string) string { return toolRedactor().Redact(s) } }
+func init() {
+	tools.ShowUIRedactor = func(s string) string { return toolRedactor().Redact(s) }
+	// Every secret literal registered anywhere in the process — the log's
+	// provenance registrations included — is a tool-output scrub target too
+	// (logging.RegisterSecretLiterals is the one registration point).
+	logging.OnSecretLiterals(addToolLiterals)
+}
 
 // toolRedactor returns the process-wide secret scrubber applied to tool output
 // (in the tool wrappers + stream sink) and to the persisted session log. Built
@@ -37,10 +43,9 @@ func init() { tools.ShowUIRedactor = func(s string) string { return toolRedactor
 func toolRedactor() *redact.Redactor {
 	redactorOnce.Do(func() {
 		r := redact.NewRedactor(nil)
-		environ := os.Environ()
-		r.RegisterEnvLiterals(environ)
-		// The process log redacts by the same literal set (#2052).
-		logging.RegisterEnvLiterals(environ)
+		// The process's own secret-named env values. (The process log seeds
+		// the same set itself, at Configure.)
+		r.RegisterEnvLiterals(os.Environ())
 		// Publish under pendingMu, and drain under the same lock: that is what
 		// makes RegisterSecretLiteral's nil-check safe against a racing
 		// construction, so a value offered concurrently is either buffered here
@@ -99,10 +104,25 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	if len(kept) == 0 && !rotated {
 		return
 	}
-	// Every literal the tool-output scrubber learns is also a log scrub
-	// target (#2052): a credential that must not reach the model must not
-	// reach the process log either.
+	// One registration point (#2052, #2074 review): the process log learns
+	// the literals, and its subscribers — this package's tool-output
+	// redactor among them (addToolLiterals) — learn them from it.
 	logging.RegisterSecretLiterals(scope, rotated, kept...)
+}
+
+// addToolLiterals is the tool-output redactor's subscription to
+// logging.RegisterSecretLiterals: a registration made before the redactor
+// exists is buffered and drained at construction.
+func addToolLiterals(scope string, rotated bool, values []string) {
+	kept := make([]string, 0, len(values))
+	for _, v := range values {
+		if v != "" {
+			kept = append(kept, v)
+		}
+	}
+	if len(kept) == 0 && !rotated {
+		return
+	}
 	pendingMu.Lock()
 	if sharedRedactor == nil {
 		pendingLiterals = append(pendingLiterals, pendingLiteral{scope: scope, rotated: rotated, values: kept})

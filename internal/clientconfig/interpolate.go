@@ -380,7 +380,9 @@ func interpolate(v string) (out string, assembled bool) {
 
 // registerHostValues hands every fragment of a connector env or header value
 // that came from the host process env — a ${VAR} the manifest interpolates,
-// whatever VAR is called — to the log redactor as a secret literal, before
+// whatever VAR is called — to every redactor as a secret literal
+// (logging.RegisterSecretLiterals, the one registration point: the log and
+// the tool-output redactor alike), before
 // any connector is spawned with it. The secret-NAME heuristic misses
 // credentials under names like AUTH or SESSION or a vendor's own; provenance
 // does not: a value the bundle writes literally (REGION: us-east-1) lives in

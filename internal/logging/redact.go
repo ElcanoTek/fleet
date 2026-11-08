@@ -74,20 +74,59 @@ func scrubKey(k string) string {
 	return Redact(k)
 }
 
-// RegisterSecretLiterals adds secret VALUES to the log redactor, with the
-// scope/rotation semantics of redact.Redactor.RegisterSecrets: an empty scope
-// registers permanently, a scope with rotated=true replaces that scope's
-// previous generation after the redactor's grace window. The values are kept
-// only as scrub targets and are never emitted.
+// RegisterSecretLiterals is THE registration point for a secret literal in
+// this process: it adds the VALUES to the log redactor and hands them to every
+// other redactor subscribed with OnSecretLiterals — the tool-output redactor
+// (agentcore), the broker's (mcpbroker) — so a value scrubbed from the log is
+// scrubbed from tool results reaching the model too, and vice versa, whichever
+// package learned it (#2074 review). Semantics are those of
+// redact.Redactor.RegisterSecrets: an empty scope registers permanently, a
+// scope with rotated=true replaces that scope's previous generation after the
+// redactor's grace window. The values are kept only as scrub targets and are
+// never emitted.
 func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	redactor().RegisterSecrets(scope, rotated, values...)
+	for _, fn := range secretSubscribers() {
+		fn(scope, rotated, values)
+	}
 }
 
-// RegisterEnvLiterals adds the values of secret-named variables in environ
-// (os.Environ form) to the log redactor — redact.Redactor.RegisterEnvLiterals,
-// the same name rule the tool-output and broker redactors seed themselves with.
+// RegisterEnvLiterals registers the values of secret-named variables in
+// environ (os.Environ form) — redact.IsSecretEnvName, the name rule every
+// redactor seeds itself with — through RegisterSecretLiterals, so the
+// subscribed redactors learn them too.
 func RegisterEnvLiterals(environ []string) {
-	redactor().RegisterEnvLiterals(environ)
+	var values []string
+	for _, kv := range environ {
+		name, val, ok := strings.Cut(kv, "=")
+		if ok && name != "" && redact.IsSecretEnvName(name) {
+			values = append(values, val)
+		}
+	}
+	if len(values) > 0 {
+		RegisterSecretLiterals("", false, values...)
+	}
+}
+
+var (
+	subscribersMu sync.Mutex
+	subscribers   []func(scope string, rotated bool, values []string)
+)
+
+// OnSecretLiterals subscribes another redactor to every RegisterSecretLiterals
+// (and RegisterEnvLiterals) call in this process, from now on. fn must not
+// call RegisterSecretLiterals itself, and must not block. Call it from the
+// subscribing package's init, before anything registers.
+func OnSecretLiterals(fn func(scope string, rotated bool, values []string)) {
+	subscribersMu.Lock()
+	defer subscribersMu.Unlock()
+	subscribers = append(subscribers, fn)
+}
+
+func secretSubscribers() []func(string, bool, []string) {
+	subscribersMu.Lock()
+	defer subscribersMu.Unlock()
+	return append([]func(string, bool, []string){}, subscribers...)
 }
 
 // seedEnvLiterals registers this process's own secret-named env values

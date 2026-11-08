@@ -25,6 +25,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // accountSeparatorFolder maps the separators an operator might type in an
@@ -84,7 +85,9 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 			// variable is called: the log redactor learns it before the
 			// connector is spawned with it (see clientconfig's
 			// registerHostValues for the unsuffixed seat).
-			logging.RegisterSecretLiterals("", false, out[k])
+			if !redact.IsPathListValue(out[k]) {
+				logging.RegisterSecretLiterals("", false, out[k])
+			}
 			overrides++
 			continue
 		}
