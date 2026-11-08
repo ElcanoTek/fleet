@@ -360,12 +360,12 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
 	root := repoRoot(t)
 
-	pin := regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`).
+	pin := regexp.MustCompile(`(?m)^\s+GOLANGCI_LINT_VERSION:\s*'(\d+\.\d+\.\d+)'`).
 		FindStringSubmatch(readFile(t, root, ".github/workflows/ci.yml"))
 	if pin == nil {
-		t.Fatal("ci.yml: could not find the golangci-lint-action version pin")
+		t.Fatal("ci.yml: could not find the GOLANGCI_LINT_VERSION pin")
 	}
-	want := pin[1]
+	want := "v" + pin[1]
 
 	// Each doc names the version in prose. Match any golangci-lint-adjacent
 	// vN.N.N so a stale copy is caught rather than skipped for not matching.

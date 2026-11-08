@@ -460,7 +460,7 @@ linking it).
 | GitHub Actions, by commit SHA | every workflow | Dependabot `github-actions` (`/`) |
 | `COSIGN` — the verifier boxes and release.yml run | `internal/release/cosign.lock` | `update-pins.sh`: the new `cosign_checksums.txt` must carry Sigstore's keyless signature, verified by the cosign already pinned; both binaries hash-checked |
 | `GRYPE` | `ci.yml`, `grype-scheduled.yml`, `release.yml` | `update-pins.sh`: checksums file, its keyless signature (anchore's release workflow), the asset's SHA-256 |
-| `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature) |
+| `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM`, `GOLANGCI_LINT` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature). `GOLANGCI_LINT` is also restated in `ONBOARDING.md` and `docs/TESTING.md`; `scripts/check_versions_test.go` fails the update PR until those are bumped too |
 | `RUFF`, `SEMGREP` (`pip install x==v`) | `ci.yml`, `semgrep.yml` | `update-pins.sh`: newest final PyPI release past the cooldown |
 
 The Playwright browser is not a pin: the control-plane image never downloads
