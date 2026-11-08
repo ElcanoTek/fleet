@@ -803,7 +803,7 @@ func (c *containerImpl) startStatsCollector(ctx context.Context) {
 	// NoNetwork containers have an empty namespace; their net counters are
 	// meaningless, so we tell the collector not to surface Net* fields.
 	netReported := !c.cfg.NoNetwork
-	statsCtx, cancel := context.WithCancel(context.Background())
+	statsCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	c.statsCancel = cancel
 	c.statsDone = done

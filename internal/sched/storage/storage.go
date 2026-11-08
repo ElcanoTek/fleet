@@ -1548,7 +1548,7 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	// here leaves the row's spawn credit unclaimed and the scheduler tick's
 	// ReconcileRecurrences repairs the chain (#1116).
 	if (update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError) && task.Recurrence != "" {
-		s.scheduleNextRecurrence(context.Background(), task)
+		s.scheduleNextRecurrence(context.WithoutCancel(ctx), task)
 	}
 
 	return task, nil
@@ -1753,7 +1753,7 @@ func (s *Storage) DeadLetterTaskWithOutcomeWithContext(ctx context.Context, task
 	// failure abort the terminal write. A failed or crashed spawn leaves the
 	// row's spawn credit unclaimed and ReconcileRecurrences re-drives it.
 	if task.Recurrence != "" {
-		s.scheduleNextRecurrence(context.Background(), task)
+		s.scheduleNextRecurrence(context.WithoutCancel(ctx), task)
 	}
 	return task, nil
 }

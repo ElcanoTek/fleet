@@ -111,7 +111,7 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 			if attempt > 0 {
 				time.Sleep(100 * time.Millisecond)
 			}
-			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
 			rcancel()
 			if rerr == nil {
@@ -127,7 +127,7 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 					if delay < 5*time.Second {
 						delay *= 2
 					}
-					rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+					rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 					_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
 					rcancel()
 					if rerr == nil {

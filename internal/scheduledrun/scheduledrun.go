@@ -1664,7 +1664,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		return taskMCPBinding{}, errors.New("open scheduled MCP scope: opener returned an incomplete scope")
 	}
 	cleanup := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), taskMCPScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskMCPScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
 			logging.From(ctx).Error("scheduled task: close MCP scope failed", "task_id", task.ID, "err", closeErr)

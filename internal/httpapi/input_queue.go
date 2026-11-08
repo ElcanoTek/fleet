@@ -73,8 +73,8 @@ func (m *steerMailbox) Poll() (agentcore.SteerMessage, bool) {
 // flip, on a fresh context (the turn ctx may be near its deadline). A lost
 // race with remove/cancel refuses injection — the message is gone, not
 // silently injected after the user deleted it.
-func (m *steerMailbox) Acknowledge(_ context.Context, id string) error {
-	actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (m *steerMailbox) Acknowledge(ctx context.Context, id string) error {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	ok, err := m.store.MarkInputInjected(actx, id, m.turnID)
 	if err != nil {
@@ -311,7 +311,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// set its mark before looking the row up, so either that lookup saw the
 	// row or this check sees the mark.
 	if created && s.inputKeyStopped(conv.ID, clientID) {
-		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		wctx, wcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer wcancel()
 		ok, rerr := s.store.RemoveQueuedInput(wctx, user, conv.ID, row.ID)
 		if rerr == nil && !ok {

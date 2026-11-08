@@ -332,7 +332,7 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 	}
 	notifier := e.cfg.Notifier
 	safe.Go("budget.soft-alert", func() {
-		nctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		defer cancel()
 		if err := notifier.Notify(nctx, ev); err != nil {
 			logging.From(ctx).Error("budget: soft alert delivery failed", "budget_id", b.ID, "err", err)

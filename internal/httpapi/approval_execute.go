@@ -302,7 +302,7 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return shared()
 	}
 	release := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), approvalScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalScopeCloseTimeout)
 		defer cancel()
 		if err := scope.Close(closeCtx); err != nil {
 			// our own row, and it is rendered with %q so any CR/LF would be escaped.

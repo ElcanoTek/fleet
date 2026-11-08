@@ -202,6 +202,7 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		Catalog:         brokerToolCatalog(tools),
 		Servers:         servers,
 		CloseScope:      scope.Close,
+		OpenCtx:         ctx,
 		Skipped:         scope.Skipped(),
 		SkipReasons:     scope.SkipReasons(),
 		SkippedSeats:    scope.SkippedSeats(),

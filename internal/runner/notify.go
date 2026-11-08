@@ -36,7 +36,11 @@ type Notifier interface {
 // It must NOT be called while holding p.mu (it spawns a goroutine that does its
 // own I/O); the call sites in executeTask are after the terminal status write,
 // outside any lock.
-func (p *Pool) notifyTerminal(task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) {
+//
+// ctx is the task run's: the notification goroutine detaches from its
+// cancellation (context.WithoutCancel) but keeps its correlation, so the
+// fan-out's records — email, webhook, push — carry task_id and run_id.
+func (p *Pool) notifyTerminal(ctx context.Context, task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) {
 	if p.notifier == nil {
 		return
 	}
@@ -45,7 +49,7 @@ func (p *Pool) notifyTerminal(task *models.Task, status notify.Status, session *
 		// A bound on the whole fan-out independent of any per-attempt timeout, so a
 		// pathological retry loop cannot leak a goroutine forever. notify applies
 		// its own per-attempt timeout + bounded retry within this budget.
-		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifyFanoutBudget)
 		defer cancel()
 		p.deliver(ctx, task, ev)
 	}()
@@ -79,7 +83,9 @@ const blockedStreakAlert = 3
 // so in its message, once per streak. Nothing parks: the schedule keeps
 // running, and the next run that publishes ends the streak. The streak lookup
 // runs off-thread with the rest of the fan-out.
-func (p *Pool) notifyBlocked(task *models.Task, session *models.LogSession, dur time.Duration) {
+//
+// ctx is the task run's, detached as for notifyTerminal.
+func (p *Pool) notifyBlocked(ctx context.Context, task *models.Task, session *models.LogSession, dur time.Duration) {
 	if p.notifier == nil {
 		return
 	}
@@ -89,7 +95,7 @@ func (p *Pool) notifyBlocked(task *models.Task, session *models.LogSession, dur 
 	}
 	ev := p.buildEvent(task, notify.StatusBlocked, session, dur)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifyFanoutBudget)
 		defer cancel()
 		message := detail
 		if task.Recurrence != "" && p.store != nil {

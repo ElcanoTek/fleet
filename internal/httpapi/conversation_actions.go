@@ -811,7 +811,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		cancelledQueued := 0
 		if scope == "all" {
 			epoch := s.store.AcceptedInputSeq()
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
 				logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 			} else if n > 0 {
@@ -852,7 +852,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// bounded to rows accepted before the Stop began (#1477): a
 		// follow-up submitted after Stop, while the cancelled turn was still
 		// finishing, keeps its 202 and runs on the re-kick.
-		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
 			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 		} else if n > 0 {

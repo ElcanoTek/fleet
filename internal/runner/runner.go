@@ -640,7 +640,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 				if attempt > 0 {
 					time.Sleep(100 * time.Millisecond)
 				}
-				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+				rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				rerr = p.store.ReleaseClaimedTask(rctx, task.ID, token.String())
 				rcancel()
 				if rerr == nil {
@@ -1009,7 +1009,7 @@ func captureRunFailure(ctx context.Context, task *models.Task, model string, run
 // retry/dead-letter/error-analysis.
 func (p *Pool) parkForQuestion(ctx context.Context, task *models.Task, session *models.LogSession, pauseQuestion string, token uuid.UUID, start time.Time) {
 	p.submitLog(ctx, task, session, "Paused awaiting human input: "+pauseQuestion)
-	if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, token, pauseQuestion); err != nil {
+	if ok, err := p.store.PauseTaskForQuestion(context.WithoutCancel(ctx), task.ID, token, pauseQuestion); err != nil {
 		logging.From(ctx).Error("runner: task pause write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
 		logging.From(ctx).Warn("runner: task pause did not apply (lease lost or not running)", "task_id", task.ID)
@@ -1101,9 +1101,9 @@ func (p *Pool) finishSuccess(ctx context.Context, task *models.Task, session *mo
 		// the recorded reason (ADR-0092): the thing it maintains did not
 		// change while the run reads green. Nothing parks.
 		if task.IsRunOutcome(models.RunOutcomeBlocked) {
-			p.notifyBlocked(task, session, time.Since(start))
+			p.notifyBlocked(ctx, task, session, time.Since(start))
 		} else {
-			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+			p.notifyTerminal(ctx, task, notify.StatusSuccess, session, time.Since(start))
 		}
 		// If this run answered an inbound email (#511), reply to the sender with
 		// the result. Off-thread, no-op unless the run came from an email trigger.
@@ -1230,7 +1230,7 @@ func (p *Pool) failAuditAborted(ctx context.Context, task *models.Task, session 
 	p.submitLog(ctx, task, session, msg)
 	logging.From(ctx).Warn("runner: task aborted by self-audit", "task_id", task.ID, "elapsed", time.Since(start).Round(time.Second))
 	if landed {
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 	}
 }
 
@@ -1269,7 +1269,7 @@ func (p *Pool) failInterrupted(ctx context.Context, task *models.Task, session *
 	// when the terminal write actually landed (#580), so a lease lost out from
 	// under us never produces a notification the DB contradicts.
 	if landed {
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 	}
 }
 
@@ -1291,7 +1291,7 @@ func (p *Pool) failWallTimeout(ctx context.Context, task *models.Task, session *
 	// Terminal failure: fire the outbound notification off-thread (#208) — only
 	// when the terminal write landed (#580), matching every other branch.
 	if landed {
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 	}
 }
 
@@ -1372,7 +1372,7 @@ func (p *Pool) requeueForConnectorOutage(ctx context.Context, task *models.Task,
 	when := time.Now().UTC().Add(delay)
 	msg := fmt.Sprintf("Task could not start (%s, infra re-run %d of %d); re-running in %s without spending a retry: %v",
 		models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, delay.Round(time.Second), runErr)
-	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
+	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, when, msg); err != nil {
 		logging.From(ctx).Warn("runner: failed to re-queue task after a connector outage; classifying normally", "task_id", task.ID, "err", err)
 		return false
 	}
@@ -1413,13 +1413,13 @@ func (p *Pool) handleRunFailure(ctx context.Context, task *models.Task, session 
 		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
 			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
 		// Pending Q&A deliberately survives a successful requeue (#582).
-		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
+		if _, err := p.store.RequeueTaskForRetryWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, when, msg); err != nil {
 			logging.From(ctx).Warn("runner: failed to re-queue task for retry; marking error", "task_id", task.ID, "err", err)
 			p.clearPendingQA(ctx, task, leaseOwner)
 			if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
 				logging.From(ctx).Error("runner: failed to report error for task", "task_id", task.ID, "err", rerr)
 			} else {
-				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+				p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 				p.maybeAnalyzeFailure(task, session, runErr)
 			}
 		} else {
@@ -1433,7 +1433,7 @@ func (p *Pool) handleRunFailure(ctx context.Context, task *models.Task, session 
 	if task.RetryPolicy.ShouldRetryClass(class) {
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s) (%s): %v", task.AttemptCount+1, class, runErr)
 		if p.sendToDeadLetter(ctx, task, session, runErr, reason, "retry_exhausted", outcome, outcomeDetail, leaseOwner, start) {
-			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+			p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 			p.maybeAnalyzeFailure(task, session, runErr)
 		}
 		return
@@ -1444,7 +1444,7 @@ func (p *Pool) handleRunFailure(ctx context.Context, task *models.Task, session 
 		reason = fmt.Sprintf("connector unavailable after %d infra re-run(s) (%s): %v", task.InfraRetryCount, class, runErr)
 	}
 	if p.sendToDeadLetter(ctx, task, session, runErr, reason, class, outcome, outcomeDetail, leaseOwner, start) {
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.notifyTerminal(ctx, task, notify.StatusFailure, session, time.Since(start))
 		p.maybeAnalyzeFailure(task, session, runErr)
 	}
 }
@@ -1498,7 +1498,7 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // external side effect may fire.
 func (p *Pool) sendToDeadLetter(ctx context.Context, task *models.Task, session *models.LogSession, runErr error, reason, reasonClass, outcome, outcomeDetail string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
-	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.Background(), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
+	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.WithoutCancel(ctx), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
 	if err != nil {
 		logging.From(ctx).Warn("runner: failed to dead-letter task; falling back to error status", "task_id", task.ID, "err", err)
 		landed := true
@@ -1557,7 +1557,7 @@ func (p *Pool) parkForWake(ctx context.Context, task *models.Task, session *mode
 		what = "for event " + strconv.Quote(spec.EventKey) + " (timeout " + spec.WakeAt.UTC().Format(time.RFC3339) + ")"
 	}
 	p.submitLog(ctx, task, session, "Sleeping "+what)
-	if ok, err := p.store.PauseTaskForWake(context.Background(), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
+	if ok, err := p.store.PauseTaskForWake(context.WithoutCancel(ctx), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
 		logging.From(ctx).Error("runner: task wake park write failed", "task_id", task.ID, "err", err)
 	} else if !ok {
 		logging.From(ctx).Warn("runner: task wake park did not apply (lease lost or not running)", "task_id", task.ID)
@@ -1573,7 +1573,7 @@ func (p *Pool) parkForWake(ctx context.Context, task *models.Task, session *mode
 // otherwise (a failure is logged and never affects the terminal write).
 func (p *Pool) clearPendingQA(ctx context.Context, task *models.Task, leaseOwner uuid.UUID) {
 	if task.PendingQuestion != "" || task.PendingAnswer != "" {
-		if err := p.store.ClearPendingQA(context.Background(), task.ID, leaseOwner); err != nil {
+		if err := p.store.ClearPendingQA(context.WithoutCancel(ctx), task.ID, leaseOwner); err != nil {
 			logging.From(ctx).Error("runner: failed to clear pending Q&A for task", "task_id", task.ID, "err", err)
 		}
 	}
@@ -1582,7 +1582,7 @@ func (p *Pool) clearPendingQA(ctx context.Context, task *models.Task, leaseOwner
 	// the wake reason + note intact, so every retried attempt still injects
 	// them. wake_cycles survives by design (lifetime cap counter).
 	if task.WakeReason != "" || task.WakeNote != "" || task.WakeAt != nil {
-		if err := p.store.ClearWakeState(context.Background(), task.ID, leaseOwner); err != nil {
+		if err := p.store.ClearWakeState(context.WithoutCancel(ctx), task.ID, leaseOwner); err != nil {
 			logging.From(ctx).Error("runner: failed to clear wake state for task", "task_id", task.ID, "err", err)
 		}
 	}
@@ -1701,7 +1701,7 @@ func (p *Pool) reportWorkspacePath(ctx context.Context, taskID, leaseOwner uuid.
 	if strings.TrimSpace(path) == "" {
 		return
 	}
-	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, &models.StatusUpdate{
+	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.WithoutCancel(ctx), taskID, leaseOwner, &models.StatusUpdate{
 		TaskID:        taskID,
 		Status:        models.TaskStatusRunning,
 		WorkspacePath: &path,
@@ -1720,7 +1720,7 @@ func (p *Pool) recordArtifactsForLease(ctx context.Context, taskID, leaseOwner u
 	if len(manifest) == 0 {
 		return
 	}
-	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, &models.StatusUpdate{
+	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.WithoutCancel(ctx), taskID, leaseOwner, &models.StatusUpdate{
 		TaskID:    taskID,
 		Status:    models.TaskStatusRunning,
 		Artifacts: manifest,
@@ -1751,7 +1751,7 @@ func (p *Pool) submitLog(ctx context.Context, task *models.Task, session *models
 			})
 		}
 	}
-	if _, err := p.store.AddLogWithContext(context.Background(), task.ID, session); err != nil {
+	if _, err := p.store.AddLogWithContext(context.WithoutCancel(ctx), task.ID, session); err != nil {
 		logging.From(ctx).Error("runner: failed to submit logs for task", "task_id", task.ID, "err", err)
 	}
 }

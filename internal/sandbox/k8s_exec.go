@@ -151,7 +151,7 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 		return nil, fmt.Errorf("pod exec executor: %w", err)
 	}
 
-	sessCtx, cancel := context.WithCancel(context.Background())
+	sessCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &k8sExecSession{cancel: cancel, ctx: sessCtx, done: make(chan struct{}), exitCode: -1}
 
 	var stdin io.Reader

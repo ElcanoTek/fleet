@@ -285,7 +285,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 	}
 	s.background.Go("escalation.classifier_late", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), agentcore.StruggleCheckTimeout+5*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentcore.StruggleCheckTimeout+5*time.Second)
 		defer cancel()
 		recordCtx = ctx
 		s.classifierOutcome(checks, nil, record)

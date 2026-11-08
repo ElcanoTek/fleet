@@ -366,9 +366,15 @@ type RemoteMCPOverlay struct {
 	// {connection name, account label} it mounted (#988), so approval staging
 	// can record the exact seat a later approval must reopen.
 	Seats map[string]agentcore.MCPChoice
-	// CloseScope releases a broker-owned scope. It is called with a fresh,
-	// bounded context so cancellation of the run cannot suppress cleanup.
+	// CloseScope releases a broker-owned scope. It is called with a bounded
+	// context detached from OpenCtx's cancellation, so cancellation of the run
+	// cannot suppress cleanup.
 	CloseScope func(context.Context) error
+	// OpenCtx is the context the overlay was opened under (the run's or the
+	// turn's): Close derives its bounded context from it with
+	// context.WithoutCancel, so a teardown failure is logged with that run's
+	// or turn's correlation. Nil means context.Background().
+	OpenCtx context.Context
 	// Skipped names servers that were selected but could not be wired this run.
 	// Callers surface these to the owner (a needs-reauth server silently doing
 	// nothing is a correctness trap, especially for headless runs). SkipReasons
@@ -818,14 +824,20 @@ func (o *RemoteMCPOverlay) Validate() error {
 const remoteMCPOverlayCloseTimeout = 5 * time.Second
 
 // Close tears down the overlay's per-run client or broker scope (nil-safe). It
-// deliberately uses a fresh bounded context: callers commonly defer it from a
-// run whose context may already be cancelled.
+// deliberately uses a bounded context detached from the opening context's
+// cancellation (context.WithoutCancel of OpenCtx): callers commonly defer it
+// from a run whose context may already be cancelled, and the teardown's log
+// lines still carry that run's correlation.
 func (o *RemoteMCPOverlay) Close() {
 	if o == nil {
 		return
 	}
 	if o.CloseScope != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), remoteMCPOverlayCloseTimeout)
+		base := o.OpenCtx
+		if base == nil {
+			base = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), remoteMCPOverlayCloseTimeout)
 		defer cancel()
 		if err := o.CloseScope(ctx); err != nil {
 			logging.From(ctx).Error("remote-mcp: close overlay scope failed", "err", err)
@@ -863,7 +875,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 
 	client := mcp.NewClient()
 	httpClient := resolver.SafeHTTPClient()
-	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}, Seats: map[string]agentcore.MCPChoice{}}
+	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}, Seats: map[string]agentcore.MCPChoice{}, OpenCtx: ctx}
 	chosen, missing := selectRemoteSeats(conns, sel)
 	for _, name := range missing {
 		// A pinned seat that is not connected: never fall back to another

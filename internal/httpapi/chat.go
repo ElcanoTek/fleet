@@ -705,7 +705,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			releaseSlot()
 		}
 		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
-		qctx, qcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(reqCtx), 3*time.Second)
 		s.emitQueueUpdate(qctx, user, conv.ID)
 		qcancel()
 		return true
@@ -899,7 +899,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// settle-time queue.updated had no subscribers — and the row this turn
 		// is running has since moved queued -> running, which is the
 		// difference between a chip offering send-now/remove and an inert one.
-		qctx, qcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(reqCtx), 3*time.Second)
 		s.emitQueueUpdate(qctx, user, conv.ID)
 		qcancel()
 	}
@@ -913,7 +913,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// deferred-only release would deterministically starve the queue at cap.
 	var releasedOnce sync.Once
 	releaseOnce := func() { releasedOnce.Do(releaseSlot) }
-	go func() { //nolint:gosec // G118: deliberate — the turn must outlive the HTTP request (see the detachment comment above); Stop routes through /cancel.
+	// Deliberate: the turn must outlive the HTTP request (see the detachment
+	// comment above); Stop routes through /cancel.
+	go func() {
 		defer func() {
 			s.activeTurnCount.Add(-1)
 			s.activeTurns.Done()
@@ -943,7 +945,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		if cancelledSteers > 0 {
 			logging.From(turnCtx).Warn("input queue: cancelled injected steers of a failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled", cancelledSteers, "turn_id", safe.LogSafe(turnID))
 		}
-		s.emitQueueUpdate(context.Background(), user, conv.ID)
+		s.emitQueueUpdate(context.WithoutCancel(reqCtx), user, conv.ID)
 		releaseOnce()
 		if requeued > 0 {
 			// The re-queued row may be the FIFO head an immediate drain would
@@ -1122,7 +1124,7 @@ func (s *Server) runTurnAsync(
 		if err := runMockTurn(turnCtx, s.turnStore(buf), conv, buf.turnID, userInput, buf); err != nil {
 			logging.From(turnCtx).Error("runMockTurn error", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
 		}
-		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sweepCtx, cancel := context.WithTimeout(context.WithoutCancel(turnCtx), 10*time.Second)
 		defer cancel()
 		s.sweepRetention(sweepCtx)
 		return
@@ -1253,7 +1255,7 @@ func (s *Server) runTurnAsync(
 	// title generation; if anything in the persist path takes longer
 	// than that something's actually wrong and timing out is the right
 	// call.
-	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 10*time.Second)
 	defer persistCancel()
 
 	// Canonical history was committed INSIDE RunTurn (#798): the user entry
@@ -1316,7 +1318,7 @@ func (s *Server) runTurnAsync(
 		// is wide margin over the default titling model's ~2-3s (SuggestTitle's
 		// own 20s deadline is the backstop); a slower configured model that
 		// overruns just leaves the default title in place.
-		titleCtx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+		titleCtx, cancel := context.WithTimeout(context.WithoutCancel(turnCtx), 18*time.Second)
 		title := s.agent.SuggestTitle(titleCtx, userInput, res.FinalText)
 		cancel()
 		if title != "" {
@@ -1380,7 +1382,7 @@ func (s *Server) runTurnAsync(
 	// would hold a Switch & retry click (ChatTranscript queues it). The
 	// classifier has been running since the turn began, so this rarely waits.
 	// Its own context: persistCtx's 10s budget may be spent by now.
-	escCtx, escCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	escCtx, escCancel := context.WithTimeout(context.WithoutCancel(turnCtx), 10*time.Second)
 	checkHandedOff = true
 	s.escalateAfterTurn(escCtx, buf, conv, user, history, res, check)
 	escCancel()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -390,14 +391,23 @@ func registerHostValues(out string, fromEnv [][2]int) {
 	if len(fromEnv) == 0 {
 		return
 	}
+	// A filesystem path or a path list (CUTLASS_ALLOWED_DIRS assembled from
+	// ${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}) is host configuration,
+	// not a credential: as a literal it would blank every log line naming a
+	// file under it (#2074 review). Same exclusion as the broker's connector
+	// env scrub (redact.IsPathListValue).
 	values := make([]string, 0, len(fromEnv)+1)
 	for _, r := range fromEnv {
-		values = append(values, out[r[0]:r[1]])
+		if v := out[r[0]:r[1]]; !redact.IsPathListValue(v) {
+			values = append(values, v)
+		}
 	}
 	// The assembled value too: ${AUTH_A}${AUTH_B} built from fragments each
 	// below the redactor's minimum literal length registers nothing piece by
 	// piece, yet the whole is the credential the connector is sent.
-	values = append(values, out)
+	if !redact.IsPathListValue(out) {
+		values = append(values, out)
+	}
 	logging.RegisterSecretLiterals("", false, values...)
 }
 

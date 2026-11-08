@@ -1342,7 +1342,7 @@ func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.
 	}
 	if scope == nil || scope.Broker == nil || scope.Close == nil {
 		if scope != nil && scope.Close != nil {
-			closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpScopeCloseTimeout)
 			defer cancel()
 			_ = scope.Close(closeCtx)
 		}
@@ -1562,7 +1562,7 @@ func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPS
 		return nil, nil, func() {}, errors.New("open MCP turn scope: opener returned an incomplete scope")
 	}
 	cleanup := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
 			logging.From(ctx).Error("RunTurn: close MCP turn scope failed", "err", closeErr)

@@ -1303,7 +1303,7 @@ func (k *k8sImpl) ensureBridge(ctx context.Context) error {
 	// The bridge intentionally outlives any single request ctx and is torn
 	// down in close() / terminateBridgeLocked — dial under a handshake-bounded
 	// background context, mirroring the podman backend's noctx bridge exec.
-	session, err := k.backend.client.execPod(context.Background(), k.backend.cfg.Namespace, podName, sandboxContainerName,
+	session, err := k.backend.client.execPod(context.WithoutCancel(ctx), k.backend.cfg.Namespace, podName, sandboxContainerName,
 		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(stderrLog, stderrBuf))
 	if err != nil {
 		_ = pw.Close()

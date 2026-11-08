@@ -108,8 +108,8 @@ type turnCommits struct {
 
 // commitUser durably persists the user entry BEFORE the first provider call
 // (TurnInput.CommitUser).
-func (c *turnCommits) commitUser(_ context.Context, entry agent.HistoryEntry) error {
-	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *turnCommits) commitUser(ctx context.Context, entry agent.HistoryEntry) error {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	id, err := c.store.CommitUserMessage(cctx, c.convID, c.turnID, entry)
 	if err != nil {

@@ -55,3 +55,28 @@ func TestAssembledHostValueIsRegisteredWhole(t *testing.T) {
 		t.Fatalf("assembled host value not registered: %q", got)
 	}
 }
+
+// A path or path list interpolated from the host (CUTLASS_ALLOWED_DIRS built
+// from ${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}) is configuration, not
+// a credential: it is not registered, so a log line naming a file under it
+// stays readable (#2074 review), while a credential interpolated beside it
+// still is.
+func TestInterpolatedHostPathsAreNotRegistered(t *testing.T) {
+	t.Setenv("CUTLASS_ALLOWED_DIRS", "/srv/dropsHostPath77")
+	t.Setenv("ACME_EXTRA_DIR", "/var/lib/fleetWorkspace77")
+	t.Setenv("ACME_SESSION", "acmeSessionOpaque-Qw81Zr")
+	env := resolveEnvMap(map[string]string{
+		"CUTLASS_ALLOWED_DIRS": "${CUTLASS_ALLOWED_DIRS}:${ACME_EXTRA_DIR}",
+		"SESSION":              "${ACME_SESSION}",
+	}, nil)
+	if env["CUTLASS_ALLOWED_DIRS"] != "/srv/dropsHostPath77:/var/lib/fleetWorkspace77" {
+		t.Fatalf("CUTLASS_ALLOWED_DIRS = %q", env["CUTLASS_ALLOWED_DIRS"])
+	}
+	got := logging.Redact("wrote /srv/dropsHostPath77/report.csv under /var/lib/fleetWorkspace77/run-1; session acmeSessionOpaque-Qw81Zr")
+	if !strings.Contains(got, "/srv/dropsHostPath77/report.csv") || !strings.Contains(got, "/var/lib/fleetWorkspace77/run-1") {
+		t.Fatalf("an interpolated host path was registered as a secret: %q", got)
+	}
+	if strings.Contains(got, "acmeSessionOpaque-Qw81Zr") {
+		t.Fatalf("the interpolated credential was not registered: %q", got)
+	}
+}
