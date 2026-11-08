@@ -196,8 +196,11 @@ fleet__mode() {
 # (fleet__mode — COPY preserves them, so a chmod +x makes a new image) and,
 # for a file, its contents (a symlink: its target). Directories count on their
 # own, so an added empty directory or a directory mode change is a change.
-# The Containerfile is hashed under a fixed name, so the same context at
-# another path or under another file name hashes the same
+# The Containerfile is an entry like any other, at its real relative path
+# (a `COPY .` puts its name in the image), and the records also name which
+# entry the build uses as its Containerfile. Only relative paths count, so the
+# same context at another absolute path hashes the same, while a Containerfile
+# renamed or moved within its context does not
 # (fleet_sandbox_uses_release_image compares a bundle's context with the
 # generic one this way).
 # Nothing is excluded — not VCS metadata (.git), not what a .containerignore /
@@ -210,9 +213,9 @@ fleet__mode() {
 # The default <bundle>/sandbox/ layout holds only the build's own files.
 # update.sh stores this as the sandbox build stamp, so an edit to ANY file the
 # build can COPY — not only to the Containerfile — triggers a rebuild. The
-# prefix names the format: a `ctx3-` hash never equals a stamp an earlier
-# format wrote (`ctx2-`, `ctx1-`, or the bare Containerfile sha256), so a
-# format change rebuilds once.
+# prefix names the format: a `ctx4-` hash never equals a stamp an earlier
+# format wrote (`ctx3-`, `ctx2-`, `ctx1-`, or the bare Containerfile sha256),
+# so a format change rebuilds once.
 # It fails closed: when any entry cannot be listed, stat'ed, read or hashed
 # (an unreadable file, a root-squashed NFS bundle, a full /tmp) it prints the
 # path and reason to stderr and returns 1 — never a hash of a partial tree.
@@ -240,7 +243,7 @@ fleet_sandbox_context_hash() {
   fi
   rm -rf -- "$tmp"
   (( rc == 0 )) || return 1
-  printf 'ctx3-%s' "$sum"
+  printf 'ctx4-%s' "$sum"
 }
 
 # fleet__hash_error PATH WHY — fleet_sandbox_context_hash's failure message.
@@ -262,9 +265,9 @@ fleet__sha() {
 # Status 1 (with the path on stderr) on the first entry it cannot account for.
 fleet__context_records() {
   local cf="$1" ctx="$2" cf_rel="$3" tmp="$4" path rel mode sum target
-  if ! mode="$(fleet__mode "$cf")"; then fleet__hash_error "$cf" "cannot stat"; return 1; fi
-  if ! sum="$(fleet__sha "$cf")"; then fleet__hash_error "$cf" "cannot read"; return 1; fi
-  if ! printf 'containerfile\0%s\0%s\0' "$mode" "$sum" > "$tmp/records"; then
+  # Which entry is the Containerfile (by relative path); its mode and contents
+  # are hashed below with every other entry.
+  if ! printf 'containerfile\0%s\0' "$cf_rel" > "$tmp/records"; then
     fleet__hash_error "$tmp/records" "cannot write"
     return 1
   fi
@@ -278,7 +281,6 @@ fleet__context_records() {
   fi
   while IFS= read -r -d '' path; do
     rel="${path#"$ctx"/}"
-    [[ "$rel" == "$cf_rel" ]] && continue
     if [[ -L "$path" ]]; then
       if ! target="$(readlink -- "$path")"; then fleet__hash_error "$path" "cannot read the link"; return 1; fi
       printf 'link\0%s\0%s\0' "$rel" "$target"
@@ -309,11 +311,10 @@ fleet__context_records() {
 # started after the idle gate, or a --force update) stays for the next try, so
 # overwriting the digest file never strands it.
 # It never removes what is in use:
-#   - before any rmi, a ref equal to a PROTECTED_REF (the current release
-#     ref, the bundle's tag, a custom build's base, the manifest's prebuilt
-#     sandbox.image), or naming the same image ID as one, leaves the list
-#     untouched — it is the image fleet runs (again), not a superseded one;
-#     the digest file names it once it is superseded later;
+#   - a ref equal to a PROTECTED_REF (the current release ref, the bundle's
+#     tag, a custom build's base, the manifest's prebuilt sandbox.image), or
+#     naming the same image ID as one, is skipped — no rmi — but stays
+#     listed, so a later run reclaims it once it is no longer current;
 #   - never --force: podman refuses an image any container, running or
 #     stopped, or any child image still uses;
 #   - a store that cannot be read keeps the ref (only `image exists` exit 1
@@ -340,7 +341,10 @@ fleet_sandbox_reclaim_release_images() {
     [[ "$seen" == *" $ref "* ]] && continue
     seen+="$ref "
     [[ "$ref" == *@sha256:* ]] || continue
-    [[ " ${protect[*]} " == *" $ref "* ]] && continue
+    if [[ " ${protect[*]} " == *" $ref "* ]]; then
+      keep+=("$ref")    # current now: no rmi, reclaimed once it no longer is
+      continue
+    fi
     rc=0
     sandbox_podman image exists "$ref" >/dev/null 2>&1 || rc=$?
     (( rc == 1 )) && continue
@@ -353,7 +357,10 @@ fleet_sandbox_reclaim_release_images() {
       keep+=("$ref")    # present but unreadable: retry later, remove nothing
       continue
     fi
-    [[ "$ids" == *" $id "* ]] && continue
+    if [[ "$ids" == *" $id "* ]]; then
+      keep+=("$ref")    # the current image under this name: same as above
+      continue
+    fi
     sandbox_podman rmi "$ref" >/dev/null 2>&1 || keep+=("$ref")
   done
   if (( ${#keep[@]} == 0 )); then

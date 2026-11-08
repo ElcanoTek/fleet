@@ -56,11 +56,11 @@ func tryContextHash(t *testing.T, containerfile string, env ...string) (string, 
 
 // TestSandboxContextHashFailsClosed — any entry the hash cannot stat, read or
 // list makes it fail (non-zero, the path on stderr, nothing on stdout), never
-// a ctx3- hash of the part of the tree it could read.
+// a ctx4- hash of the part of the tree it could read.
 func TestSandboxContextHashFailsClosed(t *testing.T) {
 	cf := genericSandboxContext(t, t.TempDir(), "sandbox")
 	ctx := filepath.Dir(cf)
-	if h, ok, out := tryContextHash(t, cf); !ok || !strings.HasPrefix(h, "ctx3-") {
+	if h, ok, out := tryContextHash(t, cf); !ok || !strings.HasPrefix(h, "ctx4-") {
 		t.Fatalf("readable context did not hash: %s", out)
 	}
 
@@ -211,7 +211,7 @@ sandbox_base=""; base_prev=""; sandbox_image_ref=""; sandbox_unverified=""; sand
 	}
 	out = libBash(t, prelude+stampCalc+gate+`printf 'REASON=%s\n' "$build_reason"
 `+record, env...)
-	if got := strings.TrimSpace(readFile(t, state, "sandbox-containerfile.sha256")); !strings.HasPrefix(got, "ctx3-") || got == "ctx3-previous" {
+	if got := strings.TrimSpace(readFile(t, state, "sandbox-containerfile.sha256")); !strings.HasPrefix(got, "ctx4-") || got == "ctx3-previous" {
 		t.Errorf("a readable context's rebuild did not record its hash: %q\n%s", got, out)
 	}
 }

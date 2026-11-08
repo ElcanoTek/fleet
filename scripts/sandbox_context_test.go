@@ -77,8 +77,8 @@ func contextHash(t *testing.T, containerfile string) string {
 func TestSandboxContextHash(t *testing.T) {
 	root := repoRoot(t)
 	generic := contextHash(t, filepath.Join(root, "config/default/sandbox/Containerfile"))
-	if !regexp.MustCompile(`^ctx3-[0-9a-f]{64}$`).MatchString(generic) {
-		t.Fatalf("context hash = %q, want ctx3-<sha256>", generic)
+	if !regexp.MustCompile(`^ctx4-[0-9a-f]{64}$`).MatchString(generic) {
+		t.Fatalf("context hash = %q, want ctx4-<sha256>", generic)
 	}
 	if got := contextHash(t, filepath.Join(t.TempDir(), "no/such/Containerfile")); got != "absent" {
 		t.Errorf("missing Containerfile hashes to %q, want absent", got)
@@ -110,6 +110,24 @@ func TestSandboxContextHash(t *testing.T) {
 	writeTestFile(t, filepath.Join(filepath.Dir(cf2), "extra", "setup.sh"), "#!/bin/sh\n")
 	if got := contextHash(t, cf2); got == generic {
 		t.Error("an extra file in the context left the hash unchanged")
+	}
+
+	// The Containerfile counts at its real relative path: renaming it changes
+	// the hash, though only relative paths count — the copy above at
+	// images/agent/ matched the generic one.
+	cfR := genericSandboxContext(t, t.TempDir(), "sandbox")
+	renamed := filepath.Join(filepath.Dir(cfR), "Dockerfile")
+	if err := os.Rename(cfR, renamed); err != nil {
+		t.Fatal(err)
+	}
+	if got := contextHash(t, renamed); got == generic {
+		t.Error("renaming the Containerfile left the hash unchanged")
+	}
+	// Same files, but the build uses a different entry as its Containerfile.
+	both := genericSandboxContext(t, t.TempDir(), "sandbox")
+	writeTestFile(t, filepath.Join(filepath.Dir(both), "Alt.Containerfile"), "FROM scratch\n")
+	if contextHash(t, both) == contextHash(t, filepath.Join(filepath.Dir(both), "Alt.Containerfile")) {
+		t.Error("choosing a different Containerfile in the same context left the hash unchanged")
 	}
 
 	// Nothing is excluded: VCS metadata and ignore files count, and so does
@@ -233,6 +251,20 @@ func TestSandboxUsesReleaseImageComparesTheWholeContext(t *testing.T) {
 	for k, v := range same {
 		vcs[k] = v
 	}
+	// The generic Containerfile under another name is a different context
+	// (a `COPY .` would carry the name); at another directory it is not.
+	renamed := map[string]string{
+		"sandbox/Dockerfile": generic("Containerfile"), "sandbox/requirements.txt": generic("requirements.txt"), "sandbox/requirements.in": generic("requirements.in"),
+	}
+	if usesReleaseImage(t, sandboxBundle(t, "sandbox/Dockerfile", renamed)) {
+		t.Error("the generic context with a renamed Containerfile still counts as the release image")
+	}
+	elsewhere := map[string]string{
+		"images/agent/Containerfile": generic("Containerfile"), "images/agent/requirements.txt": generic("requirements.txt"), "images/agent/requirements.in": generic("requirements.in"),
+	}
+	if !usesReleaseImage(t, sandboxBundle(t, "images/agent/Containerfile", elsewhere)) {
+		t.Error("the generic context at another directory no longer counts as the release image")
+	}
 	if usesReleaseImage(t, sandboxBundle(t, "", vcs)) {
 		t.Error("a context holding .git still counts as the release image (the hash excludes nothing)")
 	}
@@ -318,12 +350,13 @@ func TestUpdateSandboxStampGate(t *testing.T) {
 		t.Error("release-image stamp matched a context hash")
 	}
 	// Stamps of the earlier context formats (ctx1: contents only; ctx2:
-	// modes, but VCS metadata and ignored paths excluded) read as a change
+	// modes, but VCS metadata and ignored paths excluded; ctx3: the
+	// Containerfile under a fixed name) read as a change
 	// too: one rebuild, no error.
-	for _, old := range []string{"ctx1-", "ctx2-"} {
+	for _, old := range []string{"ctx1-", "ctx2-", "ctx3-"} {
 		record(old + strings.Repeat("a", 64))
-		if now2, prev2 := gate(); now2 == prev2 || !strings.HasPrefix(now2, "ctx3-") {
-			t.Errorf("%s stamp: cf_now=%s cf_prev=%s, want a ctx3 mismatch", old, now2, prev2)
+		if now2, prev2 := gate(); now2 == prev2 || !strings.HasPrefix(now2, "ctx4-") {
+			t.Errorf("%s stamp: cf_now=%s cf_prev=%s, want a ctx4 mismatch", old, now2, prev2)
 		}
 	}
 }
@@ -489,49 +522,6 @@ func TestReclaimReleaseImages(t *testing.T) {
 		}
 	})
 
-	t.Run("current refs and the current image are never removed", func(t *testing.T) {
-		s := newReclaimStore(t, images)
-		// cur and tag are protected refs; alias is the current image under
-		// another digest name; a non-digest ref and a gone one are dropped;
-		// a duplicate is tried once.
-		writeTestFile(t, s.list, strings.Join([]string{cur, tag, alias, "localhost/other:1", repo + "9999", prev, prev}, "\n")+"\n")
-		s.run("", cur, tag)
-		if got := s.rmis(); len(got) != 1 || got[0] != "rmi "+prev {
-			t.Errorf("rmi calls %q, want exactly [rmi %s]", got, prev)
-		}
-		for _, ref := range []string{cur, tag, alias} {
-			if !s.has(ref) {
-				t.Errorf("%s was removed", ref)
-			}
-		}
-		// Refs equal to a protected ref, or naming its image, leave the list
-		// before any rmi: they are what fleet runs, not superseded images.
-		if got := s.pending(); got != nil {
-			t.Errorf("pending = %q, want none", got)
-		}
-	})
-
-	t.Run("the manifest's prebuilt sandbox.image is never removed", func(t *testing.T) {
-		const prebuilt = "registry.example/sandbox@sha256:4444444444444444444444444444444444444444444444444444444444444444"
-		const prebuiltAlias = "registry.example/sandbox@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-		s := newReclaimStore(t, map[string]string{
-			prebuilt: "id-prebuilt", prebuiltAlias: "id-prebuilt", prev: "id-prev", cur: "id-cur", tag: "id-cur",
-		})
-		writeTestFile(t, s.list, prebuilt+"\n"+prebuiltAlias+"\n")
-		// As update.sh's post-restart retry passes it: digest-file ref, tag,
-		// (empty) custom base, sandbox_image_ref.
-		s.run(prev, cur, tag, "", prebuilt)
-		if got := s.rmis(); len(got) != 1 || got[0] != "rmi "+prev {
-			t.Errorf("rmi calls %q, want exactly [rmi %s]", got, prev)
-		}
-		if !s.has(prebuilt) || !s.has(prebuiltAlias) {
-			t.Error("the configured sandbox.image was removed")
-		}
-		if got := s.pending(); got != nil {
-			t.Errorf("pending = %q, want none (the prebuilt image leaves the list)", got)
-		}
-	})
-
 	t.Run("an unreadable store keeps the list and removes nothing", func(t *testing.T) {
 		s := newReclaimStore(t, images)
 		s.broken = true
@@ -571,4 +561,85 @@ func TestReclaimReleaseImages(t *testing.T) {
 	if strings.Contains(update, "rmi -f") || strings.Contains(update, "rmi --force") {
 		t.Error("update.sh must never force-remove an image")
 	}
+}
+
+// TestReclaimKeepsProtectedRefsListed — a pending ref that is the current
+// release ref, the tag, the prebuilt sandbox.image, or the same image under
+// another name gets no rmi but stays listed; once it is no longer protected,
+// the next run removes it.
+func TestReclaimKeepsProtectedRefsListed(t *testing.T) {
+	const (
+		repo  = "ghcr.io/elcanotek/fleet-sandbox@sha256:"
+		prev  = repo + "1111111111111111111111111111111111111111111111111111111111111111"
+		cur   = repo + "2222222222222222222222222222222222222222222222222222222222222222"
+		alias = repo + "3333333333333333333333333333333333333333333333333333333333333333"
+		tag   = "localhost/fleet-sandbox:latest"
+	)
+	images := map[string]string{prev: "id-prev", cur: "id-cur", tag: "id-cur", alias: "id-cur"}
+
+	t.Run("current refs and the current image are never removed", func(t *testing.T) {
+		s := newReclaimStore(t, images)
+		// cur and tag are protected refs; alias is the current image under
+		// another digest name; a non-digest ref and a gone one are dropped;
+		// a duplicate is tried once.
+		writeTestFile(t, s.list, strings.Join([]string{cur, tag, alias, "localhost/other:1", repo + "9999", prev, prev}, "\n")+"\n")
+		s.run("", cur, tag)
+		if got := s.rmis(); len(got) != 1 || got[0] != "rmi "+prev {
+			t.Errorf("rmi calls %q, want exactly [rmi %s]", got, prev)
+		}
+		for _, ref := range []string{cur, tag, alias} {
+			if !s.has(ref) {
+				t.Errorf("%s was removed", ref)
+			}
+		}
+		// Refs equal to a protected ref, or naming its image, get no rmi but
+		// stay listed; the non-digest, gone and removed ones leave.
+		if got := s.pending(); strings.Join(got, " ") != cur+" "+alias {
+			t.Errorf("pending = %q, want [%s %s]", got, cur, alias)
+		}
+
+		// A later release moves the tag on: cur and alias are superseded now,
+		// and the next run removes both.
+		const next = repo + "8888888888888888888888888888888888888888888888888888888888888888"
+		writeTestFile(t, s.store, cur+" id-cur\n"+alias+" id-cur\n"+next+" id-next\n"+tag+" id-next\n")
+		writeTestFile(t, s.log, "")
+		s.run("", next, tag)
+		if s.has(cur) || s.has(alias) || !s.has(next) || !s.has(tag) {
+			t.Errorf("after the tag moved: rmi calls %q", s.rmis())
+		}
+		if got := s.pending(); got != nil {
+			t.Errorf("pending = %q, want none", got)
+		}
+	})
+
+	t.Run("the manifest's prebuilt sandbox.image is never removed", func(t *testing.T) {
+		const prebuilt = "registry.example/sandbox@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+		const prebuiltAlias = "registry.example/sandbox@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+		s := newReclaimStore(t, map[string]string{
+			prebuilt: "id-prebuilt", prebuiltAlias: "id-prebuilt", prev: "id-prev", cur: "id-cur", tag: "id-cur",
+		})
+		writeTestFile(t, s.list, prebuilt+"\n"+prebuiltAlias+"\n")
+		// As update.sh's post-restart retry passes it: digest-file ref, tag,
+		// (empty) custom base, sandbox_image_ref.
+		s.run(prev, cur, tag, "", prebuilt)
+		if got := s.rmis(); len(got) != 1 || got[0] != "rmi "+prev {
+			t.Errorf("rmi calls %q, want exactly [rmi %s]", got, prev)
+		}
+		if !s.has(prebuilt) || !s.has(prebuiltAlias) {
+			t.Error("the configured sandbox.image was removed")
+		}
+		if got := s.pending(); strings.Join(got, " ") != prebuilt+" "+prebuiltAlias {
+			t.Errorf("pending = %q, want both prebuilt refs kept (skipped, not dropped)", got)
+		}
+
+		// The manifest stops naming that image: the next run reclaims both.
+		writeTestFile(t, s.log, "")
+		s.run("", cur, tag, "", "")
+		if s.has(prebuilt) || s.has(prebuiltAlias) {
+			t.Errorf("no longer protected, still present; rmi calls %q", s.rmis())
+		}
+		if got := s.pending(); got != nil {
+			t.Errorf("pending = %q, want none", got)
+		}
+	})
 }
