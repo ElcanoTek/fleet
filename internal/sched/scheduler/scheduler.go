@@ -131,6 +131,16 @@ type Scheduler struct {
 	// storeTimeout bounds one task-path storage statement (storeCtx);
 	// 0 means sweepTimeout. A field only so tests can shorten it.
 	storeTimeout time.Duration
+	// chatPassTimeoutOverride shortens a chat schedule pass's deadline
+	// (tests only; 0 = sweepTimeout).
+	chatPassTimeoutOverride time.Duration
+
+	// promoteAgain asks the task loop for another promotion pass right away:
+	// ProcessScheduledTasks stopped at its per-tick row cap with due tasks
+	// left. Capacity 1, so requests coalesce. maxScheduledRows is that cap
+	// (0 = maxScheduledRowsPerTick; tests shorten it).
+	promoteAgain     chan struct{}
+	maxScheduledRows int
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -262,6 +272,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
 		gateInFlight:       make(map[uuid.UUID]struct{}),
 		chatWakeSig:        make(chan struct{}, 1),
+		promoteAgain:       make(chan struct{}, 1),
 	}
 }
 
@@ -426,6 +437,11 @@ func (s *Scheduler) runLoop() {
 				// survive to be expired.
 				s.runStrandedWakeExpiry()
 				s.runRecurrenceReconciliation()
+				s.ProcessScheduledTasks()
+			}()
+		case <-s.promoteAgain:
+			func() {
+				defer safe.Recover("scheduler.promote", nil)
 				s.ProcessScheduledTasks()
 			}()
 		case <-cleanupC:
@@ -644,8 +660,16 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		// Defensive valve: bounds the per-tick work if an operator somehow
 		// accumulates an enormous due set. The next tick (30s) starts over and —
 		// promotions having emptied the front of the due set — reaches the rest.
-		if rowsThisTick >= maxScheduledRowsPerTick {
-			log.Printf("ProcessScheduledTasks: handled %d due rows this tick, deferring the rest to the next tick", rowsThisTick)
+		maxRows := s.maxScheduledRows
+		if maxRows <= 0 {
+			maxRows = maxScheduledRowsPerTick
+		}
+		if rowsThisTick >= maxRows {
+			log.Printf("ProcessScheduledTasks: handled %d due rows this pass; another pass follows right away", rowsThisTick)
+			select {
+			case s.promoteAgain <- struct{}{}:
+			default: // one is already requested
+			}
 			return
 		}
 

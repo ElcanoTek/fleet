@@ -197,12 +197,53 @@ func (s *Scheduler) runChatSchedules() {
 	if s.chatDeliverer == nil {
 		return
 	}
-	s.sweep("chat schedules", func(ctx context.Context) (int, error) {
-		fired, err := s.drainChatSchedules(ctx)
-		s.chatDeliverer.KickQueuedChatScheduleTurns(ctx)
-		s.armNextChatScheduleWake(ctx)
+	var left chatBacklog
+	s.sweepWithin(s.chatPassTimeout(), "chat schedules", func(ctx context.Context) (int, error) {
+		fired, l, err := s.drainChatSchedules(ctx)
+		left = l
 		return fired, err
 	}, nil)
+	if s.ctx.Err() != nil {
+		return // stopping
+	}
+	// The bookkeeping after a pass gets a context of its own: the pass's may
+	// have run out, and with it this would silently do nothing.
+	ctx, cancel := s.storeCtx()
+	defer cancel()
+	s.chatDeliverer.KickQueuedChatScheduleTurns(ctx)
+	s.armNextChatScheduleWake(ctx)
+	switch left {
+	case chatBacklogLeft:
+		// Stopped early with work still due (the pass's deadline or its
+		// fire cap): carry on right away rather than at the next tick.
+		s.WakeChatSchedulesAt(time.Now())
+	case chatBacklogAfterError:
+		// A storage error: retry soon, without spinning on it.
+		s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
+	case chatBacklogNone:
+	}
+}
+
+// chatBacklog says whether a pass left due work behind.
+type chatBacklog int
+
+const (
+	chatBacklogNone       chatBacklog = iota // drained, or deferred (retried by its fires' leases)
+	chatBacklogLeft                          // stopped at its deadline or fire cap
+	chatBacklogAfterError                    // stopped on a storage error
+)
+
+// chatScheduleErrorRetry is how soon a pass that failed on a storage error is
+// tried again.
+const chatScheduleErrorRetry = 5 * time.Second
+
+// chatPassTimeout bounds one chat schedule pass (claims; each fire has its
+// own bound). sweepTimeout unless a test shortens it.
+func (s *Scheduler) chatPassTimeout() time.Duration {
+	if s.chatPassTimeoutOverride > 0 {
+		return s.chatPassTimeoutOverride
+	}
+	return sweepTimeout
 }
 
 // drainChatSchedules fires every recoverable and due schedule. Every claimed
@@ -210,13 +251,20 @@ func (s *Scheduler) runChatSchedules() {
 // schedules whose deliveries fail cannot be claimed again and again ahead of
 // the healthy rows behind it; a failed fire also keeps its lease for a
 // backoff, so the next passes skip it too.
-func (s *Scheduler) drainChatSchedules(ctx context.Context) (int, error) {
+//
+// ctx (the pass's deadline) bounds only the claims: a claimed fire is always
+// delivered and settled, each under a fresh bounded context of its own, so a
+// pass that runs out of time never strands fires it already leased. It
+// reports whether it left due work behind.
+func (s *Scheduler) drainChatSchedules(ctx context.Context) (int, chatBacklog, error) {
 	fired := 0
 	attempted := []string{}
 	fire := func(fs []models.ChatScheduleFire, now time.Time) (deferred bool) {
 		for _, f := range fs {
 			attempted = append(attempted, f.ScheduleID)
-			d, err := s.fireChatSchedule(ctx, f, now)
+			fireCtx, cancel := context.WithTimeout(s.ctx, chatScheduleFireTimeout)
+			d, err := s.fireChatSchedule(fireCtx, f, now)
+			cancel()
 			if err != nil {
 				log.Printf("scheduler: chat schedule %s fire: %v", safe.LogSafe(f.ScheduleID), err)
 				continue
@@ -232,36 +280,50 @@ func (s *Scheduler) drainChatSchedules(ctx context.Context) (int, error) {
 		return deferred
 	}
 
-	for len(attempted) < maxChatScheduleFiresPerSweep && ctx.Err() == nil {
+	stoppedEarly := func() (int, chatBacklog, error) {
+		left := chatBacklogLeft
+		if stopping := s.ctx.Err() != nil; stopping {
+			left = chatBacklogNone
+		}
+		return fired, left, nil
+	}
+	recovered := false
+	for !recovered {
+		if len(attempted) >= maxChatScheduleFiresPerSweep || ctx.Err() != nil {
+			return stoppedEarly()
+		}
 		now := time.Now()
 		fs, err := s.storage.DB().RecoverChatScheduleFires(ctx, now, chatScheduleLease, chatScheduleBatch)
 		if err != nil {
-			return fired, err
+			if ctx.Err() != nil {
+				return stoppedEarly()
+			}
+			return fired, chatBacklogAfterError, err
 		}
 		if fire(fs, now) {
-			return fired, nil // the chat server is not taking turns now
+			return fired, chatBacklogNone, nil // the chat server is not taking turns now
 		}
-		if len(fs) < chatScheduleBatch {
-			break
-		}
+		recovered = len(fs) < chatScheduleBatch
 	}
-	for len(attempted) < maxChatScheduleFiresPerSweep && ctx.Err() == nil {
+	for {
+		if len(attempted) >= maxChatScheduleFiresPerSweep || ctx.Err() != nil {
+			return stoppedEarly()
+		}
 		now := time.Now()
 		fs, err := s.storage.DB().ClaimDueChatSchedules(ctx, now, chatScheduleLease, chatScheduleBatch, attempted)
 		if err != nil {
-			return fired, err
+			if ctx.Err() != nil {
+				return stoppedEarly()
+			}
+			return fired, chatBacklogAfterError, err
 		}
 		if fire(fs, now) {
-			return fired, nil
+			return fired, chatBacklogNone, nil
 		}
 		if len(fs) < chatScheduleBatch {
-			break
+			return fired, chatBacklogNone, nil
 		}
 	}
-	if len(attempted) >= maxChatScheduleFiresPerSweep {
-		s.WakeChatSchedulesAt(time.Now())
-	}
-	return fired, ctx.Err()
 }
 
 // fireChatSchedule delivers one claimed fire and settles it. A delivery error

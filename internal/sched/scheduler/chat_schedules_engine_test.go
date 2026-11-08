@@ -27,6 +27,7 @@ type fakeDeliverer struct {
 	deferAll  bool                     // the chat server is draining: every fire is deferred
 	coalesce  bool                     // a patrol turn is in flight: a manual fire coalesces
 	block     map[string]chan struct{} // delivery to these schedules waits on the channel
+	delay     time.Duration            // every delivery takes this long
 	queueFull bool                     // the conversation's input queue is full
 }
 
@@ -47,6 +48,12 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.coalesce && f.Trigger == models.ChatScheduleTriggerManual {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: "in-flight"}, nil
+	}
+	if d.delay > 0 {
+		dl := d.delay
+		d.mu.Unlock()
+		time.Sleep(dl)
+		d.mu.Lock()
 	}
 	if ch := d.block[f.ScheduleID]; ch != nil {
 		d.mu.Unlock()
@@ -549,5 +556,89 @@ func TestChatSchedules_EarlyWakeSurvivesABusyLoop(t *testing.T) {
 	}
 	if d.deliveredTo("early") != 1 {
 		t.Fatal("the early wake was lost behind the late ones; its schedule waits for the next tick")
+	}
+}
+
+// TestChatSchedules_BacklogBeyondOnePassDrainsWithoutWaitingForTick: a pass
+// that runs out of time with schedules still due asks for the next pass at
+// once, so a backlog larger than one pass can fire drains well before the
+// next tick (an hour away) — and no fire it had claimed is stranded.
+func TestChatSchedules_BacklogBeyondOnePassDrainsWithoutWaitingForTick(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.chatPassTimeoutOverride = 300 * time.Millisecond
+	d.delay = 20 * time.Millisecond // a batch of 25 takes ~500ms: past the pass deadline
+	const n = 3*chatScheduleBatch + 5
+	past := time.Now().Add(-time.Minute).Unix()
+	for i := 0; i < n; i++ {
+		addChatSchedule(t, s, fmt.Sprintf("b-%03d", i), "active", past)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		got := len(d.delivered)
+		d.mu.Unlock()
+		if got == n {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	d.mu.Lock()
+	got := len(d.delivered)
+	d.mu.Unlock()
+	if got != n {
+		t.Fatalf("%d of %d due schedules fired; the rest wait for the next tick", got, n)
+	}
+	var leased int
+	if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL`).Scan(&leased); err != nil || leased != 0 {
+		t.Fatalf("%d fire(s) left leased (err %v)", leased, err)
+	}
+}
+
+// TestProcessScheduledTasks_RowCapAsksForAnotherPass: promotion that stops at
+// its per-pass row cap with due tasks left runs again right away instead of
+// leaving them to the next tick.
+func TestProcessScheduledTasks_RowCapAsksForAnotherPass(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.scheduledBatchSize = 2
+	s.maxScheduledRows = 2
+	ids := make([]uuid.UUID, 0, 7)
+	for i := 0; i < 7; i++ {
+		at := time.Now().UTC().Add(-time.Duration(10-i) * time.Minute)
+		task := &models.Task{ID: uuid.New(), Prompt: "due", Status: models.TaskStatusScheduled, ScheduledFor: &at, CreatedAt: time.Now().UTC()}
+		if _, err := s.storage.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, task.ID)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+	s.ProcessScheduledTasks() // one capped pass, as a tick would run it
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pending := 0
+		for _, id := range ids {
+			task, err := s.storage.GetTask(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.Status == models.TaskStatusPending {
+				pending++
+			}
+		}
+		if pending == len(ids) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d due tasks promoted; the rest wait for the next tick", pending, len(ids))
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
