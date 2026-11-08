@@ -1112,7 +1112,7 @@ func (s *Server) runTurnAsync(
 	// so a panic fails only THIS turn. Registered after the cleanup defers, so it
 	// runs FIRST on unwind: emit a terminal error, then turnCancel + finishTurn
 	// seal the buffer and the user sees an error instead of a stuck "Thinking…".
-	defer safe.Recover("httpapi.runTurnAsync", func(any) {
+	defer safe.RecoverContext(turnCtx, "httpapi.runTurnAsync", func(any) {
 		buf.Emit("turn.error", map[string]any{"message": "the turn ended unexpectedly due to an internal error"})
 	})
 

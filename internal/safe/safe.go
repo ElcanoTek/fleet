@@ -239,6 +239,24 @@ func Recover(name string, onPanic func(v any)) {
 	}
 }
 
+// RecoverContext is Recover for a goroutine that serves one turn, run or
+// request: the panic record is emitted with ctx, so the configured handler adds
+// that context's correlation (conv_id/turn_id, task_id/run_id …) to it. Use
+// `defer safe.RecoverContext(ctx, "name", onPanic)`. recover() only stops a
+// panic when called directly by the deferred function, so this repeats
+// Recover's body rather than wrapping it.
+func RecoverContext(ctx context.Context, name string, onPanic func(v any)) {
+	if r := recover(); r != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		EmitPanicWithMetadataContext(ctx, PanicMetadata{Location: name}, r, nil)
+		if onPanic != nil {
+			onPanic(r)
+		}
+	}
+}
+
 // Go runs fn in a new goroutine guarded by Recover. For fire-and-forget
 // goroutines that need no failure bookkeeping beyond the structured event.
 func Go(name string, fn func()) {

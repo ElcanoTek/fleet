@@ -715,10 +715,14 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// observability.CapturePanicClass is a cheap no-op when FLEET_SENTRY_DSN
 			// is unset (the SDK checks internally), so the default config pays
 			// nothing for the call.
-			defer safe.Recover("runner.worker", func(val any) {
+			// The incident line carries task_id/run_id like every other line
+			// of this run (#2052): executeTask attributes its own context the
+			// same way, but this recoverer sits above it.
+			runLogCtx := logging.WithTask(ctx, task.ID.String(), token.String())
+			defer safe.RecoverContext(runLogCtx, "runner.worker", func(val any) {
 				if p.stillOwns(task.ID, token) {
 					if _, err := p.reportStatus(task.ID, token, models.TaskStatusError, "task panicked during execution"); err != nil {
-						logging.From(ctx).Error("runner: failed to mark panicked task errored", "task_id", task.ID, "err", err)
+						logging.From(runLogCtx).Error("runner: failed to mark panicked task errored", "task_id", task.ID, "err", err)
 					}
 				}
 				model := ""
