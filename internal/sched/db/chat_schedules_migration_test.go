@@ -344,6 +344,8 @@ func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
 		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
 			VALUES ('patrol', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 3, 1, 1)`,
 		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
+			VALUES ('edited', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 5, 1, 1)`,
+		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
 			VALUES ('forged', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 0, 1, 1)`,
 	} {
 		if _, err := schedConn.Exec(q); err != nil {
@@ -351,7 +353,7 @@ func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
 		}
 	}
 	fires, err := d.ClaimDueChatSchedules(ctx, now, time.Minute, 25, nil)
-	if err != nil || len(fires) != 3 {
+	if err != nil || len(fires) != 4 {
 		t.Fatalf("claim = %+v, %v", fires, err)
 	}
 	for _, f := range fires {
@@ -368,6 +370,12 @@ func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
 		if _, err := schedConn.Exec(`UPDATE chat_schedules SET fire_next_run_at = $2 WHERE id = $1`, f.ScheduleID, nextSlot); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// After delivering, 'edited' has its cadence edited (def_version moves,
+	// and the edit recomputes next_run_at for the new cron).
+	editedSlot := now.Add(5 * time.Hour).Unix()
+	if _, err := schedConn.Exec(`UPDATE chat_schedules SET def_version = def_version + 1, cron_expr = '0 */5 * * *', next_run_at = $1 WHERE id = 'edited'`, editedSlot); err != nil {
+		t.Fatal(err)
 	}
 	// ...the process dies here: nothing settles. The operator rolls back.
 	down, err := fs.ReadFile(migrationsFS, "migrations/077_move_chat_schedules.down.sql")
@@ -386,6 +394,9 @@ func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
 	}
 	if r := got["patrol"]; r.RunCount != 4 || r.Status != "active" || r.NextRunAt != nextSlot || !r.LastRunAt.Valid {
 		t.Errorf("patrol after down = %+v; want run 4 counted and moved to %d", r, nextSlot)
+	}
+	if r := got["edited"]; r.RunCount != 6 || r.CronExpr != "0 */5 * * *" || r.NextRunAt != editedSlot {
+		t.Errorf("patrol edited after delivery, after down = %+v; want run 6 counted and the edited slot %d kept", r, editedSlot)
 	}
 	if r := got["forged"]; r.RunCount != 0 || r.NextRunAt != now.Unix()-5 {
 		t.Errorf("schedule with only a forged user input = %+v; want nothing counted", r)

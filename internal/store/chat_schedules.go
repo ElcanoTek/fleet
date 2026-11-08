@@ -28,17 +28,35 @@ const chatSchedulesTable = config.SchedSchema + ".chat_schedules"
 // cascade, their run history). The scheduler's table may not exist yet when a
 // chat-only CLI verb (fleet chat user del, fleet admin rm) runs before the
 // first boot has migrated the sched schema; then there is nothing to erase.
+//
+// The legacy table matters too: on a database from the previous release that
+// a chat-only verb opened (the chat store migrates, the scheduler does not),
+// a user's schedules are still in chat.chat_schedules — some of them in other
+// people's conversations, which the conversation cascade does not reach — and
+// sched migration 077 would later move them under the erased identity. So
+// whichever of the two tables exists is cleaned; both, when both do.
 func deleteUserChatSchedulesTx(ctx context.Context, tx *sql.Tx, email string) error {
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, chatSchedulesTable).Scan(&exists); err != nil {
-		return err
+	for _, t := range []struct{ table, del string }{
+		{chatSchedulesTable, `DELETE FROM ` + chatSchedulesTable + ` WHERE user_email = $1`},
+		{legacyChatSchedulesTable, `DELETE FROM ` + legacyChatSchedulesTable + ` WHERE user_email = $1`},
+	} {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, t.table).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, t.del, email); err != nil {
+			return err
+		}
 	}
-	if !exists {
-		return nil
-	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM `+chatSchedulesTable+` WHERE user_email = $1`, email)
-	return err
+	return nil
 }
+
+// legacyChatSchedulesTable is where chat schedules lived before sched
+// migration 077 moved them (chat migrations 086 + 096).
+const legacyChatSchedulesTable = config.ChatSchema + ".chat_schedules"
 
 // ChatSchedule status values (the sched.chat_schedules CHECK constraint).
 const (

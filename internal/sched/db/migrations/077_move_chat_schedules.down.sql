@@ -63,8 +63,13 @@ BEGIN
                        WHEN s.status IN ('active', 'paused')
                         AND (s.cron_expr = '' OR (s.max_runs > 0 AND s.fire_run_number >= s.max_runs))
                        THEN 'completed' ELSE s.status END,
+                   -- The slot recorded with the delivery, unless the cadence
+                   -- was edited since (def_version moved): then the edit's
+                   -- own recomputed next_run_at stands.
                    next_run_at = CASE
-                       WHEN s.cron_expr <> '' AND s.fire_next_run_at IS NOT NULL THEN s.fire_next_run_at
+                       WHEN s.cron_expr <> '' AND s.fire_next_run_at IS NOT NULL
+                        AND s.fire_def_version IS NOT DISTINCT FROM s.def_version
+                       THEN s.fire_next_run_at
                        ELSE s.next_run_at END
               FROM chat.chat_input_queue q
              WHERE s.fire_id IS NOT NULL

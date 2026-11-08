@@ -743,8 +743,6 @@ func run() error {
 	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
-	// The chat server delivers each chat schedule fire the scheduler claims.
-	sch.SetChatScheduleDeliverer(chatSrv)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
 	// before the listeners come up, so the very first turn already reads a
@@ -879,8 +877,7 @@ func run() error {
 	// Paused-task expiry (#510): fail tasks stuck awaiting input past the
 	// window. Off (wait forever) when TaskPausedExpiryMinutes<=0.
 	sch.SetPausedExpiry(cfg.TaskPausedExpiryMinutes)
-	sch.Start()
-	defer sch.Stop()
+	// Started below, after the last boot step that can fail.
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
 	taskRunner := scheduledrun.New(scheduledrun.Options{
@@ -1068,6 +1065,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Every boot step that can fail has succeeded: only now does the
+	// scheduler start firing — promoting due tasks and delivering chat
+	// patrols and timers (the chat server is their deliverer). Started any
+	// earlier, a failed boot could leave a chat turn running, with its side
+	// effects, while fleet reports the failure and closes the stores under
+	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this.
+	sch.SetChatScheduleDeliverer(chatSrv)
+	sch.Start()
+	defer sch.Stop()
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
