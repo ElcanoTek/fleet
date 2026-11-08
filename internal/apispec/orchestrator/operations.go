@@ -15,8 +15,8 @@ var (
 
 // PathParams types the path parameters that are not plain strings.
 var PathParams = map[string]*apispec.Schema{
-	"version":   apispec.Typed("integer"),
-	"entry_id":  apispec.Typed("integer"),
+	"version":  apispec.Typed("integer"),
+	"entry_id": apispec.Typed("integer"),
 	"child_session_id": {
 		Type:    "string",
 		Pattern: "^subagent-[0-9a-f-]{36}$",

@@ -132,19 +132,6 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 	}
 }
 
-// gateOneCapturingVerifier approves every verification but captures each
-// prompt it was handed, so a test can pin exactly what Gate 1 saw.
-type gateOneCapturingVerifier struct {
-	itMockModel
-	prompts []string
-}
-
-func (m *gateOneCapturingVerifier) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
-	raw, _ := json.Marshal(call.Prompt)
-	m.prompts = append(m.prompts, string(raw))
-	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"missing_actions":[]}`}}, FinishReason: fantasy.FinishReasonStop}, nil
-}
-
 // TestComposeRunAnswer pins how a repair round's text combines with the
 // answer a gate judged: a true supplement is appended, a restatement that
 // contains the judged text (or is contained in it, or equals it with

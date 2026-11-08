@@ -124,7 +124,6 @@ export function LogViewer({ task, onClose, canStop, readOnly, onResubmitted, onE
       key={task.id}
       task={task}
       onClose={onClose}
-      canStop={!!canStop}
       readOnly={!!readOnly}
       onResubmitted={onResubmitted}
       onEdit={onEdit}
@@ -930,7 +929,6 @@ function LiveTaskView({
 function LogViewerBody({
   task,
   onClose,
-  canStop,
   readOnly,
   onResubmitted,
   onEdit,
@@ -939,7 +937,6 @@ function LogViewerBody({
 }: {
   task: Task;
   onClose: () => void;
-  canStop: boolean;
   readOnly: boolean;
   onResubmitted?: () => void;
   onEdit?: (task: Task) => void;
