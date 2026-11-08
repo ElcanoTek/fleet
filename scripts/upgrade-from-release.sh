@@ -102,7 +102,6 @@ fleet_env() {
     "FLEET_ORCHESTRATOR_ADDR=127.0.0.1:$ORCH_PORT" \
     "FLEET_WEB_ADDR=off" \
     "APP_SESSION_SECRET=upgrade-rehearsal-session-secret-0123456789" \
-    "FLEET_SERVER_TOKEN=upgrade-rehearsal-token" \
     "ADMIN_API_KEY=$ADMIN_API_KEY" \
     "AUTH_SIGNING_PUBKEY=P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=" \
     "OPENROUTER_API_KEY=sk-or-fake-upgrade-rehearsal" \

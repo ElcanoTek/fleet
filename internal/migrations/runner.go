@@ -99,6 +99,9 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 		if err := dbschema.Ensure(ctx, conn); err != nil {
 			return err
 		}
+		if err := refuseUnadoptedPreM6(ctx, conn); err != nil {
+			return err
+		}
 		if _, err := conn.ExecContext(ctx, createTableSQL); err != nil {
 			return fmt.Errorf("create %s: %w", Table, err)
 		}
@@ -206,6 +209,25 @@ func ledgerExists(ctx context.Context, q querier) (bool, error) {
 	return ok, nil
 }
 
+// refuseUnadoptedPreM6 refuses a populated pre-M6 database that has no
+// core.schema_versions yet, so a build after M6's adoption code was removed
+// never creates an empty ledger and replays migration 1 over existing tables.
+func refuseUnadoptedPreM6(ctx context.Context, q querier) error {
+	var unadopted bool
+	if err := q.QueryRowContext(ctx, `SELECT to_regclass('core.schema_versions') IS NULL AND (
+		to_regclass('chat.schema_migrations') IS NOT NULL OR
+		to_regclass('sched.schema_migrations') IS NOT NULL OR
+		to_regclass('chat.conversations') IS NOT NULL OR
+		to_regclass('sched.tasks') IS NOT NULL
+	)`).Scan(&unadopted); err != nil {
+		return fmt.Errorf("probe pre-M6 schema state: %w", err)
+	}
+	if unadopted {
+		return fmt.Errorf("%s is absent on a populated pre-M6 database: upgrade through the M6 release (v2026.11.08.12) first so it adopts the legacy ledgers into %s", Table, Table)
+	}
+	return nil
+}
+
 // readLedger reads every row of core.schema_versions.
 func readLedger(ctx context.Context, q querier) (map[int]ledgerRow, error) {
 	rows, err := q.QueryContext(ctx, `SELECT version, name, checksum, applied_at, dirty FROM core.schema_versions`)
@@ -300,6 +322,16 @@ func (r *runner) apply(ctx context.Context, conn *sql.Conn, m Migration) (err er
 	if strings.TrimSpace(m.Up) != "" {
 		if _, err = tx.ExecContext(ctx, m.Up); err != nil {
 			return migrationError(m, m.Up, err)
+		}
+	}
+	if m.Version == LegacyLatest {
+		// M4 renamed sched.users (created by legacy sched/001 and altered by
+		// sched/072) to sched.users_premerge_m4 on every upgraded database; do
+		// the same at the end of the legacy sequence so a fresh install and an
+		// upgraded database end with identical schemas without editing frozen
+		// legacy migration files.
+		if _, err = tx.ExecContext(ctx, `DO $$ BEGIN IF to_regclass('sched.users') IS NOT NULL AND to_regclass('sched.users_premerge_m4') IS NULL THEN ALTER TABLE sched.users RENAME TO users_premerge_m4; END IF; END $$`); err != nil {
+			return fmt.Errorf("migration %d (%s): rename legacy sched.users: %w", m.Version, m.Name, err)
 		}
 	}
 	if _, err = tx.ExecContext(ctx,

@@ -95,6 +95,8 @@ func (r *runner) status(ctx context.Context, db querier) (Report, error) {
 		}
 		sort.Slice(rep.Unknown, byVersion(rep.Unknown))
 		sort.Slice(rep.Mismatched, byVersion(rep.Mismatched))
+	} else if err := refuseUnadoptedPreM6(ctx, db); err != nil {
+		rep.Problem = err.Error()
 	}
 	for _, m := range r.set.list {
 		if _, ok := applied[m.Version]; !ok {

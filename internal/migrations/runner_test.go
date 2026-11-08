@@ -557,3 +557,18 @@ func TestForceDropsUnshippedRowsAndWaitsForLocks(t *testing.T) {
 		t.Fatalf("after force 200 the ledger ends at %d with %d rows (the unshipped row must go)", got[len(got)-1], len(got))
 	}
 }
+
+func TestUpRefusesUnadoptedPreM6(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	r := testEmbeddedRunner(t)
+	mustExec(t, db, `CREATE SCHEMA chat; CREATE TABLE chat.schema_migrations (version int PRIMARY KEY)`)
+	if err := r.up(ctx, db); err == nil || !strings.Contains(err.Error(), "populated pre-M6 database") {
+		t.Fatalf("up on unadopted pre-M6 db = %v, want refusal", err)
+	}
+	rep, err := r.status(ctx, db)
+	if err != nil || !rep.Refused() || !strings.Contains(rep.Problem, "populated pre-M6 database") {
+		t.Fatalf("status on unadopted pre-M6 db = %+v, %v", rep, err)
+	}
+}

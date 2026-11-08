@@ -210,10 +210,11 @@ const singleStoreRestoreRefusal = "single-store restores are not supported any m
 // object created by a migration newer than the dump survives next to the
 // older restored ledger; any other schema of the database is left alone.
 func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
-	got, err := dumpSchemas(ctx, inPath)
+	toc, err := dumpTOC(ctx, inPath)
 	if err != nil {
 		return err
 	}
+	got := parseTOCSchemas(toc)
 	var missing []string
 	for _, s := range allSchemas {
 		if !slices.Contains(got, s) {
@@ -227,6 +228,10 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 		return fmt.Errorf("%s is a dump of the removed two-database layout (its tables are in schema public); fleet restores only whole-database dumps taken since M4 (fleet-all-<stamp>.dump) — see docs/BACKUP_RESTORE.md for importing an old one by hand", inPath)
 	case len(missing) > 0:
 		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): fleet restores only whole-database dumps (fleet backup --db=all writes fleet-all-<stamp>.dump)", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
+	case !tocHasTable(toc, config.IdentitySchema, "users"):
+		return fmt.Errorf("%s has no %s.users table (a pre-M4 dump taken before the one identity table); refusing to restore it", inPath, config.IdentitySchema)
+	case !tocHasTable(toc, config.IdentitySchema, "schema_versions"):
+		return fmt.Errorf("%s has no %s.schema_versions table (a pre-M6 dump taken before the one migration ledger); refusing to restore it", inPath, config.IdentitySchema)
 	}
 	return pgRestoreAll(ctx, dsn, inPath)
 }
@@ -344,17 +349,46 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 	return nil
 }
 
+// dumpTOC reads the table of contents of a custom-format dump via
+// pg_restore --list (read-only).
+func dumpTOC(ctx context.Context, path string) (string, error) {
+	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv. --list is read-only.
+	out, err := exec.CommandContext(ctx, "pg_restore", "--list", path).Output()
+	if err != nil {
+		return "", fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
+	}
+	return string(out), nil
+}
+
 // dumpSchemas lists the schemas a custom-format dump holds — the names of its
 // SCHEMA entries and the schemas of its TABLE entries — from pg_restore
 // --list (which reads only the archive's table of contents), sorted and
 // distinct.
 func dumpSchemas(ctx context.Context, path string) ([]string, error) {
-	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv. --list is read-only.
-	out, err := exec.CommandContext(ctx, "pg_restore", "--list", path).Output()
+	toc, err := dumpTOC(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
+		return nil, err
 	}
-	return parseTOCSchemas(string(out)), nil
+	return parseTOCSchemas(toc), nil
+}
+
+// tocHasTable reports whether a pg_restore --list output contains a TABLE
+// entry for schema.table.
+func tocHasTable(toc, schema, table string) bool {
+	for _, ln := range strings.Split(toc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), ";") {
+			continue
+		}
+		_, rest, ok := strings.Cut(ln, "; ")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(rest)
+		if len(f) >= 5 && f[2] == "TABLE" && f[3] == schema && f[4] == table {
+			return true
+		}
+	}
+	return false
 }
 
 // parseTOCSchemas extracts the schemas of a pg_restore --list output: entry

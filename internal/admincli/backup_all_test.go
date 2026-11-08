@@ -49,6 +49,7 @@ func TestBackupAllIsOneSnapshot(t *testing.T) {
 	}
 	exec(srcDB, `CREATE SCHEMA chat; CREATE SCHEMA core; CREATE SCHEMA sched; CREATE SCHEMA other;
 		CREATE TABLE core.users (email text PRIMARY KEY); INSERT INTO core.users VALUES ('ops@x.com');
+		CREATE TABLE core.schema_versions (version bigint PRIMARY KEY); INSERT INTO core.schema_versions VALUES (177);
 		CREATE TABLE chat.sentinel (note text); INSERT INTO chat.sentinel VALUES ('chat-ok');
 		CREATE TABLE sched.tasks (created_by text); INSERT INTO sched.tasks VALUES ('ops@x.com');
 		CREATE TABLE other.keep (note text)`)
