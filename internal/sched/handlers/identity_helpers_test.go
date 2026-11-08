@@ -54,7 +54,12 @@ func seedOpsUser(t testing.TB, st *storage.Storage, id uuid.UUID, username, lega
 		t.Fatalf("seed account %s: %v", username, err)
 	}
 	if token != "" {
-		seededSessions.Store(token, u.Email)
+		// seededSessions is process-wide and tests run in parallel: one token
+		// must always name the same email, or a parallel test silently
+		// signs in as another account.
+		if prev, loaded := seededSessions.LoadOrStore(token, u.Email); loaded && prev.(string) != u.Email {
+			t.Fatalf("session token %q already names %q, not %q: give this test its own token", token, prev, u.Email)
+		}
 	}
 	return &models.User{ID: u.ID, Username: u.Email, Role: u.LegacyOpsRole()}
 }
