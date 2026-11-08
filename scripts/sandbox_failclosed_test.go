@@ -237,7 +237,7 @@ warn() { printf 'WARN %s\n' "$*"; }
 ok() { printf 'OK %s\n' "$*"; }
 STATE_DIR="$ST"; STAMP_FILE="$ST/sandbox-containerfile.sha256"; SANDBOX_BASE_FILE="$ST/sandbox-base.ref"
 REF_FILE="$ST/sandbox-image.ref"; SANDBOX_RECLAIM_FILE="$LIST"
-cf_now=ctx3-x; ref_now="$TAG"; sandbox_image_ref=""
+cf_now=ctx4-x; ref_now="$TAG"; ref_prev="$TAG"; sandbox_image_ref=""
 `
 	env := []string{"ST=" + state, "LIST=" + s.list, "LOG=" + s.log, "STORE=" + s.store, "INUSE=" + s.inUse, "TAG=" + tag}
 
@@ -280,7 +280,7 @@ cf_now=ctx3-x; ref_now="$TAG"; sandbox_image_ref=""
 	// digest file only on the published path.
 	for _, want := range []string{
 		`if [[ "$sandbox_published" == "1" && -z "$sandbox_image_ref" && -f "$SANDBOX_DIGEST_FILE" ]]; then`,
-		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$sandbox_current_tag" "$sandbox_base" "$sandbox_image_ref"`,
 	} {
 		if !strings.Contains(update, want) {
 			t.Errorf("update.sh must contain %q", want)

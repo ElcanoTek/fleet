@@ -299,15 +299,20 @@ fleet__context_records() {
   return 0
 }
 
-# fleet_sandbox_reclaim_release_images LIST_FILE NEW_REF PROTECTED_REF… —
-# remove superseded digest-pulled release sandbox images. `podman pull
-# repo@sha256:…` keeps that digest reference among the image's names, so an
-# old release image never goes dangling and `image prune` never reclaims it
-# (~1.5 GB per release). LIST_FILE holds the refs still waiting, one per line;
-# NEW_REF (may be empty) is the one this update just superseded. Each is tried
-# with a plain `sandbox_podman rmi` (the caller's: the service user's store).
-# A ref that is removed, already gone, or not a digest reference leaves the
-# list; one whose removal is refused (a container still uses it — work that
+# fleet_sandbox_reclaim_release_images LIST_FILE NEW_REFS PROTECTED_REF… —
+# remove superseded sandbox images. `podman pull repo@sha256:…` keeps that
+# digest reference among the image's names, so an old release image never
+# goes dangling and `image prune` never reclaims it (~1.5 GB per release); an
+# image left under a sandbox.tag the bundle renamed away from is never
+# dangling either. LIST_FILE holds the entries still waiting, one per line;
+# NEW_REFS (space-separated, may be empty) are the ones this update just
+# superseded. An entry is a digest reference (`…@sha256:…`), or `tag:NAME`
+# for a superseded tag — the only way a non-digest name gets here, so a stray
+# line naming some other image is never acted on. Each is tried with a plain
+# `sandbox_podman rmi` (the caller's: the service user's store; on an image
+# with other names left, that just drops this name). An entry that is
+# removed, already gone, or malformed leaves the list; one whose removal is
+# refused (a container still uses it — work that
 # started after the idle gate, or a --force update) stays for the next try, so
 # overwriting the digest file never strands it.
 # It never removes what is in use:
@@ -321,7 +326,7 @@ fleet__context_records() {
 #     means gone).
 # Best-effort: always returns 0.
 fleet_sandbox_reclaim_release_images() {
-  local list="$1" new="$2" ref id rc seen=" " ids=" "
+  local list="$1" new="$2" entry ref id rc seen=" " ids=" "
   shift 2
   local -a protect=("$@") pending=() keep=()
   if [[ -f "$list" ]]; then
@@ -330,38 +335,46 @@ fleet_sandbox_reclaim_release_images() {
       [[ -n "$ref" ]] && pending+=("$ref")
     done < "$list"
   fi
-  [[ -n "$new" ]] && pending+=("$new")
+  local -a new_refs=()
+  read -r -a new_refs <<<"$new" || true
+  pending+=("${new_refs[@]}")
   (( ${#pending[@]} > 0 )) || return 0
   for ref in "${protect[@]}"; do
     [[ -n "$ref" ]] || continue
     id="$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" || continue
     [[ -n "$id" ]] && ids+="$id "
   done
-  for ref in "${pending[@]}"; do
-    [[ "$seen" == *" $ref "* ]] && continue
-    seen+="$ref "
-    [[ "$ref" == *@sha256:* ]] || continue
+  for entry in "${pending[@]}"; do
+    [[ "$seen" == *" $entry "* ]] && continue
+    seen+="$entry "
+    if [[ "$entry" == tag:* ]]; then
+      ref="${entry#tag:}"
+      [[ -n "$ref" && "$ref" != *@* ]] || continue
+    else
+      ref="$entry"
+      [[ "$ref" == *@sha256:* ]] || continue
+    fi
     if [[ " ${protect[*]} " == *" $ref "* ]]; then
-      keep+=("$ref")    # current now: no rmi, reclaimed once it no longer is
+      keep+=("$entry")    # current now: no rmi, reclaimed once it no longer is
       continue
     fi
     rc=0
     sandbox_podman image exists "$ref" >/dev/null 2>&1 || rc=$?
     (( rc == 1 )) && continue
     if (( rc != 0 )); then
-      keep+=("$ref")
+      keep+=("$entry")
       continue
     fi
     id="$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" || id=""
     if [[ -z "$id" ]]; then
-      keep+=("$ref")    # present but unreadable: retry later, remove nothing
+      keep+=("$entry")    # present but unreadable: retry later, remove nothing
       continue
     fi
     if [[ "$ids" == *" $id "* ]]; then
-      keep+=("$ref")    # the current image under this name: same as above
+      keep+=("$entry")    # the current image under this name: same as above
       continue
     fi
-    sandbox_podman rmi "$ref" >/dev/null 2>&1 || keep+=("$ref")
+    sandbox_podman rmi "$ref" >/dev/null 2>&1 || keep+=("$entry")
   done
   if (( ${#keep[@]} == 0 )); then
     rm -f "$list" 2>/dev/null || true

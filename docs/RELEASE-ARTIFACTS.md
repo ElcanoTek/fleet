@@ -352,8 +352,10 @@ release image.
 After pulling a new release image by digest, `update` removes the previous
 one (it keeps its `@sha256` name, so `podman image prune` never would),
 without `--force`. The same goes for a custom build's previous
-`FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one. When a container still uses it, the removal is refused and
-the ref is kept in `sandbox-image.reclaim` under the state directory; `update`
+`FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one, and for
+the image left under the old `sandbox.tag` when the bundle renames it. When a
+container still uses it, the removal is refused and the ref is kept in
+`sandbox-image.reclaim` under the state directory; `update`
 retries every listed ref after the service restart and on each later run, and
 drops it once it is removed or gone. The current release ref, the bundle's
 tag, a custom build's base, the manifest's prebuilt `sandbox.image` and their

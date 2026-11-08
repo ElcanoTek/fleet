@@ -1198,9 +1198,12 @@ elif [[ "$sandbox_published" == "1" ]]; then
       # per release). Remove it by that name, with any earlier one whose
       # removal was refused — never the image just tagged, never forced, so an
       # image a container still uses stays listed in SANDBOX_RECLAIM_FILE and
-      # is retried after the restart below and on the next update.
+      # is retried after the restart below and on the next update. A renamed
+      # sandbox.tag leaves the previous image under the OLD tag too (so
+      # dropping its digest name only untags it): queue that tag as well.
       sandbox_superseded=""
       [[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"
+      [[ -n "$ref_prev" && "$ref_prev" != "$ref_now" ]] && sandbox_superseded+=" tag:${ref_prev}"
       fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"
       sandbox_podman image prune -f >/dev/null 2>&1 || true
     elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
@@ -1340,9 +1343,13 @@ else
       # so the old bundle image built on it (dangling now) is gone first; the
       # new base, the tag and a prebuilt sandbox.image (and their image IDs)
       # are protected, nothing is forced, and a refusal stays listed for the
-      # retry after the restart and on the next update.
+      # retry after the restart and on the next update. A renamed sandbox.tag
+      # leaves the previous bundle image under the old tag (not dangling, so
+      # the prune kept it): queue that tag too — only with the new tag
+      # resolved, so it can never be the one this build just wrote.
       sandbox_superseded=""
       [[ -n "$base_prev" && "$base_prev" != "$sandbox_base" ]] && sandbox_superseded="$base_prev"
+      [[ -n "$ref_now" && -n "$ref_prev" && "$ref_prev" != "$ref_now" ]] && sandbox_superseded+=" tag:${ref_prev}"
       fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$sandbox_base" "$ref_now" "$sandbox_image_ref"
     else
       # A failed build is survivable ONLY while the resolved ref still exists
@@ -1851,7 +1858,13 @@ else
       if [[ "$sandbox_published" == "1" && -z "$sandbox_image_ref" && -f "$SANDBOX_DIGEST_FILE" ]]; then
         sandbox_current="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
       fi
-      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"
+      # The tag is what fleet runs only when the sandbox resolves through it
+      # (the release or custom-build path). With a prebuilt sandbox.image the
+      # tag is a leftover too, and protecting it would pin a superseded release
+      # that shares its image ID on the list forever.
+      sandbox_current_tag=""
+      [[ -z "$sandbox_image_ref" ]] && sandbox_current_tag="$ref_now"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$sandbox_current_tag" "$sandbox_base" "$sandbox_image_ref"
     fi
   else
     if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then

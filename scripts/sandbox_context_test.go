@@ -546,16 +546,16 @@ func TestReclaimReleaseImages(t *testing.T) {
 	// the digest moved), and again after the restart, never forced.
 	update := readFile(t, repoRoot(t), "scripts/update.sh")
 	for _, want := range []string{
-		`[[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"
-      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"
+		`[[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"
       sandbox_podman image prune -f >/dev/null 2>&1 || true`,
-		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$sandbox_current_tag" "$sandbox_base" "$sandbox_image_ref"`,
 	} {
 		if !strings.Contains(update, want) {
 			t.Errorf("update.sh must contain:\n%s", want)
 		}
 	}
-	if i, j := strings.Index(update, `"$sandbox_current" "$ref_now" "$sandbox_base"`), strings.Index(update, "INSTALL_STATE=restarted"); i < j {
+	if i, j := strings.Index(update, `"$sandbox_current" "$sandbox_current_tag" "$sandbox_base"`), strings.Index(update, "INSTALL_STATE=restarted"); i < j {
 		t.Error("the post-restart reclaim must run after the restart succeeded")
 	}
 	if strings.Contains(update, "rmi -f") || strings.Contains(update, "rmi --force") {
