@@ -188,10 +188,12 @@ Before applying a migration you're unsure about, take a dump with the existing
 CLI:
 
 ```sh
-fleet backup --db=all --out ./backups   # pg_dump -Fc, one file per DB
+fleet backup --db=all --out ./backups   # ONE pg_dump -Fc of chat, core and sched: fleet-all-<stamp>.dump
 ```
 
-and restore with `fleet restore --db=all|chat|sched <dump-file>` if needed.
+and restore it with `fleet restore --db=all <fleet-all-dump>` if needed (one
+transaction; [BACKUP_RESTORE.md](BACKUP_RESTORE.md) covers the per-store
+restores and which of them are self-contained).
 
 ## Not yet implemented (honest scope)
 
