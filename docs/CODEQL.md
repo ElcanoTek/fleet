@@ -711,3 +711,32 @@ So expect findings to surface on the PR that introduces them, and the Security
 tab's `main` list to refresh with every merge into `main`. (When this first
 shipped, the list repopulated only at the next dev→main promotion; `dev` has
 since been retired, ADR-0062.)
+
+## The CodeQL bundle is pinned, cached and verified
+
+Left to itself, `init` downloads the CodeQL bundle
+(`codeql-bundle-<lang>-linux64.tar.zst`) from `github/codeql-action`'s release
+assets on every run. When that CDN returned HTTP 504 (run 42470808260), every
+Analyze leg failed before it analyzed anything, `CodeQL gate` refused the scan
+that never ran, and `CI gate` blocked every PR.
+
+So `codeql.yml` no longer lets `init` fetch it. `.github/codeql-bundle.lock`
+pins the bundle version and the SHA-256 of each per-language bundle; each leg
+restores its bundle from `actions/cache` (keyed by language, version and
+SHA-256), downloads and verifies it with retries only on a miss
+(`scripts/install-pinned-tool.sh`, the installer ci.yml's tools use), and hands
+the local tarball to `init` through `tools:`, which the pinned action documents
+as accepting "a local path to a CodeQL Bundle tarball". The local path was
+chosen over pre-seeding `$RUNNER_TOOL_CACHE/CodeQL/<version>/x64`: it is the
+documented input, and the action keeps per-language bundles out of the
+toolcache anyway. The bundle is the same per-language one `init` would have
+picked, at the version the pinned action's `src/defaults.json` names, so the
+languages, queries and gate are unchanged.
+
+The lock records the `github/codeql-action` commit it was taken from, and
+`scripts/check_codeql_bundle_test.go` fails when that is not the commit
+`codeql.yml` pins. Dependabot moves the action; `scripts/update-pins.sh` (pins.tsv
+row `CODEQL_BUNDLE`, monthly via `pins-update.yml`) moves the lock after it,
+reading the new commit's `defaults.json` and requiring each bundle to match
+GitHub's published asset digest. On a Dependabot PR that bumps the action, run
+`PINS_ONLY=CODEQL_BUNDLE scripts/update-pins.sh` and commit the lock.

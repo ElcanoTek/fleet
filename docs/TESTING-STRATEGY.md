@@ -130,9 +130,11 @@ replays give consumers the conversation id through the
 needs a Postgres-backed `httpapi` harness. Turns
 with approvals, sub-agents or reasoning need fake-LLM scripting that does not
 exist yet. Until then those frames are still hand-written in the specs that
-need them. The orchestrator HTTP API has its own contract: `cmd/fleet`'s
-OpenAPI tests check route parity and schema drift against
-`docs/openapi.yaml`.
+need them. The orchestrator HTTP API has its own contract:
+`docs/openapi.yaml` is generated from the router and its route catalog
+(`TestOpenAPIGenerated`), and `cmd/fleet`'s other OpenAPI tests check route
+parity, schema drift and permission enforcement against it
+([`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md)).
 
 ## Rules for a test that can fail
 

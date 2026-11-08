@@ -81,6 +81,10 @@ that Tier A would mean re-implementing by hand.
 - **Runtime dependencies.** `dependencies` in `web/package.json` ship in the
   browser bundle; everything else is a devDependency (Vite, TypeScript,
   Vitest, Playwright, axe, type packages) and never reaches production.
+  `web/tools/openapi-typescript` is a build-time npm workspace of `web/` (same
+  lockfile, devDependencies only, declared in `stack.conf`): the
+  `openapi-typescript` generator needs the TypeScript 5 compiler API that
+  TypeScript 7 no longer ships ([ADR-0109](docs/adr/0109-generated-http-contracts.md)).
 
   | Runtime dependency | Why it is needed |
   |---|---|
@@ -153,6 +157,7 @@ make test-cover   # the same, with -coverprofile/-covermode=atomic (writes cover
 make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
                   #   + actionlint & shellcheck (workflows + shell) + stack-check — must pass clean
 make stack-check  # the Elcano frontend standard: AGENTS block, flag.lock, no CDNs, Tier B rules
+make api-contracts # regenerate docs/openapi.yaml (router + internal/apispec) and web/src/api/generated
 make govulncheck  # call-graph-aware CVE scan of the dependency tree
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
@@ -375,6 +380,12 @@ same PR.
   against each other, and that pattern is the reason to add a row rather than
   trust a reviewer to notice. [`docs/USER-GUIDES.md`](docs/USER-GUIDES.md) has
   the full contract.
+- **Orchestrator routes carry a contract.** `docs/openapi.yaml` and
+  `web/src/api/generated/` are generated, never edited: a route added to,
+  renamed in or removed from `buildOrchestratorMux` needs its entry in
+  `internal/apispec/orchestrator/operations.go`, then `make api-contracts`
+  (`TestOpenAPIGenerated` and the CI `contracts` job fail otherwise). See
+  [`docs/HTTP-CONTRACTS.md`](docs/HTTP-CONTRACTS.md).
 - **Ship features with honest scope.** Every feature lands with a design note
   recording what shipped, what deviated from the issue, and what was deliberately
   deferred — in a dedicated `docs/<FEATURE>.md` (plus an ADR when an invariant is

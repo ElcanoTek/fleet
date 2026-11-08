@@ -1271,6 +1271,61 @@ jobs:
           ./fleet version --web
           test "$(./fleet version --web)" = "web bundle: $(cat internal/webui/bundle/dist/build-id.txt)"
 
+  contracts:
+    # The generated HTTP contracts (ADR-0109, docs/HTTP-CONTRACTS.md).
+    # Regenerates docs/openapi.yaml from the REAL orchestrator router plus its
+    # route catalog (internal/apispec/orchestrator), and web/src/api/generated/
+    # from that spec with the pinned openapi-typescript devDependency, then
+    # fails on any difference from the commit. Generation itself fails when
+    # the router registers a route the catalog does not describe, or the
+    # catalog describes a route the router does not register, so this job is
+    # also the route <-> spec gate. It fetches nothing the go and web jobs do
+    # not already fetch: Go modules through the module proxy and the npm
+    # registry behind setup-node's npm cache.
+    name: HTTP contracts (OpenAPI + web types)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    # docs/openapi.yaml is not docs-only (the classifier's allow-list is
+    # prose), so a hand edit to the generated spec always reaches this job.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
+
+      - name: Regenerate the spec and the web types
+        run: make api-contracts
+
+      - name: Fail on drift
+        run: |
+          set -euo pipefail
+          paths=(docs/openapi.yaml web/src/api/generated)
+          if ! git diff --exit-code -- "${paths[@]}" || [ -n "$(git status --porcelain --untracked-files=all -- "${paths[@]}")" ]; then
+            git status --short -- "${paths[@]}"
+            echo "::error::The committed HTTP contracts differ from what the router and internal/apispec generate. Run make api-contracts and commit the result (docs/HTTP-CONTRACTS.md)."
+            exit 1
+          fi
+          echo "docs/openapi.yaml and web/src/api/generated/ match the router."
+
   playwright:
     name: Web e2e (Playwright, mocked)
     runs-on: ubuntu-latest
@@ -1849,7 +1904,7 @@ jobs:
     # (cancelled upstream jobs, none failed) concludes neutral (#1302).
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, playwright, e2e-live, upgrade-from-release, grype-scan]
+    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, contracts, playwright, e2e-live, upgrade-from-release, grype-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
