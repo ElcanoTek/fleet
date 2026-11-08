@@ -6,6 +6,7 @@ package scripts
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -347,16 +348,17 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 }
 
 // TestGolangciLintPinAgreesWithDocs: the golangci-lint binary version is
-// declared in ci.yml and then RESTATED in prose in two docs that tell a
-// contributor which
-// version to install. Those copies are invisible to every other check, and they
-// drift exactly the way you would expect: the v2.12.2 -> v2.13.1 bump that Go
-// 1.27 forced updated ONBOARDING.md and missed docs/TESTING.md, which went on
-// telling contributors to install the version that cannot lint the tree.
+// declared once, as GOLANGCI_LINT_VERSION in ci.yml, and then RESTATED in prose
+// that tells a contributor which version to install. Those copies drift exactly
+// the way you would expect: the v2.12.2 -> v2.13.1 bump that Go 1.27 forced
+// updated ONBOARDING.md and missed docs/TESTING.md, which went on telling
+// contributors to install the version that cannot lint the tree.
 //
-// Asserting them is the same rule this file already applies to the node major
-// and the Go minor: one declaration point, and anything that must agree with it
-// is a test failure rather than something to remember.
+// Every copy is listed in scripts/lib/pin-docs.tsv, which scripts/update-pins.sh
+// rewrites along with the pin, so the monthly pins PR lands green with no hand
+// edits. This test holds both ends: every listed copy matches the pin, and no
+// tracked file states a golangci-lint version without being listed (an
+// unlisted copy would rot, or fail that PR).
 func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
 	root := repoRoot(t)
 
@@ -366,20 +368,72 @@ func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
 		t.Fatal("ci.yml: could not find the GOLANGCI_LINT_VERSION pin")
 	}
 	want := "v" + pin[1]
+	versionRE := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`)
 
-	// Each doc names the version in prose. Match any golangci-lint-adjacent
-	// vN.N.N so a stale copy is caught rather than skipped for not matching.
-	for _, rel := range []string{"ONBOARDING.md", "docs/TESTING.md"} {
-		body := readFile(t, root, rel)
-		found := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`).FindAllStringSubmatch(body, -1)
+	listed := map[string]bool{}
+	for _, row := range loadPinDocs(t) {
+		if row.name != "GOLANGCI_LINT" {
+			continue
+		}
+		if row.marker != "golangci-lint" || row.prefix != "v" {
+			t.Errorf("pin-docs.tsv: %s row for %s must use marker golangci-lint and prefix v", row.name, row.file)
+		}
+		listed[row.file] = true
+		found := versionRE.FindAllStringSubmatch(readFile(t, root, row.file), -1)
 		if len(found) == 0 {
-			t.Errorf("%s names no golangci-lint version; ci.yml pins %s — keep the doc honest or drop the mention", rel, want)
+			t.Errorf("%s names no golangci-lint version; drop its pin-docs.tsv row or restore the mention (ci.yml pins %s)", row.file, want)
 			continue
 		}
 		for _, m := range found {
 			if m[1] != want {
-				t.Errorf("%s says golangci-lint %s but ci.yml pins %s — a contributor following the doc installs a binary that cannot lint the tree", rel, m[1], want)
+				t.Errorf("%s says golangci-lint %s but ci.yml pins %s — a contributor following the doc installs a binary that cannot lint the tree", row.file, m[1], want)
 			}
 		}
 	}
+	if len(listed) == 0 {
+		t.Fatal("pin-docs.tsv lists no GOLANGCI_LINT copies — the matcher is broken or the table was emptied")
+	}
+
+	// Historical records name the version that was current THEN, and must not
+	// be rewritten by the updater.
+	history := map[string]bool{"docs/CODEQL.md": true}
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Skipf("git ls-files unavailable: %v", err)
+	}
+	for _, rel := range strings.Fields(string(out)) {
+		if listed[rel] || history[rel] || strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		if fi, err := os.Lstat(filepath.Join(root, rel)); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
+			continue
+		}
+		if m := versionRE.FindStringSubmatch(readFile(t, root, rel)); m != nil {
+			t.Errorf("%s states golangci-lint %s but is not in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at GOLANGCI_LINT_VERSION instead", rel, m[1])
+		}
+	}
+}
+
+type pinDocRow struct{ name, marker, prefix, file string }
+
+// loadPinDocs reads scripts/lib/pin-docs.tsv and checks each row names a pin
+// update-pins.sh actually moves.
+func loadPinDocs(t *testing.T) []pinDocRow {
+	t.Helper()
+	pins := loadPins(t)
+	var rows []pinDocRow
+	for _, line := range strings.Split(readFile(t, repoRoot(t), "scripts/lib/pin-docs.tsv"), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if len(cols) != 4 {
+			t.Fatalf("pin-docs.tsv: %q has %d columns, want 4", line, len(cols))
+		}
+		if _, ok := pins[cols[0]]; !ok {
+			t.Errorf("pin-docs.tsv: %s is not a pins.tsv pin, so nothing would rewrite %s", cols[0], cols[3])
+		}
+		rows = append(rows, pinDocRow{cols[0], cols[1], cols[2], cols[3]})
+	}
+	return rows
 }

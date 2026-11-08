@@ -1,0 +1,15 @@
+# Prose that restates a pin from scripts/lib/pins.tsv, so a person following
+# the doc installs the version CI runs. scripts/update-pins.sh rewrites these
+# together with the workflow pin, so its monthly PR needs no hand edits;
+# scripts/check_versions_test.go fails when a listed copy disagrees with the
+# pin, or when a tracked file states the version without being listed here.
+#
+# Columns (tab-separated):
+#   name    the pin (pins.tsv name)
+#   marker  only lines containing this text are rewritten
+#   prefix  what precedes the version in the prose ("v" for v2.14.0, "-" none)
+#   file    the file, relative to the repo root
+GOLANGCI_LINT	golangci-lint	v	ONBOARDING.md
+GOLANGCI_LINT	golangci-lint	v	docs/TESTING.md
+GOLANGCI_LINT	golangci-lint	v	docs/PR-STEWARDSHIP.md
+GOLANGCI_LINT	golangci-lint	v	.agents/skills/steward/SKILL.md
