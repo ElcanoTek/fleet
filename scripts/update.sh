@@ -1199,7 +1199,7 @@ elif [[ "$sandbox_published" == "1" ]]; then
       # is retried after the restart below and on the next update.
       sandbox_superseded=""
       [[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"
-      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"
       sandbox_podman image prune -f >/dev/null 2>&1 || true
     elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
       warn "pulling ${pub_ref} failed — the restarted service keeps the existing ${ref_now}; re-run: sudo fleet update --no-pull"
@@ -1817,12 +1817,13 @@ else
     fleet_remove_web_tier "$SRC_DIR" || true
     # The restart ended the old process's sandbox containers, so a superseded
     # release image step 3 could not remove (in use then) may be free now.
-    # Same rules as there: the current release ref, the tag and a custom
-    # build's base are protected, nothing is forced, a refusal stays listed.
+    # Same rules as there: the current release ref, the tag, a custom
+    # build's base and the manifest's prebuilt sandbox.image (the image fleet
+    # just restarted with) are protected, nothing is forced, a refusal stays listed.
     if [[ -f "$SANDBOX_RECLAIM_FILE" ]] && command -v podman >/dev/null 2>&1; then
       sandbox_current=""
       [[ -f "$SANDBOX_DIGEST_FILE" ]] && sandbox_current="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
-      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"
     fi
   else
     if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then

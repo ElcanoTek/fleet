@@ -153,11 +153,12 @@ fleet_sandbox_build_containerfile() {
 
 # fleet_sandbox_uses_release_image BUNDLE_DIR GENERIC_BUNDLE_DIR — true when
 # the release's published sandbox image IS this bundle's image: the bundle
-# ships no Containerfile (and names none), or its whole build context — the
-# Containerfile and every other file the build would send — hashes the same as
-# the generic bundle's (fleet_sandbox_context_hash). The image is built from
-# all of it, so an edited requirements.txt, or a file the generic context does
-# not have at all, makes a custom image.
+# ships no Containerfile (and names none), or its whole build-context
+# directory — the Containerfile and every other entry beside it, VCS metadata
+# and ignore files included — hashes the same as the generic bundle's
+# (fleet_sandbox_context_hash). The image is built from that directory, so an
+# edited requirements.txt, or anything the generic context does not have at
+# all, makes a custom image (when in doubt, build: never a stale image).
 fleet_sandbox_uses_release_image() {
   local cf generic
   cf="$(fleet_sandbox_containerfile "$1")"
@@ -168,75 +169,6 @@ fleet_sandbox_uses_release_image() {
   generic="$(fleet_sandbox_containerfile "$2")"
   [[ -f "$generic" ]] || return 1
   [[ "$(fleet_sandbox_context_hash "$cf")" == "$(fleet_sandbox_context_hash "$generic")" ]]
-}
-
-# fleet_sandbox_ignore_file CONTEXT_DIR — the ignore file `podman build`
-# honours in CONTEXT_DIR (.containerignore, else .dockerignore), or nothing.
-fleet_sandbox_ignore_file() {
-  local f
-  for f in .containerignore .dockerignore; do
-    if [[ -f "$1/$f" ]]; then
-      printf '%s' "$1/$f"
-      return 0
-    fi
-  done
-  return 0
-}
-
-# fleet__ignore_match PATTERN REL — true when one ignore-file PATTERN (already
-# stripped of `!` and of leading and trailing `/`) matches the context-relative
-# path REL or one of its parent directories (a pattern naming a directory
-# excludes everything under it). As in the build: `*`, `?` and `[...]` match
-# within one path segment, and `**` spans any number of segments.
-fleet__ignore_match() {
-  local -a ig_pat ig_rel
-  IFS=/ read -r -a ig_pat <<<"$1"
-  IFS=/ read -r -a ig_rel <<<"$2"
-  fleet__ignore_match_at 0 0
-}
-
-# fleet__ignore_match_at I J — ig_pat[I:] matches ig_rel[J:] or a prefix of it.
-# Reads fleet__ignore_match's ig_pat/ig_rel arrays (bash dynamic scope).
-fleet__ignore_match_at() {
-  local i="$1" j="$2" k
-  # `a//b` and `./a` leave empty and `.` segments: they match nothing.
-  while (( i < ${#ig_pat[@]} )) && [[ -z "${ig_pat[i]}" || "${ig_pat[i]}" == "." ]]; do i=$((i + 1)); done
-  (( i >= ${#ig_pat[@]} )) && return 0
-  if [[ "${ig_pat[i]}" == "**" ]]; then
-    for (( k = j; k <= ${#ig_rel[@]}; k++ )); do
-      fleet__ignore_match_at $((i + 1)) "$k" && return 0
-    done
-    return 1
-  fi
-  (( j < ${#ig_rel[@]} )) || return 1
-  # shellcheck disable=SC2053 # the pattern segment is a glob on purpose
-  [[ "${ig_rel[j]}" == ${ig_pat[i]} ]] || return 1
-  fleet__ignore_match_at $((i + 1)) $((j + 1))
-}
-
-# fleet__context_ignored REL IGNORE_FILE — true when IGNORE_FILE (may be
-# empty: nothing is ignored) excludes the context-relative path REL from the
-# build. The last matching line wins, so a later `!pattern` re-includes what an
-# earlier line excluded.
-fleet__context_ignored() {
-  local rel="$1" line neg ignored=1
-  [[ -n "$2" ]] || return 1
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="$(fleet__trim "$line")"
-    [[ -z "$line" || "$line" == "#"* ]] && continue
-    neg=0
-    if [[ "$line" == "!"* ]]; then
-      neg=1
-      line="$(fleet__trim "${line#!}")"
-    fi
-    while [[ "$line" == /* ]]; do line="${line#/}"; done
-    while [[ "$line" == */ ]]; do line="${line%/}"; done
-    [[ -n "$line" ]] || continue
-    if fleet__ignore_match "$line" "$rel"; then
-      ignored=$neg
-    fi
-  done < "$2"
-  return "$ignored"
 }
 
 # fleet__mode PATH — PATH's permission bits that the build preserves and that
@@ -255,50 +187,52 @@ fleet__mode() {
 # fleet_sandbox_context_hash CONTAINERFILE — one SHA-256 over the build
 # context `podman build -f CONTAINERFILE "$(dirname CONTAINERFILE)"` uses
 # (build-sandbox-image.sh), or `absent` when CONTAINERFILE does not exist.
-# Deterministic: every directory, regular file and symlink under the context,
-# sorted bytewise by relative path, each hashed as its kind, its path, its
-# permission bits (fleet__mode — COPY preserves them, so a chmod +x makes a
-# new image) and, for a file, its contents (a symlink: its target).
-# Directories count on their own, so an added empty directory or a directory
-# mode change is a change. VCS metadata (.git, .hg, .svn) never counts, nor
-# does a path the context's .containerignore / .dockerignore excludes (the
-# build never sends it). The Containerfile and the ignore file itself always
-# count — the Containerfile under a fixed name, so the same context at another
-# path or under another file name hashes the same
+# Deterministic: EVERY entry under the context directory, sorted bytewise by
+# relative path, each hashed as its kind, its path, its permission bits
+# (fleet__mode — COPY preserves them, so a chmod +x makes a new image) and,
+# for a file, its contents (a symlink: its target). Directories count on their
+# own, so an added empty directory or a directory mode change is a change.
+# The Containerfile is hashed under a fixed name, so the same context at
+# another path or under another file name hashes the same
 # (fleet_sandbox_uses_release_image compares a bundle's context with the
 # generic one this way).
+# Nothing is excluded — not VCS metadata (.git), not what a .containerignore /
+# .dockerignore keeps out of the build, and not those files themselves. The
+# hash over-approximates the context podman sends rather than re-implementing
+# its exclusion rules: erring that way costs at most an extra rebuild, while
+# the other way — a missed change — leaves a stale image. The trade-off: a
+# context holding often-changing files the build ignores (a Containerfile at
+# a bundle root beside the bundle's .git, say) rebuilds whenever they change.
+# The default <bundle>/sandbox/ layout holds only the build's own files.
 # update.sh stores this as the sandbox build stamp, so an edit to ANY file the
 # build can COPY — not only to the Containerfile — triggers a rebuild. The
-# prefix names the format: a `ctx2-` hash (modes and directories) never
-# equals a `ctx1-` stamp (contents only) or the bare Containerfile sha256 of
-# earlier releases, so a format change rebuilds once.
+# prefix names the format: a `ctx3-` hash never equals a stamp an earlier
+# format wrote (`ctx2-`, `ctx1-`, or the bare Containerfile sha256), so a
+# format change rebuilds once.
 fleet_sandbox_context_hash() {
-  local cf="$1" ctx ignore path rel cf_rel ignore_rel=""
+  local cf="$1" ctx path rel cf_rel
   if [[ ! -f "$cf" ]]; then
     printf 'absent'
     return 0
   fi
   ctx="$(cd "$(dirname "$cf")" && pwd -P)"
   cf_rel="$(basename "$cf")"
-  ignore="$(fleet_sandbox_ignore_file "$ctx")"
-  [[ -n "$ignore" ]] && ignore_rel="$(basename "$ignore")"
   {
     printf 'containerfile\0%s\0%s\0' "$(fleet__mode "$cf")" "$(sha256sum < "$cf" | awk '{print $1}')"
     while IFS= read -r -d '' path; do
       rel="${path#"$ctx"/}"
       [[ "$rel" == "$cf_rel" ]] && continue
-      if [[ "$rel" != "$ignore_rel" ]] && fleet__context_ignored "$rel" "$ignore"; then
-        continue
-      fi
       if [[ -L "$path" ]]; then
         printf 'link\0%s\0%s\0' "$rel" "$(readlink "$path")"
       elif [[ -d "$path" ]]; then
         printf 'dir\0%s\0%s\0' "$rel" "$(fleet__mode "$path")"
-      else
+      elif [[ -f "$path" ]]; then
         printf 'file\0%s\0%s\0%s\0' "$rel" "$(fleet__mode "$path")" "$(sha256sum < "$path" | awk '{print $1}')"
+      else
+        printf 'other\0%s\0%s\0' "$rel" "$(fleet__mode "$path")"
       fi
-    done < <(find "$ctx" -mindepth 1 \( -name .git -o -name .hg -o -name .svn \) -prune -o \( -type f -o -type l -o -type d \) -print0 | LC_ALL=C sort -z)
-  } | sha256sum | awk '{printf "ctx2-%s", $1}'
+    done < <(find "$ctx" -mindepth 1 -print0 | LC_ALL=C sort -z)
+  } | sha256sum | awk '{printf "ctx3-%s", $1}'
 }
 
 # fleet_sandbox_reclaim_release_images LIST_FILE NEW_REF PROTECTED_REF… —
@@ -313,10 +247,11 @@ fleet_sandbox_context_hash() {
 # started after the idle gate, or a --force update) stays for the next try, so
 # overwriting the digest file never strands it.
 # It never removes what is in use:
-#   - never a PROTECTED_REF (the current release ref, the bundle's tag, a
-#     custom build's base) — such a ref leaves the list, it is current again —
-#     nor an image whose ID is one of theirs (that ref stays listed: once it is
-#     no longer current, a later run removes it);
+#   - before any rmi, a ref equal to a PROTECTED_REF (the current release
+#     ref, the bundle's tag, a custom build's base, the manifest's prebuilt
+#     sandbox.image), or naming the same image ID as one, leaves the list
+#     untouched — it is the image fleet runs (again), not a superseded one;
+#     the digest file names it once it is superseded later;
 #   - never --force: podman refuses an image any container, running or
 #     stopped, or any child image still uses;
 #   - a store that cannot be read keeps the ref (only `image exists` exit 1
@@ -352,10 +287,11 @@ fleet_sandbox_reclaim_release_images() {
       continue
     fi
     id="$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" || id=""
-    if [[ -z "$id" || "$ids" == *" $id "* ]]; then
-      keep+=("$ref")
+    if [[ -z "$id" ]]; then
+      keep+=("$ref")    # present but unreadable: retry later, remove nothing
       continue
     fi
+    [[ "$ids" == *" $id "* ]] && continue
     sandbox_podman rmi "$ref" >/dev/null 2>&1 || keep+=("$ref")
   done
   if (( ${#keep[@]} == 0 )); then

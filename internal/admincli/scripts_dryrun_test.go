@@ -807,7 +807,7 @@ func TestUpdateSandboxGatePresent(t *testing.T) {
 		`build-sandbox-image.sh" --print-tag`,
 		"sandbox-image.ref",
 		`cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")"`,
-		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"`,
 		`SANDBOX_RECLAIM_FILE="$STATE_DIR/sandbox-image.reclaim"`,
 		"sandbox_podman image exists",
 		"sandbox_podman image prune -f",

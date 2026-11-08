@@ -335,9 +335,15 @@ Containerfile or any file beside it (a `requirements.txt`, a script it
 copies), compared by one hash of the whole directory: file contents,
 directories (an empty one too) and permission bits (`mode & 0755`, so a
 `chmod +x` counts but a umask-dependent group/other write bit does not). It
-ignores VCS metadata and whatever the context's `.containerignore` /
-`.dockerignore` excludes. The first update from a release that hashed less
-(only the Containerfile, or contents only) rebuilds once.
+excludes nothing: `.git`, `.containerignore` / `.dockerignore` and the paths
+they name all count, even though the build never sends the ignored ones.
+Erring that way costs at most an extra rebuild, never a stale image. The
+trade-off is a context that holds often-changing files the build ignores (a
+Containerfile at the bundle root, beside the bundle's `.git`): it rebuilds
+whenever they change. The default `sandbox/` directory holds only the build's
+own files and is unaffected. The first update from a release that hashed the
+context differently (only the Containerfile, or an earlier context format)
+rebuilds once.
 
 After pulling a new release image by digest, `update` removes the previous
 one (it keeps its `@sha256` name, so `podman image prune` never would),
@@ -345,7 +351,9 @@ without `--force`. When a container still uses it, the removal is refused and
 the ref is kept in `sandbox-image.reclaim` under the state directory; `update`
 retries every listed ref after the service restart and on each later run, and
 drops it once it is removed or gone. The current release ref, the bundle's
-tag and their image are never removed.
+tag, a custom build's base, the manifest's prebuilt `sandbox.image` and their
+images are never removed: a listed ref that names one of them leaves the list
+before anything is removed.
 
 A bundle Containerfile that only adds packages should become:
 

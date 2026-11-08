@@ -71,13 +71,14 @@ func contextHash(t *testing.T, containerfile string) string {
 // TestSandboxContextHash — update.sh's rebuild stamp covers the whole build
 // context `podman build` sends, not only the Containerfile: a custom bundle
 // that edits only its sandbox/requirements.txt must rebuild. The hash is
-// deterministic, independent of where the context lives, blind to VCS
-// metadata and to what .containerignore keeps out of the build.
+// deterministic and independent of where the context lives. It excludes
+// nothing — not .git, not ignore files or what they name: an over-broad hash
+// costs at most an extra rebuild, a missed change a stale image.
 func TestSandboxContextHash(t *testing.T) {
 	root := repoRoot(t)
 	generic := contextHash(t, filepath.Join(root, "config/default/sandbox/Containerfile"))
-	if !regexp.MustCompile(`^ctx2-[0-9a-f]{64}$`).MatchString(generic) {
-		t.Fatalf("context hash = %q, want ctx2-<sha256>", generic)
+	if !regexp.MustCompile(`^ctx3-[0-9a-f]{64}$`).MatchString(generic) {
+		t.Fatalf("context hash = %q, want ctx3-<sha256>", generic)
 	}
 	if got := contextHash(t, filepath.Join(t.TempDir(), "no/such/Containerfile")); got != "absent" {
 		t.Errorf("missing Containerfile hashes to %q, want absent", got)
@@ -92,13 +93,6 @@ func TestSandboxContextHash(t *testing.T) {
 	}
 	if again := contextHash(t, cf); again != base {
 		t.Errorf("unchanged context: hash %s then %s", base, again)
-	}
-
-	// VCS metadata never counts.
-	writeTestFile(t, filepath.Join(ctx, ".git", "HEAD"), "ref: refs/heads/main\n")
-	writeTestFile(t, filepath.Join(ctx, ".hg", "store", "data"), "x\n")
-	if got := contextHash(t, cf); got != base {
-		t.Errorf("VCS metadata changed the hash: %s → %s", base, got)
 	}
 
 	// Only requirements.txt changes: the hash does.
@@ -116,6 +110,30 @@ func TestSandboxContextHash(t *testing.T) {
 	writeTestFile(t, filepath.Join(filepath.Dir(cf2), "extra", "setup.sh"), "#!/bin/sh\n")
 	if got := contextHash(t, cf2); got == generic {
 		t.Error("an extra file in the context left the hash unchanged")
+	}
+
+	// Nothing is excluded: VCS metadata and ignore files count, and so does
+	// a change to what an ignore file names.
+	cf3 := genericSandboxContext(t, t.TempDir(), "sandbox")
+	ctx3 := filepath.Dir(cf3)
+	writeTestFile(t, filepath.Join(ctx3, ".git", "HEAD"), "ref: refs/heads/main\n")
+	withGit := contextHash(t, cf3)
+	if withGit == generic {
+		t.Error("a .git directory in the context left the hash unchanged")
+	}
+	writeTestFile(t, filepath.Join(ctx3, ".git", "HEAD"), "ref: refs/heads/other\n")
+	withIgnore := contextHash(t, cf3)
+	if withIgnore == withGit {
+		t.Error("a change inside .git left the hash unchanged")
+	}
+	writeTestFile(t, filepath.Join(ctx3, ".containerignore"), ".\n")
+	if got := contextHash(t, cf3); got == withIgnore {
+		t.Error("adding a .containerignore left the hash unchanged")
+	}
+	withIgnore = contextHash(t, cf3)
+	writeTestFile(t, filepath.Join(ctx3, "scratch.txt"), "1\n") // what `.` would exclude
+	if got := contextHash(t, cf3); got == withIgnore {
+		t.Error("a file a .containerignore names left the hash unchanged")
 	}
 }
 
@@ -186,60 +204,6 @@ func TestSandboxContextHashCoversModesAndDirectories(t *testing.T) {
 	}
 }
 
-// TestSandboxContextHashHonoursContainerignore — a path the context's
-// .containerignore (else .dockerignore) excludes is never sent to the build,
-// so it must not trigger one; the ignore file itself, and a `!` re-include,
-// do count.
-func TestSandboxContextHashHonoursContainerignore(t *testing.T) {
-	for _, name := range []string{".containerignore", ".dockerignore"} {
-		t.Run(name, func(t *testing.T) {
-			cf := genericSandboxContext(t, t.TempDir(), "sandbox")
-			ctx := filepath.Dir(cf)
-			writeTestFile(t, filepath.Join(ctx, name), "# build scratch\n/cache/\n**/*.pyc\n!cache/keep.txt\n")
-			withIgnore := contextHash(t, cf)
-
-			writeTestFile(t, filepath.Join(ctx, "cache", "sub", "blob"), "1\n")
-			writeTestFile(t, filepath.Join(ctx, "x.pyc"), "1\n")
-			if got := contextHash(t, cf); got != withIgnore {
-				t.Errorf("ignored files changed the hash: %s → %s", withIgnore, got)
-			}
-			writeTestFile(t, filepath.Join(ctx, "cache", "keep.txt"), "1\n")
-			if got := contextHash(t, cf); got == withIgnore {
-				t.Error("a file re-included by !pattern did not change the hash")
-			}
-		})
-	}
-
-	cf := genericSandboxContext(t, t.TempDir(), "sandbox")
-	before := contextHash(t, cf)
-	writeTestFile(t, filepath.Join(filepath.Dir(cf), ".containerignore"), "nothing-matches\n")
-	if got := contextHash(t, cf); got == before {
-		t.Error("adding a .containerignore did not change the hash")
-	}
-
-	// The matcher keeps `*` within one segment and lets `**` span segments,
-	// as the build does; a pattern naming a directory covers its contents.
-	for _, c := range []struct {
-		pat, rel string
-		want     bool
-	}{
-		{"*.pyc", "x.pyc", true},
-		{"*.pyc", "a/x.pyc", false},
-		{"**/*.pyc", "a/b/x.pyc", true},
-		{"**/*.pyc", "x.pyc", true},
-		{"a/*/c", "a/b/c", true},
-		{"a/*/c", "a/b/b/c", false},
-		{"cache", "cache/sub/blob", true},
-		{"cach", "cache/sub/blob", false},
-		{"[ab]?", "bx/q", true},
-	} {
-		got := libBash(t, `fleet__ignore_match "$P" "$R" && echo y || echo n`, "P="+c.pat, "R="+c.rel)
-		if (strings.TrimSpace(got) == "y") != c.want {
-			t.Errorf("pattern %q vs %q: match=%s, want %v", c.pat, c.rel, strings.TrimSpace(got), c.want)
-		}
-	}
-}
-
 // TestSandboxUsesReleaseImageComparesTheWholeContext — the release image is
 // this bundle's image only when the bundle's whole build context matches the
 // generic one: a file the generic context lacks makes a custom image.
@@ -269,8 +233,8 @@ func TestSandboxUsesReleaseImageComparesTheWholeContext(t *testing.T) {
 	for k, v := range same {
 		vcs[k] = v
 	}
-	if !usesReleaseImage(t, sandboxBundle(t, "", vcs)) {
-		t.Error("VCS metadata in the context made it a custom image")
+	if usesReleaseImage(t, sandboxBundle(t, "", vcs)) {
+		t.Error("a context holding .git still counts as the release image (the hash excludes nothing)")
 	}
 }
 
@@ -353,11 +317,14 @@ func TestUpdateSandboxStampGate(t *testing.T) {
 	if now2, prev2 := gate(); now2 == prev2 {
 		t.Error("release-image stamp matched a context hash")
 	}
-	// A ctx1- stamp (contents only, before modes and directories counted)
-	// reads as a change too: one rebuild, no error.
-	record("ctx1-" + strings.Repeat("a", 64))
-	if now2, prev2 := gate(); now2 == prev2 || !strings.HasPrefix(now2, "ctx2-") {
-		t.Errorf("ctx1 stamp: cf_now=%s cf_prev=%s, want a ctx2 mismatch", now2, prev2)
+	// Stamps of the earlier context formats (ctx1: contents only; ctx2:
+	// modes, but VCS metadata and ignored paths excluded) read as a change
+	// too: one rebuild, no error.
+	for _, old := range []string{"ctx1-", "ctx2-"} {
+		record(old + strings.Repeat("a", 64))
+		if now2, prev2 := gate(); now2 == prev2 || !strings.HasPrefix(now2, "ctx3-") {
+			t.Errorf("%s stamp: cf_now=%s cf_prev=%s, want a ctx3 mismatch", old, now2, prev2)
+		}
 	}
 }
 
@@ -537,8 +504,31 @@ func TestReclaimReleaseImages(t *testing.T) {
 				t.Errorf("%s was removed", ref)
 			}
 		}
-		if got := s.pending(); len(got) != 1 || got[0] != alias {
-			t.Errorf("pending = %q, want [%s] (the current image's other name waits until it is superseded)", got, alias)
+		// Refs equal to a protected ref, or naming its image, leave the list
+		// before any rmi: they are what fleet runs, not superseded images.
+		if got := s.pending(); got != nil {
+			t.Errorf("pending = %q, want none", got)
+		}
+	})
+
+	t.Run("the manifest's prebuilt sandbox.image is never removed", func(t *testing.T) {
+		const prebuilt = "registry.example/sandbox@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+		const prebuiltAlias = "registry.example/sandbox@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+		s := newReclaimStore(t, map[string]string{
+			prebuilt: "id-prebuilt", prebuiltAlias: "id-prebuilt", prev: "id-prev", cur: "id-cur", tag: "id-cur",
+		})
+		writeTestFile(t, s.list, prebuilt+"\n"+prebuiltAlias+"\n")
+		// As update.sh's post-restart retry passes it: digest-file ref, tag,
+		// (empty) custom base, sandbox_image_ref.
+		s.run(prev, cur, tag, "", prebuilt)
+		if got := s.rmis(); len(got) != 1 || got[0] != "rmi "+prev {
+			t.Errorf("rmi calls %q, want exactly [rmi %s]", got, prev)
+		}
+		if !s.has(prebuilt) || !s.has(prebuiltAlias) {
+			t.Error("the configured sandbox.image was removed")
+		}
+		if got := s.pending(); got != nil {
+			t.Errorf("pending = %q, want none (the prebuilt image leaves the list)", got)
 		}
 	})
 
@@ -567,9 +557,9 @@ func TestReclaimReleaseImages(t *testing.T) {
 	update := readFile(t, repoRoot(t), "scripts/update.sh")
 	for _, want := range []string{
 		`[[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"
-      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"
       sandbox_podman image prune -f >/dev/null 2>&1 || true`,
-		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base" "$sandbox_image_ref"`,
 	} {
 		if !strings.Contains(update, want) {
 			t.Errorf("update.sh must contain:\n%s", want)
