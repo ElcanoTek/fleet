@@ -414,7 +414,7 @@ func TestValidateEmailHasContent_NoopForNonJSON(t *testing.T) {
 func TestExpandCidImagesToDataURLs_SubstitutesWorkspaceFile(t *testing.T) {
 	convID := "conv-cid-1"
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convDir := filepath.Join(root, convID)
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -448,7 +448,7 @@ func TestExpandCidImagesToDataURLs_SubstitutesWorkspaceFile(t *testing.T) {
 func TestExpandCidImagesToDataURLs_MultipleRefsSinglePass(t *testing.T) {
 	convID := "conv-cid-multi"
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convDir := filepath.Join(root, convID)
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -509,7 +509,7 @@ func TestExpandCidImagesToDataURLs_LeavesUnmatchedCidsAlone(t *testing.T) {
 func TestExpandCidImagesToDataURLs_RejectsPathTraversal(t *testing.T) {
 	convID := "conv-cid-traversal"
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

@@ -173,15 +173,6 @@ func ListEnvKeys(path string) ([]string, error) {
 	return keys, nil
 }
 
-// ReadEnvLines returns the env file's raw lines, comments and blanks
-// included, for a caller that rewrites the file while preserving its layout
-// (`fleet config migrate-env`). A missing file yields no lines and no error.
-func ReadEnvLines(path string) ([]string, error) { return readEnvLines(path) }
-
-// WriteEnvLines writes lines back with the same guarantees as every writer
-// here: atomic (temp + fsync + rename), mode 0600, owner preserved.
-func WriteEnvLines(path string, lines []string) error { return writeEnvLines(path, lines) }
-
 // readEnvLines reads the env file's lines. A missing file yields an empty slice
 // (the caller may be creating it).
 func readEnvLines(path string) ([]string, error) {

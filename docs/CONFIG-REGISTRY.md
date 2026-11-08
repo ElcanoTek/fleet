@@ -4,9 +4,11 @@ Every environment variable fleet reads is declared **once**, in
 [`internal/config/envreg/table.go`](../internal/config/envreg/table.go). The
 env-file allowlist, the typed-knob validation, the generated reference
 ([CONFIGURATION.md](CONFIGURATION.md)), the Helm schema's `config.env`
-properties, `fleet config explain`, `fleet config migrate-env` and the alias
-warnings in `fleet doctor` are all derived from that one table, and a lint rule
-plus two tests keep anything from reading the environment around it.
+properties and `fleet config explain` are all derived from that one table, and
+a lint rule plus two tests keep anything from reading the environment around
+it. The legacy `CHAT_`/`CUTLASS_` aliases this page used to describe were
+removed by [ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md) (see
+[Removed aliases](#removed-aliases-adr-0101)).
 
 This page records what shipped, how to use it, and where it deviates from the
 issue.
@@ -28,21 +30,19 @@ proper. Each `Entry` carries:
 | `DefaultFrom`, `DefaultDerive`, `DefaultFromCanonical` | an **inherited** default: when unset, the setting takes `DefaultFrom`'s resolved value (optionally transformed by `DefaultDerive`, which mirrors the reader; `DefaultFromCanonical` when the reader reads only the parent's canonical spelling) |
 | `Description`, `Group` | the docs text and section |
 | `Scope` | `server`, `cli`, `sandbox`, `broker`, `scripts`, `test` |
-| `Secret` | redacted by `explain`, never printed by `migrate-env`, routed to `existingSecret` by the Helm docs |
+| `Secret` | redacted by `explain`, routed to `existingSecret` by the Helm docs |
 | `ProcessOnly` | fleet's own env-file loader does not admit the name |
-| `Chain`, `ChainFile` | the setting resolves `FLEET_<X>` → `CHAT_<X>` → `CUTLASS_<X>`; `ChainFile` names the legacy prefixes the env file admits. The chain aliases are derived, never spelled out |
-| `Aliases` | other spellings (`Deprecated`; `EnvFile`, whether fleet's own loader admits it; `ReadBy`, the one reader of a reader-specific alias the server ignores) |
+| `Aliases` | other spellings (`EnvFile`: whether fleet's own loader admits it). Only the bare `PERSONA` / `PERSONA_DEFAULT` remain; a removed `CHAT_`/`CUTLASS_` spelling may not be declared (the registry panics at init) |
 | `Enum` | accepted values of an `enum` |
 | `Knob` | makes it a boot-validated typed knob: `Min`/`Max`, `ReadBy` (a consumer outside `config.Load`), `Lenient`/`Why` |
 | `Helm` | the chart value that sets it (the explicit values↔settings mapping) |
 
 The table holds 401 settings. 276 are admitted from the env file under their
-canonical name (the old allowlist's 300 keys are those plus 22 legacy alias
-spellings and the bare `PERSONA` / `PERSONA_DEFAULT`). The other 125 are read only
-from the process environment and were in no table before: CLI, Kubernetes,
-platform and harness variables, and the operator-facing inputs of the shell
-scripts. 149 settings resolve through the legacy-prefix chain, which with 9
-explicit spellings makes 307 deprecated aliases.
+canonical name; with the bare `PERSONA` / `PERSONA_DEFAULT` that makes the
+278-key allowlist (the old allowlist's 300 keys also held 22 legacy alias
+spellings, removed by ADR-0106). The other 125 are read only from the process
+environment and were in no table before: CLI, Kubernetes, platform and harness
+variables, and the operator-facing inputs of the shell scripts.
 
 ### Derived, not maintained
 
@@ -51,9 +51,9 @@ explicit spellings makes 307 deprecated aliases.
   is gone.
 - **`envKnobs`** (the typed-knob table behind boot validation, hot-reload and
   `fleet validate-config`) is every entry with a `Knob`.
-- **`lookupFleet`** (config) and **`fleetEnv.lookup`** (agentcore) take their
-  spellings from `envreg.ChainSpellings`, so a chain read of an undeclared
-  setting fails the test suite.
+- **`lookupFleet`** (config) and **`fleetEnv.lookup`** (agentcore) read
+  `FLEET_<suffix>` through `envreg`, so a read of an undeclared setting fails
+  the test suite.
 
 Behaviour is pinned byte for byte by
 [`registry_snapshot_test.go`](../internal/config/registry_snapshot_test.go),
@@ -108,13 +108,12 @@ the repo's `-update` golden-file convention) and rewrites:
 
 - **[CONFIGURATION.md](CONFIGURATION.md)** — every setting by section, with
   type, default, scope, secret, env-file admission, boot validation and bounds,
-  aliases (deprecated ones marked, with whether the env file admits each), and
-  the Helm value that sets it; plus a table of every deprecated alias.
+  aliases, and the Helm value that sets it.
 - **the `config.env` subtree of
   [`deploy/helm/fleet/values.schema.json`](../deploy/helm/fleet/values.schema.json)** —
   one property per control-plane setting (server, sandbox and broker scopes),
-  with its description, the chart value that sets it, `deprecated: true` on
-  the legacy spellings, and a pointer to `existingSecret` for secrets. Every
+  with its description, the chart value that sets it, and a pointer to
+  `existingSecret` for secrets. Every
   other byte of the hand-written schema is left as it is
   (`RewriteHelmSchema` splices only that member).
 
@@ -142,7 +141,8 @@ its **source**. It draws only from the sources it can see, highest first:
    applies only when the unit's `FLEET_ENV_FILE` names that file. The
    standard unit unsets `FLEET_ENV_FILE` and exports the file through
    `EnvironmentFile=`, so its lines arrive as source 1.
-4. **The setting's alias spellings.**
+4. **The setting's alias spellings** (the bare `PERSONA` /
+   `PERSONA_DEFAULT`); a removed `CHAT_`/`CUTLASS_` spelling only as a note.
 5. **Its default**, including one **inherited** from another setting
    (`DefaultFrom`).
 
@@ -153,7 +153,8 @@ JSON field names say exactly that. The JSON fields are:
 - `sources` (`process_env`, `env_file`, `env_file_read_by_fleet_loader`,
   `systemd_unit`);
 - per setting: `configured_value`, `source`, `source_detail`, `spelling`,
-  `inherited_from`, `inherited_source`, `deprecated`, `secret`, `notes`.
+  `inherited_from`, `inherited_source`, `secret`, `notes` (the `deprecated`
+  field went with the aliases, ADR-0106).
 
 **One resolution.** `explain` resolves through the **same code** as
 `config.Load`, in [`internal/config/resolve.go`](../internal/config/resolve.go):
@@ -169,15 +170,14 @@ JSON field names say exactly that. The JSON fields are:
    boot. Inside the service, the unit's environment *is* the process
    environment.
 2. **Pick, across a setting's spellings** (`resolveSpellings`). The first
-   spelling with a non-empty value wins. A reader-specific alias is not among
-   the spellings.
+   spelling with a non-empty value wins.
 3. **Default** (`resolveSetting`). An unset setting with `DefaultFrom`
    resolves its parent through this same function, recursively, then applies
    `DefaultDerive`. Otherwise it takes its `Default`.
 
 `explain` prints the configured value; its source, with the unit's
-`Environment=` or `EnvironmentFile=<path>` as detail; the spelling; and
-`DEPRECATED` for a legacy alias. An inherited default prints as, for example,
+`Environment=` or `EnvironmentFile=<path>` as detail; and the spelling. An
+inherited default prints as, for example,
 `vendor/my-model` with source `default (inherited from FLEET_MEMORY_MODEL ←
 FLEET_METADATA_MODEL ← FLEET_TITLE_MODEL, set in env file as
 FLEET_TITLE_MODEL)`. Notes cover:
@@ -187,12 +187,14 @@ FLEET_TITLE_MODEL)`. Notes cover:
 - a file value masked by a higher source (even an empty one);
 - a file value the loader does not admit;
 - a lower-precedence spelling that is also set;
-- a reader-specific alias.
+- a removed `CHAT_`/`CUTLASS_` (or `DATA_DIR`) spelling that is set, with the
+  `FLEET_` key to rename it to.
 
 Secrets print as `<redacted>`. With no KEY, `explain` lists every setting
 that is set **or carries a note**, so an entry whose only spelling set is
-`CHAT_TLS_MODE` still appears. `--all` lists every setting with its default.
-An unknown KEY is an error.
+the removed `CHAT_TLS_MODE` still appears. `--all` lists every setting with
+its default. An unknown KEY is an error; a removed spelling as KEY is an error
+naming its `FLEET_` key.
 
 **Inherited defaults.** These entries use `DefaultFrom`, found by grepping
 `config.go` and the readers for derived defaults:
@@ -225,38 +227,40 @@ inherits / derived from `<SETTING>`" without the matching `DefaultFrom`.
 `TestExplainMatchesLoad` pins the two against each other. For six settings,
 it applies every combination of {absent, process env, process env
 present-but-empty, env file, empty process + env file} across all their
-spellings: canonical, CHAT_/CUTLASS_, the bare `PERSONA_DEFAULT`, and the
-reader-specific `CHAT_TLS_MODE` and `DATA_DIR`. That is over 1,000 cases.
-Each case asserts that `explain`'s value and source are what `Load`
-actually produced.
+spellings: canonical, the bare `PERSONA_DEFAULT`, and the removed
+`CHAT_`/`CUTLASS_` and `DATA_DIR` spellings, which neither may read. That is
+over 1,000 cases. Each case asserts that `explain`'s value and source are
+what `Load` actually produced.
 
-### Deprecating the aliases ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md))
+### Removed aliases ([ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md))
 
-- **`fleet doctor`** prints one warning per deprecated spelling set in the
-  process environment or the server env file, naming the canonical key, before
-  it runs the box checks (and on the status fallback). It never prints a value.
-- **`fleet config migrate-env [--write]`** rewrites the env file to canonical
-  keys. Dry run by default (line numbers and key names, `KEY=…`, never values).
-  `--write` copies the file to `<file>.bak-<UTC timestamp>` (0600, owner kept)
-  and then writes atomically through the creds writer (temp + fsync + rename,
-  0600, owner kept). Only the key token of each line changes; comments, blank
-  lines, order, `export ` prefixes and value text are untouched. An alias line
-  whose canonical key already holds the same value is dropped. It refuses —
-  writing nothing — when two spellings of one setting have different values,
-  or one alias is assigned twice with different values. An alias fleet's own
-  env-file loader does not admit is rewritten too: on the standard install the
-  systemd unit's `EnvironmentFile=` exports every line, so the line has been
-  effective there, and the plan says so. The one exception is a
-  *reader-specific* alias (`Alias.ReadBy`: `CHAT_`/`CUTLASS_TLS_*`, read only by
-  the CLI's local health probe), which the server ignores; it is left in place
-  and reported, because renaming it would start applying it to the server.
+[ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md) deprecated the
+`CHAT_<X>`/`CUTLASS_<X>` spellings of every `FLEET_<X>` setting and shipped
+`fleet config migrate-env` to rewrite them; once every box was migrated,
+ADR-0106 removed them, and `migrate-env` with them. Nothing reads one now,
+and the env-file loader does not admit one. `envreg.RetiredAlias` recognises
+a removed spelling (`CHAT_<X>`/`CUTLASS_<X>` when `FLEET_<X>` is registered
+and the name is not a setting of its own, plus the bare `DATA_DIR`), so a
+leftover is reported rather than silently ignored:
 
-`fleet config explain` and `fleet doctor` follow the same rules. When the
-fleet unit loads the env file with `EnvironmentFile=`, every line counts as
-the server's environment, not only the names fleet's own loader admits;
-without such a unit an unadmitted line is reported as ignored. A
-reader-specific alias is never reported as a setting's configured value, only
-as a note.
+- **boot** (`config.Load`) logs one warning per removed spelling set in the
+  process environment or the env file, naming the `FLEET_` key;
+- **`fleet doctor`** prints the same warning first, from the process
+  environment, the systemd unit's environment and the env file;
+- **`fleet config explain FLEET_<X>`** notes a removed spelling that is set,
+  and `fleet config explain CHAT_<X>` is an error naming `FLEET_<X>`;
+- **`fleet config set-env CHAT_<X>`** refuses, naming `FLEET_<X>`.
+
+None of them prints a value. The canonical `CHAT_`/`CUTLASS_` settings
+(`CHAT_RATE_PER_*`, the `CUTLASS_*` connector wire keys, the `CHAT_DB_*`
+script inputs) are not removed spellings. The MCP broker still keeps the
+`CHAT_`/`CUTLASS_` spellings of parent-owned names out of connector env
+(`envreg.RetiredSpellings`), because a stale line can hold the same secret.
+
+`fleet config explain` follows systemd: when the fleet unit loads the env
+file with `EnvironmentFile=`, every line counts as the server's environment,
+not only the names fleet's own loader admits; without such a unit an
+unadmitted line is reported as ignored.
 
 The unit's environment comes from systemd itself (`systemctl show -p
 LoadState -p Environment -p EnvironmentFiles -p UnsetEnvironment
@@ -298,40 +302,10 @@ JSON output prints any of it.
 
 ## Removing the aliases
 
-When every box has run `fleet config migrate-env --write` (and `fleet doctor`
-is quiet on each), the follow-up PR removes alias support. Every touch point
-carries `LEGACY-ENV-ALIAS: remove after migrate-env`; `git grep -n
-LEGACY-ENV-ALIAS` lists them all. The checklist:
-
-1. **Delete** `internal/config/legacy_aliases.go` and
-   `internal/admincli/legacy_env.go`, and their tests in
-   `internal/config/explain_test.go` / `internal/admincli/config_explain_test.go`
-   (the parts marked).
-2. **Unhook** the `migrate-env` case in `cmdConfig` and the
-   `warnDeprecatedEnvAliases` call in `cmdDoctor`; drop both from the usage
-   text.
-3. **Registry:** delete `LegacyPrefixes`, `Chain`, `ChainFile`,
-   `Alias.Deprecated`, `expandChain`, `isLegacyPrefix`, `DeprecatedAliases`,
-   `ChainSpellings` and the `fileCHAT`/`fileCUTLASS`/`fileBoth` shorthands,
-   and every explicit `CHAT_*`/`CUTLASS_*` alias in the table (each is marked).
-   Keep the canonical `CHAT_`/`CUTLASS_` settings (`CHAT_RATE_PER_*`, the
-   `CUTLASS_*` connector wire keys, the `CHAT_DB_*` script inputs).
-4. **Readers:** `lookupFleet` and `fleetEnv.lookup` read the canonical name
-   only; `EnvAliases` returns its argument alone; the explicit alias reads in
-   `internal/tools/env.go`, `internal/admincli/idle.go` and `status.go`,
-   `internal/boxdoctor`, `internal/worktree`, `internal/agent`
-   (`CUTLASS_LOG_FILE`), `internal/clientconfig/builtin_skills.go` and
-   `internal/chattui` go, as do the marked `CHAT_`/`CUTLASS_` reads in
-   `scripts/doctor.sh` and `scripts/lib/idle.sh`.
-5. **Snapshot tests:** the allowlist loses the 22 file-admitted alias
-   spellings and the knob rows lose their chain flag. Update
-   `registry_snapshot_test.go` in the same PR with a line in its header
-   saying so — that diff is the record of the deliberate change.
-6. **Tests that set legacy spellings** (the "lifted parity" tests and the
-   alias tests in `internal/config`, `internal/agentcore`) are deleted or
-   switched to `FLEET_` names.
-7. `make config-docs`; supersede ADR-0099 with the removal ADR; drop the
-   "Deprecated aliases" notes in OPERATORS.md.
+Done in [ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md); see
+[Removed aliases](#removed-aliases-adr-0101). The 22 file-admitted alias
+spellings left the allowlist and the knob rows lost their chain flag;
+`registry_snapshot_test.go` says so in its header.
 
 ## Deviations from the issue
 
@@ -349,8 +323,8 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   `networkPolicies.*`), not environment variables; the mapping between the two
   is the registry's `Helm` field, checked against the Deployment template by
   `TestHelmTemplateEnvMatchesRegistryMapping`.
-- **Removal is a follow-up PR, not a dated window** (owner direction): every
-  box is owner-controlled and will be migrated first. See ADR-0099.
+- **Removal was a follow-up PR, not a dated window** (owner direction): every
+  box is owner-controlled and was migrated first. See ADR-0099 and ADR-0106.
 - **`internal/config/dsn.go` is unchanged.** The DSN keys are registered
   exactly as they are read today; `ProcessEnv` keeps reading `os.Getenv` inside
   `internal/config`, which the lint rule allows.
@@ -362,7 +336,8 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   `fleet validate-config` and the boot error list them in that order instead
   of the old table's. Which knobs are reported, and their messages, are
   unchanged.
-- **`fleet doctor` prints the alias warnings** before its checks.
+- **`fleet doctor` prints the alias warnings** before its checks (since
+  ADR-0106: warnings about removed spellings that are still set).
 - **Helm: `config.env` values must be scalars.** A map or list value used to
   pass the schema and render as Go map syntax; it is now refused by
   `helm lint`/`install`. String, number and boolean values, for known and

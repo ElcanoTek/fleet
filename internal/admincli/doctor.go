@@ -6,12 +6,36 @@ package admincli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
+
+// warnRetiredEnvAliases prints one warning per removed CHAT_/CUTLASS_ (or bare
+// DATA_DIR) spelling set in the process environment, the systemd unit's
+// environment or the server env file (ADR-0106): nothing reads them any more,
+// so the setting silently falls back to its default. It is read-only and
+// never prints a value.
+func warnRetiredEnvAliases(w io.Writer) {
+	path := serverEnvFile("")
+	findings, err := config.RetiredAliasFindings(path, loadUnitEnv())
+	if err != nil {
+		fmt.Fprintf(w, "fleet doctor: could not check %s for removed env aliases: %v\n", path, err)
+		return
+	}
+	if len(findings) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "WARN removed CHAT_/CUTLASS_ env aliases are set (ADR-0106); nothing reads them, so rename each to its FLEET_ name (fleet config set-env / fleet env edit):\n")
+	for _, f := range findings {
+		fmt.Fprintf(w, "  - %s\n", f)
+	}
+}
 
 // cmdDoctor wraps scripts/doctor.sh — the box-level diagnose-AND-REPAIR pass.
 // It forwards every flag verbatim (--check / --no-restart / --dry-run) to the
@@ -34,9 +58,9 @@ import (
 // found; rather than failing uselessly we degrade to the in-process status
 // report so `fleet doctor` is never a dead verb.
 func cmdDoctor(argv []string) int {
-	// Deprecated CHAT_/CUTLASS_ env spellings (ADR-0099): warn first, on every
+	// Removed CHAT_/CUTLASS_ env spellings (ADR-0106): warn first, on every
 	// path (script or status fallback); read-only, never a value.
-	warnDeprecatedEnvAliases(os.Stdout) // LEGACY-ENV-ALIAS: remove after migrate-env
+	warnRetiredEnvAliases(os.Stdout)
 	script := findScript("doctor.sh")
 	if script == "" {
 		fmt.Fprintln(os.Stderr, "fleet doctor: scripts/doctor.sh not found (no checkout — set FLEET_ROOT or run from the repo); falling back to the read-only `fleet status` checks.")

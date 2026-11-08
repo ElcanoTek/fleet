@@ -116,19 +116,6 @@ func resolveSpellings(spellings []string, get func(string) (string, bool)) (valu
 	return "", "", false
 }
 
-// serverSpellings are the spellings the code resolves for e, in order: all
-// of them except reader-specific aliases (Alias.ReadBy).
-func serverSpellings(e *envreg.Entry) []string {
-	out := make([]string, 0, 1+len(e.Aliases))
-	out = append(out, e.Name)
-	for _, a := range e.Aliases {
-		if a.ReadBy == "" {
-			out = append(out, a.Name)
-		}
-	}
-	return out
-}
-
 // settingValue is a setting's resolved configured value.
 type settingValue struct {
 	value    string
@@ -156,7 +143,7 @@ func resolveSetting(e envreg.Entry, get func(string) layerValue) settingValue {
 		layers[name] = lv
 		return lv.value, lv.present
 	}
-	if v, sp, ok := resolveSpellings(serverSpellings(&e), pick); ok {
+	if v, sp, ok := resolveSpellings(e.Spellings(), pick); ok {
 		return settingValue{value: v, set: true, spelling: sp, layer: layers[sp]}
 	}
 	if e.DefaultFrom != "" {

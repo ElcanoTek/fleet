@@ -682,9 +682,8 @@ else
   # model key from ✗ to an advisory on a production box. Same token set the
   # Go side accepts (config truthy()).
   mock_on=0
-  for _mv in "$(env_get FLEET_MOCK_MODE)" "${CHAT_MOCK_MODE:-}" "$(env_get CHAT_MOCK_MODE)"; do # LEGACY-ENV-ALIAS: remove after migrate-env
-    case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
-  done
+  _mv="$(env_get FLEET_MOCK_MODE)"
+  case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
   if [[ -n "$(env_get OPENROUTER_API_KEY)" ]]; then
     pass "OPENROUTER_API_KEY set"
   elif [[ "$mock_on" == "1" ]]; then
@@ -1407,7 +1406,6 @@ fi
 # fail this check forever: doctor said "build it: sudo fleet update", and
 # update correctly skipped the build because the manifest names an image.
 sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
-[[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)" # LEGACY-ENV-ALIAS: remove after migrate-env
 sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"

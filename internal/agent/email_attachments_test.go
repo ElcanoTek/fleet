@@ -15,7 +15,7 @@ import (
 // private copy under <EMAIL_ATTACHMENT_DIR>/outbound.
 func TestEmailAttachmentSnapshotter_BoundToConversation(t *testing.T) {
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	for _, dir := range []string{"conv-a", "conv-b"} {
 		if err := os.MkdirAll(filepath.Join(wsRoot, dir), 0o755); err != nil {
 			t.Fatal(err)

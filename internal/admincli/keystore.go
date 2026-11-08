@@ -70,7 +70,7 @@ func chooseKeyStore(in keyStoreInputs) keyStore {
 		serviceDir = abs(in.unitWorkDir, dd)
 	}
 	if e := strings.TrimSpace(in.explicit); e != "" {
-		return keyStore{Dir: abs(in.cwd, e), ServiceDir: serviceDir, Source: "FLEET_DATA_DIR/DATA_DIR in your environment"}
+		return keyStore{Dir: abs(in.cwd, e), ServiceDir: serviceDir, Source: "FLEET_DATA_DIR in your environment"}
 	}
 	if serviceDir != "" {
 		return keyStore{Dir: serviceDir, ServiceDir: serviceDir, Source: "the fleet.service store (unit WorkingDirectory + its env file)"}
@@ -82,9 +82,6 @@ func chooseKeyStore(in keyStoreInputs) keyStore {
 func resolveKeyStore() keyStore {
 	in := keyStoreInputs{}
 	in.explicit = strings.TrimSpace(envreg.Get("FLEET_DATA_DIR"))
-	if in.explicit == "" {
-		in.explicit = strings.TrimSpace(envreg.Get("DATA_DIR"))
-	}
 	if cwd, err := os.Getwd(); err == nil {
 		in.cwd = cwd
 	} else {
@@ -93,14 +90,11 @@ func resolveKeyStore() keyStore {
 	in.unitWorkDir = unitProperty(serviceName(""), "WorkingDirectory")
 	if in.unitWorkDir != "" {
 		// The unit's EnvironmentFile is the same file serverEnvFile resolves
-		// (FLEET_ENV_FILE / /etc/fleet/fleet.env). Read the two keys the store
+		// (FLEET_ENV_FILE / /etc/fleet/fleet.env). Read the key the store
 		// hangs on without sourcing it; an unreadable file (not root) just means
 		// the default applies, which is also what the unit gets when unset.
-		if vals, err := creds.ReadEnvValues(serverEnvFile(""), "FLEET_DATA_DIR", "DATA_DIR"); err == nil {
+		if vals, err := creds.ReadEnvValues(serverEnvFile(""), "FLEET_DATA_DIR"); err == nil {
 			in.envFileDir = vals["FLEET_DATA_DIR"]
-			if in.envFileDir == "" {
-				in.envFileDir = vals["DATA_DIR"]
-			}
 		}
 	}
 	return chooseKeyStore(in)

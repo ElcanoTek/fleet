@@ -86,7 +86,7 @@ line never snaps a ceiling back to its default mid-run.
 These are read per-turn / per-task from the shared config, so a new value takes
 effect on the next turn or task:
 
-| Env var (FLEET_ / CHAT_ / CUTLASS_) | Field | Bound |
+| Env var | Field | Bound |
 |---|---|---|
 | `FLEET_MAX_COST_USD` | per-run cost ceiling (USD); an admin override set in Settings → Features (`max_cost_usd`) takes precedence while set — the reload still records the env value and it serves again on Reset | `>= 0` |
 | `FLEET_MAX_TOTAL_TOKENS` | per-run uncached-token ceiling; an admin override set in Settings → Features (`max_total_tokens`) takes precedence while set — the reload still records the env value and it serves again on Reset | `>= 0` |

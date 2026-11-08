@@ -172,9 +172,6 @@ func explainSourceCell(x config.Explanation) string {
 	if x.Spelling != "" && x.Spelling != x.Key {
 		s += " as " + x.Spelling
 	}
-	if x.Deprecated {
-		s += " (DEPRECATED alias — run `fleet config migrate-env`)"
-	}
 	if len(x.InheritedFrom) > 0 {
 		s += " (inherited from " + strings.Join(x.InheritedFrom, " ← ")
 		if x.InheritedSource != "" {

@@ -93,7 +93,7 @@ var defaultEnvFilePaths = []string{".env.local", "/etc/fleet/fleet.env"}
 //
 //	server: --server | $FLEET_CHAT_URL | http://$FLEET_SERVER_ADDR | env-file FLEET_SERVER_ADDR | http://127.0.0.1:8080
 //	email:  --email  | $FLEET_USER_EMAIL                                                          (required)
-//	token:  --token-file (contents) | $FLEET_SERVER_TOKEN | $CHAT_SERVER_TOKEN | env-file FLEET_SERVER_TOKEN/CHAT_SERVER_TOKEN (required)
+//	token:  --token-file (contents) | $FLEET_SERVER_TOKEN | env-file FLEET_SERVER_TOKEN (required)
 //
 // The env-file step (#480) is the on-box convenience: when the token (or server
 // address) wasn't given explicitly, Resolve reads it from the SAME 0600
@@ -123,8 +123,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		cfg.Token = strings.TrimSpace(string(b))
 	}
 	if cfg.Token == "" {
-		// Env-var NAMES (not secret values): canonical first, legacy alias second.
-		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN"))) // LEGACY-ENV-ALIAS: remove after migrate-env
+		cfg.Token = strings.TrimSpace(env("FLEET_SERVER_TOKEN"))
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
@@ -145,12 +144,12 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// the deployment this client is talking to.
 	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil { // LEGACY-ENV-ALIAS: remove after migrate-env
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
 			// serverFile is recorded only when the file actually fills a
 			// missing value: a file that merely matched on a key we already
 			// had says nothing about which deployment we are talking to.
 			if cfg.Token == "" {
-				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
+				if tok := strings.TrimSpace(vals["FLEET_SERVER_TOKEN"]); tok != "" {
 					cfg.Token, serverFile = tok, path
 				}
 			}
@@ -208,7 +207,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 
 	if cfg.Token == "" {
-		return Config{}, fmt.Errorf("no server token: on the box, `fleet chat` reads FLEET_SERVER_TOKEN from the server env file (tried %s) — ensure you can read it, or set FLEET_SERVER_TOKEN / CHAT_SERVER_TOKEN, or pass --token-file <path> (mode 0600)",
+		return Config{}, fmt.Errorf("no server token: on the box, `fleet chat` reads FLEET_SERVER_TOKEN from the server env file (tried %s) — ensure you can read it, or set FLEET_SERVER_TOKEN, or pass --token-file <path> (mode 0600)",
 			strings.Join(candidates, ", "))
 	}
 	return cfg, nil

@@ -23,7 +23,7 @@ func TestTitleModelDefaultIsTheCoreModel(t *testing.T) {
 // resolved with the same function as everything else.
 func TestExplainReportsInheritedDefaults(t *testing.T) {
 	for _, n := range []string{"FLEET_TITLE_MODEL", "FLEET_METADATA_MODEL", "FLEET_MEMORY_MODEL", "FLEET_MEMORY_GRAPH_MODEL"} {
-		unsetForTest(t, envreg.ChainSpellings(n)...)
+		unsetForTest(t, n)
 	}
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_TITLE_MODEL=vendor/my-model\n")

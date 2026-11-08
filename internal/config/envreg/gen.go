@@ -40,10 +40,10 @@ func Markdown() []byte {
 	w("  refuses to boot, and `fleet validate-config` reports it. An unset variable gets its default.\n")
 	w("- **Secrets** are marked *secret*: `fleet config explain` always redacts them, and in Kubernetes they belong in\n")
 	w("  `config.existingSecret`, not `config.env`.\n")
-	w("- **Deprecated aliases.** The legacy `CHAT_`/`CUTLASS_` spellings of a setting still work and are listed under it, but\n")
-	w("  are deprecated ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)): `fleet doctor` warns about each one it\n")
-	w("  finds and `fleet config migrate-env --write` rewrites the env file to the canonical names. Some `CHAT_`/`CUTLASS_` names\n")
-	w("  are canonical (not aliases) and are listed as settings of their own.\n")
+	w("- **No `CHAT_`/`CUTLASS_` aliases.** The legacy `CHAT_<X>`/`CUTLASS_<X>` spellings of a `FLEET_<X>` setting were removed\n")
+	w("  ([ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md)): nothing reads them. When one is set, `fleet serve` logs a\n")
+	w("  warning at boot, `fleet doctor` warns, and `fleet config explain` names the `FLEET_` key to use instead. The `CHAT_`/\n")
+	w("  `CUTLASS_` names listed below are canonical settings of their own, not aliases.\n")
 	w("- **Inherited defaults.** A default shown as *inherited from `X`* is setting `X`'s value, resolved the same way\n")
 	w("  (`FLEET_METADATA_MODEL` follows `FLEET_TITLE_MODEL` unless set).\n")
 	w("- **Inspect a box** with `fleet config explain [KEY…]`. It reports each setting's *configured* value and its source,\n")
@@ -55,7 +55,7 @@ func Markdown() []byte {
 	for _, g := range Groups {
 		w("- [%s](#%s)\n", g, anchor(g))
 	}
-	w("- [Deprecated aliases](#deprecated-aliases)\n\n")
+	w("\n")
 
 	for _, g := range Groups {
 		w("## %s\n\n", g)
@@ -71,32 +71,6 @@ func Markdown() []byte {
 		w("\n")
 	}
 
-	w("## Deprecated aliases\n\n")
-	w("Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether\n")
-	w("fleet's own env-file loader admits the alias. One it does not admit is still effective on the standard install,\n")
-	w("because the systemd unit's `EnvironmentFile=` exports every line, so migrate-env rewrites it too. The exception is a\n")
-	w("*reader-specific* alias, which only the named reader honours and the server ignores: migrate-env leaves it in place,\n")
-	w("because renaming it would start applying it to the server.\n\n")
-	w("| Alias | Canonical | Env file | Read by |\n| --- | --- | --- | --- |\n")
-	type row struct{ alias, canon, file, readBy string }
-	var rows []row
-	for i := range entries {
-		for _, a := range entries[i].DeprecatedAliases() {
-			file := "no"
-			if a.EnvFile {
-				file = "yes"
-			}
-			readBy := "every reader of the setting"
-			if a.ReadBy != "" {
-				readBy = "only " + a.ReadBy
-			}
-			rows = append(rows, row{a.Name, entries[i].Name, file, readBy})
-		}
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].alias < rows[j].alias })
-	for _, r := range rows {
-		w("| `%s` | `%s` | %s | %s |\n", r.alias, r.canon, r.file, cell(r.readBy))
-	}
 	return b.Bytes()
 }
 
@@ -165,26 +139,16 @@ func describe(e *Entry) string {
 		}
 		parts = append(parts, v+".")
 	}
-	var dep, other []string
+	other := make([]string, 0, len(e.Aliases))
 	for _, a := range e.Aliases {
 		s := "`" + a.Name + "`"
-		switch {
-		case a.ReadBy != "":
-			s += " (read only by " + a.ReadBy + "; the server ignores it)"
-		case !a.EnvFile:
+		if !a.EnvFile {
 			s += " (process env only)"
 		}
-		if a.Deprecated {
-			dep = append(dep, s)
-		} else {
-			other = append(other, s)
-		}
+		other = append(other, s)
 	}
 	if len(other) > 0 {
 		parts = append(parts, "Also read as "+strings.Join(other, ", ")+".")
-	}
-	if len(dep) > 0 {
-		parts = append(parts, "Deprecated aliases: "+strings.Join(dep, ", ")+".")
 	}
 	if e.Helm != "" {
 		parts = append(parts, "Helm: "+helmLabel(e.Helm)+".")
@@ -220,7 +184,6 @@ func bounds(k *Knob) string {
 type HelmProperty struct {
 	Type        []string `json:"type"`
 	Description string   `json:"description"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
 }
 
 // HelmSchema is the generated config.env subtree.
@@ -283,10 +246,6 @@ func HelmEnvSchema() HelmSchema {
 			d += " Default: " + strings.Trim(e.Default, "()") + "."
 		}
 		s.Properties[e.Name] = HelmProperty{Type: helmValueTypes, Description: d}
-		for _, a := range e.DeprecatedAliases() {
-			s.Properties[a.Name] = HelmProperty{Type: helmValueTypes, Deprecated: true,
-				Description: "Deprecated alias of " + e.Name + " (ADR-0099); use " + e.Name + "."}
-		}
 	}
 	return s
 }
@@ -363,11 +322,7 @@ func renderHelmEnv(s HelmSchema, indent string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		p := `{ "type": ["` + strings.Join(prop.Type, `", "`) + `"], "description": ` + d
-		if prop.Deprecated {
-			p += `, "deprecated": true`
-		}
-		p += " }"
+		p := `{ "type": ["` + strings.Join(prop.Type, `", "`) + `"], "description": ` + d + " }"
 		sep := ","
 		if i == len(names)-1 {
 			sep = ""

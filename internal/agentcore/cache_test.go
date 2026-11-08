@@ -1,8 +1,8 @@
 package agentcore
 
 // Lifted+adapted from chat cache_test.go. The kill-switch env var is the
-// canonical FLEET_DISABLE_PROMPT_CACHE (chat used CHAT_DISABLE_PROMPT_CACHE; the
-// back-compat alias still works). The `~`-alias handling that chat tested is
+// canonical FLEET_DISABLE_PROMPT_CACHE (chat used CHAT_DISABLE_PROMPT_CACHE,
+// which ADR-0106 removed). The `~`-alias handling that chat tested is
 // preserved by supportsExplicitBreakpoints.
 
 import (
@@ -101,8 +101,6 @@ func hasCacheMarker(msg fantasy.Message) bool {
 
 func TestPromptCachingStep_AnthropicPlacesBreakpoints(t *testing.T) {
 	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CHAT_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CUTLASS_DISABLE_PROMPT_CACHE", "")
 	msgs := []fantasy.Message{
 		fantasy.NewSystemMessage("you are an assistant"),
 		fantasy.NewUserMessage("hello"),
@@ -139,8 +137,6 @@ func TestPromptCachingStep_AnthropicPlacesBreakpoints(t *testing.T) {
 
 func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CHAT_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CUTLASS_DISABLE_PROMPT_CACHE", "")
 	msgs := []fantasy.Message{
 		fantasy.NewSystemMessage("you are an assistant"),
 		fantasy.NewUserMessage("hello"),
@@ -186,8 +182,6 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 // nothing past an explicit one. Anthropic keeps its breakpoints.
 func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.T) {
 	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CHAT_DISABLE_PROMPT_CACHE", "")
-	t.Setenv("CUTLASS_DISABLE_PROMPT_CACHE", "")
 	system := fantasy.NewSystemMessage(strings.Repeat("s", 4000))
 	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] " + strings.Repeat("m", 2000))
 	marked := func(model string, msgs []fantasy.Message, opts ...CacheOption) []bool {
@@ -278,9 +272,9 @@ func TestPromptCachingStep_KillSwitch(t *testing.T) {
 	}
 }
 
-// TestPromptCachingStep_KillSwitchLegacyAlias asserts the CHAT_/CUTLASS_
-// back-compat aliases still toggle the kill-switch.
-func TestPromptCachingStep_KillSwitchLegacyAlias(t *testing.T) {
+// TestPromptCachingStep_KillSwitchIgnoresRemovedAlias asserts the removed
+// CHAT_ spelling (ADR-0106) no longer toggles the kill-switch.
+func TestPromptCachingStep_KillSwitchIgnoresRemovedAlias(t *testing.T) {
 	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
 	t.Setenv("CHAT_DISABLE_PROMPT_CACHE", "1")
 	msgs := []fantasy.Message{
@@ -289,8 +283,8 @@ func TestPromptCachingStep_KillSwitchLegacyAlias(t *testing.T) {
 	}
 	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, out, _ := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
-	if out.Messages != nil {
-		t.Errorf("legacy CHAT_ kill-switch should short-circuit, got %d msgs", len(out.Messages))
+	if out.Messages == nil {
+		t.Error("the removed CHAT_ kill-switch spelling must not short-circuit caching")
 	}
 }
 

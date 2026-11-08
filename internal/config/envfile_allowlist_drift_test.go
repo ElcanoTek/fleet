@@ -22,8 +22,7 @@ import (
 // FLEET_-prefixed helper family, and asserts each is in allowedEnvVars.
 //
 // Suffix-based helpers are expanded exactly the way lookupFleet derives the
-// spellings: only the canonical FLEET_<suffix> must be allowlisted (the
-// CHAT_/CUTLASS_ legacy twins are optional back-compat); getenvFleetOrBare
+// spellings: the canonical FLEET_<suffix> must be allowlisted; getenvFleetOrBare
 // additionally reads the bare suffix, so that spelling is asserted too.
 
 // driftDirectKeyFuncs read their first string argument as a verbatim env key.
