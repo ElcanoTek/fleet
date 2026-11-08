@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
+
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -23,8 +25,9 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	l := newLegacy(t)
 	ctx := context.Background()
 	l.schedUser(uuid.New(), "Brad@X.test", "client", true)
-	l.schedUser(uuid.New(), " Ops@X.test", "client", true)
-	l.schedUser(uuid.New(), "ops@x.test", "readonly", true) // case/space duplicate of " Ops@X.test"
+	l.schedUser(uuid.New(), "Lee@X.test", "client", true)
+	// Rows the account already has under its email (written since: a chat
+	// member's prompt, a budget set for the email) collide with Lee's.
 	exec := func(q string, args ...any) {
 		t.Helper()
 		if _, err := l.raw.Exec(q, args...); err != nil {
@@ -33,12 +36,12 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	}
 	prompt := `INSERT INTO sched.prompt_library (id, owner_username, name, content, visibility) VALUES ($1, $2, $3, 'body', 'private')`
 	exec(prompt, uuid.New(), "Brad@X.test", "Daily brief")
-	exec(prompt, uuid.New(), "ops@x.test", "Triage")
-	exec(prompt, uuid.New(), " Ops@X.test", "triage") // same name, case-insensitively
+	exec(prompt, uuid.New(), "lee@x.test", "Triage")
+	exec(prompt, uuid.New(), "Lee@X.test", "triage") // same name, case-insensitively
 	budgetSQL := `INSERT INTO sched.budgets (scope, principal_id, time_window, soft_usd, hard_usd, soft_tokens, hard_tokens) VALUES ('user', $1, $2, $3, $4, $5, $6)`
 	exec(budgetSQL, "Brad@X.test", "day", nil, 0.0, nil, nil) // a hard stop
-	exec(budgetSQL, "ops@x.test", "week", nil, 10.0, nil, 5000)
-	exec(budgetSQL, " Ops@X.test", "week", 2.0, 20.0, nil, 1000)
+	exec(budgetSQL, "lee@x.test", "week", nil, 10.0, nil, 5000)
+	exec(budgetSQL, "Lee@X.test", "week", 2.0, 20.0, nil, 1000)
 	// Audit labels move too; an API key's label does not.
 	taskID := uuid.New()
 	if err := l.sched.AddTask(ctx, &models.Task{ID: taskID, Prompt: "p", Status: models.TaskStatusPending}); err != nil {
@@ -65,18 +68,18 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	}
 
 	// Prompt collision: both kept, the moved one renamed.
-	ops, err := st.ListPromptLibrary(ctx, "ops@x.test")
-	if err != nil || len(ops) != 2 {
-		t.Fatalf("ops prompts = %+v, %v; want both", ops, err)
+	lee, err := st.ListPromptLibrary(ctx, "lee@x.test")
+	if err != nil || len(lee) != 2 {
+		t.Fatalf("lee's prompts = %+v, %v; want both", lee, err)
 	}
-	if len(rep.RenamedPrompts) != 1 || rep.RenamedPrompts[0].To != "triage (from  Ops@X.test)" {
+	if len(rep.RenamedPrompts) != 1 || rep.RenamedPrompts[0].To != "triage (from Lee@X.test)" {
 		t.Errorf("renamed prompts = %+v", rep.RenamedPrompts)
 	}
 	// Budget collision: one week budget, the stricter bound of each kind.
 	var n int
 	var soft, hard float64
 	var hardTok int64
-	if err := l.raw.QueryRow(`SELECT count(*), max(soft_usd), max(hard_usd), max(hard_tokens) FROM sched.budgets WHERE scope = 'user' AND principal_id = 'ops@x.test' AND time_window = 'week'`).Scan(&n, &soft, &hard, &hardTok); err != nil {
+	if err := l.raw.QueryRow(`SELECT count(*), max(soft_usd), max(hard_usd), max(hard_tokens) FROM sched.budgets WHERE scope = 'user' AND principal_id = 'lee@x.test' AND time_window = 'week'`).Scan(&n, &soft, &hard, &hardTok); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || soft != 2 || hard != 10 || hardTok != 1000 {
@@ -94,5 +97,79 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	}
 	if rep.RewrittenPrincipals == 0 {
 		t.Errorf("report counts no rewritten rows")
+	}
+}
+
+// TestMergeQuarantinesDuplicateUsernamesRows (Codex 4505664986 on #2083): two
+// legacy usernames that normalize to one email are one account, and only the
+// winner's rows move to it. The winner is the username that already is the
+// email (else the oldest); the loser's private prompt and budget stay under
+// its old username — never folded into the winner's account — and are
+// reported as quarantined.
+func TestMergeQuarantinesDuplicateUsernamesRows(t *testing.T) {
+	l := newLegacy(t)
+	ctx := context.Background()
+	// The mixed-case one is older, but the exact email wins.
+	l.schedUser(uuid.New(), " Pat@X.test", "client", true)
+	l.schedUser(uuid.New(), "pat@x.test", "readonly", true)
+	// And a group with no exact email: the oldest wins.
+	l.schedUser(uuid.New(), "Kim@X.test", "client", true)
+	l.schedUser(uuid.New(), "KIM@x.test", "client", true)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := l.raw.Exec(q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	prompt := `INSERT INTO sched.prompt_library (id, owner_username, name, content, visibility) VALUES ($1, $2, $3, 'body', 'private')`
+	budgetSQL := `INSERT INTO sched.budgets (scope, principal_id, time_window, hard_usd) VALUES ('user', $1, 'day', $2)`
+	for _, u := range []struct {
+		name string
+		hard float64
+	}{{" Pat@X.test", 1}, {"pat@x.test", 50}, {"Kim@X.test", 2}, {"KIM@x.test", 60}} {
+		exec(prompt, uuid.New(), u.name, "mine: "+u.name)
+		exec(budgetSQL, u.name, u.hard)
+	}
+
+	res := l.merge()
+	rep := res.Report
+	st := storage.New()
+	st.SetDatabase(l.sched)
+	for _, c := range []struct {
+		email, ownPrompt, lostOwner string
+		hard                        float64
+	}{
+		{"pat@x.test", "mine: pat@x.test", " Pat@X.test", 50},
+		{"kim@x.test", "mine: Kim@X.test", "KIM@x.test", 2},
+	} {
+		list, err := st.ListPromptLibrary(ctx, c.email)
+		if err != nil || len(list) != 1 || list[0].Name != c.ownPrompt {
+			t.Errorf("%s's prompts = %+v, %v; want only %q", c.email, list, err, c.ownPrompt)
+		}
+		var hard float64
+		var n int
+		if err := l.raw.QueryRow(`SELECT count(*), coalesce(max(hard_usd), 0) FROM sched.budgets WHERE scope = 'user' AND principal_id = $1`, c.email).Scan(&n, &hard); err != nil || n != 1 || hard != c.hard {
+			t.Errorf("%s's budgets: n=%d hard=%v (%v); want its own (%v)", c.email, n, hard, err, c.hard)
+		}
+		var lostPrompts, lostBudgets int
+		if err := l.raw.QueryRow(`SELECT (SELECT count(*) FROM sched.prompt_library WHERE owner_username = $1), (SELECT count(*) FROM sched.budgets WHERE principal_id = $1)`, c.lostOwner).Scan(&lostPrompts, &lostBudgets); err != nil || lostPrompts != 1 || lostBudgets != 1 {
+			t.Errorf("the loser %q's rows were moved: prompts=%d budgets=%d (%v)", c.lostOwner, lostPrompts, lostBudgets, err)
+		}
+	}
+	got := map[string]identity.MergeEntry{}
+	for _, d := range rep.DuplicateUsernames {
+		got[d.SchedUsername] = d
+	}
+	for _, lost := range []string{" Pat@X.test", "KIM@x.test"} {
+		if d, ok := got[lost]; !ok || d.QuarantinedPrompts != 1 || d.QuarantinedBudgets != 1 {
+			t.Errorf("duplicate %q not reported as quarantined: %+v", lost, rep.DuplicateUsernames)
+		}
+	}
+	if len(rep.MergedBudgets) != 0 || len(rep.RenamedPrompts) != 0 {
+		t.Errorf("a loser's rows were folded in: merged=%+v renamed=%+v", rep.MergedBudgets, rep.RenamedPrompts)
+	}
+	// The exact email took the account: its UUID and role.
+	if u := l.account("pat@x.test"); u.OpsScope != identity.OpsView {
+		t.Errorf("pat@x.test = %+v, want the exact username's readonly access", u)
 	}
 }

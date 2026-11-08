@@ -79,14 +79,16 @@ with the report. A failure rolls back whole and the next open retries.
 | sched admin + chat member/viewer | role unchanged, scope **run**; reported (fail closed, ADR-0074) |
 | sched-only account | new row keyed by the lowercased username, role **viewer**, scope mapped (an admin: run, reported), sched UUID, password hash, `created_at` and `last_login` kept (`updated_at` is the merge), enabled as it was; reported |
 | sched row with an unknown role (the column had no CHECK), judged exactly as stored: a padded or re-cased name (`" admin"`, `ReadOnly`) is unknown too | scope none; reported |
-| two sched usernames differing only in case | the first wins the UUID; the rest reported |
+| two sched usernames that normalize to one email (case, spaces) | one becomes the account — the username that already is the email, else the oldest — keeping its UUID; the others are reported as duplicates: their tasks no longer resolve, and their prompts, budgets and audit labels stay under the old username (quarantined: no account reaches them, nothing is folded into the winner) |
 
 **Username-keyed rows move with the account.** A few scheduler tables key
 rows by the sched username as text rather than by UUID. When the merge
 normalizes a legacy username to the account's email (trimmed, lower-cased:
 `Brad@X.com` → `brad@x.com`), it renames those rows in the same transaction,
 for exactly the usernames it changed (API-key labels, `admin` and run labels
-are never touched):
+are never touched) — and, in a duplicate group, only for the winner's: a
+losing duplicate's rows are never moved onto the winning account (they would
+hand one person's private prompts and budget limits to another):
 
 - `prompt_library.owner_username`. Prompts are never dropped: if the account
   already has a prompt of the same name (case-insensitively), the moved one

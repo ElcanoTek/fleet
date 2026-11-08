@@ -70,6 +70,12 @@ type MergeEntry struct {
 	SchedRole string `json:"sched_role,omitempty"`
 	ChatRole  string `json:"chat_role,omitempty"`
 	OpsScope  string `json:"ops_scope,omitempty"`
+	// SchedUsername is the legacy username as stored (duplicates: the one
+	// that lost), and QuarantinedPrompts / QuarantinedBudgets count the rows
+	// still keyed by it, which no account reaches.
+	SchedUsername      string `json:"sched_username,omitempty"`
+	QuarantinedPrompts int    `json:"quarantined_prompts,omitempty"`
+	QuarantinedBudgets int    `json:"quarantined_budgets,omitempty"`
 }
 
 // Notable reports whether the report names anything an operator should read.
@@ -98,7 +104,7 @@ func (r *MergeReport) Lines() []string {
 		out = append(out, fmt.Sprintf("  %s had unknown Operations Center role %q: no Operations Center access", e.Email, e.SchedRole))
 	}
 	for _, e := range r.DuplicateUsernames {
-		out = append(out, fmt.Sprintf("  %s: another Operations Center username differing only in case was merged first; this one's tasks no longer resolve to an account", e.Email))
+		out = append(out, fmt.Sprintf("  %q is another Operations Center username for %s (differing only in case or spaces) and did not become the account: its tasks no longer resolve to an account, and its %d private prompt(s) and %d budget(s) stay under %q, quarantined", e.SchedUsername, e.Email, e.QuarantinedPrompts, e.QuarantinedBudgets, e.SchedUsername))
 	}
 	if r.RewrittenPrincipals > 0 {
 		out = append(out, fmt.Sprintf("  %d scheduler row(s) keyed by a legacy username (prompt owners, user budgets, audit labels) moved to the account's email", r.RewrittenPrincipals))
@@ -365,28 +371,36 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	seen := map[string]bool{}
 	opsAdmins := map[string]bool{}
-	// renames are the legacy usernames the merge normalizes: the scheduler
-	// rows keyed by them move with the account (rewritePrincipals).
+	// Collisions first: legacy usernames that normalize to one email are one
+	// account, and exactly one of them becomes it (duplicateWinners). Only
+	// the winner's username-keyed rows move to the email (renames); a
+	// losing duplicate's prompts, budgets and labels stay under its old
+	// username — quarantined, reported — and are never folded into the
+	// winner's account.
+	winner := duplicateWinners(legacyRows)
 	renames := map[string]string{}
-	for _, r := range legacyRows {
-		if email := NormalizeEmail(r.username); email != "" && email != r.username {
+	for i, r := range legacyRows {
+		if email := NormalizeEmail(r.username); email != "" && winner[email] == i && email != r.username {
 			renames[r.username] = email
 		}
 	}
 	now := time.Now().Unix()
-	for _, r := range legacyRows {
+	for i, r := range legacyRows {
 		email := NormalizeEmail(r.username)
 		if email == "" {
 			continue
 		}
 		schedRole := r.role // exact: a padded role is unknown (MapLegacy)
-		if seen[email] {
-			rep.DuplicateUsernames = append(rep.DuplicateUsernames, MergeEntry{Email: email, SchedRole: schedRole})
+		if winner[email] != i {
+			prompts, budgets, err := countKeyedRows(ctx, tx, schedSchema, r.username)
+			if err != nil {
+				return err
+			}
+			rep.DuplicateUsernames = append(rep.DuplicateUsernames, MergeEntry{Email: email, SchedRole: schedRole,
+				SchedUsername: r.username, QuarantinedPrompts: prompts, QuarantinedBudgets: budgets})
 			continue
 		}
-		seen[email] = true
 		if r.enabled && schedRole == LegacyOpsAdmin {
 			opsAdmins[email] = true
 		}
@@ -502,4 +516,47 @@ func plainIdentifier(s string) bool {
 		}
 	}
 	return true
+}
+
+// duplicateWinners picks, for every email several legacy usernames normalize
+// to, the row that becomes the account (index into rows): the one whose
+// username already IS the email — its rows are keyed by the email, so it is
+// the only choice that keeps every other username's rows apart — else the
+// oldest (rows come ordered by created_at, id). A single-username email maps
+// to its own row.
+func duplicateWinners(rows []legacyRow) map[string]int {
+	win := map[string]int{}
+	for i, r := range rows {
+		email := NormalizeEmail(r.username)
+		if email == "" {
+			continue
+		}
+		cur, seen := win[email]
+		switch {
+		case !seen:
+			win[email] = i
+		case r.username == email && rows[cur].username != email:
+			win[email] = i
+		}
+	}
+	return win
+}
+
+// countKeyedRows counts a username's prompt_library and user budget rows.
+func countKeyedRows(ctx context.Context, tx *sql.Tx, schema, username string) (prompts, budgets int, err error) {
+	count := func(table, where string) (int, error) {
+		var ok bool
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+"."+table).Scan(&ok); err != nil || !ok {
+			return 0, err
+		}
+		var n int
+		q := `SELECT count(*) FROM ` + schema + `.` + table + ` WHERE ` + where //nolint:gosec // G202: schema passed plainIdentifier; table/where are fixed
+		err := tx.QueryRowContext(ctx, q, username).Scan(&n)
+		return n, err
+	}
+	if prompts, err = count("prompt_library", "owner_username = $1"); err != nil {
+		return 0, 0, err
+	}
+	budgets, err = count("budgets", "scope = 'user' AND principal_id = $1")
+	return prompts, budgets, err
 }
