@@ -335,7 +335,7 @@ func TestPreviewRoundModel_CircuitOpenPicksFallbackBeforePreRoundCompaction(t *t
 		t.Fatalf("closed circuit: preview = %q, want the primary", got.Model())
 	}
 	for i := 0; i < 50 && e.healthRegistry.State("cp-primary") != CircuitOpen; i++ {
-		e.healthRegistry.RecordError("cp-primary", "503")
+		e.healthRegistry.RecordError(context.Background(), "cp-primary", "503")
 	}
 	if e.healthRegistry.State("cp-primary") != CircuitOpen {
 		t.Skip("could not open the circuit through RecordError in 50 attempts")

@@ -310,6 +310,8 @@ func childRecord(line []byte) (slog.Record, bool) {
 		msg    string
 		hasMsg bool
 		attrs  []slog.Attr
+		// the record's own keys, so a child field named like one is suffixed
+		seenKeys = map[string]bool{slog.TimeKey: true, slog.LevelKey: true, slog.MessageKey: true}
 	)
 	for dec.More() {
 		tok, err := dec.Token()
@@ -346,7 +348,9 @@ func childRecord(line []byte) (slog.Record, bool) {
 				continue
 			}
 		}
-		attrs = append(attrs, jsonAttr(key, v))
+		// The key is scrubbed like every nested key (redactedKeys) and made
+		// unique in document order.
+		attrs = append(attrs, jsonAttr(uniqueKey(seenKeys, Redact(key)), v))
 	}
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
 		return slog.Record{}, false
@@ -363,13 +367,13 @@ func childRecord(line []byte) (slog.Record, bool) {
 	return rec, true
 }
 
-// jsonAttr turns one decoded JSON field into an attribute the handler's
-// ReplaceAttr redacts like a native one: numbers as numbers (so the
-// secret-key rule for numbers applies), objects as groups (so their keys are
-// checked as members of the group path), everything else as is. The key is
-// scrubbed too: nothing from the child is trusted.
+// jsonAttr turns one top-level decoded JSON field into an attribute the
+// handler's ReplaceAttr redacts like a native one: scalars typed (numbers as
+// numbers, so the secret-key rule for numbers applies), objects and arrays
+// as slog.Any — which ReplaceAttr hands to redactComposite, the one walk that
+// redacts every nested key and value. The top-level key arrives scrubbed and
+// unique (childRecord); nothing from the child is trusted.
 func jsonAttr(key string, v any) slog.Attr {
-	key = Redact(key)
 	switch x := v.(type) {
 	case string:
 		return slog.String(key, x)
@@ -383,16 +387,7 @@ func jsonAttr(key string, v any) slog.Attr {
 			return slog.Float64(key, f)
 		}
 		return slog.String(key, x.String())
-	case map[string]any:
-		members := make([]any, 0, len(x))
-		for k, e := range x {
-			members = append(members, jsonAttr(k, e))
-		}
-		if len(members) == 0 {
-			return slog.Any(key, x)
-		}
-		return slog.Group(key, members...)
-	default: // nil, []any
+	default: // nil, map[string]any, []any
 		return slog.Any(key, x)
 	}
 }

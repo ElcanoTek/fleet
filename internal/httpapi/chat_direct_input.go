@@ -8,7 +8,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -233,7 +232,7 @@ func (s *Server) settleUnreleasedInput(user, convID string, c *directClaim) {
 		return true
 	}
 	if !try() {
-		s.retryDirectInput("settle_unreleased", c.id, 1, directReleaseBackoff, try)
+		s.retryDirectInput(detachedCtx(user, convID, ""), "settle_unreleased", c.id, 1, directReleaseBackoff, try)
 	}
 }
 
@@ -303,14 +302,14 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 // doubling the delay, until it lands or directReleaseRetries run out (boot
 // recovery then settles the claim). A claim left 'running' with no live turn
 // would answer every resend of its key "already running".
-func (s *Server) retryDirectInput(what, id string, attempt int, delay time.Duration, try func() bool) {
+func (s *Server) retryDirectInput(ctx context.Context, what, id string, attempt int, delay time.Duration, try func() bool) {
 	if attempt > directReleaseRetries {
-		slog.Warn("direct input: giving up after retries; boot recovery settles it", "op", what, "input_id", id, "retries", directReleaseRetries)
+		logging.From(ctx).Warn("direct input: giving up after retries; boot recovery settles it", "op", what, "input_id", id, "retries", directReleaseRetries)
 		return
 	}
 	s.background.After("httpapi.direct_"+what, delay, func() {
 		if !try() {
-			s.retryDirectInput(what, id, attempt+1, 2*delay, try)
+			s.retryDirectInput(ctx, what, id, attempt+1, 2*delay, try)
 		}
 	})
 }
@@ -329,7 +328,7 @@ func (s *Server) settleDirectInput(id, turnID string) {
 		return true
 	}
 	if !try() {
-		s.retryDirectInput("settle", id, 1, directReleaseBackoff, try)
+		s.retryDirectInput(detachedCtx("", "", turnID), "settle", id, 1, directReleaseBackoff, try)
 	}
 }
 
@@ -370,7 +369,7 @@ func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (r
 	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer scancel()
 	if !cancelStopped(sctx) {
-		s.retryDirectInput("cancel_stopped_inputs", turnID, 1, directReleaseBackoff, func() bool {
+		s.retryDirectInput(detachedCtx("", buf.convID, turnID), "cancel_stopped_inputs", turnID, 1, directReleaseBackoff, func() bool {
 			ctx, cancel := context.WithTimeout(detachedCtx("", buf.convID, turnID), 5*time.Second)
 			defer cancel()
 			if !cancelStopped(ctx) {

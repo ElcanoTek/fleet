@@ -6,7 +6,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -388,12 +387,12 @@ func lookRuntimeBinary(bin string) error {
 // after boot — it stays because this path cannot fail a container create for a
 // tuning knob that only ever ADDS memory (unlike the memory LIMIT itself,
 // which fails closed when unparseable).
-func kataOverheadMB() int {
+func kataOverheadMB(ctx context.Context) int {
 	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_KATA_OVERHEAD_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
-		slog.Warn("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB — using default", "value", v, "default_mib", DefaultKataOverheadMB)
+		logging.From(ctx).Warn("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB — using default", "value", v, "default_mib", DefaultKataOverheadMB)
 	}
 	return DefaultKataOverheadMB
 }
@@ -496,11 +495,11 @@ func addKataMemoryOverhead(memoryLimit string, overheadMB int) (string, error) {
 // Returns an error — propagated out of NewContainer — when the limit is
 // unparseable, so a misconfiguration fails closed instead of silently shipping
 // an undersized guest.
-func applyKataMemoryOverhead(cfg *ContainerConfig) error {
+func applyKataMemoryOverhead(ctx context.Context, cfg *ContainerConfig) error {
 	if runtimeKind(cfg.Runtime) != runtimeKata {
 		return nil
 	}
-	bumped, err := addKataMemoryOverhead(cfg.MemoryLimit, kataOverheadMB())
+	bumped, err := addKataMemoryOverhead(cfg.MemoryLimit, kataOverheadMB(ctx))
 	if err != nil {
 		return err
 	}

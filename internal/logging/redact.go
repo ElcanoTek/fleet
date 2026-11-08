@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -166,22 +168,23 @@ func redactComposite(v any) any {
 		return out
 	case map[string]string:
 		out := make(map[string]string, len(x))
-		for k, s := range x {
-			if secretAttrKey(k) {
-				out[k] = redactedValue
+		for _, k := range redactedKeys(x) {
+			if secretAttrKey(k.orig) {
+				out[k.out] = redactedValue
 				continue
 			}
-			out[k] = Redact(s)
+			out[k.out] = Redact(x[k.orig])
 		}
 		return out
 	case map[string]any:
 		out := make(map[string]any, len(x))
-		for k, e := range x {
-			if secretAttrKey(k) && !keepUnderSecretKey(k, e) {
-				out[k] = redactedValue
+		for _, k := range redactedKeys(x) {
+			e := x[k.orig]
+			if secretAttrKey(k.orig) && !keepUnderSecretKey(k.orig, e) {
+				out[k.out] = redactedValue
 				continue
 			}
-			out[k] = redactComposite(e)
+			out[k.out] = redactComposite(e)
 		}
 		return out
 	case error:
@@ -213,6 +216,42 @@ func redactComposite(v any) any {
 		return unloggable(v)
 	}
 	return redactComposite(walked)
+}
+
+// keyPair is one map key and the form it is logged under.
+type keyPair struct{ orig, out string }
+
+// redactedKeys is the one key routine for every map the redactor rebuilds
+// (redactComposite, and through it child JSON and slog.Any values): each key
+// scrubbed like a value — a key can be a secret too (a registered token used
+// as a map key, a header line used as a field name) — in sorted order, with
+// collisions made unique deterministically: when two keys redact to the same
+// text, the later one in sorted order gets "#2", "#3", … so neither entry is
+// lost and the output does not depend on map iteration order. The secret-KEY
+// rule is applied by the caller to the ORIGINAL key.
+func redactedKeys[V any](m map[string]V) []keyPair {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	seen := make(map[string]bool, len(keys))
+	out := make([]keyPair, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, keyPair{orig: k, out: uniqueKey(seen, Redact(k))})
+	}
+	return out
+}
+
+// uniqueKey returns k, or k#2, k#3 … — the first not yet in seen — and marks
+// it seen.
+func uniqueKey(seen map[string]bool, k string) string {
+	c := k
+	for i := 2; seen[c]; i++ {
+		c = k + "#" + strconv.Itoa(i)
+	}
+	seen[c] = true
+	return c
 }
 
 // unloggable is what a composite value that cannot be walked logs as: its

@@ -208,7 +208,7 @@ const httpStatusBodyCap = 4 * 1024
 // those (method-not-found, invalid params), so a body that IS a JSON-RPC
 // response keeps its existing parse; anything else becomes an HTTPStatusError
 // carrying the status and the body's first line.
-func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (json.RawMessage, error) {
+func (t *HTTPTransport) httpStatusResponse(ctx context.Context, resp *http.Response, wantID int) (json.RawMessage, error) {
 	// Keep the first httpStatusBodyCap bytes for the error message while the
 	// decoder streams the whole body: the two must not share one bound. The
 	// first version of this path decoded only that head, so a JSON-RPC body
@@ -225,7 +225,7 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 		// which a Google-style REST error ({"error":{"code":403,…}}) also
 		// has and which must stay an HTTPStatusError with its own text.
 		if env, derr := decodeJSONRPCEnvelope(br); derr == nil && (env.JSONRPC != "" || env.ID.matchesInt(wantID)) {
-			t.noteStatusBodyMismatch(resp.StatusCode, env)
+			t.noteStatusBodyMismatch(ctx, resp.StatusCode, env)
 			result, ierr := interpretJSONRPC(env, wantID)
 			var rpcErr *RPCError
 			var unattributed *UnattributedResponseError
@@ -257,7 +257,7 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 // symptom of a project that has not enabled the *mcp.googleapis.com service
 // (or is not enrolled in the Developer Preview); the tool calls that follow
 // carry the real "the caller does not have permission".
-func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope) {
+func (t *HTTPTransport) noteStatusBodyMismatch(ctx context.Context, status int, env *jsonrpcEnvelope) {
 	if len(env.Result) == 0 || string(env.Result) == nullString {
 		return
 	}
@@ -268,7 +268,7 @@ func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope)
 	if logged {
 		return
 	}
-	slog.Warn("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
+	logging.From(ctx).Warn("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
 }
 
 // headCapture is an io.Writer that keeps only the first max bytes written
@@ -1458,7 +1458,7 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 	// refused credential, a missing route, an outage — and must be reported
 	// as such, not fed to the JSON-RPC decoder as if it were a result.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return t.httpStatusResponse(resp, id)
+		return t.httpStatusResponse(ctx, resp, id)
 	}
 
 	// Handle SSE (Server-Sent Events) responses

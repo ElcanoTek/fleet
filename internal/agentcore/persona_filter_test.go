@@ -90,7 +90,7 @@ func TestMatchesToolPattern(t *testing.T) {
 func TestResolvePersonaTools_EmptyPolicyPassthrough(t *testing.T) {
 	all := []fantasy.AgentTool{namedTool("bash"), namedTool("run_python"), namedTool("mcp_email_send")}
 	obs := &recordingObserver{}
-	got := resolvePersonaTools("p", PersonaToolPermissions{}, all, obs)
+	got := resolvePersonaTools(context.Background(), "p", PersonaToolPermissions{}, all, obs)
 	// An empty policy must return the SAME slice header (zero-alloc passthrough)
 	// and emit no audit events.
 	if &got[0] != &all[0] || len(got) != len(all) {
@@ -114,7 +114,7 @@ func TestResolvePersonaTools_AllowOnly(t *testing.T) {
 		Allow: []string{"bash", "run_python", "mcp:filesystem/*"},
 	}
 	obs := &recordingObserver{}
-	got := toolNames(resolvePersonaTools("code-reviewer", policy, all, obs))
+	got := toolNames(resolvePersonaTools(context.Background(), "code-reviewer", policy, all, obs))
 	want := []string{"bash", "run_python", "mcp_filesystem_read_file", "mcp_filesystem_write_file"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("allow-only: got %v, want %v", got, want)
@@ -146,7 +146,7 @@ func TestResolvePersonaTools_DenyOnly(t *testing.T) {
 		Deny: []string{"bash", "run_python", "mcp:email/*"},
 	}
 	obs := &recordingObserver{}
-	got := toolNames(resolvePersonaTools("executive-assistant", policy, all, obs))
+	got := toolNames(resolvePersonaTools(context.Background(), "executive-assistant", policy, all, obs))
 	// Deny-only is default-allow: everything except the denied tools survives.
 	want := []string{"web_search"}
 	if !slices.Equal(got, want) {
@@ -170,7 +170,7 @@ func TestResolvePersonaTools_DenyWinsOverAllow(t *testing.T) {
 		Deny:  []string{"mcp:filesystem/write_file"},
 	}
 	obs := &recordingObserver{}
-	got := toolNames(resolvePersonaTools("p", policy, all, obs))
+	got := toolNames(resolvePersonaTools(context.Background(), "p", policy, all, obs))
 	want := []string{"mcp_filesystem_read_file"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("deny-wins: got %v, want %v", got, want)
@@ -195,7 +195,7 @@ func TestResolvePersonaTools_BridgesSurviveAllowList(t *testing.T) {
 		namedTool("tool_call"),
 	}
 	policy := PersonaToolPermissions{Allow: []string{"bash"}}
-	got := toolNames(resolvePersonaTools("p", policy, all, &recordingObserver{}))
+	got := toolNames(resolvePersonaTools(context.Background(), "p", policy, all, &recordingObserver{}))
 	want := []string{"bash", "tool_search", "tool_describe", "tool_call"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("allow-list must keep the disclosure bridges: got %v, want %v", got, want)
@@ -208,7 +208,7 @@ func TestResolvePersonaTools_BridgesSurviveAllowList(t *testing.T) {
 func TestResolvePersonaTools_ExplicitDenyDropsBridge(t *testing.T) {
 	all := []fantasy.AgentTool{namedTool("bash"), namedTool("tool_search"), namedTool("tool_call")}
 	policy := PersonaToolPermissions{Deny: []string{"tool_call"}}
-	got := toolNames(resolvePersonaTools("p", policy, all, &recordingObserver{}))
+	got := toolNames(resolvePersonaTools(context.Background(), "p", policy, all, &recordingObserver{}))
 	want := []string{"bash", "tool_search"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("explicit deny of a bridge must hold: got %v, want %v", got, want)
@@ -227,7 +227,7 @@ func TestResolvePersonaTools_CannotWidenBeyondInput(t *testing.T) {
 	policy := PersonaToolPermissions{
 		Allow: []string{"bash", "mcp:filesystem/*", "mcp:email/send", "*"},
 	}
-	got := toolNames(resolvePersonaTools("p", policy, all, &recordingObserver{}))
+	got := toolNames(resolvePersonaTools(context.Background(), "p", policy, all, &recordingObserver{}))
 	if slices.Contains(got, "mcp_email_send") {
 		t.Fatal("persona allowlist widened the roster beyond the input — a denied-upstream tool reappeared")
 	}

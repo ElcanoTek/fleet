@@ -450,7 +450,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		logSession = NewLogSession()
 	}
 
-	eng := newRunEngine(cfg, deps, logSession)
+	eng := newRunEngine(ctx, cfg, deps, logSession)
 	eng.logger = logging.From(ctx)
 	defer func() {
 		result.Compactions = eng.compactionsSnapshot()
@@ -559,7 +559,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// a zero-overhead passthrough (current behavior). Re-applied on every
 		// rebuild (the mcp_load_servers dirty path) via this closure.
 		if cfg.PersonaPolicy != nil {
-			tools = resolvePersonaRoster(cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
+			tools = resolvePersonaRoster(ctx, cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
 		}
 		// A narrowed run's audit gate reads the live roster (#1603).
 		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
@@ -1035,14 +1035,14 @@ func runMaxCompletionTokens(cfg RunConfig) int64 {
 	return int64(DefaultMaxCompletionTokens)
 }
 
-func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
+func newRunEngine(ctx context.Context, cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
 		model:                  deps.Model,
 		fallbackModels:         fallbackModels,
-		resilience:             loadResilienceConfig(),
+		resilience:             loadResilienceConfig(ctx),
 		logSession:             logSession,
-		onRetry:                newRetryLogger(logSession),
+		onRetry:                newRetryLogger(ctx, logSession),
 		temperature:            cfg.Temperature,
 		compactionSummarizer:   deps.CompactionSummarizer,
 		steerSource:            deps.SteerSource,

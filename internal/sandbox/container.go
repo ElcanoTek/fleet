@@ -351,7 +351,7 @@ func NewContainer(ctx context.Context, cfg ContainerConfig) (*Sandbox, error) {
 	// Done here, after defaults and any per-task ResourceOverride, so the bump
 	// stacks on the final limit. Fails closed on an unparseable limit rather
 	// than shipping a guest that may be too small to boot.
-	if err := applyKataMemoryOverhead(&defaulted); err != nil {
+	if err := applyKataMemoryOverhead(ctx, &defaulted); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 	c := &containerImpl{cfg: defaulted}
@@ -769,7 +769,9 @@ func (c *containerImpl) start(ctx context.Context) error {
 		}
 		return fmt.Errorf("podman run: %w (stderr: %s)", err, bytes.TrimSpace(stderr.Bytes()))
 	}
-	c.startStatsCollector()
+	// The collector outlives start; it keeps start's correlation, not its
+	// cancellation.
+	c.startStatsCollector(context.WithoutCancel(ctx))
 	return nil
 }
 
@@ -781,7 +783,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 //
 // This is OBSERVABILITY only: it samples `podman stats` and records peaks; it
 // never alters the container's caps or isolation.
-func (c *containerImpl) startStatsCollector() {
+func (c *containerImpl) startStatsCollector(ctx context.Context) {
 	interval := c.cfg.StatsInterval
 	if interval == 0 {
 		interval = resolveStatsInterval(envreg.Get("FLEET_SANDBOX_STATS_INTERVAL_SECONDS"))
@@ -803,7 +805,7 @@ func (c *containerImpl) startStatsCollector() {
 		// memBreached only crosses once, so this fires at most once per
 		// container — no log spam. The warning surfaces in the journal so an
 		// operator can see a turn brushing its --memory cap.
-		logMemoryBreach(containerID, usedBytes, limitBytes)
+		logMemoryBreach(ctx, containerID, usedBytes, limitBytes)
 	}
 	safe.Go("sandbox.stats.collect", func() {
 		defer close(done)

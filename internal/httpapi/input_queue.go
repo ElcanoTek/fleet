@@ -759,6 +759,6 @@ func (s *Server) settleUnqueuedInput(user, convID, key string) {
 	if !try() {
 		// Retried in the background like the other claim settlements: an
 		// acknowledged key must not be left with no row.
-		s.retryDirectInput("settle_unqueued", id, 1, directReleaseBackoff, try)
+		s.retryDirectInput(detachedCtx(user, convID, ""), "settle_unqueued", id, 1, directReleaseBackoff, try)
 	}
 }
