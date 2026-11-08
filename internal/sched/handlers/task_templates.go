@@ -69,7 +69,7 @@ type wireTaskTemplate struct {
 // prompt). It is purely a config read — no database access, no task is created.
 // Returns [] (never null) when no templates are configured. Same member-auth gate
 // as the other orchestrator reads (registered in cmd/fleet's admin-or-user group).
-func (h *Handlers) ListTaskTemplates(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) ListTaskTemplates(w http.ResponseWriter, r *http.Request) {
 	var templates []clientconfig.TaskTemplate
 	if h.taskTemplates != nil {
 		templates = h.taskTemplates()
@@ -81,5 +81,5 @@ func (h *Handlers) ListTaskTemplates(w http.ResponseWriter, _ *http.Request) {
 			Variables:    extractTemplateVars(t.Task.Prompt),
 		})
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, r, http.StatusOK, out)
 }

@@ -110,7 +110,7 @@ func TestDatasetsRequirePermissions(t *testing.T) {
 	t.Parallel()
 
 	r, store, keyMgr := setupDatasetAuthz(t)
-	readonly, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	readonly, readonlyKey, err := keyMgr.CreateTypedKey(context.Background(), "viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 	addLogUser(t, store, "root-"+uuid.NewString()[:8], "admin", "ds-root-token")
 	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	_, otherKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
-	_, auditorKey, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewAllLogs},
+	_, auditorKey, err := keyMgr.CreateKey(context.Background(), "auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewAllLogs},
 		nil, 0, nil, "fleet-wide auditor")
 	if err != nil {
 		t.Fatalf("create auditor key: %v", err)

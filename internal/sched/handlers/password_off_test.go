@@ -41,7 +41,7 @@ func TestPasswordBearerIsRetired(t *testing.T) {
 	req = httptest.NewRequest("POST", "/tasks", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", bearer)
 	w = httptest.NewRecorder()
-	if _, authorized := h.authorizeTaskCreator(w, req); authorized || w.Code != http.StatusUnauthorized {
+	if _, _, authorized := h.authorizeTaskCreator(w, req); authorized || w.Code != http.StatusUnauthorized {
 		t.Errorf("task creation accepted a bearer: authorized=%v %d", authorized, w.Code)
 	}
 

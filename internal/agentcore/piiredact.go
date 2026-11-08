@@ -1,9 +1,10 @@
 package agentcore
 
 import (
-	"log"
+	"context"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
 )
 
@@ -43,14 +44,14 @@ func currentPIIRedactor() piiredact.Redactor {
 // was BLOCKED, so the caller can flag the tool result as an error. A nil/off
 // redactor is a pass-through no-op. Findings are audit-logged by TYPE and COUNT
 // only — never the raw value (surfacing it would defeat the redaction).
-func redactPII(toolName, text string) (out string, blocked bool) {
+func redactPII(ctx context.Context, toolName, text string) (out string, blocked bool) {
 	r := currentPIIRedactor()
 	if r == nil || text == "" {
 		return text, false
 	}
 	res := r.Redact(text)
 	if res.Found() {
-		log.Printf("piiredact: %s output — %s (mode=%s)", toolName, res.Summary(), r.Mode())
+		logging.From(ctx).Info("piiredact: tool output redacted", "tool", toolName, "summary", res.Summary(), "mode", r.Mode())
 	}
 	return res.Text, res.Blocked
 }

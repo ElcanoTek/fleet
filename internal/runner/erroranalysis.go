@@ -2,10 +2,10 @@ package runner
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -50,7 +50,7 @@ func (p *Pool) maybeAnalyzeFailure(task *models.Task, session *models.LogSession
 		defer cancel()
 		analysis, err := p.errorAnalyzer.AnalyzeTaskFailure(ctx, prompt, errMsg, tail)
 		if err != nil {
-			log.Printf("runner: error analysis for task %s failed: %v", taskID, err)
+			logging.From(ctx).Error("runner: error analysis for task failed", "task_id", taskID, "err", err)
 			return
 		}
 		if len(analysis) == 0 {
@@ -59,7 +59,7 @@ func (p *Pool) maybeAnalyzeFailure(task *models.Task, session *models.LogSession
 		// Detached background context for the write: the analysis is worth
 		// persisting even if the per-analysis deadline above has elapsed.
 		if err := p.store.SetTaskErrorAnalysis(context.Background(), taskID, analysis); err != nil {
-			log.Printf("runner: failed to persist error analysis for task %s: %v", taskID, err)
+			logging.From(ctx).Error("runner: failed to persist error analysis for task", "task_id", taskID, "err", err)
 		}
 	}()
 }

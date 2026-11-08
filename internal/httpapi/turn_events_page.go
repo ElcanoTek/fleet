@@ -145,5 +145,5 @@ func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, co
 		}
 	}
 
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }

@@ -58,7 +58,7 @@ func TestSanitizeToolCallInputs_CopyOnWrite(t *testing.T) {
 		fantasy.NewUserMessage("hi"),
 		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "running"}, bad, &good}},
 	}
-	out, fixed := SanitizeToolCallInputs(msgs)
+	out, fixed := SanitizeToolCallInputs(context.Background(), msgs)
 	if fixed != 1 {
 		t.Fatalf("fixed = %d, want 1", fixed)
 	}
@@ -80,7 +80,7 @@ func TestSanitizeToolCallInputs_NoChangeReturnsSameSlice(t *testing.T) {
 	msgs := []fantasy.Message{{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
 		fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "bash", Input: `{"command":"ls"}`},
 	}}}
-	out, fixed := SanitizeToolCallInputs(msgs)
+	out, fixed := SanitizeToolCallInputs(context.Background(), msgs)
 	if fixed != 0 || &out[0] != &msgs[0] {
 		t.Fatalf("clean history was copied or reported fixed (fixed=%d)", fixed)
 	}

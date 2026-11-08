@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
@@ -111,7 +111,7 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 			if attempt > 0 {
 				time.Sleep(100 * time.Millisecond)
 			}
-			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
 			rcancel()
 			if rerr == nil {
@@ -127,7 +127,7 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 					if delay < 5*time.Second {
 						delay *= 2
 					}
-					rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+					rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 					_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
 					rcancel()
 					if rerr == nil {
@@ -196,13 +196,13 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 		delete(r.cancels, d.ID)
 		r.mu.Unlock()
 		if _, err := r.store.UpdateDatasetStatus(context.WithoutCancel(ctx), d.ID, []string{models.DatasetStatusRunning}, to); err != nil {
-			log.Printf("dataset %s: park status %s: %v", d.ID, to, err)
+			logging.From(ctx).Error("dataset: park status failed", "dataset", d.ID, "status", to, "err", err)
 		}
 	}()
 
 	schema, err := OutputSchema(d.Columns)
 	if err != nil {
-		log.Printf("dataset %s: output schema: %v", d.ID, err)
+		logging.From(ctx).Error("dataset: output schema error", "dataset", d.ID, "err", err)
 		return
 	}
 
@@ -225,7 +225,7 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 			// that marks the row failed; this is the backstop for a panic
 			// in the claim loop itself.
 			defer wg.Done()
-			defer safe.Recover("datasets.worker", nil)
+			defer safe.RecoverContext(ctx, "datasets.worker", nil)
 			for {
 				if ctx.Err() != nil {
 					return
@@ -233,7 +233,7 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 				row, err := r.store.ClaimNextDatasetRow(ctx, d.ID)
 				if err != nil {
 					if ctx.Err() == nil {
-						log.Printf("dataset %s: claim: %v", d.ID, err)
+						logging.From(ctx).Error("dataset: claim failed", "dataset", d.ID, "err", err)
 					}
 					return
 				}
@@ -264,10 +264,10 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	// A panic in one row's turn (a nil turn result, a schema edge case) is
 	// that ROW's failure, not the process's: record it as failed so it is not
 	// stranded 'running', and let the worker continue with the next row.
-	defer safe.Recover("datasets.runRow", func(v any) {
+	defer safe.RecoverContext(ctx, "datasets.runRow", func(v any) {
 		msg := clamp("row run panicked: "+safe.PanicClass(v), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", msg, 0); ferr != nil {
-			log.Printf("dataset %s row %d: record panic: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: could not record panic", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 	})
 	prompt, err := RowPrompt(d, row)
@@ -293,12 +293,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// persistent the re-run records it as failed properly.
 		if ctx.Err() != nil {
 			if rerr := r.store.RequeueDatasetRow(wctx, row.ID); rerr != nil {
-				log.Printf("dataset %s row %d: requeue after pause: %v", d.ID, row.RowIndex, rerr)
+				logging.From(ctx).Error("dataset row: requeue after pause failed", "dataset", d.ID, "row", row.RowIndex, "err", rerr)
 			}
 			return
 		}
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", clamp(err.Error(), maxNoteChars), 0); ferr != nil {
-			log.Printf("dataset %s row %d: record failure: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: could not record failure", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -307,7 +307,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// A (nil, nil) from the turn runner is a contract violation, not a
 		// row outcome to dereference: fail the row explicitly.
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", "turn runner returned no result", 0); ferr != nil {
-			log.Printf("dataset %s row %d: record missing result: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: could not record missing result", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
@@ -318,12 +318,12 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		// cell mutation. The row fails with the answer preserved for review.
 		note := clamp(strings.TrimSpace(turn.FinalText), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, note, "output did not conform to the dataset schema: "+clamp(verr.Error(), 500), turn.CostUSD); ferr != nil {
-			log.Printf("dataset %s row %d: record nonconforming: %v", d.ID, row.RowIndex, ferr)
+			logging.From(ctx).Error("dataset row: could not record nonconforming result", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 		}
 		return
 	}
 	if ferr := r.store.FinishDatasetRow(wctx, row.ID, proposed, "", "", turn.CostUSD); ferr != nil {
-		log.Printf("dataset %s row %d: record proposal: %v", d.ID, row.RowIndex, ferr)
+		logging.From(ctx).Error("dataset row: could not record proposal", "dataset", d.ID, "row", row.RowIndex, "err", ferr)
 	}
 }
 

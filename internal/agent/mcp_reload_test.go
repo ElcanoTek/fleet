@@ -164,7 +164,7 @@ func TestSpecsToServerDefs(t *testing.T) {
 	if d := byName["stdio"]; d.Command != "python" || len(d.Args) != 1 {
 		t.Errorf("stdio def wrong: %+v", d)
 	}
-	wantDir := agentcore.StdioCwd("/bundle", false, agentcore.SharedMCPWorkspaceDir())
+	wantDir := agentcore.StdioCwd("/bundle", false, agentcore.SharedMCPWorkspaceDir(t.Context()))
 	if d := byName["stdio"]; d.Dir != wantDir {
 		t.Errorf("stdio Dir = %q, want %q (must equal the boot spawn's cwd or every reload churns)", d.Dir, wantDir)
 	}

@@ -76,6 +76,13 @@ linters:
       forbid:
         - pattern: ^os\.(Getenv|LookupEnv|Environ)$
           msg: read the environment through internal/config/envreg (Get/Lookup for a registered setting, Unregistered for a data-named variable) — docs/CONFIG-REGISTRY.md
+        # One way to log (#2052, internal/logging): structured log/slog
+        # records through logging.From(ctx) (or slog.* where no context
+        # exists), so every line carries its correlation ids and goes through
+        # the redactor. The stdlib log package's print/fatal/panic helpers
+        # produce an unstructured line with neither.
+        - pattern: ^log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$
+          msg: log through logging.From(ctx).Info/Warn/Error (or slog.* with no context) with key/value attributes; use logging.Fatal to exit — internal/logging
     exhaustive:
       # Treat a switch with a default case as exhaustive. Every enum switch in
       # this tree that exhaustive flagged already routes the remaining values
@@ -145,20 +152,30 @@ linters:
       - path: ^internal/config/
         linters:
           - forbidigo
-      # Tests set and read the environment directly to stage scenarios.
+      # Tests set and read the environment directly to stage scenarios. (Only
+      # the env-read ban: the log-print ban below applies to tests too.)
       - path: _test\.go
+        text: os\.(Getenv|LookupEnv|Environ)
         linters:
           - forbidigo
       # Wholesale copies of the environment, never a read of one setting:
       #   - subprocess env plumbing: `fleet backup` (pg_dump) and `fleet
       #     update` (update.sh) hand their whole environment to the child;
       #   - secret redactors snapshot every VALUE as a literal to scrub
-      #     (agentcore, mcpbroker, the Browserbase live-view guard, `fleet
+      #     (agentcore, mcpbroker, the process log, the Browserbase live-view guard, `fleet
       #     diagnose`), and diagnose lists the set NAMES (never values);
       #   - the broker divests the connector env by scanning it, and creds
       #     discovers per-account suffix variants by scanning it.
-      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
+      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/logging/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
         text: os\.Environ
+        linters:
+          - forbidigo
+      # ── forbidigo exception: the log-print ban (#2052) ──
+      # The ONE allowlisted file: logging's own test drives the stdlib log
+      # package on purpose, to prove a third-party library's log.Printf is
+      # bridged into the structured stream. Nothing else may call it.
+      - path: ^internal/logging/logging_test\.go$
+        text: log\.Printf
         linters:
           - forbidigo
 

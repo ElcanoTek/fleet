@@ -50,7 +50,7 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"providers": providers})
+		writeJSON(w, r, map[string]any{"providers": providers})
 	case http.MethodPost:
 		var body llmProviderBody
 		if !decodeJSONBody(w, r, &body) {
@@ -196,7 +196,7 @@ func (s *Server) handleAdminLLMProviderTest(w http.ResponseWriter, r *http.Reque
 		Models:  cfg.Models,
 		Region:  cfg.Region,
 	})
-	writeJSON(w, result)
+	writeJSON(w, r, result)
 }
 
 // applyLLMProviderChange rebuilds the resolver routing table after a persisted
@@ -211,7 +211,7 @@ func (s *Server) applyLLMProviderChange(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 	}
-	writeJSON(w, result)
+	writeJSON(w, r, result)
 }
 
 // validateLLMProviderRow enforces what the store's shape checks can't: an
@@ -285,10 +285,10 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 			slug := strings.TrimSpace(r.URL.Query().Get("slug"))
 			kind, err := engine.CheckModelRoute(slug)
 			if err != nil {
-				writeJSON(w, map[string]any{"allowed": false, "slug": slug, "reason": "provider_unavailable", "message": err.Error()})
+				writeJSON(w, r, map[string]any{"allowed": false, "slug": slug, "reason": "provider_unavailable", "message": err.Error()})
 				return
 			}
-			writeJSON(w, map[string]any{"allowed": true, "slug": slug, "provider_type": kind})
+			writeJSON(w, r, map[string]any{"allowed": true, "slug": slug, "provider_type": kind})
 			return
 		}
 		providers := engine.ModelProviders()
@@ -301,7 +301,7 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 				})
 			}
 		}
-		writeJSON(w, map[string]any{"models": models, "providers": providers, "routing_known": true})
+		writeJSON(w, r, map[string]any{"models": models, "providers": providers, "routing_known": true})
 		return
 	}
 	providers, err := s.store.ListLLMProviders(r.Context())
@@ -336,5 +336,5 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 			})
 		}
 	}
-	writeJSON(w, map[string]any{"models": out, "providers": provs})
+	writeJSON(w, r, map[string]any{"models": out, "providers": provs})
 }

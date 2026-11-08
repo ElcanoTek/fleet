@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"maps"
 	"slices"
 	"sort"
@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
@@ -38,7 +39,25 @@ const (
 //
 // Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
 // so it never corrupts the frame stream the parent decodes.
+// mcpBrokerLogConfig is the broker child's logging: always JSON, at the
+// parent's level (FLEET_LOG_LEVEL), and NO file of its own. JSON is the wire
+// format between the two processes, not the operator's choice: the parent
+// (logging.ChildStderr) parses each child record and re-logs it through its
+// own configured handler — the operator's FLEET_LOG_FORMAT, its redactor,
+// its sinks, FLEET_LOG_FILE under the one rotator the parent owns.
+func mcpBrokerLogConfig() logging.Config {
+	return logging.Config{
+		Format: "json",
+		Level:  envreg.Get("FLEET_LOG_LEVEL"),
+	}
+}
+
 func runMCPBroker() error {
+	// Same handler and redactor as the parent, in JSON: the parent parses each
+	// line and re-logs it in the operator's format (mcpBrokerLogConfig).
+	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
+		return fmt.Errorf("configure broker logging: %w", err)
+	}
 	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
 		return err
@@ -62,7 +81,7 @@ func runMCPBroker() error {
 	// the parent fleet process (only public tool descriptors + rendered text do).
 	specs := agent.BuildMCPSpecs(cfg)
 	client := agent.BuildMCPClient(specs, cfg.HTTPTools, cfg.A2APeers)
-	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
+	slog.Info("mcp-broker: serving MCP tools over stdio", "tools", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
 		MCPBroker:   agentcore.NewLocalMCPBroker(client),
@@ -443,6 +462,9 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 		return nil, err
 	}
 	specs := agent.BuildMCPSpecs(cfg)
+	// A reloaded catalog may carry new header credentials: the redactors
+	// learn them before Reload contacts any server.
+	agent.RegisterConnectorSecrets(specs, cfg.HTTPTools, cfg.A2APeers)
 	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(specs))
 	if err != nil {
 		return nil, err

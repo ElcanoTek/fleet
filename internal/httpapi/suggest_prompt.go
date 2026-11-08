@@ -57,7 +57,7 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"name":        draft.Name,
 		"description": draft.Description,
 		"content":     draft.Content,

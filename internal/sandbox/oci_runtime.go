@@ -6,7 +6,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // OCI-runtime selection (#217). The mandatory rootless-Podman sandbox can run
@@ -236,7 +236,7 @@ func PreflightRuntime(ctx context.Context, execCtx PodmanExec, runtime string) e
 	// Surface a containers.conf remap rather than silently preflighting a
 	// different binary than an operator reading the config would expect.
 	if guess := RuntimeBinary(runtime); guess != "" && guess != bin && filepath.Base(bin) != guess {
-		log.Printf("sandbox: podman resolves --runtime=%s to %s (the name suggests %q) — preflighting the resolved binary", normalized, bin, guess)
+		logging.From(ctx).Info("sandbox: podman resolves the runtime name to a different binary — preflighting the resolved binary", "runtime", normalized, "bin", bin, "guess", guess)
 	}
 	switch kind {
 	case runtimeKata:
@@ -246,7 +246,7 @@ func PreflightRuntime(ctx context.Context, execCtx PodmanExec, runtime string) e
 	default:
 		// Shared-kernel runtime (runc/crun/runsc/…): resolvability is the whole
 		// check — no hypervisor posture to verify.
-		log.Printf("sandbox: runtime %s preflight OK — podman resolves it to %s", normalized, bin)
+		logging.From(ctx).Info("sandbox: runtime preflight OK", "runtime", normalized, "bin", bin)
 		return nil
 	}
 }
@@ -306,10 +306,9 @@ func preflightKata(ctx context.Context, execCtx PodmanExec, bin string) error {
 	defer cancel()
 	out, err := execCtx.CommandContext(checkCtx, bin, "check", "--no-network-checks").CombinedOutput()
 	if err != nil {
-		log.Printf("sandbox: %s check reported issues (non-fatal — /dev/kvm is the hard gate): %v\n%s",
-			bin, err, strings.TrimSpace(string(out)))
+		logging.From(ctx).Warn("sandbox: runtime check reported issues (non-fatal — /dev/kvm is the hard gate)", "bin", bin, "err", err, "output", strings.TrimSpace(string(out)))
 	} else {
-		log.Printf("sandbox: kata preflight OK — %s present and /dev/kvm accessible", bin)
+		logging.From(ctx).Info("sandbox: kata preflight OK — runtime binary present and /dev/kvm accessible", "bin", bin)
 	}
 	return nil
 }
@@ -332,7 +331,7 @@ func preflightKrun(ctx context.Context, execCtx PodmanExec, bin string) error {
 	if err := verifyKrunLibkrun(ctx, execCtx, bin); err != nil {
 		return fmt.Errorf("krun preflight: %w", err)
 	}
-	log.Printf("sandbox: krun (libkrun) preflight OK — %s has +LIBKRUN and /dev/kvm accessible", bin)
+	logging.From(ctx).Info("sandbox: krun (libkrun) preflight OK — runtime binary has +LIBKRUN and /dev/kvm accessible", "bin", bin)
 	return nil
 }
 
@@ -388,12 +387,12 @@ func lookRuntimeBinary(bin string) error {
 // after boot — it stays because this path cannot fail a container create for a
 // tuning knob that only ever ADDS memory (unlike the memory LIMIT itself,
 // which fails closed when unparseable).
-func kataOverheadMB() int {
+func kataOverheadMB(ctx context.Context) int {
 	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_KATA_OVERHEAD_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
-		log.Printf("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB=%q — using default %dMiB", v, DefaultKataOverheadMB)
+		logging.From(ctx).Warn("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB — using default", "value", v, "default_mib", DefaultKataOverheadMB)
 	}
 	return DefaultKataOverheadMB
 }
@@ -496,11 +495,11 @@ func addKataMemoryOverhead(memoryLimit string, overheadMB int) (string, error) {
 // Returns an error — propagated out of NewContainer — when the limit is
 // unparseable, so a misconfiguration fails closed instead of silently shipping
 // an undersized guest.
-func applyKataMemoryOverhead(cfg *ContainerConfig) error {
+func applyKataMemoryOverhead(ctx context.Context, cfg *ContainerConfig) error {
 	if runtimeKind(cfg.Runtime) != runtimeKata {
 		return nil
 	}
-	bumped, err := addKataMemoryOverhead(cfg.MemoryLimit, kataOverheadMB())
+	bumped, err := addKataMemoryOverhead(cfg.MemoryLimit, kataOverheadMB(ctx))
 	if err != nil {
 		return err
 	}

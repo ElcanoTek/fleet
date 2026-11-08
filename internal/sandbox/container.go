@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -41,6 +41,11 @@ import (
 type containerImpl struct {
 	cfg ContainerConfig
 
+	// logCtx carries the session-level correlation (conversation, user,
+	// task) of the context the sandbox was started under, for lines logged
+	// where no request is in flight (teardown). Set once in start.
+	logCtx context.Context
+
 	// containerID is the random ULID-ish name we assigned at start.
 	// Using a name (not the SHA) keeps `podman ps` readable.
 	//
@@ -59,7 +64,8 @@ type containerImpl struct {
 	bridgeCmd        *exec.Cmd
 	bridgeStdin      io.WriteCloser
 	bridgeStdout     *bufio.Reader
-	bridgeStderr     *syncBuffer // captured `podman exec` stderr — used to surface the real reason on broken-pipe write failures
+	bridgeStderrLog  *logging.StderrLogger // the bridge's stderr as log records; Closed after Wait
+	bridgeStderr     *syncBuffer           // captured `podman exec` stderr — used to surface the real reason on broken-pipe write failures
 	bridgeStarted    bool
 	bridgeScriptPath string // host-side temp file (bind-mounted into container)
 
@@ -350,7 +356,7 @@ func NewContainer(ctx context.Context, cfg ContainerConfig) (*Sandbox, error) {
 	// Done here, after defaults and any per-task ResourceOverride, so the bump
 	// stacks on the final limit. Fails closed on an unparseable limit rather
 	// than shipping a guest that may be too small to boot.
-	if err := applyKataMemoryOverhead(&defaulted); err != nil {
+	if err := applyKataMemoryOverhead(ctx, &defaulted); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 	c := &containerImpl{cfg: defaulted}
@@ -534,6 +540,7 @@ func networkArgs(noNetwork bool, proxyURL string) []string {
 const bridgeScriptTempPattern = "chat-sandbox-bridge-*.py"
 
 func (c *containerImpl) start(ctx context.Context) error {
+	c.logCtx = sessionContext(ctx)
 	// Write the bridge script to a host temp file so we can bind-mount
 	// it into the container. We bind-mount the file (not a directory)
 	// so the rest of /opt inside the container stays untouched.
@@ -584,7 +591,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 	// On any error after this point, NewContainer calls close(), which removes
 	// the bridge script (tracked via c.bridgeScriptPath); the seccomp temp file
 	// is cleaned up by the deferred seccompCleanup below.
-	seccompArg, seccompCleanup, err := resolveSeccompArg(bridgeDir)
+	seccompArg, seccompCleanup, err := resolveSeccompArg(ctx, bridgeDir)
 	if err != nil {
 		return fmt.Errorf("seccomp profile: %w", err)
 	}
@@ -768,7 +775,9 @@ func (c *containerImpl) start(ctx context.Context) error {
 		}
 		return fmt.Errorf("podman run: %w (stderr: %s)", err, bytes.TrimSpace(stderr.Bytes()))
 	}
-	c.startStatsCollector()
+	// The collector outlives start; it keeps start's correlation, not its
+	// cancellation.
+	c.startStatsCollector(context.WithoutCancel(ctx))
 	return nil
 }
 
@@ -780,7 +789,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 //
 // This is OBSERVABILITY only: it samples `podman stats` and records peaks; it
 // never alters the container's caps or isolation.
-func (c *containerImpl) startStatsCollector() {
+func (c *containerImpl) startStatsCollector(ctx context.Context) {
 	interval := c.cfg.StatsInterval
 	if interval == 0 {
 		interval = resolveStatsInterval(envreg.Get("FLEET_SANDBOX_STATS_INTERVAL_SECONDS"))
@@ -794,7 +803,7 @@ func (c *containerImpl) startStatsCollector() {
 	// NoNetwork containers have an empty namespace; their net counters are
 	// meaningless, so we tell the collector not to surface Net* fields.
 	netReported := !c.cfg.NoNetwork
-	statsCtx, cancel := context.WithCancel(context.Background())
+	statsCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	c.statsCancel = cancel
 	c.statsDone = done
@@ -802,7 +811,7 @@ func (c *containerImpl) startStatsCollector() {
 		// memBreached only crosses once, so this fires at most once per
 		// container — no log spam. The warning surfaces in the journal so an
 		// operator can see a turn brushing its --memory cap.
-		logMemoryBreach(containerID, usedBytes, limitBytes)
+		logMemoryBreach(ctx, containerID, usedBytes, limitBytes)
 	}
 	safe.Go("sandbox.stats.collect", func() {
 		defer close(done)
@@ -982,7 +991,7 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 		if containerAlreadyGone(string(out)) {
 			return true
 		}
-		log.Printf("sandbox: cancelled-exec container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
+		logging.From(killCtx).Warn("sandbox: cancelled-exec container kill unconfirmed", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 		return false
 	}
 	return true
@@ -1079,7 +1088,7 @@ for pid in proc_info:
 		if containerAlreadyGone(string(out)) {
 			return false
 		}
-		log.Printf("sandbox: persistent turn-release process reap failed (%s): %v (%.200s); retiring container", containerID, err, string(out))
+		logging.From(reapCtx).Warn("sandbox: persistent turn-release process reap failed; retiring container", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 		c.execPoisoned.Store(true)
 		c.killContainerNow(containerID)
 		return false
@@ -1267,7 +1276,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := c.ensureBridge(); err != nil {
+	if err := c.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in container: %w", err)
 	}
 
@@ -1294,6 +1303,10 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if c.bridgeStdin == nil || c.bridgeStdout == nil {
 		return PythonResult{}, fmt.Errorf("send bridge request: %w", ErrClosed)
 	}
+	// The bridge's stderr during this request is this request's; cleared
+	// at its end.
+	c.bridgeStderrLog.Attribute(ctx)
+	defer func() { c.bridgeStderrLog.ClearAttribution() }()
 
 	if _, err := fmt.Fprintf(c.bridgeStdin, "%s\n", reqBytes); err != nil {
 		// A failed write means the exec client is gone (EPIPE) yet
@@ -1301,7 +1314,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// is nil until the child is Wait()ed — wedging every later
 		// run_python in the turn. Reap and reset so the next call starts
 		// fresh; the container is intact, so no poison.
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, c.bridgeStderrSuffix())
 	}
 
@@ -1324,7 +1337,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// single-host process. Surface it as a read error instead (ch is
 		// buffered, and the normal send cannot have happened if ReadBytes
 		// panicked, so this send never blocks).
-		defer safe.Recover("sandbox.container.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.container.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		// Capped read (mirrors the bash path's BashOutputCaptureCap): the
@@ -1351,14 +1364,14 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// (mirrors hostImpl.readLocked): the orphaned reader goroutine above
 		// still owns c.bridgeStdout and the session's response stream can no
 		// longer be trusted.
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("python execution cancelled (%w); sandbox retired: %w", ctx.Err(), ErrPoisoned)
 	case <-timer.C:
 		// Same containment as the cancel arm: the timed-out cell is still
 		// running in the container until the PID namespace goes away.
 		c.execPoisoned.Store(true)
 		_ = c.killContainerNow(c.currentContainerID())
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
@@ -1368,7 +1381,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 			// later run_python in the turn would write into the same corpse
 			// and fail — reap it and clear the state so the next call boots a
 			// fresh bridge. The container itself is intact: no poison.
-			c.terminateBridgeLocked()
+			c.terminateBridgeLocked(ctx)
 			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, c.bridgeStderrSuffix())
 		}
 		if r.discarded > 0 {
@@ -1379,7 +1392,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 			// not fatal to the sandbox).
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
 		}
-		return parseBridgeResponse(r.data)
+		return parseBridgeResponse(ctx, r.data)
 	}
 }
 
@@ -1399,13 +1412,21 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 // processes), and --init reaps the resulting zombie. A reset therefore
 // restarts the kernel and loses prior in-conversation state — surfaced in the
 // run_python tool description.
-func (c *containerImpl) terminateBridgeLocked() {
+// ctx is the request's when a run_python request tears the bridge down, else
+// the sandbox's session context (logContext): the reap warning carries it.
+func (c *containerImpl) terminateBridgeLocked(ctx context.Context) {
 	if cmd := c.bridgeCmd; cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
 		// Brief grace period; force-kill if still alive.
 		done := make(chan struct{})
+		stderrLog := c.bridgeStderrLog
 		go func() {
 			_ = cmd.Wait()
+			// Wait joined the stderr copier: flush its last partial line
+			// (also when the wait below is abandoned and finishes later).
+			if stderrLog != nil {
+				_ = stderrLog.Close()
+			}
 			close(done)
 		}()
 		select {
@@ -1422,7 +1443,7 @@ func (c *containerImpl) terminateBridgeLocked() {
 			select {
 			case <-done:
 			case <-time.After(bridgeReapTimeout):
-				log.Printf("sandbox: bridge exec client did not reap within %s of SIGKILL; abandoning the wait and clearing the bridge state", bridgeReapTimeout)
+				logging.From(ctx).Warn("sandbox: bridge exec client did not reap in time after SIGKILL; abandoning the wait and clearing the bridge state", "timeout", bridgeReapTimeout)
 			}
 		}
 	}
@@ -1430,6 +1451,7 @@ func (c *containerImpl) terminateBridgeLocked() {
 		_ = c.bridgeStdin.Close()
 	}
 	c.bridgeCmd = nil
+	c.bridgeStderrLog = nil
 	c.bridgeStdin = nil
 	c.bridgeStdout = nil
 	c.bridgeStarted = false
@@ -1458,7 +1480,7 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 // already running and healthy. There is no post-start settle delay: a request
 // written before the bridge reads stdin just sits in the exec client's pipe
 // until it does, and the first ReadBytes waits for the reply either way.
-func (c *containerImpl) ensureBridge() error {
+func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1490,7 +1512,8 @@ func (c *containerImpl) ensureBridge() error {
 	// BashWaitDelay exists for on the bash path.
 	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
+	stderrLog := bridgeStderrLogger(ctx)
+	cmd.Stderr = io.MultiWriter(stderrLog, stderrBuf)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1506,11 +1529,21 @@ func (c *containerImpl) ensureBridge() error {
 		return fmt.Errorf("start bridge exec: %w", err)
 	}
 	c.bridgeCmd = cmd
+	c.bridgeStderrLog = stderrLog
 	c.bridgeStdin = stdin
 	c.bridgeStdout = bufio.NewReader(stdout)
 	c.bridgeStderr = stderrBuf
 	c.bridgeStarted = true
 	return nil
+}
+
+// logContext is the sandbox's session context (logCtx), for a line logged
+// with no request in flight.
+func (c *containerImpl) logContext() context.Context {
+	if c.logCtx == nil {
+		return context.Background()
+	}
+	return c.logCtx
 }
 
 func (c *containerImpl) close() {
@@ -1520,7 +1553,7 @@ func (c *containerImpl) close() {
 	// stdin and nil'ing bridgeCmd (the old behavior) never reaped the child —
 	// every sandbox that ever ran Python leaked a zombie, its pipe FDs, and
 	// the stderr-copier goroutine cmd.Start spawned for the MultiWriter.
-	c.terminateBridgeLocked()
+	c.terminateBridgeLocked(c.logContext())
 	c.bridgeStderr = nil
 	scriptPath := c.bridgeScriptPath
 	statsCancel := c.statsCancel
@@ -1554,7 +1587,7 @@ func (c *containerImpl) close() {
 		select {
 		case <-statsDone:
 		case <-time.After(statsDrainTimeout):
-			log.Printf("sandbox: telemetry poller did not stop within %s; abandoning its resource rollup and tearing the container down anyway", statsDrainTimeout)
+			logging.From(c.logContext()).Warn("sandbox: telemetry poller did not stop in time; abandoning its resource rollup and tearing the container down anyway", "timeout", statsDrainTimeout)
 		}
 	}
 
@@ -1570,7 +1603,7 @@ func (c *containerImpl) close() {
 		stop := exec.CommandContext(killCtx, c.cfg.PodmanBinary, c.podmanArgs([]string{"kill", containerID})...) //nolint:gosec // containerID is our generated UUID, not user input
 		if out, err := stop.CombinedOutput(); err != nil {
 			if !containerAlreadyGone(string(out)) {
-				log.Printf("sandbox: close-time container kill unconfirmed (%s): %v (%.200s) — the container may linger until the boot-time orphan prune", containerID, err, string(out))
+				logging.From(killCtx).Warn("sandbox: close-time container kill unconfirmed — the container may linger until the boot-time orphan prune", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 			}
 		}
 	}

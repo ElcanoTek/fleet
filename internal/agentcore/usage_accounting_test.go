@@ -96,7 +96,7 @@ func TestCheckCeilings_TokenCeilingFiresOnUncachedSpend(t *testing.T) {
 // oldest half of the conversation) — the #587 failure scenario.
 func TestCheckContextPressure_TrueUsageFractionWithHotCache(t *testing.T) {
 	slug := "ctx587-hot-cache"
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow) // 1000-token window
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow) // 1000-token window
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	obs := &captureObserver{}

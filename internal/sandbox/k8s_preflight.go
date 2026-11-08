@@ -28,8 +28,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // k8sPreflightTimeout bounds the whole preflight sequence. Generous for a
@@ -105,8 +106,7 @@ func (b *KubernetesBackend) Preflight(ctx context.Context) error {
 		case b.cfg.UnrestrictedEgressAcknowledged:
 			// Say it every boot. An acknowledgement that scrolls past once at
 			// install time is not an informed posture six months later.
-			log.Printf("sandbox: WARNING open sandbox egress is UNVERIFIED by fleet — %s is set, so boot did not require the %q NetworkPolicy. Sandbox pods labeled %s=open can reach whatever your cluster's own policy allows; if that is nothing, this is fine, and if you are not sure, it is not",
-				k8sUnrestrictedEgressAckEnv, b.cfg.OpenEgressPolicyName, k8sLabelEgress)
+			logging.From(ctx).Warn("sandbox: WARNING open sandbox egress is UNVERIFIED by fleet — the acknowledgement env var is set, so boot did not require the open-egress NetworkPolicy. Sandbox pods with the open egress label can reach whatever your cluster's own policy allows; if that is nothing, this is fine, and if you are not sure, it is not", "ack_env", k8sUnrestrictedEgressAckEnv, "policy", b.cfg.OpenEgressPolicyName, "label", k8sLabelEgress+"=open")
 		default:
 			if err := b.client.getNetworkPolicy(preCtx, b.cfg.Namespace, b.cfg.OpenEgressPolicyName); err != nil {
 				return fmt.Errorf("kubernetes sandbox preflight: open-egress NetworkPolicy %q not found in namespace %q — with FLEET_DEFAULT_NETWORK_MODE=open, a sandbox pod labeled %s=open that no policy selects can reach the fleet Service, the in-cluster database, the apiserver and the node metadata endpoint from model-authored code. Enable the policy the chart ships (networkPolicies.openEgress.create=true, with your cluster ranges in blockedCIDRs), or use FLEET_DEFAULT_NETWORK_MODE=lockdown, or — only if your cluster shapes this egress with policy fleet cannot see — set %s=true to state that deliberately: %w",
@@ -121,6 +121,6 @@ func (b *KubernetesBackend) Preflight(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("sandbox: kubernetes backend preflight OK — apiserver %s, sandbox namespace %q", version, b.cfg.Namespace)
+	logging.From(ctx).Info("sandbox: kubernetes backend preflight OK", "apiserver_version", version, "namespace", b.cfg.Namespace)
 	return nil
 }

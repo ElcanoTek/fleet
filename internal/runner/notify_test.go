@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -22,12 +23,15 @@ import (
 type fakeNotifier struct {
 	mu     sync.Mutex
 	events []notify.Event
+	// runIDs is the run_id each Notify's context carried.
+	runIDs []string
 }
 
-func (f *fakeNotifier) Notify(_ context.Context, ev notify.Event) error {
+func (f *fakeNotifier) Notify(ctx context.Context, ev notify.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, ev)
+	f.runIDs = append(f.runIDs, logging.Value(ctx, logging.KeyRunID))
 	return nil
 }
 
@@ -102,7 +106,7 @@ func TestNotifyTerminal_Fires(t *testing.T) {
 	p := &Pool{notifier: fake, publicURLBase: "https://x.example"}
 	task := &models.Task{ID: uuid.New(), Prompt: "p"}
 
-	p.notifyTerminal(task, notify.StatusFailure, &models.LogSession{Cost: 1.25}, 5*time.Second)
+	p.notifyTerminal(t.Context(), task, notify.StatusFailure, &models.LogSession{Cost: 1.25}, 5*time.Second)
 
 	// notifyTerminal fires from a detached goroutine; wait for the event.
 	deadline := time.Now().Add(2 * time.Second)
@@ -119,7 +123,7 @@ func TestNotifyTerminal_Fires(t *testing.T) {
 
 	// nil notifier: no panic, no fire.
 	pNil := &Pool{}
-	pNil.notifyTerminal(task, notify.StatusSuccess, nil, time.Second) // must not panic
+	pNil.notifyTerminal(t.Context(), task, notify.StatusSuccess, nil, time.Second) // must not panic
 }
 
 // TestProgressEvents_NotifyToolIsAProgressNote: the agent's notify tool and an
@@ -182,7 +186,7 @@ func TestNotifyTerminal_AudienceEmptyWithoutOwner(t *testing.T) {
 	p := &Pool{notifier: fake}
 	task := &models.Task{ID: uuid.New(), Prompt: "p"} // CreatedBy nil
 
-	p.notifyTerminal(task, notify.StatusSuccess, nil, time.Second)
+	p.notifyTerminal(t.Context(), task, notify.StatusSuccess, nil, time.Second)
 	deadline := time.Now().Add(2 * time.Second)
 	for len(fake.drain()) != 1 {
 		if time.Now().After(deadline) {
@@ -229,5 +233,30 @@ func TestNotifyTaskNameStripsLineBreaks(t *testing.T) {
 	}
 	if name != "first line Bcc: victim@example.com third" {
 		t.Errorf("notifyTaskName = %q, want the lines joined by single spaces", name)
+	}
+}
+
+// The notification fan-out runs under the task run's context, detached from
+// its cancellation: a run that already ended still notifies, and the records
+// carry its run_id (#2074 review: they ran under context.Background()).
+func TestNotifyTerminalCarriesTheRunContext(t *testing.T) {
+	t.Parallel()
+	fake := &fakeNotifier{}
+	p := &Pool{notifier: fake}
+	task := &models.Task{ID: uuid.New(), Prompt: "p"}
+	ctx, cancel := context.WithCancel(logging.WithTask(context.Background(), task.ID.String(), "run-42"))
+	cancel() // the run is over by the time the notification goes out
+	p.notifyTerminal(ctx, task, notify.StatusFailure, nil, time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(fake.drain()) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("notifier was not fired within deadline")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.runIDs[0] != "run-42" {
+		t.Fatalf("notification context run_id = %q, want run-42", fake.runIDs[0])
 	}
 }

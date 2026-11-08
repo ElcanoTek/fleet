@@ -8,10 +8,12 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // bridgeResponseCaptureCap bounds how many bytes of a single bridge response
@@ -86,14 +88,14 @@ type bridgeResponse struct {
 	ImageFiles []string `json:"image_files,omitempty"`
 }
 
-func parseBridgeResponse(data []byte) (PythonResult, error) {
+func parseBridgeResponse(ctx context.Context, data []byte) (PythonResult, error) {
 	var resp bridgeResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		preview := string(bytes.TrimSpace(data))
 		if len(preview) > 240 {
 			preview = preview[:240] + "..."
 		}
-		log.Printf("sandbox: bridge response not JSON: %v (preview: %s)", err, preview)
+		logging.From(ctx).Error("sandbox: bridge response not JSON", "err", err, "preview", preview)
 		return PythonResult{}, fmt.Errorf("parse bridge response: %w", err)
 	}
 	return PythonResult(resp), nil

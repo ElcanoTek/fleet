@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -92,7 +93,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		if list == nil {
 			list = []store.Project{}
 		}
-		writeJSON(w, map[string]any{"projects": list})
+		writeJSON(w, r, map[string]any{"projects": list})
 	case http.MethodPost:
 		var req projectRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -124,7 +125,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 			writeMemoryStoreError(w, err)
 			return
 		}
-		writeJSON(w, created)
+		writeJSON(w, r, created)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -195,7 +196,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, p)
+		writeJSON(w, r, p)
 	case http.MethodPatch:
 		var req projectRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -244,7 +245,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		if patch.TeamID != nil {
 			s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 		}
-		writeJSON(w, updated)
+		writeJSON(w, r, updated)
 	case http.MethodDelete:
 		affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), id)
 		if err := s.store.DeleteProject(r.Context(), user, id); err != nil {
@@ -289,7 +290,7 @@ func (s *Server) projectConversations(w http.ResponseWriter, r *http.Request, p 
 	for _, c := range list {
 		out = append(out, convWithPreview{Conversation: c, Preview: previews[c.ID]})
 	}
-	writeJSON(w, map[string]any{"conversations": out})
+	writeJSON(w, r, map[string]any{"conversations": out})
 }
 
 // projectTeamConversations handles GET /projects/{id}/team-conversations —
@@ -336,7 +337,7 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 		}
 		out = append(out, item)
 	}
-	writeJSON(w, map[string]any{"conversations": out})
+	writeJSON(w, r, map[string]any{"conversations": out})
 }
 
 // projectImpact handles GET /projects/{id}/impact — the counts the project's
@@ -367,7 +368,7 @@ func (s *Server) projectImpact(w http.ResponseWriter, r *http.Request, p *store.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, impact)
+	writeJSON(w, r, impact)
 }
 
 // projectTransfer handles POST /projects/{id}/transfer — hand the project to
@@ -438,9 +439,8 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
-	log.Printf("projects: %q transferred project %q to %q", user, projectID, updated.OwnerEmail)
-	writeJSON(w, updated)
+	logging.From(r.Context()).Info("projects: project transferred", "user", safe.LogSafe(user), "project_id", safe.LogSafe(projectID), "to", safe.LogSafe(updated.OwnerEmail))
+	writeJSON(w, r, updated)
 }
 
 // projectMembers handles GET /projects/{id}/members — the accounts a project
@@ -478,7 +478,7 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	if emails == nil {
 		emails = []string{}
 	}
-	writeJSON(w, map[string]any{"members": emails})
+	writeJSON(w, r, map[string]any{"members": emails})
 }
 
 // projectFile is one entry in the LEGACY flat Sources list (`files`), kept
@@ -882,7 +882,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		flat = flat[:maxProjectFiles]
 		truncated = true
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"groups": groups, "files": flat,
 		"truncated":        truncated || groupsTruncated,
 		"groups_truncated": groupsTruncated,
@@ -1097,7 +1097,7 @@ func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, st)
+		writeJSON(w, r, st)
 	case http.MethodPut:
 		var body struct {
 			KeptPersonal *bool           `json:"kept_personal"`
@@ -1111,7 +1111,7 @@ func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, st)
+		writeJSON(w, r, st)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1183,7 +1183,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			writeMemoryStoreError(w, err)
 			return
 		}
-		writeJSON(w, memory)
+		writeJSON(w, r, memory)
 	case memID != "" && r.Method == http.MethodDelete:
 		if s.projectMemoryPermitted(w, r, p, memID, user) == nil {
 			return
@@ -1202,7 +1202,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		if memories == nil {
 			memories = []store.Memory{}
 		}
-		writeJSON(w, map[string]any{"memories": memories})
+		writeJSON(w, r, map[string]any{"memories": memories})
 	case memID == "" && r.Method == http.MethodPost:
 		var req projectMemoryRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -1219,7 +1219,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 				writeMemoryStoreError(w, err)
 				return
 			}
-			writeJSON(w, memory)
+			writeJSON(w, r, memory)
 			return
 		}
 		memory, err := s.store.CreateProjectMemory(r.Context(), p.ID, user, req.Content, req.Kind)
@@ -1227,7 +1227,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			writeMemoryStoreError(w, err)
 			return
 		}
-		writeJSON(w, memory)
+		writeJSON(w, r, memory)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1280,7 +1280,7 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 		"Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s"`, exportFilename(p.Name, p.ID, "json", "project")),
 	)
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"version":          "1",
 		"project":          p,
 		"memories":         memories,
@@ -1396,7 +1396,7 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		// the chat this key made was soft-deleted since (refuse: use a new key).
 		if errors.Is(err, store.ErrConversationIDTaken) {
 			if winner, gerr := s.store.Get(r.Context(), user, store.ConversationIDFromContext(r.Context())); gerr == nil && winner != nil {
-				writeJSON(w, winner)
+				writeJSON(w, r, winner)
 				return nil, false
 			}
 			http.Error(w, "the chat made with this client_request_id was deleted; retry with a new one", http.StatusConflict)

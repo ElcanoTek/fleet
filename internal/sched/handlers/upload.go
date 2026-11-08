@@ -4,12 +4,13 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -36,6 +38,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// This mirrors logic in CreateTask but slightly simpler as we just need "any valid user"
 
 	isAuthed := false
+	identity := "" // the principal's log identity, as the auth middleware sets it
 
 	// 1. API Key
 	if h.verifyAdminKey(r) {
@@ -50,6 +53,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		isAuthed = true
+		identity = user.Username
 	} else {
 		// 1b. Scoped API key carrying create_task permission (#719): an uploaded
 		// file is only usable via a subsequent task create, so the SAME scoped
@@ -65,8 +69,9 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 			perm := models.PermissionCreateTask
-			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
+				identity = apiKeyIdentity(key.KeyID)
 			}
 		}
 	}
@@ -75,6 +80,9 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
+	// No middleware put the principal on the context; the log lines below
+	// carry it the way they would under one. (r itself is left as is.)
+	logCtx := logging.WithUser(r.Context(), identity)
 
 	maxBytes := h.config.UploadMaxBytes
 	if maxBytes <= 0 {
@@ -118,7 +126,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Create checksums directory (hidden/system directory to prevent collisions)
 	checksumsDir := filepath.Join(tempDir, ".checksums")
 	if err := os.MkdirAll(checksumsDir, 0700); err != nil {
-		log.Printf("Failed to create checksums dir: %v", err)
+		logging.From(logCtx).Error("Failed to create checksums dir", "err", err)
 		// Continue, just won't be able to save checksums
 	}
 
@@ -142,7 +150,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	size, checksum, err := writeUploadFile(path, file)
 	if err != nil {
-		log.Printf("Failed to save upload %s: %v", safe.LogSafe(filename), err)
+		logging.From(logCtx).Error("Failed to save upload", "filename", safe.LogSafe(filename), "err", err)
 		writeError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
@@ -151,12 +159,12 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
 	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
 		// Non-critical error, just log it
-		log.Printf("Failed to save checksum sidecar for %s: %v", safe.LogSafe(filename), err)
+		logging.From(logCtx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 	}
 
-	log.Printf("File uploaded: %s (size: %d, checksum: %s)", safe.LogSafe(filename), size, checksum)
+	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", safe.LogSafe(checksum))
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, r, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
 		"original_name": originalName,
 		"checksum":      checksum,
@@ -228,7 +236,7 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Calculate and set checksum header
-	checksum, err := getFileChecksum(h.config.DataDir, filename)
+	checksum, err := getFileChecksum(r.Context(), h.config.DataDir, filename)
 	if err == nil {
 		w.Header().Set("X-Checksum-SHA256", checksum)
 	}
@@ -249,7 +257,7 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	// see.
 	if _, err := os.Stat(tempDir); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("Error accessing temp uploads dir %s: %v", tempDir, err)
+			slog.Error("Error accessing temp uploads dir", "dir", safe.LogSafe(tempDir), "err", err)
 		}
 		return
 	}
@@ -257,21 +265,21 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue walking - we want to clean up as many files as possible
-			log.Printf("Error accessing temp file %s: %v", path, err)
+			slog.Error("Error accessing temp file", "path", safe.LogSafe(path), "err", err)
 			return nil
 		}
 		if !info.IsDir() && time.Since(info.ModTime()) > maxAge {
 			//nolint:gosec // G122: this walks the server's own DataDir/temp_uploads (operator-owned), removing aged temp files during scheduled cleanup. The path is produced by filepath.Walk over a server-controlled root, not by request input; symlink-TOCTOU is not a meaningful vector here.
 			if err := os.Remove(path); err != nil {
-				log.Printf("Failed to remove old temp file %s: %v", path, err)
+				slog.Error("Failed to remove old temp file", "path", safe.LogSafe(path), "err", err)
 			} else {
-				log.Printf("Removed old temp file: %s", path)
+				slog.Info("Removed old temp file", "path", safe.LogSafe(path))
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		log.Printf("Error cleaning up temp files: %v", err)
+		slog.Error("Error cleaning up temp files", "err", err)
 	}
 }
 
@@ -295,7 +303,7 @@ func calculateFileChecksum(path string) (string, error) {
 
 // getFileChecksum returns the checksum for a file in the temp_uploads directory.
 // It checks for a cached sidecar file first, falling back to calculation if needed.
-func getFileChecksum(dataDir, filename string) (string, error) {
+func getFileChecksum(ctx context.Context, dataDir, filename string) (string, error) {
 	// Security: validate filename to prevent path traversal
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
 		return "", fmt.Errorf("invalid filename: path traversal not allowed")
@@ -330,8 +338,7 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 	if err := os.MkdirAll(checksumDir, 0700); err == nil {
 		// Cache the result for next time
 		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: checksumPath is asserted within checksumDir via withinDir/filepath.Rel above.
-			//nolint:gosec // G706: filename is sanitized via safe.LogSafe (strips CR/LF) and already passed sanitizeFilename; gosec's taint tracker cannot see through the helper.
-			log.Printf("Failed to save checksum sidecar for %s: %v", safe.LogSafe(filename), err)
+			logging.From(ctx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 		}
 	}
 

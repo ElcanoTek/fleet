@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -41,7 +41,7 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 	if s.store != nil && user != "" {
 		list, err := s.store.ListConnectorPrefs(ctx, user)
 		if err != nil {
-			log.Printf("availableOptionalConnectorsForUser: load connector prefs failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("availableOptionalConnectorsForUser: load connector prefs failed", "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 			return []agent.OptionalServerInfo{}
 		}
 		prefs = list
@@ -661,16 +661,12 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	resumed := autoRes.ResumeInput != nil
 	if resumed {
 		metrics.RecordApprovalResume("queued")
-		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
-		log.Printf("audit: approval resume queued for conversation %q as input %q after %q",
-			conv.ID, autoRes.ResumeInput.ID, approvalResumeIDs(autoRes.ResumeClaimed))
+		logging.From(ctx).Info("audit: approval resume queued", "conv_id", safe.LogSafe(conv.ID), "input_id", safe.LogSafe(autoRes.ResumeInput.ID), "claimed", approvalResumeIDs(autoRes.ResumeClaimed))
 		s.emitQueueUpdate(ctx, autoRes.ResumeInput.UserEmail, conv.ID)
 		s.maybeDrainQueue(conv.ID)
 	} else if autoRes.ResumeSkipped != "" {
 		metrics.RecordApprovalResume(autoRes.ResumeSkipped)
-		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
-		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
-			conv.ID, autoRes.ResumeSkipped, autoRes.RecentResumes, maxPerHour, approval.ID)
+		logging.From(ctx).Info("audit: approval resume skipped", "conv_id", safe.LogSafe(conv.ID), "reason", safe.LogSafe(autoRes.ResumeSkipped), "recent_resumes", autoRes.RecentResumes, "max_per_hour", maxPerHour, "approval_id", safe.LogSafe(approval.ID))
 	}
 
 	msg := fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", "))

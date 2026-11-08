@@ -49,7 +49,8 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	// the forecast silently dead ("Unauthorized") for every cookie-path
 	// Operations Center user. The resolved creator is discarded: the forecast
 	// creates nothing, so this cannot become a weaker path to task creation.
-	if _, ok := h.authorizeTaskCreator(w, r); !ok {
+	_, r, ok := h.authorizeTaskCreator(w, r)
+	if !ok {
 		return
 	}
 
@@ -72,7 +73,7 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	if !forecast.PricingKnown {
 		status = http.StatusAccepted
 	}
-	writeJSON(w, status, forecast)
+	writeJSON(w, r, status, forecast)
 }
 
 // forecastTask resolves the model, system prompt, MCP tool count, iteration cap,

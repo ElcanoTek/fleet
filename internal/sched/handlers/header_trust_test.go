@@ -122,7 +122,7 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 			req.Header.Set("X-User-Email", email)
 		}
 		rr := httptest.NewRecorder()
-		creator, ok := h.authorizeTaskCreator(rr, req)
+		creator, _, ok := h.authorizeTaskCreator(rr, req)
 		return rr, creator, ok
 	}
 

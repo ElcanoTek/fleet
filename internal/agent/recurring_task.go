@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -100,7 +100,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	}
 	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(recurringTaskSchema))
 	if err != nil {
-		log.Printf("SuggestRecurringTask: output failed schema validation")
+		logging.From(ctx).Error("SuggestRecurringTask: output failed schema validation")
 		return nil, fmt.Errorf("recurring-task synthesis produced no conforming output")
 	}
 	var p RecurringTaskProposal

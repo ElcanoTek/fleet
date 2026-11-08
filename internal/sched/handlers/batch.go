@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -118,9 +119,43 @@ func (h *Handlers) scopedKeyCannotCreate(r *http.Request) bool {
 // calls ValidateKey (which DOES consume one rate-limit token, matching
 // CreateTask), but creates nothing, so the batch path cannot become a weaker
 // route to task creation.
-func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) (taskCreator, bool) {
+//
+// These routes sit outside the auth middleware, so it also does the
+// middleware's other job: the returned request's context names the resolved
+// principal (logging.WithUser — the username, "apikey/<id>", or "admin" for
+// the bootstrap key), so the create pipeline's log lines carry user_id. The
+// caller must continue with the returned request.
+func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) (taskCreator, *http.Request, bool) {
+	c, id, ok := h.resolveTaskCreator(w, r)
+	if !ok {
+		return taskCreator{}, r, false
+	}
+	return c, withAuthIdentity(r, id), true
+}
+
+// withAuthIdentity is what the auth middleware does for a request it
+// authenticated, for the routes that authenticate inline: the principal's
+// log identity on the context.
+func withAuthIdentity(r *http.Request, id string) *http.Request {
+	if id == "" {
+		return r
+	}
+	return r.WithContext(logging.WithUser(r.Context(), id))
+}
+
+// bootstrapAdminIdentity is the log identity of the bootstrap ADMIN_API_KEY.
+const bootstrapAdminIdentity = "admin"
+
+// apiKeyIdentity is an API key's log identity: its id, never the key (#2052).
+//
+// The separator is "/" and not ":" on purpose: "apikey:<value>" is exactly the
+// marker=value shape the log redactor scrubs, so a ":" identity logged as
+// user_id=apikey:[REDACTED] and named no key at all.
+func apiKeyIdentity(keyID string) string { return "apikey/" + keyID }
+
+func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (taskCreator, string, bool) {
 	if h.verifyAdminKey(r) {
-		return taskCreator{hasAdminPermission: true}, true
+		return taskCreator{hasAdminPermission: true}, bootstrapAdminIdentity, true
 	}
 	// The user principal (#2050): POST /tasks (and /tasks/batch,
 	// /tasks/estimate) sit outside the AdminOrUserAuthMiddleware group, so the
@@ -129,24 +164,24 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 	// middleware: a refused principal is never retried on weaker paths.
 	if user, _, handled := h.userPrincipal(w, r); handled {
 		if user == nil {
-			return taskCreator{}, false
+			return taskCreator{}, "", false
 		}
 		return taskCreator{
 			creatorID:          &user.ID,
 			creatorUsername:    user.Username,
 			hasAdminPermission: userHasPermission(user, models.PermissionAdmin),
-		}, true
+		}, user.Username, true
 	}
 	if h.scopedKeyCannotCreate(r) {
 		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
-		return taskCreator{}, false
+		return taskCreator{}, "", false
 	}
 
 	var creator taskCreator
 	apiKey := r.Header.Get("X-API-Key")
 	if apiKey != "" {
 		perm := models.PermissionCreateTask
-		valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil)
+		valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil)
 		if valid && key != nil {
 			creator.hasAdminPermission = key.HasPermission(models.PermissionAdmin)
 			keyID := key.KeyID
@@ -155,14 +190,14 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 				capVal := *key.MaxPriority
 				creator.creatorKeyMaxPriority = &capVal
 			}
-			return creator, true
+			return creator, apiKeyIdentity(keyID), true
 		}
 	}
 
 	// The Operations Center password bearer is retired (#2049 M4, ADR-0105):
 	// programs use API keys, people the session cookie (the principal above).
 	writeError(w, http.StatusUnauthorized, "Unauthorized")
-	return taskCreator{}, false
+	return taskCreator{}, "", false
 }
 
 // CreateTaskBatch handles POST /tasks/batch (#227): it accepts a slice of
@@ -180,7 +215,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 // admin key and cookie/bearer callers are not hourly-keyed, so there is nothing
 // extra to charge there.
 func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
-	creator, ok := h.authorizeTaskCreator(w, r)
+	creator, r, ok := h.authorizeTaskCreator(w, r)
 	if !ok {
 		return
 	}
@@ -281,7 +316,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+		writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 			Created: []models.BatchCreated{},
 			Failed:  atomicFailedList,
 			Count:   0,
@@ -301,7 +336,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 						Index: c.Index, Error: "atomic batch rolled back: " + err.Error(),
 					})
 				}
-				writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+				writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 					Created: []models.BatchCreated{},
 					Failed:  failedList,
 					Count:   0,
@@ -316,7 +351,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 					Index: c.Index, Error: "failed to create task: " + err.Error(),
 				})
 			}
-			writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+			writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 				Created: []models.BatchCreated{},
 				Failed:  failedList,
 				Count:   0,
@@ -334,7 +369,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 	for _, t := range toInsert {
 		localizeTask(t)
 	}
-	writeJSON(w, status, models.BatchTaskResult{
+	writeJSON(w, r, status, models.BatchTaskResult{
 		Created: createdList,
 		Failed:  failedList,
 		Count:   len(createdList),

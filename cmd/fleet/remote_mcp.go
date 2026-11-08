@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -29,7 +30,7 @@ func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
 	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
 	if err != nil {
 		// Config already validates the key length; degrade rather than crash.
-		log.Printf("store secret cipher: not installed — invalid encryption key: %v", err)
+		slog.Error("store secret cipher: not installed — invalid encryption key", "err", err)
 		return
 	}
 	chatStore.SetTokenCipher(cipher)
@@ -61,7 +62,7 @@ func remoteMCPResolver(svc *remotemcp.Service) agent.RemoteMCPResolver {
 // thing the parent already does for the add-time probe.
 func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Service {
 	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
-		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
+		slog.Info("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
 		return nil
 	}
 	// installStoreCipher (which run() calls first) already put the cipher on
@@ -69,7 +70,7 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	if !chatStore.RemoteMCPEncryptionEnabled() {
 		// Config already validates the key length, so this is belt-and-suspenders:
 		// disable rather than crash the whole server on a bad key.
-		log.Printf("remote MCP OAuth: disabled — invalid encryption key (see the store secret cipher error)")
+		slog.Error("remote MCP OAuth: disabled — invalid encryption key (see the store secret cipher error)")
 		return nil
 	}
 	// Same wiring the credential-owning child does (see mcp_broker.go, #1124),
@@ -89,7 +90,7 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// unreachable by the shutdown context, so it outlived the drain and could
 	// touch a closing store. Folding it into the one loop that already runs
 	// hourly fixed that and removed a redundant ticker.
-	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
+	slog.Info("remote MCP OAuth: ENABLED (per-user hosted servers; redirect /api/oauth/mcp/callback)", "public_base_url", cfg.PublicBaseURL)
 	return svc
 }
 
@@ -172,7 +173,7 @@ func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, stri
 	return func(ctx context.Context, email string) []handlers.MCPServerCatalogEntry {
 		conns, err := svc.ConnectedServersForUser(ctx, email)
 		if err != nil {
-			log.Printf("orchestrator mcp catalog: remote server lookup failed: %v", err)
+			logging.From(ctx).Error("orchestrator mcp catalog: remote server lookup failed", "err", err)
 			return nil
 		}
 		out := make([]handlers.MCPServerCatalogEntry, 0, len(conns))

@@ -10,6 +10,7 @@ package handlers
 // and read every task on the box.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -157,11 +158,11 @@ func TestTaskReadIsCreatorScoped(t *testing.T) {
 
 	store, keyMgr, r := setupTaskAuthz(t)
 
-	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
+	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey(context.Background(), "owner", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create owner key: %v", err)
 	}
-	_, intruderRaw, err := keyMgr.CreateTypedKey("intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, intruderRaw, err := keyMgr.CreateTypedKey(context.Background(), "intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create intruder key: %v", err)
 	}
@@ -237,7 +238,7 @@ func TestTaskReadFleetWideGrants(t *testing.T) {
 		t.Error("bootstrap admin key must list every task")
 	}
 
-	_, typedAdminRaw, err := keyMgr.CreateTypedKey("root", apikeys.KeyTypeAdmin, nil, 0, nil, "")
+	_, typedAdminRaw, err := keyMgr.CreateTypedKey(context.Background(), "root", apikeys.KeyTypeAdmin, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed admin key: %v", err)
 	}
@@ -245,7 +246,7 @@ func TestTaskReadFleetWideGrants(t *testing.T) {
 		t.Errorf("typed admin key must read any task: got %d", code)
 	}
 
-	_, auditorRaw, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
+	_, auditorRaw, err := keyMgr.CreateKey(context.Background(), "auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
 		nil, 0, nil, "fleet-wide auditor")
 	if err != nil {
 		t.Fatalf("create auditor key: %v", err)
@@ -255,7 +256,7 @@ func TestTaskReadFleetWideGrants(t *testing.T) {
 	}
 
 	// An unattributed task is visible only under a fleet-wide grant.
-	_, plainRaw, err := keyMgr.CreateTypedKey("plain", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, plainRaw, err := keyMgr.CreateTypedKey(context.Background(), "plain", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create plain key: %v", err)
 	}
@@ -309,11 +310,11 @@ func TestTagCatalogueAuthz(t *testing.T) {
 	bob := addLogUser(t, store, "bob", "client", "bob-token")
 	addLogUser(t, store, "root", "admin", "root-token")
 
-	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
+	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey(context.Background(), "owner", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create owner key: %v", err)
 	}
-	_, intruderRaw, err := keyMgr.CreateTypedKey("intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, intruderRaw, err := keyMgr.CreateTypedKey(context.Background(), "intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create intruder key: %v", err)
 	}

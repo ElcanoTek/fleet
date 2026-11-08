@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"slices"
 	"strings"
@@ -411,7 +410,7 @@ func (e *engine) elisionHeld() bool {
 		return true
 	}
 	if e.runOrch.selfAuditPending() {
-		log.Printf("context elision held: the run's self-audit is pending, so this compaction is the summary")
+		e.log().Info("context elision held: the run's self-audit is pending, so this compaction is the summary")
 		return true
 	}
 	return false
@@ -493,16 +492,16 @@ func (e *engine) noteRerunStop(tool, kind string, raise bool) {
 	}
 	if !raise || raised <= budget {
 		if kind == rerunElided {
-			log.Printf("context elision off for the rest of the run: %s was re-run after its result was elided", tool)
+			e.log().Info("context elision off for the rest of the run: tool was re-run after its result was elided", "tool", tool)
 		} else {
-			log.Printf("resend budget not raised: %s was re-run after a summary dropped its result, but the window leaves no room", tool)
+			e.log().Info("resend budget not raised: tool was re-run after a summary dropped its result, but the window leaves no room", "tool", tool)
 		}
 		return
 	}
 	if kind == rerunElided {
-		log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was %s", raised, tool, how)
+		e.log().Info("context elision off and the resend budget raised for the rest of the run: tool was re-run after its result was removed", "raised", raised, "tool", tool, "how", how)
 	} else {
-		log.Printf("resend budget raised to %d for the rest of the run: %s was re-run after its result was %s", raised, tool, how)
+		e.log().Info("resend budget raised for the rest of the run: tool was re-run after its result was removed", "raised", raised, "tool", tool, "how", how)
 	}
 	if e.logSession != nil {
 		e.logSession.AddMessage(roleUser, fmt.Sprintf(

@@ -172,7 +172,7 @@ func userMessage(text string, taskID string) map[string]any {
 
 func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, string) {
 	t.Helper()
-	key, raw, err := keyMgr.CreateTypedKey(name, apikeys.KeyTypeTask, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateTypedKey(context.Background(), name, apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
 	wantRPCError(t, env, -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED")
 
 	// A readonly key cannot create: definitive transport-layer 403.
-	_, roRaw, err := keyMgr.CreateTypedKey("ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, roRaw, err := keyMgr.CreateTypedKey(context.Background(), "ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestA2AReadsAreCreatorScoped(t *testing.T) {
 	// route cannot pass the suite. (Scoping still applies: the readonly key is
 	// not the creator, so the task is invisible to it — the point is the 200 +
 	// JSON-RPC answer, not a transport 403/405.)
-	_, roRaw, err := keyMgr.CreateTypedKey("reader", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, roRaw, err := keyMgr.CreateTypedKey(context.Background(), "reader", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

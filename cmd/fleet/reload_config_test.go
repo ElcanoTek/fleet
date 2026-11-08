@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -59,4 +62,29 @@ func TestLogConfigReload(_ *testing.T) {
 		Changed: []config.FieldChange{{Key: "FLEET_MAX_COST_USD", Old: "50", New: "25"}},
 		Skipped: []config.SkippedField{{Key: "FLEET_SERVER_ADDR", Reason: "restart required"}},
 	}, nil)
+}
+
+// TestLogConfigReloadLevels: a clean SIGUSR2 reload logs its summary at Info
+// (it is not an error), while each per-setting error is logged at Warn so it
+// still shows at FLEET_LOG_LEVEL=warn.
+func TestLogConfigReloadLevels(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	logConfigReload(config.ReloadResult{Changed: []config.FieldChange{{Key: "FLEET_X", Old: "1", New: "2"}}}, nil)
+	if out := buf.String(); strings.Contains(out, "level=ERROR") || strings.Contains(out, "level=WARN") {
+		t.Fatalf("clean reload logged above Info:\n%s", out)
+	}
+
+	buf.Reset()
+	logConfigReload(config.ReloadResult{Errors: []config.ReloadError{{Key: "FLEET_Y", Error: "bad value"}}}, nil)
+	out := buf.String()
+	if !strings.Contains(out, `level=WARN msg="config reload: setting not applied" key=FLEET_Y`) {
+		t.Fatalf("per-setting reload error not logged at Warn:\n%s", out)
+	}
+	if strings.Contains(out, "level=ERROR") {
+		t.Fatalf("reload with a per-setting error logged at Error:\n%s", out)
+	}
 }

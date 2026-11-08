@@ -19,11 +19,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -81,7 +81,7 @@ func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, map[string]any{
+	writeJSONStatus(w, r, http.StatusCreated, map[string]any{
 		"url":   "/shared/" + token,
 		"token": token,
 	})
@@ -216,8 +216,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		outs, _, cerr = s.ownerOutputs(countCtx, convID)
 		cancel()
 		if cerr != nil {
-			log.Printf("share-with-team: count after unsharing %s: %v", safe.LogSafe(convID), safe.LogSafe(cerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
-			outs = nil                                                                                                    // the chat IS unshared; only the count is unknown
+			logging.From(r.Context()).Error("share-with-team: count after unsharing failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(cerr.Error()))
+			outs = nil // the chat IS unshared; only the count is unknown
 		}
 	}
 	sharedFiles := countShared(outs)
@@ -225,7 +225,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		// Retires this person's getting-started card in the project. Display
 		// state: a failure is logged, never a failed share.
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, user); err != nil {
-			log.Printf("share-with-team: record has_shared_chat for %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+			logging.From(r.Context()).Error("share-with-team: record has_shared_chat failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	} else if !conv.TeamVisible {
 		// Unsharing a chat that was not shared stops nothing.
@@ -233,7 +233,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	}
 	// The STORED state, never the requested one: a client that is told
 	// team_visible:true must be able to believe it.
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"team_visible": stored,
 		"shared_files": sharedFiles,
 		"total_files":  len(outs),
@@ -258,21 +258,21 @@ func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user 
 		stored, err := s.store.SetConversationTeamVisibleWithOptions(ctx, user, conv.ID, true, true)
 		if err != nil {
 			if !errors.Is(err, store.ErrNoTeamToShareWith) && !errors.Is(err, store.ErrNoTeamShareHome) && !errors.Is(err, store.ErrArchivedNotShareable) {
-				log.Printf("auto-share: conversation %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+				logging.From(ctx).Error("auto-share: share conversation failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			}
 			return
 		}
 		if stored {
 			conv.TeamVisible = true
 			if err := s.store.MarkProjectSharedChat(ctx, conv.ID, user); err != nil {
-				log.Printf("auto-share: record has_shared_chat for %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+				logging.From(ctx).Error("auto-share: record has_shared_chat failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			}
 		}
 	}
 	updated, err := s.store.SetConversationMultiplayer(ctx, user, conv.ID, true, nil, nil)
 	if err != nil {
 		if !errors.Is(err, store.ErrArchivedNotShareable) && !errors.Is(err, store.ErrConversationNotFound) {
-			log.Printf("auto-multiplayer: conversation %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+			logging.From(ctx).Error("auto-multiplayer: enable multiplayer failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 		return
 	}
@@ -339,7 +339,7 @@ func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"multiplayer":  conv.Multiplayer,
 		"team_visible": conv.TeamVisible,
 		"owner_email":  conv.UserEmail,
@@ -422,7 +422,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	}
 	if updated.TeamVisible && updated.ProjectID != "" {
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
-			log.Printf("multiplayer: record has_shared_chat for %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+			logging.From(r.Context()).Error("multiplayer: record has_shared_chat failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
@@ -439,7 +439,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"multiplayer":  updated.Multiplayer,
 		"team_visible": updated.TeamVisible,
 		"owner_email":  updated.UserEmail,
@@ -789,7 +789,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 			resp.ViewerBranch.ConversationID, resp.ViewerBranch.BranchedAt, resp.ViewerBranch.ChangedSince
 	}
 	w.Header().Set("ETag", `W/"tv-`+served.Fingerprint()+`"`)
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // teamViewAfterVersion is a test seam: it runs between the team view's
@@ -847,5 +847,5 @@ func (s *Server) handleSharedConversation(w http.ResponseWriter, r *http.Request
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
-	writeJSON(w, conv)
+	writeJSON(w, r, conv)
 }

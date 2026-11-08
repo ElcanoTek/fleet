@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -88,7 +88,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		key, rawKey, err = h.apiKeys.CreateTypedKey(
+		key, rawKey, err = h.apiKeys.CreateTypedKey(r.Context(),
 			keyCreate.Name,
 			kt,
 			keyCreate.AllowedTriggerSlugs,
@@ -99,7 +99,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Legacy role-based path: mints an untyped sk- key. Unchanged except that
 		// an explicit (validated, role-free) permission set is now honored.
-		key, rawKey, err = h.apiKeys.CreateKey(
+		key, rawKey, err = h.apiKeys.CreateKey(r.Context(),
 			keyCreate.Name,
 			keyCreate.Permissions,
 			keyCreate.Role,
@@ -116,28 +116,28 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	// Apply the optional task-urgency ceiling (#230), validated above.
 	if keyCreate.MaxPriority != nil {
 		if err := h.apiKeys.SetMaxPriority(key.KeyID, keyCreate.MaxPriority); err != nil {
-			log.Printf("Warning: failed to set max_priority on new key %s: %v", key.KeyID, err)
+			logging.From(r.Context()).Warn("Warning: failed to set max_priority on new key", "key_id", key.KeyID, "err", err)
 		}
 	}
 
-	log.Printf("Created API key: %s (%s)", key.KeyID, safe.LogSafe(key.Name))
+	logging.From(r.Context()).Info("Created API key", "key_id", key.KeyID, "key_name", safe.LogSafe(key.Name))
 
 	resp := key.ToResponse()
-	writeJSON(w, http.StatusOK, models.APIKeyCreated{
+	writeJSON(w, r, http.StatusOK, models.APIKeyCreated{
 		APIKeyResponse: resp,
 		APIKey:         rawKey,
 	})
 }
 
 // ListAPIKeys handles GET /keys
-func (h *Handlers) ListAPIKeys(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	keys := h.apiKeys.ListKeys()
 	responses := make([]models.APIKeyResponse, len(keys))
 	for i, key := range keys {
 		responses[i] = key.ToResponse()
 	}
 
-	writeJSON(w, http.StatusOK, responses)
+	writeJSON(w, r, http.StatusOK, responses)
 }
 
 // GetAuditLog handles GET /keys/audit
@@ -178,7 +178,7 @@ func (h *Handlers) GetAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries := h.apiKeys.GetAuditLog(keyIDPtr, actionPtr, since, limit)
-	writeJSON(w, http.StatusOK, models.AuditLogResponse{
+	writeJSON(w, r, http.StatusOK, models.AuditLogResponse{
 		Entries: entries,
 		Total:   len(entries),
 	})
@@ -193,7 +193,7 @@ func (h *Handlers) GetAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, key.ToResponse())
+	writeJSON(w, r, http.StatusOK, key.ToResponse())
 }
 
 // maxRotateGraceHours bounds POST /keys/{id}/rotate's ?grace_period_hours=:
@@ -214,17 +214,16 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, rawKey, err := h.apiKeys.RotateKey(keyID, gracePeriodHours)
+	key, rawKey, err := h.apiKeys.RotateKey(r.Context(), keyID, gracePeriodHours)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Rotated API key: %s", safe.LogSafe(keyID))
+	logging.From(r.Context()).Info("Rotated API key", "key_id", safe.LogSafe(keyID))
 
 	resp := key.ToResponse()
-	writeJSON(w, http.StatusOK, models.APIKeyRotated{
+	writeJSON(w, r, http.StatusOK, models.APIKeyRotated{
 		APIKeyResponse:   resp,
 		APIKey:           rawKey,
 		GracePeriodHours: gracePeriodHours,
@@ -234,13 +233,12 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 // RevokeAPIKey handles POST /keys/{key_id}/revoke
 func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
-	if err := h.apiKeys.RevokeKey(keyID); err != nil {
+	if err := h.apiKeys.RevokeKey(r.Context(), keyID); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Revoked API key: %s", safe.LogSafe(keyID))
+	logging.From(r.Context()).Info("Revoked API key", "key_id", safe.LogSafe(keyID))
 
 	key := h.apiKeys.GetKey(keyID)
 	if key == nil {
@@ -248,20 +246,19 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, key.ToResponse())
+	writeJSON(w, r, http.StatusOK, key.ToResponse())
 }
 
 // DeleteAPIKey handles DELETE /keys/{key_id}
 func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
-	if err := h.apiKeys.DeleteKey(keyID); err != nil {
+	if err := h.apiKeys.DeleteKey(r.Context(), keyID); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Deleted API key: %s", safe.LogSafe(keyID))
-	writeJSON(w, http.StatusOK, models.DeleteKeyResponse{
+	logging.From(r.Context()).Info("Deleted API key", "key_id", safe.LogSafe(keyID))
+	writeJSON(w, r, http.StatusOK, models.DeleteKeyResponse{
 		Deleted: true,
 		KeyID:   keyID,
 	})

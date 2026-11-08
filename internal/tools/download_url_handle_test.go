@@ -19,7 +19,7 @@ func TestProtectFastIODownloadURLs_VaultsBearerURLOnly(t *testing.T) {
 	const web = "https://elcano.fast.io/workspace/general/preview/node"
 	input := "**Result:** success\n\n# download_url\n" + signed + "\n\n# web_url\n" + web + "\n"
 
-	got := ProtectFastIODownloadURLs(input)
+	got := ProtectFastIODownloadURLs(t.Context(), input)
 	if strings.Contains(got, signed) || strings.Contains(got, "secret-bearer-value") {
 		t.Fatalf("protected response leaked the signed URL:\n%s", got)
 	}
@@ -148,7 +148,7 @@ func TestProtectFastIODownloadURLs_FailsLoudOnFormatDrift(t *testing.T) {
 	// No "# " heading anywhere: the pre-fix scanner returned this verbatim.
 	input := "Result: success\nDownload: " + tokenURL + "\nSigned: " + sigV4URL + "\nBlob: " + azureURL + "\nPreview: " + web + "\nNext: " + paged + "\n"
 
-	got := ProtectFastIODownloadURLs(input)
+	got := ProtectFastIODownloadURLs(t.Context(), input)
 	for _, leaked := range []string{tokenURL, sigV4URL, azureURL, "secret-bearer-value", "deadbeef", "sig=abc123"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("credential-bearing URL leaked past the drift fallback (%q):\n%s", leaked, got)
@@ -183,7 +183,7 @@ func TestProtectFastIODownloadURLs_FailsLoudOnFormatDrift(t *testing.T) {
 	// fallback, and the still-recognized zip_url section keeps its whole-URL
 	// vaulting (no credential heuristic needed there).
 	drifted := "# file_url\n" + tokenURL + "\n# zip_url\nhttps://cdn.fast.io/opaque/path\n# web_url\n" + web + "\n"
-	got = ProtectFastIODownloadURLs(drifted)
+	got = ProtectFastIODownloadURLs(t.Context(), drifted)
 	if strings.Contains(got, "secret-bearer-value") || strings.Contains(got, "https://cdn.fast.io/opaque/path") || !strings.Contains(got, web) {
 		t.Fatalf("drifted-heading response mis-handled:\n%s", got)
 	}
@@ -211,7 +211,7 @@ func TestProtectFastIODownloadURLs_TrimsTrailingPunctuation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ProtectFastIODownloadURLs(c.line + "\n")
+			got := ProtectFastIODownloadURLs(t.Context(), c.line+"\n")
 			if strings.Contains(got, "prose-bearer-value") {
 				t.Fatalf("bearer leaked: %q", got)
 			}

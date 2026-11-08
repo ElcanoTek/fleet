@@ -60,6 +60,10 @@ type fakeKube struct {
 	// each response line — the pod-side output nothing on the fleet side reads.
 	bridgeTrailingStdout []byte
 
+	// bridgeStderr, when set, is written to the bridge's stderr for each
+	// request, before its response (a traceback the kernel printed).
+	bridgeStderr []byte
+
 	// bashBehaviors maps a bash command string to its fake process. The
 	// handler receives the parsed workdir ("" when the call carried none).
 	bashBehaviors map[string]func(workdir string, stdout, stderr io.Writer, conn *websocket.Conn) int
@@ -509,6 +513,9 @@ func (f *fakeKube) runFakeBridge(_ string, e *execConn) {
 				e.send(k8sChannelStderr, []byte("bad bridge request: "+err.Error()))
 				pending = *bytes.NewBuffer(append([]byte(nil), rest...))
 				continue
+			}
+			if len(f.bridgeStderr) > 0 {
+				e.send(k8sChannelStderr, f.bridgeStderr)
 			}
 			resp, _ := json.Marshal(bridgeResponse{Status: "ok", Result: "ran: " + req.Code})
 			// Optionally append stray stdout AFTER the response newline, in the

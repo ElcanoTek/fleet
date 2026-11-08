@@ -942,7 +942,7 @@ func TestClaimNextPendingTask(t *testing.T) {
 	}
 	defer tx1.Rollback()
 	row := tx1.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE status = $1 ORDER BY effective_priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED", string(models.TaskStatusPending))
-	locked, err := db.scanTask(row)
+	locked, err := db.scanTask(t.Context(), row)
 	if err != nil {
 		t.Fatalf("tx1 lock claim failed: %v", err)
 	}

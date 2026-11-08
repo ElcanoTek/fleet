@@ -180,7 +180,7 @@ func (a *Agent) loadMCPServers(ctx context.Context, names []string, account stri
 		// server creates nothing on disk.
 		workdir := ""
 		if agentcore.EnvReferencesWorkspace(sc.Env) {
-			workdir = agentcore.SharedMCPWorkspaceDir()
+			workdir = agentcore.SharedMCPWorkspaceDir(ctx)
 		}
 		sel := agentcore.MCPSelection{{Server: name, Account: account}}
 		registered, err := agentcore.BindMCPSelection(ctx, a.mcpClient, sel, bases, workdir)

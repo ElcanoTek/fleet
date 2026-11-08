@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -316,12 +316,12 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeCriticalSuffixes = critical
 	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
 	for _, problem := range aliasProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeCriticalAliasClass = classes
 	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
 	for _, problem := range emailLastProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
@@ -349,11 +349,11 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 			continue
 		}
 		if v != ApprovalModeNotify && v != ApprovalModeApprove {
-			log.Printf("agent_policy: ignoring unknown approval mode %q for %q (want %q or %q)", v, k, ApprovalModeApprove, ApprovalModeNotify)
+			slog.Warn("agent_policy: ignoring unknown approval mode", "mode", v, "tool", k, "want", ApprovalModeApprove+" or "+ApprovalModeNotify)
 			continue
 		}
 		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
-			log.Printf("agent_policy: refusing mode %q for %q — a sent message cannot be undone, so its approval card is the review step; pinned to %q", ApprovalModeNotify, k, ApprovalModeApprove)
+			slog.Warn("agent_policy: refusing approval mode — a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
 			continue
 		}
 		modes[k] = v
@@ -387,31 +387,31 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 
 	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
 	for _, problem := range noSessionProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeNoSessionApproval = noSession
 
 	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
 	for _, problem := range describerProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeCardDescribers = describers
 
 	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
 	for _, problem := range resumeProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeResume, activeResumeMaxPerHour = resume, resumeMax
 
 	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
 	for _, problem := range groupProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeGroupApproval = group
 
 	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
 	for _, problem := range progressProblems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeProgress = progress
 
@@ -709,7 +709,7 @@ func closeEmailLastOverEquivalents(emailLast map[string]bool, aliasClass map[str
 			return false
 		}
 		emailLast[s] = true
-		log.Printf("agent_policy: %q is email-last as an equivalent of %q (critical_tool_aliases / critical_tool_substitutes)", s, via)
+		slog.Info("agent_policy: tool is email-last as an equivalent (critical_tool_aliases / critical_tool_substitutes)", "tool", s, "via", via)
 		return true
 	}
 	for changed := true; changed; {

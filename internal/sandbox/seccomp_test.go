@@ -165,7 +165,7 @@ func TestResolveSeccompArgDefault(t *testing.T) {
 	t.Setenv(seccompProfileEnv, "")
 	bridgeDir := t.TempDir()
 
-	arg, cleanup, err := resolveSeccompArg(bridgeDir)
+	arg, cleanup, err := resolveSeccompArg(context.Background(), bridgeDir)
 	if err != nil {
 		t.Fatalf("resolveSeccompArg: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestResolveSeccompArgNone(t *testing.T) {
 	for _, v := range []string{"none", "unconfined"} {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv(seccompProfileEnv, v)
-			arg, cleanup, err := resolveSeccompArg(t.TempDir())
+			arg, cleanup, err := resolveSeccompArg(context.Background(), t.TempDir())
 			if err != nil {
 				t.Fatalf("resolveSeccompArg: %v", err)
 			}
@@ -222,7 +222,7 @@ func TestResolveSeccompArgCustomPath(t *testing.T) {
 		t.Fatalf("write custom profile: %v", err)
 	}
 	t.Setenv(seccompProfileEnv, custom)
-	arg, cleanup, err := resolveSeccompArg(t.TempDir())
+	arg, cleanup, err := resolveSeccompArg(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("resolveSeccompArg: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestResolveSeccompArgCustomPath(t *testing.T) {
 	}
 
 	t.Setenv(seccompProfileEnv, filepath.Join(t.TempDir(), "does-not-exist.json"))
-	if _, cleanup, err := resolveSeccompArg(t.TempDir()); err == nil {
+	if _, cleanup, err := resolveSeccompArg(context.Background(), t.TempDir()); err == nil {
 		cleanup()
 		t.Fatal("expected error for nonexistent custom profile path, got nil — a typo'd override must fail loudly, not silently change policy")
 	}
@@ -313,7 +313,7 @@ func TestSeccompProfileDeniesAtRuntime(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skip("podman not available")
 	}
-	profile, cleanup, err := resolveSeccompArg(t.TempDir())
+	profile, cleanup, err := resolveSeccompArg(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("resolveSeccompArg: %v", err)
 	}

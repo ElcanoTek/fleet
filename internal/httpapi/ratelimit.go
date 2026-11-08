@@ -2,11 +2,11 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -47,7 +47,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			}
 			metrics.RecordChatRateLimited(reason)
 			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
-			writeJSONStatus(w, http.StatusTooManyRequests, map[string]any{
+			writeJSONStatus(w, r, http.StatusTooManyRequests, map[string]any{
 				"error":               "rate_limit_exceeded",
 				"reason":              reason,
 				"retry_after_seconds": int(retry.Seconds()),
@@ -62,7 +62,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 // release func (call when the turn completes) and admitted=false after writing a
 // 429 when the user is already at the limit. Admins and a disabled limiter are
 // always admitted with a no-op release.
-func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (release func(), admitted bool) {
+func (s *Server) admitConcurrentTurn(w http.ResponseWriter, r *http.Request, user string) (release func(), admitted bool) {
 	// Deliberately the ADMIN_EMAILS allowlist only (isAdmin), not
 	// callerIsAdmin: a users.role = 'admin' account gets the same cap as any
 	// member.
@@ -71,7 +71,7 @@ func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (releas
 	}
 	if !s.concurrent.Acquire(user) {
 		metrics.RecordChatRateLimited("concurrent")
-		writeJSONStatus(w, http.StatusTooManyRequests, map[string]any{
+		writeJSONStatus(w, r, http.StatusTooManyRequests, map[string]any{
 			"error":  "Too many concurrent turns",
 			"active": s.concurrent.Active(user),
 			"limit":  s.concurrent.Limit(),
@@ -83,10 +83,10 @@ func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (releas
 
 // writeJSONStatus writes v as JSON with an explicit status code. (writeJSON
 // defaults to 200; this is its status-carrying sibling for error bodies.)
-func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+func writeJSONStatus(w http.ResponseWriter, r *http.Request, status int, v any) {
 	setJSONContentType(w)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("write json: %v", err)
+		logging.From(requestContext(r)).Error("write json failed", "err", err)
 	}
 }

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -139,7 +139,7 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 	}
 	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(libraryPromptSchema))
 	if err != nil {
-		log.Printf("SuggestLibraryPrompt: output failed schema validation")
+		logging.From(ctx).Error("SuggestLibraryPrompt: output failed schema validation")
 		return nil, fmt.Errorf("library-prompt synthesis produced no conforming output")
 	}
 	var d LibraryPromptDraft

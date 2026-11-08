@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -366,7 +367,7 @@ func (p *Pool) coldContainer(ctx context.Context, ov ResourceOverride, noNetwork
 	// runs on every override take.
 	if p.cfg.Mode == ModeKubernetes && ov.PidsLimit > 0 {
 		k8sPidsOverrideWarnOnce.Do(func() {
-			log.Printf("sandbox: per-task pids limit (%d) ignored under the kubernetes backend — a Pod spec has no per-pod pids limit; memory and CPU overrides still apply. Bound process counts with the kubelet's podPidsLimit on the sandbox nodes (docs/DEPLOYMENT-KUBERNETES.md)", ov.PidsLimit)
+			logging.From(ctx).Warn("sandbox: per-task pids limit ignored under the kubernetes backend — a Pod spec has no per-pod pids limit; memory and CPU overrides still apply. Bound process counts with the kubelet's podPidsLimit on the sandbox nodes (docs/DEPLOYMENT-KUBERNETES.md)", "pids_limit", ov.PidsLimit)
 		})
 	}
 	cfg = ov.applyTo(cfg)
@@ -891,7 +892,7 @@ func (p *Pool) Close() {
 	}
 	p.persistentMu.Unlock()
 	if len(persistent) > 0 {
-		log.Printf("sandbox.Pool.Close: closing %d persistent conversation sandbox(es)", len(persistent))
+		slog.Info("sandbox.Pool.Close: closing persistent conversation sandboxes", "count", len(persistent))
 	}
 	for _, e := range persistent {
 		e.sb.Close()
@@ -907,7 +908,7 @@ func (p *Pool) Close() {
 func (p *Pool) fill() {
 	sb, err := p.newSandbox(p.cfg.FillCtx)
 	if err != nil {
-		log.Printf("sandbox.Pool.fill: %v", err)
+		slog.Error("sandbox.Pool.fill failed", "err", err)
 		return
 	}
 
@@ -1054,7 +1055,7 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 	gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
 	if gb <= 0 {
 		// Quota disabled: no flag either way, so skip the probe container.
-		log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
+		logging.From(ctx).Warn("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
 		p.storageProbeDone = true
 		return false
 	}
@@ -1075,7 +1076,7 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 			// turn). That says nothing about the host, and charging a strike
 			// would let a burst of cancels on a healthy host open a cooldown
 			// that runs containers without the layer quota for no reason.
-			log.Printf("sandbox disk quota: --storage-opt probe cut short by the caller — this container gets the per-file ulimit only; the next container creation re-probes")
+			logging.From(ctx).Info("sandbox disk quota: --storage-opt probe cut short by the caller — this container gets the per-file ulimit only; the next container creation re-probes")
 			return false
 		}
 		// The probe's own timeout fired with a live caller: the host itself
@@ -1083,18 +1084,18 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 		p.storageProbeStrikes++
 		if p.storageProbeStrikes >= storageProbeMaxStrikes {
 			p.storageProbeRetryAt = p.now().Add(storageProbeCooldown)
-			log.Printf("sandbox disk quota: --storage-opt probe timed out (%d consecutive) — treating the driver as unsupported for %v (containers get the per-file ulimit only), then re-probing", p.storageProbeStrikes, storageProbeCooldown)
+			logging.From(ctx).Warn("sandbox disk quota: --storage-opt probe timed out repeatedly — treating the driver as unsupported for a cooldown (containers get the per-file ulimit only), then re-probing", "consecutive_timeouts", p.storageProbeStrikes, "cooldown", storageProbeCooldown)
 			return false
 		}
-		log.Printf("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
+		logging.From(ctx).Warn("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
 		return false
 	}
 	p.storageProbeDone = true
 	p.storageOptOK = supported
 	if p.storageOptOK {
-		log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
+		logging.From(ctx).Info("sandbox disk quota: ulimit fsize (per-file, covers the workspace bind mount) + storage-opt size (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", "fsize_gib", gb, "storage_opt_gib", gb)
 	} else {
-		log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
+		logging.From(ctx).Warn("sandbox disk quota: ulimit fsize only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", "fsize_gib", gb)
 	}
 	return p.storageOptOK
 }

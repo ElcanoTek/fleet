@@ -290,7 +290,7 @@ func TestContextWindowForActiveModel_OpenRouterCatalogOverridesDeclaration(t *te
 	// provider-wrapped model. This exercises OpenRouter's static/live fallback
 	// path without consulting a slug-only observation after the scoped lookup
 	// misses.
-	recordContextMaxForModel(&namedMockModel{name: slug}, 2_000_000)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, 2_000_000)
 	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
 		t.Fatalf("OpenRouter active window = %d, want authoritative catalog 131072", got)
 	}
@@ -304,14 +304,14 @@ func TestContextWindowForActiveModel_OpenRouterCatalogOverridesDeclaration(t *te
 	// Provider-reported ground truth is scoped to the exact provider+slug pair.
 	// A large native observation must not inflate OpenRouter's 128K catalog
 	// window, and a later OpenRouter observation must not shrink the native one.
-	recordContextFromError(native, &fantasy.ProviderError{ContextMaxTokens: 1_000_000})
+	recordContextFromError(context.Background(), native, &fantasy.ProviderError{ContextMaxTokens: 1_000_000})
 	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
 		t.Fatalf("native same-slug observation contaminated OpenRouter: got %d, want 131072", got)
 	}
 	if got := contextWindowForActiveModel(native); got != 1_000_000 {
 		t.Fatalf("native observed window = %d, want 1000000", got)
 	}
-	recordContextFromError(openRouter, &fantasy.ProviderError{ContextMaxTokens: 64 * 1024})
+	recordContextFromError(context.Background(), openRouter, &fantasy.ProviderError{ContextMaxTokens: 64 * 1024})
 	if got := contextWindowForActiveModel(openRouter); got != 64*1024 {
 		t.Fatalf("OpenRouter observed window = %d, want 65536", got)
 	}

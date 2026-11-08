@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/guardrail"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -51,7 +51,7 @@ func screenText(ctx context.Context, source, text string) (bool, error) {
 	v, err := p.detector.Check(ctx, p.profile, source, text)
 	if err != nil {
 		metrics.RecordGuardrailVerdict(source, p.mode, "detector_error")
-		log.Printf("guardrail: detector unavailable (source=%s mode=%s): %v", source, p.mode, err)
+		logging.From(ctx).Error("guardrail: detector unavailable", "content_source", source, "mode", p.mode, "err", err)
 		if p.block {
 			return true, fmt.Errorf("%w: detector unavailable", ErrGuardrailBlocked)
 		}
@@ -61,7 +61,7 @@ func screenText(ctx context.Context, source, text string) (bool, error) {
 		metrics.RecordGuardrailVerdict(source, p.mode, "clean")
 		return false, nil
 	}
-	log.Printf("guardrail: content flagged (source=%s profile=%s mode=%s score=%.3f)", source, p.profile, p.mode, v.Score)
+	logging.From(ctx).Warn("guardrail: content flagged", "content_source", source, "profile", p.profile, "mode", p.mode, "score", fmt.Sprintf("%.3f", v.Score))
 	metrics.RecordGuardrailVerdict(source, p.mode, "flagged")
 	if p.block {
 		return true, fmt.Errorf("%w: profile %s", ErrGuardrailBlocked, p.profile)
@@ -122,7 +122,7 @@ func seedScreenError(blocked bool, err error) error {
 func screenToolOutput(ctx context.Context, toolName, text string) (string, bool) {
 	blocked, err := screenText(ctx, "tool_output", guardrailScreenSample(text))
 	if err != nil || blocked {
-		log.Printf("guardrail: withheld output from %s", toolName)
+		logging.From(ctx).Warn("guardrail: withheld tool output", "tool", toolName)
 		return "[BLOCKED: workspace content guardrail]", true
 	}
 	return text, false

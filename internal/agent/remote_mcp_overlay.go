@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -15,9 +14,11 @@ import (
 	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -365,9 +366,15 @@ type RemoteMCPOverlay struct {
 	// {connection name, account label} it mounted (#988), so approval staging
 	// can record the exact seat a later approval must reopen.
 	Seats map[string]agentcore.MCPChoice
-	// CloseScope releases a broker-owned scope. It is called with a fresh,
-	// bounded context so cancellation of the run cannot suppress cleanup.
+	// CloseScope releases a broker-owned scope. It is called with a bounded
+	// context detached from OpenCtx's cancellation, so cancellation of the run
+	// cannot suppress cleanup.
 	CloseScope func(context.Context) error
+	// OpenCtx is the context the overlay was opened under (the run's or the
+	// turn's): Close derives its bounded context from it with
+	// context.WithoutCancel, so a teardown failure is logged with that run's
+	// or turn's correlation. Nil means context.Background().
+	OpenCtx context.Context
 	// Skipped names servers that were selected but could not be wired this run.
 	// Callers surface these to the owner (a needs-reauth server silently doing
 	// nothing is a correctness trap, especially for headless runs). SkipReasons
@@ -559,7 +566,7 @@ func recordRefusedMount(ctx context.Context, resolver RemoteMCPResolver, email, 
 	}
 	detail := fmt.Sprintf("the server rejected the stored credential (HTTP %d) — reconnect, or update the key, to use", hs.StatusCode)
 	if merr := marker.MarkRemoteMCPUnauthorized(ctx, owner, conn.ID, detail); merr != nil {
-		log.Printf("remote-mcp: could not record the credential rejection for %q: %v", regName, merr)
+		logging.From(ctx).Error("remote-mcp: could not record the credential rejection", "reg_name", regName, "err", merr)
 	}
 }
 
@@ -817,17 +824,23 @@ func (o *RemoteMCPOverlay) Validate() error {
 const remoteMCPOverlayCloseTimeout = 5 * time.Second
 
 // Close tears down the overlay's per-run client or broker scope (nil-safe). It
-// deliberately uses a fresh bounded context: callers commonly defer it from a
-// run whose context may already be cancelled.
+// deliberately uses a bounded context detached from the opening context's
+// cancellation (context.WithoutCancel of OpenCtx): callers commonly defer it
+// from a run whose context may already be cancelled, and the teardown's log
+// lines still carry that run's correlation.
 func (o *RemoteMCPOverlay) Close() {
 	if o == nil {
 		return
 	}
 	if o.CloseScope != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), remoteMCPOverlayCloseTimeout)
+		base := o.OpenCtx
+		if base == nil {
+			base = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(base), remoteMCPOverlayCloseTimeout)
 		defer cancel()
 		if err := o.CloseScope(ctx); err != nil {
-			log.Printf("remote-mcp: close overlay scope: %v", err)
+			logging.From(ctx).Error("remote-mcp: close overlay scope failed", "err", err)
 		}
 	}
 	if o.Client != nil {
@@ -862,13 +875,13 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 
 	client := mcp.NewClient()
 	httpClient := resolver.SafeHTTPClient()
-	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}, Seats: map[string]agentcore.MCPChoice{}}
+	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}, Seats: map[string]agentcore.MCPChoice{}, OpenCtx: ctx}
 	chosen, missing := selectRemoteSeats(conns, sel)
 	for _, name := range missing {
 		// A pinned seat that is not connected: never fall back to another
 		// account under the same name — surface it so the owner can connect
 		// (or re-pin) it.
-		log.Printf("remote-mcp: skipping %q for %s — the pinned seat is not connected", name, email)
+		logging.From(ctx).Warn("remote-mcp: skipping server — the pinned seat is not connected", "reg_name", safe.LogSafe(name), "user", safe.LogSafe(email))
 		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0
@@ -879,14 +892,14 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// A collision never takes a slot, so it is checked before the cap:
 			// past the cap it would otherwise be reported as a connector the
 			// user could free a slot for, which it can never use.
-			log.Printf("remote-mcp: skipping remote server %q — name collides with a built-in server", regName)
+			logging.From(ctx).Warn("remote-mcp: skipping remote server — name collides with a built-in server", "reg_name", regName)
 			continue
 		}
 		if registered >= maxOverlayServers {
 			// Past the cap: record every one (the notice names them, and a
 			// pinned name here is "left out", not "unknown"), log once.
 			if !capLogged {
-				log.Printf("remote-mcp: overlay cap %d reached for %s — skipping %q and every further server", maxOverlayServers, email, regName)
+				logging.From(ctx).Warn("remote-mcp: overlay cap reached — skipping this and every further server", "max_servers", maxOverlayServers, "user", email, "reg_name", regName)
 				capLogged = true
 			}
 			overlay.skipConn(conn, SkipReasonOverlayCap)
@@ -895,19 +908,19 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		if conn.Owner != "" {
 			// Attribution for shared connections: the run belongs to email, but
 			// tool calls authenticate with the OWNER's token host-side.
-			log.Printf("remote-mcp: run for %s uses shared server %q owned by %s", email, regName, conn.Owner)
+			logging.From(ctx).Info("remote-mcp: run uses a shared server", "user", email, "reg_name", regName, "owner", conn.Owner)
 		}
 		bearer, terr := resolver.AcquireTokenByID(ctx, email, conn.ID)
 		if terr != nil {
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
-			log.Printf("remote-mcp: skipping server %q for %s — token unavailable", regName, email)
+			logging.From(ctx).Warn("remote-mcp: skipping server — token unavailable", "reg_name", regName, "user", email)
 			overlay.skipConn(conn, tokenSkipReason(terr))
 			continue
 		}
 		if conn.Transport == "http_tools" || conn.Transport == "playwright" {
 			if cerr := mountCustomRemoteConnector(client, regName, conn, bearer, httpClient); cerr != nil {
-				log.Printf("remote-mcp: skipping custom connector %q for %s: %s", regName, email, connectFailureReason(bearer, cerr))
+				logging.From(ctx).Warn("remote-mcp: skipping custom connector", "reg_name", regName, "user", email, "reason", connectFailureReason(bearer, cerr))
 				overlay.skipConn(conn, SkipReasonUnknown)
 				continue
 			}
@@ -946,7 +959,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// "failed to connect" left the GitHub verification in #1006 blind
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
+			logging.From(ctx).Warn("remote-mcp: skipping server — failed to connect", "reg_name", regName, "user", email, "reason", connectFailureReason(bearer, aerr))
 			overlay.skipConn(conn, connectSkipReason(aerr))
 			failure := agentcore.NewMCPConnectFailure(regName, aerr)
 			// The summary never quotes a URL or body, but a vendor's own

@@ -1,11 +1,13 @@
 package agentcore
 
 import (
-	"log"
+	"context"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Default model identifiers + context-window resolution (reconciled from chat
@@ -376,11 +378,11 @@ func observedContextWindow(key observedContextKey) int {
 
 // recordContextMaxForModel writes an observed context_max back into the cache,
 // keyed by the model's provider identity and slug (observedContextKeyForModel).
-func recordContextMaxForModel(model fantasy.LanguageModel, tokens int) {
-	recordObservedContextWindow(observedContextKeyForModel(model), tokens)
+func recordContextMaxForModel(ctx context.Context, model fantasy.LanguageModel, tokens int) {
+	recordObservedContextWindow(ctx, observedContextKeyForModel(model), tokens)
 }
 
-func recordObservedContextWindow(key observedContextKey, tokens int) {
+func recordObservedContextWindow(ctx context.Context, key observedContextKey, tokens int) {
 	if tokens <= 0 || key.slug == "" {
 		return
 	}
@@ -391,6 +393,5 @@ func recordObservedContextWindow(key observedContextKey, tokens int) {
 		return
 	}
 	observedContextWindows.m[key] = tokens
-	log.Printf("📏 Recorded ContextMaxTokens for provider=%s type=%s model=%s: %d (was %d)",
-		key.providerName, key.providerType, key.slug, tokens, existing)
+	logging.From(ctx).Info("📏 Recorded ContextMaxTokens", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "previous", existing)
 }

@@ -2,7 +2,7 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -51,7 +51,7 @@ func buildStopSet(members []string, modes map[string]string, critical map[string
 func installStopSet(members []string, modes map[string]string, critical map[string]bool) map[string]bool {
 	set, problems := buildStopSet(members, modes, critical)
 	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	return set
 }

@@ -1,9 +1,11 @@
 package agentcore
 
 import (
-	"log"
+	"context"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Provider health / circuit breaker (#267).
@@ -158,7 +160,7 @@ func (r *ProviderHealthRegistry) RecordSuccess(slug string) {
 // circuit opens once errorThreshold errors land within the window; a failure
 // while half-open re-opens it. msg is a short error description for the
 // operator-facing snapshot. A nil registry is a no-op (returns closed).
-func (r *ProviderHealthRegistry) RecordError(slug, msg string) CircuitState {
+func (r *ProviderHealthRegistry) RecordError(ctx context.Context, slug, msg string) CircuitState {
 	if r == nil || slug == "" {
 		return CircuitClosed
 	}
@@ -175,7 +177,7 @@ func (r *ProviderHealthRegistry) RecordError(slug, msg string) CircuitState {
 		// The probe failed — re-open and reset the cooldown.
 		c.state = CircuitOpen
 		c.openedAt = now
-		logCircuitOpen(slug, c)
+		logCircuitOpen(ctx, slug, c)
 		return c.state
 	}
 
@@ -185,7 +187,7 @@ func (r *ProviderHealthRegistry) RecordError(slug, msg string) CircuitState {
 		c.state = CircuitOpen
 		c.openedAt = now
 		c.openLogged = false
-		logCircuitOpen(slug, c)
+		logCircuitOpen(ctx, slug, c)
 	}
 	return c.state
 }
@@ -193,13 +195,12 @@ func (r *ProviderHealthRegistry) RecordError(slug, msg string) CircuitState {
 // logCircuitOpen emits a machine-readable warning once per open episode so an
 // operator's log pipeline (alertmanager / PagerDuty) can page on a degraded
 // model. Guarded by openLogged so it fires on the transition, not per error.
-func logCircuitOpen(slug string, c *modelCircuit) {
+func logCircuitOpen(ctx context.Context, slug string, c *modelCircuit) {
 	if c.openLogged {
 		return
 	}
 	c.openLogged = true
-	log.Printf(`{"level":"WARN","event":"circuit_open","model":%q,"recent_errors":%d,"last_error":%q}`,
-		slug, len(c.errorTimes), c.lastError)
+	logging.From(ctx).Warn("circuit breaker: circuit open", "event", "circuit_open", "model", slug, "recent_errors", len(c.errorTimes), "last_error", c.lastError)
 }
 
 // Snapshot returns a point-in-time copy of every tracked model's health,

@@ -23,13 +23,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -379,7 +379,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			// redacted, so an operator can see what the vendor answered when a
 			// user reports "it says 401" (an EU-region token on the US host and
 			// an account-level key read the same to the user).
-			log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: add-time probe of %s for %s refused: %s", logSafeURL(canonURL), in.Email, perr.Error())))
+			logging.From(ctx).Info(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: add-time probe of %s for %s refused: %s", logSafeURL(canonURL), in.Email, perr.Error())))
 			return nil, noProbe, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
@@ -519,7 +519,7 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, p
 		if tool != "" {
 			where = "or at " + tool
 		}
-		log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", logSafeURL(url), where)))
+		logging.From(ctx).Warn(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", logSafeURL(url), where)))
 	}
 	return report, nil
 }
@@ -626,7 +626,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	}
 	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
-		log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: key rotation probe of %s for %s refused: %s", logSafeURL(server.URL), email, err.Error())))
+		logging.From(ctx).Info(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: key rotation probe of %s for %s refused: %s", logSafeURL(server.URL), email, err.Error())))
 		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
 	return report, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
@@ -1320,8 +1320,7 @@ func (s *Service) tryRevoke(ctx context.Context, server *store.RemoteMCPServer) 
 		// that rode the request masked in case an AS or transport error text
 		// echoes them (an *OAuthError never does; a *url.Error can carry the
 		// request URL, which never holds them either — belt and braces).
-		log.Printf("remotemcp: token revocation for server %s failed (local record still removed; the refresh token may remain live at the authorization server): %s",
-			server.ID, maskSecrets(err.Error(), clientSecret, tokens.RefreshToken))
+		logging.From(ctx).Error("remotemcp: token revocation for server failed (local record still removed; the refresh token may remain live at the authorization server)", "server_id", server.ID, "err", maskSecrets(err.Error(), clientSecret, tokens.RefreshToken))
 	}
 }
 

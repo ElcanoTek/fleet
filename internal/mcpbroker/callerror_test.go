@@ -77,7 +77,7 @@ func TestClientServer_VendorAnswerCrossesTheWire(t *testing.T) {
 	if strings.Contains(err.Error(), errBrokerCallFailed) {
 		t.Errorf("a 4xx answer must not be masked: %v", err)
 	}
-	if out := logged(); !strings.Contains(out, "stripe.stripe_api_read") || !strings.Contains(out, "livemode") || !strings.Contains(out, "passed to the caller as") {
+	if out := logged(); !strings.Contains(out, "stripe.stripe_api_read") || !strings.Contains(out, "livemode") || !strings.Contains(out, "passed to the caller with a safe message") {
 		t.Errorf("host log should still carry the full detail and say it was passed:\n%s", out)
 	}
 

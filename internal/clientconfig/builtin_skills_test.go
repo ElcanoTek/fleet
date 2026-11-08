@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func TestMergedSkills(t *testing.T) {
 		if b.SkillsDir == b.BundleSkillsDir {
 			t.Fatal("SkillsDir should point at the merged dir")
 		}
-		got := names(b.Skills())
+		got := names(b.Skills(context.Background()))
 		if _, ok := got["my-skill"]; !ok {
 			t.Error("bundle skill missing from merged roster")
 		}
@@ -101,7 +102,7 @@ func TestMergedSkills(t *testing.T) {
 		if b.SkillsDir != b.BundleSkillsDir {
 			t.Errorf("opt-out should keep SkillsDir on the bundle: %q vs %q", b.SkillsDir, b.BundleSkillsDir)
 		}
-		got := names(b.Skills())
+		got := names(b.Skills(context.Background()))
 		if len(got) != 1 {
 			t.Errorf("want only the bundle skill, got %v", got)
 		}
@@ -113,7 +114,7 @@ func TestMergedSkills(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		got := names(b.Skills())
+		got := names(b.Skills(context.Background()))
 		if _, ok := got["data-profiler"]; ok {
 			t.Error("hidden builtin still present")
 		}
@@ -134,7 +135,7 @@ func TestMergedSkills(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "skills", "my-skill", "SKILL.md"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got := names(b.Skills())
+		got := names(b.Skills(context.Background()))
 		if !strings.Contains(got["my-skill"], "second revision") {
 			t.Errorf("edit not picked up: %q", got["my-skill"])
 		}
@@ -151,7 +152,7 @@ func TestMergedSkills(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(dir, "skills", "ephemeral")); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := names(b.Skills())["ephemeral"]; ok {
+		if _, ok := names(b.Skills(context.Background()))["ephemeral"]; ok {
 			t.Error("deleted bundle skill still in the merged roster")
 		}
 	})

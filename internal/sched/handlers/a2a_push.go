@@ -113,10 +113,10 @@ func a2aPushWireConfig(cfg *models.A2APushConfig) *wire.PushConfig {
 // a2aPushTask loads the task behind a push-config call and enforces the
 // mutating-surface gate. Invisible (or malformed id) ⇒ -32001; visible but
 // neither creator nor operator ⇒ transport-layer 403, like answer/cancel.
-func (h *Handlers) a2aPushTask(w http.ResponseWriter, p principal, req a2abridge.Request, rawTaskID string) (*models.Task, bool) {
+func (h *Handlers) a2aPushTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawTaskID string) (*models.Task, bool) {
 	task, err := h.a2aVisibleTask(p, wire.TaskID(rawTaskID))
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return nil, false
 	}
 	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
@@ -133,27 +133,27 @@ func (h *Handlers) a2aPushTask(w http.ResponseWriter, p principal, req a2abridge
 // delete, and the TCK registers configs on completed tasks.
 func (h *Handlers) a2aCreatePushConfig(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !h.a2a.PushEnabled {
-		a2aWrite(w, a2aPushRefusal(req.ID))
+		a2aWrite(w, r, a2aPushRefusal(req.ID))
 		return
 	}
 	var params a2aPushParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a TaskPushNotificationConfig: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a TaskPushNotificationConfig: "+err.Error(), nil))
 		return
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	if params.taskID() == "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "taskId is required", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "taskId is required", nil))
 		return
 	}
 	if err := a2aValidatePushURL(params.URL); err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
-	task, ok := h.a2aPushTask(w, p, req, params.taskID())
+	task, ok := h.a2aPushTask(w, r, p, req, params.taskID())
 	if !ok {
 		return
 	}
@@ -169,38 +169,38 @@ func (h *Handlers) a2aCreatePushConfig(w http.ResponseWriter, r *http.Request, p
 	}
 	stored, err := h.storage.UpsertA2APushConfig(r.Context(), cfg)
 	if err != nil {
-		a2aWrite(w, a2aPushStoreError(req.ID, err))
+		a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 		return
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, a2aPushWireConfig(stored)))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2aPushWireConfig(stored)))
 }
 
 // a2aGetPushConfig implements GetTaskPushNotificationConfig.
 func (h *Handlers) a2aGetPushConfig(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !h.a2a.PushEnabled {
-		a2aWrite(w, a2aPushRefusal(req.ID))
+		a2aWrite(w, r, a2aPushRefusal(req.ID))
 		return
 	}
 	var params a2aPushParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId and id: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId and id: "+err.Error(), nil))
 		return
 	}
-	task, ok := h.a2aPushTask(w, p, req, params.taskID())
+	task, ok := h.a2aPushTask(w, r, p, req, params.taskID())
 	if !ok {
 		return
 	}
 	cfg, err := h.storage.GetA2APushConfig(r.Context(), task.ID, params.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		a2aWrite(w, a2aErrorFrom(req.ID, fmt.Errorf("%w: task %s has no push-notification config %q",
+		a2aWrite(w, r, a2aErrorFrom(req.ID, fmt.Errorf("%w: task %s has no push-notification config %q",
 			wire.ErrTaskNotFound, task.ID, params.ID)))
 		return
 	}
 	if err != nil {
-		a2aWrite(w, a2aPushStoreError(req.ID, err))
+		a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 		return
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, a2aPushWireConfig(cfg)))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2aPushWireConfig(cfg)))
 }
 
 // a2aListPushConfigs implements ListTaskPushNotificationConfigs. Pagination
@@ -209,28 +209,28 @@ func (h *Handlers) a2aGetPushConfig(w http.ResponseWriter, r *http.Request, p pr
 // always the empty string.
 func (h *Handlers) a2aListPushConfigs(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !h.a2a.PushEnabled {
-		a2aWrite(w, a2aPushRefusal(req.ID))
+		a2aWrite(w, r, a2aPushRefusal(req.ID))
 		return
 	}
 	var params a2aPushParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId: "+err.Error(), nil))
 		return
 	}
-	task, ok := h.a2aPushTask(w, p, req, params.taskID())
+	task, ok := h.a2aPushTask(w, r, p, req, params.taskID())
 	if !ok {
 		return
 	}
 	configs, err := h.storage.ListA2APushConfigs(r.Context(), task.ID)
 	if err != nil {
-		a2aWrite(w, a2aPushStoreError(req.ID, err))
+		a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 		return
 	}
 	out := make([]*wire.PushConfig, 0, len(configs))
 	for _, cfg := range configs {
 		out = append(out, a2aPushWireConfig(cfg))
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, map[string]any{
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, map[string]any{
 		"configs":       out,
 		"nextPageToken": "",
 	}))
@@ -240,23 +240,23 @@ func (h *Handlers) a2aListPushConfigs(w http.ResponseWriter, r *http.Request, p 
 // idempotent by spec §3.1.10; the result is the Empty object.
 func (h *Handlers) a2aDeletePushConfig(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !h.a2a.PushEnabled {
-		a2aWrite(w, a2aPushRefusal(req.ID))
+		a2aWrite(w, r, a2aPushRefusal(req.ID))
 		return
 	}
 	var params a2aPushParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId and id: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must name taskId and id: "+err.Error(), nil))
 		return
 	}
-	task, ok := h.a2aPushTask(w, p, req, params.taskID())
+	task, ok := h.a2aPushTask(w, r, p, req, params.taskID())
 	if !ok {
 		return
 	}
 	if err := h.storage.DeleteA2APushConfig(r.Context(), task.ID, params.ID); err != nil {
-		a2aWrite(w, a2aPushStoreError(req.ID, err))
+		a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 		return
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, struct{}{}))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, struct{}{}))
 }
 
 // a2aStorePushConfigInline persists a SendMessage-inline push config against

@@ -673,6 +673,11 @@ func TestUnverifiedProbeLogKeepsAPathKeyOut(t *testing.T) {
 	if !strings.Contains(out, "answered an invalid key the same") {
 		t.Fatalf("the unverified notice was not logged: %q", out)
 	}
+	// A key fleet could not verify is an operator-actionable fallback: warn,
+	// so FLEET_LOG_LEVEL=warn still shows it (#2074 review).
+	if !strings.Contains(out, "WARN remote-mcp:") {
+		t.Fatalf("the unverified notice was not logged at warn: %q", out)
+	}
 	if strings.Contains(out, key) {
 		t.Fatalf("the key reached the host log: %q", out)
 	}

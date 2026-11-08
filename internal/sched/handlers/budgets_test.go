@@ -168,7 +168,7 @@ func (env *budgetTestEnv) createKey(t *testing.T) (keyID, raw string) {
 	// clear AdminOrUserAuthMiddleware, which the context-reading handlers sit
 	// behind, and a real create key carries both anyway. The budget gate keys
 	// on spend, not permissions, so this does not soften any assertion here.
-	key, raw, err := env.keyMgr.CreateKey("budgeted",
+	key, raw, err := env.keyMgr.CreateKey(context.Background(), "budgeted",
 		[]models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)

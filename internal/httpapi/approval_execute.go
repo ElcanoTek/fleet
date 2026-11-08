@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -301,12 +302,11 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return shared()
 	}
 	release := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), approvalScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalScopeCloseTimeout)
 		defer cancel()
 		if err := scope.Close(closeCtx); err != nil {
-			//nolint:gosec // G706: approval.ID is a server-minted uuid read back from
 			// our own row, and it is rendered with %q so any CR/LF would be escaped.
-			log.Printf("approval %q: close MCP scope: %v", approval.ID, err)
+			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", safe.LogSafe(approval.ID), "err", err)
 		}
 	}
 	return scope.Broker, scope.Catalog, release, nil
@@ -836,7 +836,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 	payload, _ := json.Marshal(payloadMap)
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
-		log.Printf("AppendHistory (approval result): %v", err)
+		logging.From(ctx).Error("AppendHistory failed (approval result)", "err", err)
 	}
 }
 

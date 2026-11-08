@@ -130,7 +130,7 @@ log lines.
 Four host-side calls ARE traceable to a specific run/conversation but fire
 where no live session ledger is reachable. They are metered as the same
 structured host log line the ledger-backed calls emit
-(`aux model call: label=… model=… prompt=… completion=… cost=…`, logged
+(`msg="aux model call" label=… model=… prompt_tokens=… completion_tokens=… cost_usd=…`, logged
 before output validation — a non-conforming reply still cost money). That
 the log line is their ONLY record is a documented limitation, not an
 oversight:

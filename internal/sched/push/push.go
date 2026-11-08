@@ -35,10 +35,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 
 	wire "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -90,7 +92,9 @@ type Store interface {
 type Dispatcher struct {
 	store  Store
 	client *http.Client
-	logf   func(format string, args ...any)
+	// logger, when set, receives the dispatcher's log lines (a test seam);
+	// nil logs through logging.From(ctx).
+	logger *slog.Logger
 	// scanEvery, when set, replaces scanInterval (SetScanInterval).
 	scanEvery time.Duration
 	// budget, when set, replaces tickBudget (tests).
@@ -110,7 +114,7 @@ func New(store Store, allowPrivate bool) *Dispatcher {
 			},
 		}
 	}
-	return &Dispatcher{store: store, client: client, logf: log.Printf}
+	return &Dispatcher{store: store, client: client}
 }
 
 // SetScanInterval overrides the pause between scans (default scanInterval).
@@ -140,12 +144,21 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
+// log is the dispatcher's logger: the test seam when set, else the context
+// logger.
+func (d *Dispatcher) log(ctx context.Context) *slog.Logger {
+	if d.logger != nil {
+		return d.logger
+	}
+	return logging.From(ctx)
+}
+
 // tick performs one scan-deliver-mark pass.
 func (d *Dispatcher) tick(ctx context.Context) {
 	work, err := d.store.ListA2APushWork(ctx, scanBatch)
 	if err != nil {
 		if ctx.Err() == nil {
-			d.logf("a2a push: work scan failed: %v", err)
+			d.log(ctx).Error("a2a push: work scan failed", "err", err)
 		}
 		return
 	}
@@ -187,7 +200,7 @@ func (d *Dispatcher) tick(ctx context.Context) {
 	close(jobs)
 	wg.Wait()
 	if deferred > 0 && ctx.Err() == nil {
-		d.logf("a2a push: tick budget %s spent; %d deliveries deferred to the next scan", budget, deferred)
+		d.log(ctx).Warn("a2a push: tick budget spent; deliveries deferred to the next scan", "budget", budget, "deferred", deferred)
 	}
 }
 
@@ -205,7 +218,7 @@ func (d *Dispatcher) process(ctx context.Context, w models.A2APushWork) {
 	// client contract already demands idempotent processing.
 	claimed, err := d.store.MarkA2APushAttempted(ctx, w.Config.TaskID, w.Config.ID, w.Status)
 	if err != nil {
-		d.logf("a2a push: mark failed for task %s config %s: %v", w.Config.TaskID, w.Config.ID, err)
+		d.log(ctx).Error("a2a push: mark failed", "task_id", w.Config.TaskID, "config_id", w.Config.ID, "err", err)
 		return
 	}
 	if !claimed {
@@ -215,8 +228,8 @@ func (d *Dispatcher) process(ctx context.Context, w models.A2APushWork) {
 		// One attempt is the contract (spec: retry is MAY). The receiver
 		// learns current state from GetTask; the next transition pushes
 		// again. URL and credentials never enter the log line.
-		d.logf("a2a push: delivery attempt failed for task %s config %s: %v",
-			w.Config.TaskID, w.Config.ID, sanitizeErr(err))
+		d.log(ctx).Warn("a2a push: delivery attempt failed",
+			"task_id", w.Config.TaskID, "config_id", w.Config.ID, "err", sanitizeErr(err))
 	}
 }
 

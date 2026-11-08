@@ -82,7 +82,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
-	writeJSON(w, http.StatusCreated, models.UserResponse{
+	writeJSON(w, r, http.StatusCreated, models.UserResponse{
 		ID:        u.ID,
 		Username:  u.Email,
 		Role:      u.LegacyOpsRole(),

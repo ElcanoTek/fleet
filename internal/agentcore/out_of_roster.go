@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/jsonrepair"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -200,7 +200,7 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 	if o == nil {
 		return nil
 	}
-	return func(_ context.Context, opts fantasy.ToolCallRepairOptions) (*fantasy.ToolCallContent, error) {
+	return func(ctx context.Context, opts fantasy.ToolCallRepairOptions) (*fantasy.ToolCallContent, error) {
 		call := opts.OriginalToolCall
 		if hasTool(opts.AvailableTools, call.ToolName) {
 			return repairJSON(call), nil
@@ -217,7 +217,7 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 			model = "unknown"
 		}
 		metrics.RecordToolCallOutOfRoster(model, reason)
-		log.Printf("out-of-roster tool call: model=%s tool=%q reason=%s rerouted=%t", model, call.ToolName, reason, repaired != nil)
+		logging.From(ctx).Info("out-of-roster tool call", "model", model, "tool", call.ToolName, "reason", reason, "rerouted", repaired != nil)
 		payload := map[string]any{"id": call.ToolCallID, "tool": call.ToolName, "reason": reason, "model": model}
 		if repaired != nil {
 			payload["rerouted_to"] = repaired.ToolName

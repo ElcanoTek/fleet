@@ -84,5 +84,5 @@ func (s *Server) handleSubagentLog(w http.ResponseWriter, r *http.Request, convI
 		http.Error(w, "sub-agent transcript file is unreadable", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, child)
+	writeJSON(w, r, child)
 }

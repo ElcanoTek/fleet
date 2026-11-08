@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ func TestLoadImageAttachments(t *testing.T) {
 	if err := os.WriteFile(pngPath, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	parts, refs := loadImageAttachments([]ImageAttachment{
+	parts, refs := loadImageAttachments(context.Background(), []ImageAttachment{
 		{Path: pngPath, MediaType: "image/png", Name: "shot.png"},
 		{Path: filepath.Join(dir, "missing.jpg"), MediaType: "image/jpeg", Name: "missing.jpg"},
 	}, dir)
@@ -40,7 +41,7 @@ func TestLoadImageAttachments_RejectsPathOutsideRoot(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("SECRET"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	parts, refs := loadImageAttachments([]ImageAttachment{
+	parts, refs := loadImageAttachments(context.Background(), []ImageAttachment{
 		{Path: outside, MediaType: "image/png", Name: "secret.png"},
 	}, root)
 	if len(parts) != 0 || len(refs) != 0 {
@@ -54,7 +55,7 @@ func TestAssembleTurnMessages_EmptyUploadsRootSkipsImages(t *testing.T) {
 	if err := os.WriteFile(p, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, entry, err := assembleTurnMessages(TurnInput{
+	_, entry, err := assembleTurnMessages(context.Background(), TurnInput{
 		UserMessage:      "see this",
 		ImageAttachments: []ImageAttachment{{Path: p, MediaType: "image/png", Name: "shot.png"}},
 	}, time.Now())
@@ -76,7 +77,7 @@ func TestLoadImageAttachments_EmptyRootReadsNothing(t *testing.T) {
 	if err := os.WriteFile(p, []byte("a"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := loadImageAttachments([]ImageAttachment{{Path: p, Name: "x.png"}}, "")
+	parts, _ := loadImageAttachments(context.Background(), []ImageAttachment{{Path: p, Name: "x.png"}}, "")
 	if len(parts) != 0 {
 		t.Fatalf("empty uploads root must fail closed, got %d parts", len(parts))
 	}
@@ -86,7 +87,7 @@ func TestLoadImageAttachments_DefaultsMimeWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "x.png")
 	_ = os.WriteFile(p, []byte("a"), 0o600)
-	parts, refs := loadImageAttachments([]ImageAttachment{{Path: p, Name: "x.png"}}, dir)
+	parts, refs := loadImageAttachments(context.Background(), []ImageAttachment{{Path: p, Name: "x.png"}}, dir)
 	if len(parts) != 1 || parts[0].MediaType != "image/png" {
 		t.Errorf("expected default media image/png, got %+v", parts)
 	}
@@ -113,7 +114,7 @@ func TestReplayHistory_PreservesUserImages(t *testing.T) {
 		}),
 		mustEntry("assistant", "text", TextContent{Text: "a square"}),
 	}
-	msgs, err := replayHistory(entries, dir)
+	msgs, err := replayHistory(context.Background(), entries, dir)
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestReplayHistory_ImageMissingFileGracefullyDropped(t *testing.T) {
 			},
 		}),
 	}
-	msgs, err := replayHistory(entries, t.TempDir())
+	msgs, err := replayHistory(context.Background(), entries, t.TempDir())
 	if err != nil {
 		t.Fatalf("replayHistory should not fail on missing image: %v", err)
 	}

@@ -2,14 +2,16 @@ package clientconfig
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Agent Skills support for the client bundle.
@@ -293,13 +295,14 @@ func validSkillName(name string) bool {
 // generic bundle ships one example skill; a real bundle ships its own. Re-read
 // from disk so an operator editing a skill in place takes effect without a
 // process restart — matching the persona/protocol live-reload contract.
-func (b *Bundle) Skills() []Skill {
+// ctx is the caller's: a resync problem is logged with its correlation.
+func (b *Bundle) Skills(ctx context.Context) []Skill {
 	// When the merged bundle+builtin dir is in use, resync it from its
 	// sources first so an operator editing a bundle skill in place is still
 	// picked up without a restart (the copy is a no-op when nothing changed).
 	if b.SkillsDir != b.BundleSkillsDir && b.BundleSkillsDir != "" {
-		if err := syncMergedSkills(b.BundleSkillsDir, b.SkillsDir, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
-			log.Printf("clientconfig: warning: skills resync failed: %v", err)
+		if err := syncMergedSkills(ctx, b.BundleSkillsDir, b.SkillsDir, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
+			logging.From(ctx).Warn("clientconfig: warning: skills resync failed", "err", err)
 		}
 	}
 	skills, _ := ReadSkills(b.SkillsDir)

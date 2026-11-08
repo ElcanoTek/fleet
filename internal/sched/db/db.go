@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -152,7 +153,7 @@ func (db *Database) mergeIdentities(ctx context.Context) error {
 	db.merge = res
 	if res.Ran {
 		for _, line := range res.Report.Lines() {
-			log.Print(line)
+			logging.From(ctx).Info("identity merge: " + line)
 		}
 	}
 	return nil
@@ -177,19 +178,19 @@ func (db *Database) Conn() *sql.DB {
 func marshalJSON(v interface{}) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		log.Printf("Warning: failed to marshal JSON: %v (value type: %T)", err, v)
+		slog.Warn("Warning: failed to marshal JSON", "err", err, "value_type", fmt.Sprintf("%T", v))
 		return "[]"
 	}
 	return string(b)
 }
 
-func unmarshalStringSlice(s string) []string {
+func unmarshalStringSlice(ctx context.Context, s string) []string {
 	if s == "" {
 		return []string{}
 	}
 	var result []string
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		log.Printf("Warning: failed to unmarshal string slice: %v (input: %.100s)", err, s)
+		logging.From(ctx).Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return []string{}
 	}
 	if result == nil {
@@ -198,13 +199,13 @@ func unmarshalStringSlice(s string) []string {
 	return result
 }
 
-func unmarshalMCPSelection(s string) models.MCPSelection {
+func unmarshalMCPSelection(ctx context.Context, s string) models.MCPSelection {
 	if s == "" {
 		return models.MCPSelection{}
 	}
 	var result models.MCPSelection
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		log.Printf("Warning: failed to unmarshal mcp_selection: %v (input: %.100s)", err, s)
+		logging.From(ctx).Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return models.MCPSelection{}
 	}
 	if result == nil {
