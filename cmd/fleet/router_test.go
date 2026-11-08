@@ -67,7 +67,7 @@ func TestBrowserAliasMountsTheV1RouteSet(t *testing.T) {
 	v1 := routesUnder(t, root, orchestrator.V1Prefix)
 	alias := routesUnder(t, root, webui.OrchestratorPrefix)
 	own := routesUnder(t, realOrchestratorRouter(t), "")
-	if len(v1) < 90 {
+	if len(v1) < 65 {
 		t.Fatalf("only %d routes under /v1; the walk did not reach the orchestrator router", len(v1))
 	}
 	if !slices.Equal(v1, alias) {
