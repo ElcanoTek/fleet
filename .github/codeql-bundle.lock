@@ -13,9 +13,12 @@
 #            runner (javascript-typescript's is "javascript")
 #
 # Dependabot bumps the action SHA; scripts/update-pins.sh (pins.tsv row
-# CODEQL_BUNDLE, run monthly by pins-update.yml) reads the new commit's
-# defaults.json, downloads each bundle, requires it to match the digest GitHub
-# publishes for the asset, and rewrites this file. On a Dependabot PR that
+# CODEQL_BUNDLE, run monthly by pins-update.yml) checks this whole file on
+# every run, not only when the action moves: the version against the pinned
+# commit's defaults.json and each hash against the digest GitHub publishes for
+# the asset. When anything differs it downloads each bundle, requires that
+# digest, and rewrites this file (`--check` fails on a wrong lock for the
+# pinned action). On a Dependabot PR that
 # moves codeql-action, run `PINS_ONLY=CODEQL_BUNDLE scripts/update-pins.sh`
 # and commit the result: scripts/check_codeql_bundle_test.go fails until the
 # action line here names the same commit as the workflow.

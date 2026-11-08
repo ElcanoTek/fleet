@@ -281,8 +281,15 @@ update_cosign() { # REPO ASSET SUMS ID ISS
 # one that commit's src/defaults.json names, and each per-language asset ({lang}
 # in ASSET) must hash to the digest GitHub publishes for it. No cooldown of its
 # own: the action's version, and so its cooldown, is Dependabot's.
+#
+# The lock is VERIFIED ON EVERY RUN, not only when the action moves: its
+# version is checked against defaults.json and every hash against the
+# published digest, so a lock seeded with a wrong version or hash can never be
+# reported current. Only the rewrite is skipped when all of it agrees. A lock
+# that disagrees while naming the pinned action is a broken pin, not an
+# update, so --check fails on it.
 update_codeql() {
-  local name="$1" repo="$2" asset_t="$3" lock wf shas sha cur_sha cur v tag lang asset want got out
+  local name="$1" repo="$2" asset_t="$3" lock wf shas sha cur_sha cur v tag lang asset want got out drift=() langs
   lock="$ROOT/.github/codeql-bundle.lock"
   wf="$ROOT/.github/workflows/codeql.yml"
   [[ -f "$lock" && -f "$wf" ]] || { fail "$name: needs .github/codeql-bundle.lock and .github/workflows/codeql.yml"; return; }
@@ -291,24 +298,44 @@ update_codeql() {
   sha="$shas"
   cur_sha="$(awk '$1=="action"{print $2}' "$lock")"
   cur="$(awk '$1=="version"{print $2}' "$lock")"
-  [[ "$sha" == "$cur_sha" ]] && { note "$name: $cur is current (action ${sha:0:12})"; return; }
+  langs="$(awk '!/^#/ && NF==2 && $1!="action" && $1!="version" {print $1}' "$lock")"
+  [[ -n "$langs" ]] || { fail "$name: codeql-bundle.lock pins no language bundle"; return; }
   v="$(api "$GH_API/repos/$repo/contents/src/defaults.json?ref=$sha" \
         | jq -r '.content | gsub("\\s"; "") | @base64d | fromjson | .cliVersion // empty')" \
     || { fail "$name: could not read $repo src/defaults.json at $sha"; return; }
   [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { fail "$name: $repo defaults.json cliVersion is not a plain version — refusing it"; return; }
-  if [[ "$CHECK" == "1" ]]; then note "$name: action ${cur_sha:0:12} → ${sha:0:12}, bundle $cur → $v (would update)"; return; fi
   tag="codeql-bundle-v$v"
   api "$GH_API/repos/$repo/releases/tags/$tag" > "$WORK/codeql-release.json" \
     || { fail "$name: could not read the $tag release"; return; }
-  out="$WORK/codeql-bundle.lock"
-  awk '/^#/' "$lock" > "$out"
-  printf 'action %s\nversion %s\n' "$sha" "$v" >> "$out"
-  for lang in $(awk '!/^#/ && NF==2 && $1!="action" && $1!="version" {print $1}' "$lock"); do
+  [[ "$sha" == "$cur_sha" ]] || drift+=("action ${cur_sha:0:12} → ${sha:0:12}")
+  [[ "$v" == "$cur" ]] || drift+=("version $cur → $v")
+  for lang in $langs; do
     [[ "$lang" =~ ^[a-z]+$ ]] || { fail "$name: odd language $lang in codeql-bundle.lock"; return; }
     asset="${asset_t//\{lang\}/$lang}"
     want="$(A="$asset" jq -r '.assets[] | select(.name == env.A) | .digest // empty' "$WORK/codeql-release.json" | head -n1)"
     want="${want#sha256:}"
     valid_sha "$want" || { fail "$name: GitHub publishes no sha256 digest for $asset in $tag — not updating"; return; }
+    [[ "$(L="$lang" awk '$1==ENVIRON["L"]{print $2}' "$lock")" == "$want" ]] || drift+=("$lang hash ≠ GitHub's digest")
+  done
+  if [[ ${#drift[@]} -eq 0 ]]; then
+    note "$name: $cur is current (action ${sha:0:12}; version and every bundle hash match defaults.json and GitHub's digests)"
+    return
+  fi
+  if [[ "$CHECK" == "1" ]]; then
+    if [[ "$sha" == "$cur_sha" ]]; then
+      fail "$name: codeql-bundle.lock names the pinned action but disagrees with it: ${drift[*]} — run scripts/update-pins.sh to rewrite it"
+    else
+      note "$name: ${drift[*]} (would update)"
+    fi
+    return
+  fi
+  out="$WORK/codeql-bundle.lock"
+  awk '/^#/' "$lock" > "$out"
+  printf 'action %s\nversion %s\n' "$sha" "$v" >> "$out"
+  for lang in $langs; do
+    asset="${asset_t//\{lang\}/$lang}"
+    want="$(A="$asset" jq -r '.assets[] | select(.name == env.A) | .digest // empty' "$WORK/codeql-release.json" | head -n1)"
+    want="${want#sha256:}"
     fleet_release_get "$GH_DL/$repo/releases/download/$tag/$asset" "$WORK/asset" "$FLEET_RELEASE_MAX_BINARY" \
       || { fail "$name: could not download $asset from $tag"; return; }
     got="$(sha256sum "$WORK/asset" | awk '{print $1}')"
@@ -318,7 +345,7 @@ update_codeql() {
   done
   cp "$out" "$lock"
   CHANGES+=("$name $cur → $v")
-  note "$name: $cur → $v for $repo ${sha:0:12} (each bundle hash-checked against GitHub's asset digest)"
+  note "$name: ${drift[*]} — rewritten for $repo ${sha:0:12} (each bundle hash-checked against GitHub's asset digest)"
 }
 
 while IFS=$'\t' read -r name kind source asset sums id iss; do
