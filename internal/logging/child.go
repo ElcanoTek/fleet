@@ -276,8 +276,14 @@ func ChildStderr(child string) io.WriteCloser {
 func forwardChildLine(child string, line []byte, dropped int) {
 	ctx := context.Background()
 	if dropped == 0 {
-		if rec, ok := childRecord(line); ok {
+		if rec, bridged, ok := childRecord(line); ok {
 			rec.AddAttrs(slog.String(childKey, child))
+			if bridged {
+				// The child's stdlib-log bridge wrote it: ungated here as
+				// there (its bridge handler adds StdlibLogKey back).
+				_ = bridgeLogger.Handler().Handle(ctx, rec)
+				return
+			}
 			if h := slog.Default().Handler(); h.Enabled(ctx, rec.Level) {
 				_ = h.Handle(ctx, rec)
 			}
@@ -315,15 +321,15 @@ const (
 // line without a valid level ({"msg":"x","severity":"fatal"}) is not a
 // record: re-logging it at an assumed info would drop it at FLEET_LOG_LEVEL
 // warn or error, so it takes the ungated "child stderr" path instead.
-func childRecord(line []byte) (slog.Record, bool) {
+func childRecord(line []byte) (rec slog.Record, bridged, ok bool) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
-		return slog.Record{}, false
+		return slog.Record{}, false, false
 	}
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return slog.Record{}, false
+		return slog.Record{}, false, false
 	}
 	var (
 		when   = time.Now()
@@ -340,15 +346,15 @@ func childRecord(line []byte) (slog.Record, bool) {
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
-			return slog.Record{}, false
+			return slog.Record{}, false, false
 		}
 		key, isKey := tok.(string)
 		if !isKey {
-			return slog.Record{}, false
+			return slog.Record{}, false, false
 		}
 		var v any
 		if err := dec.Decode(&v); err != nil {
-			return slog.Record{}, false
+			return slog.Record{}, false, false
 		}
 		switch key {
 		case slog.TimeKey:
@@ -361,11 +367,11 @@ func childRecord(line []byte) (slog.Record, bool) {
 		case slog.LevelKey:
 			s, ok := v.(string)
 			if !ok {
-				return slog.Record{}, false
+				return slog.Record{}, false, false
 			}
 			var l slog.Level
 			if l.UnmarshalText([]byte(s)) != nil {
-				return slog.Record{}, false
+				return slog.Record{}, false, false
 			}
 			level, hasLevel = l, true
 			continue
@@ -375,23 +381,31 @@ func childRecord(line []byte) (slog.Record, bool) {
 				continue
 			}
 		}
+		// The child's bridge marks its stdlib lines (StdlibLogKey=true; a
+		// call site's attribute of that name was renamed in the child).
+		if key == StdlibLogKey {
+			if b, isBool := v.(bool); isBool && b {
+				bridged = true
+				continue
+			}
+		}
 		// The key is scrubbed like every nested key (redactedKeys) and made
 		// unique in document order.
 		attrs = append(attrs, jsonAttr(uniqueKey(seenKeys, Redact(key)), v))
 	}
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
-		return slog.Record{}, false
+		return slog.Record{}, false, false
 	}
 	// Exactly one object: trailing bytes make it not a record.
 	if _, err := dec.Token(); err != io.EOF {
-		return slog.Record{}, false
+		return slog.Record{}, false, false
 	}
 	if !hasMsg || !hasLevel {
-		return slog.Record{}, false
+		return slog.Record{}, false, false
 	}
-	rec := slog.NewRecord(when, level, msg, 0)
+	rec = slog.NewRecord(when, level, msg, 0)
 	rec.AddAttrs(attrs...)
-	return rec, true
+	return rec, bridged, true
 }
 
 // jsonAttr turns one top-level decoded JSON field into an attribute the
@@ -445,7 +459,13 @@ func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
 		} else {
 			rec = append(rec, slog.String("line", Redact(string(line))))
 		}
-		slog.Default().LogAttrs(context.Background(), slog.LevelInfo, StderrLineMessage, rec...)
+		// Not gated by FLEET_LOG_LEVEL, like a child's raw stderr line: a
+		// connector's or the sandbox bridge's stderr is of unknown severity
+		// (a traceback is exactly that), so raising the level must not
+		// erase it. It is labelled info.
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, StderrLineMessage, 0)
+		r.AddAttrs(rec...)
+		_ = slog.Default().Handler().Handle(context.Background(), r)
 		return nil
 	}
 	return l

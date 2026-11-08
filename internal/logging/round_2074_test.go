@@ -127,3 +127,18 @@ func TestJSONWithoutAValidLevelSurvivesTheLevelGate(t *testing.T) {
 		t.Fatalf("want both level-less lines as warn child-stderr records, got %d:\n%s", wrapped, data)
 	}
 }
+
+// A connector's or the sandbox bridge's stderr line is of unknown severity,
+// so it is not gated by FLEET_LOG_LEVEL either (the same class as the
+// broker's stdlib lines, #2074 review).
+func TestSubprocessStderrIsNotGated(t *testing.T) {
+	var out childLog
+	prev := slog.Default()
+	slog.SetDefault(slog.New(NewHandler("json", &out, slog.LevelError)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	l := NewStderrLogger(slog.String("connector", "acme"))
+	_, _ = l.Write([]byte("Traceback (most recent call last):\n"))
+	if !strings.Contains(out.String(), "Traceback (most recent call last):") {
+		t.Fatalf("connector stderr was gated at level=error: %q", out.String())
+	}
+}

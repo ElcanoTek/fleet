@@ -90,7 +90,7 @@ func (b *startupBuffer) add(r bufferedRecord) {
 // too.
 func FlushStartup() {
 	h := emergencyHandler()
-	if replayStartup(h, h) {
+	if replayStartup(h, newBridgeHandler("json", lockedStderr)) {
 		slog.SetDefault(slog.New(h))
 	}
 }

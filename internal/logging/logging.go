@@ -130,13 +130,17 @@ func Configure(cfg Config) (io.Closer, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
 		newHandler = newTextHandler
 	}
+	format := "json"
+	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
+		format = "text"
+	}
 	configured.Store(true)
 	levelVar.Set(ParseLevel(cfg.Level))
 	setOutput(dest)
 	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
 	// Lines logged before Configure (BufferStartup) go out now, through the
 	// configured format, level and file sink.
-	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
+	bridgeLogger = slog.New(newBridgeHandler(format, dest))
 	replayStartup(slog.Default().Handler(), bridgeLogger.Handler())
 	// contextAttrHandler: a panic recovered under a request or a run carries
 	// that context's correlation (safe.EmitPanicWithMetadataContext).
@@ -154,18 +158,48 @@ func Configure(cfg Config) (io.Closer, error) {
 // silently erase a library's report of a failure it could only express as a
 // plain print. Reassigned once in Configure (before any concurrent logging);
 // defaults to stderr pre-Configure.
-var bridgeLogger = slog.New(newJSONHandler(lockedStderr, slog.LevelInfo))
+var bridgeLogger = slog.New(newBridgeHandler("json", lockedStderr))
+
+// StdlibLogKey marks a record the stdlib-log bridge wrote (stdlib_log=true).
+// It travels with the record across a process boundary: the MCP broker child
+// writes its bridged lines with it, and the parent (ChildStderr) re-logs a
+// child record carrying it through its own ungated bridge, not its gated
+// default handler. Only the bridge handler can write it — every other
+// handler renames a call site's attribute of that name (userReplaceAttr), so
+// a log call cannot pose as an ungated stdlib line.
+const StdlibLogKey = "stdlib_log"
+
+// newBridgeHandler is the bridge's handler: format at dest, at info (not
+// FLEET_LOG_LEVEL), every record tagged StdlibLogKey=true.
+func newBridgeHandler(format string, dest io.Writer) slog.Handler {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr}
+	var h slog.Handler = slog.NewJSONHandler(dest, opts)
+	if strings.EqualFold(strings.TrimSpace(format), "text") {
+		h = slog.NewTextHandler(dest, opts)
+	}
+	return h.WithAttrs([]slog.Attr{slog.Bool(StdlibLogKey, true)})
+}
+
+// userReplaceAttr is replaceAttr for every handler but the bridge's: a
+// top-level attribute named StdlibLogKey is renamed (stdlib_log#2), so only
+// the bridge can mark a record as a stdlib line.
+func userReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == StdlibLogKey {
+		a.Key = StdlibLogKey + "#2"
+	}
+	return replaceAttr(groups, a)
+}
 
 // newJSONHandler builds the structured-JSON handler: an slog JSON handler at
 // dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted
 // so tests can exercise it over a buffer without touching process-global state.
 func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewJSONHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
+	return slog.NewJSONHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
 }
 
 // newTextHandler is newJSONHandler's logfmt sibling (FLEET_LOG_FORMAT=text).
 func newTextHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
+	return slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
 }
 
 // NewHandler returns a redacting handler of the named format ("json" or

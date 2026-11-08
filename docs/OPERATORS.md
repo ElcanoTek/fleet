@@ -753,11 +753,15 @@ Operator notes:
 - A subprocess stderr line longer than 64 KiB is cut. The kept part ends
   early by a safety margin, so a secret that straddles the cut is not shown
   at all, and the line ends with `…[truncated: line was N bytes]`.
-- A stdio MCP connector's stderr (a Python traceback, a startup banner) is
-  logged one line per record — `msg="subprocess stderr"`, the text in `line`,
-  the server in `connector` — after secret redaction, at `info`. It is never
-  copied to the log verbatim. Lines longer than 64 KiB are cut and marked
-  `truncated`.
+- A stdio MCP connector's stderr (a Python traceback, a startup banner), and
+  the sandbox bridge's (`subprocess=sandbox-bridge`), is logged one line per
+  record — `msg="subprocess stderr"`, the text in `line`, the server in
+  `connector` — after secret redaction, labelled `info` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. It is never copied to
+  the log verbatim. Lines longer than 64 KiB are cut and marked `truncated`.
+- Lines a library writes through Go's standard `log` package carry
+  `stdlib_log=true`, in fleet serve and in the MCP broker alike; the parent
+  keeps a broker's such lines ungated too.
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.

@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/exec"
 	"testing"
 )
 
@@ -271,5 +272,68 @@ func TestStdlibLogBeforeConfigureIsNotGated(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte("an ordinary startup info line")) {
 		t.Fatalf("an ordinary info line passed level=error:\n%s", data)
+	}
+}
+
+// TestMain re-execs this test binary as a fleet-mcp-broker-like child when
+// FLEET_LOGGING_TEST_CHILD is set: it configures logging as the broker does
+// (JSON on stderr, the parent's level) and writes one stdlib log line, one
+// ordinary info record and a stdlib_log spoof attempt, then exits.
+func TestMain(m *testing.M) {
+	if os.Getenv("FLEET_LOGGING_TEST_CHILD") == "1" {
+		if _, err := Configure(Config{Format: "json", Level: os.Getenv("FLEET_LOGGING_TEST_LEVEL")}); err != nil {
+			os.Exit(2)
+		}
+		log.Printf("library diagnostic from the child")
+		slog.Info("ordinary child info record")
+		slog.Info("spoofed stdlib line", StdlibLogKey, true)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// A stdlib log line inside a child (the broker's dependency printing a
+// failure) stays ungated across the process boundary: the child's bridge
+// tags it, and the parent re-logs it through its own ungated bridge, so it
+// reaches FLEET_LOG_FILE at FLEET_LOG_LEVEL=error, while an ordinary child
+// info record — and a call site trying to spoof the tag — are still gated
+// (#2074 review).
+func TestChildStdlibLogSurvivesTheParentsLevel(t *testing.T) {
+	restoreLogging(t)
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "FLEET_LOGGING_TEST_CHILD=1", "FLEET_LOGGING_TEST_LEVEL=info")
+	stderr := ChildStderr("mcp-broker")
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	_ = stderr.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var m map[string]any
+		if json.Unmarshal(line, &m) != nil {
+			continue
+		}
+		switch m["msg"] {
+		case "library diagnostic from the child":
+			found = m["child"] == "mcp-broker" && m[StdlibLogKey] == true
+		case "ordinary child info record", "spoofed stdlib line":
+			t.Fatalf("a gated child record passed level=error: %s", line)
+		}
+	}
+	if !found {
+		t.Fatalf("the child's stdlib log line did not reach the file at level=error:\n%s", data)
 	}
 }
