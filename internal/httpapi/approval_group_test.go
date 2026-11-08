@@ -150,7 +150,7 @@ type groupReply struct {
 func postGroup(t *testing.T, s *Server, method, group, body string) (int, string) {
 	t.Helper()
 	req := httptest.NewRequest(method, "/conversations/c1/approval-groups/"+url.PathEscape(group), strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApprovalGroup(rec, req, "c1", group)
 	return rec.Code, rec.Body.String()

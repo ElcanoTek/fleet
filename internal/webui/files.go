@@ -91,7 +91,7 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 		g.dispatch(w, r, g.chat, "chat-server", call{
 			method: http.MethodGet,
 			target: "/conversations/" + p(r, "id") + "/workspace/" + tail,
-			header: g.chatHeaders(identityOf(s)),
+			header: http.Header{}, who: sessionPrincipal(s),
 		}, fileOut([]string{"Content-Type", "Content-Length", "Cache-Control", "Last-Modified", "ETag"}, name, false, nil))
 	})
 
@@ -110,7 +110,7 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 		g.dispatch(w, r, g.chat, "chat-server", call{
 			method: r.Method,
 			target: "/conversations/" + p(r, "id") + "/team-files/" + tail,
-			header: g.chatHeaders(identityOf(s)),
+			header: http.Header{}, who: sessionPrincipal(s),
 		}, fileOut([]string{"Content-Type", "Content-Length", "Cache-Control", "Last-Modified", "ETag", "Content-Disposition"}, name, true,
 			func(dst http.Header) { dst.Set("Content-Security-Policy", "sandbox") }))
 	}
@@ -138,7 +138,7 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 		if len(parts) > 0 {
 			target += "?" + strings.Join(parts, "&")
 		}
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: g.chatHeaders(identityOf(s))},
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: http.Header{}, who: sessionPrincipal(s)},
 			out{headers: []string{"Content-Type", "Content-Disposition"}})
 	})
 
@@ -152,7 +152,7 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 		g.dispatch(w, r, g.chat, "chat-server", call{
 			method: http.MethodGet,
 			target: "/shared-files/" + p(r, "id") + "/download",
-			header: g.chatHeaders(identityOf(s)),
+			header: http.Header{}, who: sessionPrincipal(s),
 		}, out{headers: []string{"Content-Type", "Content-Disposition", "Content-Length"}, plainErrors: true, status200: true})
 	})
 
@@ -175,10 +175,10 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expected multipart/form-data"})
 				return
 			}
-			h := g.chatHeaders(identityOf(s))
+			h, who := http.Header{}, sessionPrincipal(s)
 			h.Set("Content-Type", r.Header.Get("Content-Type"))
 			g.dispatch(w, r, g.chat, "chat-server", call{
-				method: http.MethodPost, target: target, header: h,
+				method: http.MethodPost, target: target, header: h, who: who,
 				body: r.Body, contentLength: r.ContentLength,
 			}, textJSON)
 		}
@@ -198,7 +198,7 @@ func (g *Gateway) registerFiles(mux *http.ServeMux) {
 		g.dispatch(w, r, g.orch, "orchestrator", call{
 			method: http.MethodGet,
 			target: "/tasks/" + p(r, "taskId") + "/workspace/" + tail,
-			header: g.orchHeaders(auth),
+			header: g.orchHeaders(auth), who: auth.who,
 		}, fileOut([]string{"Content-Type", "Content-Length", "Cache-Control", "Last-Modified", "ETag"}, name, false, nil))
 	})
 }

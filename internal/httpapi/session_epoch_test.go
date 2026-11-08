@@ -7,29 +7,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/principal"
 )
 
 // Session revocation. The web session cookie is a stateless HMAC the web tier
 // tier verifies locally, so the users-table lookup membershipMiddleware already
 // performs is the only place a "this session is no longer valid" decision can be
-// made. The cookie carries the account's session epoch, the web tier forwards
-// it as X-User-Session-Epoch, and a mismatch means the password has changed since
-// the cookie was minted.
+// made. The cookie carries the account's session epoch, the web tier hands it
+// over in the request principal's Session, and a mismatch means the password
+// has changed since the cookie was minted.
 //
 // These run against the REAL store (memberFixture points isMember back at it),
 // because the epoch comes from the same GetUser call that admits the user.
 
-// getEpoch is `do` for a GET plus the forwarded session-epoch claim. An empty
-// epoch sends no header at all — the elcano_auth case, whose cookie chat does
-// not mint.
+// getEpoch is `do` for a GET plus the session-epoch claim. An empty epoch
+// carries no claim — the elcano_auth case, whose cookie fleet does not mint.
 func getEpoch(t *testing.T, h http.Handler, path, user, epoch string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", user)
-	if epoch != "" {
-		req.Header.Set("X-User-Session-Epoch", epoch)
-	}
+	req := httptest.NewRequestWithContext(sessionContext(user, principal.Session{Epoch: epoch}), http.MethodGet, path, nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	return w
@@ -123,13 +119,9 @@ func TestExternalEpochRevocationEndsPasswordSessionsToo(t *testing.T) {
 	}
 
 	externalRequest := func(epoch string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/conversations", nil)
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", "u@x.com")
-		req.Header.Set("X-User-Session-Epoch", epoch)
-		req.Header.Set("X-User-Session-Source", "oidc")
-		req.Header.Set("X-External-Issuer", "https://auth.example.com")
-		req.Header.Set("X-External-Subject", "account-123")
+		req := httptest.NewRequestWithContext(sessionContext("u@x.com", principal.Session{
+			Epoch: epoch, Source: principal.SourceOIDC, Issuer: "https://auth.example.com", Subject: "account-123",
+		}), http.MethodGet, "/conversations", nil)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		return rr

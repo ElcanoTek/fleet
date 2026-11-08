@@ -14,7 +14,7 @@ import (
 func postProject(t *testing.T, srv *Server, user, convID, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/conversations/"+convID+"/project", strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	srv.conversationByID(w, req)
 	return w

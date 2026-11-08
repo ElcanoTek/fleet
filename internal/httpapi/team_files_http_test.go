@@ -515,7 +515,7 @@ func TestTeammateBranchRecordsOriginAfterRequestCancel(t *testing.T) {
 	f := newFilesFixture(t)
 	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
 	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
-	reqCtx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKeyUser, "bob@x.com"))
+	reqCtx, cancel := context.WithCancel(asUser(context.Background(), "bob@x.com"))
 	defer cancel()
 	canceled := false
 	branchCopyAfterStat = func(string) {
@@ -1204,7 +1204,7 @@ func teamViewIf(t *testing.T, srv *Server, user, convID, etag string) *httptest.
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	srv.conversationByID(w, req)
 	return w
 }

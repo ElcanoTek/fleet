@@ -93,6 +93,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
 - **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **One identity table** (one `core.users` row per person, role plus Operations Center scope, the merge of the scheduler's users, the retired Operations Center bearer): [`docs/IDENTITY.md`](IDENTITY.md) + [ADR-0105](adr/0105-one-identity-table.md)
+- **Who is calling** (the typed request principal, the one account lookup both planes share, why no handler reads an identity header): [`docs/PRINCIPAL.md`](PRINCIPAL.md) + [ADR-0108](adr/0108-typed-principal.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
 - **The browser tier** (the fleet binary serves the Vite SPA and every

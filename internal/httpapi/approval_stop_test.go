@@ -145,7 +145,7 @@ func stopRow() store.Approval {
 
 func postStop(s *Server, conv string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", "/conversations/"+conv+"/approvals/ap1/stop", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.conversationByID(rec, req)
 	return rec

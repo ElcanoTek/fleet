@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +33,7 @@ func TestHandlerOnlyScopePreservesIdempotentOutcome(t *testing.T) {
 			fake := &expiredClickFakeStore{approval: store.Approval{ID: "a", ConversationID: "c", UserEmail: "u@example.com", ToolName: "schedule_task", Status: status}}
 			s := &Server{store: fake}
 			req := httptest.NewRequest(http.MethodPost, "/conversations/c/approvals/a", strings.NewReader(`{"approved":true,"scope":"session"}`))
-			req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+			req = req.WithContext(asUser(req.Context(), "u@example.com"))
 			rec := httptest.NewRecorder()
 			s.handleApproval(rec, req, "c", "a")
 			want := http.StatusOK

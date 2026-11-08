@@ -257,7 +257,7 @@ func TestBackchannelRoute(t *testing.T) {
 		t.Fatalf("logout: %d", res.StatusCode)
 	}
 	got := e.chat.last(t)
-	if got.URI != "/auth/external-session-revoke" || got.Header.Get("X-User-Email") != "dave@x.com" || got.Body != `{"event_id":"evt-1","issuer":"https://auth.example.com","subject":"acct-1"}` {
+	if got.URI != "/auth/external-session-revoke" || !got.isGateway("dave@x.com") || !got.noIdentityHeaders() || got.Body != `{"event_id":"evt-1","issuer":"https://auth.example.com","subject":"acct-1"}` {
 		t.Fatalf("%q %q", got.URI, got.Body)
 	}
 	// chat-server could not record it → 503 (Auth retries).
@@ -349,7 +349,7 @@ func TestBackchannelTeamRename(t *testing.T) {
 		t.Fatalf("team rename: %d", res.StatusCode)
 	}
 	got := e.chat.last(t)
-	if got.URI != "/auth/external-team-rename" || got.Header.Get("X-User-Email") != "" || got.Header.Get("X-Chat-Server-Token") != testChatToken ||
+	if got.URI != "/auth/external-team-rename" || !got.isGateway("") || !got.noIdentityHeaders() ||
 		got.Body != `{"event_id":"evt-r1","issuer":"https://auth.example.com","version":4,"from":"Trading","to":"Research"}` {
 		t.Fatalf("%q %v %q", got.URI, got.Header, got.Body)
 	}

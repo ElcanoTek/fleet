@@ -52,8 +52,8 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
-		c := call{method: http.MethodPost, target: "/chat", header: h}
+		h, who := http.Header{}, sessionPrincipal(s)
+		c := call{method: http.MethodPost, target: "/chat", header: h, who: who}
 		c.body, c.contentLength = jsonBody(r, h)
 		g.dispatch(w, r, g.chat, "chat-server", c, sseOut)
 	})
@@ -67,12 +67,12 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
+		h, who := http.Header{}, sessionPrincipal(s)
 		if v := r.Header.Get("Last-Event-ID"); v != "" {
 			h.Set("Last-Event-ID", v)
 		}
 		target := withRawQuery("/conversations/"+p(r, "id")+"/stream", r)
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: h}, sseOut)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: h, who: who}, sseOut)
 	})
 
 	// POST /api/conversations/{id}/summarize — "summarize and continue",
@@ -87,9 +87,9 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
+		h, who := http.Header{}, sessionPrincipal(s)
 		h.Set("Content-Type", "application/json")
-		c := call{method: http.MethodPost, target: "/conversations/" + p(r, "id") + "/summarize", header: h}
+		c := call{method: http.MethodPost, target: "/conversations/" + p(r, "id") + "/summarize", header: h, who: who}
 		c.body, c.contentLength = bodyOrNil(r)
 		if c.body == nil {
 			c.body, c.contentLength = strings.NewReader("{}"), 2
@@ -110,12 +110,12 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.orchHeaders(auth)
+		h, who := g.orchHeaders(auth), auth.who
 		h.Set("Accept", "text/event-stream")
 		if v := r.Header.Get("Last-Event-ID"); v != "" {
 			h.Set("Last-Event-ID", v)
 		}
-		g.dispatch(w, r, g.orch, "orchestrator", call{method: http.MethodGet, target: "/tasks/" + p(r, "taskId") + "/stream", header: h}, out{
+		g.dispatch(w, r, g.orch, "orchestrator", call{method: http.MethodGet, target: "/tasks/" + p(r, "taskId") + "/stream", header: h, who: who}, out{
 			headers:    contentTypeOnly,
 			ctFallback: "application/json",
 			status200:  true,
@@ -134,8 +134,8 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
+		h, who := http.Header{}, sessionPrincipal(s)
 		target := withRawQuery("/browser-sessions/"+p(r, "id")+"/stream", r)
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: h}, sseOut)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: h, who: who}, sseOut)
 	})
 }

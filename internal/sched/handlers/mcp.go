@@ -81,7 +81,7 @@ func (h *Handlers) GetMCPServers(w http.ResponseWriter, r *http.Request) {
 		servers = h.mcpCatalog()
 	}
 	// Merge the caller's connected remote MCP servers. The orchestrator username
-	// IS the chat-side email for the elcano-auth/header-trust tier (see
+	// IS the chat-side email for a gateway session's principal (see
 	// ownerEmailResolver), which is the key the remote-MCP tokens are stored under.
 	// Best-effort: a missing user (admin key) or a provider that returns nothing
 	// simply yields the bundle catalog unchanged.
