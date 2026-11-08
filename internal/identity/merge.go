@@ -51,6 +51,16 @@ type MergeReport struct {
 	// account left behind before this release).
 	DanglingTaskCreators    int `json:"dangling_task_creators"`
 	DanglingDatasetCreators int `json:"dangling_dataset_creators"`
+	// RewrittenPrincipals counts scheduler rows keyed by a legacy username
+	// the merge normalized (prompt owners, user budgets, audit labels) that
+	// were moved to the account's email (merge_principals.go).
+	RewrittenPrincipals int `json:"rewritten_principals"`
+	// RenamedPrompts lists moved prompts renamed because the account already
+	// had one of that name; nothing is dropped.
+	RenamedPrompts []PromptRename `json:"renamed_prompts,omitempty"`
+	// MergedBudgets lists moved user budgets folded into the account's
+	// existing budget for the same window (the stricter bound of each kind).
+	MergedBudgets []BudgetMerge `json:"merged_budgets,omitempty"`
 	// At is when the merge ran.
 	At time.Time `json:"at"`
 }
@@ -66,7 +76,8 @@ type MergeEntry struct {
 // Notable reports whether the report names anything an operator should read.
 func (r *MergeReport) Notable() bool {
 	return r != nil && (len(r.Created) > 0 || len(r.DemotedSplitAdmins) > 0 || len(r.UnknownRoles) > 0 || len(r.AdminsGainingOps) > 0 ||
-		len(r.DuplicateUsernames) > 0 || r.DanglingTaskCreators > 0 || r.DanglingDatasetCreators > 0)
+		len(r.DuplicateUsernames) > 0 || r.DanglingTaskCreators > 0 || r.DanglingDatasetCreators > 0 ||
+		len(r.RenamedPrompts) > 0 || len(r.MergedBudgets) > 0)
 }
 
 // Lines renders the report for a log or a terminal.
@@ -89,6 +100,15 @@ func (r *MergeReport) Lines() []string {
 	}
 	for _, e := range r.DuplicateUsernames {
 		out = append(out, fmt.Sprintf("  %s: another Operations Center username differing only in case was merged first; this one's tasks no longer resolve to an account", e.Email))
+	}
+	if r.RewrittenPrincipals > 0 {
+		out = append(out, fmt.Sprintf("  %d scheduler row(s) keyed by a legacy username (prompt owners, user budgets, audit labels) moved to the account's email", r.RewrittenPrincipals))
+	}
+	for _, p := range r.RenamedPrompts {
+		out = append(out, fmt.Sprintf("  prompt %q of %s renamed %q: the account already had a prompt of that name", p.From, p.Owner, p.To))
+	}
+	for _, b := range r.MergedBudgets {
+		out = append(out, fmt.Sprintf("  %s's %s budget merged into %s's (the stricter bound of each kind kept)", b.From, b.Window, b.Principal))
 	}
 	if r.DanglingTaskCreators > 0 || r.DanglingDatasetCreators > 0 {
 		out = append(out, fmt.Sprintf("  %d task(s) and %d dataset(s) name a creator that is no longer an account (deleted before this release)", r.DanglingTaskCreators, r.DanglingDatasetCreators))
@@ -346,6 +366,14 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 	}
 	seen := map[string]bool{}
 	opsAdmins := map[string]bool{}
+	// renames are the legacy usernames the merge normalizes: the scheduler
+	// rows keyed by them move with the account (rewritePrincipals).
+	renames := map[string]string{}
+	for _, r := range legacyRows {
+		if email := NormalizeEmail(r.username); email != "" && email != r.username {
+			renames[r.username] = email
+		}
+	}
 	now := time.Now().Unix()
 	for _, r := range legacyRows {
 		email := NormalizeEmail(r.username)
@@ -403,6 +431,9 @@ func foldLegacy(ctx context.Context, tx *sql.Tx, schedSchema string, rep *MergeR
 			return fmt.Errorf("identity merge: merge %s: %w", email, err)
 		}
 		rep.Merged++
+	}
+	if err := rewritePrincipals(ctx, tx, schedSchema, renames, rep); err != nil {
+		return err
 	}
 	// Chat admins that were not Operations Center admins gain that access
 	// now: report them, so the widening is visible.

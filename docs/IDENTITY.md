@@ -81,6 +81,29 @@ with the report. A failure rolls back whole and the next open retries.
 | sched row with an unknown role (the column had no CHECK) | scope none; reported |
 | two sched usernames differing only in case | the first wins the UUID; the rest reported |
 
+**Username-keyed rows move with the account.** A few scheduler tables key
+rows by the sched username as text rather than by UUID. When the merge
+normalizes a legacy username to the account's email (trimmed, lower-cased:
+`Brad@X.com` → `brad@x.com`), it renames those rows in the same transaction,
+for exactly the usernames it changed (API-key labels, `admin` and run labels
+are never touched):
+
+- `prompt_library.owner_username`. Prompts are never dropped: if the account
+  already has a prompt of the same name (case-insensitively), the moved one
+  becomes `<name> (from <old username>)` (then ` 2`, ` 3`, …), and the report
+  lists it under `renamed_prompts`.
+- `budgets.principal_id` of scope `user`. If the account already has a budget
+  for the same window, the two merge into the existing row keeping the
+  stricter bound of each kind (a configured bound beats none; of two, the
+  lower), and the report lists it under `merged_budgets`.
+- Audit labels: `agent_notes.created_by`/`updated_by`,
+  `agent_note_proposals.proposed_by`/`decided_by`, `task_feedback.created_by`,
+  `task_learned_instructions.activated_by`.
+
+Free text that mentions a username (a task's "stopped by …" reason) is
+history and stays as written. The report's `rewritten_principals` counts the
+moved rows.
+
 A matched account keeps its chat password and takes the sched UUID, so tasks
 and datasets keep resolving to it; the chat session epoch does not move, so no
 chat session is signed out. Chat admins that had no enabled Operations Center
@@ -91,7 +114,8 @@ listed in the report.
 the scheduler's first open on this release): `merged`, `created[]`,
 `demoted_split_admins[]`, `admins_gaining_ops[]`, `unknown_roles[]`,
 `duplicate_usernames[]`, `dangling_task_creators`, `dangling_dataset_creators`,
-`at`. Each entry is `{email, sched_role, chat_role, ops_scope}`. Re-grant a
+`rewritten_principals`, `renamed_prompts[]` (`{owner, from, to}`),
+`merged_budgets[]` (`{principal, window, from}`), `at`. Each entry is `{email, sched_role, chat_role, ops_scope}`. Re-grant a
 demoted split admin with `fleet admin add <email>`. `fleet admin merge-report`
 prints the stored report (`--json` for scripts; read-only), and `fleet doctor`
 advises on each demoted split admin, unknown role and duplicate username in it.
