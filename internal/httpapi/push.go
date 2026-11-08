@@ -156,7 +156,7 @@ func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]bool{"subscribed": held})
+	writeJSON(w, r, map[string]bool{"subscribed": held})
 }
 
 // pushRenewRequest is a browser's new PushSubscription (sub.toJSON()) plus the
@@ -202,7 +202,7 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]bool{"renewed": renewed})
+	writeJSON(w, r, map[string]bool{"renewed": renewed})
 }
 
 // pushVAPIDPublicKey handles GET /push/vapid-public-key: the non-secret
@@ -219,5 +219,5 @@ func (s *Server) pushVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 	if !s.pushReady(w) {
 		return
 	}
-	writeJSON(w, map[string]string{"key": s.push.PublicKey()})
+	writeJSON(w, r, map[string]string{"key": s.push.PublicKey()})
 }

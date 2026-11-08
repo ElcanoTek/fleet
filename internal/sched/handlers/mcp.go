@@ -90,13 +90,13 @@ func (h *Handlers) GetMCPServers(w http.ResponseWriter, r *http.Request) {
 			servers = append(servers, h.remoteMCPServers(r.Context(), user.Username)...)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"servers": servers})
+	writeJSON(w, r, http.StatusOK, map[string]any{"servers": servers})
 }
 
 // GetMCPAccounts returns the flat (server, account) seat catalog — names only,
 // derived from the same provider as GetMCPServers.
 // Response: { "accounts": [ {server, account} ] }
-func (h *Handlers) GetMCPAccounts(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) GetMCPAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := []MCPAccountEntry{}
 	if h.mcpCatalog != nil {
 		for _, s := range h.mcpCatalog() {
@@ -105,5 +105,5 @@ func (h *Handlers) GetMCPAccounts(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
+	writeJSON(w, r, http.StatusOK, map[string]any{"accounts": accounts})
 }

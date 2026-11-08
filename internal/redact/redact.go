@@ -231,6 +231,17 @@ func (r *Redactor) addLiterals(scope string, rotated bool, values ...string) {
 		if len(v) >= minLiteralLen {
 			kept = append(kept, v)
 		}
+		// A multi-line secret (a PEM key, a JSON service-account file) is also
+		// registered line by line: text that is scrubbed one line at a time
+		// (a subprocess's stderr) never contains the whole value, so only its
+		// lines can be matched there.
+		if strings.ContainsAny(v, "\r\n") {
+			for _, line := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == '\r' }) {
+				if line = strings.TrimSpace(line); len(line) >= minLiteralLen && line != v {
+					kept = append(kept, line)
+				}
+			}
+		}
 	}
 	// A rotation with no usable value still has to run: it is what starts the
 	// previous generation's grace clock. A non-rotating call with nothing to

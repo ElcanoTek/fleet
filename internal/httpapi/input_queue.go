@@ -201,7 +201,8 @@ const maxPendingInputs = 20
 // count leaves it out too: the input is already durably accepted, so the ack
 // is not withheld over its rank, and a client then names no place at all
 // rather than a wrong one.
-func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
+func (s *Server) writeQueueAck(w http.ResponseWriter, r *http.Request, status int, convID string, row store.InputQueueRow) {
+	ctx := r.Context()
 	input := map[string]any{
 		"id": row.ID, "client_input_id": externalClientInputID(row.ClientInputID),
 		"mode": row.Mode, "state": row.State, "position": row.Position,
@@ -218,7 +219,7 @@ func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, statu
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writeJSONStatus(w, status, map[string]any{
+	writeJSONStatus(w, r, status, map[string]any{
 		"queued":          true,
 		"input":           input,
 		"conversation_id": convID,
@@ -286,7 +287,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 			return false
 		}
 		if existing != nil {
-			s.writeQueueAck(r.Context(), w, http.StatusOK, conv.ID, *existing)
+			s.writeQueueAck(w, r, http.StatusOK, conv.ID, *existing)
 			return true
 		}
 		http.Error(w, fmt.Sprintf("input queue is full (%d pending); wait for the queue to drain or remove queued inputs", maxPendingInputs), http.StatusTooManyRequests)
@@ -342,7 +343,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if !created {
 		status = http.StatusOK
 	}
-	s.writeQueueAck(r.Context(), w, status, conv.ID, row)
+	s.writeQueueAck(w, r, status, conv.ID, row)
 	return true
 }
 
@@ -678,7 +679,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		writeJSON(w, map[string]any{"items": queueItemsPayload(items)})
+		writeJSON(w, r, map[string]any{"items": queueItemsPayload(items)})
 	case subArg != "" && !strings.Contains(subArg, "/") && r.Method == http.MethodDelete:
 		ok, err := s.store.RemoveQueuedInput(r.Context(), user, convID, subArg)
 		if err != nil {

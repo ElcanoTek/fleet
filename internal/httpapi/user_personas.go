@@ -69,7 +69,7 @@ func (s *Server) userPersonasCollection(w http.ResponseWriter, r *http.Request) 
 		if workspace == nil {
 			workspace = []string{}
 		}
-		writeJSON(w, map[string]any{
+		writeJSON(w, r, map[string]any{
 			"personas":           list,
 			"workspace_personas": workspace,
 			"default":            s.cfg.PersonaDefault,
@@ -88,7 +88,7 @@ func (s *Server) userPersonasCollection(w http.ResponseWriter, r *http.Request) 
 			s.userPersonaError(w, err)
 			return
 		}
-		writeJSON(w, p)
+		writeJSON(w, r, p)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -111,7 +111,7 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 			s.userPersonaError(w, err)
 			return
 		}
-		writeJSON(w, p)
+		writeJSON(w, r, p)
 	case sub != "":
 		http.Error(w, "not found", http.StatusNotFound)
 	case r.Method == http.MethodPut:
@@ -128,7 +128,7 @@ func (s *Server) userPersonaByID(w http.ResponseWriter, r *http.Request) {
 			s.userPersonaError(w, err)
 			return
 		}
-		writeJSON(w, p)
+		writeJSON(w, r, p)
 	case r.Method == http.MethodDelete:
 		if err := s.store.DeleteUserPersona(r.Context(), user, id); err != nil {
 			s.userPersonaError(w, err)

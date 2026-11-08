@@ -48,7 +48,7 @@ func (n *NotesHandlers) ListNotes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
+	writeJSON(w, r, http.StatusOK, map[string]any{"notes": notes})
 }
 
 // GetNote — GET /notes/{slug}
@@ -63,7 +63,7 @@ func (n *NotesHandlers) GetNote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	writeJSON(w, r, http.StatusOK, note)
 }
 
 // CreateNote — POST /notes
@@ -85,7 +85,7 @@ func (n *NotesHandlers) CreateNote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, note)
+	writeJSON(w, r, http.StatusCreated, note)
 }
 
 // UpdateNote — PUT /notes/{slug}
@@ -118,7 +118,7 @@ func (n *NotesHandlers) UpdateNote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	writeJSON(w, r, http.StatusOK, note)
 }
 
 // ArchiveNote — DELETE /notes/{slug}
@@ -162,7 +162,7 @@ func (n *NotesHandlers) ListProposals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"proposals": props})
+	writeJSON(w, r, http.StatusOK, map[string]any{"proposals": props})
 }
 
 // GetProposal — GET /notes/proposals/{id} (admin)
@@ -185,7 +185,7 @@ func (n *NotesHandlers) GetProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	// Best-effort current note for the diff view.
 	current, _ := n.store.GetNoteBySlug(r.Context(), prop.Slug)
-	writeJSON(w, http.StatusOK, map[string]any{"proposal": prop, "current": current})
+	writeJSON(w, r, http.StatusOK, map[string]any{"proposal": prop, "current": current})
 }
 
 // PublishProposal — POST /notes/proposals/{id}/publish
@@ -209,7 +209,7 @@ func (n *NotesHandlers) PublishProposal(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	writeJSON(w, r, http.StatusOK, note)
 }
 
 // RejectProposal — POST /notes/proposals/{id}/reject
@@ -237,7 +237,7 @@ func (n *NotesHandlers) RejectProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prop, _ := n.store.GetProposal(r.Context(), id)
-	writeJSON(w, http.StatusOK, prop)
+	writeJSON(w, r, http.StatusOK, prop)
 }
 
 // parseUUID parses a path UUID param, writing a 400 on failure.

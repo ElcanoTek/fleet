@@ -1237,7 +1237,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		s.handleSuggestAdvancedApproval(context.WithoutCancel(r.Context()), w, r, user, d.suggest, req)
 		return
 	}
-	d.write(w)
+	d.write(w, r)
 }
 
 // approvalDecision is the answer to one approval decision, before it is
@@ -1266,13 +1266,13 @@ func approvalBody(body map[string]any) approvalDecision {
 }
 
 // write sends the decision the way handleApproval always answered.
-func (d approvalDecision) write(w http.ResponseWriter) {
+func (d approvalDecision) write(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case d.gone:
 	case d.status != 0:
 		http.Error(w, d.errText, d.status)
 	default:
-		writeJSON(w, d.body)
+		writeJSON(w, r, d.body)
 	}
 }
 
@@ -1771,7 +1771,7 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 // (or arrived after resolution) with the current state of the approval,
 // mirroring the idempotent already-resolved response above.
 func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Request, user, approvalID string) {
-	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w, r)
 }
 
 // resolvedApprovalDecision is writeResolvedApprovalState before it is written.
@@ -1836,7 +1836,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 			"User dismissed the model-switch suggestion. Continue working with the current model.", approval.UserEmail)
 		// Not a resume tool, but a deferred resume may be waiting on it.
 		s.noteApprovalSettled(approval.ConversationID, approval)
-		writeJSON(w, map[string]any{
+		writeJSON(w, r, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
 		})
@@ -1877,7 +1877,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		resultText, approval.UserEmail)
 	s.noteApprovalSettled(approval.ConversationID, approval)
 
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"status":      "approved",
 		"action":      action,
 		"model":       advancedModel,

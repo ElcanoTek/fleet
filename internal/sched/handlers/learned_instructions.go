@@ -85,7 +85,7 @@ func (h *Handlers) SubmitFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.maybeDistill(task)
-	writeJSON(w, http.StatusOK, fb)
+	writeJSON(w, r, http.StatusOK, fb)
 }
 
 // maybeDistill fires an off-thread distillation when fresh down-signals reached
@@ -166,7 +166,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 		if list == nil {
 			list = []*models.TaskLearnedInstruction{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"learned_instructions": list})
+		writeJSON(w, r, http.StatusOK, map[string]any{"learned_instructions": list})
 
 	case r.Method == http.MethodDelete && versionStr == "":
 		// Deactivate: full revert to "no learned instruction". Mutating →
@@ -180,7 +180,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "Failed to deactivate")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"deactivated": had})
+		writeJSON(w, r, http.StatusOK, map[string]any{"deactivated": had})
 
 	case r.Method == http.MethodPost && versionStr != "":
 		if !p.hasPermission(models.PermissionCancelTask) {
@@ -197,7 +197,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, li)
+		writeJSON(w, r, http.StatusOK, li)
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

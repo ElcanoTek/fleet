@@ -5,14 +5,12 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
-	"runtime/debug"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
-	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -247,21 +245,10 @@ func isApprovalDecisionPath(path string) bool {
 
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500
 // rather than letting it crash the single-host process. (The detached turn
-// goroutine has its own recovery; see runTurnAsync.) This mirrors the chi
-// httpmw.Recoverer the orchestrator router already uses.
-func recoverMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
-					panic(rec) // a deliberate abort is the server's to handle
-				}
-				// Same structured emission + counter + hooks every recovered panic
-				// gets (#241), labeled with the request method+path for correlation.
-				safe.EmitPanic("httpapi.handler "+r.Method+" "+r.URL.Path, rec, debug.Stack())
-				writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
+// goroutine has its own recovery; see runTurnAsync.) It is the same
+// httpmw.RecoverWith the orchestrator router's Recoverer is built from — one
+// structured safe event per panic (#241), labelled with the route, never the
+// value or stack — answering with the chat API's JSON error body.
+var recoverMiddleware = httpmw.RecoverWith("httpapi.handler", func(w http.ResponseWriter, r *http.Request) {
+	writeJSONStatus(w, r, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+})

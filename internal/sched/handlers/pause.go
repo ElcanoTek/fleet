@@ -80,7 +80,7 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	logging.From(r.Context()).Info("Task resumed", "task_id", safe.LogSafe(task.ID.String()), "by", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
-	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
 
 type wakeRequest struct {
@@ -129,7 +129,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	logging.From(r.Context()).Info("Task woken by event", "task_id", safe.LogSafe(task.ID.String()), "event", safe.LogSafe(event), "by", safe.LogSafe(p.stopLabel()))
 	h.kickTaskQueue()
-	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
 
 // ListPausedTasks handles GET /tasks/paused — the "needs a human answer" queue.
@@ -160,5 +160,5 @@ func (h *Handlers) ListPausedTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tasks {
 		localizeTask(t)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+	writeJSON(w, r, http.StatusOK, map[string]any{"tasks": tasks})
 }

@@ -1491,7 +1491,7 @@ func (c *containerImpl) ensureBridge() error {
 	// BashWaitDelay exists for on the bash path.
 	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
+	cmd.Stderr = io.MultiWriter(bridgeStderrLogger(), stderrBuf)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

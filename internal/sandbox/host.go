@@ -279,7 +279,9 @@ func (h *hostImpl) ensureBridge() error {
 
 	//nolint:gosec,noctx // long-running bridge process; lifetime tied to sandbox
 	cmd := exec.Command("python3", h.bridgeScriptPath)
-	cmd.Stderr = os.Stderr
+	// The bridge's stderr (a Python traceback) is logged line by line through
+	// slog, redacted — never copied to the process stderr as written.
+	cmd.Stderr = bridgeStderrLogger()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

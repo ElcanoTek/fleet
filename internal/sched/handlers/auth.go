@@ -68,7 +68,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, models.LoginResponse{
+	writeJSON(w, r, http.StatusOK, models.LoginResponse{
 		Token: token,
 		User: models.UserResponse{
 			ID:        user.ID,
@@ -159,7 +159,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, models.UserResponse{
+	writeJSON(w, r, http.StatusCreated, models.UserResponse{
 		ID:        user.ID,
 		Username:  user.Username,
 		Role:      user.Role,

@@ -143,7 +143,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !inserted {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+		writeJSON(w, r, http.StatusOK, map[string]string{"status": "duplicate"})
 		return
 	}
 
@@ -174,7 +174,7 @@ func (h *Handlers) HandleEmailTrigger(w http.ResponseWriter, r *http.Request) {
 		logging.From(r.Context()).Warn("email trigger event-link warning", "slug", safe.LogSafe(slug), "err", err)
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID.String()})
+	writeJSON(w, r, http.StatusAccepted, map[string]string{"run_id": runID.String()})
 }
 
 // checkEmailPolicy enforces the sender allowlist and the DKIM/SPF requirements.

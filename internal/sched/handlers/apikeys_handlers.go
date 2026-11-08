@@ -123,21 +123,21 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	logging.From(r.Context()).Info("Created API key", "key_id", key.KeyID, "key_name", safe.LogSafe(key.Name))
 
 	resp := key.ToResponse()
-	writeJSON(w, http.StatusOK, models.APIKeyCreated{
+	writeJSON(w, r, http.StatusOK, models.APIKeyCreated{
 		APIKeyResponse: resp,
 		APIKey:         rawKey,
 	})
 }
 
 // ListAPIKeys handles GET /keys
-func (h *Handlers) ListAPIKeys(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	keys := h.apiKeys.ListKeys()
 	responses := make([]models.APIKeyResponse, len(keys))
 	for i, key := range keys {
 		responses[i] = key.ToResponse()
 	}
 
-	writeJSON(w, http.StatusOK, responses)
+	writeJSON(w, r, http.StatusOK, responses)
 }
 
 // GetAuditLog handles GET /keys/audit
@@ -178,7 +178,7 @@ func (h *Handlers) GetAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries := h.apiKeys.GetAuditLog(keyIDPtr, actionPtr, since, limit)
-	writeJSON(w, http.StatusOK, models.AuditLogResponse{
+	writeJSON(w, r, http.StatusOK, models.AuditLogResponse{
 		Entries: entries,
 		Total:   len(entries),
 	})
@@ -193,7 +193,7 @@ func (h *Handlers) GetAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, key.ToResponse())
+	writeJSON(w, r, http.StatusOK, key.ToResponse())
 }
 
 // maxRotateGraceHours bounds POST /keys/{id}/rotate's ?grace_period_hours=:
@@ -223,7 +223,7 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	logging.From(r.Context()).Info("Rotated API key", "key_id", safe.LogSafe(keyID))
 
 	resp := key.ToResponse()
-	writeJSON(w, http.StatusOK, models.APIKeyRotated{
+	writeJSON(w, r, http.StatusOK, models.APIKeyRotated{
 		APIKeyResponse:   resp,
 		APIKey:           rawKey,
 		GracePeriodHours: gracePeriodHours,
@@ -246,7 +246,7 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, key.ToResponse())
+	writeJSON(w, r, http.StatusOK, key.ToResponse())
 }
 
 // DeleteAPIKey handles DELETE /keys/{key_id}
@@ -258,7 +258,7 @@ func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.From(r.Context()).Info("Deleted API key", "key_id", safe.LogSafe(keyID))
-	writeJSON(w, http.StatusOK, models.DeleteKeyResponse{
+	writeJSON(w, r, http.StatusOK, models.DeleteKeyResponse{
 		Deleted: true,
 		KeyID:   keyID,
 	})

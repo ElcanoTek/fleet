@@ -326,7 +326,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+		writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 			Created: []models.BatchCreated{},
 			Failed:  atomicFailedList,
 			Count:   0,
@@ -346,7 +346,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 						Index: c.Index, Error: "atomic batch rolled back: " + err.Error(),
 					})
 				}
-				writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+				writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 					Created: []models.BatchCreated{},
 					Failed:  failedList,
 					Count:   0,
@@ -361,7 +361,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 					Index: c.Index, Error: "failed to create task: " + err.Error(),
 				})
 			}
-			writeJSON(w, http.StatusUnprocessableEntity, models.BatchTaskResult{
+			writeJSON(w, r, http.StatusUnprocessableEntity, models.BatchTaskResult{
 				Created: []models.BatchCreated{},
 				Failed:  failedList,
 				Count:   0,
@@ -379,7 +379,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 	for _, t := range toInsert {
 		localizeTask(t)
 	}
-	writeJSON(w, status, models.BatchTaskResult{
+	writeJSON(w, r, status, models.BatchTaskResult{
 		Created: createdList,
 		Failed:  failedList,
 		Count:   len(createdList),

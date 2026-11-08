@@ -107,7 +107,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	// reaches this endpoint without the gateway's own refusal (the operator
 	// channel, a future client) still cannot sign in with one.
 	if s.passwordLoginDisabled() {
-		writeJSONStatus(w, http.StatusForbidden, verifyResponse{OK: false, Error: errPasswordLoginDisabled})
+		writeJSONStatus(w, r, http.StatusForbidden, verifyResponse{OK: false, Error: errPasswordLoginDisabled})
 		return
 	}
 	var req verifyRequest
@@ -120,7 +120,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	// the login UI can say "try again shortly" honestly.
 	if !s.verifyLimit.allow(strings.ToLower(strings.TrimSpace(req.Email)), time.Now()) {
 		w.Header().Set("Retry-After", "60")
-		writeJSONStatus(w, http.StatusTooManyRequests, verifyResponse{
+		writeJSONStatus(w, r, http.StatusTooManyRequests, verifyResponse{
 			OK:    false,
 			Error: "too many attempts — try again in a minute",
 		})
@@ -133,7 +133,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().Unix()
 		last := s.lastUserCheck.Load()
 		if now-last < 5 {
-			writeJSON(w, verifyResponse{
+			writeJSON(w, r, verifyResponse{
 				OK:    false,
 				Error: "This instance has no users. Run `chat user add <email>` on the server.",
 			})
@@ -151,7 +151,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		if n == 0 {
 			s.lastUserCheck.Store(now)
-			writeJSON(w, verifyResponse{
+			writeJSON(w, r, verifyResponse{
 				OK:    false,
 				Error: "This instance has no users. Run `chat user add <email>` on the server.",
 			})
@@ -164,12 +164,12 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Both "not found" and "bad password" surface the same way.
 		if errors.Is(err, store.ErrUserNotFound) || errors.Is(err, store.ErrBadPassword) {
-			writeJSON(w, verifyResponse{OK: false, Error: "invalid credentials"})
+			writeJSON(w, r, verifyResponse{OK: false, Error: "invalid credentials"})
 			return
 		}
 		logging.From(r.Context()).Error("auth/verify: verify user failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, verifyResponse{OK: true})
+	writeJSON(w, r, verifyResponse{OK: true})
 }

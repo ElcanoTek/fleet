@@ -728,12 +728,17 @@ Operator notes:
   still shows them. Lines a third-party library writes through Go's standard
   `log` package are bridged at info and are not gated, since their true
   severity is unknown.
-- The `fleet mcp-broker` child logs in the same format and level, and its lines
-  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
-  The parent redacts every child line again before writing it: a JSON record
-  is parsed and scrubbed field by field (secret-named keys at any depth,
-  secret values anywhere) and re-serialised, and anything else is scrubbed as
-  text.
+- The `fleet mcp-broker` child logs at the parent's level, as JSON on its
+  stderr. The parent re-logs each child record through its own handler (your
+  `FLEET_LOG_FORMAT`, `FLEET_LOG_LEVEL`, redactor and sinks), adding
+  `child=mcp-broker`. Any other child line (a panic trace, a library's raw
+  print) is logged at `warn` as `msg="child stderr"` with the redacted text
+  in `line`. A PEM private-key block in subprocess output is replaced by one
+  `[REDACTED PEM block]` line.
+- A number under a secret-named key (`password`, `api_token`, …) is redacted
+  like a string. Only count-like keys keep their numbers: keys ending in
+  `tokens`, `count`, `ms`, `bytes`, `seconds`, `size`, `len`, `limit`, `total`
+  and similar (`prompt_tokens=1200`).
 - A failing log sink (a full disk under `FLEET_LOG_FILE`, a failed rotation)
   is reported once with a `logging: a log sink write failed` warning on the
   sinks that still work; its lines are dropped until it recovers. It never

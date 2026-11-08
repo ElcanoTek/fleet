@@ -54,7 +54,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		writeJSON(w, searchResponse{Results: []store.SearchResult{}, Total: 0})
+		writeJSON(w, r, searchResponse{Results: []store.SearchResult{}, Total: 0})
 		return
 	}
 
@@ -77,7 +77,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []store.SearchResult{}
 	}
-	writeJSON(w, searchResponse{Results: results, Total: total})
+	writeJSON(w, r, searchResponse{Results: results, Total: total})
 }
 
 // parseSearchLimit reads the optional ?limit= parameter: absent →

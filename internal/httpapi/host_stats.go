@@ -16,8 +16,8 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.hostStats == nil {
-		writeJSON(w, hoststats.Snapshot{Warnings: []string{"host statistics collector unavailable"}})
+		writeJSON(w, r, hoststats.Snapshot{Warnings: []string{"host statistics collector unavailable"}})
 		return
 	}
-	writeJSON(w, s.hostStats.Collect())
+	writeJSON(w, r, s.hostStats.Collect())
 }

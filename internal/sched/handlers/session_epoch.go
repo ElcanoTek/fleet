@@ -84,7 +84,7 @@ func (h *Handlers) checkSessionEpoch(w http.ResponseWriter, r *http.Request, ema
 		subject := r.Header.Get(headerExternalSubject)
 		if h.externalSessionEpoch == nil || issuer == "" || subject == "" {
 			w.Header().Set(headerSessionRevoked, "1")
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
+			writeJSON(w, r, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
 			return false
 		}
 		live, err = h.externalSessionEpoch(r.Context(), issuer, subject, email)
@@ -100,7 +100,7 @@ func (h *Handlers) checkSessionEpoch(w http.ResponseWriter, r *http.Request, ema
 	}
 	if subtle.ConstantTimeCompare([]byte(claim), []byte(live)) != 1 {
 		w.Header().Set(headerSessionRevoked, "1")
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
+		writeJSON(w, r, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
 		return false
 	}
 	return true

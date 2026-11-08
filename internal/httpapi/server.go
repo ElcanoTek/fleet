@@ -23,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -1061,7 +1062,7 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	return entry, ok
 }
 
-func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Fleet-Active-Turns", strconv.Itoa(s.ActiveTurns()))
 	w.Header().Set("X-Fleet-Active-Approvals", strconv.Itoa(s.approvalRuns.activeCount()))
 	// Draining (#278): report 503 the moment graceful shutdown begins so a load
@@ -1069,7 +1070,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	// it drains in-flight work. Checked first — a draining box is unready
 	// regardless of provider health.
 	if s.IsDraining() {
-		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
+		writeJSONStatus(w, r, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
 	}
 	// Surface LLM provider degradation (#267): if any model's circuit is open
@@ -1078,7 +1079,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	if s.agent != nil {
 		for _, h := range s.agent.ProviderHealth() {
 			if h.State == agentcore.CircuitOpen.String() {
-				writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
+				writeJSONStatus(w, r, http.StatusServiceUnavailable, map[string]any{
 					"status": "degraded",
 					"reason": "llm provider circuit open",
 					"model":  h.Slug,
@@ -1148,11 +1149,22 @@ func setJSONContentType(w http.ResponseWriter) {
 // already committed by the time Encode runs, so a mid-body failure (typically
 // the client disconnecting) cannot change the response — log it for
 // diagnostics rather than swallowing it silently.
-func writeJSON(w http.ResponseWriter, v any) {
+// writeJSON writes v as the JSON body. r is the request being answered: an
+// encode failure is logged through its context logger, so the line carries
+// the request's correlation ids.
+func writeJSON(w http.ResponseWriter, r *http.Request, v any) {
 	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("write json failed", "err", err)
+		logging.From(requestContext(r)).Error("write json failed", "err", err)
 	}
+}
+
+// requestContext is r's context, or Background for a nil r.
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	return r.Context()
 }
 
 // keyedLocks is a set of mutexes by key, each dropped once nobody holds or

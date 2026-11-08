@@ -65,7 +65,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)
 	}
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // ── /client-config ──────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 			resp.EmptyState.ProtocolPills = b.EmptyState.ProtocolPills
 		}
 	}
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +214,7 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 	} else {
 		logging.From(r.Context()).Error("list user personas failed", "err", err)
 	}
-	writeJSON(w, personasResponse{
+	writeJSON(w, r, personasResponse{
 		Personas:     names,
 		Default:      s.cfg.PersonaDefault,
 		UserPersonas: userPersonas,

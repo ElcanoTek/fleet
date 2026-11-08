@@ -169,7 +169,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to list prompts")
 			return
 		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, r, http.StatusOK, items)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -197,7 +197,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
+	writeJSON(w, r, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
 }
 
 // PromptLibraryItem handles PUT/DELETE /prompts/{prompt_id}. Git IDs are never
@@ -236,7 +236,7 @@ func (h *Handlers) PromptLibraryItem(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		writeJSON(w, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
+		writeJSON(w, r, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
 	case http.MethodDelete:
 		if err := h.storage.DeletePromptLibrary(r.Context(), id, owner, admin); err != nil {
 			if errors.Is(err, storage.ErrPromptNotFound) {
@@ -263,7 +263,7 @@ func (h *Handlers) ExportPromptLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="fleet-prompts.json"`)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"format": "fleet-prompt-library", "version": 1,
 		"exported_at": time.Now().UTC(), "prompts": items,
 	})

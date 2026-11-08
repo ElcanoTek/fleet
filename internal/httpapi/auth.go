@@ -330,7 +330,7 @@ func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+	writeJSON(w, r, sessionEpochResponse{SessionEpoch: epoch})
 }
 
 type externalSessionRequest struct {
@@ -361,7 +361,7 @@ func (s *Server) handleExternalSessionEpoch(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "external session lookup failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+	writeJSON(w, r, sessionEpochResponse{SessionEpoch: epoch})
 }
 
 func (s *Server) handleExternalSessionRevoke(w http.ResponseWriter, r *http.Request) {

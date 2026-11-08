@@ -134,7 +134,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, body.BranchPointMessageID)
 	}
 	s.autoShareNewConversationIfConfigured(r.Context(), user, branch)
-	writeJSONStatus(w, http.StatusCreated, branch)
+	writeJSONStatus(w, r, http.StatusCreated, branch)
 }
 
 // carrySharedFilesIntoBranch is the file half of a teammate's branch

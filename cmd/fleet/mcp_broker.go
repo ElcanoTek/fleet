@@ -39,21 +39,22 @@ const (
 //
 // Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
 // so it never corrupts the frame stream the parent decodes.
-// mcpBrokerLogConfig is the broker child's logging: the parent's format and
-// level (FLEET_LOG_FORMAT, FLEET_LOG_LEVEL — canonical names), and NO file of
-// its own. The parent pipes the child's stderr into its own log destination
-// (logging.ChildStderr), so the child's lines reach FLEET_LOG_FILE under the
-// one rotator the parent owns.
+// mcpBrokerLogConfig is the broker child's logging: always JSON, at the
+// parent's level (FLEET_LOG_LEVEL), and NO file of its own. JSON is the wire
+// format between the two processes, not the operator's choice: the parent
+// (logging.ChildStderr) parses each child record and re-logs it through its
+// own configured handler — the operator's FLEET_LOG_FORMAT, its redactor,
+// its sinks, FLEET_LOG_FILE under the one rotator the parent owns.
 func mcpBrokerLogConfig() logging.Config {
 	return logging.Config{
-		Format: envreg.Get("FLEET_LOG_FORMAT"),
+		Format: "json",
 		Level:  envreg.Get("FLEET_LOG_LEVEL"),
 	}
 }
 
 func runMCPBroker() error {
-	// Same handler, redactor, format and level as the parent, so the
-	// broker's lines are not Go's default plaintext mixed into JSON.
+	// Same handler and redactor as the parent, in JSON: the parent parses each
+	// line and re-logs it in the operator's format (mcpBrokerLogConfig).
 	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
 		return fmt.Errorf("configure broker logging: %w", err)
 	}

@@ -141,7 +141,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		out = append(out, att)
 	}
 
-	writeJSON(w, map[string]any{"attachments": out})
+	writeJSON(w, r, map[string]any{"attachments": out})
 }
 
 // saveUpload copies one multipart file into its own random subdirectory

@@ -192,7 +192,7 @@ func (s *Server) memoryGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		relations = append(relations, rj)
 	}
-	writeJSON(w, map[string]any{"entities": entities, "relations": relations})
+	writeJSON(w, r, map[string]any{"entities": entities, "relations": relations})
 }
 
 // handleMemoryExtractGraph serves POST /memories/{id}/extract-graph (#523):
@@ -228,7 +228,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"memory_id": id, "relations": n})
+	writeJSON(w, r, map[string]any{"memory_id": id, "relations": n})
 }
 
 // snippet returns the first n runes of s (the graph API's per-relation echo

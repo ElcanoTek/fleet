@@ -60,7 +60,7 @@ func (h *Handlers) GetSubagentLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Sub-agent transcript file is unreadable")
 		return
 	}
-	writeJSON(w, http.StatusOK, child)
+	writeJSON(w, r, http.StatusOK, child)
 }
 
 // taskLogReferencesSubagent reports whether the task's persisted transcript —

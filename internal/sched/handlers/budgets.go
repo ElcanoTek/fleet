@@ -113,7 +113,7 @@ func (h *Handlers) ListBudgets(w http.ResponseWriter, r *http.Request) {
 	if statuses == nil {
 		statuses = []models.BudgetStatus{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"budgets": statuses})
+	writeJSON(w, r, http.StatusOK, map[string]any{"budgets": statuses})
 }
 
 // UpsertBudget handles POST /admin/budgets: create or replace the budget for
@@ -138,7 +138,7 @@ func (h *Handlers) UpsertBudget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to save budget")
 		return
 	}
-	writeJSON(w, http.StatusOK, b)
+	writeJSON(w, r, http.StatusOK, b)
 }
 
 // DeleteBudget handles DELETE /admin/budgets/{budget_id}.
@@ -161,5 +161,5 @@ func (h *Handlers) DeleteBudget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Budget not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	writeJSON(w, r, http.StatusOK, map[string]string{"status": "deleted"})
 }

@@ -111,7 +111,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if trig.UsesSlack() {
 		if t, _ := payload["type"].(string); t == "url_verification" {
 			challenge, _ := payload["challenge"].(string)
-			writeJSON(w, map[string]any{"challenge": challenge})
+			writeJSON(w, r, map[string]any{"challenge": challenge})
 			return
 		}
 	}
@@ -142,11 +142,11 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			// durable yet. 409 rather than 200: if that request fails, the
 			// sender's next retry should be processed, not swallowed.
 			metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+			writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
 			return
 		}
 		metrics.RecordWebhookTrigger(trig.Slug, "duplicate")
-		writeJSONStatus(w, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
+		writeJSONStatus(w, r, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
 		return
 	}
 	var (
@@ -214,7 +214,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Concurrency admission keyed by the trigger owner, so a burst of webhooks
 	// can't hold every worker slot. admitConcurrentTurn writes its own 429.
-	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
+	releaseSlot, admitted := s.admitConcurrentTurn(w, r, user)
 	if !admitted {
 		metrics.RecordWebhookTrigger(trig.Slug, "throttled")
 		return
@@ -250,7 +250,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		// This request outlived its claim and a repeat now owns the delivery.
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+		writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
 		return
 	}
 	if err != nil {
@@ -281,7 +281,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "conversation is busy"})
+		writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "conversation is busy"})
 		return
 	}
 
@@ -372,7 +372,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
+	writeJSONStatus(w, r, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
 }
 
 // webhookInputCommitTimeout bounds how long the webhook handler waits for the

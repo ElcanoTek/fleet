@@ -164,7 +164,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, adminStats{Users: users, DailyCache: dailyCache})
+	writeJSON(w, r, adminStats{Users: users, DailyCache: dailyCache})
 }
 
 // listDecisionModels is the OpenRouter decision-model listing, a seam for tests.
@@ -183,10 +183,10 @@ func (s *Server) handleAdminDecisionModels(w http.ResponseWriter, r *http.Reques
 	models, err := listDecisionModels(r.Context())
 	if err != nil {
 		logging.From(r.Context()).Error("admin decision models: failed", "err", safe.LogSafe(err.Error()))
-		writeJSON(w, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
+		writeJSON(w, r, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
 		return
 	}
-	writeJSON(w, map[string]any{"models": models})
+	writeJSON(w, r, map[string]any{"models": models})
 }
 
 // adminUser is the JSON shape of one row in the admin Users tab (#237).
@@ -251,7 +251,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		au.OpsCenterAdmin = au.OpsCenterRole == "admin"
 		out = append(out, au)
 	}
-	writeJSON(w, map[string]any{"users": out})
+	writeJSON(w, r, map[string]any{"users": out})
 }
 
 // handleAdminUserItem dispatches the /admin/users/{email}[/password] item
@@ -386,5 +386,5 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		s.setOpsRole(r, u.Email, *body.OpsRole)
 		logging.From(r.Context()).Info("admin users: set ops role", "email", safe.LogSafe(u.Email), "ops_role", safe.LogSafe(*body.OpsRole), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	}
-	writeJSON(w, s.toAdminUserAnnotated(r, *u))
+	writeJSON(w, r, s.toAdminUserAnnotated(r, *u))
 }

@@ -42,7 +42,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1300,7 +1299,7 @@ func (k *k8sImpl) ensureBridge() error {
 	// down in close() / terminateBridgeLocked — dial under a handshake-bounded
 	// background context, mirroring the podman backend's noctx bridge exec.
 	session, err := k.backend.client.execPod(context.Background(), k.backend.cfg.Namespace, podName, sandboxContainerName,
-		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(os.Stderr, stderrBuf))
+		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(bridgeStderrLogger(), stderrBuf))
 	if err != nil {
 		_ = pw.Close()
 		_ = pr.Close()

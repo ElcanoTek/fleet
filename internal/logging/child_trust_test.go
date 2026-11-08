@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-// A child line shaped like a JSON log record is not trusted either: every
-// key, nested ones included, gets the secret-key rule and every string the
-// pattern and literal scrub, and the record is re-serialised with its
-// top-level key order (#2074 review).
+// A child line shaped like a JSON log record is not trusted either: it is
+// re-logged through the parent's handler, so every key, nested ones included,
+// gets the secret-key rule (numbers too, unless count-like) and every string
+// the pattern and literal scrub (#2074 review).
 func TestChildStderrRedactsJSONRecords(t *testing.T) {
 	out := captureOutput(t)
 	const opaque = "Op4queReg1steredTok3nXyZ"
@@ -24,25 +24,25 @@ func TestChildStderrRedactsJSONRecords(t *testing.T) {
 	shaped := "sk-ant-" + strings.Repeat("E", 32)
 	line := `{"time":"2026-11-08T00:00:00Z","level":"INFO","msg":"lib said ` + opaque + `",` +
 		`"authorization":"Basic dXNlcjpwYXNz","req":{"headers":{"X-Api-Key":"plainkeyvalue123","accept":"json"},"body":["` + shaped + `"]},` +
-		`"prompt_tokens":12,"note":"<ok> & fine"}`
-	w := ChildStderr()
+		`"prompt_tokens":12,"password":12345678,"note":"<ok> & fine"}`
+	w := ChildStderr("mcp-broker")
 	if _, err := w.Write([]byte(line + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.TrimSuffix(out.String(), "\n")
-	for _, leak := range []string{opaque, shaped, "dXNlcjpwYXNz", "plainkeyvalue123"} {
+	for _, leak := range []string{opaque, shaped, "dXNlcjpwYXNz", "plainkeyvalue123", "12345678"} {
 		if strings.Contains(got, leak) {
 			t.Fatalf("leaked %q: %s", leak, got)
 		}
 	}
 	if !strings.HasPrefix(got, `{"time":"2026-11-08T00:00:00Z","level":"INFO","msg":"lib said `) {
-		t.Fatalf("top-level order not kept: %s", got)
+		t.Fatalf("not re-logged with the child's time, level and message: %s", got)
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(got), &m); err != nil {
 		t.Fatalf("forwarded record is not JSON: %v: %s", err, got)
 	}
-	if m["authorization"] != redactedValue || m["prompt_tokens"] != float64(12) || m["note"] != "<ok> & fine" {
+	if m["authorization"] != redactedValue || m["password"] != redactedValue || m["prompt_tokens"] != float64(12) || m["note"] != "<ok> & fine" {
 		t.Fatalf("record = %v", m)
 	}
 	req, _ := m["req"].(map[string]any)
@@ -53,15 +53,18 @@ func TestChildStderrRedactsJSONRecords(t *testing.T) {
 }
 
 // A line that only looks like a record (two objects, trailing text) is
-// redacted as text, never forwarded raw.
+// wrapped and redacted as text, never forwarded raw.
 func TestChildStderrNearJSONIsRedactedAsText(t *testing.T) {
 	out := captureOutput(t)
 	const opaque = "Tr41lingOpaqueTokenVal"
 	RegisterSecretLiterals("", false, opaque)
-	w := ChildStderr()
+	w := ChildStderr("child")
 	_, _ = w.Write([]byte(`{"msg":"a"} {"authorization":"` + opaque + `"}` + "\n"))
 	if got := out.String(); strings.Contains(got, opaque) {
 		t.Fatalf("leaked: %s", got)
+	}
+	if recs := out.records(t); len(recs) != 1 || recs[0]["msg"] != ChildLineMessage {
+		t.Fatalf("records = %v", recs)
 	}
 }
 
@@ -94,25 +97,20 @@ func captureSinkFailures(t *testing.T) *failureLog {
 	return f
 }
 
-func setOutputForTest(t *testing.T, w io.Writer) {
-	t.Helper()
-	prev := currentOutput()
-	setOutput(w)
-	t.Cleanup(func() { setOutput(prev) })
-}
-
 // A sink that fails must never stop the drain: os/exec's copier quits at the
 // first Write error, the pipe fills and the child blocks. A child writing far
 // more than a pipe buffer to stderr while every sink write fails still runs
-// to completion, and the failure is reported once (#2074 review).
+// to completion, and the failing sink is reported once (#2074 review).
 func TestChildStderrKeepsDrainingWhenTheSinkFails(t *testing.T) {
-	setOutputForTest(t, failingWriter{})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(NewHandler("json", newTee(teeSink{name: "file", w: failingWriter{}}), slog.LevelDebug)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	failures := captureSinkFailures(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	// ~4 MB of stderr in 100-byte lines: dozens of pipe buffers.
 	cmd := exec.CommandContext(ctx, "sh", "-c", `i=0; while [ $i -lt 400 ]; do head -c 10000 /dev/zero | tr '\0' 'a' | fold -w 100 >&2; i=$((i+1)); done`)
-	w := ChildStderr()
+	w := ChildStderr("child")
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("child did not run to completion (blocked on stderr?): %v", err)

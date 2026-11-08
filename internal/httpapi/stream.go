@@ -183,7 +183,7 @@ func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID s
 
 	entry, ok := s.getInflight(convID)
 	if !ok || entry.buf == nil {
-		writeJSON(w, map[string]any{"inflight": false})
+		writeJSON(w, r, map[string]any{"inflight": false})
 		return
 	}
 
@@ -195,7 +195,7 @@ func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID s
 	if entry.submissionID != "" {
 		probe["submission_id"] = entry.submissionID
 	}
-	writeJSON(w, probe)
+	writeJSON(w, r, probe)
 }
 
 // parseLastEventID extracts the `Last-Event-ID` header, falling back

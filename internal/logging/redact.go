@@ -117,9 +117,18 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 			return slog.String(a.Key, Redact(string(x)))
 		}
 		return slog.Any(a.Key, redactComposite(v.Any()))
+	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindDuration:
+		// A number is a credential as easily as a string ({"password":
+		// 12345678}, a numeric PIN or account secret). Under a secret-named
+		// key or group it is redacted unless the key is count-like
+		// (prompt_tokens, retry_count, latency_ms — countLikeKey).
+		if (secretAttrKey(a.Key) || secretGroupPath(groups)) && !countLikeKey(a.Key) {
+			return slog.String(a.Key, redactedValue)
+		}
+		return a
 	default:
-		// Int64/Uint64/Float64/Bool/Duration/Time/Group/LogValuer: no text to
-		// scrub (a group's members are visited individually).
+		// Bool/Time/Group/LogValuer: no secret to carry (a bool is one bit;
+		// a group's members are visited individually).
 		return a
 	}
 }
@@ -168,7 +177,7 @@ func redactComposite(v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			if secretAttrKey(k) && !isNumberOrBool(e) {
+			if secretAttrKey(k) && !keepUnderSecretKey(k, e) {
 				out[k] = redactedValue
 				continue
 			}
@@ -215,12 +224,38 @@ func unloggable(v any) string {
 	return fmt.Sprintf("[unloggable value: %T]", v)
 }
 
-// isNumberOrBool reports a decoded JSON scalar that carries no text, so a
-// secret-named key holding a count ("max_tokens": 4096) keeps its value.
-func isNumberOrBool(v any) bool {
+// keepUnderSecretKey reports whether a decoded value under the secret-named
+// key may be logged as is: a boolean (one bit, never a credential), or a
+// number under a count-like key (countLikeKey). Every other value under a
+// secret-named key — strings, objects, arrays and numbers alike — is
+// redacted whole.
+func keepUnderSecretKey(key string, v any) bool {
 	switch v.(type) {
-	case json.Number, bool, int, int64, float64:
+	case bool:
 		return true
+	case json.Number, int, int64, float64:
+		return countLikeKey(key)
+	}
+	return false
+}
+
+// countLikeSuffixes are the key endings (separators removed, lowercased) that
+// name a measurement rather than a credential. It is an explicit allowlist,
+// matched as a SUFFIX: "prompt_tokens" and "token_count" are counts, while
+// "token", "api_token" and "password" are not — a bare substring rule would
+// let "token" match "prompt_tokens" the wrong way round.
+var countLikeSuffixes = []string{
+	"tokens", "count", "ms", "bytes", "seconds", "secs", "len", "length",
+	"size", "ttl", "limit", "total", "num",
+}
+
+// countLikeKey reports a key whose number is a count, size or duration.
+func countLikeKey(key string) bool {
+	k := keySeparators.Replace(strings.ToLower(key))
+	for _, s := range countLikeSuffixes {
+		if strings.HasSuffix(k, s) {
+			return true
+		}
 	}
 	return false
 }

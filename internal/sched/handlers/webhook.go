@@ -145,7 +145,7 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID.String()})
+	writeJSON(w, r, http.StatusAccepted, map[string]string{"run_id": runID.String()})
 }
 
 // webhookKeyFromRequest extracts a presented API key from either the X-API-Key

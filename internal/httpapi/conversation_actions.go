@@ -141,7 +141,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		resolvedCards = append(resolvedCards, card)
 	}
 	if r.URL.Query().Get("approval_index") == "1" {
-		writeJSON(w, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
+		writeJSON(w, r, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
 		return
 	}
 	// Pending memory proposals — same pattern as approvals. Without
@@ -217,7 +217,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
 		conv = &sanitized
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
 		// historyForParticipant: the owner's own entries carry
@@ -255,7 +255,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 		s.withApprovalProgress(card, a)
 		resolved = append(resolved, card)
 	}
-	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
+	writeJSON(w, r, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
 }
 
 func (s *Server) includeExecutingApprovals(ctx context.Context, user, convID string, resolved []store.Approval) ([]store.Approval, error) {
@@ -437,7 +437,7 @@ func (s *Server) handleConversationRename(w http.ResponseWriter, r *http.Request
 	if entry, ok := s.getInflight(id); ok && entry.buf != nil {
 		entry.buf.Emit("conversation.title_updated", map[string]any{"id": id, "title": title})
 	}
-	writeJSON(w, struct {
+	writeJSON(w, r, struct {
 		ID    string `json:"id"`
 		Title string `json:"title"`
 	}{ID: id, Title: title})
@@ -486,8 +486,8 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 //
 // Per-conversation approval default-deny window override (#225).
 // approval_timeout_seconds == null means "use the global default".
-func (s *Server) handleApprovalTimeoutGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleApprovalTimeoutGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"approval_timeout_seconds": conv.ApprovalTimeoutSeconds,
 		"default_seconds":          s.cfg.LiveApprovalTimeoutSeconds(),
 	})
@@ -522,8 +522,8 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 }
 
 // handleAutoApproveGet serves GET /conversations/{id}/auto-approve.
-func (s *Server) handleAutoApproveGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleAutoApproveGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"auto_approve": conv.AutoApprove,
 	})
 }
@@ -547,8 +547,8 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 //
 // Per-conversation Claude extended-thinking override (#220). A null
 // thinking_config means "inherit the global default".
-func (s *Server) handleThinkingConfigGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleThinkingConfigGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"thinking_config":       conv.ThinkingConfig,
 		"default_budget_tokens": s.cfg.DefaultThinkingBudgetTokens,
 	})
@@ -663,7 +663,7 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json", "chat")),
 		)
-		writeJSON(w, body)
+		writeJSON(w, r, body)
 	}
 }
 

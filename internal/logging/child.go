@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -93,6 +95,7 @@ type lineSplitter struct {
 	dropped  int  // bytes of the current line discarded past the cap
 	closed   bool
 	failing  bool // the last emit failed; its failure was reported
+	inPEM    bool // inside a PEM private-key block: suppress its lines (send)
 	// emit receives one line; dropped > 0 marks it truncated (head is then
 	// the first MaxStderrLine bytes, dropped the bytes discarded after them).
 	emit func(line []byte, dropped int) error
@@ -129,7 +132,32 @@ func (s *lineSplitter) Write(p []byte) (int, error) {
 
 // send emits one line and keeps the failure state: the first failure of a
 // streak is reported, the rest are silent, a success ends the streak.
+//
+// It also keeps the one piece of redaction state that spans lines: a PEM
+// private-key block. Redaction runs per line, and neither the PEM pattern
+// (BEGIN…END) nor a registered multi-line literal can match a block that
+// arrives as separate lines, so the body lines would go out as written. From
+// a BEGIN … PRIVATE KEY line the splitter emits one "[REDACTED PEM block]"
+// line in its place and suppresses what follows up to and including the END
+// line — or up to the first line that cannot be part of a PEM body (not
+// base64, not an RFC 1421 header), which is emitted normally, so a block
+// that never ends cannot swallow the log.
 func (s *lineSplitter) send(line []byte, dropped int) {
+	if s.inPEM {
+		if pemEndRE.Match(line) {
+			s.inPEM = false
+			return
+		}
+		if dropped > 0 || pemBodyLine(line) {
+			return
+		}
+		s.inPEM = false
+	}
+	if loc := pemBeginRE.FindIndex(line); loc != nil && !pemEndRE.Match(line[loc[1]:]) {
+		s.inPEM = true
+		line = append([]byte(Redact(string(line[:loc[0]]))), pemPlaceholder...)
+		dropped = 0
+	}
 	if err := s.emit(line, dropped); err != nil {
 		if !s.failing {
 			s.failing = true
@@ -139,6 +167,19 @@ func (s *lineSplitter) send(line []byte, dropped int) {
 	}
 	s.failing = false
 }
+
+// pemPlaceholder replaces a whole PEM private-key block in subprocess output.
+const pemPlaceholder = "[REDACTED PEM block]"
+
+var (
+	pemBeginRE = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+	pemEndRE   = regexp.MustCompile(`-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	// pemBodyRE is one line of a PEM body: base64, or an RFC 1421 header
+	// (Proc-Type, DEK-Info) of an encrypted key, or blank.
+	pemBodyRE = regexp.MustCompile(`^\s*(?:[A-Za-z0-9+/=]*|[A-Za-z-]+:.*)\s*$`)
+)
+
+func pemBodyLine(line []byte) bool { return pemBodyRE.Match(line) }
 
 // appendCapped adds b to the pending line up to MaxStderrLine; past the cap
 // it only counts what it drops, and the line goes out truncated at its end.
@@ -196,133 +237,163 @@ var sinkFailedHook = func(sink string, err error) {
 
 func sinkFailed(sink string, err error) { sinkFailedHook(sink, err) }
 
-// ChildStderr returns a writer for a child process's stderr that forwards
-// each complete line to this process's log destination (stderr, plus
-// FLEET_LOG_FILE when it is on). A child that logs through Configure with no
-// file of its own (the fleet mcp-broker) so lands in the same sink, under the
-// one rotator the parent owns — two processes rotating one file would rename
-// it under each other. Lines are forwarded whole, so a child line never
-// interleaves with a parent line mid-way.
+// ChildLineMessage is the message of the record a child stderr line that is
+// not one of the child's own log records is wrapped in; the line itself is
+// the "line" attribute.
+const ChildLineMessage = "child stderr"
+
+// ChildStderr returns a writer for a child process's stderr (child names it
+// in every record: "mcp-broker") that logs each line through this process's
+// configured handler, so it takes this process's format, FLEET_LOG_LEVEL,
+// redactor and sinks (stderr, plus FLEET_LOG_FILE under the one rotator the
+// parent owns — two processes rotating one file would rename it under each
+// other). Nothing is copied to the sink as written.
 //
-// Nothing the child writes is trusted, whatever its shape. A line that parses
-// as one JSON object (the child's own slog records) is walked and redacted
-// with this process's redactor — every key, nested ones included, by the same
-// secret-key rule the slog handler applies, and every string value by pattern
-// and registered literal — then re-serialised. Anything else (a text-format
-// record, a panic trace, a line that only looks like JSON) is redacted as
-// text. A child library that prints {"authorization": "…"} to stderr is
-// scrubbed exactly like a parent attribute would be.
+//   - A line that parses as one JSON object with a "msg" (the child's own
+//     slog record, which the broker always writes as JSON) is re-logged as a
+//     record of this process: the child's time, level and message, each
+//     other field an attribute (nested objects as groups), plus child=<name>.
+//     The handler's redaction then applies exactly as to a parent attribute:
+//     the secret-key rule at every depth, pattern and literal scrubbing of
+//     every string. A child library printing {"authorization": "…"} is
+//     scrubbed like a parent attribute would be.
+//   - Anything else — a panic trace, a library's raw print, a line that only
+//     looks like JSON, a line cut at MaxStderrLine — is logged at warn as
+//     msg="child stderr" with the redacted text in "line".
 //
-// Lines are capped at MaxStderrLine, and Write never fails (see lineSplitter).
-// Close the writer after the child has been waited on so a last line with no
-// newline is still forwarded.
-func ChildStderr() io.WriteCloser {
-	return &lineSplitter{emit: forwardChildLine}
+// Lines are capped at MaxStderrLine, multi-line PEM blocks are suppressed
+// (see lineSplitter.send), and Write never fails. Close the writer after the
+// child has been waited on so a last line with no newline is still logged.
+func ChildStderr(child string) io.WriteCloser {
+	return &lineSplitter{emit: func(line []byte, dropped int) error {
+		forwardChildLine(child, line, dropped)
+		return nil
+	}}
 }
 
-func forwardChildLine(line []byte, dropped int) error {
-	var out []byte
-	if dropped > 0 {
-		out = []byte(truncatedLine(line, dropped))
-	} else if rec, ok := redactJSONRecord(line); ok {
-		out = rec
-	} else {
-		out = []byte(Redact(string(line)))
+func forwardChildLine(child string, line []byte, dropped int) {
+	ctx := context.Background()
+	if dropped == 0 {
+		if rec, ok := childRecord(line); ok {
+			rec.AddAttrs(slog.String("child", child))
+			if h := slog.Default().Handler(); h.Enabled(ctx, rec.Level) {
+				_ = h.Handle(ctx, rec)
+			}
+			return
+		}
 	}
-	out = append(out, '\n')
-	_, err := currentOutput().Write(out)
-	return err
+	attrs := []slog.Attr{slog.String("child", child)}
+	if dropped > 0 {
+		attrs = append(attrs, slog.String("line", truncatedLine(line, dropped)), slog.Bool("truncated", true))
+	} else {
+		attrs = append(attrs, slog.String("line", Redact(string(line))))
+	}
+	slog.Default().LogAttrs(ctx, slog.LevelWarn, ChildLineMessage, attrs...)
 }
 
-// redactJSONRecord parses line as exactly one JSON object and returns it
-// redacted and re-serialised, top-level keys in their original order (so a
-// record still starts time, level, msg). ok is false for anything else.
-func redactJSONRecord(line []byte) (out []byte, ok bool) {
+// childRecord parses line as exactly one JSON object carrying a string "msg"
+// and returns it as a record: time and level from the object when they parse
+// (now and info otherwise), every other field an attribute in order.
+func childRecord(line []byte) (slog.Record, bool) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
-		return nil, false
+		return slog.Record{}, false
 	}
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return nil, false
+		return slog.Record{}, false
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	buf.WriteByte('{')
-	for first := true; dec.More(); first = false {
+	var (
+		when   = time.Now()
+		level  = slog.LevelInfo
+		msg    string
+		hasMsg bool
+		attrs  []slog.Attr
+	)
+	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, false
+			return slog.Record{}, false
 		}
 		key, isKey := tok.(string)
 		if !isKey {
-			return nil, false
+			return slog.Record{}, false
 		}
 		var v any
 		if err := dec.Decode(&v); err != nil {
-			return nil, false
+			return slog.Record{}, false
 		}
-		if !first {
-			buf.WriteByte(',')
+		switch key {
+		case slog.TimeKey:
+			if s, ok := v.(string); ok {
+				if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+					when = t
+				}
+			}
+			continue
+		case slog.LevelKey:
+			if s, ok := v.(string); ok {
+				var l slog.Level
+				if l.UnmarshalText([]byte(s)) == nil {
+					level = l
+				}
+			}
+			continue
+		case slog.MessageKey:
+			if s, ok := v.(string); ok {
+				msg, hasMsg = s, true
+				continue
+			}
 		}
-		if err := enc.Encode(Redact(key)); err != nil {
-			return nil, false
-		}
-		trimNewline(&buf)
-		buf.WriteByte(':')
-		if err := enc.Encode(redactJSONField(key, v)); err != nil {
-			return nil, false
-		}
-		trimNewline(&buf)
+		attrs = append(attrs, jsonAttr(key, v))
 	}
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
-		return nil, false
+		return slog.Record{}, false
 	}
 	// Exactly one object: trailing bytes make it not a record.
 	if _, err := dec.Token(); err != io.EOF {
-		return nil, false
+		return slog.Record{}, false
 	}
-	buf.WriteByte('}')
-	return buf.Bytes(), true
+	if !hasMsg {
+		return slog.Record{}, false
+	}
+	rec := slog.NewRecord(when, level, msg, 0)
+	rec.AddAttrs(attrs...)
+	return rec, true
 }
 
-func trimNewline(b *bytes.Buffer) {
-	if n := b.Len(); n > 0 && b.Bytes()[n-1] == '\n' {
-		b.Truncate(n - 1)
-	}
-}
-
-// redactJSONField redacts one decoded JSON value under key: a secret-named
-// key loses its whole value unless that value is a number or boolean (a
-// token count), the same rule replaceAttr applies to a parent attribute;
-// otherwise objects and arrays recurse and strings are scrubbed.
-func redactJSONField(key string, v any) any {
-	if secretAttrKey(key) && !isNumberOrBool(v) {
-		return redactedValue
-	}
-	return redactJSONValue(v)
-}
-
-func redactJSONValue(v any) any {
+// jsonAttr turns one decoded JSON field into an attribute the handler's
+// ReplaceAttr redacts like a native one: numbers as numbers (so the
+// secret-key rule for numbers applies), objects as groups (so their keys are
+// checked as members of the group path), everything else as is. The key is
+// scrubbed too: nothing from the child is trusted.
+func jsonAttr(key string, v any) slog.Attr {
+	key = Redact(key)
 	switch x := v.(type) {
 	case string:
-		return Redact(x)
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = redactJSONValue(e)
+		return slog.String(key, x)
+	case bool:
+		return slog.Bool(key, x)
+	case json.Number:
+		if n, err := x.Int64(); err == nil {
+			return slog.Int64(key, n)
 		}
-		return out
+		if f, err := x.Float64(); err == nil {
+			return slog.Float64(key, f)
+		}
+		return slog.String(key, x.String())
 	case map[string]any:
-		out := make(map[string]any, len(x))
+		members := make([]any, 0, len(x))
 		for k, e := range x {
-			out[Redact(k)] = redactJSONField(k, e)
+			members = append(members, jsonAttr(k, e))
 		}
-		return out
-	default: // json.Number, bool, nil
-		return x
+		if len(members) == 0 {
+			return slog.Any(key, x)
+		}
+		return slog.Group(key, members...)
+	default: // nil, []any
+		return slog.Any(key, x)
 	}
 }
 

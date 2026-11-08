@@ -71,7 +71,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			writeJSON(w, map[string]any{"memories": memories})
+			writeJSON(w, r, map[string]any{"memories": memories})
 			return
 		}
 		memories, err := s.store.ListMemories(r.Context(), user)
@@ -79,7 +79,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"memories": memories})
+		writeJSON(w, r, map[string]any{"memories": memories})
 	case http.MethodPost:
 		var req memoryRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -93,7 +93,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 		// A manually created memory is ACTIVE immediately → derive its graph
 		// fragment (async, best-effort, gated; #523).
 		s.maybeExtractMemoryGraph(memory)
-		writeJSON(w, memory)
+		writeJSON(w, r, memory)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -142,7 +142,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			}
 			// No graph extraction: the knowledge graph is a personal-memory
 			// derivation (#523) and a project row is not part of it.
-			writeJSON(w, map[string]any{"memory": memory, "supersede": store.SupersedeNone, "project_id": p.ID})
+			writeJSON(w, r, map[string]any{"memory": memory, "supersede": store.SupersedeNone, "project_id": p.ID})
 			return
 		}
 		memory, supersede, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
@@ -156,7 +156,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		// The envelope (vs the bare memory) carries the #515 stage-2 outcome:
 		// what happened to the older fact this proposal claimed to replace
 		// ("retired", or the guard that kept it — pinned/changed/missing/…).
-		writeJSON(w, map[string]any{"memory": memory, "supersede": supersede})
+		writeJSON(w, r, map[string]any{"memory": memory, "supersede": supersede})
 		return
 	}
 	if sub == "extract-graph" && r.Method == http.MethodPost {
@@ -181,7 +181,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			writeMemoryStoreError(w, err)
 			return
 		}
-		writeJSON(w, memory)
+		writeJSON(w, r, memory)
 	case http.MethodDelete:
 		if err := s.store.DeleteMemory(r.Context(), user, id); err != nil {
 			writeMemoryStoreError(w, err)

@@ -40,7 +40,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	s.doctorMu.Lock()
 	defer s.doctorMu.Unlock()
-	writeJSON(w, boxdoctor.Run(r.Context(), opts))
+	writeJSON(w, r, boxdoctor.Run(r.Context(), opts))
 }
 
 func truthyParam(v string) bool {

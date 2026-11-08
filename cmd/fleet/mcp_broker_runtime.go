@@ -50,7 +50,7 @@ func productionMCPBrokerCommand() (*exec.Cmd, error) {
 	// The child logs to its stderr in the parent's format and level
 	// (mcpBrokerLogConfig); its lines join the parent's log destination,
 	// FLEET_LOG_FILE included.
-	cmd.Stderr = logging.ChildStderr()
+	cmd.Stderr = logging.ChildStderr("mcp-broker")
 	return cmd, nil
 }
 

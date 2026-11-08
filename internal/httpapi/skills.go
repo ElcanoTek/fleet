@@ -131,7 +131,7 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries, UserSkills: userEntries})
+	writeJSON(w, r, skillsResponse{Skills: entries, Shared: sharedEntries, UserSkills: userEntries})
 }
 
 // skillOrigin reports where a merged-roster skill came from — the bundle's
@@ -167,7 +167,7 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 					"body":        sk.Body,
 					"content":     store.RenderUserSkillMarkdown(&sk),
 				}
-				writeJSON(w, resp)
+				writeJSON(w, r, resp)
 				return
 			}
 		}
@@ -192,7 +192,7 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 		if origin.Plugin != "" {
 			resp["plugin"] = origin.Plugin
 		}
-		writeJSON(w, resp)
+		writeJSON(w, r, resp)
 		return
 	}
 	http.Error(w, "unknown skill", http.StatusNotFound)

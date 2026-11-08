@@ -1576,7 +1576,7 @@ func Load(envFile string) (*Config, error) {
 
 	// Lockdown is a no-op without an image. Surface the misconfiguration loudly.
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
-		fmt.Fprintln(os.Stderr, "warn: FLEET_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
+		slog.Warn("FLEET_LOCKDOWN_ONLY=true but the sandbox image is unset; lockdown cannot be enforced and is treated as disabled")
 		cfg.LockdownOnly = false
 	}
 

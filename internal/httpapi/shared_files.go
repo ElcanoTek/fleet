@@ -74,7 +74,7 @@ func (s *Server) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
 		if files == nil {
 			files = []store.SharedFile{}
 		}
-		writeJSON(w, sharedFilesResponse{
+		writeJSON(w, r, sharedFilesResponse{
 			Files:         files,
 			TotalBytes:    sharedfiles.TotalBytes(files),
 			MaxTotalBytes: s.sharedFilesMaxTotalBytes(),
@@ -256,7 +256,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, map[string]any{"files": out})
+	writeJSON(w, r, map[string]any{"files": out})
 }
 
 // rollbackSharedFileBatch undoes the rows one upload request created before
@@ -395,7 +395,7 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 			logging.From(r.Context()).Warn("shared files: restage failed (will self-heal on the next maintenance pass)", "id", id, "err", err)
 		}
 	}
-	writeJSON(w, updated)
+	writeJSON(w, r, updated)
 }
 
 func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id string) {

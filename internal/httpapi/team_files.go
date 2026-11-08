@@ -82,8 +82,8 @@ func (s *Server) outputsFromHistory(ctx context.Context, convID string, history 
 // writeOutputsResponse is the one body GET outputs and POST outputs/share
 // both answer with. truncated is additive: true when older references were
 // beyond the discovery bound and are not in the list.
-func writeOutputsResponse(w http.ResponseWriter, outs []outputFile, truncated, teamVisible bool) {
-	writeJSON(w, map[string]any{
+func writeOutputsResponse(w http.ResponseWriter, r *http.Request, outs []outputFile, truncated, teamVisible bool) {
+	writeJSON(w, r, map[string]any{
 		"outputs":      outs,
 		"total":        len(outs),
 		"shared_count": countShared(outs),
@@ -155,7 +155,7 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 				outs[i].Shared = *body.Shared
 			}
 		}
-		writeOutputsResponse(w, outs, truncated, conv.TeamVisible)
+		writeOutputsResponse(w, r, outs, truncated, conv.TeamVisible)
 		return
 	}
 	outs, truncated, err := s.ownerOutputs(r.Context(), convID)
@@ -163,7 +163,7 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeOutputsResponse(w, outs, truncated, conv.TeamVisible)
+	writeOutputsResponse(w, r, outs, truncated, conv.TeamVisible)
 }
 
 // isActiveContentType reports whether a browser would open ctype as a
@@ -281,7 +281,7 @@ func (s *Server) handleTeamLink(w http.ResponseWriter, r *http.Request, user, co
 	if tl.Project != nil {
 		out["project"] = tl.Project
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 // maxBranchCopyBytes bounds the bytes one teammate branch copies. The copy

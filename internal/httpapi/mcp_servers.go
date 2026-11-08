@@ -96,7 +96,7 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	// What a chat turn can call: interactive_hidden_tools are not offered
 	// (mcp_servers_hidden.go).
 	servers = hideInteractiveHiddenTools(servers)
-	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
+	writeJSON(w, r, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
 // defaultEnabledOptionalMCPServers returns the canonical (lowercased, sorted,
@@ -603,7 +603,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	// What a chat turn can call: interactive_hidden_tools are not offered
 	// (mcp_servers_hidden.go).
 	servers = hideInteractiveHiddenTools(servers)
-	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
+	writeJSON(w, r, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.
@@ -716,5 +716,5 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		writeConversationMutationError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"enabled_optional": clean, "accounts": accounts})
+	writeJSON(w, r, map[string]any{"enabled_optional": clean, "accounts": accounts})
 }

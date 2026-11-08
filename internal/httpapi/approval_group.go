@@ -268,7 +268,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		// conversation for it, as after a single card.
 		out["resume"] = true
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 // checkGroupNarrowing checks a group decision's `narrow` map before any card

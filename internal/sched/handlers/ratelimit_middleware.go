@@ -123,7 +123,7 @@ func (h *Handlers) writeRateLimited(w http.ResponseWriter, r *http.Request, retr
 	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(retry).Unix(), 10))
 	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
 	logging.From(r.Context()).Warn("orchestrator rate limit exceeded", "window", window, "retry_after_s", retrySeconds)
-	writeJSON(w, http.StatusTooManyRequests, map[string]any{
+	writeJSON(w, r, http.StatusTooManyRequests, map[string]any{
 		"error":               "rate_limit_exceeded",
 		"retry_after_seconds": retrySeconds,
 	})

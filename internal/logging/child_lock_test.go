@@ -51,7 +51,7 @@ func TestConcurrentParentAndChildRecordsStayWhole(t *testing.T) {
 			}
 		})
 		wg.Go(func() {
-			fw := ChildStderr()
+			fw := ChildStderr("mcp-broker")
 			for range per {
 				// Split the record across writes the way a pipe read would.
 				_, _ = fw.Write([]byte(child[:len(child)/3]))
@@ -88,7 +88,7 @@ func TestTruncatedLineLeaksNoPrefixOfAStraddlingSecret(t *testing.T) {
 	out := captureOutput(t)
 	const secret = "StraddleOpaqueSecretQ7w2Z9xK4mV8" // matches no shape pattern
 	RegisterSecretLiterals("", false, secret)
-	w := ChildStderr()
+	w := ChildStderr("child")
 	line := strings.Repeat("x", MaxStderrLine-12) + secret + " and more after it\n"
 	_, _ = io.WriteString(w, line)
 	got := out.String()
@@ -104,7 +104,7 @@ func TestTruncatedLineLeaksNoPrefixOfAStraddlingSecret(t *testing.T) {
 	// by luck: put one early and check the head shows the placeholder.
 	out.Reset()
 	_, _ = io.WriteString(w, "early "+secret+" "+strings.Repeat("y", MaxStderrLine)+"\n")
-	if got := out.String(); strings.Contains(got, secret[:8]) || !strings.HasPrefix(got, "early "+redactedValue) {
-		t.Fatalf("head = %q", got[:min(len(got), 60)])
+	if got := out.lines(t); len(got) != 1 || strings.Contains(got[0], secret[:8]) || !strings.HasPrefix(got[0], "early "+redactedValue) {
+		t.Fatalf("head = %.60q", got)
 	}
 }

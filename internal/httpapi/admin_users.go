@@ -141,7 +141,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// %q escapes CR/LF, so request-supplied values cannot forge a log line.
 	logging.From(r.Context()).Info("admin users: created", "email", u.Email, "role", u.Role, "actor", userFromCtx(r.Context()))
-	writeJSONStatus(w, http.StatusCreated, s.toAdminUserAnnotated(r, *u))
+	writeJSONStatus(w, r, http.StatusCreated, s.toAdminUserAnnotated(r, *u))
 }
 
 // handleAdminUserDelete serves DELETE /admin/users/{email} — remove the account
@@ -175,7 +175,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 			// `error` keeps the exact prose an older client already renders;
 			// `owns_shared_projects` carries {id, name} so the refusal can link
 			// straight at each project's transfer control (QA #21).
-			writeJSONStatus(w, http.StatusConflict, map[string]any{
+			writeJSONStatus(w, r, http.StatusConflict, map[string]any{
 				"error": "this account still owns team-shared projects (" +
 					strings.Join(owns.ProjectNames(), ", ") +
 					") — transfer them to another member first, then delete the account",
@@ -313,5 +313,5 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	logging.From(r.Context()).Info("admin teams: team renamed", "from", body.From, "to", body.To, "users", usersN, "projects", projectsN, "actor", userFromCtx(r.Context()))
-	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
+	writeJSON(w, r, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

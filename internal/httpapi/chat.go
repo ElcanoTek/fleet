@@ -179,7 +179,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		// (reconcileLockdownModelCtx) rather than 400ing at its owner.
 		next := s.lockdownCorrectedModel(conv)
 		logging.From(r.Context()).Warn("lockdown: refused a disallowed model from the client and offered the lockdown default", "conv_id", safe.LogSafe(conv.ID), "requested", safe.LogSafe(reqModel), "offered", safe.LogSafe(next))
-		writeLockdownModelRefusal(w, next)
+		writeLockdownModelRefusal(w, r, next)
 		return false
 	}
 	if reqModel != conv.Model {
@@ -232,7 +232,7 @@ const lockdownModelRefusalCode = "lockdown_model_not_allowed"
 // only escape by reloading the page. The body stays a superset of the plain
 // error text every other lockdown guard writes: `error` is the same sentence,
 // `code` identifies the refusal, `model` is the correction.
-func writeLockdownModelRefusal(w http.ResponseWriter, model string) {
+func writeLockdownModelRefusal(w http.ResponseWriter, r *http.Request, model string) {
 	body := map[string]any{
 		"error": "model not allowed in lockdown mode",
 		"code":  lockdownModelRefusalCode,
@@ -240,7 +240,7 @@ func writeLockdownModelRefusal(w http.ResponseWriter, model string) {
 	if model != "" {
 		body["model"] = model
 	}
-	writeJSONStatus(w, http.StatusBadRequest, body)
+	writeJSONStatus(w, r, http.StatusBadRequest, body)
 }
 
 // lockdownCorrectedModel names the model a refused override should be replaced
@@ -421,7 +421,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// held for the turn GOROUTINE's lifetime (released in the goroutine below),
 	// not just this HTTP handler's — postChat returns as soon as the turn is
 	// launched, but the work continues in the background.
-	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
+	releaseSlot, admitted := s.admitConcurrentTurn(w, r, user)
 	if !admitted {
 		return
 	}

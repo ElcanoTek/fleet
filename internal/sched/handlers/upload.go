@@ -179,7 +179,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", checksum)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, r, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
 		"original_name": originalName,
 		"checksum":      checksum,

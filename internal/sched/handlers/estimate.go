@@ -73,7 +73,7 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	if !forecast.PricingKnown {
 		status = http.StatusAccepted
 	}
-	writeJSON(w, status, forecast)
+	writeJSON(w, r, status, forecast)
 }
 
 // forecastTask resolves the model, system prompt, MCP tool count, iteration cap,

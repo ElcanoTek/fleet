@@ -103,7 +103,7 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 		}
 	}
 	if user == nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
+		writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "not_a_member"})
 		return nil, true
 	}
 	// Membership outranks the session: a deleted account gets the 403 the UI keys
