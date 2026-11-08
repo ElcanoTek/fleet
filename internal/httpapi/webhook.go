@@ -292,7 +292,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Unlike a chat turn, a failure here is fatal: without the turn row,
 	// startup recovery could not account for a turn whose input later
 	// committed.
-	persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	err = buf.attachPersister(persistCtx, s.store)
 	persistCancel()
 	if err != nil {
@@ -428,7 +428,7 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 // sender's retry is processed afresh. completed reports that the input commit
 // won the race and the delivery is accepted after all.
 func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, ownTurnID string) (completed bool, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", "", ownTurnID), 5*time.Second)
 	defer cancel()
 	completed, err = s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, ownTurnID)
 	if err != nil {

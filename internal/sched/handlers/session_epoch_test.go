@@ -178,7 +178,7 @@ func TestHeaderTrust_SessionEpochOnRoutesOutsideTheAuthMiddleware(t *testing.T) 
 	t.Run("authorizeTaskCreator", func(t *testing.T) {
 		h := epochHandler(liveEpochLookup)
 		rr := httptest.NewRecorder()
-		if _, ok := h.authorizeTaskCreator(rr, epochRequest(http.MethodPost, "/tasks", staleEpoch)); ok {
+		if _, _, ok := h.authorizeTaskCreator(rr, epochRequest(http.MethodPost, "/tasks", staleEpoch)); ok {
 			t.Fatal("a stale session was authorized to create a task")
 		}
 		if rr.Code != http.StatusUnauthorized {

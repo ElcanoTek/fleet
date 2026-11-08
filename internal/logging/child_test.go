@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -124,7 +125,8 @@ func TestChildStderrCapsAnUnterminatedLine(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("want the truncated line and the next line, got %d lines", len(lines))
 	}
-	if want := strings.Repeat("a", MaxStderrLine) + truncatedMarker; lines[0] != want {
+	shown := MaxStderrLine - redactor().MaxLiteralLen() - truncationAllowance
+	if want := strings.Repeat("a", shown) + " …[truncated: line was 327683 bytes]"; lines[0] != want {
 		t.Fatalf("truncated line: len %d, suffix %q", len(lines[0]), lines[0][max(0, len(lines[0])-20):])
 	}
 	if lines[1] != "next line" {
@@ -209,8 +211,10 @@ func TestStderrLoggerLogsRedactedLinesWithAttribution(t *testing.T) {
 	buf.Reset()
 	l = NewStderrLogger()
 	_, _ = l.Write(bytes.Repeat([]byte("x"), MaxStderrLine+100))
+	_ = l.Close() // an overflowing line goes out at its end; Close is its end here
 	m := decodeLast(t, &buf)
-	if m["truncated"] != true || len(m["line"].(string)) != MaxStderrLine {
-		t.Fatalf("overflow record: truncated=%v len=%d", m["truncated"], len(m["line"].(string)))
+	line, _ := m["line"].(string)
+	if m["truncated"] != true || len(line) >= MaxStderrLine || !strings.HasSuffix(line, fmt.Sprintf("[truncated: line was %d bytes]", MaxStderrLine+100)) {
+		t.Fatalf("overflow record: truncated=%v len=%d suffix=%q", m["truncated"], len(line), line[max(0, len(line)-40):])
 	}
 }

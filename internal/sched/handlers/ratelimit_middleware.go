@@ -4,11 +4,12 @@ package handlers
 
 import (
 	"crypto/subtle"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // SchedRateLimitMiddleware throttles the high-cost orchestrator endpoints
@@ -65,7 +66,7 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 		}
 
 		if ok, retry := h.taskKeyRL.AllowN(identity, perMin, perDay); !ok {
-			h.writeRateLimited(w, retry, perMin, "minute")
+			h.writeRateLimited(w, r, retry, perMin, "minute")
 			return
 		}
 
@@ -76,7 +77,7 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 			globalBucket = schedGlobalAuthenticatedBucket
 		}
 		if ok, retry := h.taskGlobalRL.Allow(globalBucket); !ok {
-			h.writeRateLimited(w, retry, h.config.SchedGlobalRateLimitPerMinute, "global")
+			h.writeRateLimited(w, r, retry, h.config.SchedGlobalRateLimitPerMinute, "global")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -112,7 +113,7 @@ func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
 
 // writeRateLimited emits a 429 with the full rate-limit header set and the
 // standardized JSON body, and logs the hit with its window.
-func (h *Handlers) writeRateLimited(w http.ResponseWriter, retry time.Duration, limit int, window string) {
+func (h *Handlers) writeRateLimited(w http.ResponseWriter, r *http.Request, retry time.Duration, limit int, window string) {
 	retrySeconds := int(retry.Seconds())
 	if retrySeconds < 1 {
 		retrySeconds = 1
@@ -121,7 +122,7 @@ func (h *Handlers) writeRateLimited(w http.ResponseWriter, retry time.Duration, 
 	w.Header().Set("X-RateLimit-Remaining", "0")
 	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(retry).Unix(), 10))
 	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
-	slog.Warn("orchestrator rate limit exceeded", "window", window, "retry_after_s", retrySeconds)
+	logging.From(r.Context()).Warn("orchestrator rate limit exceeded", "window", window, "retry_after_s", retrySeconds)
 	writeJSON(w, http.StatusTooManyRequests, map[string]any{
 		"error":               "rate_limit_exceeded",
 		"retry_after_seconds": retrySeconds,

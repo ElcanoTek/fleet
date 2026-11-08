@@ -218,7 +218,7 @@ func (s *Server) releaseDirectInput(user, convID string, c *directClaim) bool {
 // durable outcome — cancelled, nothing ran — retried in the background.
 func (s *Server) settleUnreleasedInput(user, convID string, c *directClaim) {
 	try := func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx(user, convID, ""), 5*time.Second)
 		defer cancel()
 		if err := s.store.SettleDirectInput(ctx, c.id, ""); err != nil {
 			logging.From(ctx).Error("settle unreleased input failed", "input_id", c.id, "err", err)
@@ -253,7 +253,7 @@ func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
 	if queued == nil || queued.rowID == "" {
 		return true
 	}
-	bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	bctx, bcancel := context.WithTimeout(detachedCtx("", "", turnID), 5*time.Second)
 	bound, err := s.store.BindInputTurn(bctx, queued.rowID, turnID)
 	bcancel()
 	if err != nil {
@@ -278,7 +278,7 @@ func (s *Server) bindDirectInput(id, turnID string) (bound, stopped bool) {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * directReleasePause)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx("", "", turnID), 5*time.Second)
 		bound, err := s.store.BindInputTurn(ctx, id, turnID)
 		cancel()
 		if err == nil {
@@ -320,7 +320,7 @@ func (s *Server) retryDirectInput(what, id string, attempt int, delay time.Durat
 // a failure in the background.
 func (s *Server) settleDirectInput(id, turnID string) {
 	try := func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx("", "", turnID), 5*time.Second)
 		defer cancel()
 		if err := s.store.SettleDirectInput(ctx, id, turnID); err != nil {
 			logging.From(ctx).Error("settle direct input failed", "input_id", id, "turn_id", turnID, "err", err)
@@ -371,7 +371,7 @@ func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (r
 	defer scancel()
 	if !cancelStopped(sctx) {
 		s.retryDirectInput("cancel_stopped_inputs", turnID, 1, directReleaseBackoff, func() bool {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(detachedCtx("", buf.convID, turnID), 5*time.Second)
 			defer cancel()
 			if !cancelStopped(ctx) {
 				return false

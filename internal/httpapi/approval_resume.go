@@ -145,7 +145,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 10*time.Second)
 	defer cancel()
 	maxPerHour := agentcore.ResumeMaxPerHour()
 	res, err := s.store.ClaimApprovalResume(ctx, store.ApprovalResumeRequest{
@@ -275,7 +275,7 @@ func (s *Server) resumeRowFromEarlierProcess(row *store.InputQueueRow) bool {
 // noteDroppedResume records, in the conversation, a resume that the launch
 // guard refused because it predates this process.
 func (s *Server) noteDroppedResume(convID, rowID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 5*time.Second)
 	defer cancel()
 	if err := s.store.AppendApprovalResumeDroppedNotice(ctx, convID); err != nil {
 		logging.From(ctx).Error("approval resume: could not note the dropped resume", "conv_id", safe.LogSafe(convID), "row_id", safe.LogSafe(rowID), "err", err)

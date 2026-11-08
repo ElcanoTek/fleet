@@ -550,7 +550,9 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 
 // attachTurnPersister attaches the turn_events persister.
 func (s *Server) attachTurnPersister(ctx context.Context, buf *turnBuffer, user, convID string) {
-	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
+	// WithoutCancel: the turn outlives the request, but its log lines keep
+	// the request's correlation attributes.
+	persistCtx, persistCancelAttach := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
 		logging.From(ctx).Error("attachPersister failed", "user", user, "conv_id", convID, "err", err)
 	}

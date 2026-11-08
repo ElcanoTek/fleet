@@ -8,10 +8,11 @@
 package httpapi
 
 import (
-	"log/slog"
+	"context"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
@@ -41,14 +42,14 @@ const pushServiceRefused = "This browser's push service is not one this server s
 // 400 and logging why when it is. The server later POSTs to the endpoint from
 // the host, so only a push service's is stored: see the webpush package
 // comment. what names the request in the log line ("subscription", "renewal").
-func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) bool {
+func refusedPushEndpoint(ctx context.Context, w http.ResponseWriter, user, what, endpoint string) bool {
 	err := webpush.ValidateEndpoint(endpoint)
 	if err == nil {
 		return false
 	}
 	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	slog.Warn("push: request refused", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
+	logging.From(ctx).Warn("push: request refused", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }
@@ -86,7 +87,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := userFromCtx(r.Context())
-	if refusedPushEndpoint(w, user, "subscription", req.Endpoint) {
+	if refusedPushEndpoint(r.Context(), w, user, "subscription", req.Endpoint) {
 		return
 	}
 	if err := s.store.UpsertPushSubscription(r.Context(), user, req.Endpoint, req.Keys.Auth, req.Keys.P256dh); err != nil {
@@ -193,7 +194,7 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 	// refused renewal leaves it where it is (the browser then drops the new
 	// subscription, as for any 400).
 	user := userFromCtx(r.Context())
-	if refusedPushEndpoint(w, user, "renewal", req.Endpoint) {
+	if refusedPushEndpoint(r.Context(), w, user, "renewal", req.Endpoint) {
 		return
 	}
 	renewed, err := s.store.RenewPushSubscription(r.Context(), user, req.OldEndpoint, req.Endpoint, req.Keys.Auth, req.Keys.P256dh)

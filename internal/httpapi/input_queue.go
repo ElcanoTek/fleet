@@ -481,7 +481,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
 		return // its completion tail-call re-kicks
 	}
-	dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 10*time.Second)
 	defer cancel()
 	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
@@ -496,7 +496,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 		// A direct submission won the registerTurn race; put the row back.
 		// The winner's completion re-drains it, and the bounded re-kick
 		// covers a winner whose tail already ran before our un-claim landed.
-		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rctx, rcancel := context.WithTimeout(detachedCtx("", convID, ""), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
 			logging.From(rctx).Error("input queue unclaim failed", "conv_id", safe.LogSafe(convID), "input_id", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
 		}
@@ -544,7 +544,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
-	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	lctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 15*time.Second)
 	defer cancel()
 	conv, err := s.getOwnedOrMultiplayerConversation(lctx, user, convID)
 	if err != nil {
@@ -645,7 +645,7 @@ func (s *Server) terminalizeQueueRow(convID, id, claimTurnID, state string) {
 }
 
 func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state string, retriesLeft int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", convID, claimTurnID), 5*time.Second)
 	defer cancel()
 	err := s.store.MarkClaimedInputTerminal(ctx, id, claimTurnID, state)
 	if err == nil {
@@ -745,7 +745,7 @@ func steerSourceOrNil(m *steerMailbox) agentcore.SteerSource {
 func (s *Server) settleUnqueuedInput(user, convID, key string) {
 	id := uuid.NewString()
 	try := func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx(user, convID, ""), 5*time.Second)
 		defer cancel()
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,

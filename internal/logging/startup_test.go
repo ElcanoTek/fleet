@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 func restoreLogging(t *testing.T) {
@@ -21,6 +23,7 @@ func restoreLogging(t *testing.T) {
 		slog.SetDefault(prevSlog)
 		bridgeLogger = prevBridge
 		setOutput(prevOut)
+		safe.SetPanicHandler(nil)
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
 	})

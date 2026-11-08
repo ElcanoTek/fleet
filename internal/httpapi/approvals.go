@@ -624,7 +624,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 	send := func() {
 		// Independent of the turn context on purpose: the staged card outlives
 		// the turn, so the notification should too.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx(a.userEmail, a.conversationID, ""), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
 			logging.From(ctx).Error("push: approval notification failed", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))

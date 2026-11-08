@@ -49,7 +49,8 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	// the forecast silently dead ("Unauthorized") for every cookie-path
 	// Operations Center user. The resolved creator is discarded: the forecast
 	// creates nothing, so this cannot become a weaker path to task creation.
-	if _, ok := h.authorizeTaskCreator(w, r); !ok {
+	_, r, ok := h.authorizeTaskCreator(w, r)
+	if !ok {
 		return
 	}
 

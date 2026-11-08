@@ -575,21 +575,21 @@ func (p *Pool) ActiveTasks() int {
 // admitClaims consults the optional backpressure gate. It logs the transition in
 // each direction exactly once, so an operator sees WHEN the box started and
 // stopped holding work back without a poll-rate flood in between.
-func (p *Pool) admitClaims() bool {
+func (p *Pool) admitClaims(ctx context.Context) bool {
 	if p.admitScheduled == nil {
 		return true
 	}
 	ok, reason := p.admitScheduled()
 	if ok {
 		if p.shedLogged.CompareAndSwap(true, false) {
-			slog.Info("runner: resuming scheduled task claims (backpressure cleared)")
+			logging.From(ctx).Info("runner: resuming scheduled task claims (backpressure cleared)")
 		}
 		return true
 	}
 	if p.shedLogged.CompareAndSwap(false, true) {
 		// reason is operator-facing text from the gate itself (see
 		// Config.AdmitScheduled), never request input — no log-forgery risk.
-		slog.Info("runner: holding back scheduled task claims", "reason", reason)
+		logging.From(ctx).Info("runner: holding back scheduled task claims", "reason", reason)
 	}
 	return false
 }
@@ -605,14 +605,14 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 	// that trips mid-tick holds back subsequent claims immediately. Work already
 	// in flight is left alone.
 	for {
-		if !p.admitClaims() {
+		if !p.admitClaims(ctx) {
 			return
 		}
 		release, ok := p.limiter.TryAcquireScheduled() // acquire BEFORE claiming (non-blocking)
 		if !ok {
 			return // at the scheduler sub-cap or the box is full: leave the rest pending
 		}
-		if !p.admitClaims() {
+		if !p.admitClaims(ctx) {
 			release()
 			return
 		}
@@ -634,7 +634,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			release()
 			return
 		}
-		if !p.admitClaims() {
+		if !p.admitClaims(ctx) {
 			var rerr error
 			for attempt := 0; attempt < 3; attempt++ {
 				if attempt > 0 {

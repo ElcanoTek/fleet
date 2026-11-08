@@ -368,6 +368,23 @@ func (r *Redactor) nowNano() int64 {
 	return time.Now().UnixNano()
 }
 
+// MaxLiteralLen is the byte length of the longest registered literal (0 for
+// none). A caller that cuts text at a fixed point sizes its safety margin
+// from it: a literal straddling the cut is never matched, so the bytes
+// before the cut that could be its prefix must be withheld too.
+func (r *Redactor) MaxLiteralLen() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, l := range r.literals {
+		n = max(n, len(l.value))
+	}
+	return n
+}
+
 // Redact returns input with every matched secret replaced. Literals run first
 // (exact, novel formats), then the shape patterns.
 func (r *Redactor) Redact(input string) string {

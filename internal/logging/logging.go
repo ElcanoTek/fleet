@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/logging/rotate"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Config holds the process-log knobs. The zero value (File == "") means the file
@@ -89,9 +90,10 @@ func (c Config) Enabled() bool { return c.File != "" }
 // It returns an io.Closer for the rotating file (nil when the file sink is off)
 // for the caller to defer-close, and any error opening the file.
 //
-// internal/safe keeps its OWN slog handler bound to stderr by design (a recovered
-// panic must still reach stderr/journald even if a misconfigured file sink is
-// failing), so panic events are unaffected by the choices here.
+// Recovered panics (internal/safe) go through a handler of the same format,
+// destination and redactor, installed with safe.SetPanicHandler; safe falls
+// back to its own direct-stderr JSON logger only if that handler fails, so a
+// panic always reaches stderr/journald even with a broken file sink.
 func Configure(cfg Config) (io.Closer, error) {
 	// The redactor knows the process's secret-named env values by literal
 	// before the first configured line is written — and before Configure
@@ -101,7 +103,7 @@ func Configure(cfg Config) (io.Closer, error) {
 	// opaque API key — was scrubbed by shape patterns alone.
 	seedEnvLiterals()
 	// Destination: stderr, plus the rotating file when configured.
-	var dest io.Writer = os.Stderr
+	dest := lockedStderr
 	var closer io.Closer
 	if cfg.Enabled() {
 		rotor := &rotate.Logger{
@@ -119,7 +121,7 @@ func Configure(cfg Config) (io.Closer, error) {
 		}
 		// Each sink independently: a full disk or a failed rotation must not
 		// fail a write (a subprocess-stderr forwarder would stop draining).
-		dest = newTee(teeSink{name: "stderr", w: os.Stderr}, teeSink{name: "file", w: rotor})
+		dest = newTee(teeSink{name: "stderr", w: stderrFile{}}, teeSink{name: "file", w: rotor})
 		closer = rotor
 	}
 
@@ -134,6 +136,7 @@ func Configure(cfg Config) (io.Closer, error) {
 	// configured format, level and file sink.
 	replayStartup(slog.Default().Handler())
 	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
+	safe.SetPanicHandler(newHandler(dest, slog.LevelError))
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
@@ -147,7 +150,7 @@ func Configure(cfg Config) (io.Closer, error) {
 // silently erase a library's report of a failure it could only express as a
 // plain print. Reassigned once in Configure (before any concurrent logging);
 // defaults to stderr pre-Configure.
-var bridgeLogger = slog.New(newJSONHandler(os.Stderr, slog.LevelInfo))
+var bridgeLogger = slog.New(newJSONHandler(lockedStderr, slog.LevelInfo))
 
 // newJSONHandler builds the structured-JSON handler: an slog JSON handler at
 // dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted

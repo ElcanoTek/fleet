@@ -35,7 +35,7 @@ const (
 func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.verifyAdminKey(r) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withAuthIdentity(r, bootstrapAdminIdentity))
 			return
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
@@ -43,7 +43,7 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 			if valid && key != nil {
 				if key.Type == apikeys.KeyTypeAdmin {
 					// user_id for an API-key call is the key's id — never the key (#2052).
-					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), "apikey:"+key.KeyID)
+					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), apiKeyIdentity(key.KeyID))
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -119,7 +119,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check admin API key first
 		if h.verifyAdminKey(r) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withAuthIdentity(r, bootstrapAdminIdentity))
 			return
 		}
 
@@ -161,7 +161,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 				if authorized {
 					// Store the API key in context for the handler to use.
 					// user_id for an API-key call is the key's id — never the key (#2052).
-					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), "apikey:"+key.KeyID)
+					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), apiKeyIdentity(key.KeyID))
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}

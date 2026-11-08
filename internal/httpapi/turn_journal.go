@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,7 +69,7 @@ func (w *turnJournalWriter) write(kind, callID, toolName, content string, isErr 
 		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
 	}
 	w.degraded.Store(true)
-	slog.Warn("turn journal degraded", "turn_id", w.turnID, "kind", kind, "tool", toolName, "err", err)
+	logging.From(detachedCtx("", "", w.turnID)).Warn("turn journal degraded", "kind", kind, "tool", toolName, "err", err)
 	return err
 }
 
@@ -142,7 +141,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// their queue rows now, so injected-but-uncommitted rows keep
 			// their durable next-turn fallback on crash. Fresh context — the
 			// commit's cctx was just cancelled.
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(detachedCtx("", c.convID, c.turnID), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
 				logging.From(qctx).Error("complete injected inputs failed", "turn_id", c.turnID, "err", cerr)
 			}
@@ -156,7 +155,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// still need settling — SettleTurnInputs skips them (history IS
 			// committed), so without this they stay 'injected' in every queue
 			// snapshot until the next boot recovery.
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(detachedCtx("", c.convID, c.turnID), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
 				logging.From(qctx).Error("complete injected inputs failed", "turn_id", c.turnID, "err", cerr)
 			}

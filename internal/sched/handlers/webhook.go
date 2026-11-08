@@ -83,6 +83,7 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 					return
 				}
 				authorizedByKey = true
+				r = withAuthIdentity(r, apiKeyIdentity(key.KeyID))
 			}
 		}
 	}

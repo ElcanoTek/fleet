@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -36,10 +37,12 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// This mirrors logic in CreateTask but slightly simpler as we just need "any valid user"
 
 	isAuthed := false
+	identity := "" // the principal's log identity, as the auth middleware sets it
 
 	// 1. API Key
 	if h.verifyAdminKey(r) {
 		isAuthed = true
+		identity = bootstrapAdminIdentity
 	} else if user, handled := h.headerTrustUser(w, r); handled {
 		// 1a. web-tier header-trust path (#157): /upload sits outside the
 		// AdminOrUserAuthMiddleware group like POST /tasks, so the cookie
@@ -50,6 +53,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		isAuthed = true
+		identity = user.Username
 	} else {
 		// 1b. Scoped API key carrying create_task permission (#719): an uploaded
 		// file is only usable via a subsequent task create, so the SAME scoped
@@ -67,6 +71,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			perm := models.PermissionCreateTask
 			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
+				identity = apiKeyIdentity(key.KeyID)
 			}
 		}
 
@@ -79,8 +84,9 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			} else {
 				token = authHeader
 			}
-			if h.userFromPasswordToken(token) != nil {
+			if user := h.userFromPasswordToken(token); user != nil {
 				isAuthed = true
+				identity = user.Username
 			}
 		}
 	}
@@ -89,6 +95,9 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
+	// No middleware put the principal on the context; the log lines below
+	// carry it the way they would under one. (r itself is left as is.)
+	logCtx := logging.WithUser(r.Context(), identity)
 
 	maxBytes := h.config.UploadMaxBytes
 	if maxBytes <= 0 {
@@ -132,7 +141,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// Create checksums directory (hidden/system directory to prevent collisions)
 	checksumsDir := filepath.Join(tempDir, ".checksums")
 	if err := os.MkdirAll(checksumsDir, 0700); err != nil {
-		logging.From(r.Context()).Error("Failed to create checksums dir", "err", err)
+		logging.From(logCtx).Error("Failed to create checksums dir", "err", err)
 		// Continue, just won't be able to save checksums
 	}
 
@@ -156,7 +165,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	size, checksum, err := writeUploadFile(path, file)
 	if err != nil {
-		logging.From(r.Context()).Error("Failed to save upload", "filename", safe.LogSafe(filename), "err", err)
+		logging.From(logCtx).Error("Failed to save upload", "filename", safe.LogSafe(filename), "err", err)
 		writeError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
@@ -165,10 +174,10 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
 	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
 		// Non-critical error, just log it
-		logging.From(r.Context()).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
+		logging.From(logCtx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 	}
 
-	logging.From(r.Context()).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", checksum)
+	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", checksum)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
@@ -242,7 +251,7 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Calculate and set checksum header
-	checksum, err := getFileChecksum(h.config.DataDir, filename)
+	checksum, err := getFileChecksum(r.Context(), h.config.DataDir, filename)
 	if err == nil {
 		w.Header().Set("X-Checksum-SHA256", checksum)
 	}
@@ -309,7 +318,7 @@ func calculateFileChecksum(path string) (string, error) {
 
 // getFileChecksum returns the checksum for a file in the temp_uploads directory.
 // It checks for a cached sidecar file first, falling back to calculation if needed.
-func getFileChecksum(dataDir, filename string) (string, error) {
+func getFileChecksum(ctx context.Context, dataDir, filename string) (string, error) {
 	// Security: validate filename to prevent path traversal
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
 		return "", fmt.Errorf("invalid filename: path traversal not allowed")
@@ -344,7 +353,7 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 	if err := os.MkdirAll(checksumDir, 0700); err == nil {
 		// Cache the result for next time
 		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: checksumPath is asserted within checksumDir via withinDir/filepath.Rel above.
-			slog.Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
+			logging.From(ctx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 		}
 	}
 

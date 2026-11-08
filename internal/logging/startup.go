@@ -3,7 +3,6 @@ package logging
 import (
 	"context"
 	"log/slog"
-	"os"
 	"slices"
 	"sync"
 	"time"
@@ -58,7 +57,7 @@ func BufferStartup() {
 // early return (a config error) still shows what was logged; Fatal calls it
 // too.
 func FlushStartup() {
-	h := newJSONHandler(os.Stderr, slog.LevelInfo)
+	h := newJSONHandler(lockedStderr, slog.LevelInfo)
 	if replayStartup(h) {
 		slog.SetDefault(slog.New(h))
 	}

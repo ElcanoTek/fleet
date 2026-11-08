@@ -11,12 +11,14 @@
 // (seal the turn buffer, error the task) via the onPanic callback so a panic
 // surfaces as a contained failure, not a silent swallow.
 //
-// Every recovered panic is emitted as a STRUCTURED JSON event (queryable by a
-// log aggregator) and fanned out to optional legacy and structured hooks. cmd/fleet registers the structured Sentry and
+// Every recovered panic is emitted as a STRUCTURED log event through the
+// process's configured handler (format, redactor, FLEET_LOG_FILE), with a
+// direct-to-stderr JSON fallback if that handler fails, and fanned out to optional legacy and structured hooks. cmd/fleet registers the structured Sentry and
 // panic-events adapters; internal/safe imports neither an SDK nor a database.
 package safe
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -29,8 +31,52 @@ import (
 	"time"
 )
 
-// panicLogger emits recovered panics as structured JSON to stderr.
+// panicLogger emits recovered panics as structured JSON straight to stderr.
+// It is the FAIL-SAFE path only: once logging.Configure has run, panic
+// records go through the configured handler (SetPanicHandler) — its format,
+// its redactor, its file sink — and panicLogger is used when that handler
+// is unset, panics, or returns an error, so a broken log sink can never
+// swallow a recovered panic.
 var panicLogger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+// panicHandler is the process's configured log handler, installed by
+// logging.Configure. internal/logging imports this package's setter rather
+// than this package importing logging, so there is no import cycle.
+var panicHandler atomic.Pointer[slog.Handler]
+
+// SetPanicHandler routes recovered-panic records through h (nil restores the
+// direct-stderr fallback).
+func SetPanicHandler(h slog.Handler) {
+	if h == nil {
+		panicHandler.Store(nil)
+		return
+	}
+	panicHandler.Store(&h)
+}
+
+// logPanic writes one error record through the configured handler, falling
+// back to panicLogger when there is none or it fails.
+func logPanic(msg string, args ...any) {
+	if hp := panicHandler.Load(); hp != nil && handleSafely(*hp, msg, args) {
+		return
+	}
+	panicLogger.Error(msg, args...)
+}
+
+func handleSafely(h slog.Handler, msg string, args []any) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	ctx := context.Background()
+	if !h.Enabled(ctx, slog.LevelError) {
+		return false
+	}
+	r := slog.NewRecord(time.Now(), slog.LevelError, msg, 0)
+	r.Add(args...)
+	return h.Handle(ctx, r) == nil
+}
 
 var (
 	// SentryHook, when set, is invoked for every recovered panic. The value passed
@@ -109,7 +155,7 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 	}
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
-	panicLogger.Error("panic recovered",
+	logPanic("panic recovered",
 		"incident_id", LogSafe(meta.IncidentID),
 		"goroutine", LogSafe(meta.Location),
 		"boundary", LogSafe(meta.Boundary),
@@ -167,7 +213,7 @@ func newIncidentID() string {
 func callReportingHook(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicLogger.Error("panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
+			logPanic("panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
 		}
 	}()
 	fn()

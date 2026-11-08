@@ -460,7 +460,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// the batch path so the two cannot drift. It resolves the creator id, the
 	// authorizing key (for spend attribution), and the username the budget gate
 	// keys user-scope budgets on (#601 part 2).
-	creator, ok := h.authorizeTaskCreator(w, r)
+	creator, r, ok := h.authorizeTaskCreator(w, r)
 	if !ok {
 		return
 	}

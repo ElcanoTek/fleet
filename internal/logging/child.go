@@ -4,18 +4,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"unicode/utf8"
 )
 
 // output is the process log destination Configure set up: stderr, plus the
-// rotating file when the file sink is on. Before Configure it is stderr.
+// rotating file when the file sink is on. Before Configure it is stderr —
+// through the same lock (lockedStderr), never the raw file.
 var (
 	outputMu sync.RWMutex
-	output   io.Writer = os.Stderr
+	output   = lockedStderr
 )
+
+// stderrFile writes to whatever os.Stderr is at the time of the write.
+type stderrFile struct{}
+
+func (stderrFile) Write(p []byte) (int, error) { return os.Stderr.Write(p) }
+
+// lockedStderr is stderr behind the process log lock: what every writer uses
+// when no file sink is configured, and before Configure.
+var lockedStderr io.Writer = newTee(teeSink{name: "stderr", w: stderrFile{}})
 
 func setOutput(w io.Writer) {
 	outputMu.Lock()
@@ -33,12 +45,36 @@ func currentOutput() io.Writer {
 // ChildStderr or StderrLogger holds while it waits for the newline. A child
 // that writes megabytes with no newline (a binary blob, a minified bundle, a
 // runaway progress bar) would otherwise grow the buffer without bound. When
-// the cap is reached the held bytes are emitted as one record marked
-// truncated, and the rest of that line is dropped up to its terminator.
+// the cap is reached the rest of that line is counted and dropped up to its
+// terminator, and the line is emitted then as one truncated record (see
+// truncatedLine for what of it is shown).
 const MaxStderrLine = 64 << 10
 
-// truncatedMarker ends a forwarded line that hit MaxStderrLine.
-const truncatedMarker = " …[truncated]"
+// truncationAllowance is the part of the redaction margin covering the
+// longest shape-pattern secret: a PEM private key block (an 8192-bit RSA key
+// is ~6.4 KB) is the longest the canonical patterns match whole.
+const truncationAllowance = 8 << 10
+
+// truncatedLine renders a line cut at MaxStderrLine (head is its first
+// MaxStderrLine bytes, dropped the bytes discarded after them). It fails
+// closed on the cut: a registered literal or a vendor-shaped key that
+// straddles it is never matched — only its prefix is in head — so that
+// prefix would leak as written. head is redacted whole (so every secret
+// that lies inside it is matched), then a margin as long as the longest
+// registered literal plus truncationAllowance is withheld from its end. Any
+// secret straddling the cut starts inside that margin, so none of it is
+// shown. The marker gives the line's real length.
+func truncatedLine(head []byte, dropped int) string {
+	red := Redact(string(head))
+	keep := len(red) - (redactor().MaxLiteralLen() + truncationAllowance)
+	if keep < 0 {
+		keep = 0
+	}
+	for keep > 0 && !utf8.RuneStart(red[keep]) {
+		keep--
+	}
+	return red[:keep] + fmt.Sprintf(" …[truncated: line was %d bytes]", len(head)+dropped)
+}
 
 // lineSplitter turns a byte stream into lines for emit. A line ends at "\n",
 // "\r\n" or a lone "\r" (a progress bar's carriage-return redraw is a line of
@@ -54,9 +90,12 @@ type lineSplitter struct {
 	mu       sync.Mutex
 	pending  []byte
 	dropping bool // the current line overflowed; discard to its terminator
+	dropped  int  // bytes of the current line discarded past the cap
 	closed   bool
 	failing  bool // the last emit failed; its failure was reported
-	emit     func(line []byte, truncated bool) error
+	// emit receives one line; dropped > 0 marks it truncated (head is then
+	// the first MaxStderrLine bytes, dropped the bytes discarded after them).
+	emit func(line []byte, dropped int) error
 }
 
 func (s *lineSplitter) Write(p []byte) (int, error) {
@@ -90,8 +129,8 @@ func (s *lineSplitter) Write(p []byte) (int, error) {
 
 // send emits one line and keeps the failure state: the first failure of a
 // streak is reported, the rest are silent, a success ends the streak.
-func (s *lineSplitter) send(line []byte, truncated bool) {
-	if err := s.emit(line, truncated); err != nil {
+func (s *lineSplitter) send(line []byte, dropped int) {
+	if err := s.emit(line, dropped); err != nil {
 		if !s.failing {
 			s.failing = true
 			sinkFailed("subprocess stderr forwarder", err)
@@ -101,10 +140,14 @@ func (s *lineSplitter) send(line []byte, truncated bool) {
 	s.failing = false
 }
 
-// appendCapped adds b to the pending line, emitting it as truncated once it
-// reaches MaxStderrLine and dropping the remainder of that line.
+// appendCapped adds b to the pending line up to MaxStderrLine; past the cap
+// it only counts what it drops, and the line goes out truncated at its end.
 func (s *lineSplitter) appendCapped(b []byte) {
-	if s.dropping || s.closed {
+	if s.closed {
+		return
+	}
+	if s.dropping {
+		s.dropped += len(b)
 		return
 	}
 	room := MaxStderrLine - len(s.pending)
@@ -113,20 +156,14 @@ func (s *lineSplitter) appendCapped(b []byte) {
 		return
 	}
 	s.pending = append(s.pending, b[:room]...)
-	s.send(s.pending, true)
-	s.pending = s.pending[:0]
-	s.dropping = true
+	s.dropping, s.dropped = true, len(b)-room
 }
 
 func (s *lineSplitter) endLine() {
-	if s.dropping {
-		s.dropping = false
-		return
-	}
 	if len(s.pending) > 0 && !s.closed {
-		s.send(s.pending, false)
+		s.send(s.pending, s.dropped)
 	}
-	s.pending = s.pending[:0]
+	s.pending, s.dropping, s.dropped = s.pending[:0], false, 0
 }
 
 // Close emits a final unterminated line (a child that died mid-write, or
@@ -139,10 +176,10 @@ func (s *lineSplitter) Close() error {
 	if s.closed {
 		return nil
 	}
-	if len(s.pending) > 0 && !s.dropping {
-		s.send(s.pending, false)
+	if len(s.pending) > 0 {
+		s.send(s.pending, s.dropped)
 	}
-	s.pending, s.dropping, s.closed = nil, false, true
+	s.pending, s.dropping, s.dropped, s.closed = nil, false, 0, true
 	return nil
 }
 
@@ -183,15 +220,14 @@ func ChildStderr() io.WriteCloser {
 	return &lineSplitter{emit: forwardChildLine}
 }
 
-func forwardChildLine(line []byte, truncated bool) error {
+func forwardChildLine(line []byte, dropped int) error {
 	var out []byte
-	if rec, ok := redactJSONRecord(line); !truncated && ok {
+	if dropped > 0 {
+		out = []byte(truncatedLine(line, dropped))
+	} else if rec, ok := redactJSONRecord(line); ok {
 		out = rec
 	} else {
 		out = []byte(Redact(string(line)))
-		if truncated {
-			out = append(out, truncatedMarker...)
-		}
 	}
 	out = append(out, '\n')
 	_, err := currentOutput().Write(out)
@@ -308,12 +344,13 @@ const StderrLineMessage = "subprocess stderr"
 func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
 	attrs = append([]slog.Attr(nil), attrs...)
 	l := &StderrLogger{}
-	l.emit = func(line []byte, truncated bool) error {
+	l.emit = func(line []byte, dropped int) error {
 		rec := make([]slog.Attr, 0, len(attrs)+2)
 		rec = append(rec, attrs...)
-		rec = append(rec, slog.String("line", Redact(string(line))))
-		if truncated {
-			rec = append(rec, slog.Bool("truncated", true))
+		if dropped > 0 {
+			rec = append(rec, slog.String("line", truncatedLine(line, dropped)), slog.Bool("truncated", true))
+		} else {
+			rec = append(rec, slog.String("line", Redact(string(line))))
 		}
 		slog.Default().LogAttrs(context.Background(), slog.LevelInfo, StderrLineMessage, rec...)
 		return nil
@@ -321,14 +358,23 @@ func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
 	return l
 }
 
-// teeWriter is the Configure destination when the file sink is on: every
-// write goes to every sink independently, and a failing sink never fails the
-// write or starves the others. io.MultiWriter stopped at the first error and
-// returned it — to a subprocess-stderr forwarder that was enough to stop the
-// pipe drain. A sink's first failure in a streak is reported (sinkFailed);
-// its lines are dropped until a write to it succeeds again.
+// destMu is THE process log lock. Every path that writes a log line — the
+// default handler, the stdlib-log bridge handler, the startup flush, the
+// panic logger and the ChildStderr forwarder — writes through a teeWriter,
+// and every teeWriter takes this one lock, holding it for the whole record.
+// Each slog handler serialises only its own writes, so without it a parent
+// record and a 64 KiB forwarded child record could interleave mid-line in
+// the journald pipe (a pipe write over PIPE_BUF is not atomic).
+var destMu sync.Mutex
+
+// teeWriter is a log destination: every write goes to every sink, each
+// independently, under destMu, and a failing sink never fails the write or
+// starves the others. io.MultiWriter stopped at the first error and returned
+// it — to a subprocess-stderr forwarder that was enough to stop the pipe
+// drain. A sink's first failure in a streak is reported (sinkFailed); its
+// lines are dropped until a write to it succeeds again. Callers hand it one
+// whole record per Write.
 type teeWriter struct {
-	mu      sync.Mutex
 	sinks   []teeSink
 	failing []bool
 }
@@ -343,8 +389,8 @@ func newTee(sinks ...teeSink) *teeWriter {
 }
 
 func (t *teeWriter) Write(p []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	destMu.Lock()
+	defer destMu.Unlock()
 	for i, s := range t.sinks {
 		_, err := s.w.Write(p)
 		switch {

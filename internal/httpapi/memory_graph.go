@@ -53,7 +53,7 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 	// goroutine here could still be mid-write after shutdown returned or after a
 	// test closed its store.
 	s.background.Go("httpapi.memory_graph_extract", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), memoryGraphExtractBudget)
+		ctx, cancel := context.WithTimeout(detachedCtx(m.UserEmail, "", ""), memoryGraphExtractBudget)
 		defer cancel()
 		g, err := s.memoryGraphExtractor(ctx, content)
 		if err != nil {

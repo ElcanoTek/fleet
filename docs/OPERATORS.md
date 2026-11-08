@@ -738,6 +738,15 @@ Operator notes:
   is reported once with a `logging: a log sink write failed` warning on the
   sinks that still work; its lines are dropped until it recovers. It never
   blocks logging or the broker.
+- Recovered panics (`msg="panic recovered"`) use the same format, redactor and
+  sinks as every other line, so they reach `FLEET_LOG_FILE` too. If that
+  handler itself fails, the panic is still written to stderr as a JSON line.
+- Every record reaches stderr in a single write under one process-wide lock,
+  so a long line forwarded from the broker never interleaves with a parent
+  line in the journald pipe.
+- A subprocess stderr line longer than 64 KiB is cut. The kept part ends
+  early by a safety margin, so a secret that straddles the cut is not shown
+  at all, and the line ends with `…[truncated: line was N bytes]`.
 - A stdio MCP connector's stderr (a Python traceback, a startup banner) is
   logged one line per record — `msg="subprocess stderr"`, the text in `line`,
   the server in `connector` — after secret redaction, at `info`. It is never

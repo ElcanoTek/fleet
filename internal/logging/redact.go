@@ -83,7 +83,8 @@ func Redact(s string) string {
 //     (patterns + registered literals), so a token inside an error message or
 //     a URL is caught even under an innocent key.
 //
-// Groups recurse: slog calls replaceAttr for each member with the group path.
+// Groups recurse: slog calls replaceAttr for each member with the group path,
+// and a member under a secret-named group is treated as secret-keyed.
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) == 0 {
 		switch a.Key {
@@ -99,12 +100,12 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	v := a.Value
 	switch v.Kind() {
 	case slog.KindString:
-		if secretAttrKey(a.Key) {
+		if secretAttrKey(a.Key) || secretGroupPath(groups) {
 			return slog.String(a.Key, redactedValue)
 		}
 		return slog.String(a.Key, Redact(v.String()))
 	case slog.KindAny:
-		if secretAttrKey(a.Key) {
+		if secretAttrKey(a.Key) || secretGroupPath(groups) {
 			return slog.String(a.Key, redactedValue)
 		}
 		switch x := v.Any().(type) {
@@ -249,6 +250,20 @@ var secretKeyMarkers = []string{"secret", "token", "password", "passwd", "apikey
 
 // keySeparators are dropped from a key before it is matched.
 var keySeparators = strings.NewReplacer("-", "", "_", "", ".", "", " ", "")
+
+// secretGroupPath reports a group path with a secret-named element: slog
+// hands replaceAttr only the member ("value" in slog.Group("credentials",
+// "value", v), or under Logger.WithGroup("credentials")), never the group
+// itself, so the group names are checked here. A string-like value under
+// such a group is redacted whole, exactly as under a secret-named key.
+func secretGroupPath(groups []string) bool {
+	for _, g := range groups {
+		if secretAttrKey(g) {
+			return true
+		}
+	}
+	return false
+}
 
 // secretAttrKey reports whether an attribute key names a likely secret.
 func secretAttrKey(key string) bool {

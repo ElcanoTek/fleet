@@ -293,6 +293,15 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 	// card's securityRequirements has no optional entry). Transport-layer
 	// (HTTP) statuses, not JSON-RPC errors, per the binding's auth model.
 	p, ok := h.a2aPrincipal(r)
+	if ok {
+		// Authenticated inline (no middleware): name the principal on the
+		// context so the dispatch's log lines carry user_id.
+		id := bootstrapAdminIdentity
+		if p.apiKey != nil {
+			id = apiKeyIdentity(p.apiKey.KeyID)
+		}
+		r = withAuthIdentity(r, id)
+	}
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "Unauthorized: send a fleet API key in X-API-Key (see /.well-known/agent-card.json securitySchemes)")
 		return
@@ -551,7 +560,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	}
 	task, err := h.createTaskGoverned(r.Context(), creatorFromPrincipal(p), tc)
 	if err != nil {
-		a2aWrite(w, a2aCreateError(req.ID, err))
+		a2aWrite(w, a2aCreateError(r.Context(), req.ID, err))
 		return
 	}
 	logging.From(r.Context()).Info("Task created via A2A", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
@@ -710,7 +719,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 // Postgres error), and its text belongs in the server log, never on the wire
 // to an external caller — the REST path masks it the same way
 // (writeBudgetRefusal's fail-closed 500).
-func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
+func a2aCreateError(ctx context.Context, id json.RawMessage, err error) a2abridge.Response {
 	var refusal *createRefusalError
 	if errors.As(err, &refusal) {
 		if refusal.status == http.StatusBadRequest {
@@ -726,7 +735,7 @@ func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
 		}
 		return a2abridge.NewErrorResponse(id, wire.ErrServerError, exceeded.Error(), meta)
 	}
-	slog.Error("A2A: task create failed (infrastructure)", "err", err)
+	logging.From(ctx).Error("A2A: task create failed (infrastructure)", "err", err)
 	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "task creation failed on the server; try again", nil)
 }
 
