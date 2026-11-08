@@ -36,11 +36,22 @@ Both stores and the identity schema between them live in the one database:
 - **`--db=chat` / `--db=sched`** dump that store's schema **plus `core`**, so
   each per-store dump is self-contained.
 
-`fleet restore --db=all` restores a `fleet-all` dump — all three schemas, in
-one transaction. `--db=chat` / `--db=sched` restore one store from any dump
-that holds it (a `fleet-all` dump, a per-store dump, or an older two-file
-backup's file): chat brings `core` with it (its migrations own it); sched
-restores `sched` only and leaves the accounts as they are.
+Which restores are self-contained:
+
+| restore | restores | self-contained? |
+|---|---|---|
+| `--db=all` from a `fleet-all` dump | `chat`, `core`, `sched`, one transaction | **yes** — the whole fleet, as one snapshot |
+| `--db=chat` | `chat` + `core` (the accounts) | yes for chat; refused when the live `sched` store has task/dataset creators the dump's accounts lack |
+| `--db=sched` | `sched` only; the live accounts are kept | **no** — needs the accounts already in the database: refused when a creator the dump resolved is not an account here (e.g. an empty database) |
+
+`core` belongs to the chat store's migrations (they create it), so a sched
+restore never writes it, even though the sched dump carries it: into an
+empty database, restore chat first (or the whole fleet with `--db=all`),
+then sched. Pass `--allow-unresolved-creators` to restore one store anyway;
+those tasks and datasets then show no creator. An older sched dump (from
+before the one identity table: its accounts in `sched.users`) restores while
+the database has not merged its accounts yet — the scheduler's next start
+merges them — and is refused once it has.
 `fleet restore` reads the dump's table of contents first and establishes its
 schemas from its SCHEMA and TABLE entries; it refuses a dump that does not
 contain the schema the target store uses (the other store's dump, or an old
@@ -137,7 +148,8 @@ target explicitly.
 # A fleet-all dump: chat, core and sched, in one transaction.
 fleet restore --db=all   /var/backups/fleet/fleet-all-20260623T140506Z.dump
 
-# One store (from a fleet-all dump, a per-store dump, or an older two-file backup):
+# One store at a time (from a fleet-all dump, a per-store dump, or an older
+# two-file backup) — chat first, it carries the accounts:
 fleet restore --db=chat  /var/backups/fleet/fleet-chat-20260623T140506Z.dump
 fleet restore --db=sched /var/backups/fleet/fleet-sched-20260623T140506Z.dump
 ```

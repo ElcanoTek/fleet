@@ -177,6 +177,16 @@ func pgDump(ctx context.Context, dsn, outPath string, schemas []string) error {
 //     entry itself is not selected, so the schema is never dropped). The
 //     store's schema is created first if it is missing.
 func runPgRestore(ctx context.Context, dsn, inPath string) error {
+	return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{notes: os.Stderr})
+}
+
+// runPgRestoreWith is runPgRestore with the operator's choices. Besides the
+// schema checks above, a store restore never leaves task or dataset
+// creators naming no account without the operator saying so
+// (backup_identity.go): --db=sched refuses a dump whose creators are not
+// accounts of this database (restore chat first, or --db=all); --db=chat
+// refuses accounts that would orphan live sched creators.
+func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts) error {
 	want := config.DSNSchema(dsn)
 	if want == "" {
 		return fmt.Errorf("pg_restore %s: the DSN names no store schema", redactDSN(dsn))
@@ -197,6 +207,11 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	// -n below: only the store's schema is restored — plus, for the chat
 	// store, the identity schema core its migrations own (#2049 M4).
 	schemas := []string{want}
+	if want == config.SchedSchema {
+		if err := planSchedRestore(ctx, dsn, inPath, slices.Contains(got, config.IdentitySchema), opts); err != nil {
+			return err
+		}
+	}
 	if want == config.ChatSchema {
 		switch hasCore := slices.Contains(got, config.IdentitySchema); {
 		case hasCore:
@@ -212,6 +227,11 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 			}
 			if exists {
 				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
+			}
+		}
+		if slices.Contains(schemas, config.IdentitySchema) && !opts.allowUnresolved {
+			if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+				return err
 			}
 		}
 	}
@@ -512,6 +532,7 @@ func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	db := fs.String("db", "", "what to restore: all (a fleet-all dump) | chat | sched (required)")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
+	allowUnresolved := fs.Bool("allow-unresolved-creators", false, "restore one store even when task/dataset creators would then name no account (default: refuse)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
@@ -552,7 +573,9 @@ func cmdRestore(argv []string) int {
 			return 1
 		}
 	}
-	restore := runPgRestore
+	restore := func(ctx context.Context, dsn, inPath string) error {
+		return runPgRestoreWith(ctx, dsn, inPath, restoreOpts{allowUnresolved: *allowUnresolved, notes: os.Stderr})
+	}
 	if *db == "all" {
 		restore = runPgRestoreAll
 	}
