@@ -729,7 +729,14 @@ Operator notes:
   `log` package are bridged at info and are not gated, since their true
   severity is unknown.
 - The `fleet mcp-broker` child logs in the same format and level, and its lines
-  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
+  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set). A
+  child line that is not a JSON log record (text format, a panic trace) is
+  scrubbed by the parent's redactor before it is written.
+- A stdio MCP connector's stderr (a Python traceback, a startup banner) is
+  logged one line per record — `msg="subprocess stderr"`, the text in `line`,
+  the server in `connector` — after secret redaction, at `info`. It is never
+  copied to the log verbatim. Lines longer than 64 KiB are cut and marked
+  `truncated`.
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.

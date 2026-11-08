@@ -15,11 +15,14 @@ import (
 // an *http.Request), a log line must go through logging.From(ctx) so it
 // carries the request's, turn's or run's correlation ids — a package-level
 // slog.Info/Warn/Error/Debug/Log there drops them (a retry of a task could not
-// be told apart by run_id). Boot, shutdown and other context-free code keeps
-// using slog directly; this only fires where a context is right there.
+// be told apart by run_id). A method whose receiver type holds a context
+// (a field of type context.Context, like scheduledPolicy.runCtx) counts as
+// having one in scope: log through logging.From(recv.thatCtx). Boot, shutdown
+// and other context-free code keeps using slog directly; this only fires
+// where a context is right there.
 func TestNoPackageLevelSlogWhereAContextIsInScope(t *testing.T) {
 	root := filepath.Join("..", "..")
-	var bad []string
+	pkgFiles := map[string][]string{} // directory -> its non-test Go files
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -37,25 +40,37 @@ func TestNoPackageLevelSlogWhereAContextIsInScope(t *testing.T) {
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			bad = append(bad, slogWithContextInScope(t, path)...)
+			pkgFiles[filepath.Dir(path)] = append(pkgFiles[filepath.Dir(path)], path)
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+	bad := make([]string, 0, len(pkgFiles))
+	for _, files := range pkgFiles {
+		bad = append(bad, slogWithContextInScope(t, files)...)
+	}
 	if len(bad) > 0 {
 		t.Fatalf("package-level slog calls where a context is in scope — use logging.From(ctx):\n  %s", strings.Join(bad, "\n  "))
 	}
 }
 
-func slogWithContextInScope(t *testing.T, path string) []string {
+// slogWithContextInScope checks one package's files (they are parsed
+// together so a method in one file sees a context-holding struct declared in
+// another).
+func slogWithContextInScope(t *testing.T, paths []string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	files := make([]*ast.File, 0, len(paths))
+	for _, path := range paths {
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		files = append(files, f)
 	}
+	ctxHolders := contextHoldingTypes(files)
 	var out []string
 	var visit func(n ast.Node, hasCtx bool)
 	visit = func(n ast.Node, hasCtx bool) {
@@ -74,12 +89,69 @@ func slogWithContextInScope(t *testing.T, path string) []string {
 			return true
 		})
 	}
-	for _, d := range f.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
-			visit(fd.Body, takesContext(fd.Type))
+	for _, f := range files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+				visit(fd.Body, takesContext(fd.Type) || ctxHolders[receiverType(fd)])
+			}
 		}
 	}
 	return out
+}
+
+// contextHoldingTypes names the package's struct types with a context.Context
+// field (named or embedded).
+func contextHoldingTypes(files []*ast.File) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				if isContextType(field.Type) {
+					out[ts.Name.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// receiverType is a method's receiver base type name ("" for a function).
+func receiverType(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return ""
+	}
+	typ := fd.Recv.List[0].Type
+	if se, ok := typ.(*ast.StarExpr); ok {
+		typ = se.X
+	}
+	switch x := typ.(type) {
+	case *ast.IndexExpr: // generic receiver T[P]
+		typ = x.X
+	case *ast.IndexListExpr:
+		typ = x.X
+	}
+	if id, ok := typ.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+func isContextType(e ast.Expr) bool {
+	se, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := se.X.(*ast.Ident)
+	return ok && id.Name == "context" && se.Sel.Name == "Context"
 }
 
 func takesContext(ft *ast.FuncType) bool {
@@ -98,7 +170,7 @@ func takesContext(ft *ast.FuncType) bool {
 		}
 		switch typ := p.Type.(type) {
 		case *ast.SelectorExpr:
-			if id, ok := typ.X.(*ast.Ident); ok && id.Name == "context" && typ.Sel.Name == "Context" {
+			if isContextType(typ) {
 				return true
 			}
 		case *ast.StarExpr:

@@ -238,7 +238,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 
 // Start starts the scheduler.
 func (s *Scheduler) Start() {
-	slog.Info("Starting scheduler...")
+	logging.From(s.ctx).Info("Starting scheduler...")
 	s.loopStarted = true
 	go s.runLoop()
 }
@@ -280,7 +280,7 @@ func (s *Scheduler) Stop() {
 	select {
 	case <-settled:
 	case <-time.After(gateDrainTimeout):
-		slog.Info("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
+		logging.From(s.ctx).Info("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
 }
 
@@ -301,16 +301,16 @@ func (s *Scheduler) runLoop() {
 		cleanupC = cleanupTimer.C
 	}
 	if s.retentionDays > 0 {
-		slog.Info("scheduler: run-history retention ON (daily sweep)", "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
+		logging.From(s.ctx).Info("scheduler: run-history retention ON (daily sweep)", "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.archiveAfterDays > 0 {
-		slog.Info("scheduler: log archival ON (daily sweep)", "archive_after_days", s.archiveAfterDays, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
+		logging.From(s.ctx).Info("scheduler: log archival ON (daily sweep)", "archive_after_days", s.archiveAfterDays, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.starvationWindowMin > 0 {
-		slog.Info("scheduler: anti-starvation promotion ON (long-waiting pending tasks are promoted)", "window_min", s.starvationWindowMin, "floor_priority", models.StarvationFloorPriority)
+		logging.From(s.ctx).Info("scheduler: anti-starvation promotion ON (long-waiting pending tasks are promoted)", "window_min", s.starvationWindowMin, "floor_priority", models.StarvationFloorPriority)
 	}
 	if s.pausedExpiryMin > 0 {
-		slog.Info("scheduler: paused-task expiry ON (tasks awaiting input too long are failed)", "expiry_min", s.pausedExpiryMin)
+		logging.From(s.ctx).Info("scheduler: paused-task expiry ON (tasks awaiting input too long are failed)", "expiry_min", s.pausedExpiryMin)
 	}
 
 	for {
@@ -401,7 +401,7 @@ func (s *Scheduler) runStarvationPromotion() {
 		n, err := s.storage.PromoteStarvedTasks(ctx, s.starvationWindowMin)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: promoted starving tasks", "promoted", n, "priority", models.StarvationFloorPriority, "waited_min", s.starvationWindowMin)
+		logging.From(s.ctx).Info("scheduler: promoted starving tasks", "promoted", n, "priority", models.StarvationFloorPriority, "waited_min", s.starvationWindowMin)
 	})
 }
 
@@ -415,7 +415,7 @@ func (s *Scheduler) runPausedExpiry() {
 		n, err := s.storage.ExpirePausedTasks(ctx, s.pausedExpiryMin)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: expired paused tasks awaiting input", "expired", n, "expiry_min", s.pausedExpiryMin)
+		logging.From(s.ctx).Info("scheduler: expired paused tasks awaiting input", "expired", n, "expiry_min", s.pausedExpiryMin)
 	})
 }
 
@@ -428,7 +428,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 		n, err := s.storage.ExpireStrandedWakeTasks(ctx, db.StrandedWakeGrace)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: expired tasks parked awaiting a wake that can no longer arrive", "expired", n, "grace_past_deadline", db.StrandedWakeGrace)
+		logging.From(s.ctx).Info("scheduler: expired tasks parked awaiting a wake that can no longer arrive", "expired", n, "grace_past_deadline", db.StrandedWakeGrace)
 	})
 }
 
@@ -438,7 +438,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 // tasks the sweep is one cheap indexed query.
 func (s *Scheduler) runWakeSweep() {
 	s.sweep("wake sweep", s.storage.WakeDueTasks, func(n int) {
-		slog.Info("scheduler: woke tasks whose wake deadline passed", "woke", n)
+		logging.From(s.ctx).Info("scheduler: woke tasks whose wake deadline passed", "woke", n)
 	})
 }
 
@@ -451,7 +451,7 @@ func (s *Scheduler) runWakeSweep() {
 // probe (idx_tasks_recurrence_unspawned).
 func (s *Scheduler) runRecurrenceReconciliation() {
 	s.sweep("recurrence reconciliation", s.storage.ReconcileRecurrences, func(n int) {
-		slog.Info("scheduler: reconciled recurring schedules whose post-completion spawn never landed", "reconciled", n)
+		logging.From(s.ctx).Info("scheduler: reconciled recurring schedules whose post-completion spawn never landed", "reconciled", n)
 		metrics.RecordRecurrencesReconciled(n)
 	})
 }
@@ -461,7 +461,7 @@ func (s *Scheduler) runCleanup() {
 	s.sweepWithin(dailySweepTimeout, "run-history cleanup", func(ctx context.Context) (int, error) {
 		return s.storage.CleanupOldRuns(ctx, s.retentionDays, s.keepPerTask)
 	}, func(n int) {
-		slog.Info("scheduler: pruned old task runs", "pruned", n, "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask)
+		logging.From(s.ctx).Info("scheduler: pruned old task runs", "pruned", n, "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask)
 		metrics.RecordRunsPruned(n)
 	})
 }
@@ -483,7 +483,7 @@ func (s *Scheduler) runLogArchival() {
 		bytesSaved = saved
 		return n, err
 	}, func(n int) {
-		slog.Info("scheduler: archived task logs", "archived", n, "bytes_saved", bytesSaved, "archive_after_days", s.archiveAfterDays)
+		logging.From(s.ctx).Info("scheduler: archived task logs", "archived", n, "bytes_saved", bytesSaved, "archive_after_days", s.archiveAfterDays)
 		metrics.RecordLogsArchived("ok", n, bytesSaved)
 	})
 }
@@ -554,13 +554,13 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		// accumulates an enormous due set. The next tick (30s) starts over and —
 		// promotions having emptied the front of the due set — reaches the rest.
 		if rowsThisTick >= maxScheduledRowsPerTick {
-			slog.Info("ProcessScheduledTasks: tick row budget reached, deferring the rest to the next tick", "rows", rowsThisTick)
+			logging.From(s.ctx).Info("ProcessScheduledTasks: tick row budget reached, deferring the rest to the next tick", "rows", rowsThisTick)
 			return
 		}
 
 		tasks, err := s.storage.GetScheduledTasks(now, cursorScheduledFor, cursorID, batchSize)
 		if err != nil {
-			slog.Error("Error getting scheduled tasks", "err", err)
+			logging.From(s.ctx).Error("Error getting scheduled tasks", "err", err)
 			return
 		}
 		if len(tasks) == 0 {
@@ -597,26 +597,26 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				deferredGates++
 			}
 		}
-		slog.Info("Processing scheduled tasks", "tasks", len(tasks), "recurring", recurringCount, "gated_dispatched", gatedCount-deferredGates, "gated_deferred", deferredGates)
+		logging.From(s.ctx).Info("Processing scheduled tasks", "tasks", len(tasks), "recurring", recurringCount, "gated_dispatched", gatedCount-deferredGates, "gated_deferred", deferredGates)
 
 		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		if err != nil {
-			slog.Error("Error updating scheduled tasks batch", "err", err)
+			logging.From(s.ctx).Error("Error updating scheduled tasks batch", "err", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
 			// A row that still fails is already behind the cursor, so a persistent
 			// DB error can't re-loop it this tick.
 			for _, taskID := range promoteIDs {
 				n, perr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
 				if perr != nil {
-					slog.Error("Error updating task", "task_id", taskID, "err", perr)
+					logging.From(s.ctx).Error("Error updating task", "task_id", taskID, "err", perr)
 					continue
 				}
 				if n > 0 {
-					slog.Info("Task is now pending", "task_id", taskID)
+					logging.From(s.ctx).Info("Task is now pending", "task_id", taskID)
 				}
 			}
 		} else {
-			slog.Info("Successfully promoted scheduled tasks to pending", "promoted", promoted, "total", len(promoteIDs))
+			logging.From(s.ctx).Info("Successfully promoted scheduled tasks to pending", "promoted", promoted, "total", len(promoteIDs))
 		}
 
 		// A short page means the cursor walked off the end of the due set.
@@ -696,13 +696,13 @@ func (s *Scheduler) evalAndSettleGate(task *models.Task) {
 func (s *Scheduler) promoteGatedTask(task *models.Task) {
 	n, err := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusPending)
 	if err != nil {
-		slog.Error("Error promoting gated task", "task_id", task.ID, "err", err)
+		logging.From(s.ctx).Error("Error promoting gated task", "task_id", task.ID, "err", err)
 		return
 	}
 	if n > 0 {
-		slog.Info("Task passed its run_if gate and is now pending", "task_id", task.ID)
+		logging.From(s.ctx).Info("Task passed its run_if gate and is now pending", "task_id", task.ID)
 	} else {
-		slog.Info("Task changed while its run_if gate ran — stale pass verdict discarded", "task_id", task.ID)
+		logging.From(s.ctx).Info("Task changed while its run_if gate ran — stale pass verdict discarded", "task_id", task.ID)
 	}
 }
 
@@ -803,7 +803,7 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 		computed, err := s.storage.ComputeNextRun(task)
 		switch {
 		case err != nil:
-			slog.Error("Error computing next run for skipped task", "task_id", task.ID, "err", safe.LogSafe(err.Error()))
+			logging.From(s.ctx).Error("Error computing next run for skipped task", "task_id", task.ID, "err", safe.LogSafe(err.Error()))
 		case task.RecurrenceUntil != nil && computed.After(*task.RecurrenceUntil):
 			// The recurrence's end date falls before the next cron tick: there is
 			// no future occurrence to advance to, so cancel the row instead of
@@ -814,11 +814,11 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			n, cerr := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusCancelled)
 			switch {
 			case cerr != nil:
-				slog.Error("Error ending recurrence for skipped task", "task_id", task.ID, "err", cerr)
+				logging.From(s.ctx).Error("Error ending recurrence for skipped task", "task_id", task.ID, "err", cerr)
 			case n > 0:
-				slog.Info("Recurrence for task ended at skip: next tick is past recurrence_until", "task_id", task.ID, "next_tick", computed.Format(time.RFC3339), "recurrence_until", task.RecurrenceUntil.Format(time.RFC3339))
+				logging.From(s.ctx).Info("Recurrence for task ended at skip: next tick is past recurrence_until", "task_id", task.ID, "next_tick", computed.Format(time.RFC3339), "recurrence_until", task.RecurrenceUntil.Format(time.RFC3339))
 			default:
-				slog.Info("Task changed while its run_if gate ran — stale end-of-recurrence verdict discarded", "task_id", task.ID)
+				logging.From(s.ctx).Info("Task changed while its run_if gate ran — stale end-of-recurrence verdict discarded", "task_id", task.ID)
 			}
 			return
 		default:

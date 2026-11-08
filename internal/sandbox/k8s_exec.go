@@ -44,13 +44,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -331,7 +332,7 @@ func (s *k8sExecSession) close() {
 	select {
 	case <-s.done:
 	case <-time.After(bridgeReapTimeout):
-		slog.Warn("sandbox: exec stream did not exit in time after cancel — abandoning the join to keep teardown bounded", "timeout", bridgeReapTimeout)
+		logging.From(s.ctx).Warn("sandbox: exec stream did not exit in time after cancel — abandoning the join to keep teardown bounded", "timeout", bridgeReapTimeout)
 	}
 }
 

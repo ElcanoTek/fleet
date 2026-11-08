@@ -120,7 +120,8 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 // Scalars pass through. Common shapes are walked directly; anything else is
 // round-tripped through JSON (marshal, walk, keep the decoded structure),
 // which is also how the JSON handler would have rendered it. A value that
-// cannot be marshalled is logged as its redacted fmt text, never raw.
+// cannot be marshalled (a cycle, a chan or func field) is logged as a fixed
+// placeholder naming its type, never as its fmt text.
 func redactComposite(v any) any {
 	switch x := v.(type) {
 	case nil:
@@ -184,15 +185,24 @@ func redactComposite(v any) any {
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return Redact(fmt.Sprintf("%+v", v))
+		return unloggable(v)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var walked any
 	if err := dec.Decode(&walked); err != nil {
-		return Redact(fmt.Sprintf("%+v", v))
+		return unloggable(v)
 	}
 	return redactComposite(walked)
+}
+
+// unloggable is what a composite value that cannot be walked logs as: its
+// type only. It fails closed — formatting the raw value with %v and scrubbing
+// the text would apply only the value patterns, skipping the secret-KEY
+// check the walk does, so a struct whose chan or func field (or a cycle)
+// defeats json.Marshal would print its Credential/Token fields verbatim.
+func unloggable(v any) string {
+	return fmt.Sprintf("[unloggable value: %T]", v)
 }
 
 // isNumberOrBool reports a decoded JSON scalar that carries no text, so a

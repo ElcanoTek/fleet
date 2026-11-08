@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -955,7 +954,7 @@ func (p *scheduledPolicy) completionPredicateTool() string {
 // the fleet.completion_predicate event for the tool that satisfied the
 // predicate.
 func (p *scheduledPolicy) recordCompletionPredicate(tool string) {
-	slog.Info("Completion predicate satisfied; skipping the end-of-run verifier and phone-a-friend review", "tool", tool)
+	logging.From(p.runCtx).Info("Completion predicate satisfied; skipping the end-of-run verifier and phone-a-friend review", "tool", tool)
 	t := messageTypeCompletionPredicate
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
 		"[completion_predicate] satisfied by %s — the task's EXECUTION REQUIREMENTS completion clause lists it and it executed successfully, so the end-of-run verifier and the phone-a-friend review were skipped",
