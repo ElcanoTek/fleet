@@ -193,8 +193,10 @@ copies, and drops it in the same transaction:
   — present and future — is covered by one mechanism; it is a no-op while
   the sched table does not exist. On a database the scheduler initialised
   first (no chat schema yet when 077 ran), `fleet serve` installs the same
-  trigger at startup once both schemas exist and removes any schedule
-  orphaned in between (`db.EnsureChatScheduleCascade`). It is created by the
+  trigger once both schemas exist — retried in the background with backoff
+  (5s doubling to 5m) for the life of the process if it fails — and the
+  install removes any schedule orphaned in between
+  (`db.EnsureChatScheduleCascade`, `db.KeepChatScheduleCascade`). It is created by the
   sched side, not a chat migration, so 077's down drops it and a rollback never moves the chat
   schema's version (the previous release refuses a newer chat schema). Account erasure deletes a user's schedules
   the same way (and tolerates a chat-only database, for the chat-only CLI

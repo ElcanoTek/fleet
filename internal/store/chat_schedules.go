@@ -519,7 +519,8 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE chat_input_queue
 			    SET state = 'cancelled', updated_at = $1
-			  WHERE conversation_id = $2 AND state = 'queued' AND client_input_id LIKE $3`,
+			  WHERE conversation_id = $2 AND state = 'queued' AND mode = 'patrol'
+			    AND client_input_id LIKE $3`,
 			nowUnix, convID, ChatPatrolInputKeyPrefix+scheduleID+":%",
 		); err != nil {
 			return nil, err
@@ -695,9 +696,12 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		return stale, nil
 	}
 
+	// Patrol provenance is the server-owned mode, never the caller-supplied
+	// client_input_id alone: a user input that borrows a chat-patrol: key is
+	// not this fire's turn.
 	key := ChatScheduleInputKey(fire)
 	if row, err := scanInputRow(tx.QueryRowContext(ctx,
-		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2`,
+		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2 AND mode = 'patrol'`,
 		fire.ConversationID, key)); err == nil {
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: row.ID}, tx.Commit()
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -710,9 +714,9 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		  WHERE conversation_id = $1
 		    AND user_email = $2
 		    AND state IN ('queued', 'running')
-		    AND (mode = 'patrol' OR client_input_id LIKE $3)
+		    AND mode = 'patrol'
 		  ORDER BY position ASC LIMIT 1`,
-		fire.ConversationID, fire.UserEmail, ChatPatrolInputKeyPrefix+"%",
+		fire.ConversationID, fire.UserEmail,
 	))
 	hasInFlight := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -767,6 +771,19 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 	if !manual {
 		if err := supersedePendingModelSuggestionsTx(ctx, tx, fire.ConversationID, nowUnix); err != nil {
 			return models.ChatScheduleDelivery{}, err
+		}
+	}
+	// Record, with the delivered turn, the slot this fire moves a patrol to.
+	// The settle computes it again; this copy is for 077's down migration,
+	// which must count a delivered-but-unsettled fire the way the old engine
+	// would (it cannot evaluate cron in SQL).
+	if strings.TrimSpace(fire.CronExpr) != "" {
+		if next, nerr := models.NextChatScheduleRun(fire.CronExpr, fire.Timezone, time.Now()); nerr == nil {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE `+chatSchedulesTable+` SET fire_next_run_at = $2 WHERE id = $1`,
+				fire.ScheduleID, next.Unix()); err != nil {
+				return models.ChatScheduleDelivery{}, err
+			}
 		}
 	}
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
@@ -828,10 +845,9 @@ func (s *Store) ListQueuedPatrolConversations(ctx context.Context) ([]string, er
 		`SELECT DISTINCT conversation_id
 		   FROM chat_input_queue
 		  WHERE state = 'queued'
-		    AND (mode = 'patrol' OR client_input_id LIKE $1)
+		    AND mode = 'patrol'
 		  ORDER BY conversation_id ASC
 		  LIMIT 25`,
-		ChatPatrolInputKeyPrefix+"%",
 	)
 	if err != nil {
 		return nil, err

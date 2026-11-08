@@ -50,7 +50,12 @@ BEGIN
                    to_timestamp(q.created_at)
               FROM chat.chat_input_queue q
               JOIN chat_schedules cs ON cs.id = split_part(q.client_input_id, ':', 2)
+                                    AND cs.conversation_id = q.conversation_id
              WHERE q.client_input_id LIKE 'chat-patrol:%'
+               -- Provenance: only server-owned patrol turns, in the schedule's
+               -- own conversation. client_input_id is caller-supplied; a user
+               -- input that borrows a chat-patrol: key is not a fire.
+               AND q.mode = 'patrol'
                AND split_part(q.client_input_id, ':', 3) ~ '^[0-9]{1,9}$'
             ON CONFLICT DO NOTHING;
         END IF;
@@ -59,6 +64,11 @@ BEGIN
     END IF;
 END
 $$;
+
+-- fire_next_run_at: the slot a delivered patrol fire moves the schedule to,
+-- written with the delivery (the settle recomputes it). Only 077's down reads
+-- it, to count a delivered-but-unsettled fire as the old engine would have.
+ALTER TABLE chat_schedules ADD COLUMN IF NOT EXISTS fire_next_run_at BIGINT;
 
 -- A conversation's schedules go with it. conversation_id cannot be a foreign
 -- key across the schemas, so without the chat table's old ON DELETE CASCADE
@@ -75,8 +85,9 @@ $$;
 -- the chat schema beside its trigger and is a no-op if the sched table is
 -- gone. Skipped on a database without chat.conversations — one the scheduler
 -- initialised first (a sched-only CLI verb before any `fleet serve`); there
--- `fleet serve` installs the same trigger at startup once both schemas exist
--- (db.EnsureChatScheduleCascade) and removes schedules orphaned meanwhile.
+-- `fleet serve` installs the same trigger once both schemas exist, retrying
+-- in the background until it succeeds (db.KeepChatScheduleCascade), and
+-- removes schedules orphaned meanwhile.
 DO $$
 BEGIN
     IF to_regclass('chat.conversations') IS NOT NULL THEN

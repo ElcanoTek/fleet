@@ -430,3 +430,43 @@ func TestChatSchedulePauseBetweenDeliveryAndSettle(t *testing.T) {
 		}
 	}
 }
+
+// TestChatScheduleDeliveryTrustsOnlyPatrolMode: patrol provenance is the
+// server-owned mode, not the caller's client_input_id. A user input that
+// borrows a chat-patrol: key neither makes a due fire busy, nor is cancelled
+// when the schedule is paused.
+func TestChatScheduleDeliveryTrustsOnlyPatrolMode(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const user = "trust@elcanotek.com"
+	conv, err := s.CreateConversation(ctx, user, "c", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: user, Prompt: "P", CronExpr: "0 9 * * *"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, _, err := s.EnqueueInput(ctx, InputQueueRow{
+		ID: "forged", ConversationID: conv.ID, UserEmail: user,
+		ClientInputID: ChatPatrolInputKeyPrefix + sc.ID + ":9:s-x", Message: "hi", Attachments: "[]", Mode: InputModeQueued,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forged.Mode == InputModePatrol {
+		t.Fatalf("EnqueueInput made a user input a patrol: %+v", forged)
+	}
+	fired := fireDueChatSchedules(t, s, dsn, time.Unix(sc.NextRunAt+1, 0))
+	if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("fire = %+v; a forged user input must not make the patrol busy", fired)
+	}
+	paused := ChatScheduleStatusPaused
+	if _, err := s.UpdateChatSchedule(ctx, user, conv.ID, sc.ID, ChatSchedulePatch{Status: &paused}); err != nil {
+		t.Fatal(err)
+	}
+	if row := inputByID(t, s, conv.ID, "forged"); row.State != InputStateQueued {
+		t.Fatalf("the user's own input was cancelled by pausing the schedule: %+v", row)
+	}
+}
