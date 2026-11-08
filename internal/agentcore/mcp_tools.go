@@ -895,7 +895,7 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// into provider context and logs. The model receives only an opaque handle;
 	// download_url redeems it inside this process.
 	if !isErr && m.serverName == mcpServerFastIO && m.tool.Name == "download" {
-		resultText = tools.ProtectFastIODownloadURLs(resultText)
+		resultText = tools.ProtectFastIODownloadURLs(ctx, resultText)
 	}
 	// Scrub/screen/cap MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.

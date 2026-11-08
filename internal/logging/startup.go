@@ -187,9 +187,20 @@ func (h *bufferHandler) Handle(ctx context.Context, r slog.Record) error {
 			cur = append(slices.Clone(n.attrs), cur...)
 		}
 	}
+	// A record marked ungated (ungatedAttr: a subprocess's stderr line) is
+	// buffered as a bridged line: replayed through the ungated bridge, which
+	// adds the marker back, not gated by the configured level.
+	bridged := false
+	cur = slices.DeleteFunc(cur, func(a slog.Attr) bool {
+		if isUngatedAttr(a) {
+			bridged = true
+			return true
+		}
+		return false
+	})
 	rec := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 	rec.AddAttrs(cur...)
-	h.buf.add(bufferedRecord{ctx: context.WithoutCancel(ctx), rec: rec})
+	h.buf.add(bufferedRecord{ctx: context.WithoutCancel(ctx), rec: rec, bridged: bridged})
 	return nil
 }
 

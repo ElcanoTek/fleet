@@ -757,7 +757,7 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 	runsBase := agentcore.PerRunMCPWorkspaceBase(root)
 	scope := &sandbox.WorkspaceScope{Dir: dir, Withhold: []string{runsBase}}
 	if !taskCredentialAllowlist(task).DeniesAll() && r.selectionUsesMCPRunDir(r.taskMCPSelection(task)) {
-		runDir, run, err := agentcore.OpenStableMCPWorkspace(taskMCPRunKey(task))
+		runDir, run, err := agentcore.OpenStableMCPWorkspace(ctx, taskMCPRunKey(task))
 		if err != nil {
 			return nil, fmt.Errorf("prepare MCP run dir for the scoped sandbox: %w", err)
 		}
@@ -1243,7 +1243,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// mandatory reconciliation sweep so this run verifies before it re-creates.
 	// Appended to the TASK prompt, never the cached system prefix
 	// (docs/PROMPT-CACHE-CONTRACT.md).
-	prompt = agentcore.AugmentTaskWithCreateReconciliation(prompt, mcpBinding.workdir)
+	prompt = agentcore.AugmentTaskWithCreateReconciliation(ctx, prompt, mcpBinding.workdir)
 	// Outbound A2A recursion guard (#1368): the run's inbound delegation depth
 	// rides the call context down to the a2a peer tools (it survives every
 	// derivation to the transport call), so a task that itself arrived over
@@ -1643,7 +1643,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	if !denyAll {
 		selection = r.taskMCPSelection(task)
 	}
-	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
+	workdir, err := r.prepareTaskMCPWorkspace(ctx, task, selection)
 	if err != nil {
 		return taskMCPBinding{}, err
 	}
@@ -1700,11 +1700,11 @@ func (r *Runner) taskMCPSelection(task *models.Task) agentcore.MCPSelection {
 	return selection
 }
 
-func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.MCPSelection) (string, error) {
+func (r *Runner) prepareTaskMCPWorkspace(ctx context.Context, task *models.Task, selection agentcore.MCPSelection) (string, error) {
 	if !r.selectionUsesMCPRunDir(selection) {
 		return "", nil
 	}
-	return r.stableTaskWorkdir(task)
+	return r.stableTaskWorkdir(ctx, task)
 }
 
 // selectionUsesMCPRunDir reports whether any selected server references
@@ -1752,8 +1752,8 @@ func taskMCPRunKey(task *models.Task) string {
 // The directory sits in the sandbox-writable workspace mount, so staging goes
 // through the os.Root agentcore hands back (no write can leave the run dir)
 // and rebuilds inputs/ from scratch every attempt (see stageTaskInputs).
-func (r *Runner) stableTaskWorkdir(task *models.Task) (string, error) {
-	workdir, run, err := agentcore.OpenStableMCPWorkspace(taskMCPRunKey(task))
+func (r *Runner) stableTaskWorkdir(ctx context.Context, task *models.Task) (string, error) {
+	workdir, run, err := agentcore.OpenStableMCPWorkspace(ctx, taskMCPRunKey(task))
 	if err != nil {
 		return "", err
 	}
@@ -1854,7 +1854,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		base.TaskID = task.ID.String()
 		bases[name] = base
 	}
-	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
+	workdir, err := r.prepareTaskMCPWorkspace(ctx, task, selection)
 	if err != nil {
 		cleanup()
 		return nil, noop, "", nil, err

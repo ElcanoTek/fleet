@@ -21,8 +21,11 @@
 package redact
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,14 +108,17 @@ func (p pattern) mayMatch(s, lower string) bool {
 // literal is one registered secret VALUE in the scan set.
 type literal struct {
 	value string
-	// jsonForm and quotedForm are how value reads inside an encoded log line:
-	// a JSON string (encoding/json, HTML escaping off, as log/slog writes it)
-	// and a Go-quoted logfmt value (strconv.Quote). They equal value unless it
-	// holds a quote, a backslash or a control character. ScrubLine matches
-	// only the form of the line's own encoding, so a literal's raw bytes can
-	// never match the encoding's syntax (a literal `level":"INFO` would
-	// otherwise hit every JSON line).
-	jsonForm, quotedForm string
+	// jsonForms and textForms are how value reads inside an encoded log
+	// line: as log/slog's JSON handler escapes it in a string, and as its text
+	// handler writes it (bare when slog would not quote it, and Go-quoted the
+	// way strconv.Quote escapes it inside a quoted value). Both are produced
+	// by slog's own handlers (encodedForms), never by a hand-picked set of
+	// special characters: U+2028/U+2029, control bytes, invalid UTF-8 and
+	// HTML characters each encode their own way. ScrubLine matches only the
+	// forms of the line's own encoding, so a literal's raw bytes can never
+	// match the encoding's syntax (a literal `level":"INFO` would otherwise
+	// hit every JSON line).
+	jsonForms, textForms []string
 	// permanent marks a literal registered without a scope (a boot-time env
 	// secret); it is never retired.
 	permanent bool
@@ -128,21 +134,63 @@ type literal struct {
 }
 
 func newLiteral(value string) *literal {
-	l := &literal{value: value, jsonForm: value, quotedForm: value}
-	if strings.ContainsFunc(value, func(r rune) bool { return r == '"' || r == '\\' || r < 0x20 || r == 0x7f }) {
-		var buf strings.Builder
-		enc := json.NewEncoder(&buf)
-		enc.SetEscapeHTML(false)
-		if enc.Encode(value) == nil {
-			if js := strings.TrimSuffix(buf.String(), "\n"); len(js) >= 2 {
-				l.jsonForm = js[1 : len(js)-1]
-			}
+	l := &literal{value: value}
+	l.jsonForms, l.textForms = encodedForms(value)
+	return l
+}
+
+// encodedForms returns how value reads inside a log/slog JSON line and a
+// log/slog text line, by encoding it with those very handlers (as a message:
+// keys, group names and values are encoded by the same routine).
+func encodedForms(value string) (jsonForms, textForms []string) {
+	drop := func(groups []string, a slog.Attr) slog.Attr {
+		if len(groups) == 0 && (a.Key == slog.LevelKey || a.Key == slog.TimeKey) {
+			return slog.Attr{}
 		}
-		if q := strconv.Quote(value); len(q) >= 2 {
-			l.quotedForm = q[1 : len(q)-1]
+		return a
+	}
+	encode := func(newHandler func(*strings.Builder) slog.Handler) string {
+		var buf strings.Builder
+		_ = newHandler(&buf).Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelInfo, value, 0))
+		return buf.String()
+	}
+	js := encode(func(b *strings.Builder) slog.Handler {
+		return slog.NewJSONHandler(b, &slog.HandlerOptions{ReplaceAttr: drop})
+	})
+	if f, ok := strings.CutPrefix(js, `{"msg":"`); ok {
+		if f, ok = strings.CutSuffix(f, "\"}\n"); ok {
+			jsonForms = appendForm(jsonForms, f)
 		}
 	}
-	return l
+	if jsonForms == nil {
+		jsonForms = []string{value} // cannot happen; never match nothing
+	}
+	txt := encode(func(b *strings.Builder) slog.Handler {
+		return slog.NewTextHandler(b, &slog.HandlerOptions{ReplaceAttr: drop})
+	})
+	if f, ok := strings.CutPrefix(txt, "msg="); ok {
+		if f, ok = strings.CutSuffix(f, "\n"); ok {
+			// Bare (slog does not quote it), or the inside of slog's quotes.
+			if len(f) >= 2 && f[0] == '"' && f[len(f)-1] == '"' {
+				f = f[1 : len(f)-1]
+			}
+			textForms = appendForm(textForms, f)
+		}
+	}
+	// Inside a LONGER quoted value (one with a space, say) slog quotes the
+	// whole value with strconv.Quote, which escapes the literal's own bytes
+	// the same way wherever they sit.
+	if q := strconv.Quote(value); len(q) >= 2 {
+		textForms = appendForm(textForms, q[1:len(q)-1])
+	}
+	return jsonForms, textForms
+}
+
+func appendForm(forms []string, f string) []string {
+	if f == "" || slices.Contains(forms, f) {
+		return forms
+	}
+	return append(forms, f)
 }
 
 // Redactor applies a prioritized list of patterns + registered literals to a
@@ -243,11 +291,13 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 		if lit.value == "" {
 			continue
 		}
-		form := lit.quotedForm
+		forms := lit.textForms
 		if jsonEncoding {
-			form = lit.jsonForm
+			forms = lit.jsonForms
 		}
-		out = strings.ReplaceAll(out, form, placeholder)
+		for _, form := range forms {
+			out = strings.ReplaceAll(out, form, placeholder)
+		}
 	}
 	r.mu.RUnlock()
 	lower := strings.ToLower(out)

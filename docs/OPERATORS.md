@@ -798,9 +798,10 @@ the finished, encoded line. As a result, the log never contains:
   unless the key is a count (`prompt_tokens`, `token_count`, `…_ms`).
 - **The output of a self-describing type that carries a secret-named field.**
   This covers a `String()`, `Error()`, `MarshalJSON` or `MarshalText` on a
-  type with such a field, exported or not, nested or wrapped, or in a map key
-  (by the key's type or its name). Such a value is
-  walked field by field, or logged as `[unloggable value: <type>]`.
+  type with such a field, exported or not, nested or wrapped, in a map key
+  (by the key's type or its name), or anywhere below it at run time (a
+  struct held in an `any` field or a map). Such a value is walked field by
+  field, or logged as `[unloggable value: <type>]`.
 
 The limit: an unregistered value with no secret-like name and no recognisable
 shape cannot be told apart from ordinary text. That is why fleet registers

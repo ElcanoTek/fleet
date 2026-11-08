@@ -279,8 +279,9 @@ func forwardChildLine(child string, line []byte, dropped int) {
 		if rec, bridged, ok := childRecord(line); ok {
 			rec.AddAttrs(slog.String(childKey, child))
 			if bridged {
-				// The child's stdlib-log bridge wrote it: ungated here as
-				// there (its bridge handler adds StdlibLogKey back).
+				// The child's ungated bridge wrote it (a stdlib log line, a
+				// connector's stderr): ungated here as there (the bridge
+				// handler adds StdlibLogKey back).
 				_ = bridgeLogger.Handler().Handle(ctx, rec)
 				return
 			}
@@ -462,8 +463,12 @@ func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
 		// Not gated by FLEET_LOG_LEVEL, like a child's raw stderr line: a
 		// connector's or the sandbox bridge's stderr is of unknown severity
 		// (a traceback is exactly that), so raising the level must not
-		// erase it. It is labelled info.
+		// erase it. It is labelled info and marked StdlibLogKey=true
+		// (ungatedAttr, which only this package can make): in the MCP broker
+		// child that marker is what keeps the line ungated when the parent
+		// re-logs it (ChildStderr) at its own FLEET_LOG_LEVEL.
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, StderrLineMessage, 0)
+		r.AddAttrs(ungatedAttr())
 		r.AddAttrs(rec...)
 		_ = slog.Default().Handler().Handle(context.Background(), r)
 		return nil

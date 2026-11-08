@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Reserved ${FLEET_WORKSPACE} manifest-env token.
@@ -349,7 +351,10 @@ func SharedMCPWorkspaceDir() string {
 // that dir has no task scoping, so using it would silently mix this task's
 // ledger with every other task's. The error is returned and the run's MCP
 // setup fails loudly instead.
-func OpenStableMCPWorkspace(key string) (string, *os.Root, error) {
+//
+// ctx is the run's: a planted entry removed is logged with its correlation
+// (run_id, task_id).
+func OpenStableMCPWorkspace(ctx context.Context, key string) (string, *os.Root, error) {
 	if err := validateWorkdirKey(key); err != nil {
 		return "", nil, err
 	}
@@ -389,7 +394,7 @@ func OpenStableMCPWorkspace(key string) (string, *os.Root, error) {
 		}
 	}
 	if err == nil {
-		err = removeTopLevelSpecialFiles(run)
+		err = removeTopLevelSpecialFiles(ctx, run)
 	}
 	if err != nil {
 		_ = run.Close()
@@ -421,7 +426,7 @@ func mkdirNoFollow(root *os.Root, name string, perm fs.FileMode) error {
 // sandbox: a symlink to redirect a host-side write (a connector appending its
 // ledger, Fleet staging inputs), or a FIFO/socket/device that would block or
 // misdirect a host-side read such as the start-of-run ledger reconciliation.
-func removeTopLevelSpecialFiles(run *os.Root) error {
+func removeTopLevelSpecialFiles(ctx context.Context, run *os.Root) error {
 	dir, err := run.Open(".")
 	if err != nil {
 		return err
@@ -438,7 +443,7 @@ func removeTopLevelSpecialFiles(run *os.Root) error {
 		if err := run.Remove(e.Name()); err != nil {
 			return fmt.Errorf("remove planted %s %s: %w", e.Type(), e.Name(), err)
 		}
-		slog.Warn("mcp workspace: removed planted entry", "type", e.Type(), "name", e.Name(), "run", run.Name())
+		logging.From(ctx).Warn("mcp workspace: removed planted entry", "type", e.Type(), "name", e.Name(), "run", run.Name())
 	}
 	return nil
 }

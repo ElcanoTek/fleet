@@ -164,7 +164,10 @@ func Configure(cfg Config) (io.Closer, error) {
 // defaults to stderr pre-Configure.
 var bridgeLogger = slog.New(newBridgeHandler("json", lockedStderr))
 
-// StdlibLogKey marks a record the stdlib-log bridge wrote (stdlib_log=true).
+// StdlibLogKey marks a record the ungated bridge wrote (stdlib_log=true): a
+// stdlib log line, a subprocess's stderr line (StderrLogger: a connector's,
+// the sandbox bridge's), a sink-failure report — every record of unknown
+// severity that FLEET_LOG_LEVEL must not erase.
 // It travels with the record across a process boundary: the MCP broker child
 // writes its bridged lines with it, and the parent (ChildStderr) re-logs a
 // child record carrying it through its own ungated bridge, not its gated
@@ -187,11 +190,35 @@ func newBridgeHandler(format string, dest io.Writer) slog.Handler {
 // userReplaceAttr is replaceAttr for every handler but the bridge's: a
 // top-level attribute named StdlibLogKey is renamed (stdlib_log#2), so only
 // the bridge can mark a record as a stdlib line.
+//
+// The one exception is ungatedAttr, a value of a type only this package can
+// make: it is written as StdlibLogKey=true.
 func userReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) == 0 && a.Key == StdlibLogKey {
+		if isUngatedAttr(a) {
+			return slog.Bool(StdlibLogKey, true)
+		}
 		a.Key = StdlibLogKey + "#2"
 	}
 	return replaceAttr(groups, a)
+}
+
+// ungatedMark is the value of ungatedAttr. It is unexported, so no call site
+// outside this package can mark a record ungated.
+type ungatedMark struct{}
+
+// ungatedAttr marks a record of unknown severity that FLEET_LOG_LEVEL must
+// not erase (a subprocess's stderr line) and that a parent re-logging it
+// must keep ungated: this package's handlers write it as StdlibLogKey=true,
+// like the bridge's own records.
+func ungatedAttr() slog.Attr { return slog.Any(StdlibLogKey, ungatedMark{}) }
+
+func isUngatedAttr(a slog.Attr) bool {
+	if a.Key != StdlibLogKey || a.Value.Kind() != slog.KindAny {
+		return false
+	}
+	_, ok := a.Value.Any().(ungatedMark)
+	return ok
 }
 
 // newJSONHandler builds the structured-JSON handler: an slog JSON handler at

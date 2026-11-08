@@ -12,7 +12,7 @@ import (
 // request a workspace.
 func TestEmptyReconciliationWorkdirIsInert(t *testing.T) {
 	const prompt = "Create this week's PG records."
-	if got := agentcore.AugmentTaskWithCreateReconciliation(prompt, ""); got != prompt {
+	if got := agentcore.AugmentTaskWithCreateReconciliation(t.Context(), prompt, ""); got != prompt {
 		t.Errorf("empty workdir must leave the prompt untouched, got:\n%s", got)
 	}
 }

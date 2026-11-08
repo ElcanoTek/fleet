@@ -82,7 +82,7 @@ func TestAugmentTaskWithCreateReconciliation(t *testing.T) {
 					writeLedger(t, workdir, tc.ledger)
 				}
 			}
-			got := AugmentTaskWithCreateReconciliation(task, workdir)
+			got := AugmentTaskWithCreateReconciliation(t.Context(), task, workdir)
 			if !tc.wantBlock {
 				if got != task {
 					t.Fatalf("expected task unchanged, got:\n%s", got)
@@ -127,7 +127,7 @@ func TestCreateReconciliationRefusesSpecialLedger(t *testing.T) {
 			t.Fatal(err)
 		}
 		done := make(chan string, 1)
-		go func() { done <- AugmentTaskWithCreateReconciliation(task, dir) }()
+		go func() { done <- AugmentTaskWithCreateReconciliation(t.Context(), task, dir) }()
 		select {
 		case got := <-done:
 			if got != task {
@@ -147,7 +147,7 @@ func TestCreateReconciliationRefusesSpecialLedger(t *testing.T) {
 		if err := os.Symlink(target, filepath.Join(dir, createLedgerFilename)); err != nil {
 			t.Fatal(err)
 		}
-		if got := AugmentTaskWithCreateReconciliation(task, dir); got != task {
+		if got := AugmentTaskWithCreateReconciliation(t.Context(), task, dir); got != task {
 			t.Fatalf("symlinked ledger must not be followed, got %q", got)
 		}
 	})
@@ -155,7 +155,7 @@ func TestCreateReconciliationRefusesSpecialLedger(t *testing.T) {
 	t.Run("regular file still read", func(t *testing.T) {
 		dir := t.TempDir()
 		writeLedger(t, dir, unresolved)
-		if got := AugmentTaskWithCreateReconciliation(task, dir); !strings.Contains(got, `deal="X"`) {
+		if got := AugmentTaskWithCreateReconciliation(t.Context(), task, dir); !strings.Contains(got, `deal="X"`) {
 			t.Fatalf("regular ledger must still be reconciled, got %q", got)
 		}
 	})

@@ -288,6 +288,10 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 		log.Printf("library diagnostic from the child")
+		// A connector's stderr, as the broker logs it (internal/mcp).
+		connector := NewStderrLogger(slog.String("connector", "acme"))
+		_, _ = connector.Write([]byte("connector traceback from the child\n"))
+		_ = connector.Close()
 		slog.Info("ordinary child info record")
 		slog.Info("spoofed stdlib line", StdlibLogKey, true)
 		os.Exit(0)
@@ -323,7 +327,7 @@ func TestChildStdlibLogSurvivesTheParentsLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
+	var found, connectorFound bool
 	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
 		var m map[string]any
 		if json.Unmarshal(line, &m) != nil {
@@ -332,12 +336,18 @@ func TestChildStdlibLogSurvivesTheParentsLevel(t *testing.T) {
 		switch m["msg"] {
 		case "library diagnostic from the child":
 			found = m["child"] == "mcp-broker" && m[StdlibLogKey] == true
+		case StderrLineMessage:
+			connectorFound = m["child"] == "mcp-broker" && m["connector"] == "acme" &&
+				m["line#2"] == "connector traceback from the child" && m[StdlibLogKey] == true
 		case "ordinary child info record", "spoofed stdlib line":
 			t.Fatalf("a gated child record passed level=error: %s", line)
 		}
 	}
 	if !found {
 		t.Fatalf("the child's stdlib log line did not reach the file at level=error:\n%s", data)
+	}
+	if !connectorFound {
+		t.Fatalf("a connector's stderr logged in the broker did not reach the file at level=error:\n%s", data)
 	}
 }
 
