@@ -45,9 +45,10 @@ are fired by it; the chat server is only the deliverer of a fire.**
   `sched.chat_schedules` (same columns, ids and values) plus the engine's
   lease columns `lease_owner` / `lease_expires_at` and the fire a lease is
   for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), and
-  `sched.chat_schedule_runs`, the run history (one row per settled fire:
-  run number, `schedule`/`manual` trigger, outcome `queued` / `coalesced` /
-  `busy` / `gone`, the input-queue row, due and fire times). Sched migration
+  `sched.chat_schedule_runs`, the run history (one row per fire that ran
+  or was turned away: `schedule`/`manual` trigger, outcome `queued` /
+  `busy` / `gone`, the run number of a queued run, the input-queue row,
+  due and fire times). Sched migration
   076 creates both; 077 **moves** every row from `chat.chat_schedules` in one
   transaction, then drops the chat table.
 - **One scheduler, one tick for chat schedules.** The `Scheduler` owns two
@@ -99,10 +100,15 @@ are fired by it; the chat server is only the deliverer of a fire.**
   refused rather than minting a new fire for the same run; so is a Run now
   while the schedule's patrol turn is still queued or running (of two racing
   Run nows exactly one runs, the other gets `ErrChatScheduleFiring`, a 409).
-- **One run history.** Every fire that did something, scheduled or manual,
-  settles into `sched.chat_schedule_runs` (a counted run with its run number;
-  a busy or gone fire with none, so no row ever claims a number a later run
-  takes), pruned by the scheduler's daily retention sweep under the same
+- **One run history.** `sched.chat_schedule_runs` records the fires that
+  ran (`queued`, with the run's number) and the fires turned away
+  (`busy`: the slot was skipped; `gone`: the conversation was deleted or the
+  owner lost access and the schedule was cancelled), the latter with no run
+  number, so no row ever claims a number a later run takes. A fire that did
+  nothing adds no row: a Run now that coalesces onto a patrol turn already
+  queued or running (answered 409 — the earlier fire's row covers that turn),
+  a Run now refused on a full queue (429), a stale or deferred fire. The
+  history is pruned by the scheduler's daily retention sweep under the same
   policy as task runs (`FLEET_RUN_LOG_RETENTION_DAYS`,
   `FLEET_KEEP_RUNS_PER_TASK`). The migration seeds each schedule's history
   from the patrol turns still in `chat_input_queue`.

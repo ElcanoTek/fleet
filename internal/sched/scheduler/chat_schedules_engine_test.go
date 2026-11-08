@@ -24,9 +24,10 @@ type fakeDeliverer struct {
 	delivered map[string][]string // schedule -> fire ids delivered
 	settled   []string
 	after     func()
-	deferAll  bool // the chat server is draining: every fire is deferred
-	coalesce  bool // a patrol turn is in flight: a manual fire coalesces
-	queueFull bool // the conversation's input queue is full
+	deferAll  bool                     // the chat server is draining: every fire is deferred
+	coalesce  bool                     // a patrol turn is in flight: a manual fire coalesces
+	block     map[string]chan struct{} // delivery to these schedules waits on the channel
+	queueFull bool                     // the conversation's input queue is full
 }
 
 func newFakeDeliverer() *fakeDeliverer {
@@ -46,6 +47,11 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.coalesce && f.Trigger == models.ChatScheduleTriggerManual {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: "in-flight"}, nil
+	}
+	if ch := d.block[f.ScheduleID]; ch != nil {
+		d.mu.Unlock()
+		<-ch
+		d.mu.Lock()
 	}
 	if d.deferAll {
 		d.mu.Unlock()
@@ -156,11 +162,11 @@ func TestChatSchedules_WakeHorizonFollowsTick(t *testing.T) {
 	s := New(nil, "UTC")
 	s.tickInterval = 10 * time.Minute
 	s.WakeChatSchedulesAt(time.Now().Add(6 * time.Minute))
-	if len(s.chatWake) != 1 {
+	if s.takeChatWake().IsZero() {
 		t.Fatal("a wake request within one tick interval was dropped")
 	}
 	s.WakeChatSchedulesAt(time.Now().Add(11 * time.Minute))
-	if len(s.chatWake) != 1 {
+	if !s.takeChatWake().IsZero() {
 		t.Fatal("a wake request beyond the tick interval was kept")
 	}
 }
@@ -255,13 +261,12 @@ func TestChatSchedules_FailedDeliveryArmsRetryWake(t *testing.T) {
 	addChatSchedule(t, s, "bad", "active", time.Now().Add(-time.Minute).Unix())
 	d.fail["bad"] = true
 	s.runChatSchedules()
-	select {
-	case at := <-s.chatWake:
-		if until := time.Until(at); until < 20*time.Second || until > 40*time.Second {
-			t.Fatalf("retry wake in %s, want about the 30s backoff", until)
-		}
-	default:
+	at := s.takeChatWake()
+	if at.IsZero() {
 		t.Fatal("no wake-up armed for the failed fire's retry")
+	}
+	if until := time.Until(at); until < 20*time.Second || until > 40*time.Second {
+		t.Fatalf("retry wake in %s, want about the 30s backoff", until)
 	}
 }
 
@@ -498,5 +503,51 @@ func TestProcessScheduledTasks_LockedRowDoesNotBlockOthers(t *testing.T) {
 	}
 	if took := time.Since(start); took > 3*time.Second {
 		t.Fatalf("Stop took %s", took)
+	}
+}
+
+// TestChatSchedules_EarlyWakeSurvivesABusyLoop: while the chat loop is stuck
+// in a pass, a flood of late wake requests arrives, then one earlier one. The
+// earlier one must not be lost: its schedule fires at its time, long before
+// the next tick (an hour away).
+func TestChatSchedules_EarlyWakeSurvivesABusyLoop(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	release := make(chan struct{})
+	d.block = map[string]chan struct{}{"blocker": release}
+	addChatSchedule(t, s, "blocker", "active", time.Now().Add(-time.Minute).Unix())
+	s.Start()
+	t.Cleanup(s.Stop)
+
+	// The startup pass is now stuck delivering "blocker".
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var leased bool
+		if err := s.storage.DB().Conn().QueryRow(`SELECT lease_owner IS NOT NULL FROM chat_schedules WHERE id = 'blocker'`).Scan(&leased); err != nil {
+			t.Fatal(err)
+		}
+		if leased {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the startup pass never claimed the blocking schedule")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i := 0; i < 100; i++ {
+		s.WakeChatSchedulesAt(time.Now().Add(4 * time.Minute))
+	}
+	due := time.Now().Add(1500 * time.Millisecond)
+	addChatSchedule(t, s, "early", "active", due.Unix())
+	s.WakeChatSchedulesAt(due)
+	close(release)
+
+	deadline = time.Now().Add(10 * time.Second)
+	for d.deliveredTo("early") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d.deliveredTo("early") != 1 {
+		t.Fatal("the early wake was lost behind the late ones; its schedule waits for the next tick")
 	}
 }
