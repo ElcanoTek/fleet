@@ -298,7 +298,7 @@ func TestChildStderrSuppressesAMultiLinePEMBlock(t *testing.T) {
 		"MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu",
 		"NMoSfm76oqFvAp8Gy0iz5sxjZmSnXyCdPEovGhLa0VzMaQ8s+CLOyS56YyCFGeJZ",
 	}
-	block := "key dump: -----BEGIN PRIVATE KEY-----\n" + strings.Join(body, "\n") + "\n-----END PRIVATE KEY-----\nafter the key\n"
+	block := "key dump: -----BEGIN PRIVATE KEY-----\n" + strings.Join(body, "\n") + "\n-----END PRIVATE KEY-----\nafter the key\n" // gitleaks:allow — a FAKE PEM block of random base64, the test fixture for PEM suppression
 	for _, w := range []interface {
 		Write([]byte) (int, error)
 	}{ChildStderr("child"), NewStderrLogger(slog.String("connector", "acme"))} {

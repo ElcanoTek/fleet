@@ -41,7 +41,7 @@ func TestStdioConnectorStderrIsLoggedRedacted(t *testing.T) {
 	slog.SetDefault(slog.New(logging.NewHandler("json", &out, slog.LevelDebug)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	const token = "acme-live-Pq7Wz2Kd9Lm4Xr8T" // matches no shape pattern
+	const token = "acme-live-Pq7Wz2Kd9Lm4Xr8T" // matches no shape pattern; gitleaks:allow — a FAKE test fixture, not a credential
 	shaped := "sk-ant-" + strings.Repeat("D", 32)
 	script := `echo "starting with token $ACME_API_TOKEN" >&2; ` +
 		`printf 'Authorization: Bearer ` + shaped + `\nlast words, no newline' >&2; exit 0`

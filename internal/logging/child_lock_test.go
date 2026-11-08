@@ -86,7 +86,7 @@ func TestConcurrentParentAndChildRecordsStayWhole(t *testing.T) {
 // no 8-byte piece of the secret survives (#2074 review).
 func TestTruncatedLineLeaksNoPrefixOfAStraddlingSecret(t *testing.T) {
 	out := captureOutput(t)
-	const secret = "StraddleOpaqueSecretQ7w2Z9xK4mV8" // matches no shape pattern
+	const secret = "StraddleOpaqueSecretQ7w2Z9xK4mV8" // matches no shape pattern; gitleaks:allow — a FAKE test fixture, not a credential
 	RegisterSecretLiterals("", false, secret)
 	w := ChildStderr("child")
 	line := strings.Repeat("x", MaxStderrLine-12) + secret + " and more after it\n"

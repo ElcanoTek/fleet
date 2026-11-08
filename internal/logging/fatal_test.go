@@ -76,7 +76,7 @@ func TestFatalWithoutBufferUsesTheRedactingHandler(t *testing.T) {
 func TestFatalRedactsAnInvalidDatabaseURLPassword(t *testing.T) {
 	restoreLogging(t)
 	configured.Store(false)
-	const password = "dbOpaquePw4Rt8Yh" // matches no shape pattern
+	const password = "dbOpaquePw4Rt8Yh" // matches no shape pattern; gitleaks:allow — a FAKE test fixture, not a credential
 	dsn := "postgres://fleet:" + password + "@db.internal:notaport/fleet?sslmode=disable"
 	t.Setenv("DATABASE_URL", dsn)
 	BufferStartup()

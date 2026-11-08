@@ -42,7 +42,7 @@ type outer struct {
 // self-marshalling type with no secret field (time.Time) is untouched
 // (#2074 review).
 func TestSelfMarshallingSecretsFailClosed(t *testing.T) {
-	const secret = "marshalSecretPlain-Wq72"
+	const secret = "marshalSecretPlain-Wq72" // gitleaks:allow — a FAKE test fixture, not a credential
 	var buf bytes.Buffer
 	slog.New(NewHandler("json", &buf, slog.LevelDebug)).Info("x",
 		"top", sneakyMarshaler{Name: "a", Credential: secret},
