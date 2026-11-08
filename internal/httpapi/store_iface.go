@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -368,9 +369,9 @@ type chatStore interface {
 	UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (store.ProjectUserState, error)
 	MarkProjectSharedChat(ctx context.Context, convID, email string) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
-	// MigrationStatus reports applied vs pending chat-DB migrations for
-	// GET /admin/migrations (#256). Read-only.
-	MigrationStatus(ctx context.Context) (store.MigrationReport, error)
+	// MigrationStatus reports applied vs pending migrations of the one
+	// sequence (ADR-0107) for GET /admin/migrations (#256). Read-only.
+	MigrationStatus(ctx context.Context) (migrations.Report, error)
 	// Admin-managed LLM providers (migration 034): CRUD for /admin/llm-providers
 	// plus the member-level names+models read for the model picker. Key VALUES
 	// are write-only — no method here ever returns one.

@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
-# scripts/check-migrations.sh — zero-downtime migration linter (#256).
+# scripts/check-migrations.sh — migration linter (#256, #2049 M6).
 #
-# Rejects a small set of DANGEROUS DDL patterns in NEW/CHANGED migration files so
-# a lock-heavy or backward-incompatible change can't merge unnoticed. It is a
-# guardrail, not a full SQL parser: it flags the patterns the migration-safety
-# guide (docs/MIGRATIONS.md) calls out and points at the safe alternative.
+# Checks NEW/CHANGED files of the one migration directory, internal/migrations/sql
+# (docs/MIGRATIONS.md, ADR-0107). It is a guardrail, not a full SQL parser.
 #
-# Flagged in a forward (.up.sql or chat NNN_name.sql) migration:
+# Layout (every file under internal/migrations/sql/):
+#   - sql/legacy/** is frozen: a file added or modified there is refused (its
+#     bytes are what every installed database ran). A pure rename (100%
+#     similar) is not a change and is exempt — the move into this layout was one.
+#   - shipped migrations are append-only: a sql/NNNN_* file that existed at
+#     the base and is modified or renamed is refused, and any file deleted
+#     from (or moved out of) the directory — legacy/ included — is refused
+#     (diff mode).
+#   - a new migration is a pair, sql/NNNN_name.up.sql + sql/NNNN_name.down.sql
+#     (four digits, from 0200, lower-case name): a misnamed or unpaired file is
+#     refused.
+#   - new migrations run with search_path pg_catalog, so every object they name
+#     must carry its schema (chat.x, core.y, sched.z): an unqualified name after
+#     CREATE/ALTER/DROP TABLE|VIEW|SEQUENCE|TYPE|FUNCTION|INDEX, CREATE INDEX/
+#     TRIGGER ... ON, EXECUTE FUNCTION, INSERT INTO, UPDATE ... SET, DELETE FROM,
+#     TRUNCATE or REFERENCES is refused (in .up.sql and .down.sql alike).
+#
+# Dangerous DDL, flagged in a forward (.up.sql) migration:
 #   1. ADD [COLUMN] ... NOT NULL  without a DEFAULT — rewrites the whole table
 #      under an ACCESS EXCLUSIVE lock and rejects existing rows. Checked per
 #      comma-separated column clause, so a mixed `ADD a NOT NULL DEFAULT 0,
@@ -33,7 +48,9 @@
 #
 # Usage:
 #   scripts/check-migrations.sh                 # diff vs the merge-base with origin/main
-#   scripts/check-migrations.sh FILE [FILE...]  # check the named files directly (used by tests)
+#   scripts/check-migrations.sh FILE [FILE...]  # check the named files directly (used by tests;
+#                                               # the layout checks apply to a path containing
+#                                               # internal/migrations/sql/)
 #
 # In CI, set MIGRATION_LINT_BASE to a base ref/SHA to diff against; the script
 # falls back to `git merge-base HEAD origin/main`, and if no base can be resolved
@@ -41,10 +58,8 @@
 # since there is nothing it can reliably diff.
 set -euo pipefail
 
-MIGRATION_GLOBS=(
-  'internal/store/migrations/*.sql'
-  'internal/sched/db/migrations/*.sql'
-)
+# The one migration directory (ADR-0107).
+MIGRATION_DIR='internal/migrations/sql/'
 
 # normalize_sql strips comments and blanks string literals, emitting cleaned SQL
 # on stdout. State (block-comment / string) is tracked so a `--`, `;`, or DDL
@@ -85,8 +100,34 @@ normalize_sql() {
   ' "$1"
 }
 
+# The former migration directories (before ADR-0107) and the one-time move out
+# of them, file by file, into sql/legacy/.
+FORMER_CHAT_DIR='internal/store/migrations/'
+FORMER_SCHED_DIR='internal/sched/db/migrations/'
+
+# is_migration_path PATH — PATH is (or was) a migration file of the build.
+is_migration_path() {
+  [[ "$1" == "$MIGRATION_DIR"* || "$1" == "$FORMER_CHAT_DIR"* || "$1" == "$FORMER_SCHED_DIR"* ]]
+}
+
+# is_m6_move OLD NEW — exactly the M6 move of one file under its own name.
+is_m6_move() {
+  case "$1" in
+    "$FORMER_CHAT_DIR"*) [[ "$2" == "${MIGRATION_DIR}legacy/chat/${1#"$FORMER_CHAT_DIR"}" && "${1#"$FORMER_CHAT_DIR"}" != */* ]] ;;
+    "$FORMER_SCHED_DIR"*) [[ "$2" == "${MIGRATION_DIR}legacy/sched/${1#"$FORMER_SCHED_DIR"}" && "${1#"$FORMER_SCHED_DIR"}" != */* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- Collect the set of files to check -------------------------------------
 files=()
+# Paths (diff mode) whose file existed at the base and was changed or renamed.
+declare -A SHIPPED_CHANGED=()
+# Paths (diff mode) under the migration directory deleted (or moved out).
+DELETED=()
+# Paths (diff mode) added, and the highest sql/NNNN version at the base.
+declare -A ADDED=()
+BASE_MAX=0
 if [ "$#" -gt 0 ]; then
   files=("$@")
 else
@@ -101,13 +142,57 @@ else
     echo "check-migrations: no base ref to diff against (set MIGRATION_LINT_BASE or fetch origin/main); skipping."
     exit 0
   fi
-  # --diff-filter=AM: only added/modified files (a deletion can't introduce DDL).
+  # Added, modified and renamed files under the migration directory. Rename
+  # detection runs over the whole diff (a pathspec would hide the old path and
+  # turn a move into an add): a pure rename (R100) is not a change and is
+  # skipped; a rename with edits is checked as a modified file.
+  while IFS=$'\t' read -r status p1 p2; do
+    [ -n "$status" ] || continue
+    path="$p1"
+    case "$status" in
+      D*)
+        # A migration that ran on a database cannot leave the build: that
+        # database would then refuse to start (a version it does not ship).
+        # The former directories count until every branch has moved.
+        is_migration_path "$p1" && DELETED+=("$p1")
+        continue ;;
+      R*)
+        path="$p2"
+        # The one exemption: the one-time M6 move of a file, byte for byte
+        # and under its own name, from a former migration directory into
+        # sql/legacy/ (ADR-0107). Any other rename of a migration — within
+        # legacy/ included, where the file name is the recorded migration
+        # name — is a change to a shipped file.
+        if [ "$status" = R100 ] && is_m6_move "$p1" "$p2"; then
+          continue
+        fi
+        if is_migration_path "$p1" && [[ "$p2" != "$MIGRATION_DIR"* ]]; then
+          DELETED+=("$p1") # moved out of the directory: gone from the build
+          continue
+        fi ;;
+    esac
+    case "$path" in
+      "$MIGRATION_DIR"*)
+        files+=("$path")
+        # Shipped migrations are append-only: a file that existed at the
+        # base (modified, or renamed away from its shipped name) is refused.
+        case "$status" in
+          A*) ADDED["$path"]=1 ;;
+          M*) SHIPPED_CHANGED["$path"]=1 ;;
+          R*) if is_migration_path "$p1"; then SHIPPED_CHANGED["$path"]=1; else ADDED["$path"]=1; fi ;;
+        esac ;;
+    esac
+  done < <(git diff --name-status -M --diff-filter=AMRD "${base}...HEAD" 2>/dev/null || true)
+  # The highest new-layout version the base ships: an added migration must
+  # come after it (a database at that version would otherwise apply the new
+  # one out of order, behind versions it already has).
   while IFS= read -r f; do
-    [ -n "$f" ] && files+=("$f")
-  done < <(git diff --name-only --diff-filter=AM "${base}...HEAD" -- "${MIGRATION_GLOBS[@]}" 2>/dev/null || true)
+    f="${f##*/}"
+    [[ "$f" =~ ^([0-9]{4})_ ]] && (( 10#${BASH_REMATCH[1]} > BASE_MAX )) && BASE_MAX=$((10#${BASH_REMATCH[1]}))
+  done < <(git ls-tree -r --name-only "$base" -- "$MIGRATION_DIR" 2>/dev/null | grep -v "^${MIGRATION_DIR}legacy/" || true)
 fi
 
-if [ "${#files[@]}" -eq 0 ]; then
+if [ "${#files[@]}" -eq 0 ] && [ "${#DELETED[@]}" -eq 0 ]; then
   echo "check-migrations: no changed migration files to check."
   exit 0
 fi
@@ -124,8 +209,94 @@ emit() { # <message>
   violations=$((violations + 1))
 }
 
+# layout_checks FILE — the one-directory rules for a file under
+# internal/migrations/sql/ (see the header). Prints nothing for other paths.
+layout_checks() {
+  local f="$1" rel base stem other
+  case "$f" in
+    "$MIGRATION_DIR"*) rel="${f#"$MIGRATION_DIR"}" ;;
+    */"$MIGRATION_DIR"*) rel="${f#*/"$MIGRATION_DIR"}" ;;
+    *) return 0 ;;
+  esac
+  case "$rel" in
+    legacy/*)
+      emit "legacy migrations are frozen: add a new sql/NNNN_name.up.sql + .down.sql instead of adding or editing a file under sql/legacy/"
+      return 0 ;;
+    */*)
+      emit "new migrations live directly in internal/migrations/sql/ (no subdirectories)"
+      return 0 ;;
+  esac
+  base="$rel"
+  case "$base" in
+    *.sql) ;;
+    *) return 0 ;;
+  esac
+  if [[ -n "${SHIPPED_CHANGED[$f]:-}" ]]; then
+    emit "shipped migrations are append-only: this file existed at the base and was edited or renamed — restore it and add a new sql/NNNN_name.up.sql + .down.sql instead"
+  fi
+  if ! [[ "$base" =~ ^([0-9]{4})_[a-z0-9_]+\.(up|down)\.sql$ ]]; then
+    emit "migration file name must be NNNN_name.up.sql / NNNN_name.down.sql (four digits, lower-case name)"
+    return 0
+  fi
+  if (( 10#${BASH_REMATCH[1]} < 200 )); then
+    emit "new migrations start at version 0200 (1–199 are the legacy chat and sched files)"
+  fi
+  if [[ -n "${ADDED[$f]:-}" ]] && (( 10#${BASH_REMATCH[1]} <= BASE_MAX )); then
+    emit "a new migration must come after the last shipped one (version $(printf '%04d' "$BASE_MAX")): a database already past it would apply this one out of order"
+  fi
+  stem="${f%.*.sql}"
+  case "$base" in
+    *.up.sql) other="${stem}.down.sql" ;;
+    *) other="${stem}.up.sql" ;;
+  esac
+  if [ ! -f "$other" ]; then
+    emit "every migration ships both halves: ${other##*/} is missing"
+  fi
+  unqualified_names "$f"
+}
+
+# unqualified_names FILE — names a new migration uses without a schema.
+unqualified_names() {
+  local cleaned stmts names n
+  cleaned="$(normalize_sql "$1")"
+  stmts="$(printf '%s' "$cleaned" | tr '\n' ' ' | tr ';' '\n')"
+  local id='["[:alnum:]_.]+'
+  local s='[[:space:]]+'
+  names="$(
+    {
+      printf '%s\n' "$stmts" | grep -oiE "CREATE${s}((GLOBAL|LOCAL)${s})?((TEMP|TEMPORARY|UNLOGGED)${s})?TABLE${s}(IF${s}NOT${s}EXISTS${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "CREATE${s}(OR${s}REPLACE${s})?(FUNCTION|PROCEDURE|VIEW|MATERIALIZED${s}VIEW|SEQUENCE|TYPE)${s}(IF${s}NOT${s}EXISTS${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "ALTER${s}(TABLE|VIEW|MATERIALIZED${s}VIEW|SEQUENCE|TYPE|FUNCTION|PROCEDURE|INDEX)${s}(IF${s}EXISTS${s})?(ONLY${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "DROP${s}(TABLE|VIEW|MATERIALIZED${s}VIEW|SEQUENCE|TYPE|FUNCTION|PROCEDURE|INDEX)${s}(IF${s}EXISTS${s})?${id}"
+      printf '%s\n' "$stmts" | grep -iE "CREATE${s}(UNIQUE${s})?INDEX|CREATE${s}(OR${s}REPLACE${s})?(CONSTRAINT${s})?TRIGGER" \
+        | grep -oiE "${s}ON${s}(ONLY${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "EXECUTE${s}(FUNCTION|PROCEDURE)${s}${id}"
+      printf '%s\n' "$stmts" | grep -oiE "INSERT${s}INTO${s}${id}"
+      printf '%s\n' "$stmts" | grep -oiE "UPDATE${s}(ONLY${s})?${id}${s}SET" | awk '{print $(NF-1)}'
+      printf '%s\n' "$stmts" | grep -oiE "DELETE${s}FROM${s}(ONLY${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "TRUNCATE${s}(TABLE${s})?(ONLY${s})?${id}"
+      printf '%s\n' "$stmts" | grep -oiE "REFERENCES${s}${id}"
+    } | awk '{print $NF}' | grep -v '\.' | sort -u
+  )" || true
+  for n in $names; do
+    emit "unqualified name ${n} (new migrations run with search_path pg_catalog: write chat.${n}, core.${n} or sched.${n})"
+  done
+}
+
+for f in "${DELETED[@]}"; do
+  current_file="$f"
+  file_hit=0
+  emit "a migration may not be deleted (or moved out of internal/migrations/sql): a database that ran it would refuse to start — shipped migrations are append-only"
+done
+
 for f in "${files[@]}"; do
-  # Only forward migrations; down-migrations are reversals and expected to drop.
+  [ -f "$f" ] || [[ "$f" == *"$MIGRATION_DIR"legacy/* ]] || continue
+  current_file="$f"
+  file_hit=0
+  layout_checks "$f"
+
+  # Dangerous DDL: only forward migrations; down-migrations are reversals and
+  # expected to drop.
   case "$f" in
     *.down.sql) continue ;;
     *.sql) ;;
@@ -140,9 +311,6 @@ for f in "${files[@]}"; do
     echo "  [skip] $f — dangerous DDL explicitly allowed via migration-lint directive"
     continue
   fi
-
-  current_file="$f"
-  file_hit=0
 
   # One SQL statement per line: comments stripped + string literals blanked (so
   # a `;` inside a string can't split a statement), then split on ';'.
@@ -181,11 +349,11 @@ done
 
 if [ "$violations" -gt 0 ]; then
   echo ""
-  echo "check-migrations: $violations dangerous DDL pattern(s) found."
+  echo "check-migrations: $violations problem(s) found."
   echo "See docs/MIGRATIONS.md for the safe zero-downtime alternative, or add a"
   echo "  -- migration-lint: allow-dangerous <justification>"
   echo "comment line to the file if the pattern is intentional and reviewed."
   exit 1
 fi
 
-echo "check-migrations: ${#files[@]} migration file(s) checked, no dangerous DDL found."
+echo "check-migrations: ${#files[@]} migration file(s) checked, no problem found."

@@ -62,25 +62,24 @@ gets the store's schema, whatever database it names (a DR host, a restored
 copy). So a flag can never land a verb in the other store, or in `public`
 unless it says so.
 
-Each migration runner first calls `internal/dbschema.Ensure`, which creates
-the connection's schema under a transaction advisory lock (Postgres reports
-`current_schema()` as NULL until it exists, and `CREATE SCHEMA IF NOT EXISTS`
-races). It refuses one shape: a store schema in a database whose `public` schema
-holds a fleet store — `DATABASE_URL` pointed at a database of the removed
-two-database layout — because empty new schemas would boot an apparently
-empty fleet over that data. The check is one catalog query per store open and
-stays as a backstop after phase 2. A DSN that names no store schema (the
-stores' own single-store test templates) is left in `public`: `Ensure` does
-nothing.
+The migration runner (one since M6, `internal/migrations`, ADR-0107) first
+calls `internal/dbschema.Ensure`, which creates the schemas `chat`, `core` and
+`sched` that do not exist yet, each under a transaction advisory lock (`CREATE
+SCHEMA IF NOT EXISTS` races). It refuses one shape first: a database whose
+`public` schema holds a fleet store — `DATABASE_URL` pointed at a database of
+the removed two-database layout — because empty new schemas would boot an
+apparently empty fleet over that data. The check runs whenever the runner has
+work (a current database is one read of the ledger, which a legacy database
+does not have) and stays as a backstop after phase 2.
 
-Verified, not assumed: neither migration set uses an extension or a
-schema-qualified name, and `gen_random_uuid` is in `pg_catalog`, which
-Postgres searches first whatever the `search_path`.
-`TestBothStoresInOneDatabase` (`internal/dbschema`) runs both stores' real
-migrations into one scratch database from one DSN, creates a user in each
-store's `users` table under the same name, checks every table landed in its
-store's schema (nothing in `public`, each `schema_migrations` in its runner's
-shape), and reopens both with no migration to run.
+Verified, not assumed: no legacy migration uses an extension, and
+`gen_random_uuid` is in `pg_catalog`, which Postgres searches first whatever
+the `search_path`. Legacy migrations run with their store's schema as the
+transaction's `search_path`; new ones name every object with its schema.
+`TestBothStoresInOneDatabase` (`internal/dbschema`) opens both stores on one
+scratch database from one DSN, creates a user in the one identity table, checks
+every table landed in its store's schema (nothing in `public`, one ledger in
+`core`), and reopens both with no migration to run.
 
 `EnsureDistinctDatabases` became `EnsureDistinctStores`: what it refuses is
 two DSNs that would put both stores in the **same schema**. `ResolveDSNs`
@@ -221,7 +220,11 @@ the same issue, each updating this note:
 one role vocabulary; the shadow sync and the identity seams are gone. The
 chat store's backup carries schema `core` (`pg_dump -n chat -n core`).
 
-Still to come:
+**M5 — one scheduler** (ADR-0104): chat patrols and timers run on the sched
+engine.
 
-1. **M5 — one scheduler:** chat patrols run on the sched engine.
-2. **One migration runner** and one migration layout.
+**M6 — one migration runner** ([MIGRATIONS.md](MIGRATIONS.md), ADR-0107): one
+runner (`internal/migrations`), one directory (`internal/migrations/sql`, the
+legacy files frozen under `legacy/chat` and `legacy/sched`) and one ledger,
+`core.schema_versions`, which adopts the two per-store ledgers on the first
+start.

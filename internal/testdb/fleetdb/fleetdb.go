@@ -4,8 +4,8 @@
 // scheduler in schema sched — and opens the stores on it.
 //
 // It imports both stores, so their own internal tests (package store,
-// package db under internal/sched/db) cannot use it; they clone single-store
-// templates through internal/testdb directly. Everything else uses this —
+// package db under internal/sched/db) cannot use it; they clone the same
+// template through internal/testdb/onedb. Everything else uses this —
 // internal/sched/storage too: fleetdb deliberately does not import it, so its
 // tests can (wrap SchedDB with storage.SetDatabase).
 //
@@ -18,37 +18,18 @@ package fleetdb
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/onedb"
 )
 
-// spec is the one-database template: both stores migrated through their own
-// runners, each on its schema's DSN, exactly as `fleet serve` does on a
+// spec is the one-database template (internal/testdb/onedb): the whole
+// database migrated by the one runner, exactly as `fleet serve` does on a
 // fresh DATABASE_URL.
-var spec = testdb.Spec{
-	Name: "fleet",
-	Fingerprint: func() string {
-		return "chat:" + store.MigrationFingerprint() + " sched:" + scheddb.MigrationFingerprint()
-	},
-	Migrate: func(_ context.Context, dsn string) error {
-		chat, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
-		if err != nil {
-			return err
-		}
-		if err := chat.Close(); err != nil {
-			return err
-		}
-		sched := scheddb.New()
-		if err := sched.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
-			return err
-		}
-		return sched.Close()
-	},
-}
+var spec = onedb.Spec
 
 // DB is one test's database.
 type DB struct {

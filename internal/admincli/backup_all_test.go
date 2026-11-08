@@ -95,14 +95,6 @@ func TestBackupAllIsOneSnapshot(t *testing.T) {
 		t.Fatalf("a refused restore changed sched: %q", got)
 	}
 
-	// One store out of the all dump: chat brings core, leaves sched alone.
-	if err := runPgRestore(ctx, dstChat, allDump); err != nil {
-		t.Fatalf("restore --db=chat from the all dump: %v", err)
-	}
-	if got := read(`SELECT note FROM chat.sentinel`) + "|" + read(`SELECT email FROM core.users`) + "|" + read(`SELECT created_by FROM sched.tasks`); got != "chat-ok|ops@x.com|live" {
-		t.Fatalf("after --db=chat from the all dump: %q", got)
-	}
-
 	// The whole fleet, in one go.
 	if err := runPgRestoreAll(ctx, dstChat, allDump); err != nil {
 		t.Fatalf("restore --db=all: %v", err)

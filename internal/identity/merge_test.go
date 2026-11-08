@@ -14,6 +14,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -35,36 +36,48 @@ func scratchDatabase(t *testing.T) string {
 // does nothing; the test seeds both tables, then migrates the chat store and
 // runs the merge itself.
 type legacy struct {
-	t     *testing.T
-	dsn   string
-	raw   *sql.DB
-	chat  *store.Store
-	sched *scheddb.Database
+	t    *testing.T
+	dsn  string
+	raw  *sql.DB
+	chat *store.Store
 }
 
 func newLegacy(t *testing.T) *legacy {
 	t.Helper()
 	dsn := scratchDatabase(t)
 	l := &legacy{t: t, dsn: dsn}
-	sd := &scheddb.Database{}
-	if err := sd.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
-		t.Fatalf("open sched: %v", err)
-	}
-	if m := sd.IdentityMerge(); m.Ready || m.Ran {
-		t.Fatalf("merge ran before the chat store existed: %+v", m)
-	}
-	t.Cleanup(func() { _ = sd.Close() })
-	l.sched = sd
 	raw, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = raw.Close() })
 	l.raw = raw
+	// The database as the release before the merge left it: every migration
+	// applied (#2049 M6: one runner), the scheduler's legacy users table still
+	// in place, the merge not run (it runs at the scheduler's open, which
+	// these tests stand in for with merge()).
+	if err := migrations.Up(context.Background(), raw); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var merged bool
+	if err := raw.QueryRow(`SELECT EXISTS (SELECT 1 FROM core.identity_merge)`).Scan(&merged); err != nil || merged {
+		t.Fatalf("merge ran before the test seeded the legacy accounts: %v, %v", merged, err)
+	}
 	return l
 }
 
-// schedUser inserts a legacy Operations Center account.
+// openSched opens the scheduler store (after the test's merge: its own
+// open-time merge is then one read), closed when the test ends.
+func (l *legacy) openSched() *scheddb.Database {
+	l.t.Helper()
+	sd := &scheddb.Database{}
+	if err := sd.Init(config.WithSchema(l.dsn, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
+		l.t.Fatalf("open sched: %v", err)
+	}
+	l.t.Cleanup(func() { _ = sd.Close() })
+	return sd
+}
+
 func (l *legacy) schedUser(id uuid.UUID, username, role string, enabled bool) {
 	l.t.Helper()
 	if _, err := l.raw.Exec(`INSERT INTO sched.users (id, username, password_hash, role, created_at, enabled, last_login)
@@ -148,8 +161,8 @@ func TestMergeMapsEveryState(t *testing.T) {
 	// A task created by the merged client, and one by an account deleted
 	// before this release (its row long gone).
 	for _, by := range []uuid.UUID{ids["client"], uuid.New()} {
-		creator := by
-		if err := l.sched.AddTask(context.Background(), &models.Task{ID: uuid.New(), Prompt: "p", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), CreatedBy: &creator}); err != nil {
+		if _, err := l.raw.Exec(`INSERT INTO sched.tasks (id, prompt, priority, status, created_at, created_by)
+			VALUES ($1, 'p', 0, $2, now(), $3)`, uuid.New(), string(models.TaskStatusPending), by); err != nil {
 			t.Fatalf("seed task: %v", err)
 		}
 	}

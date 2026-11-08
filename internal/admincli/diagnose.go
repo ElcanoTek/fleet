@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
@@ -267,57 +269,65 @@ func configEnvNames(processEnv, fileEnv []string) []string {
 	return names
 }
 
-// collectDB reports the migration version of both databases via READ-ONLY SQL
-// against the same `schema_migrations` table each migration system maintains
-// (chat: MAX(version); sched: the single golang-migrate-format version + dirty row). It
-// opens a bare pgx connection — it never runs migrations and never writes — and
-// echoes only the host of the DSN (userinfo stripped by redactDSN), never the
-// password.
+// collectDB reports the one migration ledger (core.schema_versions, #2049
+// M6) via READ-ONLY SQL: the current version, applied and pending counts,
+// whether the database has adopted the one ledger yet (and, before it has,
+// what the two legacy ledgers record). It opens a bare pgx connection — it
+// never runs migrations and never writes — and echoes only the host of the DSN
+// (userinfo stripped by redactDSN), never the password.
 func (dc *diagnoseCollector) collectDB(ctx context.Context) string {
 	var sb strings.Builder
-	sb.WriteString("# database migration versions (read-only; no migrations run, no secrets)\n\n")
-	sb.WriteString(dc.dbVersion(ctx, "chat", dc.chatURL, chatDSN, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"))
+	sb.WriteString("# database migration version (read-only; no migrations run, no secrets)\n\n")
+	sb.WriteString(migrationSummary(ctx, dc.chatURL))
 	sb.WriteString("\n")
-	sb.WriteString(dc.dbVersion(ctx, "sched", dc.schedURL, schedDSN, "SELECT version, dirty FROM schema_migrations LIMIT 1"))
 	return sb.String()
 }
 
-// dbVersion runs query against the named DB and renders a one-line version
-// summary. chat returns a single version int; sched (golang-migrate format) returns
-// (version, dirty). The query is detected by its column count so one helper serves
-// both. Any failure (DSN unresolved, DB unreachable, table absent) becomes an
-// "ERROR" line, never a fatal — a box with one DB down still yields a bundle.
-func (dc *diagnoseCollector) dbVersion(ctx context.Context, label, flagURL string, resolve func(string) (string, error), query string) string {
-	dsn, err := resolve(flagURL)
+// migrationSummary is one line about the one migration ledger. Any failure
+// (DSN unresolved, DB unreachable) becomes an "ERROR" line, never a fatal —
+// a box with its database down still yields a bundle.
+func migrationSummary(ctx context.Context, flagURL string) string {
+	dsn, err := chatDSN(flagURL)
 	if err != nil {
-		return fmt.Sprintf("%s: ERROR DSN unresolved: %v", label, err)
+		return fmt.Sprintf("migrations: ERROR DSN unresolved: %v", err)
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return fmt.Sprintf("%s: ERROR open: %v (dsn=%s)", label, err, redactDSN(dsn))
+		return fmt.Sprintf("migrations: ERROR open: %v (dsn=%s)", err, redactDSN(dsn))
 	}
 	defer func() { _ = db.Close() }()
 	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	rep, err := migrations.Status(qctx, db)
+	if err != nil {
+		return fmt.Sprintf("migrations: ERROR %v (dsn=%s)", err, redactDSN(dsn))
+	}
+	return describeMigrationReport(rep) + " [" + redactDSN(dsn) + "]"
+}
 
-	cols := strings.Count(query, ",") + 1
-	if cols == 2 {
-		var version uint64
-		var dirty bool
-		if err := db.QueryRowContext(qctx, query).Scan(&version, &dirty); err != nil {
-			return fmt.Sprintf("%s: ERROR query: %v (dsn=%s)", label, err, redactDSN(dsn))
-		}
-		state := "clean"
-		if dirty {
-			state = "DIRTY (a migration failed mid-run)"
-		}
-		return fmt.Sprintf("%s: migration version %d (%s) [%s]", label, version, state, redactDSN(dsn))
+// describeMigrationReport renders a report on one line for diagnose and
+// status.
+func describeMigrationReport(rep migrations.Report) string {
+	cur := "none"
+	if rep.CurrentVersion != nil {
+		cur = strconv.Itoa(*rep.CurrentVersion)
 	}
-	var version uint64
-	if err := db.QueryRowContext(qctx, query).Scan(&version); err != nil {
-		return fmt.Sprintf("%s: ERROR query: %v (dsn=%s)", label, err, redactDSN(dsn))
+	state := "clean"
+	switch {
+	case rep.Problem != "":
+		state = "REFUSED: " + rep.Problem
+	case len(rep.Unknown) > 0:
+		state = fmt.Sprintf("REFUSED: version(s) %s are not shipped by this build (a newer fleet migrated the database)", infoVersions(rep.Unknown))
+	case len(rep.Mismatched) > 0:
+		state = fmt.Sprintf("REFUSED: version(s) %s were recorded from a different file than this build ships (an edited migration; docs/MIGRATIONS.md)", infoVersions(rep.Mismatched))
+	case rep.Dirty:
+		state = "DIRTY (a migration was left half-applied: fleet migrate force)"
 	}
-	return fmt.Sprintf("%s: migration version %d [%s]", label, version, redactDSN(dsn))
+	adopted := "adopted (" + rep.MigrationTable + ")"
+	if !rep.Adopted {
+		adopted = "NOT adopted yet — the next fleet start moves the legacy ledgers into " + rep.MigrationTable + " (" + rep.Legacy + ")"
+	}
+	return fmt.Sprintf("migrations: version %s, %d applied, %d pending, %s; %s", cur, len(rep.Applied), len(rep.Pending), state, adopted)
 }
 
 // collectSandbox records the resolved sandbox image ref the running process would
@@ -382,6 +392,7 @@ func captureHealth(ctx context.Context, chatURL, schedURL, bundleDir, service st
 	checkEnv(r)
 	checkDB(r, "chat database", chatURL, chatDSN)
 	checkDB(r, "sched database", schedURL, schedDSN)
+	checkMigrations(r, chatURL)
 	checkActiveWork(r, serviceName(service), schedURL, chatURL, true)
 	if skipSandbox {
 		r.skip("sandbox image", "skipped (--no-sandbox)")
@@ -394,4 +405,13 @@ func captureHealth(ctx context.Context, chatURL, schedURL, bundleDir, service st
 
 	_ = ctx // checks use their own short per-call timeouts; ctx reserved for parity with other collectors.
 	return buf.String()
+}
+
+// infoVersions lists the versions of a report's rows ("201, 202").
+func infoVersions(is []migrations.Info) string {
+	parts := make([]string, len(is))
+	for i, x := range is {
+		parts[i] = strconv.Itoa(x.Version)
+	}
+	return strings.Join(parts, ", ")
 }

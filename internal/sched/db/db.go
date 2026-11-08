@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/dbtrace"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -121,7 +122,10 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	if err := RunMigrations(db.conn); err != nil {
+	// The one migration runner (ADR-0107): every store open migrates the
+	// whole database (one read when it is current); the identity merge is the
+	// post-migration step that needs both stores migrated.
+	if err := migrations.Up(context.Background(), db.conn); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 	if err := db.mergeIdentities(context.Background()); err != nil {
@@ -133,9 +137,8 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 
 // mergeIdentities folds the scheduler's legacy users table into the one
 // identity table once both stores are migrated (identity.MergeLegacySchedUsers,
-// #2049 M4). Every open tries; after the first success it is one read. When the
-// chat store has not created core.users yet (a scheduler-only verb on a fresh
-// database) it does nothing and a later open merges. A failed merge fails the
+// #2049 M4). Every open tries; after the first success it is one read. It runs
+// after migrations.Up, which has migrated chat, core and sched alike. A failed merge fails the
 // open: the Operations Center must not run on half an identity table.
 func (db *Database) mergeIdentities(ctx context.Context) error {
 	schema, err := dbschema.Configured(ctx, db.conn)

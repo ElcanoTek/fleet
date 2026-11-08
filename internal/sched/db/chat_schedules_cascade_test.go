@@ -18,28 +18,27 @@ import (
 func openBoth(t *testing.T, schedFirst bool) (*Database, *store.Store) {
 	t.Helper()
 	base := testdb.Empty(t)
-	openSched := func() *Database {
-		d := New()
-		if err := d.Init(config.WithSchema(base, config.SchedSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
-			t.Fatalf("open sched: %v", err)
-		}
-		t.Cleanup(func() { _ = d.Close() })
-		return d
+	d := New()
+	if err := d.Init(config.WithSchema(base, config.SchedSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
+		t.Fatalf("open sched: %v", err)
 	}
-	openChat := func() *store.Store {
-		c, err := store.Open(config.WithSchema(base, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
-		if err != nil {
-			t.Fatalf("open chat: %v", err)
-		}
-		t.Cleanup(func() { _ = c.Close() })
-		return c
-	}
+	t.Cleanup(func() { _ = d.Close() })
 	if schedFirst {
-		d := openSched()
-		return d, openChat()
+		// Since #2049 M6 one runner migrates chat before sched whichever store
+		// opens first, so this order exists only on a database a pre-M6
+		// release migrated scheduler-first: 077 found no chat.conversations
+		// and installed no cascade. Recreate that state.
+		if _, err := d.conn.Exec(`DROP TRIGGER conversations_delete_chat_schedules ON chat.conversations;
+			DROP FUNCTION chat.conversations_delete_chat_schedules()`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	c := openChat()
-	return openSched(), c
+	c, err := store.Open(config.WithSchema(base, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("open chat: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return d, c
 }
 
 func countWhere(t *testing.T, conn *sql.DB, q string) int {

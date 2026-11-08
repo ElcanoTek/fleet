@@ -7,65 +7,68 @@ import (
 	"io"
 	"testing"
 
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
-	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 )
 
-// TestMigrateStatusEnvelope — `fleet migrate status --json` must ALWAYS emit
-// the {"chat":…,"sched":…} envelope: a DB that could not be read carries an
-// "error" member instead of being dropped, and both failing still yields valid
-// JSON. It used to print nothing when both failed and to omit the failing DB
-// when one did, so a CI consumer could not tell "sched unreachable" from
-// "sched fine, key missing".
+// TestMigrateStatusEnvelope — `fleet migrate status --json` emits the one
+// sequence's report at the top level and, for one release, the pre-M6
+// per-store reports under "chat" and "sched", derived from it (#2049 M6). A
+// database that could not be read still yields the complete envelope, every
+// member carrying "error", so a CI consumer sees why.
 func TestMigrateStatusEnvelope(t *testing.T) {
 	t.Parallel()
 
-	decode := func(t *testing.T, env migrateStatusJSON) map[string]map[string]any {
+	decode := func(t *testing.T, env migrateStatusJSON) map[string]any {
 		t.Helper()
 		b, err := json.Marshal(env)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		var got map[string]map[string]any
+		var got map[string]any
 		if err := json.Unmarshal(b, &got); err != nil {
-			t.Fatalf("envelope is not an object of objects: %v\n%s", err, b)
+			t.Fatalf("envelope is not an object: %v\n%s", err, b)
 		}
 		return got
 	}
 
-	// One side failed, the other reported.
-	v := 12
-	sched := &scheddb.MigrationReport{DB: "sched", Runner: "golang-migrate", MigrationTable: "schema_migrations", CurrentVersion: &v}
-	got := decode(t, migrateStatusEnvelope(nil, errors.New("chat DSN unset"), sched, nil))
-	if got["chat"]["error"] != "chat DSN unset" {
-		t.Errorf("chat.error = %v, want the DSN error", got["chat"]["error"])
+	cur := 177
+	at := int64(1700000000)
+	rep := &migrations.Report{DB: "fleet", Runner: "fleet", MigrationTable: migrations.Table, Layout: "unified", Adopted: true,
+		CurrentVersion: &cur,
+		Applied: []migrations.Info{
+			{Version: 1, Name: "chat/001_initial", AppliedAt: &at},
+			{Version: 101, Name: "sched/001_initial_schema", AppliedAt: &at},
+			{Version: 177, Name: "sched/077_move_chat_schedules", AppliedAt: &at},
+		},
 	}
-	if _, has := got["chat"]["runner"]; has {
-		t.Errorf("a failed DB must not carry report fields: %v", got["chat"])
+	got := decode(t, migrateStatusEnvelope(rep, nil))
+	if got["layout"] != "unified" || got["migration_table"] != "core.schema_versions" || got["current_version"] != float64(177) || got["adopted"] != true {
+		t.Errorf("top level = %v", got)
 	}
-	if got["sched"]["runner"] != "golang-migrate" || got["sched"]["current_version"] != float64(12) {
-		t.Errorf("sched report not flattened into its member: %v", got["sched"])
+	if _, has := got["error"]; has {
+		t.Errorf("a readable database must not carry an error: %v", got)
 	}
-	if _, has := got["sched"]["error"]; has {
-		t.Errorf("a healthy DB must not carry an error member: %v", got["sched"])
+	chat, _ := got["chat"].(map[string]any)
+	if chat["runner"] != "hand-rolled" || len(chat["applied"].([]any)) != 1 {
+		t.Errorf("chat view = %v", chat)
+	}
+	sched, _ := got["sched"].(map[string]any)
+	if sched["runner"] != "golang-migrate" || sched["current_version"] != float64(77) || len(sched["applied"].([]any)) != 2 {
+		t.Errorf("sched view = %v", sched)
+	}
+	if first := sched["applied"].([]any)[0].(map[string]any); first["version"] != float64(1) || first["name"] != "001_initial_schema" {
+		t.Errorf("sched view keeps the legacy numbering and names: %v", first)
 	}
 
-	// Both failed: still a complete envelope.
-	got = decode(t, migrateStatusEnvelope(nil, errors.New("c"), nil, errors.New("s")))
-	if got["chat"]["error"] != "c" || got["sched"]["error"] != "s" {
-		t.Errorf("both-failed envelope = %v", got)
+	got = decode(t, migrateStatusEnvelope(nil, errors.New("DATABASE_URL unset")))
+	if got["error"] != "DATABASE_URL unset" {
+		t.Errorf("error = %v", got["error"])
 	}
-
-	// Both reported: no error members anywhere.
-	chat := &store.MigrationReport{DB: "chat", Runner: "hand-rolled", MigrationTable: "schema_migrations"}
-	got = decode(t, migrateStatusEnvelope(chat, nil, sched, nil))
 	for _, side := range []string{"chat", "sched"} {
-		if _, has := got[side]["error"]; has {
-			t.Errorf("%s should have no error member: %v", side, got[side])
+		m, _ := got[side].(map[string]any)
+		if m["error"] != "DATABASE_URL unset" || len(m) != 1 {
+			t.Errorf("%s = %v, want only the error", side, m)
 		}
-	}
-	if got["chat"]["runner"] != "hand-rolled" {
-		t.Errorf("chat report missing: %v", got["chat"])
 	}
 }
 
@@ -75,15 +78,15 @@ func TestParseForceArgs(t *testing.T) {
 		want int
 		ok   bool
 	}{
-		{[]string{"73"}, 73, true},
-		{[]string{"-1"}, -1, true},
-		{[]string{"73", "--no-confirm"}, 73, true},
-		{[]string{"--database-url", "postgres://x/5", "73"}, 73, true},
-		{[]string{"--database-url=postgres://x", "--no-confirm", "-1"}, -1, true},
+		{[]string{"173"}, 173, true},
+		{[]string{"0"}, 0, true},
+		{[]string{"173", "--no-confirm"}, 173, true},
+		{[]string{"--database-url", "postgres://x/5", "173"}, 173, true},
+		{[]string{"--database-url=postgres://x", "--no-confirm", "0"}, 0, true},
 		{nil, 0, false},
 		{[]string{"73", "74"}, 0, false},
 		{[]string{"seventy"}, 0, false},
-		{[]string{"-2"}, 0, false},
+		{[]string{"-1"}, 0, false},
 		{[]string{"73", "--bogus"}, 0, false},
 	} {
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)

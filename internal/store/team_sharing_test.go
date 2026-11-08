@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 )
 
 // teamFixture provisions alice + bob on one team, dana on another, and a
@@ -1424,20 +1425,15 @@ func TestProjectImpactCountsChatsFromTeammates(t *testing.T) {
 	}
 }
 
-// embeddedMigrationSQL returns the SQL of one embedded migration by version.
+// embeddedMigrationSQL returns the SQL of one embedded legacy chat migration
+// by version.
 func embeddedMigrationSQL(t *testing.T, version int) string {
 	t.Helper()
-	ms, err := loadMigrations()
-	if err != nil {
-		t.Fatalf("loadMigrations: %v", err)
+	body, ok := migrations.Body(version)
+	if !ok {
+		t.Fatalf("migration %03d is not embedded", version)
 	}
-	for _, m := range ms {
-		if m.version == version {
-			return m.sql
-		}
-	}
-	t.Fatalf("migration %03d is not embedded", version)
-	return ""
+	return body
 }
 
 // Migration 055 repairs the rows the pre-fix write paths stranded: a chat filed

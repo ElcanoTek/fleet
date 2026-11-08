@@ -33,56 +33,34 @@ Both stores and the identity schema between them live in the one database:
   **one** file, `fleet-all-<stamp>.dump`: a single `pg_dump -n chat -n core
   -n sched`, so a single snapshot. The accounts and the chat and sched rows
   that name them are consistent with each other.
-- **`--db=chat` / `--db=sched`** dump that store's schema **plus `core`**,
-  so each per-store dump records the accounts its rows name. That does not
-  make a sched dump restorable on its own: `fleet restore --db=sched` never
-  writes `core` (the chat store's migrations own it), so a sched dump cannot
-  be restored alone into an empty database — restore chat first, or use a
-  `fleet-all` dump (table below).
+- **`--db=chat` / `--db=sched`** still dump one store's schema plus `core`
+  (for inspection or a hand migration), but **fleet no longer restores them**.
 
-Which restores are self-contained:
+**Restore is whole-database only** (#2049 M6, [ADR-0107](adr/0107-one-migration-runner.md)).
+The two stores and `core` share one migration history (the ledger
+`core.schema_versions`, [MIGRATIONS.md](MIGRATIONS.md)), so `fleet restore`
+puts back the whole database from a `fleet-all-<stamp>.dump`, in one
+transaction. It refuses, before changing anything:
 
-| restore | restores | self-contained? |
-|---|---|---|
-| `--db=all` from a `fleet-all` dump | `chat`, `core`, `sched`, one transaction | **yes** — the whole fleet, as one snapshot |
-| `--db=chat` | `chat` + `core` (the accounts) | yes for chat; refused when the live `sched` store has task/dataset creators the dump's accounts lack |
-| `--db=sched` | `sched` only; the live accounts are kept | **no** — needs the accounts already in the database: refused when a creator the dump resolved is not an account here (e.g. an empty database) |
+- `--db=chat` / `--db=sched` (single-store restores), with what to do instead;
+- a dump that lacks any of `chat`, `core` and `sched` (a per-store dump, an
+  older two-file backup, a dump of the removed two-database layout);
+- a dump from before the one identity table (no `core.users`; M4 and later
+  only);
+- a dump from before the one migration ledger (M4/M5: no
+  `core.schema_versions`) over a database past the ledger's boundary (a
+  migration from version 200 on has run): restore it into a new, empty
+  database instead.
 
-`core` belongs to the chat store's migrations (they create it), so a sched
-restore never writes it, even though the sched dump carries it: into an
-empty database, restore chat first (or the whole fleet with `--db=all`),
-then sched. Pass `--allow-unresolved-creators` to restore one store anyway;
-those tasks and datasets then show no creator. An older sched dump (from
-before the one identity table: its accounts in `sched.users`) restores while
-the database has not merged its accounts yet — the scheduler's next start
-merges them — and is refused once it has.
-`fleet restore` reads the dump's table of contents first and establishes its
-schemas from its SCHEMA and TABLE entries; it refuses a dump that does not
-contain the schema the target store uses (the other store's dump, or an old
-dump of the removed two-database layout — see below) or whose schemas cannot
-be determined. It then restores with `pg_restore -n <schema>`, so only the
-store's schema is restored (other schemas in the archive are left out) and
-`--clean` can drop only the target store's objects — never the other store's,
-which shares the database.
+The ledgers come back with the dump. A dump from M4/M5 carries the two legacy
+ledgers (`chat.schema_migrations`, `sched.schema_migrations`); below the
+boundary they are authoritative, and the next start reconciles the one ledger
+to them. A legacy ledger a dump does not carry is dropped first, so none
+outlives the restore stale (the next start writes it again).
 
-**Dumps from before the move to one database.** A dump taken on a box that
-still had two databases (#2049; every box has since moved) holds its store in
-schema `public`. `fleet restore` refuses it with a message saying so: restore
-a dump taken since the box moved to one database instead. If an old dump is
-all there is, import it by hand — restore it into a scratch database, rename
-its schema, and dump that schema:
-
-```sh
-createdb fleet_import
-pg_restore --no-owner --no-acl -d fleet_import fleet-chat-<stamp>.dump
-psql -d fleet_import -c 'ALTER SCHEMA public RENAME TO chat'
-pg_dump -Fc --no-owner --no-acl -n chat -f fleet-chat-imported.dump fleet_import
-fleet restore --db=chat fleet-chat-imported.dump
-dropdb fleet_import
-```
-
-(the same with `sched` for a sched dump; run it as a role that may create a
-database, and with fleet stopped for the restore as below).
+**Dumps from before the move to one database** (their store in schema
+`public`) are refused. If an old dump is all there is, restore it with the
+release that made it and take a `fleet-all` dump from there.
 
 ## Prerequisites
 
@@ -145,22 +123,12 @@ fleet backup --db=all --out /var/backups/fleet --prune
 
 ## Restore
 
-Restore overwrites a live database, so `--db` has no default: you name the
-target explicitly.
-
 ```sh
-# A fleet-all dump: chat, core and sched, in one transaction.
-fleet restore --db=all   /var/backups/fleet/fleet-all-20260623T140506Z.dump
-
-# One store at a time (from a fleet-all dump, a per-store dump, or an older
-# two-file backup) — chat first, it carries the accounts:
-fleet restore --db=chat  /var/backups/fleet/fleet-chat-20260623T140506Z.dump
-fleet restore --db=sched /var/backups/fleet/fleet-sched-20260623T140506Z.dump
+fleet restore --db=all /var/backups/fleet/fleet-all-20260623T140506Z.dump
 ```
 
-`--db=all` refuses a dump that lacks any of `chat`, `core` and `sched` (a
-per-store dump, or a file of an older two-file backup): restore those one
-store at a time.
+(`--db=all` is the default and the only restore; see above for what it
+refuses.)
 
 Restore runs `pg_restore --clean --if-exists --no-owner --no-acl`: it drops the
 existing objects first, then recreates them from the dump, so it is idempotent
@@ -171,7 +139,7 @@ Because restore **overwrites a live database**, it first verifies the dump is a
 valid archive, then asks for confirmation on an interactive terminal:
 
 ```
-WARNING: this will OVERWRITE the live chat database from …/fleet-chat-….dump. Continue? [y/N]:
+WARNING: this will OVERWRITE the live whole fleet database (chat, core, sched) from …/fleet-all-….dump. Continue? [y/N]:
 ```
 
 Pass `--no-confirm` for scripted restores. In a non-interactive context (a pipe
@@ -182,15 +150,13 @@ or CI) without `--no-confirm`, restore refuses rather than silently overwriting.
 ```sh
 fleet stop
 fleet restore --db=all fleet-all-….dump
-# or, from an older two-file backup:
-#   fleet restore --db=chat  fleet-chat-….dump
-#   fleet restore --db=sched fleet-sched-….dump
 fleet restart
 fleet status        # both DBs answer SELECT 1, unit healthy
 ```
 
-The databases self-migrate on connect, so a dump taken from an older schema is
-brought up to date when the service restarts.
+The database self-migrates on connect (one runner, every store open), so a dump
+taken from an older schema is brought up to date when the service restarts —
+or, for a dump from before M6, reconciled with its legacy ledgers first.
 
 ## Verifying a backup
 

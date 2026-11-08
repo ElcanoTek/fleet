@@ -78,10 +78,9 @@
 /internal/httpapi/auth_verify.go        @bradflaugher
 /internal/httpapi/ratelimit.go          @bradflaugher
 
-# Irreversible schema changes. The chat and scheduler migration systems are
-# separate; both apply forward-only.
-/internal/store/migrations/             @bradflaugher
-/internal/sched/db/migrations/          @bradflaugher
+# Irreversible schema changes: the one migration runner and its directory
+# (ADR-0107).
+/internal/migrations/                   @bradflaugher
 
 # CI gates and dependency/agent automation — these workflows ARE the merge
 # guarantees.

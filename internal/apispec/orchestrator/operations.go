@@ -790,35 +790,55 @@ var Operations = map[string]apispec.Operation{
 		},
 	},
 	"GET /admin/migrations": {
-		Summary: "Migration status — applied vs pending sched-DB migrations (#256).",
-		Description: "Read-only operator view of the scheduler (sched) database's schema " +
-			"migrations: the current tracking-row version (golang-migrate's format," +
-			" hence `runner: golang-migrate`), whether the tracking row is dirty (a" +
-			" prior migration failed mid-flight and needs a `fleet migrate force` +" +
-			" restart), and the applied vs pending migration lists derived from the" +
-			" embedded `.up.sql` files. Applies nothing — safe to call any time. " +
-			"Admin-only. The chat server exposes the equivalent for its own " +
-			"database at the same path on its port.",
+		Summary: "Migration status — applied vs pending migrations of the one sequence (#256, #2049 M6).",
+		Description: "Read-only operator view of the database's schema migrations: one " +
+			"sequence (legacy chat 1–99, legacy sched as 101–177, new migrations " +
+			"from 200) recorded in one ledger, `core.schema_versions` (ADR-0107, " +
+			"docs/MIGRATIONS.md). `current_version` is the highest applied version, " +
+			"`dirty` says a migration was left half-applied (fleet refuses to start " +
+			"until `fleet migrate force`), `adopted` whether the database has moved " +
+			"onto the one ledger yet (before it has, `applied` is what adoption will " +
+			"record from the legacy ledgers, described in `legacy`). Versions the " +
+			"build does not ship are listed under `applied` (and `unknown`), so a " +
+			"downgrade is visible; `unknown`, `mismatched` (an edited migration) and " +
+			"`dirty` are what fleet refuses to start on. Applies nothing — safe to call any time. Admin-only. The chat " +
+			"server answers the same report at the same path on its port. The keys " +
+			"of the pre-M6 per-store reports are kept; `layout` is `unified`.",
 		Security:   adminKey,
 		Permission: "admin",
 		Responses: []apispec.Response{
-			apispec.OK("200", "Migration status for the sched database.", apispec.JSON(apispec.Object(
-				apispec.Prop("db", apispec.Typed("string")),
-				apispec.Prop("runner", apispec.Typed("string")),
-				apispec.Prop("migration_table", apispec.Typed("string")),
+			apispec.OK("200", "Migration status of the one database.", apispec.JSON(apispec.Object(
+				apispec.Prop("db", &apispec.Schema{Type: "string", Description: `always "fleet"`}),
+				apispec.Prop("runner", &apispec.Schema{Type: "string", Description: `always "fleet"`}),
+				apispec.Prop("migration_table", &apispec.Schema{Type: "string", Description: `always "core.schema_versions"`}),
+				apispec.Prop("layout", &apispec.Schema{Type: "string", Enum: []any{"unified"}}),
+				apispec.Prop("adopted", apispec.Typed("boolean")),
 				apispec.Prop("current_version", &apispec.Schema{
 					Type:     "integer",
 					Nullable: true,
 				}),
 				apispec.Prop("dirty", apispec.Typed("boolean")),
-				apispec.Prop("applied", apispec.ArrayOf(apispec.Object(
+				apispec.Prop("legacy", &apispec.Schema{Type: "string", Description: "the legacy ledgers, before adoption"}),
+				apispec.Prop("applied", &apispec.Schema{Type: "array", Nullable: true, Items: apispec.Object(
 					apispec.Prop("version", apispec.Typed("integer")),
 					apispec.Prop("name", apispec.Typed("string")),
-				))),
-				apispec.Prop("pending", apispec.ArrayOf(apispec.Object(
+					apispec.Prop("applied_at", &apispec.Schema{Type: "integer", Description: "Unix seconds"}),
+				)}),
+				apispec.Prop("pending", &apispec.Schema{Type: "array", Nullable: true, Items: apispec.Object(
 					apispec.Prop("version", apispec.Typed("integer")),
 					apispec.Prop("name", apispec.Typed("string")),
-				))),
+				)}),
+				apispec.Prop("problem", &apispec.Schema{Type: "string", Description: "a refusal the legacy ledgers cause (adoption, or reconciliation below the boundary); fleet refuses to start"}),
+				apispec.Prop("unknown", &apispec.Schema{Type: "array", Description: "applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start", Items: apispec.Object(
+					apispec.Prop("version", apispec.Typed("integer")),
+					apispec.Prop("name", apispec.Typed("string")),
+					apispec.Prop("applied_at", &apispec.Schema{Type: "integer", Description: "Unix seconds"}),
+				)}),
+				apispec.Prop("mismatched", &apispec.Schema{Type: "array", Description: "applied versions recorded with another name or checksum than this build's file (an edited migration); fleet refuses to start", Items: apispec.Object(
+					apispec.Prop("version", apispec.Typed("integer")),
+					apispec.Prop("name", apispec.Typed("string")),
+					apispec.Prop("applied_at", &apispec.Schema{Type: "integer", Description: "Unix seconds"}),
+				)}),
 			))),
 			apispec.RefResponse("500", "Error"),
 		},

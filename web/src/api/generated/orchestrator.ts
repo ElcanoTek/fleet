@@ -383,8 +383,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Migration status — applied vs pending sched-DB migrations (#256).
-         * @description Read-only operator view of the scheduler (sched) database's schema migrations: the current tracking-row version (golang-migrate's format, hence `runner: golang-migrate`), whether the tracking row is dirty (a prior migration failed mid-flight and needs a `fleet migrate force` + restart), and the applied vs pending migration lists derived from the embedded `.up.sql` files. Applies nothing — safe to call any time. Admin-only. The chat server exposes the equivalent for its own database at the same path on its port.
+         * Migration status — applied vs pending migrations of the one sequence (#256, #2049 M6).
+         * @description Read-only operator view of the database's schema migrations: one sequence (legacy chat 1–99, legacy sched as 101–177, new migrations from 200) recorded in one ledger, `core.schema_versions` (ADR-0107, docs/MIGRATIONS.md). `current_version` is the highest applied version, `dirty` says a migration was left half-applied (fleet refuses to start until `fleet migrate force`), `adopted` whether the database has moved onto the one ledger yet (before it has, `applied` is what adoption will record from the legacy ledgers, described in `legacy`). Versions the build does not ship are listed under `applied` (and `unknown`), so a downgrade is visible; `unknown`, `mismatched` (an edited migration) and `dirty` are what fleet refuses to start on. Applies nothing — safe to call any time. Admin-only. The chat server answers the same report at the same path on its port. The keys of the pre-M6 per-store reports are kept; `layout` is `unified`.
          */
         get: {
             parameters: {
@@ -395,25 +395,51 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Migration status for the sched database. */
+                /** @description Migration status of the one database. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description always "fleet" */
                             db?: string;
+                            /** @description always "fleet" */
                             runner?: string;
+                            /** @description always "core.schema_versions" */
                             migration_table?: string;
+                            /** @enum {string} */
+                            layout?: "unified";
+                            adopted?: boolean;
                             current_version?: number | null;
                             dirty?: boolean;
+                            /** @description the legacy ledgers, before adoption */
+                            legacy?: string;
                             applied?: {
                                 version?: number;
                                 name?: string;
-                            }[];
+                                /** @description Unix seconds */
+                                applied_at?: number;
+                            }[] | null;
                             pending?: {
                                 version?: number;
                                 name?: string;
+                            }[] | null;
+                            /** @description a refusal the legacy ledgers cause (adoption, or reconciliation below the boundary); fleet refuses to start */
+                            problem?: string;
+                            /** @description applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start */
+                            unknown?: {
+                                version?: number;
+                                name?: string;
+                                /** @description Unix seconds */
+                                applied_at?: number;
+                            }[];
+                            /** @description applied versions recorded with another name or checksum than this build's file (an edited migration); fleet refuses to start */
+                            mismatched?: {
+                                version?: number;
+                                name?: string;
+                                /** @description Unix seconds */
+                                applied_at?: number;
                             }[];
                         };
                     };

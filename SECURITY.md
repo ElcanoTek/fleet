@@ -312,7 +312,7 @@ tracked separately rather than left ambiguous.
 
 Recorded here because a migration is applied history, so a question parked in
 one is a question nobody can close in place. Migration
-`internal/sched/db/migrations/022_add_task_credential_allowlist.up.sql` points at
+`internal/migrations/sql/legacy/sched/022_add_task_credential_allowlist.up.sql` points at
 this section.
 
 **What is stored.** `tasks.credential_allowlist` holds (server, account) pair

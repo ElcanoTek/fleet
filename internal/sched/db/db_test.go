@@ -14,34 +14,15 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/onedb"
 )
 
-// schedTemplate is the scheduler migrated in schema sched — the production
-// layout (ADR-0098) — with the chat store migrated first in schema chat: the
-// scheduler reads its accounts from the identity table, core.users, which the
-// chat migrations create (#2049 M4). This package cannot use
-// internal/testdb/fleetdb (it imports this package), so its tests clone a
-// template of their own; internal/store imports nothing of this package.
-var schedTemplate = testdb.Spec{
-	Name:        "sched",
-	Fingerprint: func() string { return "chat:" + store.MigrationFingerprint() + " sched:" + MigrationFingerprint() },
-	Migrate: func(_ context.Context, dsn string) error {
-		chat, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
-		if err != nil {
-			return err
-		}
-		if err := chat.Close(); err != nil {
-			return err
-		}
-		db := New()
-		if err := db.Init(config.WithSchema(dsn, config.SchedSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
-			return err
-		}
-		return db.Close()
-	},
-}
+// schedTemplate is the one-database template (internal/testdb/onedb): the
+// whole database migrated by the one runner, chat, core and sched alike. This
+// package cannot use internal/testdb/fleetdb (it imports this package), so
+// its tests clone the template through onedb — the same one fleetdb clones.
+var schedTemplate = onedb.Spec
 
 // seedAccount creates an account in the identity table with the legacy
 // Operations Center role (admin → Fleet admin; client/readonly → a viewer with

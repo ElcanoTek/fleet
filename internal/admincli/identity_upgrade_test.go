@@ -3,37 +3,29 @@ package admincli
 import (
 	"context"
 	"database/sql"
-	osexec "os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/config"
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
-// preMergeDatabase is a box between chat migration 099 and the scheduler's
-// first start on this release: the scheduler store migrated, its legacy
-// accounts still in sched.users; the chat store migrated (core.users exists);
-// the merge not run. Each email is both a chat account and a legacy
-// Operations Center account.
+// preMergeDatabase is a box between its first start on the one identity
+// table's release and the scheduler's identity merge: every migration applied
+// (#2049 M6: one runner migrates chat, core and sched together), the
+// scheduler's legacy accounts still in sched.users, the merge not run. Each
+// email is both a chat account and a legacy Operations Center account.
 func preMergeDatabase(t *testing.T, emails ...string) string {
 	t.Helper()
 	dsn := testdb.Empty(t)
-	sd := &scheddb.Database{}
-	if err := sd.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
+	if err := migrations.UpDSN(context.Background(), dsn); err != nil {
 		t.Fatal(err)
 	}
-	if sd.IdentityMerge().Ready {
-		t.Fatal("merged without a chat store")
-	}
-	_ = sd.Close()
 	raw, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -92,51 +84,4 @@ func TestAccountVerbsCompleteThePendingMerge(t *testing.T) {
 	if u, err := st.GetIdentity(t.Context(), "removed@x.test"); err == nil && u != nil {
 		t.Fatalf("admin rm was undone: %+v", u)
 	}
-}
-
-// A sched dump from after the merge, restored over a database whose own merge
-// is pending, would leave sched.users next to the restored
-// sched.users_premerge_m4 and wedge the scheduler. The restore completes the
-// pending merge first when it can (the chat store migrated), and refuses
-// when it cannot (Codex 4505570164 on #2083).
-func TestSchedRestoreOverAPendingMerge(t *testing.T) {
-	for _, b := range []string{"pg_dump", "pg_restore"} {
-		if _, err := osexec.LookPath(b); err != nil {
-			t.Skipf("%s not found", b)
-		}
-	}
-	ctx := context.Background()
-	src := fleetdb.New(t)
-	schedDump := filepath.Join(t.TempDir(), "sched.dump")
-	if err := runPgDump(ctx, src.SchedDSN(), schedDump); err != nil {
-		t.Fatal(err)
-	}
-
-	// No chat store: the merge cannot complete here, so the restore refuses.
-	schedOnly := testdb.Empty(t)
-	sd := &scheddb.Database{}
-	if err := sd.Init(config.WithSchema(schedOnly, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
-		t.Fatal(err)
-	}
-	_ = sd.Close()
-	err := runPgRestoreWith(ctx, config.WithSchema(schedOnly, config.SchedSchema), schedDump, restoreOpts{allowUnresolved: true})
-	if err == nil || !strings.Contains(err.Error(), "not merged into the one identity table yet") {
-		t.Fatalf("sched restore over an unmergeable pending merge = %v, want a refusal", err)
-	}
-
-	// The chat store migrated: the merge completes, then the restore runs and
-	// the scheduler opens on the result.
-	pre := preMergeDatabase(t, "ops@x.test")
-	if err := runPgRestoreWith(ctx, config.WithSchema(pre, config.SchedSchema), schedDump, restoreOpts{allowUnresolved: true}); err != nil {
-		t.Fatalf("sched restore over a completable pending merge: %v", err)
-	}
-	var legacy bool
-	if err := sqlOne(t, pre, `SELECT to_regclass('sched.users') IS NOT NULL`, &legacy); err != nil || legacy {
-		t.Fatalf("sched.users still there after the restore (%v)", err)
-	}
-	st := storage.New()
-	if err := st.Initialize(config.WithSchema(pre, config.SchedSchema), fleetdb.SchedPool()); err != nil {
-		t.Fatalf("scheduler on the restored database: %v", err)
-	}
-	st.Close()
 }
