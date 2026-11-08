@@ -36,7 +36,7 @@ func TestReportWorkspacePath_Persists(t *testing.T) {
 	}
 
 	const wsPath = "/var/lib/fleet/workspace/cutlass-run-abc123"
-	pool.reportWorkspacePath(task.ID, pool.leaseOwner, wsPath)
+	pool.reportWorkspacePath(context.Background(), task.ID, pool.leaseOwner, wsPath)
 
 	got, err := store.GetTask(task.ID)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestReportWorkspacePath_EmptyNoop(t *testing.T) {
 	if _, err := store.ClaimNextPendingTask(context.Background(), pool.LeaseOwner().String()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	pool.reportWorkspacePath(task.ID, pool.leaseOwner, "   ") // whitespace-only → no-op
+	pool.reportWorkspacePath(context.Background(), task.ID, pool.leaseOwner, "   ") // whitespace-only → no-op
 	got, err := store.GetTask(task.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)

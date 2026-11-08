@@ -463,6 +463,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if !ok {
 		return Result{}, fmt.Errorf("policy %T does not expose an orchestration state (embed InteractivePolicy/ScheduledPolicy or expose the inner policy via Unwrap)", deps.Policy)
 	}
+	// The orchestration state's enforcement lines carry this run's
+	// correlation ids, so a retry of the same task is told apart by run_id.
+	usageOrch.setLogger(logging.From(ctx))
 	// Fail before the first provider/tool side effect if a direct caller or a
 	// legacy database row bypassed the enqueue-time schema gate.
 	if err := validateDeclaredOutputSchema(cfg.OutputSchema); err != nil {
@@ -484,6 +487,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	logSession.SetCorrelation(telemetry.TraceID(ctx), logging.Value(ctx, logging.KeyRunID), logging.Value(ctx, logging.KeyTurnID))
 
 	eng := newRunEngine(cfg, deps, logSession)
+	eng.logger = logging.From(ctx)
 	defer func() {
 		result.Compactions = eng.compactionsSnapshot()
 	}()

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -48,7 +49,7 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 
 	// session approve → policy present, mode approve.
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_t", approvalRequest{Approved: true, Scope: "session"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_t", approvalRequest{Approved: true, Scope: "session"})
 	if p, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_t", `{}`); !ok || p.Mode != "approve" {
 		t.Errorf("session approve should register an approve policy: ok=%v mode=%q", ok, p.Mode)
 	}
@@ -57,7 +58,7 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 	}
 
 	// session deny → mode deny.
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_d", approvalRequest{Approved: false, Scope: "session"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_d", approvalRequest{Approved: false, Scope: "session"})
 	if p, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_d", `{}`); !ok || p.Mode != "deny" {
 		t.Errorf("session deny should register a deny policy: ok=%v mode=%q", ok, p.Mode)
 	}
@@ -66,13 +67,13 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 	}
 
 	// "once" (and empty) → nothing registered.
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_o", approvalRequest{Approved: true, Scope: "once"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_o", approvalRequest{Approved: true, Scope: "once"})
 	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_o", `{}`); ok {
 		t.Error(`scope "once" must not register a session policy`)
 	}
 
 	// pattern scope carries the glob.
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_p", approvalRequest{Approved: true, Scope: "pattern", Pattern: "to=*@ok.com"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_p", approvalRequest{Approved: true, Scope: "pattern", Pattern: "to=*@ok.com"})
 	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_p", `{"to":"x@ok.com"}`); !ok {
 		t.Error("pattern policy should match a conforming call")
 	}

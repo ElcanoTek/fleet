@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func TestTurnRequestIsAPrefixOfTheNext(t *testing.T) {
 	day1 := time.Date(2026, 8, 12, 23, 58, 0, 0, time.UTC)
 	day2 := day1.Add(5 * time.Minute) // past midnight: 2026-08-13
 
-	turn1, entry1, err := assembleTurnMessages(TurnInput{UserMessage: "pull yesterday's report"}, day1)
+	turn1, entry1, err := assembleTurnMessages(context.Background(), TurnInput{UserMessage: "pull yesterday's report"}, day1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestTurnRequestIsAPrefixOfTheNext(t *testing.T) {
 	}
 
 	history := []HistoryEntry{entry1, mustEntry("assistant", "text", TextContent{Text: "Here it is."})}
-	turn2, _, err := assembleTurnMessages(TurnInput{UserMessage: "check again", History: history}, day2)
+	turn2, _, err := assembleTurnMessages(context.Background(), TurnInput{UserMessage: "check again", History: history}, day2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestTurnRequestIsAPrefixOfTheNext(t *testing.T) {
 // no note is invented for it.
 func TestReplayLegacyUserRowHasNoRuntimeNote(t *testing.T) {
 	legacy := mustEntry("user", "text", TextContent{Text: "hello"})
-	out, err := replayHistory([]HistoryEntry{legacy, mustEntry("assistant", "text", TextContent{Text: "hi"})}, "")
+	out, err := replayHistory(context.Background(), []HistoryEntry{legacy, mustEntry("assistant", "text", TextContent{Text: "hi"})}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Scheduled-mode session log (the captain's-log JSON substrate). The in-memory
@@ -78,8 +78,8 @@ func writeValidatedLogFile(path string, data []byte) error {
 // addition to their session-log record, and calls whose run session is no
 // longer reachable (error analysis, recurring-task synthesis) have only this
 // line — see docs/AUX-MODEL-CALL-METERING.md.
-func logAuxUsage(rec agentcore.AuxUsageRecord) {
-	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
+func logAuxUsage(ctx context.Context, rec agentcore.AuxUsageRecord) {
+	logging.From(ctx).Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
 }
 
 // oneShotCall is one auxiliary, tool-less model call: a system prompt, a single
@@ -122,7 +122,7 @@ func generateOnce(ctx context.Context, model fantasy.LanguageModel, call oneShot
 		return "", nil, err
 	}
 	if call.AuxLabel != "" {
-		logAuxUsage(agentcore.NewAuxUsageRecord(call.AuxLabel, model.Model(), res))
+		logAuxUsage(ctx, agentcore.NewAuxUsageRecord(call.AuxLabel, model.Model(), res))
 	}
 	var out strings.Builder
 	for _, c := range res.Response.Content {
@@ -174,7 +174,7 @@ func redactLogSession(session *LogSession) *LogSession {
 // truncateLogSession drops middle messages until the marshaled session fits
 // maxSize, keeping the first message + a truncation notice + as many trailing
 // messages as fit (cutlass's binary-search-from-the-end strategy).
-func truncateLogSession(session *LogSession, maxSize int) []byte {
+func truncateLogSession(ctx context.Context, session *LogSession, maxSize int) []byte {
 	original := session.SnapshotMessages()
 	if len(original) <= 2 {
 		data, _ := marshalLogSession(session)
@@ -220,7 +220,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 			continue
 		}
 		if len(data) <= maxSize {
-			slog.Info("Truncated session log (kept the first and last messages)", "messages", len(msgs), "kept_last", endCount, "skipped", len(original)-endCount-1)
+			logging.From(ctx).Info("Truncated session log (kept the first and last messages)", "messages", len(msgs), "kept_last", endCount, "skipped", len(original)-endCount-1)
 			return data
 		}
 	}
@@ -236,7 +236,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 		original[len(original)-1],
 	})
 	data, _ := marshalLogSession(minimal)
-	slog.Info("Truncated session log to the first and last message only", "skipped", len(original)-2)
+	logging.From(ctx).Info("Truncated session log to the first and last message only", "skipped", len(original)-2)
 	return data
 }
 
@@ -244,7 +244,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 // fleet-session.json), redacting secrets and truncating to the size cap. All
 // failures are logged but non-fatal — a successful run must not be turned into
 // a failure because the side-channel log could not be written.
-func writeLogFile(session *LogSession, logFile string) {
+func writeLogFile(ctx context.Context, session *LogSession, logFile string) {
 	if logFile == "" {
 		logFile = envreg.Get("FLEET_LOG_FILE")
 		if logFile == "" {
@@ -257,19 +257,19 @@ func writeLogFile(session *LogSession, logFile string) {
 	redacted := redactLogSession(session)
 	data, err := marshalLogSession(redacted)
 	if err != nil {
-		slog.Warn("Warning: Failed to marshal log session", "err", err)
+		logging.From(ctx).Warn("Warning: Failed to marshal log session", "err", err)
 		return
 	}
 	if len(data) > maxSessionLogFileSize {
-		slog.Info("Session log exceeds the size limit; truncating middle messages", "size_bytes", len(data), "limit_bytes", maxSessionLogFileSize)
-		data = truncateLogSession(redacted, maxSessionLogFileSize)
+		logging.From(ctx).Info("Session log exceeds the size limit; truncating middle messages", "size_bytes", len(data), "limit_bytes", maxSessionLogFileSize)
+		data = truncateLogSession(ctx, redacted, maxSessionLogFileSize)
 	}
 	if err := writeValidatedLogFile(logFile, data); err != nil {
-		slog.Warn("Warning: Failed to write log file", "err", err)
+		logging.From(ctx).Warn("Warning: Failed to write log file", "err", err)
 		return
 	}
-	slog.Info("Session summary", "prompt_tokens", session.PromptTokens, "completion_tokens", session.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", session.Cost), "cached_tokens", session.CachedTokens, "cache_creation_tokens", session.CacheCreationTokens, "cache_hit_pct", fmt.Sprintf("%.1f", session.CumulativeCacheHitRate()))
-	slog.Info("Session log written", "path", logFile, "size_bytes", len(data))
+	logging.From(ctx).Info("Session summary", "prompt_tokens", session.PromptTokens, "completion_tokens", session.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", session.Cost), "cached_tokens", session.CachedTokens, "cache_creation_tokens", session.CacheCreationTokens, "cache_hit_pct", fmt.Sprintf("%.1f", session.CumulativeCacheHitRate()))
+	logging.From(ctx).Info("Session log written", "path", logFile, "size_bytes", len(data))
 }
 
 // summarizeForConsole clamps text to a single-line preview (verifier logging).

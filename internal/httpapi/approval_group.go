@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -112,7 +111,7 @@ func (a *approvalStager) joinApprovalGroup(approval *store.Approval) {
 	}
 	ok, err := a.store.SetApprovalGroup(a.ctx, a.userEmail, approval.ID, a.groupID)
 	if err != nil || !ok {
-		slog.Error("approval group: store group failed", "approval_id", approval.ID, "ok", ok, "err", err)
+		logging.From(a.ctx).Error("approval group: store group failed", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.GroupID = a.groupID

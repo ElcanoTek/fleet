@@ -1200,7 +1200,7 @@ func (p *scheduledPolicy) Unwrap() agentcore.Policy { return p.inner }
 // Execute drives one scheduled task to completion through agentcore.Run. The
 // session log is persisted on every exit path.
 func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
-	defer writeLogFile(a.logSession, a.logFile)
+	defer writeLogFile(ctx, a.logSession, a.logFile)
 	defer func() {
 		// A surfaced cancel (#1105) is attribution, not a fault: the runner's
 		// stop/pause/interrupt paths write their own transcript line ("Task

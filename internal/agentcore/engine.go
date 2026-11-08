@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"strings"
@@ -31,6 +32,9 @@ import (
 // is set, forceCompactMessageHistory falls back to a deterministic placeholder
 // summary so the context-too-large recovery path is still structurally sound.
 type engine struct {
+	// logger is the run's context logger (its correlation ids), set by Run;
+	// nil logs through the default (#2052).
+	logger         *slog.Logger
 	model          fantasy.LanguageModel
 	fallbackModel  fantasy.LanguageModel
 	fallbackModels []fantasy.LanguageModel

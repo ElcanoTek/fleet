@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -555,7 +554,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	if toolName != tools.ScheduleTaskToolName {
 		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
-			slog.Error("supersede approvals failed", "tool", toolName, "conv_id", a.conversationID, "err", err)
+			logging.From(a.ctx).Error("supersede approvals failed", "tool", toolName, "conv_id", a.conversationID, "err", err)
 		} else if n > 0 {
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
@@ -583,14 +582,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
 	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
 		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
-			slog.Error("approval narrowing: freeze the argument failed", "approval_id", approval.ID, "ok", ok, "err", err)
+			logging.From(a.ctx).Error("approval narrowing: freeze the argument failed", "approval_id", approval.ID, "ok", ok, "err", err)
 		} else {
 			approval.NarrowableArg = arg
 		}
 	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
-			slog.Error("approval card: store card failed", "approval_id", approval.ID, "ok", ok, "err", err)
+			logging.From(a.ctx).Error("approval card: store card failed", "approval_id", approval.ID, "ok", ok, "err", err)
 			cardFallback = cardFallbackStore
 		} else {
 			approval.CardJSON = cardJSON
@@ -836,7 +835,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	// Supersede any older pending cards for this same tool so the UI
 	// stays clean if a rare race writes two in quick succession.
 	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
-		slog.Error("supersede suggestions failed", "conv_id", a.conversationID, "err", err)
+		logging.From(a.ctx).Error("supersede suggestions failed", "conv_id", a.conversationID, "err", err)
 	} else if n > 0 {
 		a.emitUserScoped("tool.approval_superseded", map[string]any{
 			"tool":  tools.SuggestAdvancedModelToolName,
@@ -1186,7 +1185,7 @@ type scheduleTaskEdits struct {
 // when the user picked a non-"once" scope on the approval card. In-memory only
 // (lost on restart, by design). Logged as the audit record (this POST has no
 // live SSE buffer to emit into — the staging turn has finished).
-func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req approvalRequest) {
+func (s *Server) maybeRegisterSessionPolicy(ctx context.Context, convID, user, toolName string, req approvalRequest) {
 	scope := strings.TrimSpace(req.Scope)
 	if scope == "" || scope == "once" || s.sessionApprovals == nil {
 		return
@@ -1208,7 +1207,7 @@ func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req a
 		pattern = strings.TrimSpace(req.Pattern)
 	}
 	s.sessionApprovals.RegisterForUser(convID, user, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
-	slog.Info("audit: session approval pre-granted", "user", user, "mode", mode, "tool", toolName, "conv_id", convID, "scope", scope, "pattern", pattern)
+	logging.From(ctx).Info("audit: session approval pre-granted", "user", user, "mode", mode, "tool", toolName, "conv_id", convID, "scope", scope, "pattern", pattern)
 }
 
 // approvalHandler runs the staged tool when the user approves, or marks it
@@ -1371,7 +1370,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 			resolutionCallID(approval), historyMsg, approval.UserEmail)
-		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
+		s.maybeRegisterSessionPolicy(ctx, convID, user, approval.ToolName, req)
 		s.noteApprovalSettled(convID, approval)
 		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
 	}
@@ -1656,7 +1655,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 			}
 		}
 	}
-	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
+	s.maybeRegisterSessionPolicy(execCtx, convID, user, approval.ToolName, req)
 	// A tool in critical_tool_progress: tell the owner it finished, in case
 	// they walked away from the running card (approval_progress.go).
 	s.notifyApprovalFinished(user, convID, approval, isErr)

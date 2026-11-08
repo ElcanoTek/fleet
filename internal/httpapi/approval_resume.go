@@ -37,7 +37,6 @@ package httpapi
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -229,7 +228,7 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 	}
 	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)
 	if err != nil || !ok {
-		slog.Error("approval resume: arm failed", "approval_id", approval.ID, "ok", ok, "err", err)
+		logging.From(a.ctx).Error("approval resume: arm failed", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.ResumeState = store.ApprovalResumeArmed

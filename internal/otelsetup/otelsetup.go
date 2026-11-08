@@ -24,7 +24,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -42,6 +41,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
@@ -132,9 +132,9 @@ func InitWith(ctx context.Context, opts Options) (shutdown func(context.Context)
 	// Export failures (collector down, TLS refused) surface as structured
 	// warnings instead of the SDK's default stdlib-log line.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		slog.Warn("otel: export error", "err", err)
+		logging.From(ctx).Warn("otel: export error", "err", err)
 	}))
-	slog.Info("otel: tracing enabled", "endpoint", cfg.Endpoint, "transport", cfg.transport(), "process", opts.Process)
+	logging.From(ctx).Info("otel: tracing enabled", "endpoint", cfg.Endpoint, "transport", cfg.transport(), "process", opts.Process)
 	return tp.Shutdown, nil
 }
 

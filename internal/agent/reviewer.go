@@ -159,7 +159,7 @@ func (a *Agent) runPhoneAFriendReview(ctx context.Context, reviewer fantasy.Lang
 	// parsing — an unparseable verdict still cost money.
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsagePhoneAFriend, reviewer.Model(), out)
 	a.logSession.AddAuxUsage(rec)
-	logAuxUsage(rec)
+	logAuxUsage(ctx, rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
 		return nil, fmt.Errorf("reviewer returned empty response")
