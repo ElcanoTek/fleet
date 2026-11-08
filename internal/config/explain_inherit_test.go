@@ -22,18 +22,18 @@ func TestTitleModelDefaultIsTheCoreModel(t *testing.T) {
 // default reports the inherited value and the chain it came through,
 // resolved with the same function as everything else.
 func TestExplainReportsInheritedDefaults(t *testing.T) {
-	for _, n := range []string{"FLEET_TITLE_MODEL", "FLEET_METADATA_MODEL", "FLEET_MEMORY_MODEL", "FLEET_MEMORY_GRAPH_MODEL"} {
+	for _, n := range []string{"FLEET_TITLE_MODEL", "FLEET_METADATA_MODEL", "FLEET_MEMORY_MODEL"} {
 		unsetForTest(t, n)
 	}
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_TITLE_MODEL=vendor/my-model\n")
-	xs, err := explainRun(path, []string{"FLEET_MEMORY_GRAPH_MODEL"}, false, nil)
+	xs, err := explainRun(path, []string{"FLEET_MEMORY_MODEL"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	x := xs[0]
 	if x.Set || x.Value != "vendor/my-model" || x.Source != SourceDefault ||
-		strings.Join(x.InheritedFrom, ",") != "FLEET_MEMORY_MODEL,FLEET_METADATA_MODEL,FLEET_TITLE_MODEL" ||
+		strings.Join(x.InheritedFrom, ",") != "FLEET_METADATA_MODEL,FLEET_TITLE_MODEL" ||
 		x.InheritedSource != "env file as FLEET_TITLE_MODEL" {
 		t.Fatalf("got %+v", x)
 	}

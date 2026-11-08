@@ -169,7 +169,7 @@ Host-side maintenance calls **not tied to a specific run's budget** were left
 as they are: conversation title suggestion (`title.go`), the conversation
 summarizer (`summarize.go`, which already prices via `ResolveStepCost` and
 returns its usage to its caller), user-memory extraction
-(`memory_extract.go`), the memory-graph extractor (`memory_graph.go`),
+(`memory_extract.go`),
 learned-instruction distillation (`DistillLearnedInstruction`,
 `learned_instructions.go`), and the evals LLM-judge (`internal/evals/judge.go`).
 They are per-feature host utilities with their own bounds and their own

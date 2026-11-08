@@ -1355,10 +1355,11 @@ latest, successful attempt.
 
 ## Conversation memory auto-indexing (#234)
 
-fleet's long-term memory normally grows only when the agent calls
-`propose_memory` or a user `POST`s a memory. With
-**`FLEET_MEMORY_AUTOINDEX_ENABLED=true`** (default **false**), each completed
-interactive turn is additionally mined for **durable, reusable facts** — stable
+fleet's long-term memory grows when the agent calls
+`propose_memory`, when a user `POST`s a memory, or through the post-turn
+memory auto-indexer. With
+**`FLEET_MEMORY_AUTOINDEX_ENABLED=true`** (default **true**), each completed
+interactive turn is mined for **durable, reusable facts** — stable
 preferences, environment/config facts, standing instructions — by a short-lived
 cheap-model call (`FLEET_MEMORY_MODEL`, defaulting to the metadata/title-model
 chain), the same host-side pattern as auto-titling.
@@ -1370,8 +1371,7 @@ the loop. Extraction runs on the already-detached post-turn goroutine (its own
 LLM-call budget, errors swallowed) and is deduped against the user's existing
 memories *and* the conversation's still-pending proposals, so a fact stated
 across several turns is proposed once, not on every turn. A bounded number of
-facts per turn caps the batch. Off by default, so the memory-write paths are
-byte-for-byte unchanged unless an operator opts in.
+facts per turn caps the batch. Enabled by default (`FLEET_MEMORY_AUTOINDEX_ENABLED=false` or the Admin → Features toggle disables it).
 
 ---
 

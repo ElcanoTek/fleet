@@ -18,15 +18,14 @@ import {
   type UserMemory,
 } from "@/app/shared/lib/memoriesApi";
 
-export type MemoryView = "list" | "graph" | "team";
+export type MemoryView = "list" | "team";
 
 export function useChatMemories() {
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
-  // Memory-manager tab (#523): the flat record list (default) or the derived
-  // knowledge-graph view.
-  // "team" is the project's Team learnings, shown only while the open chat is
-  // in a project (Item D4) — members manage them without leaving the chat.
+  // Memory-manager tab: the flat record list (default) or the project's
+  // Team learnings, shown only while the open chat is in a project (Item D4) —
+  // members manage them without leaving the chat.
   const [memoryView, setMemoryView] = useState<MemoryView>("list");
   // Promotion of a personal memory into a project's team learnings (Item D5).
   // Non-null = the picker is open for this memory id (only when more than one

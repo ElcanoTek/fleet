@@ -470,24 +470,11 @@ type Config struct {
 	// richer prompt synthesis.
 	LibraryPromptModel string
 	// MemoryAutoIndexEnabled gates the memory auto-indexer (#234). Default
-	// FALSE (opt-in): when off, the only memory-write paths are the manual
-	// propose_memory tool + POST /memories, exactly as before. When on, each
-	// completed turn is mined for durable facts that are surfaced as memory
-	// PROPOSALS the user reviews — nothing is written live without consent.
-	// FLEET_MEMORY_AUTOINDEX_ENABLED.
+	// TRUE: each completed turn is mined for durable facts that are surfaced as
+	// memory PROPOSALS the user reviews — nothing is written live without
+	// consent. When false, the only memory-write paths are the manual
+	// propose_memory tool + POST /memories. FLEET_MEMORY_AUTOINDEX_ENABLED.
 	MemoryAutoIndexEnabled bool
-	// MemoryGraphModel is the fast/cheap model the knowledge-graph extractor
-	// (#523) uses to mine an ACTIVE memory for entities + relations.
-	// FLEET_MEMORY_GRAPH_MODEL, defaulting to MemoryModel (then MetadataModel,
-	// then TitleModel) so deployments need zero new config.
-	MemoryGraphModel string
-	// MemoryGraphEnabled gates the temporal knowledge-graph layer's EXTRACTION
-	// (#523). Default FALSE (opt-in): when off, no extraction goroutine or model
-	// call ever fires and behavior is byte-for-byte unchanged. When on, a memory
-	// becoming ACTIVE (manual create / accepted proposal) is mined async +
-	// best-effort into derived entity/relation rows; the manual re-extract
-	// endpoint also requires it. FLEET_MEMORY_GRAPH_ENABLED.
-	MemoryGraphEnabled bool
 
 	// ApprovalTimeoutSeconds is the global default-deny window (in seconds) for
 	// critical-tool approval cards on the web path (#225). FLEET_APPROVAL_TIMEOUT_SECONDS,
@@ -1348,9 +1335,7 @@ func Load(envFile string) (*Config, error) {
 		MemoryModel:                   getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:            getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		LibraryPromptModel:            getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		MemoryAutoIndexEnabled:        lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
-		MemoryGraphModel:              getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
-		MemoryGraphEnabled:            lp.getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
+		MemoryAutoIndexEnabled:        lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", true),
 		ApprovalTimeoutSeconds:        lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 86400),
 		AutoApproveInTest:             lp.getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
 		MaxConcurrentAgents:           lp.getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),

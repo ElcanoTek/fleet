@@ -259,12 +259,6 @@ type Server struct {
 	// turns cannot stampede the global sweeps. Zero = never. See maintenance.go.
 	lastMaintenance atomic.Int64
 
-	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
-	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
-	// on wiring; nil OR cfg.MemoryGraphEnabled=false disables extraction and
-	// leaves every memory path byte-for-byte unchanged.
-	memoryGraphExtractor MemoryGraphExtractor
-
 	// scheduleTask creates a scheduled task in the orchestrator on behalf of an
 	// approved interactive schedule_task call (#239). Injected so httpapi stays
 	// sched-agnostic — main.go translates TaskScheduleRequest to the sched model

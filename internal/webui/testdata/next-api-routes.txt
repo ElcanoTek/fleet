@@ -109,7 +109,6 @@ PUT /api/me/team
 POST /api/memories/{memoryId}/accept
 PATCH /api/memories/{memoryId}
 DELETE /api/memories/{memoryId}
-GET /api/memories/graph
 GET /api/memories
 POST /api/memories
 GET /api/model-catalog

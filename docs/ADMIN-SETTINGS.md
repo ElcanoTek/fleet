@@ -98,7 +98,7 @@ knob. These deliberately did **not** move into the panel:
   pool), sandbox image/resources, the Python REPL pool
   (`FLEET_PYTHON_REPL_*`), search FTS upkeep (`FLEET_SEARCH_ENABLED`),
   self-improving memory
-  (`FLEET_SELF_IMPROVE_ENABLED`), memory graph, log/retention/cleanup
+  (`FLEET_SELF_IMPROVE_ENABLED`), log/retention/cleanup
   schedules. These bind into listeners, pools, or wiring at startup; a restart
   is the honest unit of change. (The web UI's old concurrency-cap card, which
   called a `PUT /concurrency` endpoint fleet never served, was removed in the

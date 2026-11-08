@@ -1,4 +1,4 @@
-// MemoryManagerDialog — chat's "Memories" modal (personal list, graph, and
+// MemoryManagerDialog — chat's "Memories" modal (personal list and
 // the open project's team learnings) and the project picker for "Move to
 // team learnings", moved out of chat-experience.tsx unchanged (#2008). State
 // and actions come from useChatMemories.
@@ -8,7 +8,6 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { MEMORY_KINDS } from "@/app/shared/lib/memoriesApi";
-import { MemoryGraphView } from "./MemoryGraphView";
 import { memoryModalSubtitle } from "./memoryModalCopy";
 import { TeamLearningsPanel } from "./ProjectHome";
 import type { ChatMemories, MemoryView } from "./useChatMemories";
@@ -87,28 +86,23 @@ export function MemoryManagerDialog({
         />
       </div>
 
-      {/* Knowledge-graph tab (#523): a compact derived view over the
-          same records; the record list stays the default. The third
-          tab appears only inside a project — it is that project's
-          team learnings, the same list (and the same permissions) as
+      {/* The Team learnings tab appears only inside a project — it is that
+          project's team learnings, the same list (and the same permissions) as
           the project home's panel, reachable without leaving the
           conversation (Item D4). */}
-      <div className="flex items-center">
-        {/* Falls back to what is actually showing; see
-            activeMemoryView. */}
-        <Segmented
-          label="Memory view"
-          value={activeMemoryView}
-          options={[
-            { value: "list", label: "My memory" },
-            { value: "graph", label: "Graph" },
-            ...(activeProjectForMemory
-              ? [{ value: "team" as const, label: "Team learnings" }]
-              : []),
-          ]}
-          onChange={setMemoryView}
-        />
-      </div>
+      {activeProjectForMemory ? (
+        <div className="flex items-center">
+          <Segmented
+            label="Memory view"
+            value={activeMemoryView}
+            options={[
+              { value: "list", label: "My memory" },
+              { value: "team" as const, label: "Team learnings" },
+            ]}
+            onChange={setMemoryView}
+          />
+        </div>
+      ) : null}
 
       {memoryView === "team" && activeProjectForMemory ? (
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -119,8 +113,6 @@ export function MemoryManagerDialog({
             teamShared={activeProjectForMemory.teamShared}
           />
         </div>
-      ) : memoryView === "graph" ? (
-        <MemoryGraphView />
       ) : (
         <>
           <div className="grid gap-2">

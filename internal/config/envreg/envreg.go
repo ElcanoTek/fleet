@@ -83,10 +83,21 @@ var removedSettings = map[string]string{
 	"ORCHESTRATOR_SERVER_TOKEN": serviceTokenFix,
 	"CHAT_SERVER_TOKEN":         serviceTokenFix,
 	"CUTLASS_SERVER_TOKEN":      serviceTokenFix,
+
+	// The memory knowledge graph (ADR-0111).
+	"FLEET_MEMORY_GRAPH_ENABLED":   memoryGraphFix,
+	"CHAT_MEMORY_GRAPH_ENABLED":    memoryGraphFix,
+	"CUTLASS_MEMORY_GRAPH_ENABLED": memoryGraphFix,
+	"FLEET_MEMORY_GRAPH_MODEL":     memoryGraphFix,
+	"CHAT_MEMORY_GRAPH_MODEL":      memoryGraphFix,
+	"CUTLASS_MEMORY_GRAPH_MODEL":   memoryGraphFix,
 }
 
 // serviceTokenFix is the advice for a leftover service-token setting.
 const serviceTokenFix = "the internal service-token channel was removed (ADR-0108), so delete the line; `fleet chat`, `fleet acp` and fleet-bench authenticate with a user API key (`fleet sched apikey create <name> --type user --user <email>`)"
+
+// memoryGraphFix is the advice for a leftover memory-graph setting.
+const memoryGraphFix = "the memory knowledge graph was removed (ADR-0111), so delete the line"
 
 // Type is the value type of a setting, as the docs describe it. The typed
 // knob kinds (Int … StrictBool) are the ones internal/config's knob parser

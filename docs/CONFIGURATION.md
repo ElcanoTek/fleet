@@ -176,7 +176,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. |
 | `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. |
 | `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. |
-| `FLEET_MEMORY_GRAPH_MODEL` | string | inherited from `FLEET_MEMORY_MODEL` | server | Model for the memory graph. |
 | `FLEET_RECURRING_TASK_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts recurring tasks. |
 | `FLEET_LIBRARY_PROMPT_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts prompt-library entries. |
 | `FLEET_ESCALATION_CLASSIFIER_MODE` | enum: off, observe, suggest | `suggest` | server | Chat escalation classifier mode (docs/CHAT-ESCALATION.md). A mistyped value refuses to boot. |
@@ -212,8 +211,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_AUTO_TITLE` | bool | `true` | server | Title conversations automatically. Also an admin setting. *Validated at boot*. |
 | `FLEET_ERROR_ANALYSIS_ENABLED` | bool | `true` | server | Analyse failed runs with FLEET_ERROR_ANALYSIS_MODEL. Also an admin setting. *Validated at boot*. |
 | `FLEET_SELF_IMPROVE_ENABLED` | bool | `false` | server | Agent self-improvement notes. *Validated at boot*. |
-| `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `false` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. |
-| `FLEET_MEMORY_GRAPH_ENABLED` | bool | `false` | server | Build the memory graph. *Validated at boot*. |
+| `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `true` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. |
 | `FLEET_PHONE_A_FRIEND_ENABLED` | bool | `false` | server | Super-LLM review (phone a friend). Also an admin setting. *Validated at boot*. |
 | `FLEET_SUBAGENTS_ENABLED` | bool | `true` | server | Sub-agent delegation; false is the fleet-wide kill switch. Also an admin setting. *Validated at boot*. |
 | `FLEET_SUBAGENTS_MAX_DEPTH` | int | `1` | server | Maximum delegation depth (1 = the root may delegate, children may not). *Validated at boot*. |

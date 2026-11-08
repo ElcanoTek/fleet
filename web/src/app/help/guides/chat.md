@@ -1069,8 +1069,7 @@ footer of any reply to keep what the assistant just said, without composing a
 after a turn, marked **Proposed** in the manager until you accept them. Nothing
 enters memory without your say-so except what you typed yourself.
 
-Open **Memories** from **More options** (`•••`) in the composer or under **Settings → Memories**. In chat, the manager has two tabs, **My memory** and
-**Team learnings**, and a **Graph** view for how entries connect. Each memory
+Open **Memories** from **More options** (`•••`) in the composer or under **Settings → Memories**. Inside a project chat, the manager has two tabs, **My memory** and **Team learnings**. Each memory
 shows where it came from (**Manual**, **Saved from chat**, or **Auto-extracted
 from chat**) and offers these actions:
 

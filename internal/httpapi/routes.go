@@ -44,10 +44,6 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/projects", auth(member(mutate(http.HandlerFunc(s.projects)))))
 	mux.Handle("/projects/", auth(member(mutate(http.HandlerFunc(s.projectByID)))))
 	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
-	// Knowledge graph (#523): the exact pattern outranks the /memories/ prefix
-	// in ServeMux matching, so "graph" is never mistaken for a memory id.
-	// Read-only, hence no mutate wrapper (like /search).
-	mux.Handle("/memories/graph", auth(member(http.HandlerFunc(s.memoryGraph))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	// Cross-chat shared file library (docs/SHARED-FILES.md): list/download are
 	// member-level (every chat can already read the files), upload/rename/

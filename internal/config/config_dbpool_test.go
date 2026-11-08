@@ -72,25 +72,25 @@ func TestLoad_DBPoolOverrides(t *testing.T) {
 func TestLoad_MemoryAutoIndex(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
-	// Default: off, and the model falls back through the metadata/title chain.
+	// Default: on, and the model falls back through the metadata/title chain.
 	if cfg, err := Load(""); err != nil {
 		t.Fatalf("Load: %v", err)
 	} else {
-		if cfg.MemoryAutoIndexEnabled {
-			t.Error("MemoryAutoIndexEnabled should default to false (opt-in)")
+		if !cfg.MemoryAutoIndexEnabled {
+			t.Error("MemoryAutoIndexEnabled should default to true")
 		}
 		if cfg.MemoryModel == "" {
 			t.Error("MemoryModel should default (metadata/title chain), got empty")
 		}
 	}
 
-	t.Setenv("FLEET_MEMORY_AUTOINDEX_ENABLED", "true")
+	t.Setenv("FLEET_MEMORY_AUTOINDEX_ENABLED", "false")
 	t.Setenv("FLEET_MEMORY_MODEL", "vendor/cheap-model")
 	if cfg, err := Load(""); err != nil {
 		t.Fatalf("Load: %v", err)
 	} else {
-		if !cfg.MemoryAutoIndexEnabled {
-			t.Error("FLEET_MEMORY_AUTOINDEX_ENABLED=true should enable auto-indexing")
+		if cfg.MemoryAutoIndexEnabled {
+			t.Error("FLEET_MEMORY_AUTOINDEX_ENABLED=false should disable auto-indexing")
 		}
 		if cfg.MemoryModel != "vendor/cheap-model" {
 			t.Errorf("MemoryModel = %q, want the FLEET_MEMORY_MODEL override", cfg.MemoryModel)

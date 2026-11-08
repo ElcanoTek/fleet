@@ -673,9 +673,6 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-		// Knowledge-graph extraction (#523): the seam is always wired; whether
-		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
-		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
 	}
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))

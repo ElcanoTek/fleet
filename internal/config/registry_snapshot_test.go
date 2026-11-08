@@ -117,8 +117,6 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_AUTO_TITLE":                               true,
 	"FLEET_MEMORY_MODEL":                             true,
 	"FLEET_MEMORY_AUTOINDEX_ENABLED":                 true,
-	"FLEET_MEMORY_GRAPH_MODEL":                       true,
-	"FLEET_MEMORY_GRAPH_ENABLED":                     true,
 	"FLEET_RECURRING_TASK_MODEL":                     true,
 	"FLEET_LIBRARY_PROMPT_MODEL":                     true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":                 true,
@@ -490,7 +488,6 @@ var preRegistryEnvKnobs = []envKnob{
 	// would count as frustration and stage cards on most messages.
 	{key: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD", kind: kindInt, min: bound(50), max: bound(99)},
 	{key: "FLEET_MEMORY_AUTOINDEX_ENABLED", kind: kindBool},
-	{key: "FLEET_MEMORY_GRAPH_ENABLED", kind: kindBool},
 	{key: "FLEET_APPROVAL_TIMEOUT_SECONDS", kind: kindInt},
 	{key: "FLEET_AUTO_APPROVE_IN_TEST", kind: kindBool},
 	// min 1: `fleet serve` hands this straight to admission.New, which floors

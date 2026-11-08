@@ -1,6 +1,5 @@
 // Personal memory endpoints: GET/POST /memories and the /memories/{id} item
-// routes (accept / extract-graph / PATCH / DELETE). Split out of server.go
-// (#1127). The knowledge-graph read side lives in memory_graph.go.
+// routes (accept / PATCH / DELETE). Split out of server.go (#1127).
 
 package httpapi
 
@@ -58,22 +57,6 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
 	switch r.Method {
 	case http.MethodGet:
-		// As-of time travel (#523): with either as_of param the list answers
-		// "what was true / what did fleet know at that instant" instead of
-		// "everything, retired rows trailing" (see store.GraphQuery).
-		if r.URL.Query().Get("as_of_valid") != "" || r.URL.Query().Get("as_of_learned") != "" {
-			q, ok := s.parseAsOfQuery(w, r)
-			if !ok {
-				return
-			}
-			memories, err := s.store.ListMemoriesAsOf(r.Context(), user, q)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, r, map[string]any{"memories": memories})
-			return
-		}
 		memories, err := s.store.ListMemories(r.Context(), user)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -90,9 +73,6 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 			writeMemoryStoreError(w, err)
 			return
 		}
-		// A manually created memory is ACTIVE immediately → derive its graph
-		// fragment (async, best-effort, gated; #523).
-		s.maybeExtractMemoryGraph(memory)
 		writeJSON(w, r, memory)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -140,8 +120,6 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 				writeMemoryStoreError(w, err)
 				return
 			}
-			// No graph extraction: the knowledge graph is a personal-memory
-			// derivation (#523) and a project row is not part of it.
 			writeJSON(w, r, map[string]any{"memory": memory, "supersede": store.SupersedeNone, "project_id": p.ID})
 			return
 		}
@@ -150,17 +128,10 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			writeMemoryStoreError(w, err)
 			return
 		}
-		// Acceptance made the memory ACTIVE → derive its graph fragment
-		// (async, best-effort, gated; #523).
-		s.maybeExtractMemoryGraph(memory)
 		// The envelope (vs the bare memory) carries the #515 stage-2 outcome:
 		// what happened to the older fact this proposal claimed to replace
 		// ("retired", or the guard that kept it — pinned/changed/missing/…).
 		writeJSON(w, r, map[string]any{"memory": memory, "supersede": supersede})
-		return
-	}
-	if sub == "extract-graph" && r.Method == http.MethodPost {
-		s.handleMemoryExtractGraph(w, r, user, id)
 		return
 	}
 	switch r.Method {
