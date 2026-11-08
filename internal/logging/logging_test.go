@@ -3,10 +3,13 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
+	"sync/atomic"
 	"testing"
 )
 
@@ -335,5 +338,59 @@ func TestChildStdlibLogSurvivesTheParentsLevel(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the child's stdlib log line did not reach the file at level=error:\n%s", data)
+	}
+}
+
+// A stdlib log line written while Configure runs is never lost: one that
+// reaches the startup bridge after the replay's final read of the buffer is
+// forwarded (the buffer is sealed), not stranded in it (#2074 review).
+func TestConfigureLosesNoConcurrentStdlibLine(t *testing.T) {
+	restoreLogging(t)
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = devnull
+	defer func() { os.Stderr = prevStderr; _ = devnull.Close() }()
+
+	BufferStartup()
+	// A log.Printf that loaded the startup bridge just before Configure's
+	// log.SetOutput writes through it just after the replay: stand in for it
+	// deterministically by keeping that writer and writing through it after
+	// Configure returns. The goroutine adds a real concurrent writer.
+	inFlight := log.New(log.Writer(), "", 0)
+	const n = 1500 // under maxStartupRecords: nothing is dropped by the cap
+	var written atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < n; i++ {
+			log.Printf("concurrent line %d.", i)
+			written.Add(1)
+		}
+	}()
+	for written.Load() < 50 {
+		runtime.Gosched()
+	}
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "info"})
+	if err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	defer closer.Close()
+	inFlight.Printf("in-flight line.")
+	<-done
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if !bytes.Contains(data, []byte(fmt.Sprintf(`"concurrent line %d."`, i))) {
+			t.Fatalf("line %d was lost across Configure (wrote %d)", i, written.Load())
+		}
+	}
+	if !bytes.Contains(data, []byte(`"in-flight line."`)) {
+		t.Fatal("a line written through the startup bridge after the replay was lost")
 	}
 }

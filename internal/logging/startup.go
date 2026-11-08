@@ -28,6 +28,24 @@ type startupBuffer struct {
 	mu      sync.Mutex
 	records []bufferedRecord
 	dropped int
+	// sealed is set once the buffer has been replayed: a record that still
+	// arrives (a goroutine holding the buffering logger or the stdlib bridge
+	// across Configure) goes straight to the replay's handlers, never into a
+	// buffer nobody reads again.
+	sealed *replayTarget
+}
+
+// replayTarget is where a replayed (or late) record goes: an ordinary record
+// to h, subject to its level; a bridged stdlib line to bridge, ungated.
+type replayTarget struct{ h, bridge slog.Handler }
+
+func (t *replayTarget) handle(br bufferedRecord) {
+	switch {
+	case br.bridged:
+		_ = t.bridge.Handle(br.ctx, br.rec)
+	case t.h.Enabled(br.ctx, br.rec.Level):
+		_ = t.h.Handle(br.ctx, br.rec)
+	}
 }
 
 type bufferedRecord struct {
@@ -72,10 +90,15 @@ func (b startupLogBridge) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// add appends one record, counting it as dropped past maxStartupRecords.
+// add appends one record, counting it as dropped past maxStartupRecords —
+// or, once the buffer is sealed, hands it to the replay's handlers.
 func (b *startupBuffer) add(r bufferedRecord) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.sealed != nil {
+		b.sealed.handle(r)
+		return
+	}
 	if len(b.records) >= maxStartupRecords {
 		b.dropped++
 		return
@@ -119,18 +142,20 @@ func replayStartup(h, bridge slog.Handler) bool {
 	if buf == nil {
 		return false
 	}
+	// Replay under the buffer's lock and seal it before letting go: a record
+	// added concurrently (a stdlib log.Printf racing Configure's switch of
+	// log.SetOutput) waits, then goes straight to h or bridge after the
+	// replayed ones — never into the buffer after its last read (#2074
+	// review).
+	target := &replayTarget{h: h, bridge: bridge}
 	buf.mu.Lock()
 	records, dropped := buf.records, buf.dropped
 	buf.records = nil
-	buf.mu.Unlock()
 	for _, br := range records {
-		switch {
-		case br.bridged:
-			_ = bridge.Handle(br.ctx, br.rec)
-		case h.Enabled(br.ctx, br.rec.Level):
-			_ = h.Handle(br.ctx, br.rec)
-		}
+		target.handle(br)
 	}
+	buf.sealed = target
+	buf.mu.Unlock()
 	if dropped > 0 && h.Enabled(context.Background(), slog.LevelWarn) {
 		r := slog.NewRecord(time.Now(), slog.LevelWarn, "logging: startup log buffer overflowed; lines dropped", 0)
 		r.AddAttrs(slog.Int("dropped", dropped))

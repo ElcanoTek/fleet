@@ -22,13 +22,18 @@ import (
 // structure (a PEM block whose BEGIN and END sit in different fields), the
 // line is replaced by a fixed, valid notice rather than written broken or
 // half-redacted.
-type scrubWriter struct{ w io.Writer }
+type scrubWriter struct {
+	w io.Writer
+	// json is the encoding of the lines written (JSON records, else logfmt):
+	// each literal is matched in that encoding's form only.
+	json bool
+}
 
 // brokenLineNotice replaces a JSON line the redactor's patterns made invalid.
 const brokenLineNotice = `{"level":"ERROR","msg":"logging: a log line was withheld: redacting it broke its JSON encoding"}` + "\n"
 
 func (s scrubWriter) Write(p []byte) (int, error) {
-	out := redactor().ScrubLine(string(p))
+	out := redactor().ScrubLine(string(p), s.json)
 	if out != string(p) {
 		if trimmed := bytes.TrimSpace(p); len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed) &&
 			!json.Valid(bytes.TrimSpace([]byte(out))) {
@@ -41,10 +46,10 @@ func (s scrubWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// scrubbed wraps w in the backstop once.
-func scrubbed(w io.Writer) io.Writer {
+// scrubbed wraps w in the backstop once, for lines of the given encoding.
+func scrubbed(w io.Writer, json bool) io.Writer {
 	if _, ok := w.(scrubWriter); ok {
 		return w
 	}
-	return scrubWriter{w: w}
+	return scrubWriter{w: w, json: json}
 }

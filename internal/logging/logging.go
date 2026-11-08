@@ -141,6 +141,10 @@ func Configure(cfg Config) (io.Closer, error) {
 	// Lines logged before Configure (BufferStartup) go out now, through the
 	// configured format, level and file sink.
 	bridgeLogger = slog.New(newBridgeHandler(format, dest))
+	// replayStartup seals the buffer as it reads it for the last time: a
+	// stdlib line still arriving through the startup bridge (before the
+	// log.SetOutput below), or a record through a captured buffering logger,
+	// is forwarded to these handlers after the replayed lines, not lost.
 	replayStartup(slog.Default().Handler(), bridgeLogger.Handler())
 	// contextAttrHandler: a panic recovered under a request or a run carries
 	// that context's correlation (safe.EmitPanicWithMetadataContext).
@@ -173,9 +177,9 @@ const StdlibLogKey = "stdlib_log"
 // FLEET_LOG_LEVEL), every record tagged StdlibLogKey=true.
 func newBridgeHandler(format string, dest io.Writer) slog.Handler {
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr}
-	var h slog.Handler = slog.NewJSONHandler(scrubbed(dest), opts)
+	var h slog.Handler = slog.NewJSONHandler(scrubbed(dest, true), opts)
 	if strings.EqualFold(strings.TrimSpace(format), "text") {
-		h = slog.NewTextHandler(scrubbed(dest), opts)
+		h = slog.NewTextHandler(scrubbed(dest, false), opts)
 	}
 	return h.WithAttrs([]slog.Attr{slog.Bool(StdlibLogKey, true)})
 }
@@ -194,12 +198,12 @@ func userReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 // dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted
 // so tests can exercise it over a buffer without touching process-global state.
 func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewJSONHandler(scrubbed(dest), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
+	return slog.NewJSONHandler(scrubbed(dest, true), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
 }
 
 // newTextHandler is newJSONHandler's logfmt sibling (FLEET_LOG_FORMAT=text).
 func newTextHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewTextHandler(scrubbed(dest), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
+	return slog.NewTextHandler(scrubbed(dest, false), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
 }
 
 // NewHandler returns a redacting handler of the named format ("json" or

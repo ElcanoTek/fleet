@@ -67,3 +67,39 @@ func TestFatalWithoutBufferUsesTheRedactingHandler(t *testing.T) {
 		t.Fatalf("stderr = %q", out)
 	}
 }
+
+// A secret the configuration registry marks Secret is registered whatever
+// its name: DATABASE_URL names no credential, and an INVALID one (a bad
+// port, so url.Parse refuses it) is exactly what a fatal config error
+// quotes. Neither the DSN nor its password alone may reach the fatal line
+// (#2074 review).
+func TestFatalRedactsAnInvalidDatabaseURLPassword(t *testing.T) {
+	restoreLogging(t)
+	configured.Store(false)
+	const password = "dbOpaquePw4Rt8Yh" // matches no shape pattern
+	dsn := "postgres://fleet:" + password + "@db.internal:notaport/fleet?sslmode=disable"
+	t.Setenv("DATABASE_URL", dsn)
+	BufferStartup()
+	out, code := runFatal(t, "fleet: failed", "err",
+		errors.New("load config: invalid DATABASE_URL "+dsn+": password "+password+" rejected"))
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(out, password) || !strings.Contains(out, `"msg":"fleet: failed"`) {
+		t.Fatalf("the DATABASE_URL password reached stderr:\n%s", out)
+	}
+}
+
+// The credential parts of a DSN, in either form, as written and decoded.
+func TestDSNCredentials(t *testing.T) {
+	got := strings.Join(dsnCredentials("postgres://u:p%40ss@h:bad/db?sslpassword=k3y&x=1"), "|")
+	for _, want := range []string{"u:p%40ss", "p%40ss", "p@ss", "k3y"} {
+		if !strings.Contains("|"+got+"|", "|"+want+"|") {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	got = strings.Join(dsnCredentials(`host=db password='a b\'c' user=x`), "|")
+	if got != "a b'c" {
+		t.Fatalf("keyword DSN: %q", got)
+	}
+}

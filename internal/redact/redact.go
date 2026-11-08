@@ -105,15 +105,44 @@ func (p pattern) mayMatch(s, lower string) bool {
 // literal is one registered secret VALUE in the scan set.
 type literal struct {
 	value string
-	// scope names the rotating credential set this value belongs to, or "" for
-	// a permanent literal (a boot-time env secret), which is never retired.
-	scope string
-	// gen is the scope's generation this value was last registered under.
-	gen uint64
+	// jsonForm and quotedForm are how value reads inside an encoded log line:
+	// a JSON string (encoding/json, HTML escaping off, as log/slog writes it)
+	// and a Go-quoted logfmt value (strconv.Quote). They equal value unless it
+	// holds a quote, a backslash or a control character. ScrubLine matches
+	// only the form of the line's own encoding, so a literal's raw bytes can
+	// never match the encoding's syntax (a literal `level":"INFO` would
+	// otherwise hit every JSON line).
+	jsonForm, quotedForm string
+	// permanent marks a literal registered without a scope (a boot-time env
+	// secret); it is never retired.
+	permanent bool
+	// scopes are the rotating credential sets currently holding this value,
+	// each with the generation it was last registered under. One value can be
+	// live in several (a client secret shared by two hosted-MCP rows): it is
+	// retired only once EVERY scope holding it has superseded it.
+	scopes map[string]uint64
 	// retireAt is the unix-nano deadline after which this value may be dropped;
-	// 0 means "live, never drop". Only a SUPERSEDED generation is ever given
-	// one, so a still-current secret cannot be evicted.
+	// 0 means "live, never drop". Only a value no scope holds any more is ever
+	// given one, so a still-current secret cannot be evicted.
 	retireAt int64
+}
+
+func newLiteral(value string) *literal {
+	l := &literal{value: value, jsonForm: value, quotedForm: value}
+	if strings.ContainsFunc(value, func(r rune) bool { return r == '"' || r == '\\' || r < 0x20 || r == 0x7f }) {
+		var buf strings.Builder
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(value) == nil {
+			if js := strings.TrimSuffix(buf.String(), "\n"); len(js) >= 2 {
+				l.jsonForm = js[1 : len(js)-1]
+			}
+		}
+		if q := strconv.Quote(value); len(q) >= 2 {
+			l.quotedForm = q[1 : len(q)-1]
+		}
+	}
+	return l
 }
 
 // Redactor applies a prioritized list of patterns + registered literals to a
@@ -193,14 +222,17 @@ func canonicalPatterns() []pattern {
 
 // ScrubLine is the line-level backstop for an already-encoded log record (a
 // JSON object or a logfmt line): the registered literals — in their raw and
-// their JSON- and Go-quoted forms (encodedForms) — and the vendor credential
+// the form the line's encoding gives them — and the vendor credential
 // shapes (PEM blocks, vendor key prefixes, Authorization: Bearer/Basic), but
 // not the generic marker=value rule or operator patterns, which decide by a
 // key name and could span the encoding's structure. Every placeholder is
 // free of quotes and backslashes, so a replacement inside a quoted value
 // keeps the line well-formed. Unlike Redact it never re-encodes: bytes it
 // does not replace are left exactly as they were.
-func (r *Redactor) ScrubLine(line string) string {
+//
+// jsonEncoding says how the line is encoded: true for a JSON record, false
+// for a logfmt line. Each literal is matched in that encoding's form only.
+func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 	if line == "" || r == nil {
 		return line
 	}
@@ -211,7 +243,11 @@ func (r *Redactor) ScrubLine(line string) string {
 		if lit.value == "" {
 			continue
 		}
-		out = strings.ReplaceAll(out, lit.value, placeholder)
+		form := lit.quotedForm
+		if jsonEncoding {
+			form = lit.jsonForm
+		}
+		out = strings.ReplaceAll(out, form, placeholder)
 	}
 	r.mu.RUnlock()
 	lower := strings.ToLower(out)
@@ -286,10 +322,6 @@ func (r *Redactor) addLiterals(scope string, rotated bool, values ...string) {
 	for _, v := range values {
 		if len(v) >= minLiteralLen {
 			kept = append(kept, v)
-			// Its encoded forms too: a secret holding a quote, a backslash or
-			// a control character appears escaped in a JSON log line or a
-			// quoted logfmt value, which the raw bytes would never match.
-			kept = append(kept, encodedForms(v)...)
 		}
 		// A multi-line secret (a PEM key, a JSON service-account file) is also
 		// registered line by line: text that is scrubbed one line at a time
@@ -340,13 +372,19 @@ func (r *Redactor) addLiterals(scope string, rotated bool, values ...string) {
 // older than gen. Each gets the full window from the moment it is superseded;
 // one already counting down keeps its earlier deadline (it was superseded
 // first), and nothing is made due early.
+//
+// The scope lets go of each such value; a value no scope holds any more (and
+// that is not permanent) starts its grace clock. A value another scope still
+// holds stays live.
 func (r *Redactor) retireOlderGenerationsLocked(scope string, gen uint64, nowNano int64) {
 	graceDeadline := nowNano + literalRetireGrace.Nanoseconds()
 	for _, l := range r.literals {
-		if l.scope != scope || l.gen >= gen {
+		held, ok := l.scopes[scope]
+		if !ok || held >= gen {
 			continue
 		}
-		if l.retireAt == 0 {
+		delete(l.scopes, scope)
+		if !l.permanent && len(l.scopes) == 0 && l.retireAt == 0 {
 			l.retireAt = graceDeadline
 		}
 	}
@@ -358,28 +396,34 @@ func (r *Redactor) retireOlderGenerationsLocked(scope string, gen uint64, nowNan
 //     same bytes may also be a boot-time env secret that stays live for the
 //     process lifetime;
 //   - a scoped literal re-offered without a scope is promoted to permanent;
+//   - a value offered by a second scope is held by both (scopes), so either
+//     rotating away from it leaves it live for the other;
 //   - a stale offer (an older generation of the same scope) does not pull a
 //     value back into that older generation.
 //
 // Over-retention is acceptable here; under-redaction is not.
 func (r *Redactor) upsertLocked(value, scope string, gen uint64) {
-	if existing, ok := r.index[value]; ok {
-		switch {
-		case existing.scope == "":
-			return // already permanent
-		case scope == "":
-			existing.scope, existing.gen = "", 0
-		case scope == existing.scope && gen < existing.gen:
-			return // stale offer; the newer generation already covers it
-		default:
-			existing.scope, existing.gen = scope, gen
-		}
-		existing.retireAt = 0
-		return
+	l, ok := r.index[value]
+	if !ok {
+		l = newLiteral(value)
+		r.literals = append(r.literals, l)
+		r.index[value] = l
 	}
-	l := &literal{value: value, scope: scope, gen: gen}
-	r.literals = append(r.literals, l)
-	r.index[value] = l
+	switch {
+	case l.permanent:
+		return // already permanent
+	case scope == "":
+		l.permanent, l.scopes = true, nil
+	default:
+		if held, holds := l.scopes[scope]; holds && gen < held {
+			return // stale offer; the newer generation already covers it
+		}
+		if l.scopes == nil {
+			l.scopes = make(map[string]uint64, 1)
+		}
+		l.scopes[scope] = gen
+	}
+	l.retireAt = 0
 }
 
 // sweepLocked drops every literal whose retirement deadline has passed and
@@ -430,32 +474,6 @@ func (r *Redactor) nowNano() int64 {
 		return r.now().UnixNano()
 	}
 	return time.Now().UnixNano()
-}
-
-// encodedForms returns how v reads inside a JSON string (encoding/json,
-// HTML escaping off, as log/slog writes it) and inside a Go-quoted string
-// (strconv.Quote, as a logfmt value is quoted), where those differ from v.
-func encodedForms(v string) []string {
-	if !strings.ContainsFunc(v, func(r rune) bool { return r == '"' || r == '\\' || r < 0x20 || r == 0x7f }) {
-		return nil
-	}
-	var out []string
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if enc.Encode(v) == nil {
-		if js := strings.TrimSuffix(buf.String(), "\n"); len(js) >= 2 {
-			if inner := js[1 : len(js)-1]; inner != v {
-				out = append(out, inner)
-			}
-		}
-	}
-	if q := strconv.Quote(v); len(q) >= 2 {
-		if inner := q[1 : len(q)-1]; inner != v && (len(out) == 0 || inner != out[0]) {
-			out = append(out, inner)
-		}
-	}
-	return out
 }
 
 // MaxLiteralLen is the byte length of the longest registered literal (0 for

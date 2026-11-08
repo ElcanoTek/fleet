@@ -58,9 +58,12 @@ func RegisterEnvLiterals(environ []string) {
 // seedEnvLiterals registers this process's own secret-named env values
 // (Configure calls it first thing). In the MCP broker that is the connector
 // credentials; in fleet serve, whatever the env file set — before the
-// broker boot path hands connector values over and unsets them.
+// broker boot path hands connector values over and unsets them. It also
+// registers every setting the configuration registry marks Secret, whatever
+// its name (registerConfigSecrets).
 func seedEnvLiterals() {
 	RegisterEnvLiterals(os.Environ())
+	registerConfigSecrets()
 }
 
 // Redact scrubs s with the log redactor. Exported for the rare call site that
@@ -376,39 +379,39 @@ func builtInAttr(groups []string, a slog.Attr) (bool, slog.Attr) {
 }
 
 // hidesSecretFields reports a fmt.Stringer or error that must not be logged
-// by its own String()/Error(): a struct, map, slice or array (behind any
-// pointers) whose type carries a field — exported or not, since the type's
-// own method can read either — or a map key the secret-key rule names (a
-// Credential field, a map keyed "api_key"), so the method could print that
-// value with no key left to redact it by. Such a value is walked
-// structurally like any composite, or fails closed. Every other Stringer or
-// error (time.Time, a UUID, net.IP, *url.Error: values whose text is their
-// meaning) keeps its method, whose text is still scrubbed by pattern and
-// literal.
+// by its own String()/Error(): anything its method can reach (walkReachable:
+// fields exported or not, elements, map keys AND values, pointers, the
+// dynamic value of an interface) carries a secret-named field or map key —
+// a struct with a Credential field, a map keyed "api_key", a map whose KEY
+// type has a Token field — so the method could print that value with no key
+// left to redact it by. Such a value is walked structurally like any
+// composite, or fails closed. Every other Stringer or error (time.Time, a
+// UUID, net.IP, *url.Error: values whose text is their meaning) keeps its
+// method, whose text is still scrubbed by pattern and literal.
 func hidesSecretFields(v any) bool {
-	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Pointer {
-		if rv.IsNil() {
-			return false
-		}
-		rv = rv.Elem()
-	}
-	switch rv.Kind() {
-	case reflect.Map:
-		if rv.Type().Key().Kind() == reflect.String {
-			for _, k := range rv.MapKeys() {
-				if secretAttrKey(k.String()) {
+	return walkReachable(reflect.ValueOf(v), reachableCheck{
+		hit: func(x reflect.Value, mapKey bool) bool {
+			switch x.Kind() {
+			case reflect.Struct, reflect.Map, reflect.Slice, reflect.Array, reflect.Pointer:
+				// The static type: every field name, and a map's key and
+				// element types, at any depth.
+				if typeHasAnySecretField(x.Type()) {
 					return true
 				}
+			case reflect.Interface:
+				if mapKey && !x.IsNil() {
+					x = x.Elem()
+				}
+			default:
+				// scalars, strings, funcs, chans: the key check below
 			}
-		}
-		return typeHasAnySecretField(rv.Type().Elem())
-	case reflect.Struct, reflect.Slice, reflect.Array:
-		return typeHasAnySecretField(rv.Type())
-	default:
-		// scalars, strings, funcs, chans: String() is all there is
-		return false
-	}
+			// A runtime map key is a name too ("api_key" in a map[string]any).
+			return mapKey && x.Kind() == reflect.String && secretAttrKey(x.String())
+		},
+		// The static check above already covers a type whose contents hold no
+		// map key or interface value to read at run time.
+		skip: func(t reflect.Type) bool { return !typeHoldsDynamic(t) },
+	})
 }
 
 // marshalsItself reports a value whose JSON form its own code chooses
@@ -591,16 +594,40 @@ func anySecretFieldVisit(t reflect.Type, seen map[reflect.Type]bool) bool {
 const maxMarshalScan = 4096
 
 // hasSecretMarshaler reports whether v, or any value reachable from it
-// through fields (exported or not: a parent's own marshaler can serialise an
-// unexported one), elements, map keys and values, pointers and interfaces,
-// marshals itself and has a secret-named field. Pointer cycles are cut, and
-// a walk that runs past maxMarshalScan reports true (fail closed).
+// (walkReachable: fields exported or not, since a parent's own marshaler can
+// serialise an unexported one; elements; map keys, which a MarshalText key
+// becomes, and values; pointers and interfaces), marshals itself and has a
+// secret-named field.
 func hasSecretMarshaler(v reflect.Value) bool {
-	budget := maxMarshalScan
-	return secretMarshalerVisit(v, 0, &budget, map[uintptr]bool{})
+	return walkReachable(v, reachableCheck{
+		hit: func(x reflect.Value, _ bool) bool {
+			t := x.Type()
+			return selfMarshals(t) && typeHasAnySecretField(t)
+		},
+	})
 }
 
-func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uintptr]bool) bool {
+// reachableCheck is what walkReachable looks for.
+type reachableCheck struct {
+	// hit reports a value that is the finding; mapKey says it is a map key.
+	hit func(v reflect.Value, mapKey bool) bool
+	// skip, when set, reports a type whose contents need no walk (hit on the
+	// value itself already decided everything below it).
+	skip func(t reflect.Type) bool
+}
+
+// walkReachable is the ONE runtime walk the Stringer, error and marshaler
+// checks share: it calls c.hit on v and on every value reachable from it —
+// struct fields (exported or not), slice and array elements, map keys and
+// values, pointer targets and interfaces' dynamic values. Pointer cycles are
+// cut, and a walk that runs past maxMarshalScan (or 64 levels) reports true:
+// fail closed.
+func walkReachable(v reflect.Value, c reachableCheck) bool {
+	budget := maxMarshalScan
+	return reachableVisit(v, false, 0, &budget, map[uintptr]bool{}, c)
+}
+
+func reachableVisit(v reflect.Value, mapKey bool, depth int, budget *int, seen map[uintptr]bool, c reachableCheck) bool {
 	if !v.IsValid() {
 		return false
 	}
@@ -608,9 +635,12 @@ func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uint
 	if depth > 64 || *budget < 0 {
 		return true
 	}
-	t := v.Type()
-	if selfMarshals(t) && typeHasAnySecretField(t) {
+	if c.hit(v, mapKey) {
 		return true
+	}
+	t := v.Type()
+	if c.skip != nil && c.skip(t) {
+		return false
 	}
 	switch v.Kind() {
 	case reflect.Pointer:
@@ -618,15 +648,15 @@ func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uint
 			return false
 		}
 		seen[v.Pointer()] = true
-		return secretMarshalerVisit(v.Elem(), depth+1, budget, seen)
+		return reachableVisit(v.Elem(), false, depth+1, budget, seen, c)
 	case reflect.Interface:
 		if v.IsNil() {
 			return false
 		}
-		return secretMarshalerVisit(v.Elem(), depth+1, budget, seen)
+		return reachableVisit(v.Elem(), mapKey, depth+1, budget, seen, c)
 	case reflect.Struct:
 		for i := range t.NumField() {
-			if secretMarshalerVisit(v.Field(i), depth+1, budget, seen) {
+			if reachableVisit(v.Field(i), false, depth+1, budget, seen, c) {
 				return true
 			}
 		}
@@ -635,20 +665,56 @@ func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uint
 			return false // bytes: no fields
 		}
 		for i := range v.Len() {
-			if secretMarshalerVisit(v.Index(i), depth+1, budget, seen) {
+			if reachableVisit(v.Index(i), false, depth+1, budget, seen, c) {
 				return true
 			}
 		}
 	case reflect.Map:
 		iter := v.MapRange()
 		for iter.Next() {
-			// A key with a MarshalText is marshalled too (as the JSON key).
-			if secretMarshalerVisit(iter.Key(), depth+1, budget, seen) || secretMarshalerVisit(iter.Value(), depth+1, budget, seen) {
+			if reachableVisit(iter.Key(), true, depth+1, budget, seen, c) || reachableVisit(iter.Value(), false, depth+1, budget, seen, c) {
 				return true
 			}
 		}
 	default:
 		// scalars, strings, funcs, chans: nothing nested
+	}
+	return false
+}
+
+// dynamicTypes caches typeHoldsDynamic per type.
+var dynamicTypes sync.Map // reflect.Type -> bool
+
+// typeHoldsDynamic reports a type whose values can hold something only a
+// runtime walk sees: a map (its keys) or an interface (its dynamic value),
+// at any depth.
+func typeHoldsDynamic(t reflect.Type) bool {
+	if hit, ok := dynamicTypes.Load(t); ok {
+		return hit.(bool)
+	}
+	hit := holdsDynamicVisit(t, map[reflect.Type]bool{})
+	dynamicTypes.Store(t, hit)
+	return hit
+}
+
+func holdsDynamicVisit(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Map, reflect.Interface:
+		return true
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return holdsDynamicVisit(t.Elem(), seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if holdsDynamicVisit(t.Field(i).Type, seen) {
+				return true
+			}
+		}
+	default:
+		// scalars, strings, funcs, chans
 	}
 	return false
 }

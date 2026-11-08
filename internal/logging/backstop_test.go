@@ -129,7 +129,7 @@ func BenchmarkBackstopLine(b *testing.B) {
 	}
 	line := []byte(`{"time":"2026-11-08T05:12:46.123456789Z","level":"INFO","msg":"Task created","task_id":"0b7a5f0e-1b8c-4c1f-9a7e-3d2c1b0a9f8e","prompt":"Refresh the weekly pages from the source data","user_id":"apikey/key_4f6a9394ceaf08ac","request_id":"4bf92f3577b34da6a3ce929d0e0e4736"}` + "\n")
 	var sink bytes.Buffer
-	w := scrubWriter{w: &sink}
+	w := scrubWriter{w: &sink, json: true}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
