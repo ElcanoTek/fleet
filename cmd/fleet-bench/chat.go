@@ -63,9 +63,48 @@ func runChat(argv []string) error {
 	if opts.concurrency < 1 {
 		return fmt.Errorf("--concurrency must be >= 1")
 	}
+	if err := checkBenchIdentity(opts); err != nil {
+		return err
+	}
 
 	report := runChatLoad(opts)
 	report.print(os.Stdout, opts)
+	return nil
+}
+
+func checkBenchIdentity(opts chatOptions) error {
+	want := strings.ToLower(strings.TrimSpace(opts.email))
+	if want == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.server+"/me", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", opts.key)
+	resp, err := (&http.Client{Timeout: opts.timeout}).Do(req)
+	if err != nil {
+		return fmt.Errorf("GET /me: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET /me: status %d", resp.StatusCode)
+	}
+	var me struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&me); err != nil {
+		return fmt.Errorf("decode /me: %w", err)
+	}
+	got := strings.ToLower(strings.TrimSpace(me.Email))
+	if got != "" && got != want {
+		return fmt.Errorf("this API key acts as %s, not %s; use a key for %s, or drop --email", got, want, want)
+	}
 	return nil
 }
 

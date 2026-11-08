@@ -139,24 +139,15 @@ func redactLogSession(session *LogSession) *LogSession {
 	if session == nil {
 		return nil
 	}
-	msgs := session.SnapshotMessages()
-	redacted := &LogSession{
-		ID:                  session.ID,
-		Title:               agentcore.RedactSecrets(session.Title),
-		ParentTaskID:        session.ParentTaskID,
-		PromptTokens:        session.PromptTokens,
-		CompletionTokens:    session.CompletionTokens,
-		CachedTokens:        session.CachedTokens,
-		CacheCreationTokens: session.CacheCreationTokens,
-		Cost:                session.Cost,
-		CreatedAt:           session.CreatedAt,
-		UpdatedAt:           session.UpdatedAt,
-		Messages:            make([]LogMessage, len(msgs)),
-		// Aux-usage ledger (#1118): carried as-is — records hold only
-		// label/model/token counts/cost, nothing redactable.
-		AuxUsage: session.SnapshotAuxUsage(),
-	}
-	for i, msg := range msgs {
+	// Copy the whole session, then scrub its text: a field added to
+	// LogSession is carried by default (the correlation ids, #2052, were once
+	// dropped by a field-by-field rebuild). The aux-usage ledger (#1118) holds
+	// only label/model/token counts/cost, nothing redactable.
+	redacted := session.Clone()
+	redacted.Title = agentcore.RedactSecrets(redacted.Title)
+	redacted.OutputJSON = agentcore.RedactSecrets(redacted.OutputJSON)
+	redacted.RunOutcomeDetail = agentcore.RedactSecrets(redacted.RunOutcomeDetail)
+	for i, msg := range redacted.Messages {
 		msgCopy := msg
 		msgCopy.Content = agentcore.RedactSecrets(msgCopy.Content)
 		msgCopy.Reasoning = agentcore.RedactSecrets(msgCopy.Reasoning)
@@ -181,25 +172,14 @@ func truncateLogSession(ctx context.Context, session *LogSession, maxSize int) [
 		return data
 	}
 
-	// Aux-usage records (#1118) survive truncation: they are tiny fixed-size
-	// accounting rows, not transcript bulk, and dropping them would silently
-	// unmeter the run's overhead exactly on the biggest (truncated) runs.
-	auxUsage := session.SnapshotAuxUsage()
+	// Only the transcript is truncated: the copy keeps every other field of
+	// the session (LogSession.Clone) — its correlation ids (#2052), outcome,
+	// output and the aux-usage records (#1118), tiny accounting rows whose
+	// loss would silently unmeter the biggest (truncated) runs.
 	clone := func(msgs []LogMessage) *LogSession {
-		return &LogSession{
-			ID:                  session.ID,
-			Title:               session.Title,
-			ParentTaskID:        session.ParentTaskID,
-			PromptTokens:        session.PromptTokens,
-			CompletionTokens:    session.CompletionTokens,
-			CachedTokens:        session.CachedTokens,
-			CacheCreationTokens: session.CacheCreationTokens,
-			Cost:                session.Cost,
-			CreatedAt:           session.CreatedAt,
-			UpdatedAt:           session.UpdatedAt,
-			Messages:            msgs,
-			AuxUsage:            auxUsage,
-		}
+		c := session.Clone()
+		c.Messages = msgs
+		return c
 	}
 
 	for endCount := len(original) - 1; endCount > 0; endCount-- {

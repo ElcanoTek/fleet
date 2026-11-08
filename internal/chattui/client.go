@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,8 +35,9 @@ func (e Event) Str(key string) string {
 
 // Client streams turns from a running fleet server's POST /chat.
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg     Config
+	emailMu sync.Mutex
+	http    *http.Client
 
 	// defaultModel is the workspace default slug adopted from GET /client-config
 	// when the operator passed no --model. It is sent ONLY on turns that start a
@@ -112,8 +114,8 @@ func (c *Client) setAuthHeaders(req *http.Request) {
 
 // who names the account in a message: the expected email, else "this key".
 func (c *Client) who() string {
-	if c.cfg.Email != "" {
-		return c.cfg.Email
+	if email := c.Email(); email != "" {
+		return email
 	}
 	return "this API key's account"
 }
@@ -927,11 +929,14 @@ func (c *Client) CheckIdentity(ctx context.Context) error {
 		// which account the caller expects, so a key for another one is
 		// refused before any turn runs as the wrong person.
 		got := strings.ToLower(strings.TrimSpace(me.Email))
-		if c.cfg.Email != "" && got != "" && got != c.cfg.Email {
-			return &StatusError{Code: http.StatusForbidden, msg: fmt.Sprintf("%s: this API key acts as %s, not %s; use a key for %s, or drop --email/$FLEET_USER_EMAIL", forbiddenPrefix, got, c.cfg.Email, c.cfg.Email)}
-		}
-		if c.cfg.Email == "" {
+		c.emailMu.Lock()
+		expect := c.cfg.Email
+		if expect == "" {
 			c.cfg.Email = got
+		}
+		c.emailMu.Unlock()
+		if expect != "" && got != "" && got != expect {
+			return &StatusError{Code: http.StatusForbidden, msg: fmt.Sprintf("%s: this API key acts as %s, not %s; use a key for %s, or drop --email/$FLEET_USER_EMAIL", forbiddenPrefix, got, expect, expect)}
 		}
 		if me.Role == roleViewer {
 			return &StatusError{Code: http.StatusForbidden, msg: readOnlyMessage(c.who())}
@@ -942,4 +947,8 @@ func (c *Client) CheckIdentity(ctx context.Context) error {
 
 // Email is the account the client acts as: the expected one, or the one
 // CheckIdentity read off GET /me ("" before that).
-func (c *Client) Email() string { return c.cfg.Email }
+func (c *Client) Email() string {
+	c.emailMu.Lock()
+	defer c.emailMu.Unlock()
+	return c.cfg.Email
+}

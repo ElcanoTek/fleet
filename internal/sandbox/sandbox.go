@@ -33,6 +33,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // BashWaitDelay is how long cmd.Wait may keep waiting on the
@@ -322,7 +324,15 @@ func (s *Sandbox) ModeName() string {
 // ErrPoisoned if an earlier cancelled/timed-out invocation could not be
 // proved dead (fail closed: the suspect container must be retired, not
 // reused, so a stopped turn's stragglers can't overlap fresh work).
-func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (BashResult, error) {
+func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (res BashResult, err error) {
+	ctx, span := s.startExecSpan(ctx, "bash", req.Timeout, len(req.Command))
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		endBashSpan(span, res, err)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -362,7 +372,15 @@ func (s *Sandbox) ReapDetachedProcesses() bool {
 // RunPython dispatches one run_python invocation through the active
 // backend. Bridge stdin/stdout serialization is the backend's problem,
 // not the caller's.
-func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResult, error) {
+func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (res PythonResult, err error) {
+	ctx, span := s.startExecSpan(ctx, "python", req.Timeout, len(req.Code))
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		endPythonSpan(span, res, err)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -377,6 +395,8 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 		req.Timeout = s.pythonCellTimeout
 	}
 	s.mu.Unlock()
+	// The span records the timeout the cell runs under, after the clamp.
+	setExecTimeout(span, req.Timeout)
 	if s.impl.poisoned() {
 		return PythonResult{}, ErrPoisoned
 	}

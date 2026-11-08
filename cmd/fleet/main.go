@@ -362,13 +362,13 @@ func run() error {
 		})
 	}
 
-	// Process log file sink (#298): OPT-IN. With FLEET_LOG_FILE unset (the
-	// default) this is a no-op and the process logs only to stderr — which
-	// journald rotates under the shipped systemd unit (ADR-0004), so the default
-	// behaviour is unchanged. When set (typically a container/non-systemd box),
-	// it ALSO tees the log lines to a size/age/backup-rotated file. Configure
-	// sets the format and level and replays the lines buffered since the top of
-	// run(), so the file sink captures startup too.
+	// Process logging (#178, #298, #2052): structured slog lines (JSON by
+	// default, logfmt with FLEET_LOG_FORMAT=text) at FLEET_LOG_LEVEL, through
+	// the secret redactor, to stderr — which journald rotates under the shipped
+	// systemd unit (ADR-0004) — and, when FLEET_LOG_FILE is set (typically a
+	// container/non-systemd box), also to a size/age/backup-rotated file.
+	// Configure replays the lines buffered since the top of run(), so the
+	// file sink captures startup too. See docs/TELEMETRY.md.
 	logCloser, err := logging.Configure(logging.Config{
 		File:       cfg.Log.File,
 		MaxSizeMB:  cfg.Log.MaxSizeMB,
@@ -2290,7 +2290,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 		if r.Synthesized > 0 {
 			level = slog.LevelWarn // tool calls whose outcome is unknown
 		}
-		logging.From(recCtx).Log(context.Background(), level, "stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
+		logging.From(recCtx).Log(recCtx, level, "stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
 	}
 	// Outcomes must follow recovered calls. The store excludes conversations
 	// still containing running turns, so one failed recovery cannot strand

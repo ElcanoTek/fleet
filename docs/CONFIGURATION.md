@@ -377,13 +377,17 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_LOG_MAX_AGE_DAYS` | int | `0` | server | Delete rotated files older than this; 0 keeps them. *Validated at boot*. |
 | `FLEET_LOG_MAX_BACKUPS` | int | `7` | server | Rotated files kept. *Validated at boot*. |
 | `FLEET_LOG_COMPRESS` | bool | `true` | server | Gzip rotated files. *Validated at boot*. |
-| `FLEET_LOG_FORMAT` | enum: json, text | `json` | server | Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). |
-| `FLEET_LOG_LEVEL` | enum: debug, info, warn, error | `info` | server | Minimum level of the process log, both formats. |
+| `FLEET_LOG_FORMAT` | enum: json, text | `json` | server | Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). See docs/TELEMETRY.md. |
+| `FLEET_LOG_LEVEL` | enum: debug, info, warn, error | `info` | server | Minimum process log level (both formats). |
 | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | int | `0` | server | Archive run logs older than this; 0 disables. *Validated at boot*. |
 | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | base64 | — | server | Base64 AES-256 key encrypting log archives; unset or malformed archives gzip-only. **Secret.** |
 | `FLEET_SENTRY_DSN` | url | — | server | Sentry-protocol ingest URL; unset makes Sentry a no-op. A public identifier, not a secret. |
 | `FLEET_ENVIRONMENT` | string | `dev` | server | Deployment tier tag on Sentry events (production, staging, dev). |
-| `FLEET_OTEL_ENDPOINT` | string | — | server | OTLP/gRPC endpoint for traces; unset leaves tracing off. |
+| `FLEET_OTEL_ENDPOINT` | string | — | server | OTLP/gRPC collector for traces (host:port or a URL); unset leaves tracing off. Exported over TLS unless FLEET_OTEL_INSECURE is set (docs/TELEMETRY.md). |
+| `FLEET_OTEL_INSECURE` | bool | `false` | server | Export traces in plaintext. Allowed only for a loopback FLEET_OTEL_ENDPOINT (a collector on the same host); tracing stays off otherwise. *Validated at boot*. |
+| `FLEET_OTEL_CA_FILE` | path | — | server | PEM CA bundle that verifies the trace collector's certificate; unset uses the system roots. |
+| `FLEET_OTEL_CLIENT_CERT_FILE` | path | — | server | PEM client certificate for mutual TLS to the trace collector; set with FLEET_OTEL_CLIENT_KEY_FILE. |
+| `FLEET_OTEL_CLIENT_KEY_FILE` | path | — | server | PEM private key of FLEET_OTEL_CLIENT_CERT_FILE (a path; the key itself never goes in the env file). |
 | `FLEET_OTEL_SAMPLE_RATIO` | float | `1` | server | Trace head-sampling ratio. Lenient: a bad value samples everything and validate-config reports it. *Validated by `fleet validate-config` (advisory only)*. |
 | `FLEET_SERVICE_NAME` | string | `fleet` | server | systemd unit name the CLI manages, and the trace service name. |
 

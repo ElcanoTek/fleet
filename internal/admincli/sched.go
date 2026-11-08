@@ -447,6 +447,10 @@ func schedAPIKeyCreate(argv []string) int {
 		return code
 	}
 
+	if strings.TrimSpace(f.user) != "" && apikeys.KeyType(strings.TrimSpace(*keyType)) != apikeys.KeyTypeUser {
+		return errf(1, "--user names the account of a --type user key only")
+	}
+
 	// Typed-key path (#190): the type determines the permission set.
 	if t := strings.TrimSpace(*keyType); t != "" {
 		kt := apikeys.KeyType(t)
@@ -455,9 +459,6 @@ func schedAPIKeyCreate(argv []string) int {
 		}
 		if kt == apikeys.KeyTypeUser {
 			return createUserKey(mgr, ks, name, f.user, *rateLimit)
-		}
-		if strings.TrimSpace(f.user) != "" {
-			return errf(1, "--user names the account of a --type user key only")
 		}
 		slugs := parseCSVList(*triggerSlugs)
 		if kt == apikeys.KeyTypeWebhook {
