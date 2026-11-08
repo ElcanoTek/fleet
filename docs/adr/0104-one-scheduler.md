@@ -49,8 +49,12 @@ are fired by it; the chat server is only the deliverer of a fire.**
   for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), a
   definition version (`def_version`, bumped by every edit of the prompt,
   cadence or kind; recorded on the fire at its claim as `fire_def_version`:
-  a fire whose definition was edited since is superseded — it delivers,
-  counts and records nothing, and the next pass fires the new definition),
+  a fire whose definition was edited between its claim and its delivery is
+  superseded — it delivers, counts and records nothing, and the next pass
+  fires the new definition. The scheduler checks before delivering and the
+  chat store's delivery transaction checks again under the row lock. Once a
+  turn is delivered, an edit no longer supersedes it: the run happened, and
+  the settle counts it and moves the slot by the edited definition),
   and
   `sched.chat_schedule_runs`, the run history (one row per fire that ran
   or was turned away: `schedule`/`manual` trigger, outcome `queued` /

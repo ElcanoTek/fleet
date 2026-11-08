@@ -295,27 +295,27 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 		status, cronExpr, tz string
 		maxRuns, runCount    int
 		nextRunAt            int64
-		defVersion           int64
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, cron_expr, timezone, max_runs, run_count, next_run_at, def_version
+		SELECT status, cron_expr, timezone, max_runs, run_count, next_run_at
 		  FROM chat_schedules
 		 WHERE id = $1 AND lease_owner = $2
 		 FOR UPDATE`,
 		fire.ScheduleID, fire.LeaseToken,
-	).Scan(&status, &cronExpr, &tz, &maxRuns, &runCount, &nextRunAt, &defVersion)
+	).Scan(&status, &cronExpr, &tz, &maxRuns, &runCount, &nextRunAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if defVersion != fire.DefVersion {
-		// The definition was edited after the claim: this fire is superseded
-		// whatever its outcome says. End it, record nothing; the next pass
-		// fires the definition as it is now.
-		d = models.ChatScheduleDelivery{Outcome: models.ChatScheduleSuperseded}
-	}
+	// The definition version guards delivery only (the chat server refuses
+	// to deliver a fire claimed under an edited definition: superseded).
+	// Once a fire's turn is queued the run has happened, so the settle counts
+	// it whatever has been edited since — the slot advances (computed from
+	// the definition as it is now, read above) and the run is recorded —
+	// rather than leave the old turn running and the slot unadvanced, which
+	// would let the edited definition fire that slot again.
 
 	nowUnix := now.Unix()
 	live := status == models.ChatScheduleStatusActive || status == models.ChatScheduleStatusPaused
@@ -419,6 +419,13 @@ func (db *Database) NextChatScheduleDueAt(ctx context.Context, after int64) (int
 		return 0, false, err
 	}
 	return next.Int64, next.Valid, nil
+}
+
+// ChatScheduleDefVersion is a schedule's current definition version.
+func (db *Database) ChatScheduleDefVersion(ctx context.Context, scheduleID string) (int64, error) {
+	var v int64
+	err := db.conn.QueryRowContext(ctx, `SELECT def_version FROM chat_schedules WHERE id = $1`, scheduleID).Scan(&v)
+	return v, err
 }
 
 // OverdueChatScheduleWork reports whether any chat schedule work is already

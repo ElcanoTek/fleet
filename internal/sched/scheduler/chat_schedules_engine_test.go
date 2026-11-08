@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
@@ -924,5 +925,62 @@ func TestChatSchedules_SettleIsTimedAfterDelivery(t *testing.T) {
 	runs, err := s.storage.DB().ListChatScheduleRuns(context.Background(), "every-minute", 5)
 	if err != nil || len(runs) != 1 || runs[0].FiredAt.Before(finished.Add(-5*time.Second)) {
 		t.Fatalf("run history = %+v, %v; want one row stamped when the delivery finished", runs, err)
+	}
+}
+
+// TestChatSchedules_EditBeforeDeliveryIsSuperseded: on its own (without the
+// chat server's in-transaction check), the scheduler supersedes a fire whose
+// definition was edited between its claim and its delivery: nothing is
+// delivered, counted or recorded, and the fire is ended.
+func TestChatSchedules_EditBeforeDeliveryIsSuperseded(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	addChatSchedule(t, s, "p", "active", time.Now().Add(-time.Minute).Unix())
+	fs, err := s.storage.DB().ClaimDueChatSchedules(context.Background(), time.Now(), time.Minute, 25, nil)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("claim = %+v, %v", fs, err)
+	}
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET def_version = def_version + 1, prompt = 'edited' WHERE id = 'p'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.fireChatSchedule(context.Background(), fs[0])
+	if err != nil || got.Outcome != models.ChatScheduleSuperseded {
+		t.Fatalf("fire = %+v, %v; want superseded", got, err)
+	}
+	if d.deliveredTo("p") != 0 {
+		t.Fatal("a fire claimed under the old definition was delivered")
+	}
+	if n, leased := runCountOf(t, s, "p"); n != 0 || leased {
+		t.Fatalf("run count %d, leased %v; want 0, ended", n, leased)
+	}
+}
+
+// TestChatSchedules_DeferredRunNowRetriesOnTime: a Run now the chat server
+// defers keeps its fire with a short retry; Run now re-arms the loop for it,
+// so it is delivered within the retry, not at the next tick (an hour away).
+func TestChatSchedules_DeferredRunNowRetriesOnTime(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	addChatSchedule(t, s, "p", "paused", time.Now().Add(time.Hour).Unix())
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(300 * time.Millisecond) // the startup pass is done
+	d.mu.Lock()
+	d.deferAll = true
+	d.mu.Unlock()
+	got, err := s.RunChatScheduleNow(context.Background(), "p")
+	if err != nil || got.Outcome != models.ChatScheduleDeferred {
+		t.Fatalf("run now = %+v, %v; want deferred", got, err)
+	}
+	d.mu.Lock()
+	d.deferAll = false
+	d.mu.Unlock()
+	deadline := time.Now().Add(db.ChatScheduleDeferRetry + 5*time.Second)
+	for d.deliveredTo("p") == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d.deliveredTo("p") != 1 {
+		t.Fatal("the deferred Run now waited for the next tick")
 	}
 }
