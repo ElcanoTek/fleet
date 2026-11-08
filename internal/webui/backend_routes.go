@@ -15,8 +15,6 @@ type Backend string
 const (
 	// BackendChat is the chat server (Options.Chat).
 	BackendChat Backend = "chat"
-	// BackendOrchestrator is the orchestrator (Options.Orchestrator).
-	BackendOrchestrator Backend = "orchestrator"
 )
 
 // BackendRoute is one table-driven gateway row seen from the backend side:
@@ -32,22 +30,21 @@ type BackendRoute struct {
 	Target string
 }
 
-// BackendRoutes lists every chatRoute and orchRoute row with the upstream path
+// BackendRoutes lists every chatRoute row with the upstream path
 // it produces. It exists for the cross-package drift test in cmd/fleet, which
 // owns the real backend muxes: this package cannot import them, and a gateway
 // row whose target no backend route serves is a browser feature that answers
 // 404 while every mocked web test stays green.
 //
 // The rows with logic of their own (streams, files, login, discuss, models,
-// brand) are not table rows and are not listed.
+// brand) are not table rows and are not listed. Nor is the Operations Center:
+// /api/orchestrator/* is the orchestrator router itself (orchestrator_mount.go),
+// so it has no rows that could point at nothing.
 func BackendRoutes() []BackendRoute {
-	chat, orch := chatRoutes(), orchRoutes()
-	out := make([]BackendRoute, 0, len(chat)+len(orch))
+	chat := chatRoutes()
+	out := make([]BackendRoute, 0, len(chat))
 	for _, rt := range chat {
 		out = append(out, sampleBackendRoute(BackendChat, rt.pattern, rt.target))
-	}
-	for _, rt := range orch {
-		out = append(out, sampleBackendRoute(BackendOrchestrator, rt.pattern, rt.target))
 	}
 	return out
 }

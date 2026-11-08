@@ -9,12 +9,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/goccy/go-yaml"
 
 	"github.com/ElcanoTek/fleet/internal/apispec"
 	"github.com/ElcanoTek/fleet/internal/apispec/orchestrator"
-	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -27,18 +25,13 @@ var updateOpenAPI = flag.Bool("update", false, "rewrite docs/openapi.yaml from t
 
 // TestOpenAPIGenerated is the drift gate for the generated contract
 // (ADR-0109): docs/openapi.yaml must equal what internal/apispec generates
-// from the REAL orchestrator router plus the route catalog. Generation itself
+// from the REAL public router (the orchestrator family at its /v1 mount,
+// ADR-0110) plus the route catalog. Generation itself
 // fails when a registered route has no catalog entry or a catalog entry names
 // a route the router lacks, so a route cannot be added, renamed or removed
 // without the contract following.
 func TestOpenAPIGenerated(t *testing.T) {
-	h := handlers.New(handlers.Config{}, nil, nil)
-	notes := handlers.NewNotesHandlers(nil, h)
-	router, ok := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
-	if !ok {
-		t.Fatal("orchestrator router is not chi.Routes")
-	}
-	routes, err := apispec.WalkChi(router)
+	routes, err := apispec.WalkChi(contractRouter(t))
 	if err != nil {
 		t.Fatalf("walk router: %v", err)
 	}

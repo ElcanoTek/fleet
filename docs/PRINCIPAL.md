@@ -55,4 +55,4 @@ the two listener edges and the two clients of the service-token channel.
 
 ## Not done here
 
-- Phase 3 (one router, one listener). Phase 4 (generated contracts, ADR-0109) shipped separately.
+- Phase 3 (one router, one listener) shipped separately: ADR-0110. Phase 4 (generated contracts, ADR-0109) shipped separately.
