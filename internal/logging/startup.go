@@ -2,8 +2,10 @@ package logging
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,6 +33,10 @@ type startupBuffer struct {
 type bufferedRecord struct {
 	ctx context.Context
 	rec slog.Record
+	// bridged marks a line a third-party library wrote through the stdlib
+	// log package: replayed through the ungated bridge handler, as it would
+	// have been after Configure, not gated by FLEET_LOG_LEVEL as an info.
+	bridged bool
 }
 
 var (
@@ -49,6 +55,32 @@ func BufferStartup() {
 	}
 	startup = &startupBuffer{}
 	slog.SetDefault(slog.New(&bufferHandler{buf: startup}))
+	// After slog.SetDefault, so the stdlib log package writes here rather
+	// than into the buffer as an ordinary info record.
+	log.SetFlags(0)
+	log.SetOutput(startupLogBridge{buf: startup})
+}
+
+// startupLogBridge buffers a stdlib log line before Configure, tagged as
+// bridged (bufferedRecord.bridged).
+type startupLogBridge struct{ buf *startupBuffer }
+
+func (b startupLogBridge) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\r\n")
+	msg = strings.ReplaceAll(strings.ReplaceAll(msg, "\r", " "), "\n", " ")
+	b.buf.add(bufferedRecord{ctx: context.Background(), rec: slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0), bridged: true})
+	return len(p), nil
+}
+
+// add appends one record, counting it as dropped past maxStartupRecords.
+func (b *startupBuffer) add(r bufferedRecord) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.records) >= maxStartupRecords {
+		b.dropped++
+		return
+	}
+	b.records = append(b.records, r)
 }
 
 // FlushStartup writes any still-buffered startup records to stderr as JSON
@@ -58,7 +90,7 @@ func BufferStartup() {
 // too.
 func FlushStartup() {
 	h := emergencyHandler()
-	if replayStartup(h) {
+	if replayStartup(h, h) {
 		slog.SetDefault(slog.New(h))
 	}
 }
@@ -69,15 +101,16 @@ func emergencyHandler() slog.Handler {
 	return newJSONHandler(lockedStderr, slog.LevelInfo)
 }
 
-// replayStartup hands every buffered record to h (subject to h's level) and
-// stops buffering. It reports whether a buffer was active.
+// replayStartup hands every buffered record to h (subject to h's level) —
+// a bridged stdlib log line to bridge instead, ungated, as after Configure —
+// and stops buffering. It reports whether a buffer was active.
 //
 // It seeds the redactor with the process's secret-named env values first:
 // the buffered records are redacted only now, as h handles them, and by now
 // the env file has been applied — whichever path replays (Configure, the
 // FlushStartup emergency flush, Fatal), no record goes out before the
 // redactor knows the process's own secrets.
-func replayStartup(h slog.Handler) bool {
+func replayStartup(h, bridge slog.Handler) bool {
 	seedEnvLiterals()
 	startupMu.Lock()
 	buf := startup
@@ -91,7 +124,10 @@ func replayStartup(h slog.Handler) bool {
 	buf.records = nil
 	buf.mu.Unlock()
 	for _, br := range records {
-		if h.Enabled(br.ctx, br.rec.Level) {
+		switch {
+		case br.bridged:
+			_ = bridge.Handle(br.ctx, br.rec)
+		case h.Enabled(br.ctx, br.rec.Level):
 			_ = h.Handle(br.ctx, br.rec)
 		}
 	}
@@ -128,13 +164,7 @@ func (h *bufferHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 	rec := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 	rec.AddAttrs(cur...)
-	h.buf.mu.Lock()
-	defer h.buf.mu.Unlock()
-	if len(h.buf.records) >= maxStartupRecords {
-		h.buf.dropped++
-		return nil
-	}
-	h.buf.records = append(h.buf.records, bufferedRecord{ctx: context.WithoutCancel(ctx), rec: rec})
+	h.buf.add(bufferedRecord{ctx: context.WithoutCancel(ctx), rec: rec})
 	return nil
 }
 

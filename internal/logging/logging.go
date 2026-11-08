@@ -136,8 +136,8 @@ func Configure(cfg Config) (io.Closer, error) {
 	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
 	// Lines logged before Configure (BufferStartup) go out now, through the
 	// configured format, level and file sink.
-	replayStartup(slog.Default().Handler())
 	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
+	replayStartup(slog.Default().Handler(), bridgeLogger.Handler())
 	// contextAttrHandler: a panic recovered under a request or a run carries
 	// that context's correlation (safe.EmitPanicWithMetadataContext).
 	safe.SetPanicHandler(contextAttrHandler{inner: newHandler(dest, slog.LevelError)})

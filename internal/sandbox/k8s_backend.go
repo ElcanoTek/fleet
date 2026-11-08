@@ -1295,11 +1295,12 @@ func (k *k8sImpl) ensureBridge() error {
 	// stdout; the demux loop feeds a pipe the reader side wraps in bufio.
 	pr, pw := io.Pipe()
 	stderrBuf := &syncBuffer{}
+	stderrLog := bridgeStderrLogger()
 	// The bridge intentionally outlives any single request ctx and is torn
 	// down in close() / terminateBridgeLocked — dial under a handshake-bounded
 	// background context, mirroring the podman backend's noctx bridge exec.
 	session, err := k.backend.client.execPod(context.Background(), k.backend.cfg.Namespace, podName, sandboxContainerName,
-		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(bridgeStderrLogger(), stderrBuf))
+		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(stderrLog, stderrBuf))
 	if err != nil {
 		_ = pw.Close()
 		_ = pr.Close()
@@ -1310,6 +1311,8 @@ func (k *k8sImpl) ensureBridge() error {
 	go func() {
 		<-session.done
 		_ = pw.CloseWithError(io.EOF)
+		// The session's stderr is drained: flush its last partial line.
+		_ = stderrLog.Close()
 	}()
 	k.bridge = session
 	k.bridgeStdout = bufio.NewReader(pr)

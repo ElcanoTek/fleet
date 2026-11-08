@@ -245,3 +245,31 @@ func TestConfigureTextPreservesLegacy(t *testing.T) {
 		t.Errorf("text format should contain the raw line, got %q", data)
 	}
 }
+
+// A stdlib log line written before Configure (a library's log.Printf while
+// fleet serve is still loading its config) is buffered as a bridged line and
+// replayed through the ungated bridge, as it would be after Configure — not
+// as an info record that FLEET_LOG_LEVEL=error drops (#2074 review).
+func TestStdlibLogBeforeConfigureIsNotGated(t *testing.T) {
+	restoreLogging(t)
+	BufferStartup()
+	log.Printf("library says %s", "hello before configure")
+	slog.Info("an ordinary startup info line")
+
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"msg":"library says hello before configure"`)) {
+		t.Fatalf("the buffered stdlib log line was gated away:\n%s", data)
+	}
+	if bytes.Contains(data, []byte("an ordinary startup info line")) {
+		t.Fatalf("an ordinary info line passed level=error:\n%s", data)
+	}
+}

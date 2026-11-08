@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/procgroup"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -55,6 +56,7 @@ type hostImpl struct {
 	// that a sandbox dedicated to bash work doesn't pay the python boot
 	// cost.
 	bridgeCmd        *exec.Cmd
+	bridgeStderrLog  *logging.StderrLogger // the bridge's stderr as log records; Closed after Wait
 	bridgeStdin      io.WriteCloser
 	bridgeStdout     *bufio.Reader
 	bridgeStarted    bool
@@ -281,7 +283,8 @@ func (h *hostImpl) ensureBridge() error {
 	cmd := exec.Command("python3", h.bridgeScriptPath)
 	// The bridge's stderr (a Python traceback) is logged line by line through
 	// slog, redacted — never copied to the process stderr as written.
-	cmd.Stderr = bridgeStderrLogger()
+	stderrLog := bridgeStderrLogger()
+	cmd.Stderr = stderrLog
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -298,6 +301,7 @@ func (h *hostImpl) ensureBridge() error {
 	}
 
 	h.bridgeCmd = cmd
+	h.bridgeStderrLog = stderrLog
 	h.bridgeStdin = stdin
 	h.bridgeStdout = bufio.NewReader(stdout)
 	h.bridgeStarted = true
@@ -365,8 +369,13 @@ func (h *hostImpl) terminateBridgeLocked() {
 		_ = h.bridgeCmd.Process.Signal(os.Interrupt)
 		// Brief grace period; force-kill if still alive.
 		done := make(chan struct{})
+		cmd, stderrLog := h.bridgeCmd, h.bridgeStderrLog
 		go func() {
-			_ = h.bridgeCmd.Wait()
+			_ = cmd.Wait()
+			// Wait joined the stderr copier: flush its last partial line.
+			if stderrLog != nil {
+				_ = stderrLog.Close()
+			}
 			close(done)
 		}()
 		select {
@@ -380,6 +389,7 @@ func (h *hostImpl) terminateBridgeLocked() {
 		_ = h.bridgeStdin.Close()
 	}
 	h.bridgeCmd = nil
+	h.bridgeStderrLog = nil
 	h.bridgeStdin = nil
 	h.bridgeStdout = nil
 	h.bridgeStarted = false

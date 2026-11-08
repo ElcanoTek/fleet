@@ -116,7 +116,7 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 			return slog.String(a.Key, Redact(errorText(x)))
 		case fmt.Stringer:
 			if !stringerHidesSecretKeys(x) {
-				return slog.String(a.Key, Redact(x.String()))
+				return slog.String(a.Key, Redact(stringText(x)))
 			}
 		case []byte:
 			return slog.String(a.Key, Redact(string(x)))
@@ -194,7 +194,7 @@ func redactComposite(v any) any {
 		return Redact(errorText(x))
 	case fmt.Stringer:
 		if !stringerHidesSecretKeys(x) {
-			return Redact(x.String())
+			return Redact(stringText(x))
 		}
 		// A composite whose fields the secret-key rule names: walked by
 		// structure below, never flattened by its own String().
@@ -215,7 +215,15 @@ func redactComposite(v any) any {
 	default:
 		// Composite or other kinds: walked through JSON below.
 	}
-	raw, err := json.Marshal(v)
+	// encoding/json hands a value with its own MarshalJSON/MarshalText the
+	// form that code chooses — at any depth — and the key rule then never
+	// sees the fields. A self-marshalling value whose type has a
+	// secret-named field (exported or not: its own code can print either)
+	// fails closed, wherever in v it sits.
+	if hasSecretMarshaler(reflect.ValueOf(v)) {
+		return unloggable(v)
+	}
+	raw, err := safeMarshal(v)
 	if err != nil {
 		return unloggable(v)
 	}
@@ -405,10 +413,163 @@ func countLikeKey(key string) bool {
 func errorText(err error) (s string) {
 	defer func() {
 		if recover() != nil {
-			s = fmt.Sprintf("%T(nil)", err)
+			s = userMethodFailed(err)
 		}
 	}()
+	if isNilPointer(err) {
+		return fmt.Sprintf("%T(nil)", err)
+	}
 	return err.Error()
+}
+
+// stringText is s.String(), protected like errorText: a typed-nil pointer
+// renders as "T(nil)" and a String() that panics as a placeholder — a
+// caller's method must never take the log handler down with it.
+func stringText(s fmt.Stringer) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = userMethodFailed(s)
+		}
+	}()
+	if isNilPointer(s) {
+		return fmt.Sprintf("%T(nil)", s)
+	}
+	return s.String()
+}
+
+// safeMarshal is json.Marshal with a panicking MarshalJSON/MarshalText (or
+// any method it reaches) turned into an error, which the caller logs as
+// unloggable.
+func safeMarshal(v any) (raw []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			raw, err = nil, fmt.Errorf("marshal panicked")
+		}
+	}()
+	return json.Marshal(v)
+}
+
+// userMethodFailed is the placeholder for a String() or Error() that
+// panicked: the type only, never anything the method produced.
+func userMethodFailed(v any) string {
+	if isNilPointer(v) {
+		return fmt.Sprintf("%T(nil)", v)
+	}
+	return fmt.Sprintf("[unloggable value: %T]", v)
+}
+
+func isNilPointer(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+var (
+	jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
+	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+)
+
+// selfMarshals reports a type whose JSON form its own code chooses, through
+// a value or a pointer receiver.
+func selfMarshals(t reflect.Type) bool {
+	if t.Implements(jsonMarshalerType) || t.Implements(textMarshalerType) {
+		return true
+	}
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface {
+		pt := reflect.PointerTo(t)
+		return pt.Implements(jsonMarshalerType) || pt.Implements(textMarshalerType)
+	}
+	return false
+}
+
+// selfMarshalSecretTypes caches typeHasAnySecretField per type.
+var selfMarshalSecretTypes sync.Map // reflect.Type -> bool
+
+// typeHasAnySecretField is typeHasSecretPath counting unexported fields too:
+// a type's own MarshalJSON can print those.
+func typeHasAnySecretField(t reflect.Type) bool {
+	if hit, ok := selfMarshalSecretTypes.Load(t); ok {
+		return hit.(bool)
+	}
+	key := t
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	hit := typeHasSecretPath(t)
+	if !hit && t.Kind() == reflect.Struct {
+		for i := range t.NumField() {
+			if secretAttrKey(t.Field(i).Name) {
+				hit = true
+				break
+			}
+		}
+	}
+	selfMarshalSecretTypes.Store(key, hit)
+	return hit
+}
+
+// maxMarshalScan bounds hasSecretMarshaler's walk (depth and elements per
+// container): a value deeper or wider than this is not logged structurally.
+const maxMarshalScan = 4096
+
+// hasSecretMarshaler reports whether v, or any value reachable from it
+// through exported fields, elements, map values, pointers and interfaces,
+// marshals itself and has a secret-named field. Pointer cycles are cut, and
+// a walk that runs past maxMarshalScan reports true (fail closed).
+func hasSecretMarshaler(v reflect.Value) bool {
+	budget := maxMarshalScan
+	return secretMarshalerVisit(v, 0, &budget, map[uintptr]bool{})
+}
+
+func secretMarshalerVisit(v reflect.Value, depth int, budget *int, seen map[uintptr]bool) bool {
+	if !v.IsValid() {
+		return false
+	}
+	*budget--
+	if depth > 64 || *budget < 0 {
+		return true
+	}
+	t := v.Type()
+	if selfMarshals(t) && typeHasAnySecretField(t) {
+		return true
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() || seen[v.Pointer()] {
+			return false
+		}
+		seen[v.Pointer()] = true
+		return secretMarshalerVisit(v.Elem(), depth+1, budget, seen)
+	case reflect.Interface:
+		if v.IsNil() {
+			return false
+		}
+		return secretMarshalerVisit(v.Elem(), depth+1, budget, seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if t.Field(i).IsExported() && secretMarshalerVisit(v.Field(i), depth+1, budget, seen) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return false // bytes: no fields
+		}
+		for i := range v.Len() {
+			if secretMarshalerVisit(v.Index(i), depth+1, budget, seen) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if secretMarshalerVisit(iter.Value(), depth+1, budget, seen) {
+				return true
+			}
+		}
+	default:
+		// scalars, strings, funcs, chans: nothing nested
+	}
+	return false
 }
 
 // redactedValue replaces a secret-keyed attribute's whole value; it is the

@@ -103,7 +103,8 @@ func TestStartupOverflowWarningHonoursTheLevel(t *testing.T) {
 			slog.Error("boot noise")
 		}
 		var buf strings.Builder
-		replayStartup(NewHandler("json", &buf, tc.level))
+		h := NewHandler("json", &buf, tc.level)
+		replayStartup(h, h)
 		if got := strings.Contains(buf.String(), "startup log buffer overflowed"); got != tc.want {
 			t.Fatalf("level %v: overflow warning written = %v, want %v", tc.level, got, tc.want)
 		}

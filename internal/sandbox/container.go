@@ -60,7 +60,8 @@ type containerImpl struct {
 	bridgeCmd        *exec.Cmd
 	bridgeStdin      io.WriteCloser
 	bridgeStdout     *bufio.Reader
-	bridgeStderr     *syncBuffer // captured `podman exec` stderr — used to surface the real reason on broken-pipe write failures
+	bridgeStderrLog  *logging.StderrLogger // the bridge's stderr as log records; Closed after Wait
+	bridgeStderr     *syncBuffer           // captured `podman exec` stderr — used to surface the real reason on broken-pipe write failures
 	bridgeStarted    bool
 	bridgeScriptPath string // host-side temp file (bind-mounted into container)
 
@@ -1407,8 +1408,14 @@ func (c *containerImpl) terminateBridgeLocked() {
 		_ = cmd.Process.Signal(os.Interrupt)
 		// Brief grace period; force-kill if still alive.
 		done := make(chan struct{})
+		stderrLog := c.bridgeStderrLog
 		go func() {
 			_ = cmd.Wait()
+			// Wait joined the stderr copier: flush its last partial line
+			// (also when the wait below is abandoned and finishes later).
+			if stderrLog != nil {
+				_ = stderrLog.Close()
+			}
 			close(done)
 		}()
 		select {
@@ -1433,6 +1440,7 @@ func (c *containerImpl) terminateBridgeLocked() {
 		_ = c.bridgeStdin.Close()
 	}
 	c.bridgeCmd = nil
+	c.bridgeStderrLog = nil
 	c.bridgeStdin = nil
 	c.bridgeStdout = nil
 	c.bridgeStarted = false
@@ -1493,7 +1501,8 @@ func (c *containerImpl) ensureBridge() error {
 	// BashWaitDelay exists for on the bash path.
 	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
-	cmd.Stderr = io.MultiWriter(bridgeStderrLogger(), stderrBuf)
+	stderrLog := bridgeStderrLogger()
+	cmd.Stderr = io.MultiWriter(stderrLog, stderrBuf)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1509,6 +1518,7 @@ func (c *containerImpl) ensureBridge() error {
 		return fmt.Errorf("start bridge exec: %w", err)
 	}
 	c.bridgeCmd = cmd
+	c.bridgeStderrLog = stderrLog
 	c.bridgeStdin = stdin
 	c.bridgeStdout = bufio.NewReader(stdout)
 	c.bridgeStderr = stderrBuf
