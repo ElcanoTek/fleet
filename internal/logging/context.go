@@ -38,7 +38,9 @@ func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 		ctx = context.Background()
 	}
 	prev, _ := ctx.Value(ctxAttrsKey{}).(ctxAttrs)
-	next := make(ctxAttrs, len(prev), len(prev)+len(attrs))
+	// No capacity hint: append grows it, and a summed hint is an
+	// overflow-prone allocation size (CodeQL go/allocation-size-overflow).
+	next := make(ctxAttrs, len(prev))
 	copy(next, prev)
 	changed := false
 	for _, a := range attrs {
