@@ -75,6 +75,10 @@ func accountEventsExport(argv []string) int {
 	return 0
 }
 
+func openChatStoreDSN(dsn string) (*store.Store, error) {
+	return store.Open(dsn, store.DefaultPoolConfig())
+}
+
 func openChatStore(dbURL string) (*store.Store, int) {
 	dsn, err := chatDSN(dbURL)
 	if err != nil {

@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
-
-	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
 // schemaSnapshot renders the definition of everything in schemas chat, core
@@ -86,28 +84,22 @@ func diffLines(a, b []string) (onlyA, onlyB []string) {
 	return onlyA, onlyB
 }
 
-// freshInstall is what a fresh `fleet serve` builds: Up, then the identity
-// merge every scheduler open runs.
+// freshInstall is what a fresh `fleet serve` builds: Up.
 func freshInstall(t *testing.T) *sql.DB {
 	t.Helper()
 	db := emptyDB(t)
 	if err := Up(context.Background(), db); err != nil {
 		t.Fatalf("fresh Up: %v", err)
 	}
-	if _, err := identity.MergeLegacySchedUsers(context.Background(), db, "sched"); err != nil {
-		t.Fatalf("fresh merge: %v", err)
-	}
 	return db
 }
 
-// TestUpgradeFromLegacyLayout is the upgrade of a box from the release before
-// M6: a database built the way that release built it (the legacy files, both
-// legacy ledgers in their exact old formats, chat then sched then the identity
-// merge), holding accounts, tasks, chat schedules and a conversation. After Up
-// its schema — chat, core and sched, minus the ledgers — is exactly a fresh
-// install's, and every seeded row is intact. The same holds for a box two
-// releases behind (chat 95, sched 70), whose backlog Up applies.
-func TestUpgradeFromLegacyLayout(t *testing.T) {
+// TestUpgradeFromEarlierVersion verifies upgrading a database from an earlier
+// migration version in core.schema_versions holding accounts, tasks, chat
+// schedules and a conversation: after Up its schema — chat, core and sched,
+// minus the ledgers — is exactly a fresh install's, and every seeded row is
+// intact.
+func TestUpgradeFromEarlierVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	want := schemaSnapshot(t, freshInstall(t))
@@ -115,35 +107,27 @@ func TestUpgradeFromLegacyLayout(t *testing.T) {
 		t.Fatalf("the fresh install's snapshot has only %d lines", len(want))
 	}
 
-	t.Run("from the latest legacy release", func(t *testing.T) {
+	t.Run("from version 176", func(t *testing.T) {
 		t.Parallel()
 		db := emptyDB(t)
-		legacyBuild(t, db, 99, 77)
+		if err := UpTo(ctx, db, 176); err != nil {
+			t.Fatalf("UpTo 176: %v", err)
+		}
 		for _, q := range []string{
-			`INSERT INTO core.users (email, password_hash, role, created_at, updated_at) VALUES ('alice@example.com', 'h1', 'admin', 1700000000, 1700000000)`,
-			`INSERT INTO sched.users (id, username, password_hash, role, created_at) VALUES ('0b5e4a5e-1111-4c1e-9d1e-0123456789ab', 'ops@example.com', 'h2', 'client', now())`,
+			`INSERT INTO core.users (id, email, password_hash, role, created_at, updated_at) VALUES ('0b5e4a5e-0000-4c1e-9d1e-0123456789ab', 'alice@example.com', 'h1', 'admin', 1700000000, 1700000000)`,
+			`INSERT INTO core.users (id, email, password_hash, role, ops_scope, created_at, updated_at) VALUES ('0b5e4a5e-1111-4c1e-9d1e-0123456789ab', 'ops@example.com', 'h2', 'viewer', 'run', 1700000000, 1700000000)`,
 			`INSERT INTO chat.conversations (id, user_email, title, created_at, updated_at) VALUES ('conv-1', 'alice@example.com', 'Deals', 1700000000, 1700000000)`,
 			`INSERT INTO sched.tasks (id, prompt, priority, status, created_at) VALUES ('0b5e4a5e-2222-4c1e-9d1e-0123456789ab', 'Check pacing.', 10, 'pending', now())`,
-			`INSERT INTO sched.chat_schedules (id, conversation_id, user_email, prompt, next_run_at, created_at, updated_at, cron_expr, status) VALUES ('sched-1', 'conv-1', 'alice@example.com', 'Sweep.', 1700003600, 1700000000, 1700000000, '0 * * * *', 'active')`,
+			`INSERT INTO chat.chat_schedules (id, conversation_id, user_email, title, prompt, cron_expr, timezone, duration_seconds, status, next_run_at, run_count, max_runs, created_at, updated_at) VALUES ('sched-1', 'conv-1', 'alice@example.com', '', 'Sweep.', '0 * * * *', 'UTC', 0, 'active', 1700003600, 0, 0, 1700000000, 1700000000)`,
 		} {
 			mustExec(t, db, q)
 		}
-		if res, err := identity.MergeLegacySchedUsers(ctx, db, "sched"); err != nil || !res.Ran {
-			t.Fatalf("the previous release's identity merge = %+v, %v", res, err)
-		}
-		chatBefore, schedBefore := legacyLedgers(t, db)
 
 		if err := Up(ctx, db); err != nil {
 			t.Fatalf("Up: %v", err)
 		}
-		if res, err := identity.MergeLegacySchedUsers(ctx, db, "sched"); err != nil || res.Ran {
-			t.Fatalf("the merge after Up = %+v, %v; want already done", res, err)
-		}
 		if a, b := diffLines(want, schemaSnapshot(t, db)); len(a)+len(b) > 0 {
 			t.Fatalf("schema after the upgrade differs from a fresh install:\nonly fresh:\n  %s\nonly upgraded:\n  %s", strings.Join(a, "\n  "), strings.Join(b, "\n  "))
-		}
-		if chat, sched := legacyLedgers(t, db); strings.Join(chat, ",") != strings.Join(chatBefore, ",") || strings.Join(sched, ",") != strings.Join(schedBefore, ",") {
-			t.Fatal("the upgrade changed a legacy ledger")
 		}
 		rep, err := Status(ctx, db)
 		if err != nil || !rep.Adopted || len(rep.Pending) != 0 {
@@ -162,19 +146,18 @@ func TestUpgradeFromLegacyLayout(t *testing.T) {
 		}
 		var opsID string
 		if err := db.QueryRow(`SELECT id::text FROM core.users WHERE email = 'ops@example.com'`).Scan(&opsID); err != nil || opsID != "0b5e4a5e-1111-4c1e-9d1e-0123456789ab" {
-			t.Fatalf("the merged Operations Center account's id = %q, %v", opsID, err)
+			t.Fatalf("the Operations Center account's id = %q, %v", opsID, err)
 		}
 	})
 
-	t.Run("from two releases behind (chat 95, sched 70)", func(t *testing.T) {
+	t.Run("from version 170", func(t *testing.T) {
 		t.Parallel()
 		db := emptyDB(t)
-		legacyBuild(t, db, 95, 70)
+		if err := UpTo(ctx, db, 170); err != nil {
+			t.Fatalf("UpTo 170: %v", err)
+		}
 		if err := Up(ctx, db); err != nil {
 			t.Fatalf("Up: %v", err)
-		}
-		if _, err := identity.MergeLegacySchedUsers(ctx, db, "sched"); err != nil {
-			t.Fatal(err)
 		}
 		if a, b := diffLines(want, schemaSnapshot(t, db)); len(a)+len(b) > 0 {
 			t.Fatalf("schema after the upgrade differs from a fresh install:\nonly fresh:\n  %s\nonly upgraded:\n  %s", strings.Join(a, "\n  "), strings.Join(b, "\n  "))

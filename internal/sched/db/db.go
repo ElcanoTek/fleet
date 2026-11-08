@@ -18,9 +18,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
-	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/dbtrace"
-	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -40,9 +38,6 @@ type Database struct {
 	// once via SetA2APushCipher before serving; nil fails those stores closed
 	// (see a2a_push.go). Held in memory only, never logged.
 	pushCipher *secretbox.Cipher
-
-	// merge is the identity merge's outcome at Init (IdentityMerge).
-	merge identity.MergeResult
 }
 
 // SetLogArchiveKey configures the host-side AES-256-GCM key used to encrypt
@@ -123,48 +118,13 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 	}
 
 	// The one migration runner (ADR-0107): every store open migrates the
-	// whole database (one read when it is current); the identity merge is the
-	// post-migration step that needs both stores migrated.
+	// whole database (one read when it is current).
 	if err := migrations.Up(context.Background(), db.conn); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
-	if err := db.mergeIdentities(context.Background()); err != nil {
-		return err
-	}
 
 	return nil
 }
-
-// mergeIdentities folds the scheduler's legacy users table into the one
-// identity table once both stores are migrated (identity.MergeLegacySchedUsers,
-// #2049 M4). Every open tries; after the first success it is one read. It runs
-// after migrations.Up, which has migrated chat, core and sched alike. A failed merge fails the
-// open: the Operations Center must not run on half an identity table.
-func (db *Database) mergeIdentities(ctx context.Context) error {
-	schema, err := dbschema.Configured(ctx, db.conn)
-	if err != nil {
-		return err
-	}
-	if schema == "" {
-		// A DSN naming no store schema (the removed two-database layout is
-		// refused before any store opens): nothing to merge into here.
-		return nil
-	}
-	res, err := identity.MergeLegacySchedUsers(ctx, db.conn, schema)
-	if err != nil {
-		return fmt.Errorf("merge Operations Center accounts into the identity table: %w", err)
-	}
-	db.merge = res
-	if res.Ran {
-		for _, line := range res.Report.Lines() {
-			logging.From(ctx).Info("identity merge: " + line)
-		}
-	}
-	return nil
-}
-
-// IdentityMerge is what this open's identity merge found or did.
-func (db *Database) IdentityMerge() identity.MergeResult { return db.merge }
 
 // Close closes the database connection.
 func (db *Database) Close() error {

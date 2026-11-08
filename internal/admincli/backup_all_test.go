@@ -49,6 +49,7 @@ func TestBackupAllIsOneSnapshot(t *testing.T) {
 	}
 	exec(srcDB, `CREATE SCHEMA chat; CREATE SCHEMA core; CREATE SCHEMA sched; CREATE SCHEMA other;
 		CREATE TABLE core.users (email text PRIMARY KEY); INSERT INTO core.users VALUES ('ops@x.com');
+		CREATE TABLE core.schema_versions (version bigint PRIMARY KEY); INSERT INTO core.schema_versions VALUES (177);
 		CREATE TABLE chat.sentinel (note text); INSERT INTO chat.sentinel VALUES ('chat-ok');
 		CREATE TABLE sched.tasks (created_by text); INSERT INTO sched.tasks VALUES ('ops@x.com');
 		CREATE TABLE other.keep (note text)`)
@@ -121,5 +122,17 @@ func TestBackupAllIsOneSnapshot(t *testing.T) {
 	// --db=all needs both stores in one database.
 	if _, err := dsnFor("all", config.WithSchema(srcDB, config.ChatSchema), config.WithSchema(dstDB, config.SchedSchema)); err == nil || !strings.Contains(err.Error(), "different databases") {
 		t.Fatalf("dsnFor all across databases = %v, want a refusal", err)
+	}
+}
+
+// TestRestoreIsWholeDatabaseOnly (#2049 M6): `fleet restore --db=chat|sched`
+// is refused with what to do instead.
+func TestRestoreIsWholeDatabaseOnly(t *testing.T) {
+	for _, db := range []string{"chat", "sched"} {
+		var code int
+		out := captureStderr(t, func() { code = cmdRestore([]string{"--db=" + db, "--no-confirm", "x.dump"}) })
+		if code != 1 || !strings.Contains(out, "single-store restores are not supported") || !strings.Contains(out, "--db=all") {
+			t.Fatalf("restore --db=%s: exit %d, %q", db, code, out)
+		}
 	}
 }

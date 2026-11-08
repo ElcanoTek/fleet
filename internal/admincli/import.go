@@ -243,13 +243,7 @@ func cmdImport(argv []string) int {
 	}
 
 	if bundle.Sched != nil {
-		// Operations Center users (and tasks that name their creators) land
-		// in the one identity table: refuse up front if it is not there yet.
-		open := openSchedStorage
-		if len(bundle.Sched.Users) > 0 || len(bundle.Sched.Tasks) > 0 {
-			open = openSchedIdentityStorage
-		}
-		st, code := open(*schedDB)
+		st, code := openSchedStorage(*schedDB)
 		if st == nil {
 			return code
 		}

@@ -239,7 +239,6 @@ func TestUpWaitsForTheLegacyLocks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db := emptyDB(t)
-	legacyBuild(t, db, 99, 77)
 	var name string
 	if err := db.QueryRow(`SELECT current_database()`).Scan(&name); err != nil {
 		t.Fatal(err)
@@ -424,56 +423,6 @@ func TestDownRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSentinels: the first migration at or above 200 marks both legacy
-// ledgers so a pre-M6 binary refuses the database, on an adopted database
-// and on a fresh one alike; a legacy migration does not.
-func TestSentinels(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	adopted := emptyDB(t)
-	legacyBuild(t, adopted, 99, 77)
-	if err := testEmbeddedRunner(t).up(ctx, adopted); err != nil {
-		t.Fatal(err)
-	}
-	chat, sched := legacyLedgers(t, adopted)
-	if len(chat) != 99 || !reflect.DeepEqual(sched, []string{"(77,f)"}) {
-		t.Fatalf("legacy ledgers before 0200: chat %d rows, sched %v", len(chat), sched)
-	}
-	fresh := emptyDB(t)
-	r := runnerFor(t, embeddedPlus(t, "fixture"))
-	for name, db := range map[string]*sql.DB{"adopted": adopted, "fresh": fresh} {
-		if err := r.up(ctx, db); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		var chatMax int
-		var sentinel string
-		if err := db.QueryRow(`SELECT max(version) FROM chat.schema_migrations`).Scan(&chatMax); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.QueryRow(`SELECT name FROM chat.schema_migrations WHERE version = 100`).Scan(&sentinel); err != nil || sentinel != ChatSentinelName {
-			t.Fatalf("%s: chat sentinel = %q, %v", name, sentinel, err)
-		}
-		// The pre-M6 chat runner refused a database whose highest version
-		// was newer than its own latest (99); its sched runner refused a
-		// version it had no file for.
-		if chatMax <= 99 {
-			t.Fatalf("%s: chat ledger max %d would not stop a pre-M6 binary", name, chatMax)
-		}
-		_, sched := legacyLedgers(t, db)
-		if !reflect.DeepEqual(sched, []string{"(178,f)"}) {
-			t.Fatalf("%s: sched ledger = %v, want the single row 178", name, sched)
-		}
-	}
-	// Re-adopting such a database (its ledger dropped) is refused: the
-	// sentinels are versions this build does not ship.
-	mustExec(t, adopted, `DROP TABLE core.schema_versions`)
-	var ae AdoptionError
-	if err := r.up(ctx, adopted); !errors.As(err, &ae) {
-		t.Fatalf("re-adoption past the sentinels = %v", err)
-	}
-}
-
 // TestUpRefusesAnEditedMigration: a ledger row whose checksum (or name) is
 // not the build's file of that version — a shipped migration edited after
 // the database ran it — is refused, on the fast path too; legacy rows are
@@ -520,17 +469,64 @@ func TestUpRefusesAnEditedMigration(t *testing.T) {
 	}
 }
 
-// TestForcePastTheBoundaryWritesSentinels: `fleet migrate force` to a version
-// at or past FirstNew records it as Up would, sentinels included, under both
-// legacy locks (Codex 4506235354); it also drops ledger rows this build does
-// not ship. And whenever the ledger has crossed FirstNew without its
-// sentinels (a restore, an older force), the fast path does not read as
-// current and Up writes them.
-func TestForcePastTheBoundaryWritesSentinels(t *testing.T) {
+// TestStatus: the read-only report on a fresh database, a partially migrated
+// database, a fully migrated database, and the two derived views.
+func TestStatus(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := testEmbeddedRunner(t)
+
+	fresh := emptyDB(t)
+	rep, err := r.status(ctx, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Adopted || len(rep.Applied) != 0 || len(rep.Pending) != 99+77 || rep.CurrentVersion != nil || rep.Layout != "unified" {
+		t.Fatalf("fresh: %+v", rep)
+	}
+	if hasLedger(t, fresh) {
+		t.Fatal("status created the ledger")
+	}
+
+	db := emptyDB(t)
+	if err := UpTo(ctx, db, 170); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = r.status(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Adopted || len(rep.Applied) != 99+70 || len(rep.Pending) != 7 || *rep.CurrentVersion != 170 {
+		t.Fatalf("partial 170: adopted %v applied %d pending %d current %v", rep.Adopted, len(rep.Applied), len(rep.Pending), rep.CurrentVersion)
+	}
+	if sv := rep.Sched(); *sv.CurrentVersion != 70 || len(sv.Applied) != 70 || len(sv.Pending) != 7 || sv.Pending[0].Name != "071_recurrence_unspawned_includes_dead_lettered" {
+		t.Fatalf("sched view: %+v", sv)
+	}
+	if cv := rep.Chat(); len(cv.Applied) != 99 || len(cv.Pending) != 0 || cv.Applied[0].Version != 1 || cv.Applied[0].AppliedAt == nil || cv.DB != "chat" {
+		t.Fatalf("chat view: %+v", cv)
+	}
+
+	if err := r.up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = r.status(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Adopted || len(rep.Pending) != 0 || *rep.CurrentVersion != LegacyLatest || rep.Dirty {
+		t.Fatalf("migrated: %+v", rep)
+	}
+	if sv := rep.Sched(); *sv.CurrentVersion != 77 || sv.Runner != "golang-migrate" {
+		t.Fatalf("sched view: %+v", sv)
+	}
+}
+
+// TestForceDropsUnshippedRowsAndWaitsForLocks verifies that `fleet migrate force`
+// drops ledger rows this build does not ship and waits on the migration locks.
+func TestForceDropsUnshippedRowsAndWaitsForLocks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db := emptyDB(t)
-	legacyBuild(t, db, 99, 77)
 	plain := testEmbeddedRunner(t)
 	if err := plain.up(ctx, db); err != nil {
 		t.Fatal(err)
@@ -560,22 +556,19 @@ func TestForcePastTheBoundaryWritesSentinels(t *testing.T) {
 	if got := ledgerVersions(t, db); got[len(got)-1] != 200 || len(got) != 177 {
 		t.Fatalf("after force 200 the ledger ends at %d with %d rows (the unshipped row must go)", got[len(got)-1], len(got))
 	}
-	chat, sched := legacyLedgers(t, db)
-	if !strings.Contains(strings.Join(chat, " "), "(100,"+ChatSentinelName) || !reflect.DeepEqual(sched, []string{"(178,f)"}) {
-		t.Fatalf("force 200 left no sentinels: chat %v… sched %v", chat[len(chat)-1:], sched)
-	}
+}
 
-	// Sentinels lost (here by hand): not current; Up puts them back.
-	mustExec(t, db, `DELETE FROM chat.schema_migrations WHERE version = 100`)
-	mustExec(t, db, `UPDATE sched.schema_migrations SET version = 77`)
-	mustExec(t, db, `CREATE TABLE core.m6_fixture (id integer PRIMARY KEY, note text NOT NULL DEFAULT '')`) // what 0200 does, forced
-	if r.current(ctx, db) {
-		t.Fatal("a ledger past 200 without sentinels read as current")
+func TestUpRefusesUnadoptedPreM6(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := emptyDB(t)
+	r := testEmbeddedRunner(t)
+	mustExec(t, db, `CREATE SCHEMA chat; CREATE TABLE chat.schema_migrations (version int PRIMARY KEY)`)
+	if err := r.up(ctx, db); err == nil || !strings.Contains(err.Error(), "populated pre-M6 database") {
+		t.Fatalf("up on unadopted pre-M6 db = %v, want refusal", err)
 	}
-	if err := r.up(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	if _, sched := legacyLedgers(t, db); !reflect.DeepEqual(sched, []string{"(178,f)"}) || !r.current(ctx, db) {
-		t.Fatalf("Up did not restore the sentinels: sched %v", sched)
+	rep, err := r.status(ctx, db)
+	if err != nil || !rep.Refused() || !strings.Contains(rep.Problem, "populated pre-M6 database") {
+		t.Fatalf("status on unadopted pre-M6 db = %+v, %v", rep, err)
 	}
 }
