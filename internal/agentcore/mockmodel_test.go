@@ -90,6 +90,6 @@ func newMockEngine(t *testing.T, model fantasy.LanguageModel) *engine {
 		fallbackModel: model,
 		logSession:    session,
 		resilience:    resilienceConfig{maxAttempts: 0},
-		onRetry:       newRetryLogger(session),
+		onRetry:       newRetryLogger(context.Background(), session),
 	}
 }

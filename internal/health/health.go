@@ -12,6 +12,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // perCheckTimeout bounds every individual probe so one stuck subsystem can't
@@ -131,6 +133,9 @@ func runOne(ctx context.Context, c Check) (res Result) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				// A probe panic is a bug like any other: one structured event
+				// through internal/safe, not a silent error result.
+				safe.EmitPanic("health.probe "+c.Name, r, nil)
 				done <- Result{Status: StatusError, Detail: "probe panicked"}
 			}
 		}()

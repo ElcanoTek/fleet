@@ -431,7 +431,7 @@ func (s *Server) handleScheduleList(w http.ResponseWriter, r *http.Request, user
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"schedules":    items,
 		"auto_approve": conv.AutoApprove,
 	})
@@ -483,7 +483,7 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 	s.armShortScheduleTimer(sched.NextRunAt)
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"schedule":     sched,
 		"schedules":    items,
 		"auto_approve": conv.AutoApprove,
@@ -542,7 +542,7 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 	}
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"schedule":     sched,
 		"schedules":    items,
 		"auto_approve": conv.AutoApprove,
@@ -557,7 +557,7 @@ func (s *Server) handleScheduleDelete(w http.ResponseWriter, r *http.Request, us
 	}
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"schedule":     sched,
 		"schedules":    items,
 		"auto_approve": conv.AutoApprove,
@@ -621,7 +621,7 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 			}
 		}
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"schedule":     *target,
 		"input_id":     delivery.InputID,
 		"schedules":    items,

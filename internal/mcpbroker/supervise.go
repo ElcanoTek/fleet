@@ -94,6 +94,15 @@ func SpawnClient(cmd *exec.Cmd) (*Client, func() error, error) {
 				_ = syscall.Kill(-pgid, syscall.SIGKILL)
 				stopErr = <-done
 			}
+			// Wait has joined exec's stderr copier, so nothing more can
+			// arrive: a line-buffering stderr sink (logging.ChildStderr)
+			// flushes the child's last unterminated line now.
+			// An *os.File (os.Stderr itself) is not ours to close.
+			if _, isFile := cmd.Stderr.(*os.File); !isFile {
+				if c, ok := cmd.Stderr.(io.Closer); ok {
+					_ = c.Close()
+				}
+			}
 		})
 		return stopErr
 	}

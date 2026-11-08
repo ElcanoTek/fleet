@@ -30,7 +30,6 @@ func TestTOCHasTable(t *testing.T) {
 // TestRestoreIsWholeDatabaseOnly (#2049 M6): `fleet restore --db=chat|sched`
 // is refused with what to do instead.
 func TestRestoreIsWholeDatabaseOnly(t *testing.T) {
-	t.Parallel()
 	for _, db := range []string{"chat", "sched"} {
 		var code int
 		out := captureStderr(t, func() { code = cmdRestore([]string{"--db=" + db, "--no-confirm", "x.dump"}) })
@@ -94,12 +93,20 @@ func TestRestoreKeepsTheLedgersTrue(t *testing.T) {
 		}
 	}
 
-	// A dump taken since M6.
+	// A dump taken since M6, restored over a database that has since applied
+	// a newer migration creating a standalone table: the newer table and its
+	// ledger row are cleared so the restored schema matches its ledger.
 	src, _ := migrated()
 	m6Dump := dumpAll(src, "m6.dump")
 	dst, dstDB := migrated()
+	exec(dstDB, `CREATE TABLE chat.from_a_newer_migration (x int);
+		INSERT INTO core.schema_versions (version, name, checksum) VALUES (200, '0200_from_a_newer_fleet', 'x')`)
 	if err := restore(dst, m6Dump); err != nil {
 		t.Fatalf("restore an M6 dump: %v", err)
+	}
+	var newerTable bool
+	if err := dstDB.QueryRow(`SELECT to_regclass('chat.from_a_newer_migration') IS NOT NULL`).Scan(&newerTable); err != nil || newerTable {
+		t.Fatalf("newer migration table survived the restore (%v, %v)", newerTable, err)
 	}
 	if v, ok, err := migrations.LedgerMax(ctx, dstDB); err != nil || !ok || v != migrations.LegacyLatest {
 		t.Fatalf("ledger after the restore: %d, %v, %v", v, ok, err)

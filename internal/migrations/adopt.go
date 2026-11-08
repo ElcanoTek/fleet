@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver (UpDSN)
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // legacyState is what the two pre-M6 ledgers record.
@@ -226,7 +227,7 @@ func (r *runner) adopt(ctx context.Context, conn *sql.Conn) (adopted bool, err e
 	}
 	adopted = true
 	if st.ChatTable || st.SchedTable {
-		slog.Info("adopted the legacy migration ledgers into "+Table,
+		logging.From(ctx).Info("adopted the legacy migration ledgers into "+Table,
 			"chat_versions", len(st.Chat), "sched_version", st.SchedVersion, "recorded", len(rows))
 	}
 	return true, nil

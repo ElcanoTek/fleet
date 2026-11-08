@@ -24,7 +24,7 @@ func TestLoad_RetiredAccountEventsKnobsOnlyWarn(t *testing.T) {
 		t.Fatalf("Load with a retired FLEET_ACCOUNT_EVENTS_URL: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "FLEET_ACCOUNT_EVENTS_URL is set but no longer used") || strings.Contains(out, "FLEET_ACCOUNT_EVENTS_SECRET is set") {
+	if !strings.Contains(out, "setting=FLEET_ACCOUNT_EVENTS_URL") || !strings.Contains(out, "is set but no longer used") || strings.Contains(out, "FLEET_ACCOUNT_EVENTS_SECRET") {
 		t.Fatalf("boot log = %q, want a warning naming only FLEET_ACCOUNT_EVENTS_URL", out)
 	}
 	if strings.Contains(out, "auth.example.com") {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -77,12 +77,13 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	authorizedByKey := false
 	if rawKey := webhookKeyFromRequest(r); rawKey != "" {
 		if kt, _, perr := apikeys.ParseAPIKey(rawKey); perr == nil && kt == apikeys.KeyTypeWebhook {
-			if valid, key, _ := h.apiKeys.ValidateKey(rawKey, nil, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), rawKey, nil, nil, nil); valid && key != nil {
 				if !key.AllowsTriggerSlug(slug) {
 					writeError(w, http.StatusForbidden, "trigger slug not permitted for this key")
 					return
 				}
 				authorizedByKey = true
+				r = withAuthIdentity(r, apiKeyIdentity(key.KeyID))
 			}
 		}
 	}
@@ -107,8 +108,7 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	if triggerSlugShape.MatchString(slug) {
 		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-			//nolint:gosec // G706: slug is sanitized via safe.LogSafe (CR/LF stripped) before interpolation.
-			log.Printf("webhook trigger lookup error for slug %q: %v", safe.LogSafe(slug), lookupErr)
+			logging.From(r.Context()).Error("webhook trigger lookup error", "slug", safe.LogSafe(slug), "err", lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -140,13 +140,12 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 
 	runID, err := h.storage.SpawnWebhookRun(r.Context(), trig, prompt)
 	if err != nil {
-		//nolint:gosec // G706: slug is sanitized via safe.LogSafe (CR/LF stripped) before interpolation.
-		log.Printf("webhook trigger %q enqueue error: %v", safe.LogSafe(slug), err)
+		logging.From(r.Context()).Error("webhook trigger enqueue error", "slug", safe.LogSafe(slug), "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID.String()})
+	writeJSON(w, r, http.StatusAccepted, map[string]string{"run_id": runID.String()})
 }
 
 // webhookKeyFromRequest extracts a presented API key from either the X-API-Key

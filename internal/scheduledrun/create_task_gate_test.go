@@ -57,7 +57,7 @@ func TestMaybeAppendCreateTaskTool_Gate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Runner{cfg: &config.Config{MaxCostUSD: 10}, taskEnqueuer: tc.enqueuer}
 			task := &models.Task{ID: uuid.New(), AllowTaskCreation: tc.allow}
-			got := r.maybeAppendCreateTaskTool(base, task)
+			got := r.maybeAppendCreateTaskTool(context.Background(), base, task)
 			if len(got) != tc.wantCount {
 				t.Fatalf("expected %d tools, got %d", tc.wantCount, len(got))
 			}

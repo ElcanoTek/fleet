@@ -292,8 +292,17 @@ func TestLegacyLedgersStayAuthoritative(t *testing.T) {
 	if err := r.up(ctx, db); !errors.As(err, &ae) {
 		t.Fatalf("up over a dirty legacy row = %v", err)
 	}
-	if rep, err := r.status(ctx, db); err != nil || rep.Problem == "" || !rep.Refused() {
-		t.Fatalf("status over a dirty legacy row: problem %q, refused %v, %v", rep.Problem, rep.Refused(), err)
+	if rep, err := r.status(ctx, db); err != nil || !rep.Dirty || rep.Problem == "" || !rep.Refused() {
+		t.Fatalf("status over a dirty legacy row: dirty %v, problem %q, refused %v, %v", rep.Dirty, rep.Problem, rep.Refused(), err)
+	}
+	// Even when the other legacy ledger is missing (reconcileLegacy recreates
+	// it first, then refuses the dirty remaining one).
+	mustExec(t, db, `DROP TABLE chat.schema_migrations`)
+	if rep, err := r.status(ctx, db); err != nil || !rep.Dirty || rep.Problem == "" || !rep.Refused() {
+		t.Fatalf("status with chat.schema_migrations absent and sched dirty: dirty %v, problem %q, refused %v, %v", rep.Dirty, rep.Problem, rep.Refused(), err)
+	}
+	if err := r.up(ctx, db); !errors.As(err, &ae) {
+		t.Fatalf("up with chat.schema_migrations absent and sched dirty = %v", err)
 	}
 }
 

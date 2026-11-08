@@ -3,7 +3,6 @@ package agentcore
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"slices"
 	"sort"
 	"strconv"
@@ -941,9 +940,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// name is dropped fail-closed.
 		suffix := o.criticalSuffixFor(tool)
 		if suffix == "" || tool == suffix {
-			log.Printf("WARNING: dropping typed critical_action %q — not a full server-qualified MCP tool name "+
-				"(a bare suffix would wildcard across every server sharing it). Copy the literal tool name "+
-				"verbatim, e.g. \"mcp_myserver_create_record\".%s", tool, o.auditProtocolClause())
+			o.log().Warn("WARNING: dropping typed critical_action — not a full server-qualified MCP tool name (a bare suffix would wildcard across every server sharing it). Copy the literal tool name verbatim, e.g. \"mcp_myserver_create_record\".", "tool", tool, "audit_protocol_clause", o.auditProtocolClause())
 			continue
 		}
 		// First entry that will register → this audit is ACCEPTED, so wipe the
@@ -969,8 +966,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		dealIDs := declaredDealIDs(a.DealIDs)
 		dealID := declaredDealID(a.DealID)
 		if len(dealIDs) == 0 && len(a.DealIDs) > 0 || dealID == "" && strings.TrimSpace(a.DealID) != "" {
-			log.Printf("Enforcement: typed critical_action %q declared a placeholder record id (deal_id=%q deal_ids=%v); "+
-				"registering it as an unbound action — omit deal_id for actions that name no record", tool, a.DealID, a.DealIDs)
+			o.log().Info("Enforcement: typed critical_action declared a placeholder record id; registering it as an unbound action — omit deal_id for actions that name no record", "tool", tool, "deal_id", a.DealID, "deal_ids", a.DealIDs)
 		}
 		n := len(dealIDs)
 		if n == 0 {
@@ -1099,18 +1095,14 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			case !tc.hasDealBinding():
 				shape = "same unbound tool"
 			}
-			log.Printf("Enforcement: superseded stale commitment %q on re-audit (%s); "+
-				"obligation transferred to the fresh approval", old.describe(), shape)
+			o.log().Info("Enforcement: superseded stale commitment on re-audit; obligation transferred to the fresh approval", "commitment", old.describe(), "shape", shape)
 			old.remaining = 0
 		}
 		o.typedCommitments = append(o.typedCommitments, tc)
-		log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
-			suffix, tool, o.committedCriticalActions[suffix])
+		o.log().Info("Enforcement: registered committed critical action", "suffix", suffix, "tool", tool, "outstanding", o.committedCriticalActions[suffix])
 	}
 	if len(actions) > 0 && registered+restated == 0 {
-		log.Printf("WARNING: confirm_audit supplied %d typed critical_actions but NONE resolved to a full "+
-			"server-qualified critical tool — the audit will be REFUSED (fail closed). Use the literal MCP tool "+
-			"name in each entry's `tool` field.%s", len(actions), o.auditProtocolClause())
+		o.log().Warn("WARNING: confirm_audit supplied typed critical_actions but NONE resolved to a full server-qualified critical tool — the audit will be REFUSED (fail closed). Use the literal MCP tool name in each entry's `tool` field.", "actions", len(actions), "audit_protocol_clause", o.auditProtocolClause())
 	}
 	return registered + restated
 }
@@ -1201,9 +1193,7 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest, ide
 	if o.committedCriticalActions[chosen.suffix] > 0 {
 		o.committedCriticalActions[chosen.suffix]--
 	}
-	log.Printf("Enforcement: typed commitment %q discharged via %q (record %q; %d left on this commitment, "+
-		"%d outstanding on suffix %q)", chosen.describe(), toolName, dealID, chosen.remaining,
-		o.committedCriticalActions[chosen.suffix], chosen.suffix)
+	o.log().Info("Enforcement: typed commitment discharged", "commitment", chosen.describe(), "tool", toolName, "record", dealID, "remaining", chosen.remaining, "outstanding_on_suffix", o.committedCriticalActions[chosen.suffix], "suffix", chosen.suffix)
 	return true
 }
 
@@ -1305,7 +1295,7 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	approved := o.approvedDealIDs[suffix]
 	for _, id := range dealIDs {
 		if !approved[id] {
-			log.Printf("Enforcement: Blocking batch %s — record %q not in the approved set", toolName, id)
+			o.log().Info("Enforcement: Blocking batch — record not in the approved set", "tool", toolName, "record", id)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' targets record %q, which is not in the "+
 				"confirm_audit-approved set for this tool. Re-run confirm_audit declaring every "+
 				"deal_id in a typed critical_actions entry, or narrow the batch to the approved records.",
@@ -1320,14 +1310,14 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	got := valuesDigestArg(rawInput)
 	for _, id := range dealIDs {
 		if wants := o.approvedDigest[suffix][id]; len(wants) > 0 && !wants[""] && !wants[got] {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q is not an approved digest for record %q", toolName, got, id)
+			o.log().Info("Enforcement: Blocking batch — values_sha256 is not an approved digest for the record", "tool", toolName, "values_sha256", got, "record", id)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
 				"audit-approved digest. The approved value list differs from the one being applied — "+
 				"re-audit with the correct values_digest.", toolName)
 		}
 	}
 	if blocked, msg := o.checkBatchCanary(toolName, rawInput, dealIDs); blocked {
-		log.Printf("Enforcement: Blocking batch %s — no successful single-record canary for this action+shape yet", toolName)
+		o.log().Info("Enforcement: Blocking batch — no successful single-record canary for this action+shape yet", "tool", toolName)
 		return true, msg
 	}
 	return false, ""
@@ -1410,9 +1400,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		// verification is attempted.
 		if len(c.dealIDs) > 0 && c.digest != "" {
 			if singleID != "" && c.dealIDs[singleID] && !c.discharged[singleID] {
-				log.Printf("Enforcement: Blocking single-record %s (record %q) — record is bound to a "+
-					"values_digest batch commitment; only the whole-batch call (deal_ids + matching "+
-					"values_sha256) may discharge it", toolName, singleID)
+				o.log().Info("Enforcement: Blocking single-record call — record is bound to a values_digest batch commitment; only the whole-batch call (deal_ids + matching values_sha256) may discharge it", "tool", toolName, "record", singleID)
 				return false, fmt.Sprintf("BLOCKED: '%s' targeting record %q is part of a values_digest-bound "+
 					"batch commitment, so a bare single-record call cannot prove the approved values. To CANARY "+
 					"this record, call it as a ONE-record batch instead — deal_ids=[%q] with the matching "+
@@ -1432,7 +1420,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		return true, ""
 	}
 	if len(namedRefused) > 0 {
-		return false, namedCreateRefusal(toolName, attemptedName, namedRefused)
+		return false, namedCreateRefusal(o.log(), toolName, attemptedName, namedRefused)
 	}
 
 	refused := []string{singleID}
@@ -1450,8 +1438,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 	case singleID != "":
 		target = fmt.Sprintf(" (record %s)", singleID)
 	}
-	log.Printf("Enforcement: Blocking %s%s — no outstanding audited commitment matches (#715)",
-		toolName, target)
+	o.log().Info("Enforcement: Blocking tool — no outstanding audited commitment matches (#715)", "tool", toolName, "target", target)
 	return false, fmt.Sprintf("BLOCKED: '%s'%s matches no outstanding audited commitment. The confirm_audit "+
 		"approval is bound to the exact tool name (server and client-variant prefix included) and its declared "+
 		"record id(s) — a call on a different MCP server, a different client variant, or a different record "+

@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -93,10 +93,10 @@ func RetiredAliasFindings(envFile string, unit *UnitEnv) ([]RetiredAliasFinding,
 func warnRetiredEnvAliases(envFile string) {
 	findings, err := RetiredAliasFindings(envFile, nil)
 	if err != nil {
-		log.Printf("Warning: could not check for removed CHAT_/CUTLASS_ env aliases: %v", err)
+		slog.Warn("config: could not check for removed CHAT_/CUTLASS_ env aliases", "err", err)
 		return
 	}
 	for _, f := range findings {
-		log.Printf("Warning: %s", f)
+		slog.Warn("config: " + f.String())
 	}
 }

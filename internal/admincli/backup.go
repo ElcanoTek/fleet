@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -204,9 +205,10 @@ const singleStoreRestoreRefusal = "single-store restores are not supported any m
 //   - a dump from before the one migration ledger (no core.schema_versions)
 //     over a database past the ledger's boundary (a version >= 200 ran).
 //
-// --clean --if-exists drops the restored objects first so the restore is
-// idempotent over an already-migrated database; --no-owner ignores dump
-// ownership; -n per schema leaves any other schema of the database alone.
+// Inside the restore transaction the three fleet schemas (chat, core, sched)
+// are dropped with CASCADE and recreated before the archive loads, so no
+// object created by a migration newer than the dump survives next to the
+// older restored ledger; any other schema of the database is left alone.
 func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	got, err := dumpSchemas(ctx, inPath)
 	if err != nil {
@@ -226,14 +228,114 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	case len(missing) > 0:
 		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): fleet restores only whole-database dumps (fleet backup --db=all writes fleet-all-<stamp>.dump)", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
 	}
-	plan, err := planLedgerRestore(ctx, dsn, inPath)
+	if err := checkLedgerRestore(ctx, dsn, inPath); err != nil {
+		return err
+	}
+	return pgRestoreAll(ctx, dsn, inPath)
+}
+
+// pgRestoreAll restores allSchemas from inPath into dsn in ONE transaction
+// that first drops and recreates chat, core and sched with CASCADE, so no
+// table, view, sequence, function or legacy ledger from a migration newer
+// than the dump survives next to the restored ledger, and any failure rolls
+// back the schema reset together with the restore.
+func pgRestoreAll(ctx context.Context, dsn, inPath string) error {
+	if _, err := exec.LookPath("psql"); err != nil {
+		if err := resetRestoreSchemas(ctx, dsn, allSchemas); err != nil {
+			return err
+		}
+		return pgRestore(ctx, dsn, inPath, allSchemas, true)
+	}
+	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
 	}
-	if err := plan.prepare(ctx, dsn); err != nil {
+	dumpArgs := []string{"--no-owner", "--no-acl"}
+	var reset strings.Builder
+	reset.WriteString("BEGIN;\nSET LOCAL client_min_messages = warning;\n")
+	for _, schema := range allSchemas {
+		if !config.PlainIdentifier(schema) {
+			return fmt.Errorf("schema %q is not a plain identifier", schema)
+		}
+		reset.WriteString(`DROP SCHEMA IF EXISTS "` + schema + `" CASCADE;` + "\n")
+		reset.WriteString(`CREATE SCHEMA "` + schema + `";` + "\n")
+		dumpArgs = append(dumpArgs, "-n", schema)
+	}
+	dumpArgs = append(dumpArgs, "-f", "-", inPath)
+
+	//nolint:gosec // G204: fixed "pg_restore" and "psql" binaries; inPath is an operator-supplied path passed as a separate argv; connection params (incl. password) ride in the env, never argv.
+	restoreCmd := exec.CommandContext(ctx, "pg_restore", dumpArgs...)
+	restoreCmd.Stderr = os.Stderr
+	dumpOut, err := restoreCmd.StdoutPipe()
+	if err != nil {
 		return err
 	}
-	return pgRestore(ctx, dsn, inPath, allSchemas, true)
+	//nolint:gosec // G204: fixed "psql" binary; dbname is parsed from the DSN; credentials ride in the env.
+	psqlCmd := exec.CommandContext(ctx, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", c.dbname)
+	psqlCmd.Env = c.env()
+	psqlCmd.Stdout = io.Discard
+	psqlCmd.Stderr = os.Stderr
+	psqlIn, err := psqlCmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	if err := restoreCmd.Start(); err != nil {
+		return fmt.Errorf("pg_restore %s: %w", redactDSN(dsn), err)
+	}
+	if err := psqlCmd.Start(); err != nil {
+		_ = restoreCmd.Process.Kill()
+		_ = restoreCmd.Wait()
+		return fmt.Errorf("psql %s: %w", redactDSN(dsn), err)
+	}
+	_, copyErr := io.WriteString(psqlIn, reset.String())
+	if copyErr == nil {
+		_, copyErr = io.Copy(psqlIn, dumpOut)
+	}
+	restoreErr := restoreCmd.Wait()
+	if copyErr == nil && restoreErr == nil {
+		_, copyErr = io.WriteString(psqlIn, "\nCOMMIT;\n")
+	}
+	closeErr := psqlIn.Close()
+	psqlErr := psqlCmd.Wait()
+	for _, err := range []error{restoreErr, psqlErr, copyErr, closeErr} {
+		if err != nil {
+			return fmt.Errorf("pg_restore %s: %w", redactDSN(dsn), err)
+		}
+	}
+	return nil
+}
+
+// resetRestoreSchemas drops and recreates each schema in one transaction when
+// psql is not available to stream the reset and pg_restore together.
+func resetRestoreSchemas(ctx context.Context, dsn string, schemas []string) (err error) {
+	for _, schema := range schemas {
+		if !config.PlainIdentifier(schema) {
+			return fmt.Errorf("schema %q is not a plain identifier", schema)
+		}
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, schema := range schemas {
+		if _, err = tx.ExecContext(ctx, `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`); err != nil {
+			return fmt.Errorf("clear schema %s before the restore: %w", schema, err)
+		}
+		if _, err = tx.ExecContext(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
+			return fmt.Errorf("create schema %s before the restore: %w", schema, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // pgRestore runs one pg_restore of the given schemas, creating each first if

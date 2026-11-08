@@ -251,6 +251,11 @@ func TestWebhookValidHMACCreatesConversationAndRunsTurn(t *testing.T) {
 	// The rendered prompt (from the payload) reached the engine as the user turn.
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
+	// The turn's context carries its correlation, as a chat turn's does
+	// (#2074 review: webhook turns logged without conv_id/turn_id).
+	if engine.lastCorrelation[0] != resp.ConversationID || engine.lastCorrelation[1] == "" {
+		t.Errorf("webhook turn correlation conv_id/turn_id = %q, want the conversation and a turn id", engine.lastCorrelation)
+	}
 	if len(engine.lastHistory) != 0 {
 		t.Errorf("first turn history = %d entries, want 0 (fresh conversation)", len(engine.lastHistory))
 	}

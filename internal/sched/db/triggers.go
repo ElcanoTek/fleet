@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
+	"fmt"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/google/uuid"
 )
@@ -14,7 +15,7 @@ import (
 // and email_policy in #511).
 const triggerColumns = "id, task_id, slug, secret, prompt_template, kind, email_policy, created_at, updated_at"
 
-func scanTrigger(scanner interface{ Scan(...interface{}) error }) (*models.TaskTrigger, error) {
+func scanTrigger(ctx context.Context, scanner interface{ Scan(...interface{}) error }) (*models.TaskTrigger, error) {
 	var (
 		t           models.TaskTrigger
 		kind        sql.NullString
@@ -27,7 +28,7 @@ func scanTrigger(scanner interface{ Scan(...interface{}) error }) (*models.TaskT
 	if t.Kind == "" {
 		t.Kind = models.TriggerKindWebhook
 	}
-	t.EmailPolicy = unmarshalEmailPolicy(emailPolicy)
+	t.EmailPolicy = unmarshalEmailPolicy(ctx, emailPolicy)
 	return &t, nil
 }
 
@@ -41,13 +42,13 @@ func marshalEmailPolicy(p *models.EmailTriggerPolicy) any {
 }
 
 // unmarshalEmailPolicy reads the nullable email_policy column back. NULL/empty → nil.
-func unmarshalEmailPolicy(ns sql.NullString) *models.EmailTriggerPolicy {
+func unmarshalEmailPolicy(ctx context.Context, ns sql.NullString) *models.EmailTriggerPolicy {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var p models.EmailTriggerPolicy
 	if err := json.Unmarshal([]byte(ns.String), &p); err != nil {
-		log.Printf("Warning: failed to unmarshal email_policy: %v (input: %.100s)", err, ns.String)
+		logging.From(ctx).Warn("Warning: failed to unmarshal email_policy", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &p
@@ -70,14 +71,14 @@ func (db *Database) CreateTrigger(ctx context.Context, t *models.TaskTrigger) er
 func (db *Database) GetTriggerBySlug(ctx context.Context, slug string) (*models.TaskTrigger, error) {
 	row := db.conn.QueryRowContext(ctx,
 		"SELECT "+triggerColumns+" FROM task_triggers WHERE slug = $1", slug)
-	return scanTrigger(row)
+	return scanTrigger(ctx, row)
 }
 
 // GetTrigger looks up a trigger by its ID.
 func (db *Database) GetTrigger(ctx context.Context, id uuid.UUID) (*models.TaskTrigger, error) {
 	row := db.conn.QueryRowContext(ctx,
 		"SELECT "+triggerColumns+" FROM task_triggers WHERE id = $1", id)
-	return scanTrigger(row)
+	return scanTrigger(ctx, row)
 }
 
 // ListTriggers returns triggers, optionally filtered to a single task.
@@ -99,7 +100,7 @@ func (db *Database) ListTriggers(ctx context.Context, taskID *uuid.UUID) ([]*mod
 	defer rows.Close()
 	out := make([]*models.TaskTrigger, 0)
 	for rows.Next() {
-		t, serr := scanTrigger(rows)
+		t, serr := scanTrigger(ctx, rows)
 		if serr != nil {
 			return nil, serr
 		}

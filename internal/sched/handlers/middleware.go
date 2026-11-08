@@ -37,7 +37,7 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil)
 			if valid && key != nil {
 				if key.Type == apikeys.KeyTypeAdmin {
 					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
@@ -143,7 +143,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		//     deployed sk- key behaves.
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != "" {
-			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil)
 			if valid && key != nil {
 				authorized := false
 				switch {

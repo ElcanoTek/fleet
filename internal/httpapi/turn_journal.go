@@ -12,12 +12,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -69,7 +70,7 @@ func (w *turnJournalWriter) write(kind, callID, toolName, content string, isErr 
 		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
 	}
 	w.degraded.Store(true)
-	log.Printf("turn journal degraded (turn=%s kind=%s tool=%s): %v", w.turnID, kind, toolName, err)
+	logging.From(detachedCtx("", "", w.turnID)).Warn("turn journal degraded", "kind", kind, "tool", toolName, "err", err)
 	return err
 }
 
@@ -107,8 +108,8 @@ type turnCommits struct {
 
 // commitUser durably persists the user entry BEFORE the first provider call
 // (TurnInput.CommitUser).
-func (c *turnCommits) commitUser(_ context.Context, entry agent.HistoryEntry) error {
-	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *turnCommits) commitUser(ctx context.Context, entry agent.HistoryEntry) error {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	id, err := c.store.CommitUserMessage(cctx, c.convID, c.turnID, entry)
 	if err != nil {
@@ -141,9 +142,9 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// their queue rows now, so injected-but-uncommitted rows keep
 			// their durable next-turn fallback on crash. Fresh context — the
 			// commit's cctx was just cancelled.
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(detachedCtx("", c.convID, c.turnID), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+				logging.From(qctx).Error("complete injected inputs failed", "turn_id", safe.LogSafe(c.turnID), "err", cerr)
 			}
 			qcancel()
 			return nil
@@ -155,9 +156,9 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// still need settling — SettleTurnInputs skips them (history IS
 			// committed), so without this they stay 'injected' in every queue
 			// snapshot until the next boot recovery.
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(detachedCtx("", c.convID, c.turnID), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+				logging.From(qctx).Error("complete injected inputs failed", "turn_id", safe.LogSafe(c.turnID), "err", cerr)
 			}
 			qcancel()
 			return nil

@@ -126,7 +126,7 @@ func (db *Database) GetUnspawnedRecurringTasks(ctx context.Context, olderThan ti
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it

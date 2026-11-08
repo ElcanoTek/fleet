@@ -153,7 +153,7 @@ func TestUniversalPanicBoundary_CoversEveryToolRegistrationRoute(t *testing.T) {
 		{
 			name: "native",
 			buildAndFind: func(t *testing.T, policy Policy) (fantasy.AgentTool, fantasy.ToolCall, string) {
-				tools, _, err := buildFantasyTools(
+				tools, _, err := buildFantasyTools(context.Background(),
 					[]fantasy.AgentTool{newPanickingTool("native_panic", rawPanic)},
 					nil, nil, nil, policy, nil, nil,
 					toolBuildConfig{panicAttribution: attribution},
@@ -172,7 +172,7 @@ func TestUniversalPanicBoundary_CoversEveryToolRegistrationRoute(t *testing.T) {
 					loaderTools:      []fantasy.AgentTool{newPanickingTool("loader_panic", rawPanic)},
 					panicAttribution: attribution,
 				}
-				tools, _, err := buildFantasyTools(nil, nil, nil, nil, policy, nil, nil, cfg)
+				tools, _, err := buildFantasyTools(context.Background(), nil, nil, nil, nil, policy, nil, nil, cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -184,7 +184,7 @@ func TestUniversalPanicBoundary_CoversEveryToolRegistrationRoute(t *testing.T) {
 			name: "direct MCP",
 			buildAndFind: func(t *testing.T, policy Policy) (fantasy.AgentTool, fantasy.ToolCall, string) {
 				catalog := []mcp.ServerTool{{ServerName: "svc", Tool: mcp.Tool{Name: "explode", Description: "explode"}}}
-				tools, _, err := buildFantasyTools(nil, catalog, panickingBroker{value: rawPanic}, nil, policy, nil, nil,
+				tools, _, err := buildFantasyTools(context.Background(), nil, catalog, panickingBroker{value: rawPanic}, nil, policy, nil, nil,
 					toolBuildConfig{panicAttribution: attribution})
 				if err != nil {
 					t.Fatal(err)
@@ -202,7 +202,7 @@ func TestUniversalPanicBoundary_CoversEveryToolRegistrationRoute(t *testing.T) {
 					{ServerName: "svc", Tool: mcp.Tool{Name: "explode", Description: "explode"}},
 					{ServerName: "svc", Tool: mcp.Tool{Name: "other", Description: "other"}},
 				}
-				tools, _, err := buildFantasyTools(nil, catalog, panickingBroker{value: rawPanic}, nil, policy, nil, nil,
+				tools, _, err := buildFantasyTools(context.Background(), nil, catalog, panickingBroker{value: rawPanic}, nil, policy, nil, nil,
 					toolBuildConfig{panicAttribution: attribution})
 				if err != nil {
 					t.Fatal(err)
@@ -262,7 +262,7 @@ func TestDeferredMCPRedactorPanicProducesSingleLogicalIncident(t *testing.T) {
 		{ServerName: "svc", Tool: mcp.Tool{Name: "explode", Description: "explode"}},
 		{ServerName: "svc", Tool: mcp.Tool{Name: "other", Description: "other"}},
 	}
-	tools, _, err := buildFantasyTools(nil, catalog, textBroker{text: "connector output"}, nil, policy, nil, nil,
+	tools, _, err := buildFantasyTools(context.Background(), nil, catalog, textBroker{text: "connector output"}, nil, policy, nil, nil,
 		toolBuildConfig{panicAttribution: panicAttribution{runMode: "interactive", conversationID: "conv-deferred-redactor"}})
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func TestGovernedToolErrorsAreNormalizedBeforeFantasy(t *testing.T) {
 		func(context.Context, panicTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.ToolResponse{}, errors.New(secret)
 		})
-	tools, _, err := buildFantasyTools([]fantasy.AgentTool{native}, nil, nil, nil, policy, nil, nil,
+	tools, _, err := buildFantasyTools(context.Background(), []fantasy.AgentTool{native}, nil, nil, nil, policy, nil, nil,
 		toolBuildConfig{panicAttribution: panicAttribution{runMode: "interactive"}})
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestGovernedToolErrorsAreNormalizedBeforeFantasy(t *testing.T) {
 	}
 
 	catalog := []mcp.ServerTool{{ServerName: "svc", Tool: mcp.Tool{Name: "failure", Description: "failure"}}}
-	tools, _, err = buildFantasyTools(nil, catalog, errorBroker{err: errors.New(secret)}, nil, passPolicy{}, nil, nil,
+	tools, _, err = buildFantasyTools(context.Background(), nil, catalog, errorBroker{err: errors.New(secret)}, nil, passPolicy{}, nil, nil,
 		toolBuildConfig{panicAttribution: panicAttribution{runMode: "interactive"}})
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func TestGovernedToolErrorsAreNormalizedBeforeFantasy(t *testing.T) {
 func TestMCPTransportErrorMethodPanicBecomesIncident(t *testing.T) {
 	collector := capturePanicEvents(t)
 	catalog := []mcp.ServerTool{{ServerName: "svc", Tool: mcp.Tool{Name: "panic_error", Description: "panic error"}}}
-	tools, _, err := buildFantasyTools(nil, catalog, errorBroker{err: panickingError{}}, nil, passPolicy{}, nil, nil,
+	tools, _, err := buildFantasyTools(context.Background(), nil, catalog, errorBroker{err: panickingError{}}, nil, passPolicy{}, nil, nil,
 		toolBuildConfig{panicAttribution: panicAttribution{runMode: "scheduled", taskID: "task-mcp-error"}})
 	if err != nil {
 		t.Fatal(err)
@@ -490,7 +490,7 @@ func TestUniversalPanicBoundary_AttributesPolicyAndOutputPhases(t *testing.T) {
 					runs.Add(1)
 					return fantasy.NewTextResponse("output"), nil
 				})
-			tools, _, err := buildFantasyTools([]fantasy.AgentTool{inner}, nil, nil, nil, test.policy, nil, nil,
+			tools, _, err := buildFantasyTools(context.Background(), []fantasy.AgentTool{inner}, nil, nil, nil, test.policy, nil, nil,
 				toolBuildConfig{panicAttribution: panicAttribution{runMode: "interactive", conversationID: "conv-phase"}})
 			if err != nil {
 				t.Fatal(err)

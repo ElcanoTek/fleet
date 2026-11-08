@@ -1,14 +1,15 @@
 # HTTP contracts: what is generated
 
-Issue #2050, phase 4. The decision and its reasons are in
-[ADR-0109](adr/0109-generated-http-contracts.md). This page covers what is
-generated today, how to change it, and what phase 3/4 still has to do.
+Issue #2050, phase 4 (and the phase 3 router it walks). The decisions and
+their reasons are in [ADR-0109](adr/0109-generated-http-contracts.md) and
+[ADR-0110](adr/0110-one-http-surface.md). This page covers what is generated
+today, how to change it, and what phase 4 still has to do.
 
 ## Generated today
 
 | File | Generated from | By |
 |---|---|---|
-| `docs/openapi.yaml` (from the generated-marker line down) | the routes the real orchestrator router registers (`buildOrchestratorMux`, walked with `chi.Walk`) joined with the route catalog `internal/apispec/orchestrator/operations.go` | `internal/apispec.Generate`, run by `TestOpenAPIGenerated` (`cmd/fleet`) with `-update` |
+| `docs/openapi.yaml` (from the generated-marker line down) | the routes the one public router registers under `/v1` (`buildPublicRouter` with the real `buildOrchestratorMux` mounted, walked with `chi.Walk`, `Family.Prefix = "/v1"`) joined with the route catalog `internal/apispec/orchestrator/operations.go` | `internal/apispec.Generate`, run by `TestOpenAPIGenerated` (`cmd/fleet`) with `-update` |
 | `docs/openapi.yaml` (above the marker) | `internal/apispec/orchestrator/base.yaml`, copied byte for byte | the same |
 | `web/src/api/generated/orchestrator.ts` | `docs/openapi.yaml` | `openapi-typescript` 7.13.0 (`web/tools/openapi-typescript`, `--default-non-nullable false`) |
 
@@ -111,25 +112,43 @@ because npm places a peer next to its parent. So the generator lives in
 When `openapi-typescript` supports TypeScript 7, the workspace folds back
 into `web/package.json`.
 
-## What phase 3/4 still has to do
+## Phase 3 shipped: one router, one listener
 
-Phase 3 builds one chi router and one listener. Phase 4 completes on top of
-it:
+`cmd/fleet/router.go` (`buildPublicRouter`) is one chi tree on the public
+listener (`FLEET_WEB_ADDR`). It mounts the orchestrator router at `/v1` and
+serves the unversioned-forever orchestrator paths and chat's `/webhooks/*`
+with exactly the handlers their own listeners serve. `/api/orchestrator/*` is
+the same orchestrator router behind the gateway's browser boundary
+(`internal/webui/orchestrator_mount.go`); its rows in `routes.go` are gone.
+`/config` and `/me` are explicit renames, and the old rows' query allow-lists
+are `orchQueryPolicy`. Everything else is the gateway. The loopback chat and
+orchestrator listeners stay up with the same handlers (the box Caddyfile and
+the local CLIs use them). ADR-0110 has the invariant and its tests.
 
-1. **Walk the unified router once.** Each family gets its mount point in
-   `Family.Prefix`: orchestrator at `/v1`. Add a test that the browser
-   alias mount (`/api/orchestrator`) registers the same route set, then
-   delete the orchestrator rows of `internal/webui/routes.go`. The non-1:1
-   ones (`/config` → `/api/config`, the query allow-lists) become explicit
-   catalog routes or SPA changes (ADR-0109 §2).
-2. **Chat (`internal/httpapi`, about 70 routes, `net/http.ServeMux`).** It
-   can be walked once its routes are on the chi tree. It needs an
+- `TestOpenAPIGenerated` walks the public tree with `Family.Prefix = "/v1"`.
+  The generated document did not change.
+- `TestBrowserAliasMountsTheV1RouteSet` asserts that `/api/orchestrator`
+  registers exactly the `/v1` route set.
+- `TestOneSurfaceParity` replays the browser route table captured before the
+  change (`cmd/fleet/testdata/http-surface-before.txt`) through the new tree.
+
+## What phase 4 still has to do
+
+1. **Done in phase 3:** the unified router is walked once, the alias test
+   exists, and the orchestrator rows of `internal/webui/routes.go` are gone.
+2. **Chat (`internal/httpapi`, about 70 routes, `net/http.ServeMux`).** Phase
+   3 mounts its public paths (`/webhooks/*`) on the tree, but its
+   registration is still a `ServeMux` of prefix patterns that dispatch
+   sub-paths inside handlers, and its browser routes are per-route
+   translations (body rules, response shapes) rather than a prefix alias, so
+   they stay gateway rows. It can be walked once its registration moves to
+   chi. It needs an
    `internal/apispec/chat` catalog and base document and a `docs/` output,
    either a second document or a second family merged into one. The
    streaming routes need their SSE event shapes described. Their wire
    contract is pinned today by `testdata/contracts/chat-stream`.
-3. **webui's own routes** (auth, SSO, theme, brand, uploads): the same,
-   once they are on the tree.
+3. **webui's own routes** (auth, SSO, theme, brand, uploads): the same, once
+   the gateway's `ServeMux` registration moves to chi.
 4. **Component schemas from Go types.** Generate `components.schemas` by
    reflection over the models the drift test already binds
    (`schemaModelRegistry`). Constraints Go cannot express (`minLength`,

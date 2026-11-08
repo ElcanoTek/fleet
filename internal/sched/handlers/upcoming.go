@@ -98,7 +98,7 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > limit {
 		runs = runs[:limit]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"upcoming": runs})
+	writeJSON(w, r, http.StatusOK, map[string]any{"upcoming": runs})
 }
 
 // projectRuns computes a task's upcoming executions: cron occurrences for a

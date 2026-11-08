@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -309,7 +310,7 @@ func newHarness() *harness {
 func (h *harness) service() *Service {
 	s := New(h.tasks, h.claims, h.mailer)
 	s.now = func() time.Time { return h.clock }
-	s.logf = func(format string, args ...any) { h.logs = append(h.logs, fmt.Sprintf(format, args...)) }
+	s.logger = slog.New(slog.NewTextHandler(logLines(func(line string) { h.logs = append(h.logs, line) }), nil))
 	return s
 }
 
@@ -473,3 +474,8 @@ func TestTickNobodyToTell(t *testing.T) {
 
 // The real notifier must satisfy the seam the digest sends through.
 var _ Mailer = (*notify.Notifier)(nil)
+
+// logLines is an io.Writer handing each slog line to fn.
+type logLines func(string)
+
+func (f logLines) Write(p []byte) (int, error) { f(string(p)); return len(p), nil }

@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, raw, err := cli.CreateTypedKey("ci-bot", KeyTypeTask, nil, 0, nil, "")
+	_, raw, err := cli.CreateTypedKey(context.Background(), "ci-bot", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,20 +50,20 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	if kt, _, ok := server.LookupKeyType(raw); !ok || kt != KeyTypeTask {
 		t.Errorf("LookupKeyType: ok=%v type=%q", ok, kt)
 	}
-	if valid, key, msg := server.ValidateKey(raw, nil, nil, nil); !valid {
+	if valid, key, msg := server.ValidateKey(context.Background(), raw, nil, nil, nil); !valid {
 		t.Errorf("ValidateKey: %s", msg)
 	} else if key.Name != "ci-bot" {
 		t.Errorf("key name %q", key.Name)
 	}
 
 	// A revoked-in-memory key must NOT be resurrected by a later refresh.
-	if err := server.RevokeKey(func() string {
+	if err := server.RevokeKey(context.Background(), func() string {
 		id, _, _ := server.LookupKeyMeta(raw)
 		return id
 	}()); err != nil {
 		t.Fatal(err)
 	}
-	if valid, _, _ := server.ValidateKey(raw, nil, nil, nil); valid {
+	if valid, _, _ := server.ValidateKey(context.Background(), raw, nil, nil, nil); valid {
 		t.Error("revoked key still validates")
 	}
 

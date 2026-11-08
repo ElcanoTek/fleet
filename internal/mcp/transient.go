@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -12,6 +11,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // UnattributedResponseError is a JSON-RPC response that does not answer the
@@ -359,12 +360,10 @@ func RetryTransientConnect(ctx context.Context, server string, connect func(cont
 			return err
 		}
 		if delay >= budget.left() {
-			log.Printf("mcp: server %q failed to connect (%s); not retrying — the run's %s connect-retry budget is spent",
-				server, ConnectErrorSummary(err), MaxConnectRetryBudget)
+			logging.From(ctx).Warn("mcp: server failed to connect; not retrying — the run's connect-retry budget is spent", "server", server, "err", ConnectErrorSummary(err), "budget", MaxConnectRetryBudget)
 			return err
 		}
-		log.Printf("mcp: server %q failed to connect (%s); attempt %d of %d, retrying in %s",
-			server, ConnectErrorSummary(err), i+1, len(ConnectRetryDelays)+1, delay)
+		logging.From(ctx).Warn("mcp: server failed to connect; retrying", "server", server, "err", ConnectErrorSummary(err), "attempt", i+1, "max_attempts", len(ConnectRetryDelays)+1, "delay", delay)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

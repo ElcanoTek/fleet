@@ -106,7 +106,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 			ticks.Add(1)
 			return fantasy.NewTextResponse(strings.Repeat("d", sr.resultChars)), nil
 		})
-	recordContextMaxForModel(&namedMockModel{name: slug}, cmp.Or(sr.window, 10_000_000))
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, cmp.Or(sr.window, 10_000_000))
 	model := &namedMockModel{name: slug}
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
@@ -359,7 +359,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	const budget = 80_000
 	usage := func(in, cached int64) fantasy.Usage { return fantasy.Usage{InputTokens: in, CacheReadTokens: cached} }
-	recordContextMaxForModel(&namedMockModel{name: "cp-floor-rule"}, 10_000_000) // a large window: the floor rule is not capped
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: "cp-floor-rule"}, 10_000_000) // a large window: the floor rule is not capped
 	scheduled := func() *engine {
 		e := newMockEngine(t, &namedMockModel{name: "cp-floor-rule"})
 		e.requireCompactionOptIn = true
@@ -400,7 +400,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	// largest prompt the run can actually send (see resendWindowLimit) instead of a
 	// checkpoint the in-round context guard would never let the run reach —
 	// and never drops below the plain budget.
-	recordContextMaxForModel(&namedMockModel{name: "cp-floor-128k"}, 128_000)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: "cp-floor-128k"}, 128_000)
 	narrow := newMockEngine(t, &namedMockModel{name: "cp-floor-128k"})
 	narrow.requireCompactionOptIn = true
 	narrow.noteResendFloor(usage(50_000, 0))
@@ -412,7 +412,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	if got, want := narrow.effectiveResendBudget(budget), min(int(128_000*defaultContextCompactionThreshold), allowance); got != want || want != allowance {
 		t.Fatalf("128K window, 50K floor: effective = %d, want the inner guard's input allowance %d (not floor+budget %d)", got, want, 50_000+budget)
 	}
-	recordContextMaxForModel(&namedMockModel{name: "cp-floor-64k"}, 64_000)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: "cp-floor-64k"}, 64_000)
 	tiny := newMockEngine(t, &namedMockModel{name: "cp-floor-64k"})
 	tiny.requireCompactionOptIn = true
 	tiny.noteResendFloor(usage(50_000, 0))
@@ -445,7 +445,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 func TestCheckContextPressure_ResendBudgetFollowsTheFloorRule(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	slug := "cp-floor-pressure"
-	recordContextMaxForModel(&namedMockModel{name: slug}, 10_000_000)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, 10_000_000)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	e.requireCompactionOptIn = true

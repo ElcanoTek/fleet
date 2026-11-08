@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -19,36 +20,36 @@ func TestSecondRotationRevokesOriginalKey(t *testing.T) {
 		t.Fatalf("Failed to create manager: %v", err)
 	}
 
-	key, raw0, err := manager.CreateKey("double-rotate", nil, nil, 0, nil, "")
+	key, raw0, err := manager.CreateKey(context.Background(), "double-rotate", nil, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("Failed to create key: %v", err)
 	}
 
 	// First rotation: H0 -> H1, H0 enters its grace window.
-	_, raw1, err := manager.RotateKey(key.KeyID, 1)
+	_, raw1, err := manager.RotateKey(context.Background(), key.KeyID, 1)
 	if err != nil {
 		t.Fatalf("First rotation failed: %v", err)
 	}
 	// Second rotation, before H0's grace elapses: H1 -> H2.
-	_, raw2, err := manager.RotateKey(key.KeyID, 1)
+	_, raw2, err := manager.RotateKey(context.Background(), key.KeyID, 1)
 	if err != nil {
 		t.Fatalf("Second rotation failed: %v", err)
 	}
 
 	// The original key must be dead — this is the leaked-key revocation case.
-	if valid, _, msg := manager.ValidateKey(raw0, nil, nil, nil); valid {
+	if valid, _, msg := manager.ValidateKey(context.Background(), raw0, nil, nil, nil); valid {
 		t.Error("original key still authenticates after two rotations — rotation did not revoke it")
 	} else if !strings.Contains(msg, "Invalid API key") {
 		t.Errorf("original key rejection = %q, want %q", msg, "Invalid API key")
 	}
 
 	// The most recent predecessor is still inside its grace window: valid.
-	if valid, _, msg := manager.ValidateKey(raw1, nil, nil, nil); !valid {
+	if valid, _, msg := manager.ValidateKey(context.Background(), raw1, nil, nil, nil); !valid {
 		t.Errorf("previous key within grace should validate, got %q", msg)
 	}
 
 	// The current key is valid.
-	if valid, _, msg := manager.ValidateKey(raw2, nil, nil, nil); !valid {
+	if valid, _, msg := manager.ValidateKey(context.Background(), raw2, nil, nil, nil); !valid {
 		t.Errorf("current key should validate, got %q", msg)
 	}
 
@@ -58,10 +59,10 @@ func TestSecondRotationRevokesOriginalKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to reload manager: %v", err)
 	}
-	if valid, _, _ := reloaded.ValidateKey(raw0, nil, nil, nil); valid {
+	if valid, _, _ := reloaded.ValidateKey(context.Background(), raw0, nil, nil, nil); valid {
 		t.Error("original key authenticates after restart — persisted state kept a stale hash")
 	}
-	if valid, _, msg := reloaded.ValidateKey(raw2, nil, nil, nil); !valid {
+	if valid, _, msg := reloaded.ValidateKey(context.Background(), raw2, nil, nil, nil); !valid {
 		t.Errorf("current key should validate after restart, got %q", msg)
 	}
 }

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Per-task sandbox resource telemetry (#263).
@@ -455,13 +456,12 @@ func parseSize(s string) uint64 {
 // logMemoryBreach emits the one-shot "approaching memory cap" warning. Kept as a
 // package function so the collector's onBreach closure stays a one-liner and the
 // message format is testable/greppable.
-func logMemoryBreach(containerID string, usedBytes, limitBytes uint64) {
+func logMemoryBreach(ctx context.Context, containerID string, usedBytes, limitBytes uint64) {
 	if limitBytes == 0 {
 		return
 	}
 	pct := float64(usedBytes) / float64(limitBytes) * 100
-	log.Printf("sandbox %s: memory usage at %.0f%% of limit (%s / %s) — consider raising the sandbox memory limit",
-		shortID(containerID), pct, humanMiB(usedBytes), humanMiB(limitBytes))
+	logging.From(ctx).Warn("sandbox: memory usage is near the limit — consider raising the sandbox memory limit", "container_id", shortID(containerID), "pct", fmt.Sprintf("%.0f", pct), "used", humanMiB(usedBytes), "limit", humanMiB(limitBytes))
 }
 
 // humanMiB renders a byte count as "NNN MiB" for the breach warning.

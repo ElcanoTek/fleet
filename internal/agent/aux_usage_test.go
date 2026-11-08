@@ -120,7 +120,7 @@ func TestWriteLogFile_PersistsAuxUsage(t *testing.T) {
 	}
 
 	logFile := filepath.Join(t.TempDir(), "session.json")
-	writeLogFile(a.logSession, logFile)
+	writeLogFile(context.Background(), a.logSession, logFile)
 
 	data, err := os.ReadFile(logFile)
 	if err != nil {
@@ -157,7 +157,7 @@ func TestTruncateLogSession_PreservesAuxUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	data := truncateLogSession(session, len(full)/2) // force real truncation
+	data := truncateLogSession(context.Background(), session, len(full)/2) // force real truncation
 	var truncated LogSession
 	if err := json.Unmarshal(data, &truncated); err != nil {
 		t.Fatalf("truncated log is not a LogSession: %v", err)

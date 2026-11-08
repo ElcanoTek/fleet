@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Cooperative stop of a running tools/call (docs/APPROVAL-STOP.md).
@@ -113,7 +114,7 @@ func (t *HTTPTransport) notifyStopHTTP(ctx context.Context, stop, wrote, done <-
 		err := t.Notify(nctx, "notifications/cancelled", map[string]any{"requestId": id, "reason": StopReasonByUser})
 		cancel()
 		if err != nil {
-			log.Printf("MCP http: could not send the stop for request %d: %v", id, err)
+			logging.From(ctx).Warn("MCP http: could not send the stop for request", "mcp_request_id", id, "err", err)
 		}
 		timer := time.NewTimer(wait)
 		select {

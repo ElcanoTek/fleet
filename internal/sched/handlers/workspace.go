@@ -185,7 +185,7 @@ func (h *Handlers) TaskWorkspace(w http.ResponseWriter, r *http.Request) {
 // walk skips entries that resolve (via symlink) outside the root — defence in
 // depth so a planted symlink dir can't make the listing recurse off into the
 // host filesystem.
-func (h *Handlers) listWorkspace(w http.ResponseWriter, _ *http.Request, root string) {
+func (h *Handlers) listWorkspace(w http.ResponseWriter, r *http.Request, root string) {
 	files := make([]workspaceEntry, 0, 16)
 	truncated := false
 	//nolint:gosec // G703: root is the symlink-resolved workspace dir from loadWorkspaceTask (a DB-stored path), not raw request input; each entry is re-validated by SafeWorkspaceJoin below.
@@ -229,7 +229,7 @@ func (h *Handlers) listWorkspace(w http.ResponseWriter, _ *http.Request, root st
 		return nil
 	})
 
-	writeJSON(w, http.StatusOK, workspaceListResponse{
+	writeJSON(w, r, http.StatusOK, workspaceListResponse{
 		Files:         files,
 		WorkspacePath: root,
 		Truncated:     truncated,

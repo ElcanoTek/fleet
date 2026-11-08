@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -60,7 +60,7 @@ func onSignal(ctx context.Context, sig os.Signal, label string, fn func()) func(
 			case <-ch:
 				// Recover PER iteration (not once around the loop).
 				func() {
-					defer safe.Recover(label, nil)
+					defer safe.RecoverContext(ctx, label, nil)
 					fn()
 				}()
 			}
@@ -134,22 +134,23 @@ func mcpReloadHandler(mgr *agent.Manager) http.HandlerFunc {
 // logMCPReload logs the outcome of a SIGHUP-triggered MCP reload.
 func logMCPReload(summary *mcp.ReloadSummary, err error) {
 	if err != nil {
-		log.Printf("mcp reload (SIGHUP): error: %v", err)
+		slog.Error("mcp reload (SIGHUP): failed", "err", err)
 		return
 	}
-	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d",
-		len(summary.Added), len(summary.Removed), len(summary.Restarted), len(summary.Unchanged))
+	slog.Info("mcp reload (SIGHUP)", "added", len(summary.Added), "removed", len(summary.Removed), "restarted", len(summary.Restarted), "unchanged", len(summary.Unchanged))
 }
 
 // logConfigReload logs the outcome of a SIGUSR2-triggered reload.
 func logConfigReload(result config.ReloadResult, err error) {
 	if err != nil {
-		log.Printf("config reload (SIGUSR2): error: %v", err)
+		slog.Error("config reload (SIGUSR2): failed", "err", err)
 		return
 	}
-	log.Printf("config reload (SIGUSR2): %d changed, %d skipped, %d error(s)",
-		len(result.Changed), len(result.Skipped), len(result.Errors))
+	slog.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
 	for _, ch := range result.Changed {
-		log.Printf("config reload: %s: %q -> %q", ch.Key, ch.Old, ch.New)
+		slog.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
+	}
+	for _, e := range result.Errors {
+		slog.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
 	}
 }

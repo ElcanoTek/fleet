@@ -1,10 +1,13 @@
 package agentcore
 
 import (
-	"log"
+	"context"
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Per-persona tool allowlist (#294): different personas see different tool
@@ -60,7 +63,7 @@ func (p PersonaToolPermissions) empty() bool {
 // credential gates. A nil/empty policy returns all unchanged (and allocates
 // nothing), so the default path is zero-overhead and behavior is unchanged for
 // any persona without a manifest entry.
-func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fantasy.AgentTool, obs Observer) []fantasy.AgentTool {
+func resolvePersonaTools(ctx context.Context, persona string, policy PersonaToolPermissions, all []fantasy.AgentTool, obs Observer) []fantasy.AgentTool {
 	if policy.empty() {
 		return all
 	}
@@ -87,15 +90,15 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 		}
 		out = append(out, t)
 	}
-	log.Printf("persona %q tool policy: %d of %d tools offered (%d blocked)", persona, len(out), len(all), blocked)
+	logging.From(ctx).Info("persona tool policy applied", "persona", safe.LogSafe(persona), "offered", len(out), "total", len(all), "blocked", blocked)
 	return out
 }
 
 // resolvePersonaRoster is resolvePersonaTools over the registered roster,
 // also recording in roster what the persona removed (#1744), so a call to one
 // of those names is told why it is missing.
-func resolvePersonaRoster(persona string, policy PersonaToolPermissions, all []fantasy.AgentTool, roster *toolRoster, obs Observer) []fantasy.AgentTool {
-	kept := resolvePersonaTools(persona, policy, all, obs)
+func resolvePersonaRoster(ctx context.Context, persona string, policy PersonaToolPermissions, all []fantasy.AgentTool, roster *toolRoster, obs Observer) []fantasy.AgentTool {
+	kept := resolvePersonaTools(ctx, persona, policy, all, obs)
 	if len(kept) == len(all) {
 		return kept
 	}

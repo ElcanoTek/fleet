@@ -57,7 +57,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	cache := agentcore.SharedModelsCache()
 	resp := buildModelsResponse(cache.AllEntries(), s.cfg.LockdownAllowedModels, cache.LastFetchedAt())
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // buildModelsResponse projects the cache entries into the wire shape, dropping

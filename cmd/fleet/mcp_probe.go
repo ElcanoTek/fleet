@@ -271,7 +271,7 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		// Same shared dir the boot spawn uses, for both the token
 		// substitution and the cwd — `fleet mcp test` exists to reproduce a
 		// real boot, so it must not launch the server anywhere else.
-		shared := agentcore.SharedMCPWorkspaceDir()
+		shared := agentcore.SharedMCPWorkspaceDir(context.Background())
 		// The boot-time shared spawn's exact env: the one token helper with
 		// no task identity and no signed-in user, so the probe env matches
 		// production.

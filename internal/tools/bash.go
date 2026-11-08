@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -496,16 +496,16 @@ type bashResult struct {
 // a server-side breadcrumb, but the returned error is the per-turn signal.
 // Log dir resolution: $FLEET_AUDIT_DIR, else
 // $FLEET_DATA_DIR/audit, else ./data/audit.
-func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
+func auditBashInvocation(ctx context.Context, command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
 	dir := AuditDir()
 	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
-		auditWarnOnce("mkdir audit dir failed: " + err.Error())
+		auditWarnOnce(ctx, "mkdir audit dir failed: "+err.Error())
 		return fmt.Errorf("create audit dir: %w", err)
 	}
 	path := filepath.Join(dir, "bash.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // audit log readable by the chat group
 	if err != nil {
-		auditWarnOnce("open audit log failed: " + err.Error())
+		auditWarnOnce(ctx, "open audit log failed: "+err.Error())
 		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
@@ -522,11 +522,11 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
-		auditWarnOnce("marshal audit entry failed: " + err.Error())
+		auditWarnOnce(ctx, "marshal audit entry failed: "+err.Error())
 		return fmt.Errorf("marshal audit entry: %w", err)
 	}
 	if _, err := f.Write(append(line, '\n')); err != nil {
-		auditWarnOnce("write audit log failed: " + err.Error())
+		auditWarnOnce(ctx, "write audit log failed: "+err.Error())
 		return fmt.Errorf("write audit log: %w", err)
 	}
 	return nil
@@ -537,11 +537,11 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 // use sync.Map.
 var auditWarnedAbout sync.Map
 
-func auditWarnOnce(msg string) {
+func auditWarnOnce(ctx context.Context, msg string) {
 	if _, loaded := auditWarnedAbout.LoadOrStore(msg, true); loaded {
 		return
 	}
-	log.Printf("bash audit: %s", msg) // msg comes from our own audit code, not user input
+	logging.From(ctx).Info("bash audit", "detail", msg) // msg comes from our own audit code, not user input
 }
 
 // runBashWithSandbox is the production dispatch path. The caller MUST
@@ -569,7 +569,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 		// A blocked command is still an auditable event. If the audit write also
 		// fails, surface it on the returned error so the dropped trail is visible
 		// for THIS turn rather than only as a once-per-process log line.
-		if auditErr := auditBashInvocation(command, workingDir, -1, 0, err.Error()); auditErr != nil {
+		if auditErr := auditBashInvocation(ctx, command, workingDir, -1, 0, err.Error()); auditErr != nil {
 			return "", fmt.Errorf("%w (audit_failed: %w)", err, auditErr)
 		}
 		return "", err
@@ -633,7 +633,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	// result's Error — the same channel as the capNote above — so the model and
 	// the operator see that this invocation's audit row is missing, instead of it
 	// being silently dropped after the first per-process warning.
-	if auditErr := auditBashInvocation(command, workingDir, result.ExitCode, result.ExecutionTimeMs, ""); auditErr != nil {
+	if auditErr := auditBashInvocation(ctx, command, workingDir, result.ExitCode, result.ExecutionTimeMs, ""); auditErr != nil {
 		auditNote := "audit_failed: " + auditErr.Error()
 		if result.Error != "" {
 			result.Error += " | " + auditNote
@@ -695,7 +695,7 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 			if wdErr != nil {
 				return "", fmt.Errorf("error getting current directory: %w", wdErr)
 			}
-			log.Printf("workspace ensure failed for conv %s (%v); using cwd %s", convID, err, wd)
+			logging.From(ctx).Warn("workspace ensure failed; using cwd", "conv_id", convID, "err", err, "cwd", wd)
 			return wd, nil
 		}
 		if abs, absErr := filepath.Abs(dir); absErr == nil {

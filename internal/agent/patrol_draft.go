@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -111,14 +111,15 @@ func (m *Manager) SuggestPatrolDraft(ctx context.Context, in PatrolDraftInput) (
 	if err != nil {
 		return nil, fmt.Errorf("patrol-draft synthesis: %w", err)
 	}
-	return parsePatrolDraft(text)
+	return parsePatrolDraft(ctx, text)
 }
 
-// parsePatrolDraft validates and normalizes the model's output.
-func parsePatrolDraft(raw string) (*PatrolDraft, error) {
+// parsePatrolDraft validates and normalizes the model's output. ctx is the
+// request's: the validation-failure line carries its correlation ids.
+func parsePatrolDraft(ctx context.Context, raw string) (*PatrolDraft, error) {
 	validated, err := structuredoutput.ValidateOutput(raw, json.RawMessage(patrolDraftSchema))
 	if err != nil {
-		log.Printf("SuggestPatrolDraft: output failed schema validation")
+		logging.From(ctx).Error("SuggestPatrolDraft: output failed schema validation")
 		return nil, fmt.Errorf("patrol-draft synthesis produced no conforming output")
 	}
 	var d PatrolDraft

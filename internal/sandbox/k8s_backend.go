@@ -41,8 +41,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,6 +50,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -539,6 +538,7 @@ type k8sImpl struct {
 	// can unblock a demux loop parked in pw.Write — see terminateBridgeLocked.
 	bridgeStdoutPipe *io.PipeReader
 	bridgeStderr     *syncBuffer
+	bridgeStderrLog  *logging.StderrLogger // the session's stderr as log records; attributed per request
 	bridgeStarted    bool
 
 	execPoisoned atomic.Bool
@@ -942,8 +942,8 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		// stragglers running. The caller reports that honestly to the user
 		// ("could not be confirmed killed"); queue a retry so it also stops
 		// being true as soon as the apiserver answers again.
-		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
-		k.backend.scheduleReap(podName)
+		logging.From(delCtx).Warn("sandbox: cancelled-exec pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
+		k.backend.scheduleReap(delCtx, podName)
 		return false
 	}
 	return true
@@ -982,7 +982,7 @@ func (k *reapDurationKnob) set(d time.Duration) { k.ns.Store(int64(d)) }
 // scheduleReap queues a pod whose delete failed, and makes sure a drain
 // goroutine is running. The goroutine exits when the queue empties, so an
 // installation that never fails a delete never carries one.
-func (b *KubernetesBackend) scheduleReap(podName string) {
+func (b *KubernetesBackend) scheduleReap(ctx context.Context, podName string) {
 	if podName == "" {
 		return
 	}
@@ -994,13 +994,13 @@ func (b *KubernetesBackend) scheduleReap(podName string) {
 	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
 		// Refusing to grow without bound is the point of a bound; say so
 		// rather than dropping the pod silently.
-		log.Printf("sandbox: pod-delete retry queue is full (%d) — %s will be reclaimed by the boot-time orphan sweep instead", podReapMaxPending, sanitizeClusterText(podName))
+		logging.From(ctx).Warn("sandbox: pod-delete retry queue is full — the pod will be reclaimed by the boot-time orphan sweep instead", "max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
 		return
 	}
 	b.reapPending[podName] = 0
 	if !b.reapRunning {
 		b.reapRunning = true
-		go b.reapLoop()
+		go b.reapLoop() //nolint:gosec // G118: the reaper outlives the call that queued the pod (it retries for minutes); that call's context would cancel it
 	}
 }
 
@@ -1032,7 +1032,7 @@ func (b *KubernetesBackend) reapLoop() {
 				b.reapMu.Lock()
 				delete(b.reapPending, name)
 				b.reapMu.Unlock()
-				log.Printf("sandbox: reclaimed sandbox pod %s on retry (its delete had failed while the apiserver was unreachable)", sanitizeClusterText(name))
+				logging.From(ctx).Info("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "pod_name", sanitizeClusterText(name))
 				continue
 			}
 			b.reapMu.Lock()
@@ -1043,8 +1043,7 @@ func (b *KubernetesBackend) reapLoop() {
 			}
 			b.reapMu.Unlock()
 			if giveUp {
-				log.Printf("sandbox: gave up deleting sandbox pod %s after %d attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start: %v",
-					sanitizeClusterText(name), podReapMaxAttempts, err)
+				logging.From(ctx).Error("sandbox: gave up deleting sandbox pod — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start", "pod_name", sanitizeClusterText(name), "attempts", podReapMaxAttempts, "err", err)
 			}
 		}
 
@@ -1193,7 +1192,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := k.ensureBridge(); err != nil {
+	if err := k.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in pod: %w", err)
 	}
 
@@ -1217,6 +1216,10 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	if k.bridge == nil || k.bridgeStdout == nil {
 		return PythonResult{}, fmt.Errorf("send bridge request: %w", ErrClosed)
 	}
+	// The bridge's stderr during this request is this request's; cleared
+	// at its end.
+	k.bridgeStderrLog.Attribute(ctx)
+	defer func() { k.bridgeStderrLog.ClearAttribution() }()
 	if err := k.bridge.writeStdin(append(reqBytes, '\n')); err != nil {
 		k.terminateBridgeLocked()
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, k.bridgeStderrSuffix())
@@ -1232,7 +1235,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	// arms nil the field via terminateBridgeLocked (#583's lesson, upheld).
 	stdout := k.bridgeStdout
 	go func() {
-		defer safe.Recover("sandbox.k8s.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.k8s.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		data, discarded, err := readCappedLine(stdout, bridgeResponseCaptureCap)
@@ -1266,14 +1269,14 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 		if r.discarded > 0 {
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
 		}
-		return parseBridgeResponse(r.data)
+		return parseBridgeResponse(ctx, r.data)
 	}
 }
 
 // ensureBridge starts the bridge exec session on first use, mirroring
 // containerImpl.ensureBridge: a request written before the bridge reads stdin
 // waits in the stream until it does, so no post-start settle delay is needed.
-func (k *k8sImpl) ensureBridge() error {
+func (k *k8sImpl) ensureBridge(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -1296,11 +1299,12 @@ func (k *k8sImpl) ensureBridge() error {
 	// stdout; the demux loop feeds a pipe the reader side wraps in bufio.
 	pr, pw := io.Pipe()
 	stderrBuf := &syncBuffer{}
+	stderrLog := bridgeStderrLogger(ctx)
 	// The bridge intentionally outlives any single request ctx and is torn
 	// down in close() / terminateBridgeLocked — dial under a handshake-bounded
 	// background context, mirroring the podman backend's noctx bridge exec.
-	session, err := k.backend.client.execPod(context.Background(), k.backend.cfg.Namespace, podName, sandboxContainerName,
-		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(os.Stderr, stderrBuf))
+	session, err := k.backend.client.execPod(context.WithoutCancel(ctx), k.backend.cfg.Namespace, podName, sandboxContainerName,
+		[]string{"python3", k8sBridgePath}, true, pw, io.MultiWriter(stderrLog, stderrBuf))
 	if err != nil {
 		_ = pw.Close()
 		_ = pr.Close()
@@ -1311,11 +1315,14 @@ func (k *k8sImpl) ensureBridge() error {
 	go func() {
 		<-session.done
 		_ = pw.CloseWithError(io.EOF)
+		// The session's stderr is drained: flush its last partial line.
+		_ = stderrLog.Close()
 	}()
 	k.bridge = session
 	k.bridgeStdout = bufio.NewReader(pr)
 	k.bridgeStdoutPipe = pr
 	k.bridgeStderr = stderrBuf
+	k.bridgeStderrLog = stderrLog
 	k.bridgeStarted = true
 	return nil
 }
@@ -1445,6 +1452,7 @@ func (k *k8sImpl) close() {
 	k.mu.Lock()
 	k.terminateBridgeLocked()
 	k.bridgeStderr = nil
+	k.bridgeStderrLog = nil
 	k.mu.Unlock()
 
 	k.podMu.Lock()
@@ -1456,8 +1464,8 @@ func (k *k8sImpl) close() {
 		delCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
-			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
-			k.backend.scheduleReap(podName)
+			logging.From(delCtx).Warn("sandbox: close-time pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
+			k.backend.scheduleReap(delCtx, podName)
 		}
 	}
 }

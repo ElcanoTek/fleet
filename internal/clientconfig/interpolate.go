@@ -2,11 +2,13 @@ package clientconfig
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -295,7 +297,7 @@ func warnUserTokenFromEnv(name string) {
 	if _, seen := userTokenEnvWarned.LoadOrStore(name, true); seen {
 		return
 	}
-	log.Printf("clientconfig: warning: the process env value of %s names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so %s is treated as unset (see docs/MCP-BUNDLE-ENV.md)", name, name)
+	slog.Warn("clientconfig: warning: a process env value names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so the variable is treated as unset (see docs/MCP-BUNDLE-ENV.md)", "name", name)
 }
 
 // matchBrace returns the index of the '}' that closes the '{' at position open
@@ -372,7 +374,43 @@ func interpolate(v string) (out string, assembled bool) {
 	if usertoken.AssembledFrom(out, fromEnv) {
 		return "", true
 	}
+	registerHostValues(out, fromEnv)
 	return out, false
+}
+
+// registerHostValues hands every fragment of a connector env or header value
+// that came from the host process env — a ${VAR} the manifest interpolates,
+// whatever VAR is called — to every redactor as a secret literal
+// (logging.RegisterSecretLiterals, the one registration point: the log and
+// the tool-output redactor alike), before
+// any connector is spawned with it. The secret-NAME heuristic misses
+// credentials under names like AUTH or SESSION or a vendor's own; provenance
+// does not: a value the bundle writes literally (REGION: us-east-1) lives in
+// the bundle repo and is not a secret, while one interpolated from the host
+// is the operator's to protect. The redactor's minimum literal length keeps
+// "1" or "true" out.
+func registerHostValues(out string, fromEnv [][2]int) {
+	if len(fromEnv) == 0 {
+		return
+	}
+	// A filesystem path or a path list (CUTLASS_ALLOWED_DIRS assembled from
+	// ${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}) is host configuration,
+	// not a credential: as a literal it would blank every log line naming a
+	// file under it (#2074 review). Same exclusion as the broker's connector
+	// env scrub (redact.IsPathListValue).
+	values := make([]string, 0, len(fromEnv)+1)
+	for _, r := range fromEnv {
+		if v := out[r[0]:r[1]]; !redact.IsPathListValue(v) {
+			values = append(values, v)
+		}
+	}
+	// The assembled value too: ${AUTH_A}${AUTH_B} built from fragments each
+	// below the redactor's minimum literal length registers nothing piece by
+	// piece, yet the whole is the credential the connector is sent.
+	if !redact.IsPathListValue(out) {
+		values = append(values, out)
+	}
+	logging.RegisterSecretLiterals("", false, values...)
 }
 
 // warnUserTokenAssembled logs, once per env key, that a value assembling a
@@ -381,7 +419,7 @@ func warnUserTokenAssembled(key string) {
 	if _, seen := userTokenEnvWarned.LoadOrStore("assembled:"+key, true); seen {
 		return
 	}
-	log.Printf("clientconfig: warning: MCP env/header %s resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", key)
+	slog.Warn("clientconfig: warning: MCP env/header resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", "key", key)
 }
 
 // resolveSpawnExpr resolves one ${...} expression at catalog-build time (expr

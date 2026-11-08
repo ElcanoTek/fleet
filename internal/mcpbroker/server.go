@@ -136,9 +136,12 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	// so a methodCancel for it always finds it) and released when fn ends.
 	// A non-cancellable request runs on Serve's ctx and ignores methodCancel.
 	spawn := func(req request, location string, cancellable bool, fn func(context.Context) response) {
-		runCtx, cancel := ctx, context.CancelFunc(func() {})
+		// The parent's correlation (request.Correlation): the call's log
+		// lines carry its conv_id, turn_id, run_id, request_id …
+		reqCtx := withCorrelation(ctx, req.Correlation)
+		runCtx, cancel := reqCtx, context.CancelFunc(func() {})
 		if cancellable {
-			runCtx, cancel = context.WithCancel(ctx)
+			runCtx, cancel = context.WithCancel(reqCtx)
 			mu.Lock()
 			inflight[req.ID] = cancel
 			mu.Unlock()
@@ -151,7 +154,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			// sees the group empty, or Serve can return with the panic
 			// response still unwritten.
 			defer wg.Done()
-			defer recoverBackendPanic(location, req.ID, write)
+			defer recoverBackendPanic(runCtx, location, req.ID, write)
 			defer func() {
 				if cancellable {
 					mu.Lock()
@@ -235,7 +238,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID}
 				if err != nil {
-					logMasked("tool discovery", "", err)
+					logMasked(ctx, "tool discovery", "", err)
 					resp.Err = errBrokerDiscoveryFailed
 				} else {
 					resp.Tools = tools
@@ -248,7 +251,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID}
 				if err != nil {
-					logMasked("account discovery", req.Server, err)
+					logMasked(ctx, "account discovery", req.Server, err)
 					resp.Err = errBrokerDiscoveryFailed
 				} else {
 					resp.Accounts = accounts
@@ -277,7 +280,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				resp := response{ID: req.ID}
 				if scoped, ok := s.backend.(ScopedBackend); ok {
 					if err := scoped.CloseScope(callCtx, req.Scope); err != nil {
-						logMasked("scope close", req.Scope, err)
+						logMasked(callCtx, "scope close", req.Scope, err)
 						resp.Err = errBrokerScopeCloseFailed
 					}
 				} else {
@@ -296,7 +299,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 						// Reload errors can embed resolved URLs, headers, or subprocess
 						// environment values. Unlike ordinary tool output, none of that is
 						// permitted to cross from the credential owner to the parent.
-						logMasked("reload", "", err)
+						logMasked(callCtx, "reload", "", err)
 						resp.Err = errBrokerReloadFailed
 					case result == nil:
 						resp.Err = "mcpbroker: backend returned an empty reload result"
@@ -367,9 +370,9 @@ func (s *Server) call(callCtx context.Context, req request, stopCh <-chan struct
 		// instead of nowhere — see logMasked.
 		resp.Err = describeCallError(err)
 		if resp.Err == errBrokerCallFailed {
-			logMasked("tool call", req.Server+"."+req.Tool, err)
+			logMasked(callCtx, "tool call", req.Server+"."+req.Tool, err)
 		} else {
-			logPassed("tool call", req.Server+"."+req.Tool, err, resp.Err)
+			logPassed(callCtx, "tool call", req.Server+"."+req.Tool, err, resp.Err)
 		}
 	} else {
 		resp.Text = text
@@ -389,7 +392,7 @@ func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (id s
 	id, tools, skipped, err := backend.OpenScope(ctx, spec)
 	spentMs = mcp.ConnectRetrySpent(ctx).Milliseconds()
 	if err != nil {
-		logMasked("scope open", "", err)
+		logMasked(ctx, "scope open", "", err)
 		return "", nil, nil, spentMs, errBrokerScopeOpenFailed
 	}
 	if id == "" {
@@ -434,9 +437,12 @@ func validateScopeSpec(spec ScopeSpec) error {
 // leaves the parent Client blocked until its context expires. The incident ID
 // correlates the in-band error with safe's structured event while the recovered
 // value (which may contain connector material) never crosses the broker pipe.
-func recoverBackendPanic(location string, requestID uint64, write func(response)) {
+//
+// ctx is the request's, with the parent's correlation (request.Correlation):
+// the panic event carries its conv_id, turn_id, run_id and request_id.
+func recoverBackendPanic(ctx context.Context, location string, requestID uint64, write func(response)) {
 	if recovered := recover(); recovered != nil {
-		event := safe.EmitPanicWithMetadata(safe.PanicMetadata{
+		event := safe.EmitPanicWithMetadataContext(ctx, safe.PanicMetadata{
 			Location: location,
 			Boundary: "mcpbroker",
 		}, recovered, nil)

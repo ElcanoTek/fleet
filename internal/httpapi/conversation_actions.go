@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -141,7 +141,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		resolvedCards = append(resolvedCards, card)
 	}
 	if r.URL.Query().Get("approval_index") == "1" {
-		writeJSON(w, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
+		writeJSON(w, r, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
 		return
 	}
 	// Pending memory proposals — same pattern as approvals. Without
@@ -194,7 +194,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		var oerr error
 		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
 		if oerr != nil {
-			log.Printf("conversation get: branch origin of %s: %v", safe.LogSafe(id), safe.LogSafe(oerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+			logging.From(r.Context()).Warn("conversation get: branch origin lookup failed", "conv_id", safe.LogSafe(id), "err", safe.LogSafe(oerr.Error()))
 			origin = nil
 		}
 	}
@@ -217,7 +217,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
 		conv = &sanitized
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
 		// historyForParticipant: the owner's own entries carry
@@ -255,7 +255,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 		s.withApprovalProgress(card, a)
 		resolved = append(resolved, card)
 	}
-	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
+	writeJSON(w, r, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
 }
 
 func (s *Server) includeExecutingApprovals(ctx context.Context, user, convID string, resolved []store.Approval) ([]store.Approval, error) {
@@ -437,7 +437,7 @@ func (s *Server) handleConversationRename(w http.ResponseWriter, r *http.Request
 	if entry, ok := s.getInflight(id); ok && entry.buf != nil {
 		entry.buf.Emit("conversation.title_updated", map[string]any{"id": id, "title": title})
 	}
-	writeJSON(w, struct {
+	writeJSON(w, r, struct {
 		ID    string `json:"id"`
 		Title string `json:"title"`
 	}{ID: id, Title: title})
@@ -486,8 +486,8 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 //
 // Per-conversation approval default-deny window override (#225).
 // approval_timeout_seconds == null means "use the global default".
-func (s *Server) handleApprovalTimeoutGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleApprovalTimeoutGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"approval_timeout_seconds": conv.ApprovalTimeoutSeconds,
 		"default_seconds":          s.cfg.LiveApprovalTimeoutSeconds(),
 	})
@@ -522,8 +522,8 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 }
 
 // handleAutoApproveGet serves GET /conversations/{id}/auto-approve.
-func (s *Server) handleAutoApproveGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleAutoApproveGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"auto_approve": conv.AutoApprove,
 	})
 }
@@ -547,8 +547,8 @@ func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, us
 //
 // Per-conversation Claude extended-thinking override (#220). A null
 // thinking_config means "inherit the global default".
-func (s *Server) handleThinkingConfigGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
-	writeJSON(w, map[string]any{
+func (s *Server) handleThinkingConfigGet(w http.ResponseWriter, r *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, r, map[string]any{
 		"thinking_config":       conv.ThinkingConfig,
 		"default_budget_tokens": s.cfg.DefaultThinkingBudgetTokens,
 	})
@@ -663,7 +663,7 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json", "chat")),
 		)
-		writeJSON(w, body)
+		writeJSON(w, r, body)
 	}
 }
 
@@ -811,9 +811,9 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		cancelledQueued := 0
 		if scope == "all" {
 			epoch := s.store.AcceptedInputSeq()
-			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
-				log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+				logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 			} else if n > 0 {
 				cancelledQueued = n
 				s.emitQueueUpdate(qctx, user, id)
@@ -852,9 +852,9 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// bounded to rows accepted before the Stop began (#1477): a
 		// follow-up submitted after Stop, while the cancelled turn was still
 		// finishing, keeps its 202 and runs on the re-kick.
-		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		qctx, qcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
-			log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 		} else if n > 0 {
 			s.emitQueueUpdate(qctx, "", id)
 		}
@@ -893,7 +893,7 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (res i
 	// this process), but the Stop cannot be reported as landed.
 	intentErr := s.store.MarkInputStopRequested(qctx, convID, key)
 	if intentErr != nil {
-		log.Printf("cancel input intent (conv=%s): %v", convID, intentErr) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+		logging.From(ctx).Error("cancel input intent failed", "conv_id", safe.LogSafe(convID), "err", intentErr)
 	}
 	turn := s.cancelInputTurn(convID, key)
 	settled := false // the key's row is already terminal: the mark has nothing left to refuse
@@ -930,7 +930,7 @@ const stopInputAttempts = 3
 func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, turn turnStop) (res inputStop, ok, settled, retry bool) {
 	row, err := s.store.LookupInput(qctx, convID, key)
 	if err != nil {
-		log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+		logging.From(qctx).Error("cancel input lookup failed", "conv_id", safe.LogSafe(convID), "err", err)
 		return inputStopped, false, false, false
 	}
 	if row == nil {
@@ -941,7 +941,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: key,
 		})
 		if err != nil {
-			log.Printf("cancel input key (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+			logging.From(qctx).Error("cancel input key failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return inputStopped, false, false, false
 		}
 		if created {
@@ -952,7 +952,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 	if row != nil && row.Mode != store.InputModeDirect && row.State == store.InputStateQueued {
 		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)
 		if err != nil {
-			log.Printf("cancel input withdraw (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+			logging.From(qctx).Error("cancel input withdraw failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return inputStopped, false, false, false
 		}
 		if removed {
@@ -962,7 +962,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// It left the queue between the lookup and the withdrawal: a drained
 		// row is covered by the mark, an injected steer is handled below.
 		if row, err = s.store.LookupInput(qctx, convID, key); err != nil {
-			log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+			logging.From(qctx).Error("cancel input lookup failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return inputStopped, false, false, false
 		}
 	}
@@ -974,7 +974,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// above already cancelled that turn.
 		cancelled, err := s.store.CancelUnlaunchedInput(qctx, row.ID)
 		if err != nil {
-			log.Printf("cancel unlaunched input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+			logging.From(qctx).Error("cancel unlaunched input failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return inputStopped, false, false, false
 		}
 		if cancelled && row.Mode != store.InputModeDirect {
@@ -1002,7 +1002,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			// settlement never re-queues.)
 			cancelled, err := s.store.CancelStoppedDrain(qctx, row.ID, row.TurnID)
 			if err != nil {
-				log.Printf("cancel stopped drain (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+				logging.From(qctx).Error("cancel stopped drain failed", "conv_id", safe.LogSafe(convID), "err", err)
 				return inputStopped, false, false, false
 			}
 			if cancelled {
@@ -1038,7 +1038,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// already recorded it completed (it ran) is never overwritten. A
 		// re-queued copy a drain claims first is refused by the key's mark.
 		if _, err := s.store.CancelStoppedSteer(qctx, row.ID); err != nil {
-			log.Printf("cancel injected input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+			logging.From(qctx).Error("cancel injected input failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return inputStopped, false, false, false
 		}
 		s.emitQueueUpdate(qctx, user, convID)

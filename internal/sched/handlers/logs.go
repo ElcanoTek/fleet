@@ -23,7 +23,7 @@ func (h *Handlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, r, http.StatusOK, session)
 }
 
 // logHistoryTaskForRequest parses the path task id and enforces exactly the
@@ -49,7 +49,7 @@ func (h *Handlers) GetLogHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to list log history")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	writeJSON(w, r, http.StatusOK, map[string]any{"entries": entries})
 }
 
 // GetLogHistoryEntry handles GET /logs/{task_id}/history/{entry_id} — one
@@ -69,5 +69,5 @@ func (h *Handlers) GetLogHistoryEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Log history entry not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, r, http.StatusOK, session)
 }

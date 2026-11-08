@@ -23,13 +23,14 @@ package httpapi
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -231,7 +232,7 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 	}
 	if s.approvalOutcomeFlags(a)["executing"] != true {
 		// Already settled: the stop has nothing to do; answer the outcome.
-		writeJSON(w, s.approvalClientState(a))
+		writeJSON(w, r, s.approvalClientState(a))
 		return
 	}
 	// The call's signal is armed before its claim and dropped only after its
@@ -239,7 +240,7 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 	// is being or has been recorded: nothing to stop, answer the state.
 	h := s.approvalStopFor(approvalID)
 	if h == nil {
-		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w, r)
 		return
 	}
 	marked, accepted, err := s.acceptApprovalStop(r.Context(), h, user, approvalID)
@@ -248,14 +249,13 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		return
 	}
 	if marked {
-		//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
-		log.Printf("audit: %q stopped running approval %q (%q) in conversation %q", user, approvalID, a.ToolName, convID)
+		logging.From(r.Context()).Info("audit: running approval stopped", "user", safe.LogSafe(user), "approval_id", safe.LogSafe(approvalID), "tool", safe.LogSafe(a.ToolName), "conv_id", safe.LogSafe(convID))
 	}
 	if !accepted {
 		// The call finished first: its outcome is being recorded without a
 		// stop, and the row is not marked.
-		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w, r)
 		return
 	}
-	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w, r)
 }

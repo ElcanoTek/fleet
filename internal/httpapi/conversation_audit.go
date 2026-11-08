@@ -85,7 +85,7 @@ func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request,
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, map[string]any{"tool_calls": rows})
+	writeJSON(w, r, map[string]any{"tool_calls": rows})
 }
 
 // parseAuditFrom parses the `from` audit query param, accepting either a full

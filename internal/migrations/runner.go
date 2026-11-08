@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Table is the one migration ledger.
@@ -127,7 +127,7 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 			applied++
 		}
 		if applied > 0 {
-			slog.Info("migrated the database", "applied", applied, "version", r.set.Latest())
+			logging.From(ctx).Info("migrated the database", "applied", applied, "version", r.set.Latest())
 		}
 		// Whenever the ledger has crossed FirstNew the sentinels must be there
 		// (whoever wrote the ledger: a restore, an older force); idempotent.
@@ -382,7 +382,7 @@ func (r *runner) apply(ctx context.Context, conn *sql.Conn, m Migration) (err er
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("migration %d (%s): commit: %w", m.Version, m.Name, err)
 	}
-	slog.Debug("applied migration", "version", m.Version, "name", m.Name)
+	logging.From(ctx).Debug("applied migration", "version", m.Version, "name", m.Name)
 	return nil
 }
 

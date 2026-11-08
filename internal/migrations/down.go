@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // ErrNotAdopted is returned by Down and Force on a database that has no
@@ -106,7 +107,7 @@ func (r *runner) undo(ctx context.Context, conn *sql.Conn, m Migration) (err err
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("down %d (%s): commit: %w", m.Version, m.Name, err)
 	}
-	slog.Info("reverted migration", "version", m.Version, "name", m.Name)
+	logging.From(ctx).Info("reverted migration", "version", m.Version, "name", m.Name)
 	return nil
 }
 

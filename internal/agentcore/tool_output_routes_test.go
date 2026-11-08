@@ -32,7 +32,7 @@ func TestBuildFantasyTools_AllRegistrationRoutesUseFinalBoundary(t *testing.T) {
 	catalog := []mcp.ServerTool{{ServerName: "srv", Tool: mcp.Tool{
 		Name: "dump", Description: "large MCP result", InputSchema: map[string]any{"type": "object"},
 	}}}
-	registered, _, err := buildFantasyTools(
+	registered, _, err := buildFantasyTools(context.Background(),
 		[]fantasy.AgentTool{tool("native_large")}, catalog, broker, nil, nil, nil, nil,
 		toolBuildConfig{loaderTools: []fantasy.AgentTool{tool("loader_large")}},
 	)
@@ -58,7 +58,7 @@ func TestMCPFinalBoundaryParity_DirectDeferredAndConcurrent(t *testing.T) {
 	}}}
 
 	SetToolDisclosureThreshold(100)
-	directTools, _, err := buildFantasyTools(nil, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
+	directTools, _, err := buildFantasyTools(context.Background(), nil, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("direct build: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestMCPFinalBoundaryParity_DirectDeferredAndConcurrent(t *testing.T) {
 	core := fantasy.NewAgentTool("core", "core", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("ok"), nil
 	})
-	deferredTools, _, err := buildFantasyTools([]fantasy.AgentTool{core}, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
+	deferredTools, _, err := buildFantasyTools(context.Background(), []fantasy.AgentTool{core}, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("deferred build: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestFinalBoundary_RouteMediaSuppressed(t *testing.T) {
 		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.NewMediaResponse([]byte(strings.Repeat("raw-video", 1000)), "video/mp4"), nil
 		})
-	registered, _, err := buildFantasyTools([]fantasy.AgentTool{media}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(context.Background(), []fantasy.AgentTool{media}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}

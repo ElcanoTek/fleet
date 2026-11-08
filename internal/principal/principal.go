@@ -30,6 +30,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // AuthMethod is how a request proved who it is. Rate limiting and CSRF key
@@ -132,9 +134,33 @@ func (p Principal) IsCredential() bool {
 
 type ctxKey struct{}
 
-// With returns ctx carrying p, replacing any principal ctx already held.
+// With returns ctx carrying p, replacing any principal ctx already held. It
+// also names the principal on the context's log correlation (user_id,
+// LogIdentity), so every line logged while serving the request says who it
+// is for — wherever the principal is attached: the gateway, a backend's edge,
+// the admin-key and API-key paths (#2052).
 func With(ctx context.Context, p Principal) context.Context {
-	return context.WithValue(ctx, ctxKey{}, p)
+	ctx = context.WithValue(ctx, ctxKey{}, p)
+	if id := p.LogIdentity(); id != "" {
+		ctx = logging.WithUser(ctx, id)
+	}
+	return ctx
+}
+
+// LogIdentity is the principal's user_id on log lines: the bootstrap admin
+// key is "admin", an API key or bearer "apikey/<key id>" — its id, never the
+// key; the separator is "/", not ":", because "apikey:<value>" is the
+// marker=value shape the log redactor scrubs — and a person their account
+// email. "" for an identity-less gateway call.
+func (p Principal) LogIdentity() string {
+	switch {
+	case p.AuthMethod == MethodAdminKey:
+		return "admin"
+	case (p.AuthMethod == MethodAPIKey || p.AuthMethod == MethodBearer) && p.KeyID != "":
+		return "apikey/" + p.KeyID
+	default:
+		return p.Email
+	}
 }
 
 // From returns the principal ctx carries, and whether it carries one.

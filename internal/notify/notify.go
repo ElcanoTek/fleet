@@ -61,6 +61,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -227,9 +228,9 @@ type Notifier struct {
 	// doesn't exist. Held as an interface so this package stays free of store
 	// and webpush imports; internal/webpush.Service is the one implementation.
 	push PushSender
-	// logf is the package logger seam, overridable in tests to capture output and
-	// assert no secret is ever written. Defaults to the stdlib logger.
-	logf func(format string, args ...any)
+	// logEvent is the package logger seam, overridable in tests to capture output
+	// and assert no secret is ever written. Defaults to stdLog (slog).
+	logEvent func(ctx context.Context, level slog.Level, msg string, args ...any)
 }
 
 // notifierState is one immutable config snapshot plus the client derived from
@@ -263,7 +264,7 @@ type PushSender interface {
 // false) the returned Notifier's Notify is a no-op, so callers can always wire a
 // non-nil Notifier and let config decide whether anything fires.
 func New(cfg Config) *Notifier {
-	n := &Notifier{logf: stdLogf}
+	n := &Notifier{logEvent: stdLog}
 	n.state.Store(newState(cfg))
 	return n
 }
@@ -329,18 +330,18 @@ func (n *Notifier) Notify(ctx context.Context, ev Event) error {
 	var errs []error
 	if st.cfg.emailEnabled() {
 		if err := retry(ctx, st.cfg, func(ctx context.Context) error { return sendEmail(ctx, st.cfg, ev) }); err != nil {
-			n.logf("notify: email for task %s failed: %v", ev.TaskID, err)
+			n.logEvent(ctx, slog.LevelWarn, "notify: email failed", "task_id", ev.TaskID, "err", err)
 			errs = append(errs, fmt.Errorf("email: %w", err))
 		} else {
-			n.logf("notify: email for task %s sent", ev.TaskID)
+			n.logEvent(ctx, slog.LevelInfo, "notify: email sent", "task_id", ev.TaskID)
 		}
 	}
 	if st.cfg.webhookEnabled() {
 		if err := retry(ctx, st.cfg, func(ctx context.Context) error { return sendWebhook(ctx, st, ev) }); err != nil {
-			n.logf("notify: webhook for task %s failed: %v", ev.TaskID, err)
+			n.logEvent(ctx, slog.LevelWarn, "notify: webhook failed", "task_id", ev.TaskID, "err", err)
 			errs = append(errs, fmt.Errorf("webhook: %w", err))
 		} else {
-			n.logf("notify: webhook for task %s sent", ev.TaskID)
+			n.logEvent(ctx, slog.LevelInfo, "notify: webhook sent", "task_id", ev.TaskID)
 		}
 	}
 	// Browser Web Push (#292): per-user, so it needs an Audience to route to.
@@ -349,7 +350,7 @@ func (n *Notifier) Notify(ctx context.Context, ev Event) error {
 	// best-effort (a push has no value minutes late).
 	if n.push != nil && strings.TrimSpace(ev.Audience) != "" {
 		if err := n.push.SendEvent(ctx, ev); err != nil {
-			n.logf("notify: push for task %s failed: %v", ev.TaskID, err)
+			n.logEvent(ctx, slog.LevelWarn, "notify: push failed", "task_id", ev.TaskID, "err", err)
 			errs = append(errs, fmt.Errorf("push: %w", err))
 		}
 	}

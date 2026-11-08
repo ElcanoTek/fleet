@@ -9,7 +9,6 @@ package handlers
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -85,7 +85,7 @@ func (h *Handlers) SubmitFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.maybeDistill(task)
-	writeJSON(w, http.StatusOK, fb)
+	writeJSON(w, r, http.StatusOK, fb)
 }
 
 // maybeDistill fires an off-thread distillation when fresh down-signals reached
@@ -99,7 +99,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 		defer cancel()
 		signals, err := h.storage.UnconsumedFeedback(ctx, task.ID)
 		if err != nil {
-			log.Printf("self-improve: load feedback for task %s: %v", safe.LogSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("self-improve: load feedback for task failed", "task_id", safe.LogSafe(task.ID.String()), "err", err)
 			return
 		}
 		var critiques []string
@@ -129,7 +129,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 			return // nothing worth proposing; leave signals unconsumed for next time
 		}
 		if _, err := h.storage.ProposeLearnedInstruction(ctx, task.ID, content, evidence, time.Now().Unix()); err != nil {
-			log.Printf("self-improve: propose instruction for task %s: %v", safe.LogSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and safe.LogSafe strips CR/LF.
+			logging.From(ctx).Error("self-improve: propose instruction for task failed", "task_id", safe.LogSafe(task.ID.String()), "err", err)
 		}
 	}()
 }
@@ -166,7 +166,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 		if list == nil {
 			list = []*models.TaskLearnedInstruction{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"learned_instructions": list})
+		writeJSON(w, r, http.StatusOK, map[string]any{"learned_instructions": list})
 
 	case r.Method == http.MethodDelete && versionStr == "":
 		// Deactivate: full revert to "no learned instruction". Mutating →
@@ -180,7 +180,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "Failed to deactivate")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"deactivated": had})
+		writeJSON(w, r, http.StatusOK, map[string]any{"deactivated": had})
 
 	case r.Method == http.MethodPost && versionStr != "":
 		if !p.hasPermission(models.PermissionCancelTask) {
@@ -197,7 +197,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, li)
+		writeJSON(w, r, http.StatusOK, li)
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

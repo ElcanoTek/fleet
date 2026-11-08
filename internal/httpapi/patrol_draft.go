@@ -115,7 +115,7 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the assistant could not draft this patrol; try again or edit the draft yourself", http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"title":   draft.Title,
 		"prompt":  draft.Prompt,
 		"summary": draft.Summary,
@@ -188,5 +188,5 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 			break // no more rows
 		}
 	}
-	writeJSON(w, map[string]any{"patrols": out})
+	writeJSON(w, r, map[string]any{"patrols": out})
 }

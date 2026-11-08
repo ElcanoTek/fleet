@@ -111,7 +111,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		for _, row := range servers {
 			views = append(views, remoteServerView{RemoteMCPServer: row, CatalogDrift: driftFromCatalog(row, catalog)})
 		}
-		writeJSON(w, map[string]any{
+		writeJSON(w, r, map[string]any{
 			"servers":        views,
 			"shares":         shares,
 			"shared_with_me": sharedWithMe,
@@ -152,10 +152,10 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		// adds whether the key itself was proven (a read-only tool call) or
 		// only the reachability — the card words its confirmation on that.
 		if report.ToolCount >= 0 {
-			writeJSON(w, probedServerResponse{server, report.ToolCount, keyVerifiedField(server.AuthKind, report)})
+			writeJSON(w, r, probedServerResponse{server, report.ToolCount, keyVerifiedField(server.AuthKind, report)})
 			return
 		}
-		writeJSON(w, server)
+		writeJSON(w, r, server)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -219,7 +219,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			s.remoteMCPError(w, err)
 			return
 		}
-		writeJSON(w, struct {
+		writeJSON(w, r, struct {
 			OK          bool  `json:"ok"`
 			ToolCount   int   `json:"tool_count"`
 			KeyVerified *bool `json:"key_verified,omitempty"`
@@ -257,7 +257,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			s.remoteMCPError(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"redirect_url": authURL})
+		writeJSON(w, r, map[string]any{"redirect_url": authURL})
 	case sub == "" && r.Method == http.MethodDelete:
 		if err := s.remoteMCP.Disconnect(r.Context(), user, id); err != nil {
 			s.remoteMCPError(w, err)
@@ -312,7 +312,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 	if req.Error != "" {
 		// The user declined or the AS errored; surface it without treating it as a
 		// server failure.
-		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "authorization_failed", "detail": req.Error})
+		writeJSONStatus(w, r, http.StatusBadRequest, map[string]any{"error": "authorization_failed", "detail": req.Error})
 		return
 	}
 	if req.State == "" || req.Code == "" {
@@ -324,7 +324,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 		s.remoteMCPError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "server_id": server.ID, "name": server.Name, "status": server.Status})
+	writeJSON(w, r, map[string]any{"ok": true, "server_id": server.ID, "name": server.Name, "status": server.Status})
 }
 
 // remoteMCPError maps service/store errors to HTTP statuses. fleet's own error

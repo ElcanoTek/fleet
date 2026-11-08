@@ -17,10 +17,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -277,8 +277,7 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 				return nil, err
 			}
 			// Value-free log line: ids only — never the URL or a secret.
-			log.Printf("a2a push: skipping config %q on task %s: its secrets do not unseal (store key changed?); re-register the config to resume deliveries: %v",
-				w.Config.ID, w.Config.TaskID, err)
+			logging.From(ctx).Warn("a2a push: skipping config: its secrets do not unseal (store key changed?); re-register the config to resume deliveries", "config_id", w.Config.ID, "task_id", w.Config.TaskID, "err", err)
 			unreadable = append(unreadable, unreadableRow{
 				work:        models.A2APushWork{Config: models.A2APushConfig{TaskID: w.Config.TaskID, ID: w.Config.ID}, Status: w.Status},
 				tokenSealed: tokenSealed,
@@ -295,7 +294,7 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 	_ = rows.Close()
 	for _, u := range unreadable {
 		if _, err := db.markUnreadableA2APush(ctx, u.work.Config.TaskID, u.work.Config.ID, u.work.Status, u.tokenSealed, u.credsSealed); err != nil {
-			log.Printf("a2a push: could not mark unreadable config %q on task %s: %v", u.work.Config.ID, u.work.Config.TaskID, err)
+			logging.From(ctx).Error("a2a push: could not mark unreadable config", "config_id", u.work.Config.ID, "task_id", u.work.Config.TaskID, "err", err)
 		}
 	}
 	return out, nil

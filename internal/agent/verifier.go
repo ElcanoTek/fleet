@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
@@ -366,7 +366,7 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	// cost money even when the verdict turns out unparseable.
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageEndOfRunVerifier, model.Model(), out)
 	a.logSession.AddAuxUsage(rec)
-	logAuxUsage(rec)
+	logAuxUsage(ctx, rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
 		// An empty reply is an answer without a verdict, not an outage: a
@@ -379,7 +379,7 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w (raw=%q)", errVerifierMalformedVerdict, err, summarizeForConsole(raw, 200))
 	}
-	log.Printf("Verifier: missing=%v reasoning=%q", parsed.Missing, summarizeForConsole(parsed.Reasoning, 200))
+	logging.From(ctx).Info("Verifier: result", "missing", parsed.Missing, "reasoning", summarizeForConsole(parsed.Reasoning, 200))
 	return parsed.Missing, nil
 }
 

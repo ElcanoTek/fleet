@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
+
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -56,6 +58,9 @@ func Middleware(next http.Handler) http.Handler {
 
 		reqID := requestIDFromSpan(span)
 		w.Header().Set("X-Request-Id", reqID)
+		// Every log line written under this request carries the id (and, via
+		// the span, the trace id) — logging.From(r.Context()) (#2052).
+		ctx = logging.WithRequestID(ctx, reqID)
 
 		ww := httpmw.NewWrapResponseWriter(w, r.ProtoMajor)
 		// Pass the trace-context request DOWN; the router populates its

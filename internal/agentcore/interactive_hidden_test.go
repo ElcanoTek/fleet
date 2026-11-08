@@ -61,7 +61,7 @@ func TestInteractiveHidden_DeferredToolIsUnreachable(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
 	const hidden = "mcp_srv_stripe_refund_charge_2"
 	broker := &fakeBroker{}
-	got, roster, err := buildFantasyTools(discNative(3), discMCPTools(20), broker, nil, nil, nil, nil,
+	got, roster, err := buildFantasyTools(context.Background(), discNative(3), discMCPTools(20), broker, nil, nil, nil, nil,
 		toolBuildConfig{hiddenSuffixes: []string{"stripe_refund_charge_2"}})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestInteractiveHidden_NonstandardToolNameIsHidden(t *testing.T) {
 		t.Fatalf("problems = %q", problems)
 	}
 	broker := &fakeBroker{}
-	got, roster, err := buildFantasyTools(discNative(3), catalog, broker, nil, nil, nil, nil, toolBuildConfig{hiddenSuffixes: list})
+	got, roster, err := buildFantasyTools(context.Background(), discNative(3), catalog, broker, nil, nil, nil, nil, toolBuildConfig{hiddenSuffixes: list})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,11 +124,11 @@ func TestInteractiveHidden_NonstandardToolNameIsHidden(t *testing.T) {
 // list registers exactly what it did before.
 func TestInteractiveHidden_DirectRosterAndAbsentList(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
-	without, _, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	without, _, err := buildFantasyTools(context.Background(), discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	with, roster, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil,
+	with, roster, err := buildFantasyTools(context.Background(), discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil,
 		toolBuildConfig{hiddenSuffixes: []string{"jira_create_issue_1", "not_a_tool"}})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestInteractiveHidden_RunHidesAndExplains(t *testing.T) {
 func TestInteractiveHidden_DescribeExplains(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
 	const hidden = "mcp_srv_stripe_refund_charge_2"
-	got, _, err := buildFantasyTools(discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
+	got, _, err := buildFantasyTools(context.Background(), discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
 		toolBuildConfig{hiddenSuffixes: []string{"stripe_refund_charge_2"}})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestInteractiveHidden_PersonaGateWinsOverHidden(t *testing.T) {
 	for _, threshold := range []string{"5", "128"} {
 		t.Run("threshold="+threshold, func(t *testing.T) {
 			t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", threshold)
-			got, roster, err := buildFantasyTools(discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil, cfg)
+			got, roster, err := buildFantasyTools(context.Background(), discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -272,7 +272,7 @@ func TestInteractiveHidden_LiveRegistryOmitsHiddenTools(t *testing.T) {
 	cfg := toolBuildConfig{hiddenSuffixes: []string{"jira_create_issue_1"}}
 
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
-	_, direct, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
+	_, direct, err := buildFantasyTools(context.Background(), discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestInteractiveHidden_LiveRegistryOmitsHiddenTools(t *testing.T) {
 	}
 
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "3")
-	_, deferred, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
+	_, deferred, err := buildFantasyTools(context.Background(), discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

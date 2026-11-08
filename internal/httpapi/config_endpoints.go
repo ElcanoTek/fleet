@@ -5,13 +5,13 @@
 package httpapi
 
 import (
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)
 	}
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // ── /client-config ──────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 			resp.EmptyState.ProtocolPills = b.EmptyState.ProtocolPills
 		}
 	}
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
@@ -212,9 +212,9 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 	if list, err := s.store.ListUserPersonas(r.Context(), userFromCtx(r.Context())); err == nil {
 		userPersonas = activeUserPersonaSummaries(list)
 	} else {
-		log.Printf("list user personas: %v", err)
+		logging.From(r.Context()).Error("list user personas failed", "err", err)
 	}
-	writeJSON(w, personasResponse{
+	writeJSON(w, r, personasResponse{
 		Personas:     names,
 		Default:      s.cfg.PersonaDefault,
 		UserPersonas: userPersonas,

@@ -7,10 +7,9 @@ package scheduler
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/procgroup"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -276,7 +276,7 @@ func (s *Scheduler) SetTickInterval(seconds int) {
 func New(store *storage.Storage, timezone string) *Scheduler {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
-		log.Printf("Warning: Invalid timezone '%s', defaulting to UTC: %v", timezone, err)
+		slog.Warn("Warning: Invalid timezone, defaulting to UTC", "timezone", timezone, "err", err)
 		loc = time.UTC
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -302,7 +302,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 // in, the chat schedule loop (chat_schedules.go) — separate goroutines, so no
 // task-path work (promotion, claims, maintenance) can delay a chat fire.
 func (s *Scheduler) Start() {
-	log.Println("Starting scheduler...")
+	logging.From(s.ctx).Info("Starting scheduler...")
 	s.loopStarted = true
 	if s.chatDeliverer != nil {
 		s.chatLoopStarted = true
@@ -353,7 +353,7 @@ func (s *Scheduler) Stop() {
 	select {
 	case <-settled:
 	case <-time.After(gateDrainTimeout):
-		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
+		logging.From(s.ctx).Info("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
 }
 
@@ -399,7 +399,7 @@ func (s *Scheduler) settleCtx() (context.Context, context.CancelFunc) {
 // previous run is still going.
 func (s *Scheduler) startMaintenance() {
 	if !s.maintRunning.CompareAndSwap(false, true) {
-		log.Printf("scheduler: daily maintenance still running from the last run; skipping this one")
+		logging.From(s.ctx).Info("scheduler: daily maintenance still running from the last run; skipping this one")
 		return
 	}
 	run := s.maintenance
@@ -421,7 +421,7 @@ func (s *Scheduler) startMaintenance() {
 
 func (s *Scheduler) runLoop() {
 	defer close(s.loopDone)
-	defer safe.Recover("scheduler.runLoop", nil)
+	defer safe.RecoverContext(s.ctx, "scheduler.runLoop", nil)
 	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
 
@@ -440,19 +440,16 @@ func (s *Scheduler) runLoop() {
 		cleanupC = cleanupTimer.C
 	}
 	if s.retentionDays > 0 {
-		log.Printf("scheduler: run-history retention ON (retention=%dd, keep=%d/task, sweep daily at %02d:00 UTC)",
-			s.retentionDays, s.keepPerTask, s.cleanupHour)
+		logging.From(s.ctx).Info("scheduler: run-history retention ON (daily sweep)", "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.archiveAfterDays > 0 {
-		log.Printf("scheduler: log archival ON (archive after %dd, sweep daily at %02d:00 UTC)",
-			s.archiveAfterDays, s.cleanupHour)
+		logging.From(s.ctx).Info("scheduler: log archival ON (daily sweep)", "archive_after_days", s.archiveAfterDays, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.starvationWindowMin > 0 {
-		log.Printf("scheduler: anti-starvation promotion ON (promote pending tasks waiting > %dm to priority %d)",
-			s.starvationWindowMin, models.StarvationFloorPriority)
+		logging.From(s.ctx).Info("scheduler: anti-starvation promotion ON (long-waiting pending tasks are promoted)", "window_min", s.starvationWindowMin, "floor_priority", models.StarvationFloorPriority)
 	}
 	if s.pausedExpiryMin > 0 {
-		log.Printf("scheduler: paused-task expiry ON (fail tasks awaiting input > %dm)", s.pausedExpiryMin)
+		logging.From(s.ctx).Info("scheduler: paused-task expiry ON (tasks awaiting input too long are failed)", "expiry_min", s.pausedExpiryMin)
 	}
 
 	for {
@@ -525,7 +522,7 @@ func (s *Scheduler) sweepWithin(timeout time.Duration, name string, fn func(ctx 
 	defer cancel()
 	n, err := fn(ctx)
 	if err != nil {
-		log.Printf("scheduler: %s failed: %v", name, err)
+		logging.From(ctx).Error("scheduler: job failed", "job", name, "err", err)
 		return
 	}
 	if n > 0 && onCount != nil {
@@ -544,8 +541,7 @@ func (s *Scheduler) runStarvationPromotion() {
 		n, err := s.storage.PromoteStarvedTasks(ctx, s.starvationWindowMin)
 		return int(n), err
 	}, func(n int) {
-		log.Printf("scheduler: promoted %d starving task(s) to priority %d (waited > %dm)",
-			n, models.StarvationFloorPriority, s.starvationWindowMin)
+		logging.From(s.ctx).Info("scheduler: promoted starving tasks", "promoted", n, "priority", models.StarvationFloorPriority, "waited_min", s.starvationWindowMin)
 	})
 }
 
@@ -559,7 +555,7 @@ func (s *Scheduler) runPausedExpiry() {
 		n, err := s.storage.ExpirePausedTasks(ctx, s.pausedExpiryMin)
 		return int(n), err
 	}, func(n int) {
-		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
+		logging.From(s.ctx).Info("scheduler: expired paused tasks awaiting input", "expired", n, "expiry_min", s.pausedExpiryMin)
 	})
 }
 
@@ -572,7 +568,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 		n, err := s.storage.ExpireStrandedWakeTasks(ctx, db.StrandedWakeGrace)
 		return int(n), err
 	}, func(n int) {
-		log.Printf("scheduler: expired %d task(s) parked awaiting a wake that can no longer arrive (> %s past the deadline)", n, db.StrandedWakeGrace)
+		logging.From(s.ctx).Info("scheduler: expired tasks parked awaiting a wake that can no longer arrive", "expired", n, "grace_past_deadline", db.StrandedWakeGrace)
 	})
 }
 
@@ -582,7 +578,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 // tasks the sweep is one cheap indexed query.
 func (s *Scheduler) runWakeSweep() {
 	s.sweep("wake sweep", s.storage.WakeDueTasks, func(n int) {
-		log.Printf("scheduler: woke %d task(s) whose wake deadline passed", n)
+		logging.From(s.ctx).Info("scheduler: woke tasks whose wake deadline passed", "woke", n)
 	})
 }
 
@@ -595,7 +591,7 @@ func (s *Scheduler) runWakeSweep() {
 // probe (idx_tasks_recurrence_unspawned).
 func (s *Scheduler) runRecurrenceReconciliation() {
 	s.sweep("recurrence reconciliation", s.storage.ReconcileRecurrences, func(n int) {
-		log.Printf("scheduler: reconciled %d recurring schedule(s) whose post-completion spawn never landed", n)
+		logging.From(s.ctx).Info("scheduler: reconciled recurring schedules whose post-completion spawn never landed", "reconciled", n)
 		metrics.RecordRecurrencesReconciled(n)
 	})
 }
@@ -605,7 +601,7 @@ func (s *Scheduler) runCleanup() {
 	s.sweepWithin(dailySweepTimeout, "run-history cleanup", func(ctx context.Context) (int, error) {
 		return s.storage.CleanupOldRuns(ctx, s.retentionDays, s.keepPerTask)
 	}, func(n int) {
-		log.Printf("scheduler: pruned %d old task run(s) (retention=%dd, keep=%d/task)", n, s.retentionDays, s.keepPerTask)
+		logging.From(s.ctx).Info("scheduler: pruned old task runs", "pruned", n, "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask)
 		metrics.RecordRunsPruned(n)
 	})
 }
@@ -627,7 +623,7 @@ func (s *Scheduler) runLogArchival() {
 		bytesSaved = saved
 		return n, err
 	}, func(n int) {
-		log.Printf("scheduler: archived %d task log(s), saved %d bytes (archive after %dd)", n, bytesSaved, s.archiveAfterDays)
+		logging.From(s.ctx).Info("scheduler: archived task logs", "archived", n, "bytes_saved", bytesSaved, "archive_after_days", s.archiveAfterDays)
 		metrics.RecordLogsArchived("ok", n, bytesSaved)
 	})
 }
@@ -655,11 +651,11 @@ func (s *Scheduler) RecoverExpiredLeases() {
 	defer cancel()
 	count, err := s.storage.RecoverExpiredLeasesWithContext(ctx)
 	if err != nil {
-		log.Printf("Error recovering expired leases: %v", err)
+		logging.From(ctx).Error("Error recovering expired leases", "err", err)
 		return
 	}
 	if count > 0 {
-		log.Printf("Recovered %d tasks with expired leases", count)
+		logging.From(ctx).Info("Recovered tasks with expired leases", "count", count)
 	}
 }
 
@@ -713,13 +709,13 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			// gate slot busy, say) would otherwise be rescanned in a hot loop.
 			// Without progress the rest waits for the next tick.
 			if promotedThisPass > 0 {
-				log.Printf("ProcessScheduledTasks: handled %d due rows this pass (%d promoted); another pass follows right away", rowsThisTick, promotedThisPass)
+				logging.From(s.ctx).Info("ProcessScheduledTasks: due rows handled this pass; another pass follows right away", "rows", rowsThisTick, "promoted", promotedThisPass)
 				select {
 				case s.promoteAgain <- struct{}{}:
 				default: // one is already requested
 				}
 			} else {
-				log.Printf("ProcessScheduledTasks: handled %d due rows this pass, none promoted; the rest wait for the next tick", rowsThisTick)
+				logging.From(s.ctx).Info("ProcessScheduledTasks: due rows handled this pass, none promoted; the rest wait for the next tick", "rows", rowsThisTick)
 			}
 			return
 		}
@@ -731,7 +727,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		tasks, err := s.storage.GetScheduledTasksCtx(pageCtx, now, cursorScheduledFor, cursorID, batchSize)
 		pageCancel()
 		if err != nil {
-			log.Printf("Error getting scheduled tasks: %v", err)
+			logging.From(s.ctx).Error("Error getting scheduled tasks", "err", err)
 			return
 		}
 		if len(tasks) == 0 {
@@ -768,8 +764,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				deferredGates++
 			}
 		}
-		log.Printf("Processing %d scheduled tasks (%d recurring, %d gated dispatched async, %d gated deferred)",
-			len(tasks), recurringCount, gatedCount-deferredGates, deferredGates)
+		logging.From(s.ctx).Info("Processing scheduled tasks", "tasks", len(tasks), "recurring", recurringCount, "gated_dispatched", gatedCount-deferredGates, "gated_deferred", deferredGates)
 
 		batchCtx, batchCancel := s.storeCtx()
 		promoted, err := s.storage.UpdateTasksStatusBatchCtx(batchCtx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
@@ -782,7 +777,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			s.armPromoteRetry()
 		}
 		if err != nil {
-			log.Printf("Error updating scheduled tasks batch: %v", err)
+			logging.From(s.ctx).Error("Error updating scheduled tasks batch", "err", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
 			// A row that still fails is already behind the cursor, so a persistent
 			// DB error can't re-loop it this tick.
@@ -794,17 +789,17 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				n, perr := s.storage.UpdateTasksStatusBatchCtx(oneCtx, []uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
 				oneCancel()
 				if perr != nil {
-					log.Printf("Error updating task %s: %v", taskID, perr)
+					logging.From(s.ctx).Error("Error updating task", "task_id", taskID, "err", perr)
 					continue
 				}
 				if n > 0 {
 					promotedThisPass += n
-					log.Printf("Task %s is now pending", taskID)
+					logging.From(s.ctx).Info("Task is now pending", "task_id", taskID)
 				}
 			}
 		} else {
 			promotedThisPass += promoted
-			log.Printf("Successfully promoted %d of %d scheduled tasks to pending", promoted, len(promoteIDs))
+			logging.From(s.ctx).Info("Successfully promoted scheduled tasks to pending", "promoted", promoted, "total", len(promoteIDs))
 		}
 
 		// A short page means the cursor walked off the end of the due set.
@@ -886,13 +881,13 @@ func (s *Scheduler) promoteGatedTask(task *models.Task) {
 	defer cancel()
 	n, err := s.storage.SettleGatedTaskCtx(ctx, task.ID, task.ScheduledFor, models.TaskStatusPending)
 	if err != nil {
-		log.Printf("Error promoting gated task %s: %v", task.ID, err)
+		logging.From(s.ctx).Error("Error promoting gated task", "task_id", task.ID, "err", err)
 		return
 	}
 	if n > 0 {
-		log.Printf("Task %s passed its run_if gate and is now pending", task.ID)
+		logging.From(s.ctx).Info("Task passed its run_if gate and is now pending", "task_id", task.ID)
 	} else {
-		log.Printf("Task %s changed while its run_if gate ran — stale pass verdict discarded", task.ID)
+		logging.From(s.ctx).Info("Task changed while its run_if gate ran — stale pass verdict discarded", "task_id", task.ID)
 	}
 }
 
@@ -993,7 +988,7 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 		computed, err := s.storage.ComputeNextRun(task)
 		switch {
 		case err != nil:
-			log.Printf("Error computing next run for skipped task %s: %s", task.ID, safe.LogSafe(err.Error()))
+			logging.From(s.ctx).Error("Error computing next run for skipped task", "task_id", task.ID, "err", safe.LogSafe(err.Error()))
 		case task.RecurrenceUntil != nil && computed.After(*task.RecurrenceUntil):
 			// The recurrence's end date falls before the next cron tick: there is
 			// no future occurrence to advance to, so cancel the row instead of
@@ -1006,12 +1001,11 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			scancel()
 			switch {
 			case cerr != nil:
-				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
+				logging.From(s.ctx).Error("Error ending recurrence for skipped task", "task_id", task.ID, "err", cerr)
 			case n > 0:
-				log.Printf("Recurrence for task %s ended at skip: next tick %s is past recurrence_until %s",
-					task.ID, computed.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+				logging.From(s.ctx).Info("Recurrence for task ended at skip: next tick is past recurrence_until", "task_id", task.ID, "next_tick", computed.Format(time.RFC3339), "recurrence_until", task.RecurrenceUntil.Format(time.RFC3339))
 			default:
-				log.Printf("Task %s changed while its run_if gate ran — stale end-of-recurrence verdict discarded", task.ID)
+				logging.From(s.ctx).Info("Task changed while its run_if gate ran — stale end-of-recurrence verdict discarded", "task_id", task.ID)
 			}
 			return
 		default:
@@ -1029,14 +1023,14 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	defer cancel()
 	_, recorded, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun, task.ScheduledFor)
 	if err != nil {
-		log.Printf("Error recording skip for task %s: %v", task.ID, err)
+		logging.From(ctx).Error("Error recording skip for task", "task_id", task.ID, "err", err)
 		return
 	}
 	if !recorded {
 		// The task was cancelled, claimed, edited, or rescheduled while the
 		// gate ran; nothing was written, so don't count or log a skip that
 		// never happened — the next due tick re-evaluates the current row.
-		log.Printf("Task %s changed while its run_if gate ran — stale skip verdict discarded", task.ID)
+		logging.From(ctx).Info("Task changed while its run_if gate ran — stale skip verdict discarded", "task_id", task.ID)
 		return
 	}
 	// Distinguish a check_error (the gate timed out / crashed) from a clean
@@ -1048,21 +1042,16 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	}
 	metrics.RecordTaskSkipped(class)
 	nextStr := nextRun.Format(time.RFC3339)
-	// The reason carries raw gate stderr, so the event is json.Marshal'ed —
-	// interpolated unescaped, a newline or quote in it would split or forge
-	// log records. The log line clamps the reason to a short prefix; the full
-	// capped text is already persisted to last_skip_reason by RecordSkip above.
-	event, err := json.Marshal(struct {
-		Event     string `json:"event"`
-		TaskID    string `json:"task_id"`
-		Reason    string `json:"reason"`
-		NextRunAt string `json:"next_run_at"`
-	}{"task_skipped", task.ID.String(), clampSkipReason(reason), nextStr})
-	if err != nil {
-		log.Printf("Error marshaling skip event for task %s: %v", task.ID, err)
-		return
-	}
-	log.Printf("%s", event)
+	// The reason carries raw gate stderr, so it is an attribute, never
+	// interpolated into the message: the slog handler escapes it, so a newline
+	// or quote in it cannot split or forge a log record. The log line clamps
+	// the reason to a short prefix; the full capped text is already persisted
+	// to last_skip_reason by RecordSkip above.
+	logging.From(ctx).Info("scheduler: task skipped",
+		"event", "task_skipped",
+		"task_id", task.ID.String(),
+		"reason", clampSkipReason(reason),
+		"next_run_at", nextStr)
 }
 
 // gateSkipBackoffBase / gateSkipBackoffCap bound the retry cadence of a

@@ -56,7 +56,7 @@ func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([
 	defer func() { _ = rows.Close() }()
 	var expired []*models.Task
 	for rows.Next() {
-		t, serr := db.scanTask(rows)
+		t, serr := db.scanTask(ctx, rows)
 		if serr != nil {
 			return nil, serr
 		}
@@ -127,7 +127,7 @@ func (db *Database) ListPausedTasks(ctx context.Context, limit int) ([]*models.T
 	defer func() { _ = rows.Close() }()
 	var out []*models.Task
 	for rows.Next() {
-		t, err := db.scanTask(rows)
+		t, err := db.scanTask(ctx, rows)
 		if err != nil {
 			return nil, err
 		}

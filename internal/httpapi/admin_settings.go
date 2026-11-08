@@ -49,7 +49,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": resolved})
+	writeJSON(w, r, map[string]any{"settings": resolved})
 }
 
 // handleAdminSettingItem serves /admin/settings/{key}: PUT sets an override,
@@ -78,14 +78,14 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 			httpErrorForSetting(w, err)
 			return
 		}
-		writeJSON(w, resolved)
+		writeJSON(w, r, resolved)
 	case http.MethodDelete:
 		resolved, err := s.workspaceSettings.Reset(r.Context(), key, userFromCtx(r.Context()))
 		if err != nil {
 			httpErrorForSetting(w, err)
 			return
 		}
-		writeJSON(w, resolved)
+		writeJSON(w, r, resolved)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

@@ -6,10 +6,11 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
-	"log"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/jsonrepair"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Tool-call inputs replayed to a provider must be JSON objects.
@@ -65,13 +66,13 @@ func isJSONObject(s string) bool {
 // copy-on-write: when nothing changes msgs itself is returned, and a rewrite
 // never mutates the caller's messages or their Content slices (the history is
 // shared with the run's own bookkeeping).
-func SanitizeToolCallInputs(msgs []fantasy.Message) ([]fantasy.Message, int) {
+func SanitizeToolCallInputs(ctx context.Context, msgs []fantasy.Message) ([]fantasy.Message, int) {
 	var out []fantasy.Message
 	fixed := 0
 	for i, msg := range msgs {
 		var content []fantasy.MessagePart
 		for j, part := range msg.Content {
-			replacement, ok := sanitizedToolCallPart(part)
+			replacement, ok := sanitizedToolCallPart(ctx, part)
 			if !ok {
 				continue
 			}
@@ -97,7 +98,7 @@ func SanitizeToolCallInputs(msgs []fantasy.Message) ([]fantasy.Message, int) {
 
 // sanitizedToolCallPart returns a normalized copy of part when it is a tool
 // call (by value or pointer) whose Input is not a JSON object.
-func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool) {
+func sanitizedToolCallPart(ctx context.Context, part fantasy.MessagePart) (fantasy.MessagePart, bool) {
 	var tc fantasy.ToolCallPart
 	switch p := part.(type) {
 	case fantasy.ToolCallPart:
@@ -114,7 +115,7 @@ func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool)
 	if !changed {
 		return nil, false
 	}
-	log.Printf("agentcore: replaying tool call %s (%s) with a normalized input: the model's arguments were not a JSON object", tc.ToolCallID, tc.ToolName)
+	logging.From(ctx).Info("agentcore: replaying tool call with a normalized input: the model's arguments were not a JSON object", "tool_call_id", tc.ToolCallID, "tool", tc.ToolName)
 	tc.Input = normalized
 	return tc, true
 }
@@ -126,7 +127,7 @@ func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool)
 // retries).
 func ToolCallInputSanitizeStep() fantasy.PrepareStepFunction {
 	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-		msgs, fixed := SanitizeToolCallInputs(opts.Messages)
+		msgs, fixed := SanitizeToolCallInputs(ctx, opts.Messages)
 		if fixed == 0 {
 			return ctx, fantasy.PrepareStepResult{}, nil
 		}

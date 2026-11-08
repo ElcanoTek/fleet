@@ -41,7 +41,7 @@ func (db *Database) GetScheduledTasks(ctx context.Context, cutoff time.Time, aft
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // GetAllScheduledTasks returns all scheduled tasks regardless of due time.
@@ -55,7 +55,7 @@ func (db *Database) GetAllScheduledTasks(ctx context.Context) ([]*models.Task, e
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // ListTasksForExport returns task definitions for GET /tasks/export (#238). It
@@ -80,7 +80,7 @@ func (db *Database) ListTasksForExport(ctx context.Context, ids []uuid.UUID, rec
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // FindTaskIDsByName resolves task IDs by non-empty name (#238). It is the
@@ -126,7 +126,7 @@ func (db *Database) GetTaskByName(ctx context.Context, name string) (*models.Tas
 		return nil, nil
 	}
 	row := db.conn.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE name = $1 AND name <> ''", name)
-	t, err := db.scanTask(row)
+	t, err := db.scanTask(ctx, row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -149,7 +149,7 @@ func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error)
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // PendingQueueStats returns the per-effective-priority rollup of the pending
@@ -191,7 +191,7 @@ func (db *Database) GetTasksByStatus(ctx context.Context, status models.TaskStat
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // GetDeadLetteredTasks returns dead-lettered tasks (#253), ordered by when they
@@ -210,7 +210,7 @@ func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int)
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // GetDashboardStats gets statistics for the dashboard.
@@ -471,7 +471,7 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		return nil, 0, err
 	}
 	defer rows.Close()
-	tasks, err := db.rowsToTasks(rows)
+	tasks, err := db.rowsToTasks(ctx, rows)
 	return tasks, total, err
 }
 

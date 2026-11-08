@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"sort"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // The legacy ledgers below the boundary (ADR-0107).
@@ -142,7 +143,7 @@ func (r *runner) reconcileLegacy(ctx context.Context, conn *sql.Conn) (err error
 	if len(added)+len(dropped) > 0 {
 		sort.Ints(added)
 		sort.Ints(dropped)
-		slog.Info("reconciled "+Table+" with the legacy ledgers (a release before the one runner ran on this database)",
+		logging.From(ctx).Info("reconciled "+Table+" with the legacy ledgers (a release before the one runner ran on this database)",
 			"recorded", joinInts(added), "dropped", joinInts(dropped))
 	}
 	return nil

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -866,7 +866,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// run has a different one, so an outage of the judging model does
 			// not decide the run (endOfRunVerifierRetryModel).
 			retryModel := p.agent.endOfRunVerifierRetryModel()
-			log.Printf("verifier failed, retrying once in %s on %s: %v", verifierRetryDelay, retryModel.Model(), err)
+			logging.From(ctx).Warn("verifier failed, retrying once", "retry_in", verifierRetryDelay, "model", retryModel.Model(), "err", err)
 			firstOutage := !errors.Is(err, errVerifierMalformedVerdict) && ctx.Err() == nil
 			if sleepCtx(ctx, verifierRetryDelay) {
 				missing, err = p.agent.runEndOfRunVerifierWith(ctx, retryModel, p.task, p.latestRunText(), records)
@@ -880,7 +880,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// unresolved failed critical call: fail OPEN with a recorded warning instead of dead-lettering
 			// audited work on the verifier's own outage (the phone-a-friend
 			// reviewer already fails open on its errors).
-			log.Printf("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified: %v", err)
+			logging.From(ctx).Warn("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified", "err", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
@@ -889,7 +889,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// critical call that landed, or a failed critical call on the
 			// record: the pre-#1602 semantics — the check is spent.
 			p.verificationAttempts++
-			log.Printf("verifier failed: %v", err)
+			logging.From(ctx).Error("verifier failed", "err", err)
 			p.keepJudgedAnswer()
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
 		case len(missing) > 0:
@@ -919,7 +919,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		answer := p.latestRunText()
 		issues, err := p.agent.runPhoneAFriendReview(ctx, p.agent.reviewerModel, p.task, answer, records)
 		if err != nil {
-			log.Printf("phone_a_friend review skipped: %v", err)
+			logging.From(ctx).Warn("phone_a_friend review skipped", "err", err)
 		} else if len(issues) > 0 {
 			p.verified = false
 			p.keepJudgedAnswer()
@@ -954,7 +954,7 @@ func (p *scheduledPolicy) completionPredicateTool() string {
 // the fleet.completion_predicate event for the tool that satisfied the
 // predicate.
 func (p *scheduledPolicy) recordCompletionPredicate(tool string) {
-	log.Printf("Completion predicate satisfied by %s; skipping the end-of-run verifier and phone-a-friend review", tool)
+	logging.From(p.runCtx).Info("Completion predicate satisfied; skipping the end-of-run verifier and phone-a-friend review", "tool", tool)
 	t := messageTypeCompletionPredicate
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
 		"[completion_predicate] satisfied by %s — the task's EXECUTION REQUIREMENTS completion clause lists it and it executed successfully, so the end-of-run verifier and the phone-a-friend review were skipped",
@@ -1199,7 +1199,7 @@ func (p *scheduledPolicy) Unwrap() agentcore.Policy { return p.inner }
 // Execute drives one scheduled task to completion through agentcore.Run. The
 // session log is persisted on every exit path.
 func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
-	defer writeLogFile(a.logSession, a.logFile)
+	defer writeLogFile(ctx, a.logSession, a.logFile)
 	defer func() {
 		// A surfaced cancel (#1105) is attribution, not a fault: the runner's
 		// stop/pause/interrupt paths write their own transcript line ("Task
@@ -1213,7 +1213,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 			// persisted and operator-visible, so it is the larger half.
 			msg := agentcore.RedactSecrets(retErr.Error())
 			a.logSession.AddMessageWithMetadata(roleUser, "[fatal] "+msg, nil, nil, &t, nil, nil, "")
-			log.Printf("Execute returning error: %v", msg)
+			logging.From(ctx).Error("Execute returning error", "err", msg)
 		}
 	}()
 
@@ -1232,7 +1232,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	systemPrompt := a.systemPrompt
 	if a.notesProvider != nil {
 		if notes, err := a.notesProvider.PublishedNotes(ctx); err != nil {
-			log.Printf("agent notes unavailable; running without notes section: %v", err)
+			logging.From(ctx).Warn("agent notes unavailable; running without notes section", "err", err)
 		} else {
 			systemPrompt = appendScheduledAgentNotes(systemPrompt, notes)
 		}
@@ -1246,7 +1246,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.taskMemory != nil {
 		mems, err := a.taskMemory.ListTaskMemories(ctx, a.taskID)
 		if err != nil {
-			log.Printf("task memory unavailable; running without the persistent-memory section: %v", err)
+			logging.From(ctx).Warn("task memory unavailable; running without the persistent-memory section", "err", err)
 			mems = nil
 		}
 		systemPrompt = appendTaskMemorySection(systemPrompt, mems)

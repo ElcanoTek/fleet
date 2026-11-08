@@ -13,42 +13,22 @@ import (
 
 // A restore keeps the migration ledgers true to the schemas it puts back
 // (#2049 M6, ADR-0107). It is always a whole-database restore (--db=all),
-// so the dump's ledgers come with its schemas:
+// and pgRestoreAll recreates chat, core and sched inside the restore
+// transaction before loading the archive, so the dump's schemas and ledgers
+// replace the live ones whole:
 //
 //   - a dump taken since M6 carries core.schema_versions (and, below the
-//     boundary, the two legacy ledgers): restored with everything else. A
-//     legacy ledger the dump lacks is dropped first, so no stale one outlives
-//     the restore (the next start writes it again from the restored ledger);
+//     boundary, the two legacy ledgers): restored with everything else, while
+//     any object or legacy ledger not in the dump is cleared with the schema
+//     reset (the next start writes missing legacy ledgers again from the
+//     restored ledger);
 //   - a dump from before M6 (M4 or M5) has only the legacy ledgers. Below the
-//     boundary they are authoritative and the next start reconciles the live
-//     core.schema_versions to them; past it (a version >= 200 ran, or the
-//     legacy ledgers carry the sentinels) the restore is refused: those
-//     migrations' objects are not in the dump.
+//     boundary they are authoritative and the next start adopts them into
+//     core.schema_versions; past it (a version >= 200 ran, or the legacy
+//     ledgers carry the sentinels) the restore is refused before anything
+//     changes: those migrations' objects are not in the dump.
 //
 // Every check here is read-only and runs before anything changes.
-
-// ledgerRestore is what planLedgerRestore decided.
-type ledgerRestore struct {
-	// dropLegacy: legacy ledgers to drop before the restore (the dump does
-	// not carry them).
-	dropLegacy []string
-}
-
-// prepare makes the restore's ledger changes that precede pg_restore.
-func (p ledgerRestore) prepare(ctx context.Context, dsn string) error {
-	if len(p.dropLegacy) == 0 {
-		return nil
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := migrations.DropLegacyLedgers(ctx, db, p.dropLegacy...); err != nil {
-		return fmt.Errorf("drop the legacy migration ledgers the dump does not carry: %w", err)
-	}
-	return nil
-}
 
 // dumpTOC is the dump's table of contents (pg_restore --list, read-only).
 func dumpTOC(ctx context.Context, path string) (string, error) {
@@ -79,33 +59,26 @@ func tocHasTable(toc, schema, table string) bool {
 	return false
 }
 
-// planLedgerRestore checks a whole-database dump against the live database
+// checkLedgerRestore checks a whole-database dump against the live database
 // before the restore touches anything.
-func planLedgerRestore(ctx context.Context, dsn, inPath string) (ledgerRestore, error) {
+func checkLedgerRestore(ctx context.Context, dsn, inPath string) error {
 	toc, err := dumpTOC(ctx, inPath)
 	if err != nil {
-		return ledgerRestore{}, err
+		return err
 	}
 	if !tocHasTable(toc, config.IdentitySchema, "users") {
-		return ledgerRestore{}, fmt.Errorf("%s is from before the one identity table (it has no %s.users: its accounts are unmerged), "+
+		return fmt.Errorf("%s is from before the one identity table (it has no %s.users: its accounts are unmerged), "+
 			"which this release cannot run: restore a whole-database dump taken by fleet M4 or later (docs/BACKUP_RESTORE.md)", inPath, config.IdentitySchema)
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return ledgerRestore{}, err
-	}
-	defer db.Close()
 	if !tocHasTable(toc, config.IdentitySchema, "schema_versions") {
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
 		if err := migrations.CheckLegacyRestore(ctx, db); err != nil {
-			return ledgerRestore{}, err
+			return err
 		}
 	}
-	var plan ledgerRestore
-	if !tocHasTable(toc, config.ChatSchema, "schema_migrations") {
-		plan.dropLegacy = append(plan.dropLegacy, migrations.StreamChat)
-	}
-	if !tocHasTable(toc, config.SchedSchema, "schema_migrations") {
-		plan.dropLegacy = append(plan.dropLegacy, migrations.StreamSched)
-	}
-	return plan, nil
+	return nil
 }

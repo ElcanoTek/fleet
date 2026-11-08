@@ -174,7 +174,7 @@ func (s *Server) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 func (s *Server) versionOrDefault() string {

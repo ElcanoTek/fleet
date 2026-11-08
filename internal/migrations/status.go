@@ -217,26 +217,37 @@ func (r *runner) legacyView(ctx context.Context, db querier, applied map[int]Inf
 	if err != nil {
 		return err
 	}
-	if !st.ChatTable || !st.SchedTable || isFrozen(st) {
+	if isFrozen(st) {
 		return nil
 	}
+	rep.Dirty = rep.Dirty || st.SchedDirty
 	rows, perr := r.plan(st)
 	if perr != nil {
 		// Not this call's failure: what Up will refuse with, kept in the report.
 		rep.Problem = perr.Error()
 		return nil //nolint:nilerr // the planning failure is reported, not returned
 	}
+	hasTable := func(v int) bool {
+		switch streamOf(v) {
+		case StreamChat:
+			return st.ChatTable
+		case StreamSched:
+			return st.SchedTable
+		default:
+			return false
+		}
+	}
 	want := map[int]adoptionRow{}
 	for _, row := range rows {
 		want[row.Version] = row
 	}
 	for v := range applied {
-		if _, ok := want[v]; !ok && v < FirstNew {
+		if _, ok := want[v]; !ok && hasTable(v) {
 			delete(applied, v)
 		}
 	}
 	for v, row := range want {
-		if _, ok := applied[v]; !ok {
+		if _, ok := applied[v]; !ok && hasTable(v) {
 			applied[v] = Info{Version: v, Name: row.Name}
 		}
 	}

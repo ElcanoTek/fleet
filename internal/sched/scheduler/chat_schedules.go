@@ -3,9 +3,9 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -254,7 +254,7 @@ func (s *Scheduler) chatPass() int {
 			fs, err := get(free)
 			if err != nil {
 				if s.ctx.Err() == nil {
-					log.Printf("scheduler: chat schedules: %s: %v (retrying in %s)", name, err, chatScheduleErrorRetry)
+					logging.From(ctx).Error("scheduler: chat schedules: claim failed", "claim", name, "err", err, "retry_in", chatScheduleErrorRetry)
 					s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
 				}
 				return false
@@ -295,7 +295,7 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 		// (defers run last-first), so that pass can claim into it.
 		defer func() { s.WakeChatSchedulesAt(time.Now()) }()
 		defer func() { <-s.chatSlots }()
-		defer safe.Recover("scheduler.chat-schedule-fire", nil)
+		defer safe.RecoverContext(logging.WithConversation(s.ctx, f.ConversationID), "scheduler.chat-schedule-fire", nil)
 		timeout := chatScheduleFireTimeout
 		if s.chatFireTimeoutOverride > 0 {
 			timeout = s.chatFireTimeoutOverride
@@ -303,7 +303,7 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
 		if _, err := s.fireChatSchedule(ctx, f); err != nil {
-			log.Printf("scheduler: chat schedule %s fire: %v", safe.LogSafe(f.ScheduleID), err)
+			logging.From(logging.WithConversation(ctx, f.ConversationID)).Error("scheduler: chat schedule fire failed", "schedule_id", safe.LogSafe(f.ScheduleID), "err", err)
 		}
 	}()
 }
@@ -351,15 +351,14 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 		return d, err
 	}
 	if !settled {
-		log.Printf("scheduler: chat schedule %s: fire ended before settle (re-claimed or revoked)", safe.LogSafe(fire.ScheduleID))
+		logging.From(logging.WithConversation(wctx, fire.ConversationID)).Info("scheduler: chat schedule fire ended before settle (re-claimed or revoked)", "schedule_id", safe.LogSafe(fire.ScheduleID))
 		return d, nil
 	}
 	switch d.Outcome {
 	case models.ChatScheduleStale, models.ChatScheduleDeferred, models.ChatScheduleRejected, models.ChatScheduleSuperseded:
 		// Nothing changed that a client could see.
 	case models.ChatScheduleQueued:
-		log.Printf("audit: chat schedule %q (run #%d) queued for conversation %q as input %q",
-			fire.ScheduleID, fire.RunNumber, fire.ConversationID, d.InputID)
+		logging.From(logging.WithConversation(wctx, fire.ConversationID)).Info("audit: chat schedule queued", "schedule_id", safe.LogSafe(fire.ScheduleID), "run", fire.RunNumber, "input_id", safe.LogSafe(d.InputID))
 		s.chatDeliverer.ChatScheduleFireSettled(wctx, fire, d)
 	case models.ChatScheduleCoalesced, models.ChatScheduleBusy, models.ChatScheduleGone:
 		s.chatDeliverer.ChatScheduleFireSettled(wctx, fire, d)
@@ -370,7 +369,7 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 // deliverChatSchedule calls the deliverer with a panic boundary: a panic in
 // the chat side fails this fire (its lease is released), not the tick.
 func (s *Scheduler) deliverChatSchedule(ctx context.Context, fire models.ChatScheduleFire) (d models.ChatScheduleDelivery, err error) {
-	defer safe.Recover("scheduler.chat-schedule-deliver", func(any) {
+	defer safe.RecoverContext(ctx, "scheduler.chat-schedule-deliver", func(any) {
 		err = chatSchedError("chat schedule delivery panicked")
 	})
 	return s.chatDeliverer.DeliverChatScheduleFire(ctx, fire)
@@ -388,7 +387,7 @@ func (s *Scheduler) armNextChatScheduleWake(ctx context.Context) {
 	next, ok, err := lookup(ctx, time.Now().Unix())
 	if err != nil {
 		if s.ctx.Err() == nil {
-			log.Printf("scheduler: chat schedules: next due time: %v (retrying in %s)", err, chatScheduleErrorRetry)
+			logging.From(ctx).Error("scheduler: chat schedules: next due time lookup failed", "err", err, "retry_in", chatScheduleErrorRetry)
 			s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
 		}
 		return
@@ -406,7 +405,7 @@ func (s *Scheduler) armNextChatScheduleWake(ctx context.Context) {
 	overdue, err := s.storage.DB().OverdueChatScheduleWork(ctx)
 	if err != nil {
 		if s.ctx.Err() == nil {
-			log.Printf("scheduler: chat schedules: overdue check: %v (retrying in %s)", err, chatScheduleErrorRetry)
+			logging.From(ctx).Error("scheduler: chat schedules: overdue check failed", "err", err, "retry_in", chatScheduleErrorRetry)
 			s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
 		}
 		return
@@ -422,7 +421,7 @@ func (s *Scheduler) runChatScheduleCleanup() {
 	s.sweepWithin(dailySweepTimeout, "chat schedule run cleanup", func(ctx context.Context) (int, error) {
 		return s.storage.DB().CleanupOldChatScheduleRuns(ctx, s.retentionDays, s.keepPerTask)
 	}, func(n int) {
-		log.Printf("scheduler: pruned %d old chat schedule run(s) (retention=%dd, keep=%d/schedule)", n, s.retentionDays, s.keepPerTask)
+		logging.From(s.ctx).Info("scheduler: pruned old chat schedule runs", "runs", n, "retention_days", s.retentionDays, "keep_per_schedule", s.keepPerTask)
 	})
 }
 

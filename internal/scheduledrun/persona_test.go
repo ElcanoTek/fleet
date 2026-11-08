@@ -1,6 +1,7 @@
 package scheduledrun
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,14 +47,14 @@ func TestTaskPromptAndPersona(t *testing.T) {
 	}
 
 	t.Run("no override uses base + global persona", func(t *testing.T) {
-		sp, persona := r.taskPromptAndPersona(&models.Task{ID: uuid.New()})
+		sp, persona := r.taskPromptAndPersona(context.Background(), &models.Task{ID: uuid.New()})
 		if sp != r.baseSystemPrompt || persona != "assistant.yaml" {
 			t.Errorf("got (%q persona, base==%v), want global", persona, sp == r.baseSystemPrompt)
 		}
 	})
 
 	t.Run("valid override swaps in the persona", func(t *testing.T) {
-		sp, persona := r.taskPromptAndPersona(&models.Task{ID: uuid.New(), Persona: "security-auditor"})
+		sp, persona := r.taskPromptAndPersona(context.Background(), &models.Task{ID: uuid.New(), Persona: "security-auditor"})
 		if !strings.Contains(sp, "SECURITY EXPERTISE") {
 			t.Errorf("override prompt missing the persona expertise block: %q", sp)
 		}
@@ -66,14 +67,14 @@ func TestTaskPromptAndPersona(t *testing.T) {
 	})
 
 	t.Run("unknown persona falls back to base + global", func(t *testing.T) {
-		sp, persona := r.taskPromptAndPersona(&models.Task{ID: uuid.New(), Persona: "does-not-exist"})
+		sp, persona := r.taskPromptAndPersona(context.Background(), &models.Task{ID: uuid.New(), Persona: "does-not-exist"})
 		if sp != r.baseSystemPrompt || persona != "assistant.yaml" {
 			t.Errorf("unknown persona should fall back to global, got persona=%q base=%v", persona, sp == r.baseSystemPrompt)
 		}
 	})
 
 	t.Run("path traversal is neutralized (falls back, never escapes)", func(t *testing.T) {
-		sp, persona := r.taskPromptAndPersona(&models.Task{ID: uuid.New(), Persona: "../../etc/passwd"})
+		sp, persona := r.taskPromptAndPersona(context.Background(), &models.Task{ID: uuid.New(), Persona: "../../etc/passwd"})
 		if sp != r.baseSystemPrompt || persona != "assistant.yaml" {
 			t.Errorf("traversal attempt must fall back to global, got persona=%q", persona)
 		}

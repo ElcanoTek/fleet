@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -60,7 +60,7 @@ func (h *Handlers) HandleTaskExport(w http.ResponseWriter, r *http.Request) {
 
 	tasks, err := h.storage.ListTasksForExport(r.Context(), ids, recurrenceOnly)
 	if err != nil {
-		log.Printf("handleTaskExport: list: %v", err)
+		logging.From(r.Context()).Error("handleTaskExport: list failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "export failed")
 		return
 	}
@@ -92,14 +92,14 @@ func (h *Handlers) HandleTaskExport(w http.ResponseWriter, r *http.Request) {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(envelope); err != nil {
-			log.Printf("handleTaskExport: json encode: %v", err)
+			logging.From(r.Context()).Error("handleTaskExport: json encode failed", "err", err)
 		}
 	case "yaml":
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Header().Set("Content-Disposition", `attachment; filename="fleet-tasks-`+stamp+`.yaml"`)
 		w.WriteHeader(http.StatusOK)
 		if err := yaml.NewEncoder(w, yaml.Indent(2)).Encode(envelope); err != nil {
-			log.Printf("handleTaskExport: yaml encode: %v", err)
+			logging.From(r.Context()).Error("handleTaskExport: yaml encode failed", "err", err)
 		}
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported format: "+format+" (want json or yaml)")
@@ -226,7 +226,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	}
 	existing, err := h.storage.FindTaskIDsByName(r.Context(), names)
 	if err != nil {
-		log.Printf("handleTaskImport: find by name: %v", err)
+		logging.From(r.Context()).Error("handleTaskImport: find by name failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "import failed")
 		return
 	}
@@ -293,7 +293,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	if resp.Errors > 0 {
 		status = http.StatusMultiStatus
 	}
-	writeJSON(w, status, resp)
+	writeJSON(w, r, status, resp)
 }
 
 // createTaskFromRecord mints a fresh task from a portable record (the import

@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -111,7 +112,7 @@ func (a *approvalStager) joinApprovalGroup(approval *store.Approval) {
 	}
 	ok, err := a.store.SetApprovalGroup(a.ctx, a.userEmail, approval.ID, a.groupID)
 	if err != nil || !ok {
-		log.Printf("approval group: store group for %s: ok=%t err=%v", approval.ID, ok, err)
+		logging.From(a.ctx).Error("approval group: store group failed", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.GroupID = a.groupID
@@ -260,8 +261,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			resume = true
 		}
 	}
-	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
-	log.Printf("audit: %q decided approval group %q in conversation %q (%d cards)", user, groupID, convID, len(decisions))
+	logging.From(ctx).Info("audit: approval group decided", "user", safe.LogSafe(user), "group_id", safe.LogSafe(groupID), "conv_id", safe.LogSafe(convID), "cards", len(decisions))
 	out := map[string]any{"group_id": groupID, "results": results}
 	if resume {
 		// At least one card's settlement may start the automatic continue
@@ -269,7 +269,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		// conversation for it, as after a single card.
 		out["resume"] = true
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 // checkGroupNarrowing checks a group decision's `narrow` map before any card

@@ -16,13 +16,13 @@ import (
 // ── pure exit-condition helpers ──
 
 func TestEvalRegexExit(t *testing.T) {
-	if ok, res := evalRegexExit("DONE", "all DONE here"); !ok || res != "regex:matched" {
+	if ok, res := evalRegexExit(t.Context(), "DONE", "all DONE here"); !ok || res != "regex:matched" {
 		t.Errorf("match: ok=%v res=%q", ok, res)
 	}
-	if ok, res := evalRegexExit("DONE", "still working"); ok || res != "regex:no_match" {
+	if ok, res := evalRegexExit(t.Context(), "DONE", "still working"); ok || res != "regex:no_match" {
 		t.Errorf("no-match: ok=%v res=%q", ok, res)
 	}
-	if ok, res := evalRegexExit("(", "anything"); ok || res != "regex:invalid" {
+	if ok, res := evalRegexExit(t.Context(), "(", "anything"); ok || res != "regex:invalid" {
 		t.Errorf("invalid pattern should not match: ok=%v res=%q", ok, res)
 	}
 }

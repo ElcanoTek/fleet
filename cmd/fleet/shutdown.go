@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -31,19 +31,37 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 		case sig := <-sigCh:
 			switch sig {
 			case syscall.SIGTERM:
-				log.Printf("fleet: SIGTERM received; beginning graceful shutdown")
+				slog.Info("fleet: SIGTERM received; beginning graceful shutdown")
 				return true
 			case syscall.SIGINT:
-				log.Printf("fleet: SIGINT received; shutting down immediately")
+				slog.Info("fleet: SIGINT received; shutting down immediately")
 				return false
 			case syscall.SIGUSR1:
-				log.Printf("fleet: status — active_chat_turns=%d active_sched_tasks=%d admission_inflight=%d/%d",
-					chatSrv.ActiveTurns(), pool.ActiveTasks(), lim.InFlight(), lim.Total())
+				slog.Info("fleet: status", "active_chat_turns", chatSrv.ActiveTurns(), "active_sched_tasks", pool.ActiveTasks(), "admission_inflight", lim.InFlight(), "admission_total", lim.Total())
 			}
 		case err := <-errCh:
-			log.Printf("fleet: listener error: %v; shutting down", err)
+			slog.Error("fleet: listener error; shutting down", "err", err)
 			return false
 		}
+	}
+}
+
+// logChatDrain logs how the chat-turn drain ended: Info when every turn
+// finished within grace; otherwise the stragglers are force-cancelled
+// (cancel) and that is a Warn — work was cut short.
+func logChatDrain(drained bool, grace time.Duration, cancel func() int) {
+	if drained {
+		slog.Info("fleet: all in-flight chat turns drained within grace")
+		return
+	}
+	slog.Warn("fleet: grace period expired; force-cancelled in-flight chat turns", "grace", grace, "cancelled", cancel())
+}
+
+// logApprovalDrain warns when approved actions were still executing at the
+// end of the grace period: their outcome becomes unknown.
+func logApprovalDrain(drained bool, grace time.Duration) {
+	if !drained {
+		slog.Warn("fleet: grace period expired with approved actions still executing; their outcome will be recorded as unknown at the next start", "grace", grace)
 	}
 }
 
@@ -63,19 +81,13 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		// decoupled context and drain within the pool's own grace budget (parallel).
 		cancel()
 		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
-		if chatSrv.DrainTurns(graceCtx) {
-			log.Printf("fleet: all in-flight chat turns drained within grace")
-		} else {
-			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
-		}
+		logChatDrain(chatSrv.DrainTurns(graceCtx), grace, chatSrv.CancelInflightTurns)
 		// An approved card's call can outlive its POST (a long deal write
 		// answers "executing" and finishes detached), so the HTTP handler
 		// drain no longer covers it. Wait for it within the same grace; one
 		// still running when the process exits keeps its executing sentinel,
 		// which the next boot records as outcome unknown.
-		if !chatSrv.DrainApprovalRuns(graceCtx) {
-			log.Printf("fleet: grace period (%s) expired with approved actions still executing; their outcome will be recorded as unknown at the next start", grace)
-		}
+		logApprovalDrain(chatSrv.DrainApprovalRuns(graceCtx), grace)
 		graceStop()
 		// After the turns, not before: a turn's completion tail can schedule a
 		// queue-drain re-kick, so background work has to settle second or the
@@ -87,7 +99,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		cancel()
 		pool.ForceCancel()
 		if n := chatSrv.CancelInflightTurns(); n > 0 {
-			log.Printf("fleet: cancelled %d in-flight chat turn(s)", n)
+			slog.Warn("fleet: cancelled in-flight chat turns", "cancelled", n)
 		}
 		// Cancels pending timers and waits only for background work already
 		// running, so this stays an immediate path.
@@ -104,7 +116,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		servers = append(servers, webServer)
 	}
 	closeServers(grace, servers...)
-	log.Printf("fleet: shutdown complete")
+	slog.Info("fleet: shutdown complete")
 }
 
 // poolDrainGrace maps the process shutdown grace onto the worker pool's

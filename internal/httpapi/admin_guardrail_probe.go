@@ -28,5 +28,5 @@ func (s *Server) handleAdminGuardrailProbe(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, s.guardrailProbe(r.Context()))
+	writeJSON(w, r, s.guardrailProbe(r.Context()))
 }

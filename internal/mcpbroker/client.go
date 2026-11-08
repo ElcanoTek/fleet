@@ -455,6 +455,7 @@ func (c *Client) Close() error {
 // cancellation it best-effort tells the server to cancel the in-flight call.
 func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	ch := make(chan response, 1)
+	req.Correlation = correlationFrom(ctx)
 
 	c.mu.Lock()
 	if c.closed {

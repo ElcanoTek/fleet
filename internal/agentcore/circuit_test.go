@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,11 +25,11 @@ func TestCircuit_OpensAfterThreshold(t *testing.T) {
 	r, _ := newTestRegistry()
 	const slug = "anthropic/claude"
 	for i := 0; i < circuitOpenThreshold-1; i++ {
-		if st := r.RecordError(slug, "503"); st != CircuitClosed {
+		if st := r.RecordError(context.Background(), slug, "503"); st != CircuitClosed {
 			t.Fatalf("error %d: state=%v, want closed", i+1, st)
 		}
 	}
-	if st := r.RecordError(slug, "503"); st != CircuitOpen {
+	if st := r.RecordError(context.Background(), slug, "503"); st != CircuitOpen {
 		t.Fatalf("threshold error: state=%v, want open", st)
 	}
 	if st := r.State(slug); st != CircuitOpen {
@@ -40,7 +41,7 @@ func TestCircuit_SuccessClosesAndResets(t *testing.T) {
 	r, _ := newTestRegistry()
 	const slug = "m"
 	for i := 0; i < circuitOpenThreshold; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 	}
 	if r.State(slug) != CircuitOpen {
 		t.Fatal("precondition: circuit should be open")
@@ -51,7 +52,7 @@ func TestCircuit_SuccessClosesAndResets(t *testing.T) {
 	}
 	// Window was cleared: it takes a fresh full threshold to re-open.
 	for i := 0; i < circuitOpenThreshold-1; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 	}
 	if st := r.State(slug); st != CircuitClosed {
 		t.Errorf("error window not reset after success: state=%v, want closed", st)
@@ -62,7 +63,7 @@ func TestCircuit_CooldownToHalfOpen(t *testing.T) {
 	r, clock := newTestRegistry()
 	const slug = "m"
 	for i := 0; i < circuitOpenThreshold; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 	}
 	if r.State(slug) != CircuitOpen {
 		t.Fatal("should be open")
@@ -77,7 +78,7 @@ func TestCircuit_HalfOpenProbeSuccessCloses(t *testing.T) {
 	r, clock := newTestRegistry()
 	const slug = "m"
 	for i := 0; i < circuitOpenThreshold; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 	}
 	advance(clock, circuitCooldown+time.Second)
 	_ = r.State(slug) // transition to half-open
@@ -91,13 +92,13 @@ func TestCircuit_HalfOpenProbeFailReopens(t *testing.T) {
 	r, clock := newTestRegistry()
 	const slug = "m"
 	for i := 0; i < circuitOpenThreshold; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 	}
 	advance(clock, circuitCooldown+time.Second)
 	if r.State(slug) != CircuitHalfOpen {
 		t.Fatal("should be half-open")
 	}
-	if st := r.RecordError(slug, "503 again"); st != CircuitOpen {
+	if st := r.RecordError(context.Background(), slug, "503 again"); st != CircuitOpen {
 		t.Errorf("probe failure: state=%v, want open", st)
 	}
 }
@@ -107,7 +108,7 @@ func TestCircuit_WindowEviction(t *testing.T) {
 	const slug = "m"
 	// Spread errors so old ones age out of the window before the threshold is met.
 	for i := 0; i < circuitOpenThreshold*2; i++ {
-		r.RecordError(slug, "503")
+		r.RecordError(context.Background(), slug, "503")
 		advance(clock, circuitWindow/2) // each step ages half the window
 	}
 	if st := r.State(slug); st == CircuitOpen {
@@ -120,7 +121,7 @@ func TestCircuit_NilRegistry(t *testing.T) {
 	if r.State("m") != CircuitClosed {
 		t.Error("nil registry State should be closed")
 	}
-	if r.RecordError("m", "x") != CircuitClosed {
+	if r.RecordError(context.Background(), "m", "x") != CircuitClosed {
 		t.Error("nil registry RecordError should be closed")
 	}
 	r.RecordSuccess("m") // must not panic
@@ -133,7 +134,7 @@ func TestCircuit_Snapshot(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.RecordSuccess("good")
 	for i := 0; i < circuitOpenThreshold; i++ {
-		r.RecordError("bad", "503 Service Unavailable")
+		r.RecordError(context.Background(), "bad", "503 Service Unavailable")
 	}
 	snap := r.Snapshot()
 	if len(snap) != 2 {
@@ -167,7 +168,7 @@ func TestCircuit_ConcurrentAccess(t *testing.T) {
 			for i := 0; i < 200; i++ {
 				switch i % 3 {
 				case 0:
-					r.RecordError("m", "503")
+					r.RecordError(context.Background(), "m", "503")
 				case 1:
 					r.RecordSuccess("m")
 				default:

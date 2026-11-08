@@ -18,13 +18,13 @@ package scorers
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -40,10 +40,10 @@ type BashRunner interface {
 // Regex reports whether pattern matches text. An invalid pattern is a fail
 // (never a pass), labelled "regex:invalid" and logged — matching the loop's
 // historical behavior for a malformed exit_condition.
-func Regex(pattern, text string) (bool, string) {
+func Regex(ctx context.Context, pattern, text string) (bool, string) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		log.Printf("scorers: invalid regex %q: %v", pattern, err)
+		logging.From(ctx).Error("scorers: invalid regex", "pattern", pattern, "err", err)
 		return false, "regex:invalid"
 	}
 	if re.MatchString(text) {
@@ -82,7 +82,7 @@ func Equals(want, text string) (bool, string) {
 func Shell(ctx context.Context, sb BashRunner, cmd string, timeout time.Duration) (bool, string) {
 	res, err := sb.RunBash(ctx, sandbox.BashRequest{Command: cmd, Timeout: timeout})
 	if err != nil {
-		log.Printf("scorers: shell check failed: %v", err)
+		logging.From(ctx).Error("scorers: shell check failed", "err", err)
 		return false, "shell:error"
 	}
 	if res.TimedOut {

@@ -1,17 +1,19 @@
 package agentcore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Start-of-run create reconciliation (#717, ported from the v1 engine).
@@ -95,7 +97,7 @@ type createLedgerRecord struct {
 // run's resolved MCP workspace dir; "" (no workspace-armed server) and any
 // read/parse miss return the task unchanged — the ledger is advisory here,
 // the fail-closed guard lives server-side in the bundle.
-func AugmentTaskWithCreateReconciliation(task, workdir string) string {
+func AugmentTaskWithCreateReconciliation(ctx context.Context, task, workdir string) string {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
 		return task
@@ -103,7 +105,7 @@ func AugmentTaskWithCreateReconciliation(task, workdir string) string {
 	raw, err := readCreateLedger(filepath.Join(workdir, createLedgerFilename))
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("create reconciliation: ledger in %s not read: %v", workdir, err)
+			logging.From(ctx).Error("create reconciliation: ledger not read", "workdir", workdir, "err", err)
 		}
 		return task
 	}

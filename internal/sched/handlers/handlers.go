@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"net/mail"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -338,19 +338,38 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 
 // Helper functions
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+// writeJSON answers status with v as the JSON body. r is the request being
+// answered: an encode failure is logged through its context logger, so the
+// line carries the request's correlation ids.
+func writeJSON(w http.ResponseWriter, r *http.Request, status int, v interface{}) {
 	// The status line + headers are already committed, so a mid-body encode
 	// failure (typically the client disconnecting) can't change the response —
 	// log it for diagnostics rather than swallowing it silently.
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writeJSON: failed to encode response body: %v", err)
+	if err := encodeJSONBody(w, status, v); err != nil {
+		logging.From(requestContext(r)).Error("writeJSON: failed to encode response body", "err", err)
 	}
 }
 
+func encodeJSONBody(w http.ResponseWriter, status int, v interface{}) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	return json.NewEncoder(w).Encode(v)
+}
+
+// requestContext is r's context, or Background for a nil r.
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	return r.Context()
+}
+
+// writeError answers status with the standard error body. Unlike writeJSON it
+// does not log an encode failure: the body is a one-field struct, so a failure
+// can only be the client having gone, and the caller has usually just logged
+// the error that produced this response through its own context.
 func writeError(w http.ResponseWriter, status int, detail string) {
-	writeJSON(w, status, models.ErrorResponse{Detail: detail})
+	_ = encodeJSONBody(w, status, models.ErrorResponse{Detail: detail})
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -421,7 +440,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// the batch path so the two cannot drift. It resolves the creator id, the
 	// authorizing key (for spend attribution), and the username the budget gate
 	// keys user-scope budgets on (#601 part 2).
-	creator, ok := h.authorizeTaskCreator(w, r)
+	creator, r, ok := h.authorizeTaskCreator(w, r)
 	if !ok {
 		return
 	}
@@ -452,9 +471,9 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, safe.LogSafe(task.Prompt))
+	logging.From(r.Context()).Info("Task created", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
 	localizeTask(task)
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // createRefusalError is a typed refusal from the shared create pipeline: the
@@ -629,7 +648,7 @@ func (h *Handlers) QueueStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, r, http.StatusOK, stats)
 }
 
 // requireAdminForCeilingsAboveDeployment is the privilege boundary of the
@@ -1275,12 +1294,12 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 	// Populate CreatedByUsername for display
 	if err := h.populateCreatedByUsernames(r.Context(), tasks); err != nil {
-		log.Printf("Warning: failed to populate creator usernames: %v", err)
+		logging.From(r.Context()).Warn("Warning: failed to populate creator usernames", "err", err)
 		// Continue without usernames - will fall back to UUID display on frontend
 	}
 	localizeTasks(tasks)
 
-	writeJSON(w, http.StatusOK, models.PaginatedResponse{
+	writeJSON(w, r, http.StatusOK, models.PaginatedResponse{
 		Data:   tasks,
 		Total:  total,
 		Limit:  limit,
@@ -1319,7 +1338,7 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 
 	// Populate CreatedByUsername for display
 	if err := h.populateCreatedByUsernames(r.Context(), []*models.Task{task}); err != nil {
-		log.Printf("Warning: failed to populate creator username: %v", err)
+		logging.From(r.Context()).Warn("Warning: failed to populate creator username", "err", err)
 	}
 	localizeTask(task)
 
@@ -1329,16 +1348,16 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	if task.LoopConfig != nil {
 		iterations, ierr := h.storage.ListTaskIterations(r.Context(), taskID)
 		if ierr != nil {
-			log.Printf("Warning: failed to load task iterations: %v", ierr)
+			logging.From(r.Context()).Warn("Warning: failed to load task iterations", "err", ierr)
 		}
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, r, http.StatusOK, struct {
 			*models.Task
 			Iterations []*models.TaskIteration `json:"iterations"`
 		}{Task: task, Iterations: iterations})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // GetTaskOutput handles GET /tasks/{task_id}/output (#244): the validated
@@ -1549,8 +1568,8 @@ func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Cleaned up %d tasks older than %d days", deleted, days)
-	writeJSON(w, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
+	logging.From(r.Context()).Info("Cleaned up old tasks", "deleted", deleted, "older_than_days", days)
+	writeJSON(w, r, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
 }
 
 // BulkSetTaskModel handles POST /tasks/model: re-assign the pinned model (and
@@ -1609,7 +1628,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: true, MatchedCount: len(matched), Tasks: matched})
+		writeJSON(w, r, http.StatusOK, models.BulkModelUpdateResult{DryRun: true, MatchedCount: len(matched), Tasks: matched})
 		return
 	}
 
@@ -1626,8 +1645,8 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 			fbLog = *fallback
 		}
 	}
-	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", safe.LogSafe(req.Model), safe.LogSafe(fbLog), safe.LogSafe(req.FromModel), updated)
-	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
+	logging.From(ctx).Info("Bulk re-assigned the model on scheduled tasks", "model", safe.LogSafe(req.Model), "fallback", safe.LogSafe(fbLog), "from", safe.LogSafe(req.FromModel), "updated", updated)
+	writeJSON(w, r, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 
 // CancelTask handles DELETE /tasks/{task_id}
@@ -1688,11 +1707,11 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// running nowhere (pending) or in a prior process's orphaned lease simply
 	// stays cancelled in the DB, exactly as before.
 	if h.taskStopper != nil && h.taskStopper(taskID, who) {
-		log.Printf("Task cancelled: %s (live run interrupted, stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
+		logging.From(r.Context()).Info("Task cancelled (live run interrupted)", "task_id", taskID, "stopped_by", safe.LogSafe(who))
 	} else {
-		log.Printf("Task cancelled: %s (stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
+		logging.From(r.Context()).Info("Task cancelled", "task_id", taskID, "stopped_by", safe.LogSafe(who))
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // DeleteTask handles DELETE /tasks/{task_id}/permanent — remove the task row
@@ -1764,8 +1783,8 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	log.Printf("Task deleted: %s (by %s)", taskID, safe.LogSafe(p.stopLabel())) //nolint:gosec // G706: taskID is a parsed uuid.UUID; the label passes safe.LogSafe.
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
+	logging.From(r.Context()).Info("Task deleted", "task_id", taskID, "by", safe.LogSafe(p.stopLabel()))
+	writeJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
 }
 
 // stopLabel renders the cancelling principal for the who-stopped-it audit
@@ -2027,10 +2046,9 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: untrusted fields are sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
-	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, safe.LogSafe(updated.Prompt))
+	logging.From(r.Context()).Info("Task updated", "task_id", updated.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(updated.Prompt)))
 	localizeTask(updated)
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, r, http.StatusOK, updated)
 }
 
 // withAgentPool copies the (possibly cached) stats and stamps the LIVE
@@ -2075,7 +2093,7 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to load tag catalogue")
 		return
 	}
-	writeJSON(w, http.StatusOK, catalogue)
+	writeJSON(w, r, http.StatusOK, catalogue)
 }
 
 // recipientHistoryWindow and recipientHistoryLimit bound GET /tasks/recipients:
@@ -2122,7 +2140,7 @@ func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
 			out = append(out, ru)
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, r, http.StatusOK, out)
 }
 
 // GetSLAReport handles GET /sla-report (#274): the per-prompt SLA actuals
@@ -2159,7 +2177,7 @@ func (h *Handlers) GetSLAReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to load SLA report")
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, r, http.StatusOK, report)
 }
 
 // tagMutation is the POST /tasks/{task_id}/tags body: tags to add and/or remove.
@@ -2219,7 +2237,7 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	localizeTask(updated)
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, r, http.StatusOK, updated)
 }
 
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
@@ -2299,7 +2317,7 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	// One box, one task table: every principal that clears the permission check
 	// above sees the same counts, so one cached value serves them all.
 	if cached, ok := h.statsCache.Get(); ok {
-		writeJSON(w, http.StatusOK, h.withAgentPool(cached))
+		writeJSON(w, r, http.StatusOK, h.withAgentPool(cached))
 		return
 	}
 
@@ -2315,7 +2333,7 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	// a minute — the web dashboard polls every 5s while work is in flight.
 	h.statsCache.Set(stats, 5*time.Second)
 
-	writeJSON(w, http.StatusOK, h.withAgentPool(stats))
+	writeJSON(w, r, http.StatusOK, h.withAgentPool(stats))
 }
 
 // GetCurrentUser handles GET /api/me. It sits behind AdminOrUserAuthMiddleware,
@@ -2327,10 +2345,10 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	user := GetUserFromContext(r.Context())
 	if user == nil {
 		// Authenticated via an API key (no user record); still signed in.
-		writeJSON(w, http.StatusOK, map[string]interface{}{"authenticated": true})
+		writeJSON(w, r, http.StatusOK, map[string]interface{}{"authenticated": true})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, r, http.StatusOK, map[string]interface{}{
 		"authenticated": true,
 		"username":      user.Username,
 		"role":          user.Role,
@@ -2346,7 +2364,7 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 // deployment may be configured with a zone the browser's ICU data does not
 // know, in which case the embedded offset is still enough to render the time.
 // A client computes its skew once from this and ticks locally.
-func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
 	loc := h.storage.Location()
 	if loc == nil {
 		loc = time.UTC
@@ -2361,14 +2379,14 @@ func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
 		"default_task_timezone": h.defaultTaskTimezone(),
 	}
 
-	writeJSON(w, http.StatusOK, config)
+	writeJSON(w, r, http.StatusOK, config)
 }
 
 // Health Check
 
 // HealthCheck handles GET /health
-func (h *Handlers) HealthCheck(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, models.HealthResponse{
+func (h *Handlers) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, http.StatusOK, models.HealthResponse{
 		Status:    "healthy",
 		Version:   h.config.Version,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -2507,7 +2525,7 @@ func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to read session logs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"aggregate": acc.Result(),
 		"runs":      recent.Items(),
 	})

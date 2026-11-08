@@ -282,10 +282,11 @@ unconfigured. The browser reaches them through the Next.js proxies under
   `/push/subscribe` and `/push/renew` answer anything else with `400` and the
   line the settings switch shows: *"This browser's push service is not one
   this server sends notifications to. Turn notifications on in Chrome, Edge,
-  Firefox or Safari instead."* The server logs `push: refused a subscription
-  from <user>: the endpoint on "<host>" <rule>` (or `a renewal`). The sender
-  checks every stored row again before it sends, and deletes one that fails
-  without sending to it (`webpush: retiring a subscription of <user>: …`), so
+  Firefox or Safari instead."* The server logs `push: request refused` with
+  `what=subscription` (or `renewal`), the `user`, and an `err` naming the
+  endpoint's host and the rule. The sender checks every stored row again
+  before it sends, and deletes one that fails without sending to it
+  (`webpush: retiring a subscription`, with `user` and `err`), so
   a row stored before this check, or written straight to the database, is
   never sent to. A send never follows a redirect. Because the host is fixed to
   a push service, sends go through the ordinary HTTP client, so a host whose

@@ -12,9 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // LockKey is the session-level advisory lock the runner holds on its
@@ -75,7 +76,7 @@ func acquire(ctx context.Context, conn *sql.Conn, key int64, what string, timeou
 			return fmt.Errorf("timed out after %s waiting for the %s (advisory lock %d): another process holds it", timeout, what, key)
 		}
 		if !now.Before(nextLog) {
-			slog.Warn("waiting for a migration lock", "lock", what, "key", key,
+			logging.From(ctx).Warn("waiting for a migration lock", "lock", what, "key", key,
 				"waited", now.Sub(start).Round(time.Second), "timeout", timeout)
 			nextLog = now.Add(lockLogInterval)
 		}

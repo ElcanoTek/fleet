@@ -20,5 +20,5 @@ func (s *Server) handleMigrations(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, report)
+	writeJSON(w, r, report)
 }
