@@ -140,9 +140,10 @@ func TestWebServerTakesThePasswordSwitchFromConfig(t *testing.T) {
 
 // serve builds the Operations Center's handlers.Config inline, so no test can
 // call it. This pins, from the source, that the literal hands the scheduler
-// both decisions config.Load made: without them /v1/auth/login and the
-// bearers it minted would keep working, and /v1/users would still create Ops
-// identities, on a Fleet whose other planes leave both to Auth.
+// the accounts decision config.Load made: without it /v1/users would still
+// create Ops identities on a Fleet whose other planes leave that to Auth. (The
+// Operations Center has no password login of its own since #2049 M4, so there
+// is no password switch to hand it.)
 func TestServeHandsTheSchedulerThePasswordSwitch(t *testing.T) {
 	t.Parallel()
 
@@ -151,7 +152,7 @@ func TestServeHandsTheSchedulerThePasswordSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"PasswordLoginDisabled", "AccountsManagedByAuth"} {
+	for _, field := range []string{"AccountsManagedByAuth"} {
 		literals, wired := countConfigWiring(t, f, field)
 		if literals == 0 || wired != literals {
 			t.Fatalf("main.go builds %d handlers.Config literal(s), %d set %s: cfg.%s", literals, wired, field, field)

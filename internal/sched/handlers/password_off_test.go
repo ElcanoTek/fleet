@@ -5,105 +5,63 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/google/uuid"
 )
 
-// TestPasswordLoginDisabledRefusesLoginAndItsBearer pins the central-Auth-only
-// switch on the Operations Center: POST /auth/login refuses, and a bearer that
-// login minted BEFORE the switch is refused by every consumer (the auth
-// middleware, task creation, which sits outside it, and upload), while the
-// admin API key keeps working.
-func TestPasswordLoginDisabledRefusesLoginAndItsBearer(t *testing.T) {
+// TestPasswordBearerIsRetired pins #2049 M4 (ADR-0105): the Operations
+// Center's own password bearer is gone. A bearer — even the shape of one the
+// old POST /auth/login minted, for a real account — authenticates nowhere: not
+// the auth middleware, not task creation (outside it), not upload. The admin
+// API key keeps working.
+func TestPasswordBearerIsRetired(t *testing.T) {
 	t.Parallel()
 
-	h, _ := setupTest(t)
+	h, store := setupTest(t)
+	seedOpsUser(t, store, uuid.New(), "pat@x.com", "admin", "")
+	const bearer = "Bearer a-token-the-retired-login-would-have-minted"
 
-	create := httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "ops@x.com", "password": "testpassword123", "role": "client"}`))
-	create.Header.Set("Content-Type", "application/json")
-	create.Header.Set("X-API-Key", "admin-key")
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("Authorization", bearer)
 	w := httptest.NewRecorder()
-	h.CreateUser(w, create)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create user: %d %s", w.Code, w.Body.String())
-	}
-
-	login := func() *httptest.ResponseRecorder {
-		r := httptest.NewRequest("POST", "/auth/login", bytes.NewBufferString(`{"username": "ops@x.com", "password": "testpassword123"}`))
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		h.Login(w, r)
-		return w
-	}
-	w = login()
-	if w.Code != http.StatusOK {
-		t.Fatalf("login with passwords on: %d %s", w.Code, w.Body.String())
-	}
-	var resp models.LoginResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil || resp.Token == "" {
-		t.Fatalf("login response: %v %+v", err, resp)
-	}
-	bearer := "Bearer " + resp.Token
-
-	reached := false
-	protected := h.AdminOrUserAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached = true
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	viaMiddleware := func(header, value string) int {
-		reached = false
-		r := httptest.NewRequest("GET", "/tasks", nil)
-		r.Header.Set(header, value)
-		w := httptest.NewRecorder()
-		protected.ServeHTTP(w, r)
-		return w.Code
-	}
-	if code := viaMiddleware("Authorization", bearer); code != http.StatusNoContent || !reached {
-		t.Fatalf("bearer with passwords on: %d", code)
-	}
-
-	h.config.PasswordLoginDisabled = true
-
-	if w := login(); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Sign in through SSO") {
-		t.Errorf("login with passwords off: %d %s", w.Code, w.Body.String())
-	}
-	if code := viaMiddleware("Authorization", bearer); code != http.StatusUnauthorized || reached {
-		t.Errorf("middleware accepted an earlier password bearer: %d", code)
-	}
-	if code := viaMiddleware("X-API-Key", "admin-key"); code != http.StatusNoContent || !reached {
-		t.Errorf("admin key refused with passwords off: %d", code)
-	}
-
-	task := httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(`{"name": "t", "prompt": "p"}`))
-	task.Header.Set("Content-Type", "application/json")
-	task.Header.Set("Authorization", bearer)
-	w = httptest.NewRecorder()
-	h.CreateTask(w, task)
+	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("task creation accepted an earlier password bearer: %d %s", w.Code, w.Body.String())
+		t.Errorf("auth middleware accepted a bearer: %d", w.Code)
 	}
 
-	body := &bytes.Buffer{}
-	mw := multipart.NewWriter(body)
-	part, err := mw.CreateFormFile("file", "brief.txt")
-	if err != nil {
-		t.Fatal(err)
+	req = httptest.NewRequest("POST", "/tasks", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", bearer)
+	w = httptest.NewRecorder()
+	if _, authorized := h.authorizeTaskCreator(w, req); authorized || w.Code != http.StatusUnauthorized {
+		t.Errorf("task creation accepted a bearer: authorized=%v %d", authorized, w.Code)
 	}
-	_, _ = part.Write([]byte("hello"))
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, _ := mw.CreateFormFile("file", "a.txt")
+	_, _ = part.Write([]byte("x"))
 	_ = mw.Close()
-	up := httptest.NewRequest("POST", "/upload", bytes.NewReader(body.Bytes()))
+	up := httptest.NewRequest("POST", "/upload", &body)
 	up.Header.Set("Content-Type", mw.FormDataContentType())
 	up.Header.Set("Authorization", bearer)
 	w = httptest.NewRecorder()
 	h.HandleUpload(w, up)
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("upload accepted an earlier password bearer: %d %s", w.Code, w.Body.String())
+		t.Errorf("upload accepted a bearer: %d %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	w = httptest.NewRecorder()
+	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("admin key refused: %d", w.Code)
 	}
 }
 
@@ -134,5 +92,28 @@ func TestAccountsManagedByAuthRefusesOpsUserCreation(t *testing.T) {
 	h.CreateUser(w, r)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create when Fleet manages accounts: %d %s", w.Code, w.Body.String())
+	}
+	// One identity table (#2049 M4): role admin is the Fleet admin role, so
+	// the new account is an admin in chat too, with full Operations Center
+	// access; and a second create of the same account is a conflict.
+	acct, err := store.GetIdentity(t.Context(), "ann@x.com")
+	if err != nil || acct.Role != "admin" || acct.LegacyOpsRole() != "admin" {
+		t.Fatalf("created account = %+v, %v", acct, err)
+	}
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "ANN@x.com", "password": "testpassword123", "role": "client"}`))
+	r.Header.Set("X-API-Key", "admin-key")
+	h.CreateUser(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second create: %d %s", w.Code, w.Body.String())
+	}
+	// A client create is a viewer with ops_scope run.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "cli@x.com", "password": "testpassword123", "role": "client"}`))
+	r.Header.Set("X-API-Key", "admin-key")
+	h.CreateUser(w, r)
+	acct, err = store.GetIdentity(t.Context(), "cli@x.com")
+	if w.Code != http.StatusCreated || err != nil || acct.Role != "viewer" || acct.OpsScope != "run" {
+		t.Fatalf("client create: %d %s / %+v %v", w.Code, w.Body.String(), acct, err)
 	}
 }

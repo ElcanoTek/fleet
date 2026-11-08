@@ -26,10 +26,11 @@ func TestNoteProposalReadsRequireAdmin(t *testing.T) {
 
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	notesStore := sched.NewStore(store.DB())
 	nh := NewNotesHandlers(notesStore, h)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/notes/proposals", nh.ListProposals)
@@ -84,9 +85,10 @@ func TestNoteActorIgnoresASpoofedUserHeader(t *testing.T) {
 
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	nh := NewNotesHandlers(sched.NewStore(store.DB()), h)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Post("/notes", nh.CreateNote)

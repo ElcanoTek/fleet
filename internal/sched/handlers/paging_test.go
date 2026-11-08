@@ -107,8 +107,9 @@ func pagingRouter(t *testing.T) (func(method, target string) *httptest.ResponseR
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	t.Cleanup(cleanup)
 
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
 	mux := chi.NewRouter()
+	mux.Use(asSeededSession)
 	mux.Group(func(rt chi.Router) {
 		rt.Use(h.AdminAuthMiddleware)
 		rt.Get("/tasks", h.ListTasks)
@@ -298,8 +299,9 @@ func TestBoundedQueryParams_RejectBadValues(t *testing.T) {
 
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	t.Cleanup(cleanup)
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
 	mux := chi.NewRouter()
+	mux.Use(asSeededSession)
 	mux.Group(func(rt chi.Router) {
 		rt.Use(h.AdminAuthMiddleware)
 		rt.Get("/sla/report", h.GetSLAReport)

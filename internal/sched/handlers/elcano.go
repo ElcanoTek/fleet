@@ -1,81 +1,41 @@
 // Copyright (c) 2025 ElcanoTek
 // SPDX-License-Identifier: MIT
 
-// Sign-out of the shared Elcano cookie, and the membership lookup the
-// header-trust path gates on.
+// The membership lookup the header-trust path gates on.
 //
 // The browser tier (internal/webui) verifies every session, the elcano_auth
 // cookie included, and forwards a trusted identity here (header trust,
-// middleware.go); this server never reads that cookie itself.
+// middleware.go); this server never reads that cookie itself. Sign-out is the
+// gateway's /api/auth/logout: the Operations Center has no session of its own
+// to end since its password bearer was retired (#2049 M4, ADR-0105).
 
 package handlers
 
 import (
 	"context"
-	"log"
-	"net/http"
-	"strings"
+	"errors"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// bearerToken returns the token of an `Authorization: Bearer <token>` header.
-func bearerToken(r *http.Request) (string, bool) {
-	const prefix = "bearer "
-	a := strings.TrimSpace(r.Header.Get("Authorization"))
-	if len(a) <= len(prefix) || !strings.EqualFold(a[:len(prefix)], prefix) {
-		return "", false
+// lookupMember resolves an email to its identity row, whatever its state (nil
+// when there is none); headerTrustMember decides what it grants. It is the ONE
+// row in core.users (#2049 M4): there is no second plane to ask.
+func (h *Handlers) lookupMember(ctx context.Context, email string) (*identity.User, error) {
+	id, err := h.storage.GetIdentity(ctx, email)
+	if errors.Is(err, identity.ErrNotFound) {
+		return nil, nil
 	}
-	token := strings.TrimSpace(a[len(prefix):])
-	return token, token != ""
+	return id, err
 }
 
-// lookupMember resolves an email to a user for the header-trust membership
-// gate. In production it hits the users table (username == lowercase email);
-// tests inject memberLookup to avoid a live database.
-func (h *Handlers) lookupMember(ctx context.Context, email string) (*models.User, error) {
-	if h.memberLookup != nil {
-		return h.memberLookup(ctx, email)
+// opsModel renders an identity row with Operations Center access as this
+// plane's user (Role = the legacy Operations Center role).
+func opsModel(u *identity.User) *models.User {
+	return &models.User{
+		ID:       u.ID,
+		Username: u.Email,
+		Role:     u.LegacyOpsRole(),
 	}
-	return h.storage.GetUserByUsernameWithContext(ctx, strings.ToLower(email))
-}
-
-// ElcanoLogout handles POST /auth/logout. It deletes the shared elcano_auth
-// cookie itself (rather than bouncing to auth) and returns the user to the
-// server's own login, mirroring chat's logout. Because the cookie lives on the
-// shared parent domain, deleting it signs the user out of EVERY Elcano service
-// — the expected meaning of "log out". The deletion only takes effect when
-// name + domain + path match how auth set the cookie, so we mirror them here.
-//
-// When the request carries an `Authorization: Bearer` token minted by Login,
-// that session is ended server-side too (the user's session_token and
-// token_expires_at are cleared), so the bearer stops authenticating at once
-// rather than at its expiry. Best effort: a token that matches no session, or
-// a store error, still answers with the cookie deletion and redirect, since a
-// sign-out must always complete for the browser.
-func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
-	if token, ok := bearerToken(r); ok && h.storage != nil {
-		if _, err := h.storage.RevokeSessionToken(r.Context(), token); err != nil {
-			log.Printf("logout: end bearer session: %v", err)
-		}
-	}
-	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-	// G124: HttpOnly + SameSite are always set; Secure is conditional ON the
-	// request being HTTPS so plain-HTTP local dev still works. This is a
-	// DELETION cookie (Value="", MaxAge=-1) carrying no secret, and its
-	// attributes must mirror how auth originally set the cookie for the browser
-	// to actually clear it — forcing Secure here unconditionally would prevent
-	// logout from clearing the cookie over plain HTTP.
-	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- same reasoning as the G124 waiver: this is a DELETION cookie (Value="", MaxAge=-1) carrying no secret, and its attributes must mirror how auth set it or the browser will not clear it. Forcing Secure unconditionally would break logout over plain-HTTP dev.
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: deletion cookie (no secret); Secure is conditional on HTTPS so logout works over plain-HTTP dev, mirroring how the cookie was set — see comment above.
-		Name:     h.config.ElcanoCookieName,
-		Value:    "",
-		Path:     "/",
-		Domain:   h.config.ElcanoCookieDomain, // "" → host-only (Go omits the attr)
-		MaxAge:   -1,                          // delete now
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

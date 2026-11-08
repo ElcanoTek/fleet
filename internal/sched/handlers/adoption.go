@@ -36,16 +36,10 @@ const adoptionNote = usagePricingNote +
 
 // ChatUserDayUsageProvider aggregates the chat store's turn_metrics over
 // [from, to) by (user, UTC day). Injected by cmd/fleet via
-// SetChatUserDayUsageProvider — same separate-database rationale as
-// ChatUsageProvider. nil = chat metering unavailable (the report's sources
-// list says so instead of silently under-counting).
+// SetChatUserDayUsageProvider — chat's usage data, read through the chat
+// store like ChatUsageProvider. nil = chat metering unavailable (the report's
+// sources list says so instead of silently under-counting).
 type ChatUserDayUsageProvider func(ctx context.Context, from, to time.Time) ([]models.UserDayUsage, error)
-
-// ChatAccountsProvider lists the chat store's provisioned accounts — the
-// seat denominator for the adoption rate and the "not yet active" roster.
-// nil = roster unavailable; the report omits inactive seats and its sources
-// list omits "accounts".
-type ChatAccountsProvider func(ctx context.Context) ([]models.AdoptionSeat, error)
 
 // SetChatUserDayUsageProvider wires the chat-side per-user-per-day usage
 // aggregation (see ChatUserDayUsageProvider). Call before serving traffic.
@@ -53,10 +47,19 @@ func (h *Handlers) SetChatUserDayUsageProvider(fn ChatUserDayUsageProvider) {
 	h.chatUserDayUsage = fn
 }
 
-// SetChatAccountsProvider wires the chat-side account roster (see
-// ChatAccountsProvider). Call before serving traffic.
-func (h *Handlers) SetChatAccountsProvider(fn ChatAccountsProvider) {
-	h.chatAccounts = fn
+// adoptionSeats lists every account of the one identity table — the seat
+// denominator for the adoption rate and the "not yet active" roster.
+// Read-only; emails and creation times only.
+func (h *Handlers) adoptionSeats(ctx context.Context) ([]models.AdoptionSeat, error) {
+	users, err := h.storage.Identity().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]models.AdoptionSeat, 0, len(users))
+	for _, u := range users {
+		out = append(out, models.AdoptionSeat{Email: u.Email, CreatedAt: time.Unix(u.CreatedAt, 0).UTC()})
+	}
+	return out, nil
 }
 
 // GetAdoptionReport handles GET /admin/usage/adoption?from=&to=&format=.
@@ -126,16 +129,14 @@ func (h *Handlers) GetAdoptionReport(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, "chat")
 	}
 
-	var seats []models.AdoptionSeat
-	if h.chatAccounts != nil {
-		// A roster failure is a 500, not a silently absent denominator — an
-		// exec reading "12 active of 0 seats" would draw the wrong conclusion.
-		if seats, err = h.chatAccounts(ctx); err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to list accounts")
-			return
-		}
-		sources = append(sources, "accounts")
+	// A roster failure is a 500, not a silently absent denominator — an exec
+	// reading "12 active of 0 seats" would draw the wrong conclusion.
+	seats, err := h.adoptionSeats(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to list accounts")
+		return
 	}
+	sources = append(sources, "accounts")
 
 	out := buildAdoptionReport(from, to, prevFrom, taskCur, chatCur, taskPrev, chatPrev, seats, sources)
 

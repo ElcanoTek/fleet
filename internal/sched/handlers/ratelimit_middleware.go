@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -91,8 +90,8 @@ const (
 
 // rateLimitCallerAuthenticated reports whether r carries a credential other
 // than an API key (which the caller resolves itself): an identity an auth
-// middleware already put on the context, the web gateway's server token, or a
-// password-login bearer token. It only chooses a rate-limit bucket; it
+// middleware already put on the context, or the web gateway's server token.
+// It only chooses a rate-limit bucket; it
 // authorizes nothing.
 func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
 	if GetUserFromContext(r.Context()) != nil || GetAPIKeyFromContext(r.Context()) != nil {
@@ -101,11 +100,6 @@ func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
 	if tok := r.Header.Get("X-Orchestrator-Server-Token"); tok != "" && h.config.SharedToken != "" &&
 		subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) == 1 {
 		return true
-	}
-	if h.storage != nil {
-		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && bearer != "" {
-			return h.userFromPasswordToken(bearer) != nil
-		}
 	}
 	return false
 }

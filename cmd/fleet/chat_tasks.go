@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,14 +27,13 @@ import (
 // omitted. A count without names is a bulk edit nobody can check.
 func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
 	return func(ctx context.Context, req httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
-		var owner *uuid.UUID
-		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
-			if u, err := schedStorage.GetUserByUsernameWithContext(ctx, email); err == nil && u != nil {
-				owner = &u.ID
-			}
-		}
+		// The approving person's one identity row gives the owner UUID (#2049
+		// M4): every enabled account has one, Operations Center access or not.
+		// Only tasks that UUID created are touched (below), so this grants a
+		// chat-only account nothing over anyone else's tasks.
+		owner := accountOwnerID(ctx, schedStorage, req.RequestedBy)
 		if owner == nil {
-			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task on the Background tasks page instead", req.RequestedBy)
+			return nil, fmt.Errorf("cannot identify %q as a Fleet account; edit the task on the Background tasks page instead", req.RequestedBy)
 		}
 
 		candidates, err := resolveManagedTasks(schedStorage, req, owner)
@@ -270,17 +268,11 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 
 		// Attribute the task to the chat user who approved it (#980): run-log
 		// reads are creator-scoped, so a chat-scheduled task with no creator is
-		// one its own author cannot read the transcript of. The sched username IS
-		// the chat email for the elcano-auth tier — the same assumption the
-		// header-trust path and the push-audience resolver already make. A
-		// deployment whose chat users are not provisioned in sched simply falls
-		// through to an unattributed task, exactly as before.
-		var createdBy *uuid.UUID
-		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
-			if u, uerr := schedStorage.GetUserByUsernameWithContext(ctx, email); uerr == nil && u != nil {
-				createdBy = &u.ID
-			}
-		}
+		// one its own author cannot read the transcript of. Since the one
+		// identity table (#2049 M4) every enabled account has a UUID, so a
+		// chat-only person's task is attributed to them too; an unknown
+		// requester falls through to an unattributed task, as before.
+		createdBy := accountOwnerID(ctx, schedStorage, req.RequestedBy)
 
 		id, status, nextRunAt, err := schedStorage.EnqueueTaskAs(ctx, tc, createdBy)
 		if err != nil {
@@ -294,77 +286,19 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 	}
 }
 
-// opsAdminsService adapts sched storage to httpapi's OpsAdmins seam so the
-// admin Users tab carries `fleet admin add`'s two-plane semantics: promoting a
-// chat user to admin ensures the Operations Center admin row (same idempotent
-// EnsureAdminUser the FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS boot seed uses),
-// demoting/deleting removes it, and the users list annotates who holds it.
-type opsAdminsService struct{ st *storage.Storage }
-
-func (o opsAdminsService) Ensure(ctx context.Context, email string) error {
-	return o.st.EnsureAdminUser(ctx, email)
-}
-
-// Remove deletes the sched-side row for email when it exists — Operations
-// Center access is revoked entirely, mirroring `fleet admin rm`. Emails are
-// matched as lowercased usernames (the #458 cookie-bridge convention). A
-// missing row is a no-op, so demoting a chat-only admin never errors.
-func (o opsAdminsService) Remove(ctx context.Context, email string) error {
-	u, err := o.st.GetUserByUsernameWithContext(ctx, strings.ToLower(strings.TrimSpace(email)))
-	if err != nil || u == nil {
-		return err
+// accountOwnerID is the UUID of email's enabled account in the one identity
+// table, or nil when there is none.
+func accountOwnerID(ctx context.Context, schedStorage *storage.Storage, email string) *uuid.UUID {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil
 	}
-	return o.st.DeleteUser(u.ID)
-}
-
-func (o opsAdminsService) List(ctx context.Context) ([]string, error) {
-	users, err := o.st.ListUsers(ctx)
-	if err != nil {
-		return nil, err
+	u, err := schedStorage.GetIdentity(ctx, email)
+	if err != nil || u == nil || !u.Enabled {
+		return nil
 	}
-	out := make([]string, 0, len(users))
-	for _, u := range users {
-		if u.Role == "admin" {
-			out = append(out, u.Username)
-		}
-	}
-	return out, nil
-}
-
-// SetRole is the generalized grant: "none" removes the sched-side row
-// (mirroring Remove); any other role creates-or-re-roles the account via the
-// same primitive the bootstrap admin seed uses.
-func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error {
-	if role == "" || role == "none" {
-		return o.Remove(ctx, email)
-	}
-	return o.st.EnsureUserWithRole(ctx, email, role)
-}
-
-func (o opsAdminsService) SetEnabled(ctx context.Context, email string, enabled bool) error {
-	username := strings.ToLower(strings.TrimSpace(email))
-	u, err := o.st.GetAnyUserByUsernameWithContext(ctx, username)
-	if err != nil || u == nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	return o.st.SetUserEnabled(ctx, u.ID, enabled)
-}
-
-// Roles returns every sched-plane account's role keyed by lowercased email —
-// the batched lookup the admin users table renders from.
-func (o opsAdminsService) Roles(ctx context.Context) (map[string]string, error) {
-	users, err := o.st.ListUsers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(users))
-	for _, u := range users {
-		out[strings.ToLower(u.Username)] = u.Role
-	}
-	return out, nil
+	id := u.ID
+	return &id
 }
 
 func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {

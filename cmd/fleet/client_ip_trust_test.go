@@ -14,9 +14,11 @@ import (
 )
 
 // TestOrchestratorClientIPHonorsTrustedProxies pins the FLEET_TRUSTED_PROXIES
-// contract on the real buildOrchestratorMux through the login rate limiter
-// (20 attempts per minute per client IP), which keys on getClientIP
-// (GHSA-j6qf-3m9c-vwj3). Each attempt carries a fresh X-Forwarded-For value:
+// contract on the real buildOrchestratorMux through the task-create rate
+// limiter, set here to 20 requests per minute per client IP for a caller with
+// no API key, which keys on getClientIP (GHSA-j6qf-3m9c-vwj3). (It used the
+// password-login throttle until that login was retired, #2049 M4.) Each
+// attempt carries a fresh X-Forwarded-For value:
 //
 //   - nil trusted proxies (the default): the header is never consulted, so
 //     every attempt from one TCP peer shares its bucket and the 21st is
@@ -28,10 +30,10 @@ func TestOrchestratorClientIPHonorsTrustedProxies(t *testing.T) {
 
 	const host = "fleet.example.com"
 	attempts := func(trusted []net.IP, remoteAddr string) (throttled int) {
-		h := handlers.New(handlers.Config{}, nil, nil)
+		h := handlers.New(handlers.Config{SchedRateLimitPerMinute: 20, SchedGlobalRateLimitPerMinute: 10_000}, nil, nil)
 		mux := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), trusted)
 		for i := range 21 {
-			req := httptest.NewRequest("POST", "/auth/login", nil)
+			req := httptest.NewRequest("POST", "/tasks", nil)
 			req.Host = host
 			req.Header.Set("Origin", "https://"+host)
 			req.RemoteAddr = remoteAddr

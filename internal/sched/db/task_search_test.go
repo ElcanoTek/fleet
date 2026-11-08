@@ -51,9 +51,7 @@ func TestTaskSearchFindsJobsTheWayPeopleRememberThem(t *testing.T) {
 	ctx := context.Background()
 
 	alice := uuid.New()
-	if err := db.AddUser(ctx, &models.User{ID: alice, Username: "alice@example.com", Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("add user: %v", err)
-	}
+	seedAccount(t, db, alice, "alice@example.com", "client")
 	add := func(title, prompt, description string, tags []string, createdBy *uuid.UUID) string {
 		t.Helper()
 		task := &models.Task{

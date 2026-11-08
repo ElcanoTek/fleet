@@ -2,102 +2,66 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
-	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
-// TestEnsureAdminUser locks in the #458 bootstrap-admin primitive: it creates a
-// missing user as admin, promotes an existing non-admin, leaves an existing
-// admin untouched, and treats a blank username as a no-op. This is what lets a
-// configured operator reach the Operations Center through the chat session
-// cookie without a manual `fleet sched user add`.
-func TestEnsureAdminUser(t *testing.T) {
+// TestEnsureAdmin locks in the #458 bootstrap-admin primitive over the one
+// identity table (#2049 M4): it creates a missing account as admin (with no
+// usable password: a bootstrap admin signs in with a session cookie),
+// promotes an existing non-admin, re-enables a disabled one, leaves an
+// existing admin untouched, and treats a blank email as a no-op.
+func TestEnsureAdmin(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
+	ids := store.Identity()
 
-	// 1. Missing user → created as admin with a non-empty (random) password hash.
-	const created = "bootstrap@example.com"
-	if err := store.EnsureAdminUser(ctx, created); err != nil {
-		t.Fatalf("EnsureAdminUser(create): %v", err)
+	const created = "Bootstrap@Example.com"
+	if err := ids.EnsureAdmin(ctx, created); err != nil {
+		t.Fatalf("EnsureAdmin(create): %v", err)
 	}
-	u, err := store.GetUserByUsername(created)
-	if err != nil || u == nil {
-		t.Fatalf("expected created user, got %v (err %v)", u, err)
+	u, err := store.GetUserByUsername("bootstrap@example.com")
+	if err != nil || u.Role != "admin" {
+		t.Fatalf("created = %+v, %v; want an admin", u, err)
 	}
-	if u.Role != "admin" {
-		t.Errorf("created role = %q, want admin", u.Role)
+	var hash string
+	if err := store.DB().Conn().QueryRowContext(ctx, `SELECT password_hash FROM core.users WHERE email = 'bootstrap@example.com'`).Scan(&hash); err != nil || hash != identity.UnusablePasswordHash {
+		t.Errorf("created password hash = %q, %v; want the unusable sentinel", hash, err)
 	}
-	if u.PasswordHash == "" {
-		t.Error("created user must have a (random, unusable) password hash, got empty")
+	firstID := u.ID
+	if err := ids.EnsureAdmin(ctx, created); err != nil {
+		t.Fatalf("EnsureAdmin(again): %v", err)
 	}
-
-	// Idempotent: a second ensure of the same admin keeps the same row + role.
-	if err := store.EnsureAdminUser(ctx, created); err != nil {
-		t.Fatalf("EnsureAdminUser(idempotent): %v", err)
-	}
-	if again, _ := store.GetUserByUsername(created); again == nil || again.ID != u.ID || again.Role != "admin" {
-		t.Errorf("idempotent ensure changed the row: %+v (was id=%s)", again, u.ID)
+	if again, err := store.GetUserByUsername("bootstrap@example.com"); err != nil || again.ID != firstID {
+		t.Fatalf("second ensure changed the row: %+v %v", again, err)
 	}
 
-	// Central revocation disables without deleting. Normal membership lookup
-	// fails, while a later role grant re-enables the same UUID and preserves
-	// the identity tasks are owned by.
-	if err := store.SetUserEnabled(ctx, u.ID, false); err != nil {
-		t.Fatalf("SetUserEnabled(false): %v", err)
+	// An existing member (ops_scope view) is promoted; a disabled one is
+	// re-enabled — the boot seed is config-authoritative.
+	if _, err := ids.CreateAccount(ctx, identity.NewAccount{Email: "member@example.com", Role: identity.RoleMember, OpsScope: identity.OpsView}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.GetUserByUsername(created); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("disabled user lookup err = %v, want sql.ErrNoRows", err)
+	if _, err := store.DB().Conn().ExecContext(ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'member@example.com'`); err != nil {
+		t.Fatal(err)
 	}
-	if retained, err := store.GetAnyUserByUsernameWithContext(ctx, created); err != nil || retained.ID != u.ID || retained.Role != "admin" {
-		t.Fatalf("disabled row not retained: user=%+v err=%v", retained, err)
+	if err := ids.EnsureAdmin(ctx, "member@example.com"); err != nil {
+		t.Fatal(err)
 	}
-	if err := store.EnsureUserWithRole(ctx, created, "client"); err != nil {
-		t.Fatalf("EnsureUserWithRole(regrant): %v", err)
-	}
-	if again, err := store.GetUserByUsername(created); err != nil || again.ID != u.ID || again.Role != "client" {
-		t.Fatalf("regrant replaced or mis-roled row: user=%+v err=%v", again, err)
+	if acct, err := ids.GetByEmail(ctx, "member@example.com"); err != nil || acct.Role != identity.RoleAdmin || !acct.Enabled {
+		t.Fatalf("promoted = %+v, %v", acct, err)
 	}
 
-	// 2. Existing non-admin → promoted to admin, same row.
-	const demoted = "client@example.com"
-	client := &models.User{ID: uuid.New(), Username: demoted, Role: "client", PasswordHash: "x", CreatedAt: u.CreatedAt}
-	if _, err := store.AddUser(client); err != nil {
-		t.Fatalf("AddUser(client): %v", err)
-	}
-	if err := store.EnsureAdminUser(ctx, demoted); err != nil {
-		t.Fatalf("EnsureAdminUser(promote): %v", err)
-	}
-	promoted, _ := store.GetUserByUsername(demoted)
-	if promoted == nil || promoted.ID != client.ID {
-		t.Fatalf("promote replaced the row: %+v (was id=%s)", promoted, client.ID)
-	}
-	if promoted.Role != "admin" {
-		t.Errorf("promoted role = %q, want admin", promoted.Role)
-	}
-
-	// 3. Email is case-folded to match lookupMember's lowercased lookup.
-	if err := store.EnsureAdminUser(ctx, "  MixedCase@Example.com "); err != nil {
-		t.Fatalf("EnsureAdminUser(mixedcase): %v", err)
-	}
-	if mc, _ := store.GetUserByUsername("mixedcase@example.com"); mc == nil || mc.Role != "admin" {
-		t.Errorf("expected lowercased admin row for mixed-case input, got %+v", mc)
-	}
-
-	// 4. Blank username is a no-op (no error, no row).
-	if err := store.EnsureAdminUser(ctx, "   "); err != nil {
-		t.Errorf("EnsureAdminUser(blank) should be a no-op, got %v", err)
+	if err := ids.EnsureAdmin(ctx, "   "); err != nil {
+		t.Fatalf("blank email must be a no-op: %v", err)
 	}
 }
 
 // TestOpsRoleReportsEnabledRoleOnly pins the export's Ops role read: a
-// missing row and a centrally disabled row both read as "none".
+// missing row, a chat-only account and a centrally disabled account all read
+// as "none".
 func TestOpsRoleReportsEnabledRoleOnly(t *testing.T) {
 	t.Parallel()
 
@@ -107,17 +71,19 @@ func TestOpsRoleReportsEnabledRoleOnly(t *testing.T) {
 	if role, err := store.OpsRole(ctx, email); err != nil || role != "none" {
 		t.Fatalf("missing row = (%q, %v), want none", role, err)
 	}
-	if err := store.EnsureUserWithRole(ctx, email, "client"); err != nil {
+	if _, err := store.Identity().CreateAccount(ctx, identity.NewAccount{Email: email, Role: identity.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := store.OpsRole(ctx, email); err != nil || role != "none" {
+		t.Fatalf("chat-only row = (%q, %v), want none", role, err)
+	}
+	if _, err := store.Identity().SetOpsAccess(ctx, email, "client"); err != nil {
 		t.Fatal(err)
 	}
 	if role, err := store.OpsRole(ctx, email); err != nil || role != "client" {
 		t.Fatalf("enabled row = (%q, %v), want client", role, err)
 	}
-	u, err := store.GetAnyUserByUsernameWithContext(ctx, "ops-role@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetUserEnabled(ctx, u.ID, false); err != nil {
+	if _, err := store.DB().Conn().ExecContext(ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'ops-role@example.com'`); err != nil {
 		t.Fatal(err)
 	}
 	if role, err := store.OpsRole(ctx, email); err != nil || role != "none" {

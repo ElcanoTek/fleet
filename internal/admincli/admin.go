@@ -11,14 +11,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// cmdAdmin is the one-stop admin-user command. Fleet has TWO independent user
-// planes: the chat login DB (email+password web login + chat `/admin` RBAC) and
-// the sched / Operations-Center DB (membership resolved by email via the session
-// cookie bridge, #458). Making a human a full admin used to mean three steps
-// across both planes — `chat user add`, `chat user role admin`, and a sched-side
-// grant (or the FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS env). `fleet admin add
-// <email>` does all of it in one idempotent command so nobody has to reason about
-// the two planes. add/list/rm all operate across BOTH.
+// cmdAdmin is the one-stop admin-user command. A person is ONE row of the
+// identity table (#2049 M4, ADR-0105): `fleet admin add <email>` makes that row
+// a Fleet admin — chat admin and full Operations Center access, one role —
+// with a password, in one idempotent command. add/list/rm act on that one row.
+// --sched-database-url is still accepted (and ignored) so existing scripts
+// keep working.
 func cmdAdmin(argv []string) int {
 	if len(argv) < 1 {
 		return errf(1, "usage: fleet admin add|list|rm <email>")
@@ -35,15 +33,15 @@ func cmdAdmin(argv []string) int {
 	}
 }
 
-// adminAdd provisions (or updates) an email as a full admin across both planes:
-// a chat login with role=admin, and an Operations Center admin row keyed by the
-// same email so the cookie bridge admits them. Idempotent: re-running updates the
-// password and re-asserts admin on both sides. The password is prompted
-// interactively (hidden, double-entered) unless --password - reads it from stdin.
+// adminAdd provisions (or updates) an email as a Fleet admin: a login with
+// role=admin, which is also full Operations Center access. Idempotent:
+// re-running updates the password and re-asserts admin. The password is
+// prompted interactively (hidden, double-entered) unless --password - reads it
+// from stdin.
 func adminAdd(argv []string) int {
 	fs := flag.NewFlagSet("admin add", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
+	_ = fs.String("sched-database-url", "", "ignored: there is one identity table (#2049 M4)")
 	pw := fs.String("password", "", `password ("-" reads from stdin; omit to prompt)`)
 	email, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -54,13 +52,9 @@ func adminAdd(argv []string) int {
 		return errf(1, "email required — usage: fleet admin add <email>")
 	}
 
-	// Resolve BOTH DSNs before prompting, so a missing env var fails fast rather
+	// Resolve the DSN before prompting, so a missing env var fails fast rather
 	// than after the operator types a password.
-	chatDsn, err := chatDSN(*chatURL)
-	if err != nil {
-		return errf(1, "%v", err)
-	}
-	if _, err := schedDSN(*schedURL); err != nil {
+	if _, err := chatDSN(*chatURL); err != nil {
 		return errf(1, "%v", err)
 	}
 
@@ -72,10 +66,9 @@ func adminAdd(argv []string) int {
 		return errf(1, "password must be at least 8 characters")
 	}
 
-	// ── chat plane: web login + chat-admin role ──
-	st, err := store.Open(chatDsn, store.DefaultPoolConfig())
-	if err != nil {
-		return errf(1, "open chat DB: %v", err)
+	st, code := openChatStore(*chatURL)
+	if st == nil {
+		return code
 	}
 	defer st.Close()
 	ctx := context.Background()
@@ -86,27 +79,17 @@ func adminAdd(argv []string) int {
 		// add is idempotent.
 		if errors.Is(err, store.ErrUserExists) {
 			if err := st.UpdatePassword(ctx, email, password); err != nil {
-				return errf(5, "update chat password: %v", err)
+				return errf(5, "update password: %v", err)
 			}
 		} else {
-			return errf(5, "create chat user: %v", err)
+			return errf(5, "create user: %v", err)
 		}
 	} else {
 		created = true
 	}
 	adminRole := "admin"
 	if _, err := st.SetUserRoleTeam(ctx, email, &adminRole, nil); err != nil {
-		return errf(5, "set chat admin role: %v", err)
-	}
-
-	// ── sched plane: Operations Center admin (cookie-bridged by email) ──
-	sched, code := openSchedStorage(*schedURL)
-	if sched == nil {
-		return code
-	}
-	defer sched.Close()
-	if err := sched.EnsureAdminUser(ctx, email); err != nil {
-		return errf(5, "ensure Operations Center admin: %v", err)
+		return errf(5, "set admin role: %v", err)
 	}
 
 	verb := "updated"
@@ -114,17 +97,16 @@ func adminAdd(argv []string) int {
 		verb = "created"
 	}
 	fmt.Printf("%s admin %s\n", verb, email)
-	fmt.Println("  ✓ chat login (role=admin)")
-	fmt.Println("  ✓ Operations Center admin")
+	fmt.Println("  ✓ role=admin (chat admin and full Operations Center access)")
 	return 0
 }
 
-// adminList prints every chat login with its chat role, annotated with whether
-// the same email is an Operations Center admin — the two-plane view in one place.
+// adminList prints every account with its Fleet role and Operations Center
+// access, from the one identity table.
 func adminList(argv []string) int {
 	fs := flag.NewFlagSet("admin list", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
+	_ = fs.String("sched-database-url", "", "ignored: there is one identity table (#2049 M4)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	// No positional: a stray argument is an error, not silently discarded (the
 	// same rule as `sched apikey list`).
@@ -134,72 +116,54 @@ func adminList(argv []string) int {
 	if fs.NArg() > 0 {
 		return errf(1, "admin list takes no arguments (got %q)", fs.Args())
 	}
-	chatDsn, err := chatDSN(*chatURL)
-	if err != nil {
-		return errf(1, "%v", err)
-	}
-	st, err := store.Open(chatDsn, store.DefaultPoolConfig())
-	if err != nil {
-		return errf(1, "open chat DB: %v", err)
+	st, code := openChatStore(*chatURL)
+	if st == nil {
+		return code
 	}
 	defer st.Close()
-	ctx := context.Background()
-	users, err := st.ListUsers(ctx)
+	users, err := st.ListUsers(context.Background())
 	if err != nil {
-		return errf(5, "list chat users: %v", err)
-	}
-
-	// Best-effort sched-admin set (by lowercased email/username). A sched DB that
-	// is briefly unreachable shouldn't blank the chat listing.
-	opsAdmins := map[string]bool{}
-	if sched, _ := openSchedStorage(*schedURL); sched != nil {
-		defer sched.Close()
-		if su, err := sched.ListUsers(ctx); err == nil {
-			for _, u := range su {
-				if u.Role == "admin" {
-					opsAdmins[strings.ToLower(u.Username)] = true
-				}
-			}
-		}
+		return errf(5, "list users: %v", err)
 	}
 
 	if *asJSON {
 		type row struct {
 			Email          string `json:"email"`
 			Role           string `json:"role"`
+			OpsScope       string `json:"ops_scope"`
+			OpsCenterRole  string `json:"ops_center_role"`
 			OpsCenterAdmin bool   `json:"ops_center_admin"`
 		}
 		rows := make([]row, 0, len(users))
 		for _, u := range users {
-			rows = append(rows, row{Email: u.Email, Role: u.Role, OpsCenterAdmin: opsAdmins[strings.ToLower(u.Email)]})
+			rows = append(rows, row{Email: u.Email, Role: u.Role, OpsScope: u.OpsScope, OpsCenterRole: u.LegacyOpsRole(), OpsCenterAdmin: u.Role == store.RoleAdmin})
 		}
 		return printJSON(rows)
 	}
 	if len(users) == 0 {
-		fmt.Println("no chat users yet — add an admin with: fleet admin add <email>")
+		fmt.Println("no users yet — add an admin with: fleet admin add <email>")
 		return 0
 	}
 	rows := make([][]string, 0, len(users))
 	for _, u := range users {
-		ops := "-"
-		if opsAdmins[strings.ToLower(u.Email)] {
-			ops = "ops-center-admin"
+		ops := u.OpsScope
+		if u.Role == store.RoleAdmin {
+			ops = "admin"
 		}
 		rows = append(rows, []string{u.Email, u.Role, ops})
 	}
-	if err := renderTable(os.Stdout, []string{"EMAIL", "CHAT_ROLE", "OPS_CENTER"}, rows); err != nil {
+	if err := renderTable(os.Stdout, []string{"EMAIL", "ROLE", "OPS_CENTER"}, rows); err != nil {
 		return errf(5, "render: %v", err)
 	}
 	return 0
 }
 
-// adminRm removes an email from BOTH planes: its chat login and its Operations
-// Center row. Each side is best-effort so a user present in only one plane is
-// still cleaned up rather than aborting on the first "not found".
+// adminRm removes an account: its login, its Operations Center access and its
+// owned data (the store's delete cascade). One row, one delete.
 func adminRm(argv []string) int {
 	fs := flag.NewFlagSet("admin rm", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
+	_ = fs.String("sched-database-url", "", "ignored: there is one identity table (#2049 M4)")
 	email, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -208,47 +172,17 @@ func adminRm(argv []string) int {
 	if email == "" {
 		return errf(1, "email required — usage: fleet admin rm <email>")
 	}
-	chatDsn, err := chatDSN(*chatURL)
-	if err != nil {
-		return errf(1, "%v", err)
-	}
-	if _, err := schedDSN(*schedURL); err != nil {
-		return errf(1, "%v", err)
-	}
-	ctx := context.Background()
-
-	removed := 0
-	st, err := store.Open(chatDsn, store.DefaultPoolConfig())
-	if err != nil {
-		return errf(1, "open chat DB: %v", err)
-	}
-	defer st.Close()
-	if err := st.DeleteUser(ctx, email); err != nil {
-		fmt.Printf("  chat login: %v\n", err)
-	} else {
-		fmt.Println("  ✓ removed chat login")
-		removed++
-	}
-
-	if sched, code := openSchedStorage(*schedURL); sched != nil {
-		defer sched.Close()
-		if u, err := sched.GetUserByUsername(strings.ToLower(email)); err == nil && u != nil {
-			if err := sched.DeleteUser(u.ID); err != nil {
-				fmt.Printf("  Operations Center: %v\n", err)
-			} else {
-				fmt.Println("  ✓ removed Operations Center admin")
-				removed++
-			}
-		} else {
-			fmt.Println("  Operations Center: no such member")
-		}
-	} else {
+	st, code := openChatStore(*chatURL)
+	if st == nil {
 		return code
 	}
-
-	if removed == 0 {
-		return errf(2, "%s was not present in either plane", email)
+	defer st.Close()
+	if err := st.DeleteUser(context.Background(), email); err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			return errf(2, "%s is not an account", email)
+		}
+		return errf(5, "remove %s: %v", email, err)
 	}
-	fmt.Printf("removed admin %s\n", email)
+	fmt.Printf("removed admin %s (login, Operations Center access and owned data)\n", email)
 	return 0
 }

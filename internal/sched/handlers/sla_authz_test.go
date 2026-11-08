@@ -4,11 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 // TestSLAReportAdminGate locks in the #458 fix: GET /sla-report is reachable from
@@ -25,22 +22,12 @@ func TestSLAReportAdminGate(t *testing.T) {
 
 	addUser := func(username, role, token string) {
 		t.Helper()
-		hash := models.HashToken(token)
-		u := &models.User{
-			ID:           uuid.New(),
-			Username:     username,
-			Role:         role,
-			CreatedAt:    time.Now(),
-			SessionToken: &hash,
-		}
-		if _, err := store.AddUser(u); err != nil {
-			t.Fatalf("AddUser(%s): %v", username, err)
-		}
+		seedOpsUser(t, store, uuid.New(), username, role, token)
 	}
 	addUser("sla-admin", "admin", "sla-admin-token")
 	addUser("sla-client", "client", "sla-client-token")
 
-	gated := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetSLAReport))
+	gated := asSeededSession(h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetSLAReport)))
 
 	cases := []struct {
 		name   string

@@ -107,19 +107,6 @@ type Config struct {
 	// production (config.Validate makes FLEET_SERVER_TOKEN fatal-if-empty).
 	SharedToken string
 
-	// The shared Elcano cookie ElcanoLogout deletes (elcano.go). The browser
-	// tier verifies it; this server never reads it.
-	ElcanoCookieName   string // default "elcano_auth"
-	ElcanoCookieDomain string // AUTH_COOKIE_DOMAIN (e.g. "elcanotek.com"); "" = host-only. Needed to delete the shared cookie on logout.
-
-	// PasswordLoginDisabled mirrors config.Config.PasswordLoginDisabled: this
-	// Fleet signs people in through central Auth only. POST /auth/login then
-	// refuses, and the bearer it used to mint is no longer accepted anywhere
-	// (userFromPasswordToken), so a token issued before the switch stops
-	// working too. API keys, header trust and the elcano_auth cookie are
-	// unaffected.
-	PasswordLoginDisabled bool
-
 	// AccountsManagedByAuth mirrors config.Config.AccountsManagedByAuth:
 	// central Auth owns who is in this Fleet and with which roles, so the
 	// admin-key POST /users (also public as /v1/users) refuses rather than
@@ -142,10 +129,6 @@ type Handlers struct {
 	storage *storage.Storage
 	apiKeys *apikeys.Manager
 
-	// loginRL throttles POST /login per client IP (20/minute) with the shared
-	// sliding-window limiter (internal/ratelimit).
-	loginRL *ratelimit.Limiter
-
 	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
 	// POST /upload), shared implementation with the chat server
 	// (internal/ratelimit). taskKeyRL is per-API-key (or per-IP for cookie/bearer
@@ -157,11 +140,6 @@ type Handlers struct {
 
 	// Cache for dashboard stats
 	statsCache *statsCache
-
-	// memberLookup resolves an email to a user for the scoped-tier gate
-	// (elcano_auth cookie path). nil in production → falls back to
-	// storage.GetUserByUsername. Tests inject a fake to avoid a live database.
-	memberLookup func(ctx context.Context, email string) (*models.User, error)
 
 	// mcpCatalog returns the read-only Optional-MCP catalog the task-form picker
 	// + credential-account admin table render. Injected by cmd/fleet via
@@ -262,27 +240,18 @@ type Handlers struct {
 	taskStopper func(taskID uuid.UUID, who string) bool
 
 	// chatUsage aggregates the chat store's turn_metrics for the usage report
-	// (#601) — injected by cmd/fleet via SetChatUsageProvider because the chat
-	// store is a separate database. nil → the report covers tasks only and
-	// its sources list says so. See usage.go.
+	// (#601) — injected by cmd/fleet via SetChatUsageProvider. It is chat's own
+	// usage data read through the chat store's queries, an in-process data
+	// dependency rather than an identity seam (#2049 M4 kept it on purpose:
+	// this package does not read the chat schema). nil → the report covers
+	// tasks only and its sources list says so. See usage.go.
 	chatUsage ChatUsageProvider
 
-	// chatUserDayUsage / chatAccounts feed the adoption report
-	// (GET /admin/usage/adoption) — the chat side's per-user-per-day metering
-	// and the provisioned-account roster, injected by cmd/fleet like chatUsage.
-	// nil → the report covers tasks only / omits the seat denominator, and its
-	// sources list says so. See adoption.go.
+	// chatUserDayUsage feeds the adoption report (GET /admin/usage/adoption)
+	// with the chat side's per-user-per-day metering, injected like chatUsage.
+	// nil → the report covers tasks only, and its sources list says so. The
+	// seat roster is the identity table itself. See adoption.go.
 	chatUserDayUsage ChatUserDayUsageProvider
-	chatAccounts     ChatAccountsProvider
-
-	// chatSessionEpoch resolves an email's chat-plane session epoch so the
-	// header-trust path can refuse a session cookie a password reset has already
-	// evicted from chat. Injected by cmd/fleet like the seams above, because the
-	// epoch lives in the chat store's users table (ADR-0005). nil → the claim is
-	// not checked. See session_epoch.go.
-	chatSessionEpoch     ChatSessionEpochProvider
-	externalSessionEpoch ExternalSessionEpochProvider
-	chatMemberRole       ChatMemberRoleProvider
 
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
@@ -332,9 +301,6 @@ func (c *statsCache) Set(stats *models.DashboardStats, ttl time.Duration) {
 	c.until = time.Now().Add(ttl)
 }
 
-// loginRateLimitPerMinute bounds password logins per client IP.
-const loginRateLimitPerMinute = 20
-
 const (
 	taskPromptMinLength = 3
 	// taskPromptMaxLength bounds a task prompt in BYTES (len(), not runes).
@@ -367,7 +333,6 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		config:       cfg,
 		storage:      store,
 		apiKeys:      keyMgr,
-		loginRL:      ratelimit.New(loginRateLimitPerMinute, 0),
 		taskKeyRL:    ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL: ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		statsCache:   &statsCache{},

@@ -21,7 +21,7 @@ type AccountAccess struct {
 // account exists.
 func (s *Store) AccountAccess(ctx context.Context, email string) (AccountAccess, bool, error) {
 	a := AccountAccess{Email: normalizeEmail(email)}
-	err := s.db.QueryRowContext(ctx, `SELECT role, COALESCE(team_id, ''), enabled FROM users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Team, &a.Enabled)
+	err := s.db.QueryRowContext(ctx, `SELECT role, COALESCE(team_id, ''), enabled FROM core.users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Team, &a.Enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AccountAccess{}, false, nil
 	}
@@ -34,7 +34,7 @@ func (s *Store) AccountAccess(ctx context.Context, email string) (AccountAccess,
 // ListAccountAccess returns every Chat account's membership view, disabled rows
 // included, ordered by email (`fleet account-events export`).
 func (s *Store) ListAccountAccess(ctx context.Context) ([]AccountAccess, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT email, role, COALESCE(team_id, ''), enabled FROM users ORDER BY email ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT email, role, COALESCE(team_id, ''), enabled FROM core.users ORDER BY email ASC`)
 	if err != nil {
 		return nil, err
 	}

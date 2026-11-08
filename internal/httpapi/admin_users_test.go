@@ -8,95 +8,43 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// fakeOpsAdmins records the two-plane calls the admin Users endpoints make so
-// the tests can assert grant-on-promote / revoke-on-demote-or-delete without a
-// sched DB.
-type fakeOpsAdmins struct {
-	ensured, removed []string
-	admins           []string
-	// roles: explicit per-email sched-plane roles set via SetRole; admins
-	// listed above are reported as role "admin" alongside.
-	roles     map[string]string
-	onSetRole func(email, role string)
-}
-
-func (f *fakeOpsAdmins) Ensure(_ context.Context, email string) error {
-	f.ensured = append(f.ensured, email)
-	f.admins = append(f.admins, email)
-	return nil
-}
-
-func (f *fakeOpsAdmins) Remove(_ context.Context, email string) error {
-	f.removed = append(f.removed, email)
-	// The real service deletes the Ops row, whatever its role.
-	delete(f.roles, strings.ToLower(email))
-	out := f.admins[:0]
-	for _, a := range f.admins {
-		if !strings.EqualFold(a, email) {
-			out = append(out, a)
+// opsOf reads the account's Operations Center access straight from its one
+// identity row (#2049 M4): role, ops_scope and the legacy role they grant
+// ("" for none). It reads the row whatever its enabled state.
+func opsOf(t *testing.T, s *Server, email string) (role, scope, legacy string) {
+	t.Helper()
+	var u store.User
+	users, err := s.concreteStore(t).ListUsers(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range users {
+		if x.Email == email {
+			u = x
 		}
 	}
-	f.admins = out
-	return nil
-}
-
-func (f *fakeOpsAdmins) List(context.Context) ([]string, error) {
-	return append([]string(nil), f.admins...), nil
-}
-
-func (f *fakeOpsAdmins) SetRole(_ context.Context, email, role string) error {
-	if f.onSetRole != nil {
-		f.onSetRole(email, role)
+	if u.Email == "" {
+		return "", "", ""
 	}
-	if f.roles == nil {
-		f.roles = map[string]string{}
-	}
-	key := strings.ToLower(email)
-	if role == "" || role == "none" {
-		delete(f.roles, key)
-		return f.Remove(context.Background(), email)
-	}
-	f.roles[key] = role
-	if role == "admin" {
-		f.admins = append(f.admins, email)
-	}
-	return nil
-}
-
-func (f *fakeOpsAdmins) SetEnabled(_ context.Context, email string, enabled bool) error {
-	if enabled {
-		return nil
-	}
-	return f.Remove(context.Background(), email)
-}
-
-func (f *fakeOpsAdmins) Roles(context.Context) (map[string]string, error) {
-	out := map[string]string{}
-	for _, a := range f.admins {
-		out[strings.ToLower(a)] = "admin"
-	}
-	for k, v := range f.roles {
-		out[k] = v
-	}
-	return out, nil
+	return u.Role, u.OpsScope, u.LegacyOpsRole()
 }
 
 // TestAdminUserLifecycle drives the full UI user-management surface end to
-// end: create (with role → ops grant), duplicate → 409, password reset,
-// demote → ops revoke, delete → ops revoke, and the self-demote/self-delete
-// lockout guards.
+// end: create (role admin is full Operations Center access), duplicate → 409,
+// password reset, demote (ends Operations Center admin), delete (the one row
+// goes), and the self-demote/self-delete lockout guards.
 func TestAdminUserLifecycle(t *testing.T) {
 	t.Parallel()
 
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
-	ops := &fakeOpsAdmins{}
-	WithOpsAdmins(ops)(s)
 	h := s.Routes()
 
-	// Create carol as admin → 201, ops grant, annotated response.
+	// Create carol as admin → 201, Operations Center admin, annotated response.
 	w := do(t, h, http.MethodPost, "/admin/users",
 		map[string]any{"email": "carol@x.com", "password": "carol-pw-123", "role": "admin"}, "boss@x.com")
 	if w.Code != http.StatusCreated {
@@ -109,8 +57,8 @@ func TestAdminUserLifecycle(t *testing.T) {
 	if created.Role != "admin" || !created.OpsCenterAdmin {
 		t.Errorf("create resp = %+v, want role=admin ops_center_admin=true", created)
 	}
-	if len(ops.ensured) != 1 || ops.ensured[0] != "carol@x.com" {
-		t.Errorf("ops.ensured = %v, want [carol@x.com]", ops.ensured)
+	if role, _, legacy := opsOf(t, s, "carol@x.com"); role != "admin" || legacy != "admin" {
+		t.Errorf("carol's row = role %q ops %q, want admin/admin", role, legacy)
 	}
 
 	// Duplicate create → 409.
@@ -167,14 +115,14 @@ func TestAdminUserLifecycle(t *testing.T) {
 		t.Errorf("new password does not verify: %v", err)
 	}
 
-	// Demote carol → ops revoke.
+	// Demote carol → Operations Center admin ends with it (scope none).
 	w = do(t, h, http.MethodPatch, "/admin/users/carol@x.com",
 		map[string]any{"role": "member"}, "boss@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("demote: status %d (body %s)", w.Code, w.Body.String())
 	}
-	if len(ops.removed) != 1 || ops.removed[0] != "carol@x.com" {
-		t.Errorf("ops.removed after demote = %v, want [carol@x.com]", ops.removed)
+	if role, scope, legacy := opsOf(t, s, "carol@x.com"); role != "member" || scope != "none" || legacy != "" {
+		t.Errorf("after demote carol = %s/%s/%q, want member/none/no access", role, scope, legacy)
 	}
 
 	// Self-demote and self-delete are refused.
@@ -188,13 +136,13 @@ func TestAdminUserLifecycle(t *testing.T) {
 		t.Errorf("self-delete: status %d body %q, want 400 refusing", w.Code, w.Body.String())
 	}
 
-	// Delete carol → 204 + second ops revoke; a repeat delete → 404.
+	// Delete carol → 204, the one row gone; a repeat delete → 404.
 	w = do(t, h, http.MethodDelete, "/admin/users/carol@x.com", nil, "boss@x.com")
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("delete: status %d want 204 (body %s)", w.Code, w.Body.String())
 	}
-	if len(ops.removed) != 2 {
-		t.Errorf("ops.removed after delete = %v, want 2 entries", ops.removed)
+	if role, _, _ := opsOf(t, s, "carol@x.com"); role != "" {
+		t.Errorf("carol's row survived the delete (role %q)", role)
 	}
 	w = do(t, h, http.MethodDelete, "/admin/users/carol@x.com", nil, "boss@x.com")
 	if w.Code != http.StatusNotFound {
@@ -227,16 +175,17 @@ func TestAdminUserEndpointsRequireAdmin(t *testing.T) {
 	}
 }
 
-// TestAdminUserOpsRole locks in the split-permission semantics: ops_role
-// grants client/readonly without touching the chat role; chat demote drops an
-// implied ops-admin row but leaves an explicit client grant standing.
+// TestAdminUserOpsRole locks in the Operations Center semantics over the one
+// identity row (#2049 M4): ops_role grants client/readonly (ops_scope
+// run/view) without touching the chat role; a chat demote ends Operations
+// Center admin but leaves an explicit scope standing; admin wins over a
+// narrower grant; ops_role admin without role admin (the split state) is a
+// 400; ops_scope speaks the new names.
 func TestAdminUserOpsRole(t *testing.T) {
 	t.Parallel()
 
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
-	ops := &fakeOpsAdmins{}
-	WithOpsAdmins(ops)(s)
 	h := s.Routes()
 
 	decode := func(w *httptest.ResponseRecorder) adminUser {
@@ -255,7 +204,7 @@ func TestAdminUserOpsRole(t *testing.T) {
 	}
 	// Account creation can grant ops client without touching the chat role.
 	got := decode(w)
-	if got.Role != "member" || got.OpsCenterRole != "client" || got.OpsCenterAdmin {
+	if got.Role != "member" || got.OpsCenterRole != "client" || got.OpsCenterAdmin || got.OpsScope != "run" {
 		t.Fatalf("create with ops client grant: %+v", got)
 	}
 
@@ -303,6 +252,43 @@ func TestAdminUserOpsRole(t *testing.T) {
 		map[string]any{"email": "both@x.com", "password": "both-planes-pw", "role": "admin", "ops_role": "readonly"}, "boss@x.com")
 	if got = decode(w); w.Code != http.StatusCreated || got.OpsCenterRole != "admin" {
 		t.Fatalf("POST role=admin + ops_role=readonly: status %d, got %+v", w.Code, got)
+	}
+
+	// ops_role admin is the Fleet admin role: next to a non-admin role, or on
+	// a non-admin with no role in the body, it is the split state ADR-0074
+	// refuses — a 400, and nothing written.
+	do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"role": "member", "ops_role": "none"}, "boss@x.com")
+	for _, body := range []map[string]any{
+		{"role": "member", "ops_role": "admin"},
+		{"ops_role": "admin"},
+	} {
+		w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", body, "boss@x.com")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("PATCH %v: status %d want 400 (body %s)", body, w.Code, w.Body.String())
+		}
+	}
+	if role, scope, _ := opsOf(t, s, "op@x.com"); role != "member" || scope != "none" {
+		t.Errorf("a refused split-admin write changed the row: %s/%s", role, scope)
+	}
+	w = do(t, h, http.MethodPost, "/admin/users",
+		map[string]any{"email": "split@x.com", "password": "placeholder-not-a-secret", "ops_role": "admin"}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST ops_role=admin without role admin: status %d want 400", w.Code)
+	}
+
+	// ops_scope: the new names, and it wins over ops_role in the same body.
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"ops_scope": "view", "ops_role": "client"}, "boss@x.com")
+	if got = decode(w); got.OpsScope != "view" || got.OpsCenterRole != "readonly" {
+		t.Fatalf("PATCH ops_scope=view: %+v", got)
+	}
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"ops_scope": "readonly"}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("PATCH ops_scope=readonly (a legacy name): status %d want 400", w.Code)
+	}
+	// ops_role accepts the new names too.
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"ops_role": "run"}, "boss@x.com")
+	if got = decode(w); got.OpsScope != "run" || got.OpsCenterRole != "client" {
+		t.Fatalf("PATCH ops_role=run: %+v", got)
 	}
 }
 

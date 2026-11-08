@@ -193,7 +193,7 @@ var table = []Entry{
 	{Name: "ADMIN_EMAILS", Group: GroupAuth, Scope: ScopeServer, Type: TypeCSV,
 		Description: "Comma-separated emails that are chat admins."},
 	{Name: "FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS", Group: GroupAuth, Scope: ScopeServer, Type: TypeCSV,
-		Description: "Comma-separated emails provisioned (or promoted) as orchestrator admins at every boot. Ignored when central Auth manages accounts."},
+		Description: "Comma-separated emails made Fleet admins (chat and Operations Center: one role, ADR-0105) at every boot, created with no usable password when missing. Ignored when central Auth manages accounts."},
 
 	// ───────────────────────────── Databases ─────────────────────────────
 	// The DSN keys are resolved by internal/config/dsn.go (ResolveDSNs), read

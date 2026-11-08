@@ -204,7 +204,9 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	if err != nil || u == nil {
 		t.Fatalf("imported sched user missing: %v", err)
 	}
-	if u.ID != userID || u.Role != "admin" {
+	// One identity table (#2049 M4): an import never makes a Fleet admin; an
+	// imported Operations Center admin gets ops_scope run (role client).
+	if u.ID != userID || u.Role != "client" {
 		t.Errorf("sched user lost fidelity: id=%s role=%s", u.ID, u.Role)
 	}
 
@@ -243,7 +245,7 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	if err := database.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&nTasks); err != nil {
 		t.Fatalf("count tasks: %v", err)
 	}
-	if err := database.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&nUsers); err != nil {
+	if err := database.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM core.users").Scan(&nUsers); err != nil {
 		t.Fatalf("count users: %v", err)
 	}
 	if nTasks != 2 || nUsers != 1 {

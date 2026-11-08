@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -487,42 +489,7 @@ type schedImportOpts struct {
 // aborts the section.
 func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSection, opts schedImportOpts, stats *importStats) {
 	dryRun := opts.dryRun
-	// Users: matched by username. An existing account (e.g. the bootstrap
-	// admin) wins and imported tasks are re-attributed to its UUID; a new
-	// username is inserted with its source UUID + hash so logins keep working.
-	remap := make(map[uuid.UUID]uuid.UUID, len(sec.Users))
-	for _, u := range sec.Users {
-		username := strings.TrimSpace(u.Username)
-		if username == "" || u.ID == uuid.Nil || strings.TrimSpace(u.PasswordHash) == "" {
-			stats.errorf("sched user %q (%s): username, id, and password_hash are all required", u.Username, u.ID)
-			continue
-		}
-		existing, err := st.GetUserByUsernameWithContext(ctx, username)
-		if err == nil && existing != nil {
-			remap[u.ID] = existing.ID
-			bump(stats, "sched users", false)
-			continue
-		}
-		role := u.Role
-		if !validRole(role) {
-			stats.warnf("sched user %q: unknown role %q clamped to readonly", username, role)
-			role = "readonly"
-		}
-		if !dryRun {
-			if _, err := st.AddUser(&models.User{
-				ID:           u.ID,
-				Username:     username,
-				PasswordHash: u.PasswordHash,
-				Role:         role,
-				CreatedAt:    u.CreatedAt,
-				LastLogin:    u.LastLogin,
-			}); err != nil {
-				stats.errorf("sched user %q: %v", username, err)
-				continue
-			}
-		}
-		bump(stats, "sched users", true)
-	}
+	remap := importSchedUsers(ctx, st, sec.Users, dryRun, stats)
 
 	// presentTasks tracks every task UUID that exists (or will exist after this
 	// run) in fleet, so the log pass can reject an orphan log — one whose task
@@ -815,4 +782,69 @@ func printImportSummary(stats *importStats, dryRun bool) {
 	if stats.errors > 0 {
 		fmt.Printf("%d record(s) failed — fix and re-run; records already present in fleet are skipped on re-import (pass --overwrite to replace them)\n", stats.errors)
 	}
+}
+
+// importSchedUsers maps the bundle's Operations Center users onto accounts of
+// the one identity table and returns the old-UUID → account-UUID remap the
+// task pass attributes creators with.
+func importSchedUsers(ctx context.Context, st *storage.Storage, users []bundleSchedUser, dryRun bool, stats *importStats) map[uuid.UUID]uuid.UUID {
+	// Users: matched by email (the lowercased username) in the one identity
+	// table (#2049 M4). An existing account wins and imported tasks are
+	// re-attributed to its UUID; its Operations Center access is raised to
+	// the bundle's role when it has none (a Fleet admin is never made by an
+	// import: an imported admin without the admin role here gets run, as the
+	// identity merge does). A new username becomes a new account — role
+	// viewer, the mapped scope — with its source UUID and hash, so the
+	// person can sign in with their old password.
+	remap := make(map[uuid.UUID]uuid.UUID, len(users))
+	ids := st.Identity()
+	for _, u := range users {
+		username := identity.NormalizeEmail(u.Username)
+		if username == "" || u.ID == uuid.Nil || strings.TrimSpace(u.PasswordHash) == "" {
+			stats.errorf("sched user %q (%s): username, id, and password_hash are all required", u.Username, u.ID)
+			continue
+		}
+		role := u.Role
+		if !validRole(role) {
+			stats.warnf("sched user %q: unknown role %q clamped to readonly", username, role)
+			role = "readonly"
+		}
+		scope, admin, _ := identity.ParseOpsRole(role)
+		if admin {
+			scope = identity.OpsRun
+		}
+		existing, err := ids.GetByEmail(ctx, username)
+		if err == nil && existing != nil {
+			remap[u.ID] = existing.ID
+			if admin && existing.Role != identity.RoleAdmin {
+				stats.warnf("sched user %q: Operations Center admin in the bundle but not a Fleet admin here: given ops_scope run (grant admin with `fleet admin add %s`)", username, username)
+			}
+			if !dryRun && existing.Role != identity.RoleAdmin && existing.OpsScope == identity.OpsNone {
+				if _, err := ids.SetOpsScope(ctx, username, scope); err != nil {
+					stats.errorf("sched user %q: %v", username, err)
+					continue
+				}
+			}
+			bump(stats, "sched users", false)
+			continue
+		}
+		if !errors.Is(err, identity.ErrNotFound) && err != nil {
+			stats.errorf("sched user %q: %v", username, err)
+			continue
+		}
+		if admin {
+			stats.warnf("sched user %q: Operations Center admin in the bundle, created as a viewer with ops_scope run (grant admin with `fleet admin add %s`)", username, username)
+		}
+		if !dryRun {
+			if _, err := ids.CreateAccount(ctx, identity.NewAccount{
+				ID: u.ID, Email: username, PasswordHash: u.PasswordHash,
+				Role: identity.RoleViewer, OpsScope: scope,
+			}); err != nil {
+				stats.errorf("sched user %q: %v", username, err)
+				continue
+			}
+		}
+		bump(stats, "sched users", true)
+	}
+	return remap
 }

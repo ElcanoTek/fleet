@@ -27,6 +27,7 @@ func setupExportImportHandler(t *testing.T) (*chi.Mux, *storage.Storage, func())
 	t.Helper()
 	store, h, cleanup := setupFullHandler(t)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(rr chi.Router) {
 		rr.Use(h.AdminOrUserAuthMiddleware)
 		rr.Get("/tasks/export", h.HandleTaskExport)
@@ -44,7 +45,7 @@ func setupFullHandler(t *testing.T) (*storage.Storage, *Handlers, func()) {
 	// setupTestHandlerWithStore already constructed the Handlers internally; to
 	// get a handle to it we rebuild via the same New call it used. The config
 	// matches the shared helper so verifyAdminKey etc. behave identically.
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, nil)
@@ -420,7 +421,7 @@ func TestExportImport_ReplaceRequiresAdmin(t *testing.T) {
 
 	_, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key"}, store, nil)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key"}, store, nil)
 
 	// Seed an existing named task so the replace path is reachable.
 	future := time.Now().Add(48 * time.Hour).UTC()
@@ -500,12 +501,7 @@ func TestImport_RunIfRequiresAdmin(t *testing.T) {
 	defer cleanup()
 
 	// A client-role user: create_task + view permissions, no admin.
-	hash := models.HashToken("import-client-token")
-	if _, err := store.AddUser(&models.User{
-		ID: uuid.New(), Username: "import-client", Role: "client", CreatedAt: time.Now(), SessionToken: &hash,
-	}); err != nil {
-		t.Fatalf("AddUser: %v", err)
-	}
+	seedOpsUser(t, store, uuid.New(), "import-client", "client", "import-client-token")
 
 	post := func(env models.TaskExportEnvelope, auth func(*http.Request)) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(env)

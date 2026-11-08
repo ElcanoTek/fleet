@@ -12,8 +12,6 @@ func TestExternalAccessProvisioningDefaultsMemberAndIgnoresStaleVersions(t *test
 	t.Parallel()
 
 	s := memberFixture(t)
-	ops := &fakeOpsAdmins{}
-	WithOpsAdmins(ops)(s)
 	h := s.Routes()
 	const email = "alice@example.com"
 
@@ -80,8 +78,6 @@ func TestExternalAccessProvisioningAppliesSelectedChatAndOpsRoles(t *testing.T) 
 	t.Parallel()
 
 	s := memberFixture(t)
-	ops := &fakeOpsAdmins{}
-	WithOpsAdmins(ops)(s)
 	h := s.Routes()
 	const email = "roles@example.com"
 
@@ -106,48 +102,72 @@ func TestExternalAccessProvisioningAppliesSelectedChatAndOpsRoles(t *testing.T) 
 		if user, err := s.concreteStore(t).GetUser(t.Context(), email); err != nil || user.Role != tc.chatRole {
 			t.Fatalf("version %d chat user = (%+v, %v), want role %q", tc.version, user, err, tc.chatRole)
 		}
-		if got := ops.roles[email]; got != tc.opsRole {
+		if _, _, got := opsOf(t, s, email); got != tc.opsRole {
 			t.Fatalf("version %d ops role = %q, want %q", tc.version, got, tc.opsRole)
 		}
 	}
 }
 
-func TestExternalAccessProvisioningReconcilesNewerStateAfterOpsWrite(t *testing.T) {
+// TestExternalAccessProvisioningIsOneAtomicState pins ADR-0074 as amended by
+// #2049 M4: an access event writes role, Operations Center scope and enabled
+// to the one identity row in one transaction, so there is no "Ops Center
+// provisioning failed" 503 and no window where the planes disagree. An event
+// older than the stored state changes nothing — the newer state stays whole —
+// and a revoke ends Operations Center access with chat access.
+func TestExternalAccessProvisioningIsOneAtomicState(t *testing.T) {
 	t.Parallel()
 
 	s := memberFixture(t)
 	st := s.concreteStore(t)
-	ops := &fakeOpsAdmins{}
-	WithOpsAdmins(ops)(s)
 	const email = "racing@example.com"
-	ops.onSetRole = func(_ string, role string) {
-		if role != "readonly" {
-			return
-		}
-		ops.onSetRole = nil
-		_, _, err := st.ApplyExternalAccess(t.Context(), store.ExternalAccessState{
-			Issuer: "https://auth.example.com", Subject: "racing-account", Email: email,
-			Version: 2, Allowed: true, EventID: "grant-2", ChatRole: store.RoleMember,
-			OpsRole: "client", IssuedAt: 1_002,
-		})
-		if err != nil {
-			t.Fatalf("apply concurrent desired state: %v", err)
-		}
+	if _, _, err := st.ApplyExternalAccess(t.Context(), store.ExternalAccessState{
+		Issuer: "https://auth.example.com", Subject: "racing-account", Email: email,
+		Version: 2, Allowed: true, EventID: "grant-2", ChatRole: store.RoleMember,
+		OpsRole: "client", IssuedAt: 1_002,
+	}); err != nil {
+		t.Fatalf("apply the newer desired state: %v", err)
 	}
-	body := map[string]any{
+	older := map[string]any{
 		"event_id": "grant-1", "issuer": "https://auth.example.com",
 		"subject": "racing-account", "action": "grant", "version": 1,
 		"issued_at": 1_001,
 		"settings":  map[string]string{"chat_role": "viewer", "ops_role": "readonly"},
 	}
-
-	if w := do(t, s.Routes(), http.MethodPost, "/auth/external-access", body, email); w.Code != http.StatusNoContent {
-		t.Fatalf("provision: status %d body %q", w.Code, w.Body.String())
+	if w := do(t, s.Routes(), http.MethodPost, "/auth/external-access", older, email); w.Code != http.StatusNoContent {
+		t.Fatalf("older event: status %d body %q", w.Code, w.Body.String())
 	}
-	if user, err := st.GetUser(t.Context(), email); err != nil || user.Role != store.RoleMember {
-		t.Fatalf("latest chat user = (%+v, %v), want member", user, err)
+	if role, scope, legacy := opsOf(t, s, email); role != store.RoleMember || scope != "run" || legacy != "client" {
+		t.Fatalf("after an older event the row = %s/%s/%s, want the newer member/run/client", role, scope, legacy)
 	}
-	if got := ops.roles[email]; got != "client" {
-		t.Fatalf("latest Ops role = %q, want client", got)
+	// The new scope names are accepted and stored in Auth's legacy names.
+	view := map[string]any{
+		"event_id": "grant-3", "issuer": "https://auth.example.com",
+		"subject": "racing-account", "action": "grant", "version": 3,
+		"issued_at": 1_003,
+		"settings":  map[string]string{"chat_role": "member", "ops_role": "view"},
+	}
+	if w := do(t, s.Routes(), http.MethodPost, "/auth/external-access", view, email); w.Code != http.StatusNoContent {
+		t.Fatalf("view grant: status %d body %q", w.Code, w.Body.String())
+	}
+	if state, ok, err := st.ExternalAccessState(t.Context(), "https://auth.example.com", "racing-account"); err != nil || !ok || state.OpsRole != "readonly" {
+		t.Fatalf("stored state = %+v %v %v, want ops_role readonly", state, ok, err)
+	}
+	revoke := map[string]any{
+		"event_id": "revoke-4", "issuer": "https://auth.example.com",
+		"subject": "racing-account", "action": "revoke", "version": 4,
+		"issued_at": 1_004,
+		"settings":  map[string]string{"chat_role": "member", "ops_role": "view"},
+	}
+	if w := do(t, s.Routes(), http.MethodPost, "/auth/external-access", revoke, email); w.Code != http.StatusNoContent {
+		t.Fatalf("revoke: status %d body %q", w.Code, w.Body.String())
+	}
+	users, err := st.ListUsers(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range users {
+		if u.Email == email && u.Enabled {
+			t.Fatalf("revoked account still enabled: %+v", u)
+		}
 	}
 }

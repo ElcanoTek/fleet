@@ -109,6 +109,12 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 		return fmt.Errorf("pg_dump %s: the DSN names no store schema", redactDSN(dsn))
 	}
 	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath, "-n", schema}
+	// The chat store's migrations own the identity schema, core (#2049 M4):
+	// the one users table and its side tables. The chat dump carries it, so a
+	// chat restore brings back the accounts its rows belong to.
+	if schema == config.ChatSchema {
+		args = append(args, "-n", config.IdentitySchema)
+	}
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
 	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = c.env()
@@ -164,15 +170,37 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	case !slices.Contains(got, want):
 		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
 	}
-	// Other schemas in the archive (a whole-database dump) are left out by -n
-	// below: only the store's schema is restored.
-	if want != config.PublicSchema {
-		if err := ensureRestoreSchema(ctx, dsn, want); err != nil {
-			return err
+	// Other schemas in the archive (a whole-database dump) are left out by
+	// -n below: only the store's schema is restored — plus, for the chat
+	// store, the identity schema core its migrations own (#2049 M4).
+	schemas := []string{want}
+	if want == config.ChatSchema {
+		switch hasCore := slices.Contains(got, config.IdentitySchema); {
+		case hasCore:
+			schemas = append(schemas, config.IdentitySchema)
+		default:
+			// A chat dump from before the one identity table: its users table
+			// is chat.users, and its migration ledger stops before 099, which
+			// moves that table into core. Restored next to an existing core
+			// it could never migrate again.
+			exists, err := schemaExists(ctx, dsn, config.IdentitySchema)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
+			}
 		}
 	}
-	//nolint:gosec // G204: fixed "pg_restore" binary; dbname comes from the parsed operator DSN, want is a validated plain identifier and inPath is an operator-supplied path, all separate argv (no shell interpolation); connection params ride in the env.
-	cmd := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "-n", want, "-d", c.dbname, inPath)
+	args := []string{"--clean", "--if-exists", "--no-owner", "--no-acl"}
+	for _, schema := range schemas {
+		if err := ensureRestoreSchema(ctx, dsn, schema); err != nil {
+			return err
+		}
+		args = append(args, "-n", schema)
+	}
+	args = append(args, "-d", c.dbname, inPath)
+	cmd := exec.CommandContext(ctx, "pg_restore", args...)
 	cmd.Env = c.env()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -198,6 +226,20 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
 	}
 	return nil
+}
+
+// schemaExists reports whether the DSN's database has the schema.
+func schemaExists(ctx context.Context, dsn, schema string) (bool, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	var ok bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&ok); err != nil {
+		return false, fmt.Errorf("probe schema %s: %w", schema, err)
+	}
+	return ok, nil
 }
 
 // dumpSchemas lists the schemas a custom-format dump holds — the names of its

@@ -44,12 +44,13 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 		t.Fatalf("key manager: %v", err)
 	}
 
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)
 		r.Get("/admin/queue", h.QueueStats)

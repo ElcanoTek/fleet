@@ -8,7 +8,6 @@ package storage
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -18,8 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
@@ -691,144 +690,60 @@ func (s *Storage) ArchiveOldLogs(ctx context.Context, days int) (int, int64, err
 	return s.db.ArchiveOldLogs(ctx, days)
 }
 
-// User operations
+// User operations — Operations Center accounts are rows of the one identity
+// table, core.users (#2049 M4, ADR-0105); see db/users.go. Writes go through
+// internal/identity (Identity()); there is no scheduler-side user row to keep
+// in step with chat any more.
 
-// AddUser adds a new user.
-func (s *Storage) AddUser(user *models.User) (*models.User, error) {
-	if err := s.db.AddUser(context.Background(), user); err != nil {
-		return nil, err
-	}
-	return user, nil
-}
+// Identity returns the identity store over the scheduler's pool.
+func (s *Storage) Identity() *identity.Store { return s.db.Identity() }
 
-// UpdateUserRole changes an existing user's role.
-func (s *Storage) UpdateUserRole(userID uuid.UUID, role string) error {
-	return s.db.UpdateUserRole(context.Background(), userID, role)
-}
-
-// RenameUser changes an existing user's username.
-func (s *Storage) RenameUser(userID uuid.UUID, newUsername string) error {
-	return s.db.RenameUser(context.Background(), userID, newUsername)
-}
-
-// DeleteUser removes a user by ID.
-func (s *Storage) DeleteUser(userID uuid.UUID) error {
-	return s.db.DeleteUser(context.Background(), userID)
-}
-
-// GetUser gets a user by ID.
+// GetUser gets an account with Operations Center access by UUID.
 func (s *Storage) GetUser(userID uuid.UUID) (*models.User, error) {
 	return s.db.GetUser(context.Background(), userID)
 }
 
-// ListUsers returns all users ordered by username.
+// ListUsers returns the accounts holding Operations Center access.
 func (s *Storage) ListUsers(ctx context.Context) ([]models.User, error) {
 	return s.db.ListUsers(ctx)
 }
 
-// CountUsers returns the number of provisioned users (0-users guard).
+// CountUsers returns the number of accounts ListUsers lists.
 func (s *Storage) CountUsers(ctx context.Context) (int, error) {
 	return s.db.CountUsers(ctx)
 }
 
-// GetUserByUsername gets a user by username.
+// GetUserByUsername gets an account with Operations Center access by
+// username (lowercased email).
 func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 	return s.db.GetUserByUsername(context.Background(), username)
 }
 
-// EnsureAdminUser provisions (or promotes) username as an admin so a bootstrap
-// operator reaches the Operations Center through the shared chat session cookie
-// without a manual `fleet sched user add` step (#458). username is the
-// lowercased email the header-trust/cookie path resolves against (lookupMember).
-// Idempotent and config-authoritative: an existing admin is left untouched, an
-// existing non-admin is promoted to admin, and a missing user is created with a
-// random, UNUSABLE bcrypt password hash — a bootstrap admin authenticates ONLY
-// via the cookie/header-trust path, never the moc username/password login.
-func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
-	return s.EnsureUserWithRole(ctx, username, "admin")
-}
-
-// EnsureUserWithRole is the generalized two-plane grant primitive: create (or
-// re-role) the sched-side account for username with the given role
-// (admin|client|readonly). Created accounts get a random unusable moc
-// password — cookie-auth only, matching the bootstrap-admin convention.
-func (s *Storage) EnsureUserWithRole(ctx context.Context, username, role string) error {
-	username = strings.ToLower(strings.TrimSpace(username))
-	if username == "" {
-		return nil
-	}
-	if _, ok := models.RolePermissions[role]; !ok {
-		return fmt.Errorf("invalid ops role %q (want admin|client|readonly)", role)
-	}
-	existing, err := s.db.GetAnyUserByUsername(ctx, username)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if existing != nil {
-		if existing.Role != role {
-			if err := s.db.UpdateUserRole(ctx, existing.ID, role); err != nil {
-				return err
-			}
-		}
-		return s.db.SetUserEnabled(ctx, existing.ID, true)
-	}
-	// New account: a 32-byte random secret bcrypt-hashed so the moc password
-	// login can never succeed for this account (cookie-auth only).
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return err
-	}
-	hash, err := bcrypt.GenerateFromPassword(secret, bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	_, err = s.AddUser(&models.User{
-		ID:           uuid.New(),
-		Username:     username,
-		PasswordHash: string(hash),
-		Role:         role,
-		CreatedAt:    time.Now().UTC(),
-	})
-	return err
-}
-
-// GetUserByUsernameWithContext gets a user by username with context.
+// GetUserByUsernameWithContext is GetUserByUsername with a context.
 func (s *Storage) GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error) {
 	return s.db.GetUserByUsername(ctx, username)
 }
 
-func (s *Storage) GetAnyUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error) {
-	return s.db.GetAnyUserByUsername(ctx, username)
+// GetIdentity returns the account's identity row whatever its access.
+func (s *Storage) GetIdentity(ctx context.Context, email string) (*identity.User, error) {
+	return s.db.GetIdentity(ctx, email)
 }
 
-// OpsRole is the account's effective Operations Center role: the role of its
-// enabled row, or "none" when it has no enabled row (a centrally disabled
-// identity keeps its row and role but has no access). `fleet account-events
-// export` reports this value.
+// OpsRole is the account's effective Operations Center role in the legacy
+// names, or "none" when it has no access (no row, disabled, or a non-admin
+// with scope none). `fleet account-events export` reports this value.
 func (s *Storage) OpsRole(ctx context.Context, username string) (string, error) {
-	u, err := s.db.GetUserByUsername(ctx, strings.ToLower(strings.TrimSpace(username)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return "none", nil
+	u, err := s.db.GetIdentity(ctx, username)
+	if errors.Is(err, identity.ErrNotFound) {
+		return identity.LegacyOpsNone, nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return u.Role, nil
-}
-
-func (s *Storage) SetUserEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
-	return s.db.SetUserEnabled(ctx, userID, enabled)
-}
-
-// GetUserByToken gets a user by session token.
-func (s *Storage) GetUserByToken(token string) (*models.User, error) {
-	return s.db.GetUserByToken(context.Background(), token)
-}
-
-// RevokeSessionToken clears the password-login session the bearer token
-// belongs to (see db.RevokeSessionToken).
-func (s *Storage) RevokeSessionToken(ctx context.Context, token string) (bool, error) {
-	return s.db.RevokeSessionToken(ctx, token)
+	if role := u.LegacyOpsRole(); role != "" {
+		return role, nil
+	}
+	return identity.LegacyOpsNone, nil
 }
 
 // GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly

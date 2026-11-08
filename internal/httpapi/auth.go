@@ -423,19 +423,23 @@ func parseExternalSettings(settings map[string]string) (chatRole, opsRole string
 			teamRename = &generation
 		}
 	}
-	if len(settings) != wantKeys || !store.ValidRole(chatRole) ||
-		(opsRole != "none" && opsRole != "readonly" && opsRole != "client" && opsRole != "admin") ||
-		((chatRole == "admin") != (opsRole == "admin")) {
+	// ops_role is Auth's contract and keeps its legacy names (none | readonly
+	// | client | admin); the new scope names (view | run) are accepted too and
+	// stored in the legacy form.
+	legacyOps, okOps := store.LegacyExternalOpsRole(opsRole)
+	if len(settings) != wantKeys || !store.ValidRole(chatRole) || !okOps ||
+		((chatRole == "admin") != (legacyOps == "admin")) {
 		return "", "", nil, nil, "invalid Fleet permissions"
 	}
-	return chatRole, opsRole, team, teamRename, ""
+	return chatRole, legacyOps, team, teamRename, ""
 }
 
 // handleExternalAccess receives only already signature-verified events from
-// the web tier. It applies Chat membership non-destructively, then reconciles
-// the independent Ops database. A failed Ops write returns 503; Auth retries
-// the same version and this handler retries Ops even when Chat is already at
-// that version.
+// the web tier. It applies the account's whole access — enabled, role,
+// Operations Center scope and team — to its one identity row in one
+// transaction (store.ApplyExternalAccess; #2049 M4, ADR-0105 amends
+// ADR-0074's "eventually consistent" to atomic). There is no second plane to
+// reconcile afterwards, so no "Ops Center provisioning failed" 503.
 func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -482,12 +486,8 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		// Fleet already owns instead of flattening existing administrators.
 		if current, getErr := s.store.GetUser(r.Context(), userFromCtx(r.Context())); getErr == nil {
 			chatRole = current.Role
-		}
-		if s.opsAdmins != nil {
-			if roles, rolesErr := s.opsAdmins.Roles(r.Context()); rolesErr == nil {
-				if role := roles[strings.ToLower(userFromCtx(r.Context()))]; role != "" {
-					opsRole = role
-				}
+			if role := current.LegacyOpsRole(); role != "" {
+				opsRole = role
 			}
 		}
 	}
@@ -507,39 +507,7 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		s.sessionApprovals.ForgetUser(applied.Email)
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	for attempt := 0; attempt < 4; attempt++ {
-		if s.opsAdmins == nil {
-			if applied.Allowed && applied.OpsRole != "none" {
-				http.Error(w, "Ops Center provisioning unavailable", http.StatusServiceUnavailable)
-				return
-			}
-		} else {
-			if !applied.Allowed || applied.OpsRole == "none" {
-				err = s.opsAdmins.SetEnabled(r.Context(), applied.Email, false)
-			} else {
-				err = s.opsAdmins.SetRole(r.Context(), applied.Email, applied.OpsRole)
-			}
-			if err != nil {
-				http.Error(w, "Ops Center provisioning failed", http.StatusServiceUnavailable)
-				return
-			}
-		}
-		// The Chat and Ops databases cannot share a transaction. Re-read the
-		// durable desired state after the Ops write: if a newer event committed
-		// while this request was reconciling, apply that state before replying so
-		// an older in-flight request can never be the final Ops writer.
-		latest, exists, lookupErr := accessStore.ExternalAccessState(r.Context(), applied.Issuer, applied.Subject)
-		if lookupErr != nil {
-			http.Error(w, "external access lookup failed", http.StatusInternalServerError)
-			return
-		}
-		if !exists || latest.Version <= applied.Version {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		applied = latest
-	}
-	http.Error(w, "Ops Center provisioning changed during reconciliation", http.StatusServiceUnavailable)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // rejectViewerWrites blocks the read-only "viewer" role (#237) from MUTATING a

@@ -3,257 +3,107 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// User operations
+// Operations Center accounts (#2049 M4, ADR-0105).
+//
+// The scheduler has no users table of its own any more: an Operations Center
+// account is a row of the one identity table, core.users, read through
+// internal/identity. A models.User here is that row seen from this plane —
+// Username is the email, ID the row's UUID (what tasks.created_by records) and
+// Role the legacy Operations Center role (admin | client | readonly) the row's
+// role and ops_scope grant, so userHasPermission and the role checks read
+// exactly as they did over the old table.
 
-// AddUser adds or updates a user.
-func (db *Database) AddUser(ctx context.Context, user *models.User) error {
-	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO users (
-			id, username, password_hash, role, created_at, last_login, session_token, token_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (id) DO UPDATE SET
-			username = EXCLUDED.username,
-			password_hash = EXCLUDED.password_hash,
-			role = EXCLUDED.role,
-			last_login = EXCLUDED.last_login,
-			session_token = EXCLUDED.session_token,
-			token_expires_at = EXCLUDED.token_expires_at`,
-		user.ID,
-		user.Username,
-		user.PasswordHash,
-		user.Role,
-		user.CreatedAt,
-		user.LastLogin,
-		user.SessionToken,
-		user.TokenExpiresAt,
-	)
-	return err
+// Identity returns the identity store over this database's pool.
+func (db *Database) Identity() *identity.Store { return identity.New(db.conn) }
+
+// toModel renders an identity row as this plane's user. Role is the legacy
+// Operations Center role, "" for an account without access.
+func toModel(u *identity.User) *models.User {
+	out := &models.User{
+		ID:        u.ID,
+		Username:  u.Email,
+		Role:      u.LegacyOpsRole(),
+		CreatedAt: time.Unix(u.CreatedAt, 0).UTC(),
+	}
+	if u.LastLogin != nil {
+		t := *u.LastLogin
+		out.LastLogin = &t
+	}
+	return out
 }
 
-// UpdateUserRole changes an existing user's role.
-func (db *Database) UpdateUserRole(ctx context.Context, userID uuid.UUID, role string) error {
-	res, err := db.conn.ExecContext(ctx,
-		"UPDATE users SET role = $1 WHERE id = $2", role, userID)
+// opsUser returns the account if it may use the Operations Center (enabled,
+// and an admin or a non-admin with a scope), else sql.ErrNoRows — the
+// "enabled row" lookup the old table answered.
+func opsUser(u *identity.User, err error) (*models.User, error) {
+	if errors.Is(err, identity.ErrNotFound) {
+		return nil, sql.ErrNoRows
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
+	if !u.HasOpsAccess() {
+		return nil, sql.ErrNoRows
 	}
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return toModel(u), nil
 }
 
-// RenameUser changes an existing user's username.
-func (db *Database) RenameUser(ctx context.Context, userID uuid.UUID, newUsername string) error {
-	res, err := db.conn.ExecContext(ctx,
-		"UPDATE users SET username = $1 WHERE id = $2", newUsername, userID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
-// DeleteUser removes a user by ID.
-func (db *Database) DeleteUser(ctx context.Context, userID uuid.UUID) error {
-	res, err := db.conn.ExecContext(ctx,
-		"DELETE FROM users WHERE id = $1", userID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
-// GetUser gets a user by ID.
+// GetUser returns the account with that UUID if it has Operations Center
+// access, else sql.ErrNoRows.
 func (db *Database) GetUser(ctx context.Context, userID uuid.UUID) (*models.User, error) {
-	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE id = $1",
-		userID)
-	return db.rowToUser(row)
+	return opsUser(db.Identity().GetByID(ctx, userID))
 }
 
-// GetUserByUsername gets a user by username.
+// GetUserByUsername returns the account (username = lowercased email) if it
+// has Operations Center access, else sql.ErrNoRows. Membership and every
+// owner lookup go through it.
 func (db *Database) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
-	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1 AND enabled = TRUE",
-		username)
-	return db.rowToUser(row)
+	return opsUser(db.Identity().GetByEmail(ctx, username))
 }
 
-// GetAnyUserByUsername includes centrally disabled rows for provisioning and
-// admin reconciliation. Login and membership must use GetUserByUsername.
-func (db *Database) GetAnyUserByUsername(ctx context.Context, username string) (*models.User, error) {
-	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1",
-		username)
-	return db.rowToUser(row)
+// GetIdentity returns the account's identity row whatever its access (nil
+// and identity.ErrNotFound when there is none): the header-trust path reads
+// the chat role from it for the shared Prompt Library.
+func (db *Database) GetIdentity(ctx context.Context, email string) (*identity.User, error) {
+	return db.Identity().GetByEmail(ctx, email)
 }
 
-func (db *Database) SetUserEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
-	// Disabling preserves the stable UUID/role/task ownership, but must not let
-	// a pre-revocation scheduler session spring back to life on a later grant.
-	res, err := db.conn.ExecContext(ctx, `UPDATE users SET enabled = $1,
-		session_token = CASE WHEN $1 THEN session_token ELSE NULL END,
-		token_expires_at = CASE WHEN $1 THEN token_expires_at ELSE NULL END
-		WHERE id = $2`, enabled, userID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
-// ListUsers returns all users ordered by username. Used by the admin CLI.
+// ListUsers returns the accounts that hold Operations Center access in their
+// stored role and scope, enabled or not, ordered by username: what `fleet
+// sched user list` shows. A disabled account lists with its stored role.
 func (db *Database) ListUsers(ctx context.Context) ([]models.User, error) {
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users ORDER BY username")
+	rows, err := db.Identity().ListOpsAccess(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make([]models.User, 0)
-	for rows.Next() {
-		var (
-			id             uuid.UUID
-			username       string
-			passwordHash   string
-			role           string
-			createdAt      time.Time
-			lastLogin      sql.NullTime
-			sessionToken   sql.NullString
-			tokenExpiresAt sql.NullTime
-		)
-		if err := rows.Scan(&id, &username, &passwordHash, &role, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt); err != nil {
-			return nil, err
-		}
-		u := models.User{ID: id, Username: username, PasswordHash: passwordHash, Role: role, CreatedAt: createdAt}
-		if lastLogin.Valid {
-			u.LastLogin = &lastLogin.Time
-		}
-		out = append(out, u)
+	out := make([]models.User, 0, len(rows))
+	for i := range rows {
+		m := toModel(&rows[i])
+		m.Role = identity.LegacyOpsRole(rows[i].Role, rows[i].OpsScope)
+		out = append(out, *m)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// CountUsers returns the number of provisioned users (the 0-users unprovisioned
-// guard the admin CLI consults).
+// CountUsers returns the number of accounts ListUsers lists.
 func (db *Database) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	err := db.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n)
-	return n, err
+	rows, err := db.Identity().ListOpsAccess(ctx)
+	return len(rows), err
 }
 
-// RevokeSessionToken ends the password-login session the given bearer token
-// belongs to: the user row whose session_token is that token's hash has its
-// session_token and token_expires_at cleared. Matching on the hash (rather
-// than resolving the user first) means a superseded token — one replaced by a
-// later Login — matches no row and leaves the current session alone. Reports
-// whether a session was ended.
-func (db *Database) RevokeSessionToken(ctx context.Context, token string) (bool, error) {
-	if token == "" {
-		return false, nil
-	}
-	res, err := db.conn.ExecContext(ctx,
-		"UPDATE users SET session_token = NULL, token_expires_at = NULL WHERE session_token = $1",
-		models.HashToken(token))
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
-}
-
-// GetUserByToken gets a user by session token. Returns nil if token is expired.
-func (db *Database) GetUserByToken(ctx context.Context, token string) (*models.User, error) {
-	token = models.HashToken(token)
-	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE session_token = $1 AND enabled = TRUE AND (token_expires_at IS NULL OR token_expires_at > $2)",
-		token, time.Now().UTC())
-	return db.rowToUser(row)
-}
-
-func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
-	var (
-		id             uuid.UUID
-		username       string
-		passwordHash   string
-		role           string
-		createdAt      time.Time
-		lastLogin      sql.NullTime
-		sessionToken   sql.NullString
-		tokenExpiresAt sql.NullTime
-	)
-
-	err := row.Scan(&id, &username, &passwordHash, &role, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt)
-	if err != nil {
-		return nil, err
-	}
-
-	user := &models.User{
-		ID:           id,
-		Username:     username,
-		PasswordHash: passwordHash,
-		Role:         role,
-		CreatedAt:    createdAt,
-	}
-	if lastLogin.Valid {
-		user.LastLogin = &lastLogin.Time
-	}
-	if sessionToken.Valid {
-		user.SessionToken = &sessionToken.String
-	}
-	if tokenExpiresAt.Valid {
-		user.TokenExpiresAt = &tokenExpiresAt.Time
-	}
-	return user, nil
-}
-
-// GetUsersByIDs gets users by a list of IDs efficiently.
+// GetUsersByIDs maps each UUID that names an account to its email (the
+// board's Created By column). Any account resolves, with or without
+// Operations Center access: a task's creator stays named after their access
+// ends.
 func (db *Database) GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	if len(userIDs) == 0 {
-		return make(map[uuid.UUID]string), nil
-	}
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT id, username FROM users WHERE id = ANY($1::uuid[])", uuidStrings(userIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[uuid.UUID]string, len(userIDs))
-	for rows.Next() {
-		var id uuid.UUID
-		var username string
-		if err := rows.Scan(&id, &username); err != nil {
-			return nil, err
-		}
-		result[id] = username
-	}
-	return result, rows.Err()
+	return db.Identity().EmailsByID(ctx, userIDs)
 }

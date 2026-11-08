@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
 // ExternalAccessState is Fleet's last accepted desired membership from Auth.
@@ -63,10 +65,41 @@ func validOpsRole(role string) bool {
 	}
 }
 
+// LegacyExternalOpsRole maps an Operations Center grant in either vocabulary
+// (identity.ParseOpsRole) to the legacy name external_access_state.ops_role
+// records: none | readonly | client | admin. ok is false for anything else.
+func LegacyExternalOpsRole(role string) (string, bool) {
+	scope, admin, ok := identity.ParseOpsRole(role)
+	if !ok {
+		return "", false
+	}
+	if admin {
+		return identity.LegacyOpsAdmin, true
+	}
+	if legacy := identity.LegacyOpsRole(identity.RoleMember, scope); legacy != "" {
+		return legacy, true
+	}
+	return identity.LegacyOpsNone, true
+}
+
+// externalOpsScope is the ops_scope an access state grants a non-admin.
+func externalOpsScope(state ExternalAccessState) string {
+	if state.ChatRole == RoleAdmin {
+		return string(identity.OpsNone)
+	}
+	scope, admin, ok := identity.ParseOpsRole(state.OpsRole)
+	if !ok || admin {
+		// Auth never sends ops admin without chat admin (the HTTP layer
+		// refuses it); fail closed if a stored state ever does.
+		return string(identity.OpsNone)
+	}
+	return string(scope)
+}
+
 func (s *Store) ExternalAccessState(ctx context.Context, issuer, subject string) (ExternalAccessState, bool, error) {
 	var state ExternalAccessState
 	err := scanExternalAccessState(s.db.QueryRowContext(ctx, `SELECT `+externalAccessStateColumns+`
-		FROM external_access_state WHERE issuer = $1 AND subject = $2`, strings.TrimSpace(issuer), strings.TrimSpace(subject)), &state)
+		FROM core.external_access_state WHERE issuer = $1 AND subject = $2`, strings.TrimSpace(issuer), strings.TrimSpace(subject)), &state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, false, nil
 	}
@@ -77,6 +110,9 @@ func (s *Store) ExternalAccessState(ctx context.Context, issuer, subject string)
 func normalizeExternalAccessState(next ExternalAccessState) (ExternalAccessState, error) {
 	next.Issuer, next.Subject, next.Email = strings.TrimSpace(next.Issuer), strings.TrimSpace(next.Subject), normalizeEmail(next.Email)
 	next.EventID, next.ChatRole, next.OpsRole = strings.TrimSpace(next.EventID), strings.TrimSpace(next.ChatRole), strings.TrimSpace(next.OpsRole)
+	if legacy, ok := LegacyExternalOpsRole(next.OpsRole); ok {
+		next.OpsRole = legacy
+	}
 	if next.Team != nil {
 		team := strings.TrimSpace(*next.Team)
 		next.Team = &team
@@ -90,9 +126,11 @@ func normalizeExternalAccessState(next ExternalAccessState) (ExternalAccessState
 	return next, nil
 }
 
-// ApplyExternalAccess applies a newer Auth version atomically to Fleet's Chat
-// membership and its durable desired-state row. The Ops plane is reconciled by
-// the HTTP layer after commit and retried idempotently if it fails.
+// ApplyExternalAccess applies a newer Auth version atomically to the account's
+// one identity row — enabled, role, Operations Center scope and team — and its
+// durable desired-state row, in one transaction (#2049 M4, ADR-0105). There is
+// no second plane to reconcile afterwards: the Operations Center reads the same
+// row.
 //
 // A grant that carries a Team sets users.team_id through the same unsharing
 // an admin team change does (unshareOnTeamChangeTx), in this transaction: the
@@ -117,7 +155,7 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 			return ExternalAccessState{}, false, err
 		}
 		var applied int64
-		switch scanErr := tx.QueryRowContext(ctx, `SELECT version FROM external_team_renames WHERE issuer = $1`, next.Issuer).Scan(&applied); {
+		switch scanErr := tx.QueryRowContext(ctx, `SELECT version FROM core.external_team_renames WHERE issuer = $1`, next.Issuer).Scan(&applied); {
 		case errors.Is(scanErr, sql.ErrNoRows):
 		case scanErr != nil:
 			return ExternalAccessState{}, false, scanErr
@@ -143,7 +181,7 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 	}
 	var current ExternalAccessState
 	err = scanExternalAccessState(tx.QueryRowContext(ctx, `SELECT `+externalAccessStateColumns+`
-		FROM external_access_state WHERE issuer = $1 AND subject = $2 FOR UPDATE`, next.Issuer, next.Subject), &current)
+		FROM core.external_access_state WHERE issuer = $1 AND subject = $2 FOR UPDATE`, next.Issuer, next.Subject), &current)
 	if err == nil {
 		if current.Email != next.Email {
 			return ExternalAccessState{}, false, errors.New("external identity email changed")
@@ -162,7 +200,8 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 		if err := lockExternalTeamChangeTx(ctx, tx, next); err != nil {
 			return ExternalAccessState{}, false, err
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE users SET enabled = TRUE, role = $2, updated_at = $3 WHERE email = $1`, next.Email, next.ChatRole, now)
+		res, err := tx.ExecContext(ctx, `UPDATE core.users SET enabled = TRUE, role = $2, ops_scope = $4, updated_at = $3 WHERE email = $1`,
+			next.Email, next.ChatRole, now, externalOpsScope(next))
 		if err != nil {
 			return ExternalAccessState{}, false, err
 		}
@@ -179,8 +218,8 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 					return ExternalAccessState{}, false, err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO users(email, password_hash, role, team_id, enabled, created_at, updated_at)
-				VALUES($1, $2, $3, $4, TRUE, $5, $5)`, next.Email, "!central-auth-only!", next.ChatRole, team, now); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO core.users(email, password_hash, role, ops_scope, team_id, enabled, created_at, updated_at)
+				VALUES($1, $2, $3, $6, $4, TRUE, $5, $5)`, next.Email, identity.UnusablePasswordHash, next.ChatRole, team, now, externalOpsScope(next)); err != nil {
 				return ExternalAccessState{}, false, fmt.Errorf("create centrally provisioned user: %w", err)
 			}
 		} else if next.Team != nil {
@@ -193,14 +232,14 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 		if err != nil {
 			return ExternalAccessState{}, false, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE users SET enabled = FALSE, session_salt = $2, updated_at = $3 WHERE email = $1`, next.Email, salt, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE core.users SET enabled = FALSE, session_salt = $2, updated_at = $3 WHERE email = $1`, next.Email, salt, now); err != nil {
 			return ExternalAccessState{}, false, err
 		}
 		epoch, err := newExternalSessionEpoch()
 		if err != nil {
 			return ExternalAccessState{}, false, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO core.external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
 			VALUES($1, $2, $3, $4, $5, $5) ON CONFLICT(issuer, subject) DO UPDATE SET
 			email = EXCLUDED.email, epoch = EXCLUDED.epoch, updated_at = EXCLUDED.updated_at`,
 			next.Issuer, next.Subject, next.Email, epoch, now); err != nil {
@@ -244,7 +283,7 @@ func upsertExternalAccessStateTx(ctx context.Context, tx *sql.Tx, next ExternalA
 	if next.Team != nil {
 		storedTeam = *next.Team
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO external_access_state(
+	res, err := tx.ExecContext(ctx, `INSERT INTO core.external_access_state(
 		issuer, subject, email, version, allowed, event_id, chat_role, ops_role, team, issued_at, received_at
 	) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	ON CONFLICT(issuer, subject) DO UPDATE SET email=EXCLUDED.email, version=EXCLUDED.version,
@@ -276,7 +315,7 @@ func lockExternalTeamChangeTx(ctx context.Context, tx *sql.Tx, next ExternalAcce
 // silently detach the person from their team's shared projects.
 func applyExternalTeamTx(ctx context.Context, tx *sql.Tx, email, team string, now int64) error {
 	var cur sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM core.users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
 		return err
 	}
 	if strings.EqualFold(strings.TrimSpace(cur.String), team) {
@@ -289,6 +328,6 @@ func applyExternalTeamTx(ctx context.Context, tx *sql.Tx, email, team string, no
 	if team != "" {
 		teamArg = team
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE users SET team_id = $2, updated_at = $3 WHERE email = $1`, email, teamArg, now)
+	_, err := tx.ExecContext(ctx, `UPDATE core.users SET team_id = $2, updated_at = $3 WHERE email = $1`, email, teamArg, now)
 	return err
 }

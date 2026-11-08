@@ -55,7 +55,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		t.Fatalf("Failed to initialize API key manager: %v", err)
 	}
 
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 		// A deployment with no default task model can only accept tasks that pin
@@ -67,6 +67,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)

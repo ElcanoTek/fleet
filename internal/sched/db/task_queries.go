@@ -355,7 +355,7 @@ func taskSearchTermClause(argIndex int) string {
 		like("name"),
 		like("CAST(id AS TEXT)"),
 		"CASE WHEN jsonb_typeof(tags) = 'array' THEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag(v) WHERE " + like("tag.v") + ") ELSE false END",
-		"created_by IN (SELECT u.id FROM users u WHERE " + like("u.username") + ")",
+		"created_by IN (SELECT u.id FROM core.users u WHERE " + like("u.email") + ")",
 	}, " OR ") + ")"
 }
 
