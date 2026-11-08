@@ -347,69 +347,136 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 	}
 }
 
-// TestGolangciLintPinAgreesWithDocs: the golangci-lint binary version is
-// declared once, as GOLANGCI_LINT_VERSION in ci.yml, and then RESTATED in prose
-// that tells a contributor which version to install. Those copies drift exactly
-// the way you would expect: the v2.12.2 -> v2.13.1 bump that Go 1.27 forced
-// updated ONBOARDING.md and missed docs/TESTING.md, which went on telling
-// contributors to install the version that cannot lint the tree.
+// TestPinnedVersionsInDocsAreListedAndCurrent: every pin in scripts/lib/pins.tsv
+// is declared once (<NAME>_VERSION in the workflows, or cosign.lock), but some
+// are RESTATED in prose or a Makefile that tells a contributor which version
+// to install. Those copies drift exactly the way you would expect: the
+// golangci-lint v2.12.2 -> v2.13.1 bump that Go 1.27 forced updated
+// ONBOARDING.md and missed docs/TESTING.md, which went on telling contributors
+// to install the version that cannot lint the tree.
 //
 // Every copy is listed in scripts/lib/pin-docs.tsv, which scripts/update-pins.sh
 // rewrites along with the pin, so the monthly pins PR lands green with no hand
-// edits. This test holds both ends: every listed copy matches the pin, and no
-// tracked file states a golangci-lint version without being listed (an
-// unlisted copy would rot, or fail that PR).
-func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
+// edits. This test holds both ends, for every pin: each listed copy matches the
+// pin, and no tracked file states a version of a pinned tool without being
+// listed (an unlisted copy would rot) unless it is an exemption below.
+//
+// "States a version" is the tool's name followed, within 40 non-digits, by
+// an X.Y.Z with the pinned MAJOR, so "golangci-lint ... Go version (1.27.0)"
+// or "cosign verify ...:v2026.11.07" are not read as tool versions.
+func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 	root := repoRoot(t)
+	pins := loadPins(t)
 
-	pin := regexp.MustCompile(`(?m)^\s+GOLANGCI_LINT_VERSION:\s*'(\d+\.\d+\.\d+)'`).
-		FindStringSubmatch(readFile(t, root, ".github/workflows/ci.yml"))
-	if pin == nil {
-		t.Fatal("ci.yml: could not find the GOLANGCI_LINT_VERSION pin")
+	// Tracked files allowed to name a pinned tool's version without being
+	// rewritten, each with the reason. Keys are paths or directory prefixes.
+	exempt := map[string]string{
+		"docs/CODEQL.md": "a historical record: it names the golangci-lint that was current then (v2.13.1), which the updater must not rewrite",
+		"internal/release/testdata/sigstore-vector/": "upstream's signed cosign_checksums.txt, kept byte-for-byte as a signature test vector",
 	}
-	want := "v" + pin[1]
-	versionRE := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`)
+	// The pins' own declarations, and tests that carry fixture versions.
+	skip := func(rel string) bool {
+		return strings.HasPrefix(rel, ".github/workflows/") || strings.HasSuffix(rel, "_test.go") ||
+			rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock"
+	}
 
-	listed := map[string]bool{}
-	for _, row := range loadPinDocs(t) {
-		if row.name != "GOLANGCI_LINT" {
+	// The pinned version of each tool.
+	version := map[string]string{}
+	var workflows strings.Builder
+	for _, body := range workflowFiles(t) {
+		workflows.WriteString(body)
+	}
+	for name, p := range pins {
+		if p.kind == "cosign" {
+			m := regexp.MustCompile(`(?m)^version v?(\d+\.\d+\.\d+)$`).FindStringSubmatch(readFile(t, root, "internal/release/cosign.lock"))
+			if m == nil {
+				t.Fatal("internal/release/cosign.lock: no version line")
+			}
+			version[name] = m[1]
 			continue
 		}
-		if row.marker != "golangci-lint" || row.prefix != "v" {
-			t.Errorf("pin-docs.tsv: %s row for %s must use marker golangci-lint and prefix v", row.name, row.file)
+		m := regexp.MustCompile(`(?m)^\s+` + name + `_VERSION:\s*'v?(\d+\.\d+\.\d+)'`).FindStringSubmatch(workflows.String())
+		if m == nil {
+			t.Errorf("%s: no %s_VERSION: 'X.Y.Z' pin in the workflows", name, name)
+			continue
 		}
-		listed[row.file] = true
-		found := versionRE.FindAllStringSubmatch(readFile(t, root, row.file), -1)
+		version[name] = m[1]
+	}
+	marker := func(name string) string { return strings.ToLower(strings.ReplaceAll(name, "_", "-")) }
+
+	// 1. Every listed copy names the tool's version, and it is the pinned one.
+	listed := map[[2]string]bool{}
+	for _, row := range loadPinDocs(t) {
+		want, ok := version[row.name]
+		if !ok {
+			continue // loadPinDocs reported the unknown pin
+		}
+		if row.marker != marker(row.name) {
+			t.Errorf("pin-docs.tsv: the %s row for %s has marker %q, want %q", row.name, row.file, row.marker, marker(row.name))
+		}
+		prefix := row.prefix
+		if prefix == "-" {
+			prefix = ""
+		} else if prefix != "v" {
+			t.Errorf("pin-docs.tsv: the %s row for %s has prefix %q, want v or -", row.name, row.file, row.prefix)
+		}
+		listed[[2]string{row.name, row.file}] = true
+		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(row.marker) + `\D{0,40}?` + regexp.QuoteMeta(prefix) + `(\d+\.\d+\.\d+)`)
+		found := re.FindAllStringSubmatch(readFile(t, root, row.file), -1)
 		if len(found) == 0 {
-			t.Errorf("%s names no golangci-lint version; drop its pin-docs.tsv row or restore the mention (ci.yml pins %s)", row.file, want)
+			t.Errorf("%s names no %s version; drop its pin-docs.tsv row or restore the mention (pinned: %s%s)", row.file, row.marker, prefix, want)
 			continue
 		}
 		for _, m := range found {
 			if m[1] != want {
-				t.Errorf("%s says golangci-lint %s but ci.yml pins %s — a contributor following the doc installs a binary that cannot lint the tree", row.file, m[1], want)
+				t.Errorf("%s says %s %s%s but the pin is %s%s — a contributor following it installs a different version than CI runs", row.file, row.marker, prefix, m[1], prefix, want)
 			}
 		}
 	}
 	if len(listed) == 0 {
-		t.Fatal("pin-docs.tsv lists no GOLANGCI_LINT copies — the matcher is broken or the table was emptied")
+		t.Fatal("pin-docs.tsv lists nothing — the matcher is broken or the table was emptied")
 	}
 
-	// Historical records name the version that was current THEN, and must not
-	// be rewritten by the updater.
-	history := map[string]bool{"docs/CODEQL.md": true}
+	// 2. No tracked file states a pinned tool's version without being listed.
 	out, err := exec.Command("git", "-C", root, "ls-files").Output()
 	if err != nil {
 		t.Skipf("git ls-files unavailable: %v", err)
 	}
+	scan := map[string]*regexp.Regexp{}
+	for name := range version {
+		scan[name] = regexp.MustCompile(`(?i)` + regexp.QuoteMeta(marker(name)) + `\D{0,40}?v?(\d+)\.\d+\.\d+`)
+	}
+	used := map[string]bool{}
 	for _, rel := range strings.Fields(string(out)) {
-		if listed[rel] || history[rel] || strings.HasSuffix(rel, "_test.go") {
+		if skip(rel) {
 			continue
 		}
 		if fi, err := os.Lstat(filepath.Join(root, rel)); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
 			continue
 		}
-		if m := versionRE.FindStringSubmatch(readFile(t, root, rel)); m != nil {
-			t.Errorf("%s states golangci-lint %s but is not in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at GOLANGCI_LINT_VERSION instead", rel, m[1])
+		body := readFile(t, root, rel)
+		for name, want := range version {
+			major := strings.SplitN(want, ".", 2)[0]
+			for _, m := range scan[name].FindAllStringSubmatch(body, -1) {
+				if m[1] != major || listed[[2]string{name, rel}] {
+					continue
+				}
+				why := ""
+				for k := range exempt {
+					if rel == k || (strings.HasSuffix(k, "/") && strings.HasPrefix(rel, k)) {
+						why, used[k] = k, true
+					}
+				}
+				if why == "" {
+					t.Errorf("%s states %s (%q) but has no %s row in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at %s_VERSION instead", rel, marker(name), m[0], name, name)
+				}
+				break
+			}
+		}
+	}
+	for k, why := range exempt {
+		if !used[k] {
+			t.Errorf("exemption %s (%s) no longer matches anything — drop it", k, why)
 		}
 	}
 }

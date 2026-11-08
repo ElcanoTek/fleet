@@ -121,8 +121,8 @@ rewrite() {
 # rewrite_docs NAME OLD NEW — the prose copies of NAME's version listed in
 # scripts/lib/pin-docs.tsv, so the update PR lands without hand edits. Same
 # rules as rewrite(): values only through ENVIRON, an exact string match, and
-# only on lines carrying the row's marker. A match must end the version
-# (v2.14.0 does not match inside v2.14.01 or v2.14.0.1).
+# only on lines carrying the row's marker (any case). A match must be the
+# whole version (8.30.1 does not match inside 18.30.1, 8.30.10 or 8.30.1.2).
 rewrite_docs() {
   local table="$ROOT/scripts/lib/pin-docs.tsv" pin marker prefix file f tmp
   [[ -f "$table" ]] || return 0
@@ -133,12 +133,13 @@ rewrite_docs() {
     [[ -f "$f" ]] || { fail "$1: scripts/lib/pin-docs.tsv lists $file, which does not exist"; continue; }
     tmp="$(mktemp)"
     MARK="$marker" OLD="$prefix$2" NEW="$prefix$3" awk '
-      index($0, ENVIRON["MARK"]) == 0 { print; next }
+      index(tolower($0), tolower(ENVIRON["MARK"])) == 0 { print; next }
       {
         line = $0; out = ""; old = ENVIRON["OLD"]; n = length(old)
         while ((i = index(line, old)) > 0) {
+          prev = (i > 1) ? substr(line, i - 1, 1) : substr(out, length(out), 1)
           nxt = substr(line, i + n, 2)
-          if (nxt ~ /^[0-9]/ || nxt ~ /^\.[0-9]/) { out = out substr(line, 1, i + n - 1) }
+          if (prev ~ /[0-9.]/ || nxt ~ /^[0-9]/ || nxt ~ /^\.[0-9]/) { out = out substr(line, 1, i + n - 1) }
           else { out = out substr(line, 1, i - 1) ENVIRON["NEW"] }
           line = substr(line, i + n)
         }
@@ -252,6 +253,7 @@ update_cosign() { # REPO ASSET SUMS ID ISS
     printf 'linux/%s %s\n' "$arch" "$sha" >> "$out"
   done
   cp "$out" "$lock"
+  rewrite_docs COSIGN "${cur#v}" "${tag#v}"
   CHANGES+=("COSIGN $cur → $tag")
   note "COSIGN: $cur → $tag (checksums signature verified by cosign $cur; both binaries hash-checked)"
 }

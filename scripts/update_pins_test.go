@@ -140,7 +140,9 @@ func TestUpdatePinsRefusesHostileVersionStrings(t *testing.T) {
 func TestUpdatePinsRewritesTheDocsThatRestateAPin(t *testing.T) {
 	root, run := pinsFixture(t, time.Now().Add(-30*24*time.Hour), false)
 	_ = os.WriteFile(filepath.Join(root, "scripts/lib/pin-docs.tsv"),
-		[]byte("# comment\nFOO\tfoo\tv\tdocs/X.md\n"), 0o644)
+		[]byte("# comment\nFOO\tfoo\tv\tdocs/X.md\nFOO\tfoo\t-\tdocs/Y.md\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "docs/Y.md"), []byte("FOO pins 1.0.0; Foo 11.0.0 and foo 1.0.0.2 differ\n"), 0o644)
 	_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
 	doc := "- **foo `v1.0.0`** pinned; go install example.com/foo@v1.0.0\n" +
 		"- foo v1.0.01 and foo v1.0.0.1 are other versions\n" +
@@ -155,5 +157,9 @@ func TestUpdatePinsRewritesTheDocsThatRestateAPin(t *testing.T) {
 		"- bar v1.0.0 is an unmarked line\n"
 	if string(got) != want {
 		t.Fatalf("docs rewrite:\n got %q\nwant %q", got, want)
+	}
+	got, _ = os.ReadFile(filepath.Join(root, "docs/Y.md"))
+	if want := "FOO pins 1.1.0; Foo 11.0.0 and foo 1.0.0.2 differ\n"; string(got) != want {
+		t.Fatalf("prefix-less docs rewrite:\n got %q\nwant %q", got, want)
 	}
 }

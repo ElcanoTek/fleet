@@ -13,3 +13,8 @@ GOLANGCI_LINT	golangci-lint	v	ONBOARDING.md
 GOLANGCI_LINT	golangci-lint	v	docs/TESTING.md
 GOLANGCI_LINT	golangci-lint	v	docs/PR-STEWARDSHIP.md
 GOLANGCI_LINT	golangci-lint	v	.agents/skills/steward/SKILL.md
+GITLEAKS	gitleaks	-	.agents/skills/steward/SKILL.md
+GITLEAKS	gitleaks	-	docs/PR-STEWARDSHIP.md
+GITLEAKS	gitleaks	-	docs/TESTING.md
+ACTIONLINT	actionlint	v	Makefile
+RUFF	ruff	-	Makefile
