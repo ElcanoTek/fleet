@@ -46,9 +46,13 @@ export type AdminUser = {
   created_at: number;
   updated_at: number;
   ops_center_admin?: boolean;
-  // Operations Center (sched-plane) role: "admin" | "client" | "readonly" |
-  // "" (no ops access). Independent of the chat role.
+  // Operations Center access in the legacy names: "admin" | "client" |
+  // "readonly" | "" (none). Kept for older servers; ops_scope is the field.
   ops_center_role?: string;
+  // Operations Center (Background tasks) access of a non-admin: "none" |
+  // "view" | "run". One identity row holds it next to the role (#2049 M4); an
+  // admin has full access whatever it says.
+  ops_scope?: string;
 };
 
 const ROLES = ["member", "viewer", "admin"] as const;
@@ -76,47 +80,55 @@ const CHAT_ROLE_OPTIONS = [
   description: string;
 }[];
 
-// Operations Center roles (the sched plane). "client" is presented as
-// "Contributor" — it can create and run tasks; "readonly" watches.
-const OPS_ROLES = ["none", "readonly", "client", "admin"] as const;
-type OpsRole = (typeof OPS_ROLES)[number];
-const OPS_ROLE_OPTIONS = [
+// Background tasks (Operations Center) access: the account's ops_scope.
+// "run" is presented as "Contributor" — it can create and run tasks; "view"
+// watches. "admin" is not a scope: it marks a Fleet Admin, whose access is
+// full whatever the scope says.
+const OPS_SCOPES = ["none", "view", "run", "admin"] as const;
+type OpsScope = (typeof OPS_SCOPES)[number];
+const OPS_SCOPE_OPTIONS = [
   {
     value: "none",
     label: "None",
     description: "No access to Background tasks.",
   },
   {
-    value: "readonly",
+    value: "view",
     label: "Viewer",
     description: "Can see background tasks and their logs but can't change them.",
   },
   {
-    value: "client",
+    value: "run",
     label: "Contributor",
     description: "Can see, create, and run background tasks.",
   },
 ] as const satisfies readonly {
-  value: OpsRole;
+  value: OpsScope;
   label: string;
   description: string;
 }[];
-const opsRoleOf = (u: AdminUser): OpsRole =>
-  (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
-    ? ((u.ops_center_role || "none") as OpsRole)
-    : u.ops_center_admin
-      ? "admin"
-      : "none";
+const LEGACY_OPS_SCOPE: Record<string, OpsScope> = {
+  admin: "admin",
+  client: "run",
+  readonly: "view",
+};
+const opsScopeOf = (u: AdminUser): OpsScope => {
+  if (u.role === "admin" || u.ops_center_admin) return "admin";
+  if (u.ops_scope === "view" || u.ops_scope === "run") return u.ops_scope;
+  if (u.ops_scope === "none") return "none";
+  // An older server sends only the legacy name.
+  return LEGACY_OPS_SCOPE[u.ops_center_role ?? ""] ?? "none";
+};
 
 function PermissionFields({
   role,
-  opsRole,
+  opsScope,
   onChange,
   labelPrefix = "",
 }: {
   role: Role;
-  opsRole: OpsRole;
-  onChange: (next: { role: Role; opsRole: OpsRole }) => void;
+  opsScope: OpsScope;
+  onChange: (next: { role: Role; opsScope: OpsScope }) => void;
   labelPrefix?: string;
 }) {
   const ariaPrefix = labelPrefix ? `${labelPrefix} ` : "";
@@ -150,8 +162,8 @@ function PermissionFields({
             onChange={(event) =>
               onChange(
                 event.currentTarget.checked
-                  ? { role: "admin", opsRole: "admin" }
-                  : { role: "member", opsRole: "none" },
+                  ? { role: "admin", opsScope: "admin" }
+                  : { role: "member", opsScope: "none" },
               )
             }
             className={inputClass}
@@ -189,8 +201,8 @@ function PermissionFields({
               onChange={() =>
                 onChange({
                   role: option.value,
-                  // Leaving unified Admin revokes its implied Ops Admin grant.
-                  opsRole: role === "admin" ? "none" : opsRole,
+                  // Leaving Fleet Admin ends its full Background tasks access.
+                  opsScope: role === "admin" ? "none" : opsScope,
                 })
               }
               className={inputClass}
@@ -212,11 +224,11 @@ function PermissionFields({
         <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
           Background tasks
         </legend>
-        {OPS_ROLE_OPTIONS.map((option) => (
+        {OPS_SCOPE_OPTIONS.map((option) => (
           <label
             key={option.value}
             className={choiceClass(
-              role === "admin" && option.value === "client",
+              role === "admin" && option.value === "run",
             )}
         >
             <input
@@ -224,16 +236,16 @@ function PermissionFields({
               name={`${fieldBaseId}-ops`}
               value={option.value}
               checked={
-                (opsRole === "admin" ? "client" : opsRole) === option.value
+                (opsScope === "admin" ? "run" : opsScope) === option.value
               }
               aria-label={option.label}
               aria-describedby={`${fieldBaseId}-ops-${option.value}-description`}
               onChange={() =>
                 onChange({
                   // The member API role is the Chat Contributor fallback when
-                  // a narrower Ops role replaces unified Admin.
+                  // a narrower scope replaces Fleet Admin.
                   role: role === "admin" ? "member" : role,
-                  opsRole: option.value,
+                  opsScope: option.value,
                 })
               }
               className={inputClass}
@@ -439,7 +451,7 @@ type Menu = {
   y: number;
   role: Role;
   team: string;
-  opsRole: OpsRole;
+  opsScope: OpsScope;
 };
 
 const MENU_WIDTH_PX = 352; // 22rem — the three permission sections need room
@@ -619,13 +631,13 @@ export default function AdminUsersPage() {
         ? (u.role as Role)
         : "member",
       team: u.team_id,
-      opsRole: opsRoleOf(u),
+      opsScope: opsScopeOf(u),
     });
   };
 
   const save = async (
     u: AdminUser,
-    next: { role: string; team_id: string; ops_role?: string },
+    next: { role: string; team_id: string; ops_scope?: OpsScope },
   ) => {
     // Send ONLY what changed. Resending an unchanged role used to make a
     // self-edit look like a self-demotion upstream — an ADMIN_EMAILS bootstrap
@@ -633,14 +645,17 @@ export default function AdminUsersPage() {
     // team at all (#1157). The server-side guard is narrowed too; this keeps
     // the request honest about what the admin actually touched.
     //
-    // ops_role rides along on the same rule: an explicit write pins an
-    // ops-plane row, and untouched accounts should keep following the implied
-    // chat-admin semantics.
+    // ops_scope rides along on the same rule. "admin" is not sent: a Fleet
+    // Admin's full access is the role itself.
     const body: Record<string, string> = {};
     if (next.role !== u.role) body.role = next.role;
     if (next.team_id !== u.team_id) body.team_id = next.team_id;
-    if (next.ops_role !== undefined && next.ops_role !== opsRoleOf(u)) {
-      body.ops_role = next.ops_role;
+    if (
+      next.ops_scope !== undefined &&
+      next.ops_scope !== "admin" &&
+      next.ops_scope !== opsScopeOf(u)
+    ) {
+      body.ops_scope = next.ops_scope;
     }
     if (Object.keys(body).length === 0) return; // nothing to do
     setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
@@ -768,7 +783,7 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
-  const [newOpsRole, setNewOpsRole] = useState<OpsRole>("none");
+  const [newOpsScope, setNewOpsScope] = useState<OpsScope>("none");
   const [newTeam, setNewTeam] = useState("");
   const [addStatus, setAddStatus] = useState<string | null>(null);
   const [addedPassword, setAddedPassword] = useState<{
@@ -787,7 +802,8 @@ export default function AdminUsersPage() {
           email: newEmail.trim(),
           password: newPassword,
           role: newRole,
-          ops_role: newOpsRole,
+          // A Fleet Admin's access is the role; only a scope is sent.
+          ...(newOpsScope === "admin" ? {} : { ops_scope: newOpsScope }),
           team_id: newTeam.trim(),
         }),
       });
@@ -806,7 +822,7 @@ export default function AdminUsersPage() {
       setNewEmail("");
       setNewPassword("");
       setNewRole("member");
-      setNewOpsRole("none");
+      setNewOpsScope("none");
       setNewTeam("");
       setAddStatus(null);
       setAddOpen(false);
@@ -869,7 +885,7 @@ export default function AdminUsersPage() {
     }
     if (filterRole !== "all" && (a?.role ?? "member") !== filterRole)
       return false;
-    if (filterOps !== "all" && (a ? opsRoleOf(a) : "none") !== filterOps)
+    if (filterOps !== "all" && (a ? opsScopeOf(a) : "none") !== filterOps)
       return false;
     if (filterTeam !== "all") {
       const team = a?.team_id.trim() ?? "";
@@ -890,7 +906,7 @@ export default function AdminUsersPage() {
     menu && menuAccount
       ? menu.role !== menuAccount.role ||
         menu.team !== menuAccount.team_id ||
-        menu.opsRole !== opsRoleOf(menuAccount)
+        menu.opsScope !== opsScopeOf(menuAccount)
       : false;
 
   return (
@@ -953,7 +969,7 @@ export default function AdminUsersPage() {
                   className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                 >
                   <option value="all">Tasks: all</option>
-                  {OPS_ROLE_OPTIONS.map((o) => (
+                  {OPS_SCOPE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
                       Tasks: {o.label.toLowerCase()}
                     </option>
@@ -1121,34 +1137,23 @@ export default function AdminUsersPage() {
                               <RoleBadge>Viewer</RoleBadge>
                             ) : null}
                             {account &&
-                            opsRoleOf(account) !== "none" &&
-                            // A unified admin already has the accent Admin badge;
+                            opsScopeOf(account) !== "none" &&
+                            // An admin already has the accent Admin badge;
                             // repeating "ops: admin" would present one grant as two.
-                            !(
-                              account.role === "admin" &&
-                              opsRoleOf(account) === "admin"
-                            ) ? (
+                            opsScopeOf(account) !== "admin" ? (
                               <RoleBadge
                                 title={`Background tasks ${
                                   {
-                                    admin: "admin",
-                                    client: "contributor (creates tasks)",
-                                    readonly: "viewer (read-only)",
-                                  }[
-                                    opsRoleOf(account) as
-                                      "admin" | "client" | "readonly"
-                                  ]
+                                    run: "contributor (creates tasks)",
+                                    view: "viewer (read-only)",
+                                  }[opsScopeOf(account) as "run" | "view"]
                                 }`}
                               >
                                 {`ops: ${
                                   {
-                                    admin: "admin",
-                                    client: "contributor",
-                                    readonly: "viewer",
-                                  }[
-                                    opsRoleOf(account) as
-                                      "admin" | "client" | "readonly"
-                                  ]
+                                    run: "contributor",
+                                    view: "viewer",
+                                  }[opsScopeOf(account) as "run" | "view"]
                                 }`}
                               </RoleBadge>
                             ) : null}
@@ -1296,9 +1301,9 @@ export default function AdminUsersPage() {
               </div>
               <PermissionFields
                 role={menu.role}
-                opsRole={menu.opsRole}
-                onChange={({ role, opsRole }) =>
-                  setMenu({ ...menu, role, opsRole })
+                opsScope={menu.opsScope}
+                onChange={({ role, opsScope }) =>
+                  setMenu({ ...menu, role, opsScope })
                 }
               />
               <div className="grid gap-[0.3rem]">
@@ -1330,7 +1335,7 @@ export default function AdminUsersPage() {
                     void save(menuAccount, {
                       role: menu.role,
                       team_id: menu.team,
-                      ops_role: menu.opsRole,
+                      ops_scope: menu.opsScope,
                     });
                   }}
                   className={btnClass({ variant: "primary", sm: true })}
@@ -1437,11 +1442,11 @@ export default function AdminUsersPage() {
                   <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-[0.7rem]">
                     <PermissionFields
                       role={newRole}
-                      opsRole={newOpsRole}
+                      opsScope={newOpsScope}
                       labelPrefix="New user"
-                      onChange={({ role, opsRole }) => {
+                      onChange={({ role, opsScope }) => {
                         setNewRole(role);
-                        setNewOpsRole(opsRole);
+                        setNewOpsScope(opsScope);
                       }}
                     />
                   </div>
