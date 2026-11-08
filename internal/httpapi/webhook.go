@@ -299,7 +299,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseTurn()
-		logging.From(turnCtx).Error("webhook trigger: start turn failed", "conv_id", conv.ID, "err", err)
+		logging.From(turnCtx).Error("webhook trigger: start turn failed", "conv_id", safe.LogSafe(conv.ID), "err", err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "could not start the turn", http.StatusInternalServerError)
 		return
@@ -364,7 +364,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		completed, err := s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, turnID)
 		if !completed || err != nil {
-			logging.From(turnCtx).Error("webhook trigger: turn input not saved", "conv_id", conv.ID, "err", commitErr)
+			logging.From(turnCtx).Error("webhook trigger: turn input not saved", "conv_id", safe.LogSafe(conv.ID), "err", commitErr)
 			metrics.RecordWebhookTrigger(trig.Slug, "error")
 			http.Error(w, "could not start the turn", http.StatusInternalServerError)
 			return

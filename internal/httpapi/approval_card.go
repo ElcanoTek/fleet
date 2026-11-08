@@ -33,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -316,12 +317,12 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	server, _, err := resolveMCPTool(catalog, toolName)
 	if err != nil {
-		logging.From(a.ctx).Error("approval card: resolve failed", "tool", toolName, "err", redactedForLog(err))
+		logging.From(a.ctx).Error("approval card: resolve failed", "tool", safe.LogSafe(toolName), "err", redactedForLog(err))
 		return "", cardFallbackUnresolved
 	}
 	describer, ok := resolveDescriber(catalog, server, suffix)
 	if !ok {
-		logging.From(a.ctx).Info("approval card: no single describer found on the server", "suffix", suffix, "server", server, "tool", toolName)
+		logging.From(a.ctx).Info("approval card: no single describer found on the server", "suffix", safe.LogSafe(suffix), "server", safe.LogSafe(server), "tool", safe.LogSafe(toolName))
 		return "", cardFallbackUnresolved
 	}
 	// Re-check the describer's identity at call time, under the one policy
@@ -334,7 +335,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 		readOnly = agentcore.IsParallelSafeTool("mcp_" + seat.Server + "_" + describer)
 	}
 	if agentcore.IsCriticalTool(full) || !readOnly {
-		logging.From(a.ctx).Info("approval card: describer is critical or not parallel-safe; not called", "describer", full)
+		logging.From(a.ctx).Info("approval card: describer is critical or not parallel-safe; not called", "describer", safe.LogSafe(full))
 		return "", cardFallbackUnresolved
 	}
 	// The loop's other per-call gates apply too. A persona that does not
@@ -348,7 +349,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	persona := a.personaPolicy
 	a.mcpMu.RUnlock()
 	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) || agentcore.InteractiveHiddenTool(full) {
-		logging.From(a.ctx).Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", full)
+		logging.From(a.ctx).Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", safe.LogSafe(full))
 		return "", cardFallbackGated
 	}
 	var args map[string]any
@@ -360,22 +361,22 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	text, isErr, err := broker.CallMCP(ctx, server, describer, args)
 	switch {
 	case err != nil && (errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil):
-		logging.From(ctx).Warn("approval card: describer timed out", "describer", full, "timeout", approvalCardDescriberTimeout)
+		logging.From(ctx).Warn("approval card: describer timed out", "describer", safe.LogSafe(full), "timeout", approvalCardDescriberTimeout)
 		return "", cardFallbackTimeout
 	case err != nil:
-		logging.From(ctx).Error("approval card: describer failed", "describer", full, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval card: describer failed", "describer", safe.LogSafe(full), "err", redactedForLog(err))
 		return "", cardFallbackError
 	case isErr:
-		logging.From(ctx).Error("approval card: describer reported an error", "describer", full)
+		logging.From(ctx).Error("approval card: describer reported an error", "describer", safe.LogSafe(full))
 		return "", cardFallbackError
 	}
 	_, canonical, err := parseApprovalCard([]byte(strings.TrimSpace(text)))
 	if err != nil {
-		logging.From(ctx).Error("approval card: describer output refused", "describer", full, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval card: describer output refused", "describer", safe.LogSafe(full), "err", redactedForLog(err))
 		return "", cardFallbackInvalid
 	}
 	if tools.RedactionWouldAlter(canonical) {
-		logging.From(ctx).Warn("approval card: describer output carries a secret-like value; card withheld", "describer", full)
+		logging.From(ctx).Warn("approval card: describer output carries a secret-like value; card withheld", "describer", safe.LogSafe(full))
 		return "", cardFallbackRedacted
 	}
 	return string(canonical), ""

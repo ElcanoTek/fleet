@@ -177,7 +177,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		logging.From(logCtx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 	}
 
-	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", checksum)
+	logging.From(logCtx).Info("File uploaded", "filename", safe.LogSafe(filename), "size_bytes", size, "checksum", safe.LogSafe(checksum))
 
 	writeJSON(w, r, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
@@ -272,7 +272,7 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	// see.
 	if _, err := os.Stat(tempDir); err != nil {
 		if !os.IsNotExist(err) {
-			slog.Error("Error accessing temp uploads dir", "dir", tempDir, "err", err)
+			slog.Error("Error accessing temp uploads dir", "dir", safe.LogSafe(tempDir), "err", err)
 		}
 		return
 	}
@@ -280,15 +280,15 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue walking - we want to clean up as many files as possible
-			slog.Error("Error accessing temp file", "path", path, "err", err)
+			slog.Error("Error accessing temp file", "path", safe.LogSafe(path), "err", err)
 			return nil
 		}
 		if !info.IsDir() && time.Since(info.ModTime()) > maxAge {
 			//nolint:gosec // G122: this walks the server's own DataDir/temp_uploads (operator-owned), removing aged temp files during scheduled cleanup. The path is produced by filepath.Walk over a server-controlled root, not by request input; symlink-TOCTOU is not a meaningful vector here.
 			if err := os.Remove(path); err != nil {
-				slog.Error("Failed to remove old temp file", "path", path, "err", err)
+				slog.Error("Failed to remove old temp file", "path", safe.LogSafe(path), "err", err)
 			} else {
-				slog.Info("Removed old temp file", "path", path)
+				slog.Info("Removed old temp file", "path", safe.LogSafe(path))
 			}
 		}
 		return nil

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -205,7 +206,7 @@ func (s *Server) resolveTurnPersona(ctx context.Context, conv *store.Conversatio
 	p, err := s.store.GetUserPersonaByName(ctx, conv.UserEmail, name)
 	if err != nil || p.Status != store.UserPersonaStatusActive {
 		if err != nil && !errors.Is(err, store.ErrUserPersonaNotFound) {
-			logging.From(ctx).Warn("user persona lookup failed; running on the default persona", "conv_id", conv.ID, "err", err)
+			logging.From(ctx).Warn("user persona lookup failed; running on the default persona", "conv_id", safe.LogSafe(conv.ID), "err", err)
 		}
 		return "", nil
 	}

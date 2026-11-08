@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // scrubWriter is the line-level backstop under every handler this package
@@ -32,12 +34,21 @@ type scrubWriter struct {
 // brokenLineNotice replaces a JSON line the redactor's patterns made invalid.
 const brokenLineNotice = `{"level":"ERROR","msg":"logging: a log line was withheld: redacting it broke its JSON encoding"}` + "\n"
 
+// brokenTextLineNotice replaces a logfmt line the redactor's patterns made
+// unparseable.
+const brokenTextLineNotice = `level=ERROR msg="logging: a log line was withheld: redacting it broke its logfmt encoding"` + "\n"
+
 func (s scrubWriter) Write(p []byte) (int, error) {
 	out := redactor().ScrubLine(string(p), s.json)
 	if out != string(p) {
-		if trimmed := bytes.TrimSpace(p); len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed) &&
-			!json.Valid(bytes.TrimSpace([]byte(out))) {
-			out = brokenLineNotice
+		switch {
+		case s.json:
+			if trimmed := bytes.TrimSpace(p); len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed) &&
+				!json.Valid(bytes.TrimSpace([]byte(out))) {
+				out = brokenLineNotice
+			}
+		case redact.ValidLogfmt(string(p)) && !redact.ValidLogfmt(out):
+			out = brokenTextLineNotice
 		}
 	}
 	if _, err := io.WriteString(s.w, out); err != nil {

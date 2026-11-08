@@ -18,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -868,7 +869,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		// A pinned seat that is not connected: never fall back to another
 		// account under the same name — surface it so the owner can connect
 		// (or re-pin) it.
-		logging.From(ctx).Warn("remote-mcp: skipping server — the pinned seat is not connected", "reg_name", name, "user", email)
+		logging.From(ctx).Warn("remote-mcp: skipping server — the pinned seat is not connected", "reg_name", safe.LogSafe(name), "user", safe.LogSafe(email))
 		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0

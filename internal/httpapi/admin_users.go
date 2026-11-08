@@ -190,7 +190,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	s.purgeParticipantPrivateStashes(email)
 	s.removeOpsAdmin(r, email)
-	logging.From(r.Context()).Info("admin users: deleted", "email", email, "actor", actor)
+	logging.From(r.Context()).Info("admin users: deleted", "email", safe.LogSafe(email), "actor", safe.LogSafe(actor))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -253,7 +253,7 @@ func (s *Server) ensureOpsAdmin(r *http.Request, email string) {
 		return
 	}
 	if err := s.opsAdmins.Ensure(r.Context(), email); err != nil {
-		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin grant failed", "email", email, "err", err)
+		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin grant failed", "email", safe.LogSafe(email), "err", err)
 	}
 }
 
@@ -262,7 +262,7 @@ func (s *Server) removeOpsAdmin(r *http.Request, email string) {
 		return
 	}
 	if err := s.opsAdmins.Remove(r.Context(), email); err != nil {
-		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin removal failed", "email", email, "err", err)
+		logging.From(r.Context()).Warn("admin users: WARNING ops-center admin removal failed", "email", safe.LogSafe(email), "err", err)
 	}
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/redact"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -390,13 +391,13 @@ func storeApprovalResultCard(ctx context.Context, st chatStore, user, approvalID
 	card, ok, reason := extractResultCard(governed)
 	if !ok {
 		if reason != "" {
-			logging.From(ctx).Warn("approval result card: refused", "tool", toolName, "reason", reason)
+			logging.From(ctx).Warn("approval result card: refused", "tool", safe.LogSafe(toolName), "reason", safe.LogSafe(reason))
 		}
 		return nil
 	}
 	stored, err := st.SetApprovalResultCard(ctx, user, approvalID, string(card))
 	if err != nil || !stored {
-		logging.From(ctx).Error("approval result card: not stored", "tool", toolName, "stored", stored, "err", redactedForLog(err))
+		logging.From(ctx).Error("approval result card: not stored", "tool", safe.LogSafe(toolName), "stored", stored, "err", redactedForLog(err))
 		return nil
 	}
 	return card

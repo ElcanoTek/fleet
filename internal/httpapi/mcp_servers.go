@@ -141,7 +141,7 @@ func (s *Server) defaultEnabledOptionalMCPServers(ctx context.Context, user stri
 				add(g.Name)
 			}
 		} else {
-			logging.From(ctx).Error("mcp defaults: remote server lookup failed", "user", user, "err", err)
+			logging.From(ctx).Error("mcp defaults: remote server lookup failed", "user", safe.LogSafe(user), "err", err)
 		}
 	}
 	sort.Strings(out)

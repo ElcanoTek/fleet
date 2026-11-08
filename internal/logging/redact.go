@@ -479,6 +479,21 @@ func stringText(s fmt.Stringer) (out string) {
 	return s.String()
 }
 
+// resolveOne calls v.LogValue once, a panicking method turning into the
+// unloggable placeholder (as slog itself would, but never with the panic
+// value).
+func resolveOne(v slog.LogValuer) (out slog.Value) {
+	defer func() {
+		if recover() != nil {
+			out = slog.StringValue(userMethodFailed(v))
+		}
+	}()
+	if isNilPointer(v) {
+		return slog.StringValue(userMethodFailed(v))
+	}
+	return v.LogValue()
+}
+
 // safeMarshal is json.Marshal with a panicking MarshalJSON/MarshalText (or
 // any method it reaches) turned into an error, which the caller logs as
 // unloggable.

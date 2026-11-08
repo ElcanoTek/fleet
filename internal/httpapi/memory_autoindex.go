@@ -6,6 +6,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -39,7 +40,7 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 	// numbered known-list, and the supersede-claim id/hash resolution.
 	existing, err := s.store.ListMemories(ctx, user)
 	if err != nil {
-		logging.From(ctx).Warn("autoIndexMemories: memory load failed; skipping this turn", "user", user, "err", err)
+		logging.From(ctx).Warn("autoIndexMemories: memory load failed; skipping this turn", "user", safe.LogSafe(user), "err", err)
 		return
 	}
 
@@ -88,7 +89,7 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 			}
 		}
 		if _, err := proposer.propose(params, supersededContent); err != nil {
-			logging.From(ctx).Error("autoIndexMemories: propose failed", "user", user, "conv_id", conversationID, "err", err)
+			logging.From(ctx).Error("autoIndexMemories: propose failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conversationID), "err", err)
 		}
 	}
 }

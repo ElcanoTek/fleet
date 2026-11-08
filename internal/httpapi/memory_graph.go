@@ -7,6 +7,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -219,7 +220,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	g, err := s.memoryGraphExtractor(ctx, m.Content)
 	if err != nil {
-		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory_id", id, "err", err)
+		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory_id", safe.LogSafe(id), "err", err)
 		http.Error(w, "graph extraction failed", http.StatusBadGateway)
 		return
 	}

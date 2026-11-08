@@ -286,6 +286,8 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 	}
 	r.sweepDue()
 	out := line
+	// The forms of the line's encoding that occur in it at all.
+	var present []string
 	r.mu.RLock()
 	for _, lit := range r.literals {
 		if lit.value == "" {
@@ -296,10 +298,23 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 			forms = lit.jsonForms
 		}
 		for _, form := range forms {
-			out = strings.ReplaceAll(out, form, placeholder)
+			if strings.Contains(line, form) {
+				present = append(present, form)
+			}
 		}
 	}
 	r.mu.RUnlock()
+	switch {
+	case len(present) == 0:
+	case jsonEncoding:
+		// A JSON form never matches JSON syntax: its quotes and backslashes
+		// are escaped exactly as inside a string.
+		for _, form := range present {
+			out = strings.ReplaceAll(out, form, placeholder)
+		}
+	default:
+		out = scrubLogfmtFields(out, present)
+	}
 	lower := strings.ToLower(out)
 	for _, p := range r.patterns[:r.shapePatterns] {
 		if p.mayMatch(out, lower) {
@@ -307,6 +322,115 @@ func (r *Redactor) ScrubLine(line string, jsonEncoding bool) string {
 		}
 	}
 	return out
+}
+
+// scrubLogfmtFields replaces forms inside each key and value of a logfmt line
+// (inside the quotes of a quoted one), never across the line's syntax: a
+// literal `level=INFO` matches a value holding that text, not the record's
+// own level field. A line that is not logfmt is scrubbed whole, so a
+// registered value is never kept for want of a parse.
+func scrubLogfmtFields(line string, forms []string) string {
+	spans, ok := logfmtSpans(line)
+	if !ok {
+		for _, form := range forms {
+			line = strings.ReplaceAll(line, form, placeholder)
+		}
+		return line
+	}
+	var b strings.Builder
+	b.Grow(len(line))
+	last := 0
+	for _, sp := range spans {
+		field := line[sp[0]:sp[1]]
+		for _, form := range forms {
+			field = strings.ReplaceAll(field, form, placeholder)
+		}
+		b.WriteString(line[last:sp[0]])
+		b.WriteString(field)
+		last = sp[1]
+	}
+	b.WriteString(line[last:])
+	return b.String()
+}
+
+// ValidLogfmt reports whether line (one record, a trailing newline allowed)
+// parses as log/slog's text encoding: space-separated key=value fields, each
+// key and value bare or Go-quoted.
+func ValidLogfmt(line string) bool {
+	_, ok := logfmtSpans(line)
+	return ok
+}
+
+// logfmtSpans returns the byte span of every key and every value of a logfmt
+// line — the inside of the quotes for a quoted one — or ok=false when the
+// line is not logfmt.
+func logfmtSpans(line string) (spans [][2]int, ok bool) {
+	end := len(strings.TrimRight(line, "\r\n"))
+	quoted := func(i int) (int, bool) { // i at the opening quote; returns the index past the closing one
+		for j := i + 1; j < end; j++ {
+			switch line[j] {
+			case '\\':
+				j++
+			case '"':
+				return j + 1, true
+			}
+		}
+		return 0, false
+	}
+	i := 0
+	for {
+		for i < end && line[i] == ' ' {
+			i++
+		}
+		if i >= end {
+			return spans, true
+		}
+		// key
+		if line[i] == '"' {
+			j, closed := quoted(i)
+			if !closed {
+				return nil, false
+			}
+			spans = append(spans, [2]int{i + 1, j - 1})
+			i = j
+		} else {
+			j := i
+			for j < end && line[j] != '=' && line[j] != ' ' && line[j] != '"' {
+				j++
+			}
+			if j == i {
+				return nil, false
+			}
+			spans = append(spans, [2]int{i, j})
+			i = j
+		}
+		if i >= end || line[i] != '=' {
+			return nil, false
+		}
+		i++
+		// value
+		switch {
+		case i >= end || line[i] == ' ':
+			// empty value
+		case line[i] == '"':
+			j, closed := quoted(i)
+			if !closed || (j < end && line[j] != ' ') {
+				return nil, false
+			}
+			spans = append(spans, [2]int{i + 1, j - 1})
+			i = j
+		default:
+			j := i
+			for j < end && line[j] != ' ' {
+				if line[j] == '"' {
+					return nil, false
+				}
+				j++
+			}
+			spans = append(spans, [2]int{i, j})
+			i = j
+		}
+	}
 }
 
 // NewRedactor returns a Redactor with the canonical patterns plus any extra

@@ -101,7 +101,7 @@ func serveInBackground(name string, srv *http.Server, errCh chan<- error) {
 	}
 	go func() {
 		defer safe.Recover("cmd."+name, func(any) { errCh <- errors.New(name + ": panicked") })
-		slog.Info("server listening", "name", name, "addr", srv.Addr)
+		slog.Info("server listening", "name", safe.LogSafe(name), "addr", safe.LogSafe(srv.Addr))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("%s: %w", name, err)
 		}

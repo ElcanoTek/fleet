@@ -183,7 +183,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 			// walked away expecting it to carry on (approval_progress.go).
 			s.notifyResumeSkipped(res.Owner, convID)
 		}
-		logging.From(ctx).Info("audit: approval resume skipped", "conv_id", convID, "reason", res.Skipped, "recent_resumes", res.RecentResumes, "max_per_hour", maxPerHour, "claimed", approvalResumeIDs(res.Claimed))
+		logging.From(ctx).Info("audit: approval resume skipped", "conv_id", safe.LogSafe(convID), "reason", safe.LogSafe(res.Skipped), "recent_resumes", res.RecentResumes, "max_per_hour", maxPerHour, "claimed", approvalResumeIDs(res.Claimed))
 		if res.Skipped != store.ApprovalResumeSkipConversationGone {
 			if armed, err := s.store.HasArmedApprovals(ctx, convID); err == nil && armed {
 				s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
@@ -192,7 +192,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		return
 	}
 	metrics.RecordApprovalResume("queued")
-	logging.From(ctx).Info("audit: approval resume queued", "conv_id", convID, "input_id", res.Input.ID, "claimed", approvalResumeIDs(res.Claimed))
+	logging.From(ctx).Info("audit: approval resume queued", "conv_id", safe.LogSafe(convID), "input_id", safe.LogSafe(res.Input.ID), "claimed", approvalResumeIDs(res.Claimed))
 	s.emitQueueUpdate(ctx, res.Input.UserEmail, convID)
 	// Idle → the drain launches it now; a running turn → it waits in the
 	// queue and that turn's completion tail drains it.
@@ -228,7 +228,7 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 	}
 	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)
 	if err != nil || !ok {
-		logging.From(a.ctx).Error("approval resume: arm failed", "approval_id", approval.ID, "ok", ok, "err", err)
+		logging.From(a.ctx).Error("approval resume: arm failed", "approval_id", safe.LogSafe(approval.ID), "ok", ok, "err", err)
 		return
 	}
 	approval.ResumeState = store.ApprovalResumeArmed
@@ -280,5 +280,5 @@ func (s *Server) noteDroppedResume(convID, rowID string) {
 	if err := s.store.AppendApprovalResumeDroppedNotice(ctx, convID); err != nil {
 		logging.From(ctx).Error("approval resume: could not note the dropped resume", "conv_id", safe.LogSafe(convID), "row_id", safe.LogSafe(rowID), "err", err)
 	}
-	logging.From(ctx).Info("audit: approval resume predates this process; cancelled, not run", "row_id", rowID, "conv_id", convID)
+	logging.From(ctx).Info("audit: approval resume predates this process; cancelled, not run", "row_id", safe.LogSafe(rowID), "conv_id", safe.LogSafe(convID))
 }

@@ -554,7 +554,7 @@ func (s *Server) attachTurnPersister(ctx context.Context, buf *turnBuffer, user,
 	// the request's correlation attributes.
 	persistCtx, persistCancelAttach := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		logging.From(ctx).Error("attachPersister failed", "user", user, "conv_id", convID, "err", err)
+		logging.From(ctx).Error("attachPersister failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(convID), "err", err)
 	}
 	persistCancelAttach()
 }
@@ -624,7 +624,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			http.Error(w, err.Error(), status)
 			return
 		}
-		logging.From(reqCtx).Error("queued turn launch failed", "user", user, "conv_id", conv.ID, "err", err)
+		logging.From(reqCtx).Error("queued turn launch failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
 		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateQueued)
 		// No turn launched, so no completion tail will re-drain: without an
 		// explicit re-kick a 202-acknowledged row stalls until the next
@@ -938,10 +938,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.settleDirectInput(directInputID, turnID)
 		}
 		if serr != nil {
-			logging.From(turnCtx).Error("settle turn inputs failed", "turn_id", turnID, "err", serr)
+			logging.From(turnCtx).Error("settle turn inputs failed", "turn_id", safe.LogSafe(turnID), "err", serr)
 		}
 		if cancelledSteers > 0 {
-			logging.From(turnCtx).Warn("input queue: cancelled injected steers of a failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled", cancelledSteers, "turn_id", turnID)
+			logging.From(turnCtx).Warn("input queue: cancelled injected steers of a failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled", cancelledSteers, "turn_id", safe.LogSafe(turnID))
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()
@@ -970,7 +970,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
 		if err := buf.AttachForViewer(r.Context(), 0, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
-			logging.From(turnCtx).Error("Attach failed", "user", user, "conv_id", conv.ID, "err", err)
+			logging.From(turnCtx).Error("Attach failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
 		}
 	}
 	return true
@@ -1120,7 +1120,7 @@ func (s *Server) runTurnAsync(
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
 		if err := runMockTurn(turnCtx, s.turnStore(buf), conv, buf.turnID, userInput, buf); err != nil {
-			logging.From(turnCtx).Error("runMockTurn error", "user", user, "conv_id", conv.ID, "err", err)
+			logging.From(turnCtx).Error("runMockTurn error", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1277,7 +1277,7 @@ func (s *Server) runTurnAsync(
 	// not a turn-blocking dependency.
 	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix, buf.toolDurationsSnapshot()); len(entries) > 0 {
 		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
-			logging.From(turnCtx).Error("RecordToolCalls failed", "user", user, "conv_id", conv.ID, "err", err)
+			logging.From(turnCtx).Error("RecordToolCalls failed", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", err)
 		}
 	}
 

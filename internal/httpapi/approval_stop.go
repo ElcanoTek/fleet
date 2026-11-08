@@ -30,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -248,7 +249,7 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		return
 	}
 	if marked {
-		logging.From(r.Context()).Info("audit: running approval stopped", "user", user, "approval_id", approvalID, "tool", a.ToolName, "conv_id", convID)
+		logging.From(r.Context()).Info("audit: running approval stopped", "user", safe.LogSafe(user), "approval_id", safe.LogSafe(approvalID), "tool", safe.LogSafe(a.ToolName), "conv_id", safe.LogSafe(convID))
 	}
 	if !accepted {
 		// The call finished first: its outcome is being recorded without a

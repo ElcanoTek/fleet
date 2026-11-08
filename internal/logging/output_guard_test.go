@@ -154,7 +154,7 @@ func directOutputUses(t *testing.T, path, rel string) []string {
 // reviewed exceptions.
 var recoverAllowed = map[string]string{
 	"internal/safe/":                     "the panic emitter itself",
-	"internal/logging/redact.go":         "errorText guards a nil-pointer Error() while formatting an attribute, not a panic boundary",
+	"internal/logging/redact.go":         "errorText, stringText and resolveOne guard a caller's Error(), String() or LogValue() while formatting an attribute (a placeholder, never the panic value), not a panic boundary",
 	"internal/tools/workspace_reader.go": "readMisses undoes its reservations and re-panics the value unchanged (defer panic(r)); nothing is logged or swallowed",
 }
 

@@ -49,7 +49,7 @@ func refusedPushEndpoint(ctx context.Context, w http.ResponseWriter, user, what,
 	}
 	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	logging.From(ctx).Warn("push: request refused", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
+	logging.From(ctx).Warn("push: request refused", "what", safe.LogSafe(what), "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }

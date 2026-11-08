@@ -92,3 +92,22 @@ func decodedStrings(t *testing.T, format, line string) []string {
 	}
 	return out
 }
+
+// With `level=INFO` registered, text-format records still log normally —
+// their own level field is untouched — and the literal inside a value is
+// redacted (#2074 review).
+func TestTextRecordsSurviveASyntaxShapedLiteral(t *testing.T) {
+	RegisterSecretLiterals("", false, "level=INFO")
+	var buf bytes.Buffer
+	lg := slog.New(NewHandler("text", &buf, slog.LevelDebug))
+	lg.Info("ordinary", "n", 1)
+	lg.Info("x", "body", "saw level=INFO here")
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], " level=INFO msg=ordinary n=1") {
+		t.Fatalf("an ordinary text record changed:\n%s", buf.String())
+	}
+	if !strings.Contains(lines[1], " level=INFO msg=x ") || strings.Contains(lines[1], "saw level=INFO") ||
+		!strings.Contains(lines[1], `body="saw [REDACTED] here"`) {
+		t.Fatalf("the literal inside a value: %s", lines[1])
+	}
+}

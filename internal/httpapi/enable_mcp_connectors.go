@@ -661,12 +661,12 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	resumed := autoRes.ResumeInput != nil
 	if resumed {
 		metrics.RecordApprovalResume("queued")
-		logging.From(ctx).Info("audit: approval resume queued", "conv_id", conv.ID, "input_id", autoRes.ResumeInput.ID, "claimed", approvalResumeIDs(autoRes.ResumeClaimed))
+		logging.From(ctx).Info("audit: approval resume queued", "conv_id", safe.LogSafe(conv.ID), "input_id", safe.LogSafe(autoRes.ResumeInput.ID), "claimed", approvalResumeIDs(autoRes.ResumeClaimed))
 		s.emitQueueUpdate(ctx, autoRes.ResumeInput.UserEmail, conv.ID)
 		s.maybeDrainQueue(conv.ID)
 	} else if autoRes.ResumeSkipped != "" {
 		metrics.RecordApprovalResume(autoRes.ResumeSkipped)
-		logging.From(ctx).Info("audit: approval resume skipped", "conv_id", conv.ID, "reason", autoRes.ResumeSkipped, "recent_resumes", autoRes.RecentResumes, "max_per_hour", maxPerHour, "approval_id", approval.ID)
+		logging.From(ctx).Info("audit: approval resume skipped", "conv_id", safe.LogSafe(conv.ID), "reason", safe.LogSafe(autoRes.ResumeSkipped), "recent_resumes", autoRes.RecentResumes, "max_per_hour", maxPerHour, "approval_id", safe.LogSafe(approval.ID))
 	}
 
 	msg := fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", "))

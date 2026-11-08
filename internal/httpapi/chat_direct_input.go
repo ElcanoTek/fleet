@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/google/uuid"
 )
@@ -220,13 +221,13 @@ func (s *Server) settleUnreleasedInput(user, convID string, c *directClaim) {
 		ctx, cancel := context.WithTimeout(detachedCtx(user, convID, ""), 5*time.Second)
 		defer cancel()
 		if err := s.store.SettleDirectInput(ctx, c.id, ""); err != nil {
-			logging.From(ctx).Error("settle unreleased input failed", "input_id", c.id, "err", err)
+			logging.From(ctx).Error("settle unreleased input failed", "input_id", safe.LogSafe(c.id), "err", err)
 			return false
 		}
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: c.key,
 		}); err != nil {
-			logging.From(ctx).Error("settle unreleased input failed", "input_id", c.id, "err", err)
+			logging.From(ctx).Error("settle unreleased input failed", "input_id", safe.LogSafe(c.id), "err", err)
 			return false
 		}
 		return true
@@ -256,7 +257,7 @@ func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
 	bound, err := s.store.BindInputTurn(bctx, queued.rowID, turnID)
 	bcancel()
 	if err != nil {
-		logging.From(bctx).Error("bind input turn failed", "input_id", queued.rowID, "turn_id", turnID, "err", err)
+		logging.From(bctx).Error("bind input turn failed", "input_id", safe.LogSafe(queued.rowID), "turn_id", safe.LogSafe(turnID), "err", err)
 		return true
 	}
 	if bound {
@@ -283,7 +284,7 @@ func (s *Server) bindDirectInput(id, turnID string) (bound, stopped bool) {
 		if err == nil {
 			return bound, !bound // not bound: the claim is no longer running, so do not launch
 		}
-		logging.From(ctx).Error("bind direct input turn failed", "input_id", id, "turn_id", turnID, "err", err)
+		logging.From(ctx).Error("bind direct input turn failed", "input_id", safe.LogSafe(id), "turn_id", safe.LogSafe(turnID), "err", err)
 	}
 	return false, false
 }
@@ -292,7 +293,7 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.ReleaseDirectInput(ctx, id); err != nil {
-		logging.From(ctx).Error("release direct input failed", "input_id", id, "err", err)
+		logging.From(ctx).Error("release direct input failed", "input_id", safe.LogSafe(id), "err", err)
 		return false
 	}
 	return true
@@ -304,7 +305,7 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 // would answer every resend of its key "already running".
 func (s *Server) retryDirectInput(ctx context.Context, what, id string, attempt int, delay time.Duration, try func() bool) {
 	if attempt > directReleaseRetries {
-		logging.From(ctx).Warn("direct input: giving up after retries; boot recovery settles it", "op", what, "input_id", id, "retries", directReleaseRetries)
+		logging.From(ctx).Warn("direct input: giving up after retries; boot recovery settles it", "op", safe.LogSafe(what), "input_id", safe.LogSafe(id), "retries", directReleaseRetries)
 		return
 	}
 	s.background.After("httpapi.direct_"+what, delay, func() {
@@ -322,7 +323,7 @@ func (s *Server) settleDirectInput(id, turnID string) {
 		ctx, cancel := context.WithTimeout(detachedCtx("", "", turnID), 5*time.Second)
 		defer cancel()
 		if err := s.store.SettleDirectInput(ctx, id, turnID); err != nil {
-			logging.From(ctx).Error("settle direct input failed", "input_id", id, "turn_id", turnID, "err", err)
+			logging.From(ctx).Error("settle direct input failed", "input_id", safe.LogSafe(id), "turn_id", safe.LogSafe(turnID), "err", err)
 			return false
 		}
 		return true
@@ -354,13 +355,13 @@ func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (r
 	cancelStopped := func(ctx context.Context) bool {
 		for _, id := range steers {
 			if _, err := s.store.CancelStoppedSteer(ctx, id); err != nil {
-				logging.From(ctx).Error("cancel stopped steer failed", "input_id", id, "turn_id", turnID, "err", err)
+				logging.From(ctx).Error("cancel stopped steer failed", "input_id", safe.LogSafe(id), "turn_id", safe.LogSafe(turnID), "err", err)
 				return false
 			}
 		}
 		if drained != "" {
 			if _, err := s.store.CancelStoppedDrain(ctx, drained, turnID); err != nil {
-				logging.From(ctx).Error("cancel stopped drain failed", "input_id", drained, "turn_id", turnID, "err", err)
+				logging.From(ctx).Error("cancel stopped drain failed", "input_id", safe.LogSafe(drained), "turn_id", safe.LogSafe(turnID), "err", err)
 				return false
 			}
 		}
@@ -376,7 +377,7 @@ func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (r
 				return false
 			}
 			if _, _, err := s.store.SettleTurnInputs(ctx, turnID, queueRowID); err != nil {
-				logging.From(ctx).Error("settle turn inputs failed", "turn_id", turnID, "err", err)
+				logging.From(ctx).Error("settle turn inputs failed", "turn_id", safe.LogSafe(turnID), "err", err)
 				return false
 			}
 			s.maybeDrainQueue(buf.convID)

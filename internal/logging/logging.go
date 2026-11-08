@@ -184,7 +184,7 @@ func newBridgeHandler(format string, dest io.Writer) slog.Handler {
 	if strings.EqualFold(strings.TrimSpace(format), "text") {
 		h = slog.NewTextHandler(scrubbed(dest, false), opts)
 	}
-	return h.WithAttrs([]slog.Attr{slog.Bool(StdlibLogKey, true)})
+	return guardValuers(h.WithAttrs([]slog.Attr{slog.Bool(StdlibLogKey, true)}))
 }
 
 // userReplaceAttr is replaceAttr for every handler but the bridge's: a
@@ -225,12 +225,12 @@ func isUngatedAttr(a slog.Attr) bool {
 // dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted
 // so tests can exercise it over a buffer without touching process-global state.
 func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewJSONHandler(scrubbed(dest, true), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
+	return guardValuers(slog.NewJSONHandler(scrubbed(dest, true), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr}))
 }
 
 // newTextHandler is newJSONHandler's logfmt sibling (FLEET_LOG_FORMAT=text).
 func newTextHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewTextHandler(scrubbed(dest, false), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr})
+	return guardValuers(slog.NewTextHandler(scrubbed(dest, false), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr}))
 }
 
 // NewHandler returns a redacting handler of the named format ("json" or

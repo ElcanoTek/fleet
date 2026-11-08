@@ -213,7 +213,7 @@ func (s *Server) writeQueueAck(w http.ResponseWriter, r *http.Request, status in
 		n, inLine, err := s.store.InputsAhead(ctx, row.ID)
 		switch {
 		case err != nil:
-			logging.From(ctx).Error("queue ack: count inputs ahead failed", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("queue ack: count inputs ahead failed", "conv_id", safe.LogSafe(convID), "err", err)
 		case inLine:
 			input["ahead"] = n
 		}
@@ -655,7 +655,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 		}
 		return
 	}
-	logging.From(ctx).Error("input queue state transition failed", "input_id", id, "state", state, "retries_left", retriesLeft, "err", err)
+	logging.From(ctx).Error("input queue state transition failed", "input_id", safe.LogSafe(id), "state", safe.LogSafe(state), "retries_left", retriesLeft, "err", err)
 	if retriesLeft <= 0 {
 		return
 	}
@@ -751,7 +751,7 @@ func (s *Server) settleUnqueuedInput(user, convID, key string) {
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
 		}); err != nil {
-			logging.From(ctx).Error("settle unqueued input failed", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("settle unqueued input failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return false
 		}
 		return true

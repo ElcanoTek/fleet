@@ -13,6 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -305,7 +306,7 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		defer cancel()
 		if err := scope.Close(closeCtx); err != nil {
 			// our own row, and it is rendered with %q so any CR/LF would be escaped.
-			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", approval.ID, "err", err)
+			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", safe.LogSafe(approval.ID), "err", err)
 		}
 	}
 	return scope.Broker, scope.Catalog, release, nil

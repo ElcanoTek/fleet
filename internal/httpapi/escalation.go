@@ -223,7 +223,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 		ok, err := stager.StageHostSuggestion(source, reason)
 		if err != nil {
-			logging.From(ctx).Error("escalation: stage suggestion failed", "suggestion_source", source, "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("escalation: stage suggestion failed", "suggestion_source", safe.LogSafe(source), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 		staged = ok
 		return ok

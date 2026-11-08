@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -22,7 +23,7 @@ func (s *Server) SweepDueChatSchedules(ctx context.Context) (int, error) {
 	}
 	claimed, err := s.store.ClaimDueChatSchedules(ctx, time.Now(), maxPendingInputs)
 	for _, item := range claimed {
-		logging.From(ctx).Info("audit: chat schedule queued", "schedule_id", item.Schedule.ID, "run", item.Schedule.RunCount, "conv_id", item.Schedule.ConversationID, "input_id", item.Input.ID)
+		logging.From(ctx).Info("audit: chat schedule queued", "schedule_id", safe.LogSafe(item.Schedule.ID), "run", item.Schedule.RunCount, "conv_id", safe.LogSafe(item.Schedule.ConversationID), "input_id", safe.LogSafe(item.Input.ID))
 		s.emitQueueUpdate(ctx, item.Input.UserEmail, item.Schedule.ConversationID)
 		s.maybeDrainQueue(item.Schedule.ConversationID)
 		autoApprove := false

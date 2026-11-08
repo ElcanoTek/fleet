@@ -19,6 +19,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -438,7 +439,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	logging.From(r.Context()).Info("projects: project transferred", "user", user, "project_id", projectID, "to", updated.OwnerEmail)
+	logging.From(r.Context()).Info("projects: project transferred", "user", safe.LogSafe(user), "project_id", safe.LogSafe(projectID), "to", safe.LogSafe(updated.OwnerEmail))
 	writeJSON(w, r, updated)
 }
 
