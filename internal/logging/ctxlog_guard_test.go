@@ -199,3 +199,81 @@ func isPackageSlogCall(c *ast.CallExpr) bool {
 	}
 	return false
 }
+
+// shadowingKeys are the correlation keys a call site must never set itself.
+// The context logger prepends the context's attributes but lets a call-site
+// key win (ctxHandler), so a call site logging "request_id" for some other
+// id (an MCP JSON-RPC id) silently replaced the HTTP X-Request-Id the line
+// should have been joined on. request_id, trace_id and span_id only ever mean
+// the request or span the context carries. task_id, conv_id and turn_id are
+// deliberately not here: a handler that names the task or conversation it
+// acted on logs the same entity under the same key, which is why the call
+// site is allowed to win for them.
+var shadowingKeys = map[string]bool{KeyRequestID: true, KeyTraceID: true, KeySpanID: true}
+
+// TestNoCallSiteShadowsACorrelationKey fails on a string literal naming a
+// shadowing key passed to a logging call (logger methods, slog attribute
+// constructors) anywhere in internal/ or cmd/ outside this package.
+func TestNoCallSiteShadowsACorrelationKey(t *testing.T) {
+	root := filepath.Join("..", "..")
+	var bad []string
+	for _, dir := range []string{"internal", "cmd"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "logging", "testdata", "node_modules":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			fset := token.NewFileSet()
+			f, perr := parser.ParseFile(fset, path, nil, 0)
+			if perr != nil {
+				return perr
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || !isLoggingCall(call) {
+					return true
+				}
+				for _, arg := range call.Args {
+					if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING && shadowingKeys[strings.Trim(lit.Value, "`\"")] {
+						bad = append(bad, fset.Position(lit.Pos()).String()+" "+lit.Value)
+					}
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("log attributes that shadow a context correlation key — rename them (e.g. mcp_request_id):\n  %s", strings.Join(bad, "\n  "))
+	}
+}
+
+// isLoggingCall matches x.Info/Warn/Error/Debug/Log/LogAttrs/With(…), their
+// …Context forms, and slog.String/Any/Int/Int64/Group/Attr.
+func isLoggingCall(c *ast.CallExpr) bool {
+	se, ok := c.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch se.Sel.Name {
+	case "Info", "Warn", "Error", "Debug", "Log", "LogAttrs", "With",
+		"InfoContext", "WarnContext", "ErrorContext", "DebugContext":
+		return true
+	case "String", "Any", "Int", "Int64", "Uint64", "Bool", "Group", "Attr":
+		id, ok := se.X.(*ast.Ident)
+		return ok && id.Name == "slog"
+	}
+	return false
+}

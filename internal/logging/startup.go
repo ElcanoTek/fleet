@@ -83,7 +83,7 @@ func replayStartup(h slog.Handler) bool {
 			_ = h.Handle(br.ctx, br.rec)
 		}
 	}
-	if dropped > 0 {
+	if dropped > 0 && h.Enabled(context.Background(), slog.LevelWarn) {
 		r := slog.NewRecord(time.Now(), slog.LevelWarn, "logging: startup log buffer overflowed; lines dropped", 0)
 		r.AddAttrs(slog.Int("dropped", dropped))
 		_ = h.Handle(context.Background(), r)

@@ -1151,7 +1151,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 			case <-stop:
 				stop = nil
 				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
-					logging.From(ctx).Warn("MCP stdio: could not send the stop for request", "request_id", id, "err", err)
+					logging.From(ctx).Warn("MCP stdio: could not send the stop for request", "mcp_request_id", id, "err", err)
 				}
 			case res = <-resultChan:
 				got = true

@@ -466,6 +466,9 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 		return nil, err
 	}
 	specs := agent.BuildMCPSpecs(cfg)
+	// A reloaded catalog may carry new header credentials: the redactors
+	// learn them before Reload contacts any server.
+	agent.RegisterConnectorSecrets(specs, cfg.HTTPTools, cfg.A2APeers)
 	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(specs))
 	if err != nil {
 		return nil, err

@@ -93,6 +93,13 @@ func (c Config) Enabled() bool { return c.File != "" }
 // panic must still reach stderr/journald even if a misconfigured file sink is
 // failing), so panic events are unaffected by the choices here.
 func Configure(cfg Config) (io.Closer, error) {
+	// The redactor knows the process's secret-named env values by literal
+	// before the first configured line is written — and before Configure
+	// replays the startup buffer below. Every later secret source used to
+	// register lazily (the tool-output or broker redactor's first use), so a
+	// line logged before then — a connector's boot-time HTTP 401 echoing its
+	// opaque API key — was scrubbed by shape patterns alone.
+	seedEnvLiterals()
 	// Destination: stderr, plus the rotating file when configured.
 	var dest io.Writer = os.Stderr
 	var closer io.Closer
@@ -110,7 +117,9 @@ func Configure(cfg Config) (io.Closer, error) {
 		if _, err := rotor.Write([]byte{}); err != nil {
 			return nil, err
 		}
-		dest = io.MultiWriter(os.Stderr, rotor)
+		// Each sink independently: a full disk or a failed rotation must not
+		// fail a write (a subprocess-stderr forwarder would stop draining).
+		dest = newTee(teeSink{name: "stderr", w: os.Stderr}, teeSink{name: "file", w: rotor})
 		closer = rotor
 	}
 

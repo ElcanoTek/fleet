@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -49,6 +50,14 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 // the same name rule the tool-output and broker redactors seed themselves with.
 func RegisterEnvLiterals(environ []string) {
 	redactor().RegisterEnvLiterals(environ)
+}
+
+// seedEnvLiterals registers this process's own secret-named env values
+// (Configure calls it first thing). In the MCP broker that is the connector
+// credentials; in fleet serve, whatever the env file set — before the
+// broker boot path hands connector values over and unsets them.
+func seedEnvLiterals() {
+	RegisterEnvLiterals(os.Environ())
 }
 
 // Redact scrubs s with the log redactor. Exported for the rare call site that
@@ -233,12 +242,17 @@ const redactedValue = "[REDACTED]"
 // secretKeyMarkers are the attribute-key substrings that name a credential.
 // The list is the one this package has always applied (#178), aligned with
 // internal/redact's marker=value rule (api_key, secret, token, password,
-// passwd, authorization) plus bearer/credential.
-var secretKeyMarkers = []string{"secret", "token", "password", "passwd", "apikey", "api_key", "authorization", "bearer", "credential"}
+// passwd, authorization) plus bearer/credential and cookie. The markers are
+// matched against the key lowercased with its separators removed, so
+// "X-Api-Key", "api_key", "api.key" and "APIKey" all name the same thing.
+var secretKeyMarkers = []string{"secret", "token", "password", "passwd", "apikey", "authorization", "bearer", "credential", "cookie"}
+
+// keySeparators are dropped from a key before it is matched.
+var keySeparators = strings.NewReplacer("-", "", "_", "", ".", "", " ", "")
 
 // secretAttrKey reports whether an attribute key names a likely secret.
 func secretAttrKey(key string) bool {
-	k := strings.ToLower(key)
+	k := keySeparators.Replace(strings.ToLower(key))
 	for _, s := range secretKeyMarkers {
 		if strings.Contains(k, s) {
 			return true

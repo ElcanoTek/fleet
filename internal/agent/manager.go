@@ -384,6 +384,7 @@ type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
 // case no inline HTTP tools are registered and behavior is unchanged.
 func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig, a2aPeers []config.A2APeerConfig) *mcp.Client {
 	client := mcp.NewClient()
+	RegisterConnectorSecrets(specs, httpTools, a2aPeers)
 	for name, spec := range specs {
 		if !spec.Enabled {
 			continue

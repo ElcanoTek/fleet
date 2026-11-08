@@ -729,9 +729,15 @@ Operator notes:
   `log` package are bridged at info and are not gated, since their true
   severity is unknown.
 - The `fleet mcp-broker` child logs in the same format and level, and its lines
-  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set). A
-  child line that is not a JSON log record (text format, a panic trace) is
-  scrubbed by the parent's redactor before it is written.
+  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
+  The parent redacts every child line again before writing it: a JSON record
+  is parsed and scrubbed field by field (secret-named keys at any depth,
+  secret values anywhere) and re-serialised, and anything else is scrubbed as
+  text.
+- A failing log sink (a full disk under `FLEET_LOG_FILE`, a failed rotation)
+  is reported once with a `logging: a log sink write failed` warning on the
+  sinks that still work; its lines are dropped until it recovers. It never
+  blocks logging or the broker.
 - A stdio MCP connector's stderr (a Python traceback, a startup banner) is
   logged one line per record — `msg="subprocess stderr"`, the text in `line`,
   the server in `connector` — after secret redaction, at `info`. It is never
