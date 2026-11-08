@@ -762,7 +762,7 @@ servers:
       Official hosted server covering 494 tools across 39 Vultr API categories
       (instances, Kubernetes, managed databases, DNS, block storage, IAM).
       Category-scoped paths like /instances or /kubernetes reduce token load;
-      OAuth sign-in or API key.
+      OAuth sign-in.
     url: "https://mcp.vultr.com/"
     vendor: The Constant Company, LLC (Vultr)
     docs_url: "https://github.com/vultr/vultr-mcp"
@@ -2903,8 +2903,8 @@ servers:
     description: >-
       Whop-hosted MCP that lets agents list, create, and update live Whop
       resources (products, memberships, payments, promo codes, affiliates) over
-      HTTP streaming or SSE (/sse), authenticated via OAuth or a Company/App
-      API key. A separate docs.whop.com/mcp server exists for docs search.
+      Streamable HTTP (/mcp) with browser OAuth sign-in. A separate
+      docs.whop.com/mcp server exists for docs search.
     url: "https://mcp.whop.com/mcp"
     vendor: Whop Technologies, Inc.
     docs_url: "https://docs.whop.com/developer/guides/ai_and_mcp"
@@ -3472,8 +3472,7 @@ servers:
       Official hosted MCP for the Braintrust eval/observability platform,
       exposing search_docs, resolve_object, list_recent_objects, infer_schema,
       sql_query, summarize_experiment, and generate_permalink tools. Separate EU
-      data-plane endpoint at https://api-eu.braintrust.dev/mcp; supports OAuth
-      and API-key bearer auth.
+      data-plane endpoint at https://api-eu.braintrust.dev/mcp; OAuth sign-in.
     url: "https://api.braintrust.dev/mcp"
     vendor: Braintrust Data, Inc.
     docs_url: "https://www.braintrust.dev/docs/integrations/developer-tools/mcp"
@@ -3780,8 +3779,7 @@ servers:
     description: >-
       Hosted MCP endpoint for error/crash reporting with stack traces,
       deployment tracking, RUM and performance insights, and time-series
-      analytics. OAuth sign-in or Bearer auth with a Raygun Personal Access
-      Token.
+      analytics over Streamable HTTP with OAuth sign-in.
     url: "https://api.raygun.com/v3/mcp"
     vendor: Raygun Limited
     docs_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
@@ -4048,7 +4046,7 @@ servers:
       (search_models, get_model_schema, get_pricing, search_docs), execution
       (run_model, submit_job, check_job), and utility (upload_file,
       recommend_model) over 1,000+ generative media models over Stateless
-      Streamable HTTP with OAuth sign-in or bearer API key.
+      Streamable HTTP with OAuth sign-in.
     url: "https://mcp.fal.ai/mcp"
     vendor: fal.ai
     docs_url: "https://fal.ai/docs/documentation/setting-up/mcp"
