@@ -20,18 +20,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	backupTimeFormat = "2006-01-02T15-04-05.000"
-	compressSuffix   = ".gz"
-	defaultMaxSize   = 100
+	// backupTimeFormat names a backup by its rotation time, to the
+	// nanosecond; a name already taken (or its .gz) gets a counter suffix
+	// (backupName), so a rotation never replaces a backup.
+	backupTimeFormat = "2006-01-02T15-04-05.000000000"
+	// legacyBackupTimeFormat is the millisecond format earlier versions
+	// wrote; their backups are still recognised for cleanup.
+	legacyBackupTimeFormat = "2006-01-02T15-04-05.000"
+	compressSuffix         = ".gz"
+	defaultMaxSize         = 100
 )
 
 // ensure we always implement io.WriteCloser
@@ -214,7 +222,7 @@ func (l *Logger) openNew() error {
 	if err == nil {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
-		// move the existing file
+		// move the existing file, never over an existing backup
 		newname := backupName(name)
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %w", err)
@@ -239,14 +247,33 @@ func (l *Logger) openNew() error {
 }
 
 // backupName creates a new filename from the given name, inserting a UTC
-// timestamp between the filename and the extension.
+// timestamp (to the nanosecond) between the filename and the extension. When
+// that name — or its compressed form — is already taken (two rotations
+// within the clock's resolution), a counter is appended to the timestamp
+// ("-1", "-2", …): a rotation must never rename over a backup, and a
+// compression must never truncate another backup's .gz.
 func backupName(name string) string {
 	dir := filepath.Dir(name)
 	filename := filepath.Base(name)
 	ext := filepath.Ext(filename)
 	prefix := filename[:len(filename)-len(ext)]
 	timestamp := currentTime().UTC().Format(backupTimeFormat)
-	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
+	for n := 0; ; n++ {
+		stamp := timestamp
+		if n > 0 {
+			stamp += "-" + strconv.Itoa(n)
+		}
+		candidate := filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, stamp, ext))
+		if !pathExists(candidate) && !pathExists(candidate+compressSuffix) {
+			return candidate
+		}
+	}
+}
+
+// pathExists reports whether anything (a file, a link) is at path.
+func pathExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil || !errors.Is(err, fs.ErrNotExist)
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
@@ -436,7 +463,20 @@ func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
 		return time.Time{}, errors.New("mismatched extension")
 	}
 	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
+	// A counter suffix (backupName) follows the timestamp: "-<digits>". The
+	// n-th backup of one instant sorts as n nanoseconds later, so the newest
+	// of them is kept first.
+	if i := strings.LastIndexByte(ts, '-'); i >= 0 && i < len(ts)-1 && strings.Contains(ts[:i], "T") {
+		if n, err := strconv.Atoi(ts[i+1:]); err == nil && n > 0 {
+			if t, err := time.Parse(backupTimeFormat, ts[:i]); err == nil {
+				return t.Add(time.Duration(n)), nil
+			}
+		}
+	}
+	if t, err := time.Parse(backupTimeFormat, ts); err == nil {
+		return t, nil
+	}
+	return time.Parse(legacyBackupTimeFormat, ts)
 }
 
 // maxBytes returns the maximum size in bytes of log files before rolling.

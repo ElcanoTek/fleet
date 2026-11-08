@@ -539,6 +539,7 @@ type k8sImpl struct {
 	// can unblock a demux loop parked in pw.Write — see terminateBridgeLocked.
 	bridgeStdoutPipe *io.PipeReader
 	bridgeStderr     *syncBuffer
+	bridgeStderrLog  *logging.StderrLogger // the session's stderr as log records; attributed per request
 	bridgeStarted    bool
 
 	execPoisoned atomic.Bool
@@ -1192,7 +1193,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := k.ensureBridge(); err != nil {
+	if err := k.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in pod: %w", err)
 	}
 
@@ -1216,6 +1217,10 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	if k.bridge == nil || k.bridgeStdout == nil {
 		return PythonResult{}, fmt.Errorf("send bridge request: %w", ErrClosed)
 	}
+	// The bridge's stderr during this request is this request's; cleared
+	// at its end.
+	k.bridgeStderrLog.Attribute(ctx)
+	defer func() { k.bridgeStderrLog.ClearAttribution() }()
 	if err := k.bridge.writeStdin(append(reqBytes, '\n')); err != nil {
 		k.terminateBridgeLocked()
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, k.bridgeStderrSuffix())
@@ -1272,7 +1277,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 // ensureBridge starts the bridge exec session on first use, mirroring
 // containerImpl.ensureBridge: a request written before the bridge reads stdin
 // waits in the stream until it does, so no post-start settle delay is needed.
-func (k *k8sImpl) ensureBridge() error {
+func (k *k8sImpl) ensureBridge(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -1295,7 +1300,7 @@ func (k *k8sImpl) ensureBridge() error {
 	// stdout; the demux loop feeds a pipe the reader side wraps in bufio.
 	pr, pw := io.Pipe()
 	stderrBuf := &syncBuffer{}
-	stderrLog := bridgeStderrLogger()
+	stderrLog := bridgeStderrLogger(ctx)
 	// The bridge intentionally outlives any single request ctx and is torn
 	// down in close() / terminateBridgeLocked — dial under a handshake-bounded
 	// background context, mirroring the podman backend's noctx bridge exec.
@@ -1318,6 +1323,7 @@ func (k *k8sImpl) ensureBridge() error {
 	k.bridgeStdout = bufio.NewReader(pr)
 	k.bridgeStdoutPipe = pr
 	k.bridgeStderr = stderrBuf
+	k.bridgeStderrLog = stderrLog
 	k.bridgeStarted = true
 	return nil
 }
@@ -1447,6 +1453,7 @@ func (k *k8sImpl) close() {
 	k.mu.Lock()
 	k.terminateBridgeLocked()
 	k.bridgeStderr = nil
+	k.bridgeStderrLog = nil
 	k.mu.Unlock()
 
 	k.podMu.Lock()

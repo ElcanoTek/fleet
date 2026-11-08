@@ -1271,7 +1271,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := c.ensureBridge(); err != nil {
+	if err := c.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in container: %w", err)
 	}
 
@@ -1298,6 +1298,10 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if c.bridgeStdin == nil || c.bridgeStdout == nil {
 		return PythonResult{}, fmt.Errorf("send bridge request: %w", ErrClosed)
 	}
+	// The bridge's stderr during this request is this request's; cleared
+	// at its end.
+	c.bridgeStderrLog.Attribute(ctx)
+	defer func() { c.bridgeStderrLog.ClearAttribution() }()
 
 	if _, err := fmt.Fprintf(c.bridgeStdin, "%s\n", reqBytes); err != nil {
 		// A failed write means the exec client is gone (EPIPE) yet
@@ -1469,7 +1473,7 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 // already running and healthy. There is no post-start settle delay: a request
 // written before the bridge reads stdin just sits in the exec client's pipe
 // until it does, and the first ReadBytes waits for the reply either way.
-func (c *containerImpl) ensureBridge() error {
+func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1501,7 +1505,7 @@ func (c *containerImpl) ensureBridge() error {
 	// BashWaitDelay exists for on the bash path.
 	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
-	stderrLog := bridgeStderrLogger()
+	stderrLog := bridgeStderrLogger(ctx)
 	cmd.Stderr = io.MultiWriter(stderrLog, stderrBuf)
 
 	stdin, err := cmd.StdinPipe()

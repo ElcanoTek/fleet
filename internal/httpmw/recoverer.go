@@ -42,7 +42,7 @@ func RecoverWith(boundary string, respond func(w http.ResponseWriter, r *http.Re
 					panic(rvr)
 				}
 				safe.EmitPanicWithMetadataContext(r.Context(), safe.PanicMetadata{
-					Location: boundary + " " + r.Method + " " + r.URL.Path,
+					Location: boundary + " " + r.Method + " " + RouteLabel(r),
 					Boundary: boundary,
 				}, rvr, nil)
 				if r.Header.Get("Connection") != "Upgrade" {

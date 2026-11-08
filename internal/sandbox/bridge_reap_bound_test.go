@@ -85,7 +85,7 @@ func TestEnsureBridgeSetsWaitDelay(t *testing.T) {
 	}
 	c := &containerImpl{cfg: ContainerConfig{PodmanBinary: bin}}
 	c.containerID = "chat-sandbox-waitdelay-test"
-	if err := c.ensureBridge(); err != nil {
+	if err := c.ensureBridge(t.Context()); err != nil {
 		t.Fatalf("ensureBridge: %v", err)
 	}
 	defer func() {

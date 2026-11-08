@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -291,21 +292,27 @@ func TestMaxBackups(t *testing.T) {
 	isNil(err, t)
 	equals(len(b4), n, t)
 
-	existsWithContent(fourthFilename, b3, t)
+	// The name is taken by that .gz, so the rotation takes the next one
+	// (a counter suffix) rather than leaving the .gz to be truncated.
+	rotated := strings.TrimSuffix(fourthFilename, ".log") + "-1.log"
+	existsWithContent(rotated, b3, t)
 	existsWithContent(fourthFilename+compressSuffix, []byte("compress"), t)
 
 	// we need to wait a little bit since the files get deleted on a different
 	// goroutine.
 	waitMill(l)
 
-	// We should have four things in the directory now - the 2 log files, the
-	// not log file, and the directory
-	fileCount(dir, 5, t)
+	// We should have four things in the directory now - the log file, the
+	// newest backup, the not log file, and the directory. The stray .gz is a
+	// backup of its own now (never shared with the rotated file), older than
+	// the counter-suffixed one, so MaxBackups=1 removes it.
+	fileCount(dir, 4, t)
 
 	// third file name should still exist
 	existsWithContent(filename, b4, t)
 
-	existsWithContent(fourthFilename, b3, t)
+	existsWithContent(rotated, b3, t)
+	notExist(fourthFilename+compressSuffix, t)
 
 	// should have deleted the first filename
 	notExist(thirdFilename, t)

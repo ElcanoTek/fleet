@@ -216,7 +216,7 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 		timeout = 5 * time.Minute
 	}
 
-	if err := h.ensureBridge(); err != nil {
+	if err := h.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge: %w", err)
 	}
 
@@ -235,7 +235,11 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if err := h.sendLocked(reqBytes); err != nil {
+	// The bridge's stderr during this request is this request's (a restart
+	// in sendLocked attributes the new bridge too); cleared at its end.
+	h.bridgeStderrLog.Attribute(ctx)
+	defer func() { h.bridgeStderrLog.ClearAttribution() }()
+	if err := h.sendLocked(ctx, reqBytes); err != nil {
 		return PythonResult{}, err
 	}
 	respBytes, err := h.readLocked(ctx, timeout)
@@ -258,7 +262,7 @@ func (h *hostImpl) close() {
 // ensureBridge spawns the python bridge subprocess if it hasn't been
 // started. Idempotent and lazy — the first runPython pays the boot
 // cost, subsequent calls reuse the running process.
-func (h *hostImpl) ensureBridge() error {
+func (h *hostImpl) ensureBridge(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -283,7 +287,7 @@ func (h *hostImpl) ensureBridge() error {
 	cmd := exec.Command("python3", h.bridgeScriptPath)
 	// The bridge's stderr (a Python traceback) is logged line by line through
 	// slog, redacted — never copied to the process stderr as written.
-	stderrLog := bridgeStderrLogger()
+	stderrLog := bridgeStderrLogger(ctx)
 	cmd.Stderr = stderrLog
 
 	stdin, err := cmd.StdinPipe()
@@ -310,16 +314,19 @@ func (h *hostImpl) ensureBridge() error {
 	return nil
 }
 
-func (h *hostImpl) sendLocked(reqBytes []byte) error {
+func (h *hostImpl) sendLocked(ctx context.Context, reqBytes []byte) error {
 	if _, err := fmt.Fprintf(h.bridgeStdin, "%s\n", reqBytes); err != nil {
 		// Pipe may have closed — try a single restart.
 		h.terminateBridgeLocked()
 		h.mu.Unlock()
-		startErr := h.ensureBridge()
+		startErr := h.ensureBridge(ctx)
 		h.mu.Lock()
 		if startErr != nil {
 			return fmt.Errorf("send (after restart attempt): %w", err)
 		}
+		// The restarted bridge's stderr is this request's too (runPython
+		// clears it when the request ends).
+		h.bridgeStderrLog.Attribute(ctx)
 		if _, err := fmt.Fprintf(h.bridgeStdin, "%s\n", reqBytes); err != nil {
 			return fmt.Errorf("send (after restart): %w", err)
 		}

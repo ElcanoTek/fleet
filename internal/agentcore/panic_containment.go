@@ -41,6 +41,20 @@ type panicAttribution struct {
 	runMode        string
 	taskID         string
 	conversationID string
+	// ctx is the run's context: a contained panic is emitted under it, so the
+	// event carries the run's correlation (run_id, turn_id, trace ids) — a
+	// boundary with a narrower context of its own (a tool call) uses that.
+	ctx context.Context
+}
+
+// context is the run's context, for emitting a contained panic under it
+// (safe.EmitPanicWithMetadataContext, called at each recover so the recovery
+// visibly routes through package safe).
+func (a panicAttribution) context() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
 }
 
 func (a panicAttribution) metadata(location, boundary string) safe.PanicMetadata {
@@ -62,7 +76,7 @@ func (a panicAttribution) metadata(location, boundary string) safe.PanicMetadata
 func recoverSynchronousRunPanic(attribution panicAttribution, result *Result, err *error) {
 	if recovered := recover(); recovered != nil {
 		meta := attribution.metadata(panicLocationRun, panicPhaseRunSynchronous)
-		event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+		event := safe.EmitPanicWithMetadataContext(attribution.context(), meta, recovered, nil)
 		*result = Result{}
 		*err = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
 	}
@@ -162,7 +176,7 @@ func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (re
 			meta := t.attribution.metadata(panicLocationTool, state.phase)
 			meta.ToolName = t.name
 			meta.ToolCallID = call.ID
-			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			event := safe.EmitPanicWithMetadataContext(ctx, meta, recovered, nil)
 			// A panic may occur after an external mutation. Mark the response as
 			// possibly committed for downstream diagnostics; streamSink's earlier
 			// tool.call event is the authoritative in-round retry gate (ADR-0035).
@@ -215,7 +229,7 @@ func safeToolResultText(tr fantasy.ToolResultContent, attribution panicAttributi
 			meta := attribution.metadata(panicLocationTool, panicPhaseResultFlatten)
 			meta.ToolName = tr.ToolName
 			meta.ToolCallID = tr.ToolCallID
-			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			event := safe.EmitPanicWithMetadataContext(attribution.context(), meta, recovered, nil)
 			text = containedToolPanicText(event.IncidentID)
 			isErr = true
 		}
@@ -252,7 +266,7 @@ func recordRecoveredToolFailure(
 			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyRecord)
 			meta.ToolName = name
 			meta.ToolCallID = call.ID
-			safe.EmitPanicWithMetadata(meta, recovered, nil)
+			safe.EmitPanicWithMetadataContext(ctx, meta, recovered, nil)
 		}
 	}()
 	recordPolicyToolResult(ctx, policy, name, call.Input, result, false)
@@ -303,7 +317,7 @@ func (o *panicContainedObserver) Observe(eventType string, payload map[string]an
 				}
 				meta.ToolCallID, _ = payload[evtFieldID].(string)
 			}
-			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			event := safe.EmitPanicWithMetadataContext(o.attribution.context(), meta, recovered, nil)
 			o.failed = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
 		}
 	}()
@@ -359,7 +373,7 @@ func finalizeToolCallCallback(sink *streamSink, attribution panicAttribution) fa
 				meta := attribution.metadata(panicLocationRun, "finalize.on_tool_call")
 				meta.ToolName = call.ToolName
 				meta.ToolCallID = call.ToolCallID
-				safe.EmitPanicWithMetadata(meta, recovered, nil)
+				safe.EmitPanicWithMetadataContext(attribution.context(), meta, recovered, nil)
 				err = nil
 			}
 		}()
@@ -377,7 +391,7 @@ func finalizeToolResultCallback(sink *streamSink, attribution panicAttribution) 
 				meta := attribution.metadata(panicLocationRun, "finalize.on_tool_result")
 				meta.ToolName = result.ToolName
 				meta.ToolCallID = result.ToolCallID
-				safe.EmitPanicWithMetadata(meta, recovered, nil)
+				safe.EmitPanicWithMetadataContext(attribution.context(), meta, recovered, nil)
 				err = nil
 			}
 		}()
@@ -418,7 +432,7 @@ func callPolicyCanFinish(policy Policy, round int, finalText string, attribution
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyFinish)
-			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			event := safe.EmitPanicWithMetadataContext(attribution.context(), meta, recovered, nil)
 			err = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
 		}
 	}()

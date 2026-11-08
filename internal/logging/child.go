@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -440,8 +441,60 @@ func jsonAttr(key string, v any) slog.Attr {
 // it is logged (and again by the handler's attribute hook), and carries the
 // attrs given to NewStderrLogger — the connector name, for an MCP server.
 // Lines are capped at MaxStderrLine; Close flushes a last unterminated line.
+//
+// Each record carries the correlation of a context too: the one a caller
+// set with Attribute for the request in flight (the sandbox bridge's current
+// run_python call), else the base context it was made with, else none.
 type StderrLogger struct {
 	lineSplitter
+	base    context.Context
+	current atomic.Pointer[stderrAttribution]
+}
+
+// stderrAttribution is the request a StderrLogger's lines are attributed to:
+// in flight (until zero), or ended, still applying until until.
+type stderrAttribution struct {
+	ctx   context.Context
+	until time.Time
+}
+
+// StderrAttributionGrace is how long after a request ends its stderr lines
+// are still attributed to it: the subprocess writes its traceback to stderr
+// and its response to stdout, two pipes read independently, so the last
+// lines of a request can arrive just after its response.
+const StderrAttributionGrace = 2 * time.Second
+
+// Attribute makes the lines logged from now on carry ctx's correlation
+// (request_id, conv_id, turn_id, run_id …). Callers serialise the requests
+// they attribute (one bridge request at a time) and ClearAttribution when
+// the request ends.
+func (l *StderrLogger) Attribute(ctx context.Context) {
+	if l == nil || ctx == nil {
+		return
+	}
+	l.current.Store(&stderrAttribution{ctx: ctx})
+}
+
+// ClearAttribution ends Attribute: after StderrAttributionGrace, lines carry
+// the base context again.
+func (l *StderrLogger) ClearAttribution() {
+	if l == nil {
+		return
+	}
+	if a := l.current.Load(); a != nil && a.until.IsZero() {
+		l.current.Store(&stderrAttribution{ctx: a.ctx, until: time.Now().Add(StderrAttributionGrace)})
+	}
+}
+
+// logContext is the context a line is attributed to.
+func (l *StderrLogger) logContext() context.Context {
+	if a := l.current.Load(); a != nil && (a.until.IsZero() || time.Now().Before(a.until)) {
+		return a.ctx
+	}
+	if l.base != nil {
+		return l.base
+	}
+	return context.Background()
 }
 
 // StderrLineMessage is the message of every record a StderrLogger logs; the
@@ -450,8 +503,14 @@ const StderrLineMessage = "subprocess stderr"
 
 // NewStderrLogger returns a StderrLogger whose records carry attrs.
 func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
+	return NewStderrLoggerContext(context.Background(), attrs...)
+}
+
+// NewStderrLoggerContext is NewStderrLogger whose lines carry base's
+// correlation when no request is being attributed (Attribute).
+func NewStderrLoggerContext(base context.Context, attrs ...slog.Attr) *StderrLogger {
 	attrs = append([]slog.Attr(nil), attrs...)
-	l := &StderrLogger{}
+	l := &StderrLogger{base: base}
 	l.emit = func(line []byte, dropped int) error {
 		rec := make([]slog.Attr, 0, len(attrs)+2)
 		rec = append(rec, attrs...)
@@ -470,7 +529,8 @@ func NewStderrLogger(attrs ...slog.Attr) *StderrLogger {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, StderrLineMessage, 0)
 		r.AddAttrs(ungatedAttr())
 		r.AddAttrs(rec...)
-		_ = slog.Default().Handler().Handle(context.Background(), r)
+		ctx := l.logContext()
+		_ = From(ctx).Handler().Handle(ctx, r)
 		return nil
 	}
 	return l

@@ -39,7 +39,7 @@ func TestTerminateBridgeFlushesTheLastStderrLine(t *testing.T) {
 	slog.SetDefault(slog.New(logging.NewHandler("json", &out, slog.LevelDebug)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	stderrLog := bridgeStderrLogger()
+	stderrLog := bridgeStderrLogger(t.Context())
 	cmd := exec.Command("sh", "-c", `printf 'Traceback: last words' >&2; sleep 30`)
 	cmd.Stderr = stderrLog
 	cmd.WaitDelay = time.Second

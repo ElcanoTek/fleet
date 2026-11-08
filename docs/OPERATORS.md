@@ -802,6 +802,12 @@ the finished, encoded line. As a result, the log never contains:
   (by the key's type or its name), or anywhere below it at run time (a
   struct held in an `any` field or a map). Such a value is walked field by
   field, or logged as `[unloggable value: <type>]`.
+- **A request's path or query.** A panic recovered while serving a request
+  (log line and Sentry tag) names the matched route pattern
+  (`/shared/{token}`, `/shared/`), never the path itself: a share, invite or
+  reset token in a path segment, or an OAuth `code`/`state` or `?token=` in
+  the query, is a live credential. Before routing, only the path's first
+  segment is kept (`/shared/{…}`).
 
 The limit: an unregistered value with no secret-like name and no recognisable
 shape cannot be told apart from ordinary text. That is why fleet registers

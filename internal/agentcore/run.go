@@ -408,6 +408,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		runMode:        mode.String(),
 		taskID:         cfg.TaskID,
 		conversationID: cfg.ConversationID,
+		ctx:            ctx,
 	}
 	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
 
