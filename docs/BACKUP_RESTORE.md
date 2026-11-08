@@ -33,8 +33,12 @@ Both stores and the identity schema between them live in the one database:
   **one** file, `fleet-all-<stamp>.dump`: a single `pg_dump -n chat -n core
   -n sched`, so a single snapshot. The accounts and the chat and sched rows
   that name them are consistent with each other.
-- **`--db=chat` / `--db=sched`** dump that store's schema **plus `core`**, so
-  each per-store dump is self-contained.
+- **`--db=chat` / `--db=sched`** dump that store's schema **plus `core`**,
+  so each per-store dump records the accounts its rows name. That does not
+  make a sched dump restorable on its own: `fleet restore --db=sched` never
+  writes `core` (the chat store's migrations own it), so a sched dump cannot
+  be restored alone into an empty database — restore chat first, or use a
+  `fleet-all` dump (table below).
 
 Which restores are self-contained:
 

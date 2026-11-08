@@ -156,3 +156,50 @@ func sqlOne(t *testing.T, dsn, q string, dest any) error {
 	defer db.Close()
 	return db.QueryRowContext(context.Background(), q).Scan(dest)
 }
+
+// A chat dump taken after the merge carries its "merged" marker in core. Into
+// a database whose scheduler accounts are still unmerged (sched.users there),
+// it would stop that merge for good, so it is refused before anything
+// changes (Codex 4505481863 on #2083).
+func TestChatRestoreRefusesToSkipAPendingMerge(t *testing.T) {
+	t.Parallel()
+	for _, b := range []string{"pg_dump", "pg_restore"} {
+		if _, err := exec.LookPath(b); err != nil {
+			t.Skipf("%s not found", b)
+		}
+	}
+	ctx := context.Background()
+	admin, err := sql.Open("pgx", testdb.MaintenanceDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
+		t.Skipf("pg_dump major %d != server major %d", cm, sm)
+	}
+	src := fleetdb.New(t) // both stores migrated: the merge ran and is recorded
+	chatDump := filepath.Join(t.TempDir(), "chat.dump")
+	if err := runPgDump(ctx, src.ChatDSN(), chatDump); err != nil {
+		t.Fatal(err)
+	}
+
+	// The target: the scheduler migrated first, its accounts not merged yet.
+	target := testdb.Empty(t)
+	st := storage.New()
+	if err := st.Initialize(config.WithSchema(target, config.SchedSchema), fleetdb.SchedPool()); err != nil {
+		t.Fatal(err)
+	}
+	if st.DB().IdentityMerge().Ready {
+		t.Fatal("the target merged without a chat store")
+	}
+	st.Close()
+
+	err = runPgRestoreWith(ctx, config.WithSchema(target, config.ChatSchema), chatDump, restoreOpts{allowUnresolved: true})
+	if err == nil || !strings.Contains(err.Error(), "unmerged scheduler accounts") || !strings.Contains(err.Error(), "--db=all") {
+		t.Fatalf("chat restore over a pending merge = %v, want a refusal", err)
+	}
+	var n int
+	if err := sqlOne(t, target, `SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'core')`, &n); err != nil || n != 0 {
+		t.Fatalf("a refused restore created %d schema(s) (%v)", n, err)
+	}
+}

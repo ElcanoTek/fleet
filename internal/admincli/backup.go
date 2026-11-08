@@ -27,7 +27,9 @@ import (
 //     chat, core and sched: one snapshot, so the accounts and the chat and
 //     sched rows that name them are consistent with each other.
 //   - --db=chat / --db=sched dump that store's schema plus core, so each
-//     dump is self-contained (the accounts its rows belong to).
+//     dump records the accounts its rows name. A sched dump still does not
+//     restore alone into an empty database: a sched restore never writes
+//     core (see planSchedRestore).
 //
 // Restore takes --db=all for a whole-database dump (all three schemas, in
 // one transaction), or one store: its schema, plus core for chat (whose
@@ -103,7 +105,8 @@ func (c pgConn) env() []string {
 
 // runPgDump writes a custom-format (-Fc) dump of one store to outPath: the
 // DSN's schema plus the identity schema core, which both stores' rows
-// reference (#2049 M4), so the dump is self-contained. One pg_dump is one
+// reference (#2049 M4), so the dump records the accounts its rows name (a
+// sched restore reads them to check creators; it does not restore them). One pg_dump is one
 // snapshot. Connection params (incl. password) travel via the environment,
 // not argv.
 func runPgDump(ctx context.Context, dsn, outPath string) error {
@@ -229,9 +232,14 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
 			}
 		}
-		if slices.Contains(schemas, config.IdentitySchema) && !opts.allowUnresolved {
-			if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+		if slices.Contains(schemas, config.IdentitySchema) {
+			if err := checkChatRestoreMergeOrder(ctx, dsn, inPath); err != nil {
 				return err
+			}
+			if !opts.allowUnresolved {
+				if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+					return err
+				}
 			}
 		}
 	}

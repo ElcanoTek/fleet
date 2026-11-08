@@ -290,3 +290,32 @@ func checkChatRestoreKeepsCreators(ctx context.Context, dsn, inPath string) erro
 	}
 	return nil
 }
+
+// checkChatRestoreMergeOrder refuses a --db=chat restore that would bring a
+// "merge done" marker (core.identity_merge, step m4_sched_users) into a
+// database whose scheduler accounts are not merged yet (sched.users still
+// there): the marker would stop the scheduler's merge for good, and those
+// accounts would never reach core.users.
+func checkChatRestoreMergeOrder(ctx context.Context, dsn, inPath string) error {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var unmerged bool
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('`+config.SchedSchema+`.users') IS NOT NULL`).Scan(&unmerged); err != nil {
+		return fmt.Errorf("probe the scheduler's accounts: %w", err)
+	}
+	if !unmerged {
+		return nil
+	}
+	steps, err := dumpColumn(ctx, inPath, config.IdentitySchema, "identity_merge", "step")
+	if err != nil {
+		return err
+	}
+	if steps["m4_sched_users"] {
+		return fmt.Errorf("%s records the scheduler's accounts as merged into core.users, but this database still has unmerged scheduler accounts (sched.users): "+
+			"restoring it would stop them from ever being merged. Start fleet once on this database first so it merges them, or restore the whole fleet from a fleet-all dump with --db=all", inPath)
+	}
+	return nil
+}
