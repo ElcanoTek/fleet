@@ -231,7 +231,7 @@ func cmdImport(argv []string) int {
 		if err != nil {
 			return errf(1, "%v", err)
 		}
-		chatStore, err := store.Open(dsn, store.DefaultPoolConfig())
+		chatStore, err := openChatStoreDSN(dsn)
 		if err != nil {
 			return errf(1, "open chat DB: %v", err)
 		}

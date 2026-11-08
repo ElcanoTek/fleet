@@ -133,3 +133,76 @@ func TestUpdatePinsRefusesHostileVersionStrings(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdatePinsRewritesTheDocsThatRestateAPin — the prose copies listed in
+// scripts/lib/pin-docs.tsv move with the pin, so the update PR needs no hand
+// edits; only marked lines change, and only a whole version.
+func TestUpdatePinsRewritesTheDocsThatRestateAPin(t *testing.T) {
+	root, run := pinsFixture(t, time.Now().Add(-30*24*time.Hour), false)
+	_ = os.WriteFile(filepath.Join(root, "scripts/lib/pin-docs.tsv"),
+		[]byte("# comment\nFOO\tfoo\tv\tdocs/X.md\nFOO\tfoo\t-\tdocs/Y.md\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "docs/Y.md"), []byte("FOO pins 1.0.0; Foo 11.0.0 and foo 1.0.0.2 differ\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
+	doc := "- **foo `v1.0.0`** pinned; go install example.com/foo@v1.0.0\n" +
+		"- foo v1.0.01 and foo v1.0.0.1 are other versions\n" +
+		"- bar v1.0.0 is an unmarked line\n"
+	_ = os.WriteFile(filepath.Join(root, "docs/X.md"), []byte(doc), 0o644)
+	if out, err := run(); err != nil {
+		t.Fatalf("update-pins: %v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "docs/X.md"))
+	want := "- **foo `v1.1.0`** pinned; go install example.com/foo@v1.1.0\n" +
+		"- foo v1.0.01 and foo v1.0.0.1 are other versions\n" +
+		"- bar v1.0.0 is an unmarked line\n"
+	if string(got) != want {
+		t.Fatalf("docs rewrite:\n got %q\nwant %q", got, want)
+	}
+	got, _ = os.ReadFile(filepath.Join(root, "docs/Y.md"))
+	if want := "FOO pins 1.1.0; Foo 11.0.0 and foo 1.0.0.2 differ\n"; string(got) != want {
+		t.Fatalf("prefix-less docs rewrite:\n got %q\nwant %q", got, want)
+	}
+}
+
+// withGoInstall gives the fixture's FOO pin a `--go-install` fallback, as
+// ci.yml's tools have.
+func withGoInstall(t *testing.T, root string) {
+	t.Helper()
+	wf := filepath.Join(root, ".github/workflows/ci.yml")
+	b, err := os.ReadFile(wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = append(b, []byte("        run: |\n          scripts/install-pinned-tool.sh \\\n            --go-install \"example.com/foo/cmd/foo@v${FOO_VERSION}\" \\\n            foo\n")...)
+	if err := os.WriteFile(wf, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUpdatePinsRefusesAMajorBumpOfAGoInstallFallback — the fallback's module
+// path carries the major-version suffix (gitleaks/v8, golangci-lint/v2), so an
+// automatic major bump would leave `…/v8@v9.x`, which fails in exactly the
+// outage the fallback is for. Refuse it and say what to do; a minor bump of
+// the same pin still applies.
+func TestUpdatePinsRefusesAMajorBumpOfAGoInstallFallback(t *testing.T) {
+	root, run := pinsFixtureTag(t, time.Now().Add(-30*24*time.Hour), false, "v2.0.0")
+	withGoInstall(t, root)
+	out, err := run()
+	if err == nil || !strings.Contains(out, "FOO: 1.0.0 → 2.0.0 is a major upgrade; update its --go-install module path by hand") {
+		t.Fatalf("want a refused major bump, got err=%v\n%s", err, out)
+	}
+	wf, _ := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(wf), "FOO_VERSION: '1.0.0'") {
+		t.Fatalf("a major bump of a go-install pin was applied:\n%s", wf)
+	}
+
+	root, run = pinsFixture(t, time.Now().Add(-30*24*time.Hour), false)
+	withGoInstall(t, root)
+	if out, err := run(); err != nil {
+		t.Fatalf("a minor bump of a go-install pin was refused: %v\n%s", err, out)
+	}
+	wf, _ = os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(wf), "FOO_VERSION: '1.1.0'") {
+		t.Fatalf("minor bump not applied:\n%s", wf)
+	}
+}

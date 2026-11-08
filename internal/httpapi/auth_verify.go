@@ -171,5 +171,8 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// The gateway mints the web session on this answer: the account's last
+	// sign-in is now.
+	s.recordLogin(r.Context(), req.Email)
 	writeJSON(w, verifyResponse{OK: true})
 }

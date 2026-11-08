@@ -233,6 +233,22 @@ func orphanErr(n int, what string) error {
 //     yet (the scheduler's next start merges the restored sched.users);
 //     refused once it has, since nothing would fold them in again.
 func planSchedRestore(ctx context.Context, dsn, inPath string, dumpHasCore bool, opts restoreOpts) error {
+	if dumpHasCore {
+		// A dump from after the merge holds sched.users_premerge_m4, not
+		// sched.users. Restored over a database whose own merge is still
+		// pending, it would leave sched.users next to it and the scheduler
+		// could never merge (the rename target exists). Complete the
+		// pending merge first; refuse if it cannot complete here.
+		if err := completeIdentityMerge(ctx, dsn); err != nil {
+			return err
+		}
+		if legacy, err := schedUsersTable(ctx, dsn); err != nil {
+			return err
+		} else if legacy {
+			return fmt.Errorf("this database's scheduler accounts (sched.users) are not merged into the one identity table yet, and %s comes from after that merge: "+
+				"start fleet once on this database to complete the upgrade, or restore the whole fleet from a fleet-all dump with --db=all", inPath)
+		}
+	}
 	live, err := readLiveIdentity(ctx, dsn)
 	if err != nil {
 		return err
@@ -289,4 +305,43 @@ func checkChatRestoreKeepsCreators(ctx context.Context, dsn, inPath string) erro
 		return orphanErr(len(lost), "restoring chat (and its accounts, core) under the live sched store")
 	}
 	return nil
+}
+
+// checkChatRestoreMergeOrder refuses a --db=chat restore that would bring a
+// "merge done" marker (core.identity_merge, step m4_sched_users) into a
+// database whose scheduler accounts are not merged yet (sched.users still
+// there): the marker would stop the scheduler's merge for good, and those
+// accounts would never reach core.users.
+func checkChatRestoreMergeOrder(ctx context.Context, dsn, inPath string) error {
+	unmerged, err := schedUsersTable(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	if !unmerged {
+		return nil
+	}
+	steps, err := dumpColumn(ctx, inPath, config.IdentitySchema, "identity_merge", "step")
+	if err != nil {
+		return err
+	}
+	if steps["m4_sched_users"] {
+		return fmt.Errorf("%s records the scheduler's accounts as merged into core.users, but this database still has unmerged scheduler accounts (sched.users): "+
+			"restoring it would stop them from ever being merged. Start fleet once on this database first so it merges them, or restore the whole fleet from a fleet-all dump with --db=all", inPath)
+	}
+	return nil
+}
+
+// schedUsersTable reports whether the scheduler's legacy accounts table is
+// still there (its identity merge has not run).
+func schedUsersTable(ctx context.Context, dsn string) (bool, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	var ok bool
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('`+config.SchedSchema+`.users') IS NOT NULL`).Scan(&ok); err != nil {
+		return false, fmt.Errorf("probe the scheduler's accounts: %w", err)
+	}
+	return ok, nil
 }

@@ -165,11 +165,23 @@ func schedUserAdd(argv []string) int {
 	if admin {
 		acct.Role, acct.OpsScope = identity.RoleAdmin, identity.OpsNone
 	}
-	if _, err := st.Identity().CreateAccount(context.Background(), acct); err != nil {
-		if errors.Is(err, identity.ErrExists) {
-			return errf(3, "username %q already exists (change its access with: fleet sched user set-role %s --role <role>)", username, username)
+	ctx := context.Background()
+	if _, err := st.Identity().CreateAccount(ctx, acct); err != nil {
+		if !errors.Is(err, identity.ErrExists) {
+			return errf(5, "%v", err)
 		}
-		return errf(5, "%v", err)
+		// The email is already an account (a chat user): before the one
+		// identity table this added a separate Operations Center user, so
+		// grant that account the access instead. Its password is not changed.
+		u, err := st.Identity().AddOpsAccess(ctx, username, *role)
+		if errors.Is(err, identity.ErrExists) {
+			return errf(3, "username %q already has Operations Center access, or is disabled (change its access with: fleet sched user set-role %s --role <role>)", username, username)
+		}
+		if err != nil {
+			return errf(5, "%v", err)
+		}
+		fmt.Printf("granted existing account %s Operations Center role %s (chat role %s; its password is unchanged)\n", username, *role, u.Role)
+		return 0
 	}
 	fmt.Printf("created user %s (role=%s; chat role %s)\n", username, *role, acct.Role)
 	return 0

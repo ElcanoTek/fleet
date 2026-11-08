@@ -1022,12 +1022,16 @@ else
     case "$m_kind" in
       demoted) advise "identity merge: $m_email was an Operations Center admin but not a chat admin, so it is NOT an admin any more (chat role $m_detail, ops_scope run) — re-grant with: fleet admin add $m_email" ;;
       unknown) advise "identity merge: $m_email had unknown Operations Center role \"$m_detail\" and has no Operations Center access now — grant it in Settings → Admin → Users if intended" ;;
-      duplicate) advise "identity merge: $m_email differed only in case from an Operations Center username merged first; its tasks no longer resolve to an account" ;;
+      duplicate) advise "identity merge: Operations Center username $m_detail is a duplicate of $m_email (case or spaces) and did not become the account: its tasks no longer resolve, and its private prompts and budgets stay quarantined under the old username" ;;
+      prompt) advise "identity merge: a prompt of $m_email was renamed $m_detail (the account already had one of that name)" ;;
+      budget) advise "identity merge: two $m_detail budgets of $m_email were merged into one (the stricter bound of each kind kept) — review it (GET /admin/budgets)" ;;
     esac
   done < <(jq -r '
       (.report.demoted_split_admins // [] | .[] | ["demoted", .email, (.chat_role // "")]),
       (.report.unknown_roles // [] | .[] | ["unknown", .email, (.sched_role // "")]),
-      (.report.duplicate_usernames // [] | .[] | ["duplicate", .email, ""])
+      (.report.duplicate_usernames // [] | .[] | ["duplicate", .email, ("\"" + (.sched_username // "") + "\" (" + ((.quarantined_prompts // 0)|tostring) + " prompt(s), " + ((.quarantined_budgets // 0)|tostring) + " budget(s))")]),
+      (.report.renamed_prompts // [] | .[] | ["prompt", .owner, ("\"" + .from + "\" -> \"" + .to + "\"")]),
+      (.report.merged_budgets // [] | .[] | ["budget", .principal, .window])
       | @tsv' <<<"$merge_json")
   if (( merge_notes == 0 )); then
     pass "identity merge: no demoted admins, unknown roles or duplicate usernames"

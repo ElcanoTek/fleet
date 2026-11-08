@@ -4,7 +4,7 @@ fleet ships two systemd service+timer pairs in [`deploy/`](../deploy):
 
 | Pair | What it does | When | Skip it if… |
 |---|---|---|---|
-| `fleet-backup.{service,timer}` | `fleet backup --db=all --prune` — pg_dump of the chat + sched databases, each dump integrity-checked, old dumps pruned | daily 02:00 | you back up at the volume/hypervisor layer ([docs/BACKUP_RESTORE.md](BACKUP_RESTORE.md)) |
+| `fleet-backup.{service,timer}` | `fleet backup --db=all --prune` — one pg_dump of the whole fleet (schemas chat, core and sched of the one database, one snapshot), integrity- and schema-checked, old dumps pruned | daily 02:00 | you back up at the volume/hypervisor layer ([docs/BACKUP_RESTORE.md](BACKUP_RESTORE.md)) |
 | `fleet-maintenance.{service,timer}` | `fleet cleanup` — prunes dangling podman image layers (~1.3 GB stranded per sandbox rebuild) + build caches | daily 03:30 | you prune the container store yourself ([docs/MAINTENANCE.md](MAINTENANCE.md)) |
 
 `scripts/bootstrap.sh --enable-service` installs both on a new box

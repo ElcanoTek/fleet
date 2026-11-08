@@ -256,14 +256,17 @@ comment **directive line** (the layout and naming checks still apply):
 ## Backup before a risky migration
 
 ```sh
-fleet backup --db=all --out ./backups   # one pg_dump of chat, core and sched
+fleet backup --db=all --out ./backups   # ONE pg_dump -Fc of chat, core and sched: fleet-all-<stamp>.dump
 ```
+
+and restore it with `fleet restore --db=all <fleet-all-dump>` if needed (one
+transaction; [BACKUP_RESTORE.md](BACKUP_RESTORE.md) covers the per-store
+restores and which of them are self-contained).
 
 Every dump includes `core`, so `core.schema_versions` travels with it. A
 one-store restore (`--db=chat|sched`) of a dump taken since M6 is refused unless
 the dump's ledger is at the live version; a dump from before M6 restores and
-drops the live ledger, so the next start adopts again. See
-[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+drops the live ledger, so the next start adopts again.
 
 ## Squashing old migrations (documented, not done)
 

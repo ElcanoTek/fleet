@@ -26,7 +26,7 @@
 //	fleet config explain [KEY...] [--all] [--json]   (the configuration registry, #2053)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
-//	fleet sched user add|update|set-role|rename|del|list
+//	fleet sched user add|update|set-role|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
 //	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
 //	fleet sched trigger create|list|delete|rotate
@@ -254,7 +254,6 @@ Users, credentials, notes:
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly
-  fleet sched user rename <username> <new-username>
   fleet sched user del <username>
   fleet sched user list
   fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]

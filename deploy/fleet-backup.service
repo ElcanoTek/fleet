@@ -1,4 +1,5 @@
-# deploy/fleet-backup.service — one `fleet backup` run of BOTH databases.
+# deploy/fleet-backup.service — one `fleet backup` run: ONE dump of the whole
+# fleet (schemas chat, core and sched of the one database, one snapshot).
 #
 # A scheduled backup is a HOST operation: it runs pg_dump against the loopback
 # Postgres and writes to a host directory, so it is a systemd oneshot driven by

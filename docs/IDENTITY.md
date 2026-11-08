@@ -78,8 +78,33 @@ with the report. A failure rolls back whole and the next open retries.
 | chat X + no sched row, or a disabled sched row | scope none |
 | sched admin + chat member/viewer | role unchanged, scope **run**; reported (fail closed, ADR-0074) |
 | sched-only account | new row keyed by the lowercased username, role **viewer**, scope mapped (an admin: run, reported), sched UUID, password hash, `created_at` and `last_login` kept (`updated_at` is the merge), enabled as it was; reported |
-| sched row with an unknown role (the column had no CHECK) | scope none; reported |
-| two sched usernames differing only in case | the first wins the UUID; the rest reported |
+| sched row with an unknown role (the column had no CHECK), judged exactly as stored: a padded or re-cased name (`" admin"`, `ReadOnly`) is unknown too | scope none; reported |
+| two sched usernames that normalize to one email (case, spaces) | one becomes the account — the username that already is the email, else the oldest — keeping its UUID; the others are reported as duplicates: their tasks no longer resolve, and their prompts, budgets and audit labels stay under the old username (quarantined: no account reaches them, nothing is folded into the winner) |
+
+**Username-keyed rows move with the account.** A few scheduler tables key
+rows by the sched username as text rather than by UUID. When the merge
+normalizes a legacy username to the account's email (trimmed, lower-cased:
+`Brad@X.com` → `brad@x.com`), it renames those rows in the same transaction,
+for exactly the usernames it changed (API-key labels, `admin` and run labels
+are never touched) — and, in a duplicate group, only for the winner's: a
+losing duplicate's rows are never moved onto the winning account (they would
+hand one person's private prompts and budget limits to another):
+
+- `prompt_library.owner_username`. Prompts are never dropped: if the account
+  already has a prompt of the same name (case-insensitively), the moved one
+  becomes `<name> (from <old username>)` (then ` 2`, ` 3`, …), and the report
+  lists it under `renamed_prompts`.
+- `budgets.principal_id` of scope `user`. If the account already has a budget
+  for the same window, the two merge into the existing row keeping the
+  stricter bound of each kind (a configured bound beats none; of two, the
+  lower), and the report lists it under `merged_budgets`.
+- Audit labels: `agent_notes.created_by`/`updated_by`,
+  `agent_note_proposals.proposed_by`/`decided_by`, `task_feedback.created_by`,
+  `task_learned_instructions.activated_by`.
+
+Free text that mentions a username (a task's "stopped by …" reason) is
+history and stays as written. The report's `rewritten_principals` counts the
+moved rows.
 
 A matched account keeps its chat password and takes the sched UUID, so tasks
 and datasets keep resolving to it; the chat session epoch does not move, so no
@@ -91,7 +116,8 @@ listed in the report.
 the scheduler's first open on this release): `merged`, `created[]`,
 `demoted_split_admins[]`, `admins_gaining_ops[]`, `unknown_roles[]`,
 `duplicate_usernames[]`, `dangling_task_creators`, `dangling_dataset_creators`,
-`at`. Each entry is `{email, sched_role, chat_role, ops_scope}`. Re-grant a
+`rewritten_principals`, `renamed_prompts[]` (`{owner, from, to}`),
+`merged_budgets[]` (`{principal, window, from}`), `at`. Each entry is `{email, sched_role, chat_role, ops_scope}`. Re-grant a
 demoted split admin with `fleet admin add <email>`. `fleet admin merge-report`
 prints the stored report (`--json` for scripts; read-only), and `fleet doctor`
 advises on each demoted split admin, unknown role and duplicate username in it.
@@ -112,8 +138,13 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   written). Responses add `ops_scope` and keep `ops_center_role` and
   `ops_center_admin`. Auth's `ops_role` contract is unchanged (it may also
   send `view`/`run`). The Operations Center's `/auth/me` and `POST /users`
-  keep admin | client | readonly; `POST /users` now makes a new account (role
-  viewer, or admin) and answers 409 for any existing account.
+  keep admin | client | readonly. `POST /users` (and `fleet sched user add`)
+  makes a new account (role viewer, or admin); for an email that is already
+  an enabled account with no Operations Center access (a chat user) it grants
+  that account the access instead — password and chat role untouched, except
+  that admin makes it a Fleet admin — as adding an Operations Center user for
+  a chat email did before. An account that already has access, or is
+  disabled, is a 409.
 - **CLI.** `fleet admin add|list|rm` act on the one row (`--sched-database-url`
   is accepted and ignored). `fleet sched user add|update|set-role|del|list`
   are deprecated aliases: `del` ends Operations Center access (scope none) and
@@ -192,6 +223,16 @@ If the merge has not run yet (the scheduler never opened on this release),
 - No `ops_session_token` columns: the bearer is retired instead.
 - The merge runs on every scheduler open, not only from `fleet serve`, so a
   CLI verb cannot read a half-migrated identity table.
+- The merge also completes from the chat side: every operator verb opens the
+  chat store through one helper (`openChatStoreDSN`) that, when the database
+  still has an unmerged `sched.users` next to `core.users`, opens the
+  scheduler store in the same process (its migrations and the merge) before
+  the verb touches an account. Otherwise `fleet admin rm` or `fleet chat user
+  del` run first after an upgrade would be undone by the merge that follows.
+- A restore never mixes merge states: `--db=chat` refuses a dump that records
+  the merge as done over a database whose merge is pending, and `--db=sched`
+  with a post-merge dump completes the target's pending merge first, or
+  refuses when it cannot (no chat store yet).
 - The merge report is printed in the server's log when the merge runs,
   stored in `core.identity_merge`, shown by `fleet admin merge-report`, and
   advised on by `fleet doctor`.

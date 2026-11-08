@@ -1216,3 +1216,23 @@ func renameTeamTx(ctx context.Context, tx *sql.Tx, from, to string, now int64) (
 	}
 	return usersUpdated, projectsUpdated, nil
 }
+
+// RecordLogin stamps the account's last sign-in (core.users.last_login) when
+// a human session is minted: a password verified for the web login, or an
+// OIDC login's session epoch handed out. A missing account is not an error.
+func (s *Store) RecordLogin(ctx context.Context, email string, at time.Time) error {
+	return identity.New(s.db).RecordLogin(ctx, email, at)
+}
+
+// LastLogin is the account's last recorded sign-in (nil: never, or before
+// this was recorded). ErrUserNotFound when there is no such account.
+func (s *Store) LastLogin(ctx context.Context, email string) (*time.Time, error) {
+	u, err := identity.New(s.db).GetByEmail(ctx, email)
+	if errors.Is(err, identity.ErrNotFound) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u.LastLogin, nil
+}

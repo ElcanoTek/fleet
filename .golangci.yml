@@ -1,10 +1,11 @@
 # golangci-lint v2 configuration
 # https://golangci-lint.run/docs/configuration/
 #
-# CI pins golangci-lint to v2.14.0 (see .github/workflows/ci.yml:
-# golangci/golangci-lint-action `version: v2.14.0`). Keep these in sync so a
-# local `golangci-lint run` matches CI exactly — drifting the binary version
-# can surface or hide findings and make the full-gate flap.
+# CI pins the golangci-lint binary as GOLANGCI_LINT_VERSION in
+# .github/workflows/ci.yml (the go job's env; scripts/update-pins.sh moves it
+# and the docs that restate it, listed in scripts/lib/pin-docs.tsv). Run that
+# version locally so `golangci-lint run` matches CI exactly — drifting the
+# binary version can surface or hide findings and make the full-gate flap.
 #
 # That pin is coupled to go.mod's Go version and cannot lag it: golangci-lint
 # refuses to run when the Go release it was BUILT with is older than the

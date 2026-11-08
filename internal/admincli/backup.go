@@ -27,7 +27,9 @@ import (
 //     chat, core and sched: one snapshot, so the accounts and the chat and
 //     sched rows that name them are consistent with each other.
 //   - --db=chat / --db=sched dump that store's schema plus core, so each
-//     dump is self-contained (the accounts its rows belong to).
+//     dump records the accounts its rows name. A sched dump still does not
+//     restore alone into an empty database: a sched restore never writes
+//     core (see planSchedRestore).
 //
 // Restore takes --db=all for a whole-database dump (all three schemas, in
 // one transaction), or one store: its schema, plus core for chat (whose
@@ -103,7 +105,8 @@ func (c pgConn) env() []string {
 
 // runPgDump writes a custom-format (-Fc) dump of one store to outPath: the
 // DSN's schema plus the identity schema core, which both stores' rows
-// reference (#2049 M4), so the dump is self-contained. One pg_dump is one
+// reference (#2049 M4), so the dump records the accounts its rows name (a
+// sched restore reads them to check creators; it does not restore them). One pg_dump is one
 // snapshot. Connection params (incl. password) travel via the environment,
 // not argv.
 func runPgDump(ctx context.Context, dsn, outPath string) error {
@@ -124,21 +127,43 @@ var allSchemas = []string{config.ChatSchema, config.IdentitySchema, config.Sched
 // runPgDumpAll writes ONE custom-format dump of chat, core and sched: a
 // single pg_dump, so a single snapshot — the accounts in core and the chat
 // and sched rows that reference them are consistent with each other.
-func runPgDumpAll(ctx context.Context, dsn, outPath string) error {
-	return pgDump(ctx, dsn, outPath, allSchemas)
+//
+// Every one of the three must be in the archive: pg_dump runs with
+// --strict-names (a schema that is missing fails it), and the written
+// archive's table of contents is checked again before the backup reports
+// success — a "whole fleet" dump without core or sched is not one.
+func runPgDumpAll(ctx context.Context, dsn, outPath string) (err error) {
+	defer func() {
+		if err != nil {
+			_ = os.Remove(outPath) // no partial "backup" left for a restore to find
+		}
+	}()
+	if err := pgDump(ctx, dsn, outPath, allSchemas, "--strict-names"); err != nil {
+		return err
+	}
+	got, err := dumpSchemas(ctx, outPath)
+	if err != nil {
+		return err
+	}
+	for _, s := range allSchemas {
+		if !slices.Contains(got, s) {
+			return fmt.Errorf("the whole-fleet dump %s lacks schema %s (it holds %s): refusing to report it as a backup", outPath, s, strings.Join(got, ", "))
+		}
+	}
+	return nil
 }
 
 // pgDump runs one pg_dump of the given schemas. A pattern that matches no
 // schema is skipped (no --strict-names): core does not exist before the
 // chat store first migrates.
-func pgDump(ctx context.Context, dsn, outPath string, schemas []string) error {
+func pgDump(ctx context.Context, dsn, outPath string, schemas []string, extra ...string) error {
 	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
-	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}
+	args := append([]string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}, extra...)
 	for _, schema := range schemas {
 		args = append(args, "-n", schema)
 	}
@@ -229,9 +254,14 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 				return fmt.Errorf("%s is a chat dump from before the one identity table (it has no %s schema), and this database already has one: restore it into an empty database, or with the release that made it", inPath, config.IdentitySchema)
 			}
 		}
-		if slices.Contains(schemas, config.IdentitySchema) && !opts.allowUnresolved {
-			if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+		if slices.Contains(schemas, config.IdentitySchema) {
+			if err := checkChatRestoreMergeOrder(ctx, dsn, inPath); err != nil {
 				return err
+			}
+			if !opts.allowUnresolved {
+				if err := checkChatRestoreKeepsCreators(ctx, dsn, inPath); err != nil {
+					return err
+				}
 			}
 		}
 	}
