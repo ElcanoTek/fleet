@@ -550,7 +550,7 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 
 // stagedBashLockdown resolves whether an approved bash command must run
 // network-sealed: the conversation's own Lockdown flag (set at creation,
-// immutable) OR'd with the server-wide CHAT_LOCKDOWN_ONLY switch — the same
+// immutable) OR'd with the server-wide FLEET_LOCKDOWN_ONLY switch — the same
 // disjunction postChat and POST /conversations apply (server.go). The OR with
 // cfg.LockdownOnly matters for conversations created before an operator
 // flipped the global switch on. It FAILS CLOSED: if the conversation can't be

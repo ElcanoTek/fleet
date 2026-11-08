@@ -27,6 +27,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
@@ -34,6 +35,13 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that the web tier (internal/webui) calls in-process.
 type Server struct {
+	// patrolDraftInFlight holds the users with a draft being synthesized. A
+	// draft is a model call of up to 45 seconds; one at a time per user is all
+	// the wizard needs, and anything more is spend nobody asked for. (The
+	// route's rateLimitMiddleware bounds the rate; this bounds concurrency.)
+	// Per-Server, not package-global, so parallel tests' servers don't share it.
+	patrolDraftInFlight sync.Map
+
 	// approvalRuns admits and counts claimed approvals still executing. An
 	// execution can outlive its POST (a call on a server with a declared
 	// approved-call budget answers "executing" early), so shutdown drains it
@@ -257,6 +265,16 @@ type Server struct {
 	// and calls the storage create path. nil → schedule_task approvals report the
 	// feature is unconfigured (no task is created).
 	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+
+	// chatSchedules is the scheduler that fires chat schedules (ADR-0104):
+	// Run now goes through it, and a schedule created or edited to fire soon
+	// asks it for an early pass. nil (tests, a scheduler-less embedding)
+	// answers Run now with 503 and leaves firing to whoever does run one.
+	chatSchedules ChatScheduleEngine
+
+	// publishHook, when set (tests only), sees every queue/patrol update and
+	// drain kick, so a test can count them.
+	publishHook func(kind string)
 
 	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
 	// approved chat manage_tasks call (#1152). Same seam discipline as
@@ -567,6 +585,29 @@ func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskSched
 	return func(s *Server) { s.scheduleTask = fn }
 }
 
+// ChatScheduleEngine is the scheduler's chat schedule surface
+// (internal/sched/scheduler.Scheduler), injected so httpapi need not import
+// the sched packages.
+type ChatScheduleEngine interface {
+	// RunChatScheduleNow fires one schedule now, through the scheduler's
+	// claim → delivery → settle path.
+	RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error)
+	// WakeChatSchedulesAt asks for a firing pass at t (non-blocking).
+	WakeChatSchedulesAt(t time.Time)
+}
+
+// notePublish reports one queue/patrol update or drain kick to publishHook.
+func (s *Server) notePublish(kind string) {
+	if s.publishHook != nil {
+		s.publishHook(kind)
+	}
+}
+
+// WithChatScheduleEngine wires the scheduler that fires chat schedules.
+func WithChatScheduleEngine(e ChatScheduleEngine) Option {
+	return func(s *Server) { s.chatSchedules = e }
+}
+
 // WithTaskManager injects the orchestrator update/stop seam used to resolve an
 // approved manage_tasks call (#1152). Unset leaves the capability off: the tool
 // still stages a card, and approving it reports that the deployment has no
@@ -686,7 +727,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 // scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
 // audits and large interactive workflows are bounded by the per-turn cost
 // and iteration ceilings rather than a 30-minute wall-clock cutoff.
-// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
 const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling

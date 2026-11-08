@@ -111,7 +111,43 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 	if !h.checkSessionEpoch(w, r, email) {
 		return nil, true
 	}
+	if refuseReadonlyUserMutation(w, r, user) {
+		return nil, true
+	}
 	return user, true
+}
+
+// userMayMutate is the ONE role gate for a user principal (a bearer token or a
+// web-tier header-trust session) on the orchestrator API. Reads are open to
+// every role; a mutating method needs a role whose permission set
+// (models.RolePermissions) carries PermissionCreateTask — admin and client do,
+// readonly does not. "Mutating" is exactly the method set a readonly typed key
+// is refused on (apikeys.TypeAllowsMethod for KeyTypeReadonly), so a readonly
+// user and a readonly key draw the same line.
+//
+// Before this existed the user paths authenticated without consulting the
+// role at all: per-handler permission checks covered some routes, but POST
+// /tasks, /tasks/batch, /tasks/estimate, /upload, task feedback and own-task
+// cancel/delete/resume accepted a readonly user outright. The gate runs
+// wherever a user principal is resolved — headerTrustUser and the three
+// bearer resolutions (AdminOrUserAuthMiddleware, authorizeTaskCreator,
+// HandleUpload) — so no handler can forget it. API keys never reach it: their
+// scope is the key type's, decided on the key paths, unchanged.
+func userMayMutate(r *http.Request, user *models.User) bool {
+	if apikeys.TypeAllowsMethod(apikeys.KeyTypeReadonly, r.Method) {
+		return true
+	}
+	return userHasPermission(user, models.PermissionCreateTask)
+}
+
+// refuseReadonlyUserMutation writes the 403 for a user principal userMayMutate
+// rejects and reports whether it did; on true the caller must stop.
+func refuseReadonlyUserMutation(w http.ResponseWriter, r *http.Request, user *models.User) bool {
+	if userMayMutate(r, user) {
+		return false
+	}
+	writeError(w, http.StatusForbidden, "insufficient role: a readonly user cannot modify resources")
+	return true
 }
 
 // AdminOrUserAuthMiddleware allows access with either an admin API key, a scoped API key, or a user token.
@@ -173,6 +209,9 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 			if user := h.userFromPasswordToken(token); user != nil {
+				if refuseReadonlyUserMutation(w, r, user) {
+					return
+				}
 				ctx := logging.WithUser(context.WithValue(r.Context(), userContextKey, user), user.Username)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

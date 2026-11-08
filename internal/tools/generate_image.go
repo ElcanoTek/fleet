@@ -34,7 +34,7 @@ import (
 
 const (
 	// defaultImageGenModel is the model the tool uses when the agent doesn't
-	// pass `model` and FLEET_IMAGE_MODEL (legacy: CHAT_IMAGE_MODEL) isn't set.
+	// pass `model` and FLEET_IMAGE_MODEL isn't set.
 	// Nano Banana 2.1 (google/gemini-nano-banana-2.1) is Google's latest-generation
 	// image generation and editing model (2026-10), succeeding Nano Banana 2 and
 	// Nano Banana Pro with strong real-world grounding, recontextualization, and

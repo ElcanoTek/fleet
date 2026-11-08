@@ -11,7 +11,7 @@ import (
 const workspaceRootEnv = "FLEET_WORKSPACE_ROOT"
 
 // PinWorkspaceRoot resolves the workspace root ONCE — the operator's
-// FLEET_WORKSPACE_ROOT (legacy CHAT_/CUTLASS_ aliases honored) when set, else
+// FLEET_WORKSPACE_ROOT when set, else
 // ./workspace under the process cwd (/var/lib/fleet/workspace under
 // deploy/fleet.service) — makes it absolute, and writes it back to both
 // c.WorkspaceRoot and the canonical FLEET_WORKSPACE_ROOT env var. `fleet serve`

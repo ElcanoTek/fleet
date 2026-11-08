@@ -141,7 +141,7 @@ const turnIDHeaderName = "X-Fleet-Turn-Id"
 // Lockdown model allow-list (#568): the override must pass the SAME guard as
 // PATCH /conversations/{id}/model and conversation create — otherwise this
 // would be the one path that lets a lockdown conversation persist and run a
-// model the operator excluded from CHAT_LOCKDOWN_ALLOWED_MODELS. Reports false
+// model the operator excluded from FLEET_LOCKDOWN_ALLOWED_MODELS. Reports false
 // after writing the HTTP error; the caller must return without running the turn.
 func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, reqModel string) bool {
 	if reqModel == "" {

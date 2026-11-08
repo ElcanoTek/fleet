@@ -13,8 +13,8 @@ import (
 // stderr (#2074 review).
 func TestLoad_LockdownWithoutImageWarnsThroughSlog(t *testing.T) {
 	isolateEnv(t)
-	t.Setenv("CHAT_LOCKDOWN_ONLY", "true")
-	t.Setenv("CHAT_SANDBOX_IMAGE", "")
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "true")
+	t.Setenv("FLEET_SANDBOX_IMAGE", "")
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))

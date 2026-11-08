@@ -129,7 +129,7 @@ type Conversation struct {
 	// Lockdown is set at conversation creation and never changes. When
 	// true: the per-turn sandbox is cold-started fresh with
 	// --network=none and the model slug must be in
-	// CHAT_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
+	// FLEET_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
 	// containers (default mode), but reuse the warm pool and inherit
 	// rootless slirp4netns. Drives the "Lockdown chat" badge on the
 	// frontend.
@@ -2396,7 +2396,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	// 1. TTL sweep. Conversations with an active or paused patrol/timer schedule
 	//    are exempt just like pinned/project conversations so a scheduled patrol
 	//    is never reaped between runs.
-	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM chat_schedules cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
+	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM ` + chatSchedulesTable + ` cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
 	const notSharedOrMultiplayerClause = `COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE`
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day

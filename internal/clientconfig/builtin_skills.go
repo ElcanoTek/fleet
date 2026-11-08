@@ -87,7 +87,7 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 }
 
 // mergedSkillsBase is the parent of per-bundle merged trees. Prefer the
-// operator's data dir (FLEET_DATA_DIR / CHAT_DATA_DIR) so the tree lives
+// operator's data dir (FLEET_DATA_DIR) so the tree lives
 // next to the rest of fleet state, not under world-writable /tmp. Fall
 // back to the user cache, then a uid-scoped temp name — still never the
 // predictable shared /tmp/fleet-skills path (#1121).
@@ -99,9 +99,6 @@ func mergedSkillsBase() string { return fleetStateBase(mergedSkillsDirName) }
 // name — never a predictable shared /tmp path (#1121).
 func fleetStateBase(sub string) string {
 	if d := strings.TrimSpace(envreg.Get("FLEET_DATA_DIR")); d != "" {
-		return filepath.Join(d, sub)
-	}
-	if d := strings.TrimSpace(envreg.Get("CHAT_DATA_DIR")); d != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return filepath.Join(d, sub)
 	}
 	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {

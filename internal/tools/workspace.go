@@ -124,7 +124,7 @@ func TaskWorkspaceDir(root, lineageID string) string {
 
 // WorkspaceDirForConversation returns the absolute-or-relative path to
 // the per-conversation workspace root. Resolution order:
-//   - $FLEET_WORKSPACE_ROOT/<convID> (or legacy $CHAT_WORKSPACE_ROOT)
+//   - $FLEET_WORKSPACE_ROOT/<convID>
 //   - ./workspace/<convID>        (fallback when the env var isn't set)
 //
 // When conversationID is "", returns the shared workspace root —

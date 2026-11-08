@@ -158,6 +158,30 @@ cannot silently disable the checks):
 The justification is visible in review, so the escape hatch stays a conscious,
 auditable decision rather than a silent bypass.
 
+## Rolling back a sched release
+
+To return a box to the previous release after a release that added sched
+migrations, stop fleet, apply the new release's `.down.sql` files newest
+first with `psql` on the sched schema (`DATABASE_URL` with the sched search
+path), record the version the previous release ships with the NEW binary
+(`force` refuses a version its build does not ship — the old one does), then
+start the previous binary. For M5 (#2049, sched 076 + 077):
+
+```sh
+SCHED_DSN="$DATABASE_URL&options=-csearch_path%3Dsched"   # or ?options=... if the URL has no query
+psql "$SCHED_DSN" -v ON_ERROR_STOP=1 -1 -f internal/sched/db/migrations/077_move_chat_schedules.down.sql
+psql "$SCHED_DSN" -v ON_ERROR_STOP=1 -1 -f internal/sched/db/migrations/076_chat_schedules.down.sql
+fleet migrate force 75 --no-confirm
+```
+
+A release must not leave the chat schema at a version the previous release
+does not know (the chat runner has no down migrations, and an older binary
+refuses to boot on a newer chat schema). Chat-side objects that belong to a
+sched change are created by the sched migration and removed by its down:
+M5's conversation-delete trigger on `chat.conversations` (ADR-0104) is
+created by sched 077 and dropped by 077's down, so the rollback above is
+complete — no chat step.
+
 ## Backup before a risky migration
 
 Before applying a migration you're unsure about, take a dump with the existing

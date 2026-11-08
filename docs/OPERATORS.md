@@ -100,7 +100,7 @@ value and its source. It draws from the sources it can see:
   (`--no-unit` leaves it out);
 - your shell's environment;
 - the env file;
-- alias spellings;
+- alias spellings (the bare `PERSONA` / `PERSONA_DEFAULT`);
 - defaults, including one inherited from another setting.
 
 It is not the running server's in-memory configuration: admin overrides made
@@ -108,14 +108,16 @@ in the app and values not yet reloaded are not shown. Secrets are always
 redacted. With no KEY it lists every setting that is set or carries a note,
 and `--all` lists every one, with its default.
 
-**The legacy `CHAT_`/`CUTLASS_` spellings are deprecated**
-([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)). They still
-work, but `fleet doctor` warns about each one it finds, and
-`fleet config migrate-env` rewrites the env file to the canonical `FLEET_`
-names: it prints the plan by default, and with `--write` it backs the file up
-to `<file>.bak-<UTC timestamp>` first, changes only the key on each line
-(comments, order and values stay as they are), refuses when two spellings of
-one setting disagree, and never prints a value.
+**The legacy `CHAT_<X>`/`CUTLASS_<X>` spellings of `FLEET_<X>` settings were
+removed** ([ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md)):
+nothing reads them, so a setting spelled only that way falls back to its
+default. When one is still set, `fleet serve` logs a warning at boot and
+`fleet doctor` warns, each naming the `FLEET_` key to rename it to (with
+`fleet env edit`, or `fleet config set-env` then `fleet config unset-env`);
+`fleet config explain` notes it, and `fleet config set-env` refuses to write
+one. The `CHAT_`/`CUTLASS_` names listed in [CONFIGURATION.md](CONFIGURATION.md)
+(the chat rate limits, connector wire keys, script inputs) are settings of
+their own and keep working.
 
 A single **0600** env file (`FLEET_ENV_FILE`, default `.env.local`; on a box
 typically `/etc/fleet/fleet.env`) carries every secret and connection string.
@@ -174,7 +176,8 @@ breakpoints are only ever emitted for `anthropic/`- and `google/`-prefixed model
 slugs — other providers are unaffected by the setting. Cache efficiency is
 visible per user in `/admin/stats` (`total_cached_tokens`,
 `total_cache_creation_tokens`, `cache_hit_rate_pct`). The legacy
-`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work (deprecated, ADR-0099).
+`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` spellings were
+removed (ADR-0106) and are not read.
 
 **Value parsing rules.** Env-file values follow standard dotenv semantics: an
 `export ` prefix is tolerated; an **unquoted** value ends at the first ` #`

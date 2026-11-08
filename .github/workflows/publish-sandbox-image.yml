@@ -314,6 +314,7 @@ jobs:
           sparse-checkout: |
             scripts/build-sandbox-image.sh
             scripts/lib/sandbox-bundle.sh
+            scripts/lib/retired-env.sh
             config/default/manifest.yaml
             config/default/sandbox/
           sparse-checkout-cone-mode: false

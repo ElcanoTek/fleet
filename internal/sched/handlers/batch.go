@@ -204,6 +204,9 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return taskCreator{}, "", false
 	}
+	if refuseReadonlyUserMutation(w, r, user) {
+		return taskCreator{}, "", false
+	}
 	creator.creatorID = &user.ID
 	creator.creatorUsername = user.Username
 	creator.hasAdminPermission = userHasPermission(user, models.PermissionAdmin)

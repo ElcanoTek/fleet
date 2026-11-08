@@ -371,6 +371,15 @@ function OrchestratorInner({
   // admin-API-key principal carries no role) — treat absent as non-admin for
   // gating, so a non-admin can never reach the SLA report even via stale state.
   const isAdmin = session.role === "admin";
+  // A readonly Operations Center user may look but not touch: the orchestrator
+  // refuses every mutating request from that role with 403 ("insufficient
+  // role: a readonly user cannot modify resources"), so every control that
+  // would only earn that 403 — New task, edit, run now, stop, delete,
+  // resubmit, feedback, wake, the dataset writes — is hidden rather than left
+  // to fail. Only an explicit "readonly" hides them: an admin-API-key
+  // principal carries no role and keeps its controls. The server stays the
+  // real gate; this is the affordance.
+  const readOnly = session.role === "readonly";
 
   const applyStatFilter = (filter: StatFilter) => {
     if (statFilter === filter) {
@@ -489,27 +498,29 @@ function OrchestratorInner({
           onSignOut: () => void signOutAfter(session.logout()),
         }}
       >
-        <div
-          className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}
-        >
-          <button
-            type="button"
-            data-testid="new-task-btn"
-            className={[
-              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
-              railCollapse.collapsed
-                ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0"
-                : "",
-            ].join(" ")}
-            data-tip={railCollapse.collapsed ? "New task" : undefined}
-            onClick={() => setTaskModalOpen(true)}
+        {readOnly ? null : (
+          <div
+            className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}
           >
-            <Icon name="plus" className="size-4" />
-            <span className={railCollapse.collapsed ? "sm:hidden" : ""}>
-              New task
-            </span>
-          </button>
-        </div>
+            <button
+              type="button"
+              data-testid="new-task-btn"
+              className={[
+                "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
+                railCollapse.collapsed
+                  ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0"
+                  : "",
+              ].join(" ")}
+              data-tip={railCollapse.collapsed ? "New task" : undefined}
+              onClick={() => setTaskModalOpen(true)}
+            >
+              <Icon name="plus" className="size-4" />
+              <span className={railCollapse.collapsed ? "sm:hidden" : ""}>
+                New task
+              </span>
+            </button>
+          </div>
+        )}
       </NavRail>
 
       <main className="flex min-h-0 flex-col overflow-hidden">
@@ -519,15 +530,17 @@ function OrchestratorInner({
           actions={
             /* Mobile-only New task: on phones the rail's button is inside the
                off-canvas drawer, so surface the primary action in the bar. */
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
-              data-testid="new-task-btn-topbar"
-              onClick={() => setTaskModalOpen(true)}
-            >
-              <Icon name="plus" className="size-4" />
-              New task
-            </button>
+            readOnly ? undefined : (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
+                data-testid="new-task-btn-topbar"
+                onClick={() => setTaskModalOpen(true)}
+              >
+                <Icon name="plus" className="size-4" />
+                New task
+              </button>
+            )
           }
         />
 
@@ -628,7 +641,7 @@ function OrchestratorInner({
                   the top, which reads as a jarring jump on phones. */}
               <div className="dashboard-tab-panel">
                 {tab === "datasets" ? (
-                  <DatasetsPanel />
+                  <DatasetsPanel readOnly={readOnly} />
                 ) : tab === "upcoming" ? (
                   <UpcomingPanel />
                 ) : tab === "sla" && isAdmin ? (
@@ -658,10 +671,10 @@ function OrchestratorInner({
                       loading={dashboard.loading}
                       error={dashboard.error}
                       onRetry={() => void dashboard.reload()}
-                      onEdit={setEditTask}
-                      onRunNow={setRunNowTask}
-                      onStop={setStopTask}
-                      onDelete={setDeleteTask}
+                      onEdit={readOnly ? undefined : setEditTask}
+                      onRunNow={readOnly ? undefined : setRunNowTask}
+                      onStop={readOnly ? undefined : setStopTask}
+                      onDelete={readOnly ? undefined : setDeleteTask}
                     />
                     {/* Only the task list auto-refreshes (useDashboardData); the
                     other tabs fetch once and carry their own Refresh button,
@@ -770,17 +783,23 @@ function OrchestratorInner({
         task={liveLogTask}
         onClose={() => setLogTask(null)}
         canStop={
-          isAdmin ||
-          (!!session.username &&
-            logTask?.created_by_username === session.username)
+          !readOnly &&
+          (isAdmin ||
+            (!!session.username &&
+              logTask?.created_by_username === session.username))
         }
+        readOnly={readOnly}
         onResubmitted={() => void dashboard.reload()}
-        onEdit={(t) => {
-          setLogTask(null);
-          setEditTask(t);
-        }}
+        onEdit={
+          readOnly
+            ? undefined
+            : (t) => {
+                setLogTask(null);
+                setEditTask(t);
+              }
+        }
         onSelectTask={setLogTask}
-        onDelete={setDeleteTask}
+        onDelete={readOnly ? undefined : setDeleteTask}
         onRunEnded={refreshEndedRun}
       />
     </div>

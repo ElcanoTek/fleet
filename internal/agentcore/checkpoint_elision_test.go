@@ -260,7 +260,7 @@ func TestRecentWindowStart(t *testing.T) {
 // The fixture is TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory's
 // (a 140K prefix over the 80K budget), with elision on.
 func TestRun_Elision_ClearsTheBudgetWithoutASummary(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	const budget = 80_000
@@ -366,7 +366,7 @@ func TestRun_Elision_LowersThePostCompactionFloor(t *testing.T) {
 // stub's preview may have cut an identifier the run still needs), while the
 // kept half carries the stubs on.
 func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	model := &namedMockModel{name: "elide-not-enough"}
 	recordContextMaxForModel(context.Background(), &namedMockModel{name: model.name}, 10_000_000)
@@ -412,7 +412,7 @@ func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 // summary is skipped only when elision freed elisionHeadroomFraction of the
 // budget below the threshold.
 func TestCheckContextPressure_ElisionJustUnderTheBudgetStillSummarizes(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	run := func(used int) []map[string]any {
 		model := &namedMockModel{name: "elide-headroom"}
@@ -481,10 +481,6 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 		}
 	})
 
-	// The legacy CHAT_/CUTLASS_ aliases are read when FLEET_ is empty: clear
-	// them, so the "" case reads the default whatever the shell has.
-	t.Setenv("CHAT_CONTEXT_ELIDE_BEFORE_SUMMARY", "")
-	t.Setenv("CUTLASS_CONTEXT_ELIDE_BEFORE_SUMMARY", "")
 	for _, tc := range []struct {
 		value string
 		want  bool
@@ -501,7 +497,7 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 // and an elision that frees enough clears the stalled flag, resets the
 // consecutive-compaction count and marks the floor for re-measurement.
 func TestCheckContextPressure_ScheduledWindowCompactionElidesFirst(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
 	model := &namedMockModel{name: "elide-window"}
@@ -602,7 +598,7 @@ func TestUnseenTokens(t *testing.T) {
 // An elision that saves less than elisionMinSavingFraction of the budget is
 // not made: it could not skip the summary, and changes nothing.
 func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	const budget = 100_000
 	elide := func(history []fantasy.Message) (int, bool) {
 		e := newMockEngine(t, &namedMockModel{name: "elide-tiny"})
@@ -630,7 +626,7 @@ func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
 // guard was already stubbing old results on the wire, the measured size is
 // smaller than the history and the stubs' savings would otherwise count twice.
 func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	e := newMockEngine(t, &namedMockModel{name: "elide-direct"})
 	e.requireCompactionOptIn = true
 	history := elisionHistory(10, 40_000)
@@ -647,7 +643,7 @@ func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
 // history, which already counts the latest step's output: nothing unseen is
 // added, and the estimate after elision is the elided history's own.
 func TestCheckContextPressure_ElisionFromAnEstimateAddsNothingUnseen(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	model := &namedMockModel{name: "elide-estimated"}
 	recordContextMaxForModel(context.Background(), &namedMockModel{name: model.name}, 10_000_000)
@@ -764,7 +760,7 @@ func TestRun_Elision_SizedInTheProvidersTokens(t *testing.T) {
 // at the estimator's 4 characters a token is still made when the run's
 // measured rate puts it over.
 func TestElideBeforeSummary_MinimumSavingAtTheRunsRate(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	const budget = 100_000
 	// The shortest history whose elision, with the window at rate 2, saves
 	// 1-2% of the budget in estimated tokens: under the minimum at rate 1,
@@ -793,7 +789,7 @@ func TestElideBeforeSummary_MinimumSavingAtTheRunsRate(t *testing.T) {
 // the elision leaves alone goes out as its envelope, so its bytes are not in
 // the estimate.
 func TestElideBeforeSummary_EstimatesTheSentHistory(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	image := elisionExchange("image", `{}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("i", 256_000), MediaType: "image/png"})
 	history := append(append(elisionHistory(0, 0), image...), elisionHistory(10, 40_000)[2:]...)
 	e := newMockEngine(t, &namedMockModel{name: "elide-sent"})
@@ -817,7 +813,7 @@ func TestElideBeforeSummary_EstimatesTheSentHistory(t *testing.T) {
 // stub, once written, is byte-identical in every later call, so an elision at
 // a later pause rewrites only the results that left the window since.
 func TestRun_Elision_KeepsThePromptCachePrefix(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	sr := &sizedRun{prefix: 140_000, toolSteps: 26, resultChars: 40_000}
@@ -881,7 +877,7 @@ func TestRun_Elision_KeepsThePromptCachePrefix(t *testing.T) {
 // heldEngine is a scheduled engine with elision on and the given run state.
 func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
 	t.Helper()
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	e := newMockEngine(t, &namedMockModel{name: name})
 	e.requireCompactionOptIn = true
 	e.bindRunUsage(orch)
@@ -1187,7 +1183,7 @@ func TestNoteReruns_NoBudgetNoRaise(t *testing.T) {
 // elides. Before the fix, a pause at every 80K summarized, and the model
 // re-fetched what each summary dropped.
 func TestRun_Elision_RerunRaisesTheBudget(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	const rerunAt = 10 // after the first pause, which elides page 1
@@ -1595,7 +1591,7 @@ func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 // budget, and the in-round guard never has to trim a call. The 10K-token task
 // message is a real one, so the guard counts it as the model does.
 func TestRun_Elision_RerunRaiseOnASmallWindow(t *testing.T) {
-	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell says
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	// The input limit is 200000 − 16384 (completion) − 10000 (provider

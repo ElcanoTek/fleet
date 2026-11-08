@@ -265,8 +265,7 @@ const (
 	defaultInteractiveContextCompactionMaxTokens   = 350_000
 )
 
-// contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD
-// (with the CHAT_/CUTLASS_ aliases fleetEnv already honors),
+// contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD,
 // clamped to (0,1]. An unset, unparseable, or out-of-range value falls back to
 // the default.
 func contextPressureWarnThreshold() float64 {
@@ -311,8 +310,8 @@ func budgetWindDownFraction() float64 {
 // ~100 calls at an 11% cache-hit rate. 0 disables the trigger.
 const defaultContextResendBudgetTokens = 80_000
 
-// contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS (with
-// the CHAT_/CUTLASS_ aliases): 0 disables, a negative or unparseable value
+// contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS: 0
+// disables, a negative or unparseable value
 // falls back to the default.
 func contextResendBudgetTokens() int {
 	v := fleetEnv.lookupFloatDefault("CONTEXT_RESEND_BUDGET_TOKENS", float64(defaultContextResendBudgetTokens))

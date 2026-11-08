@@ -28,8 +28,7 @@
 //   - The compaction-summary 4th breakpoint is cutlass-only and is exposed here
 //     as an additive option (WithCompactionSummaryBreakpoint) rather than
 //     forced on, so the chat 3-breakpoint layout is unchanged by default.
-//   - The kill-switch env var is parameterized: <PREFIX>_DISABLE_PROMPT_CACHE,
-//     with CHAT_/CUTLASS_ back-compat aliases (see env.go).
+//   - The kill-switch env var is FLEET_DISABLE_PROMPT_CACHE (see env.go).
 package agentcore
 
 import (

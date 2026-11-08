@@ -123,6 +123,12 @@ On the right of every row sit four actions:
 | **Stop** | A one-time task that has not started yet is cancelled and never runs; one that is already running stops at its next checkpoint and keeps what it has done so far. On a repeating task, Stop ends the schedule for good: the confirmation reads **Stop this schedule for good?** and the task will not run again, so create a new task to bring it back. Either way its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
 | **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
 
+A **Viewer** (read-only) sees no row actions at all: viewers can open and read
+the tasks visible to them (as for any non-admin, the tasks they created unless
+their role grants viewing all logs) and those tasks' history, but cannot
+create, run, edit, stop or delete tasks, so the board also hides **New task**
+for them.
+
 Two kinds of row show fewer than four. While a run is **live** it can only be
 stopped: run-now, edit and delete are withheld until it finishes, so a second
 copy can never race the first and a running record can never be erased
@@ -284,7 +290,9 @@ cover reading it, so it says "available" rather than claiming none was ever
 written. The
 record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
-here without returning to the board.
+here without returning to the board. A Viewer sees only the read-only actions
+(**History**, **Discuss in chat**, **Download logs**); edit, resubmit, delete,
+stop, wake and run feedback are hidden.
 
 When your deployment puts a link in task notifications, by email or in the
 browser, the link opens the same record: the board loads with that task open.

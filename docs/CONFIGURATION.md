@@ -22,10 +22,10 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
   refuses to boot, and `fleet validate-config` reports it. An unset variable gets its default.
 - **Secrets** are marked *secret*: `fleet config explain` always redacts them, and in Kubernetes they belong in
   `config.existingSecret`, not `config.env`.
-- **Deprecated aliases.** The legacy `CHAT_`/`CUTLASS_` spellings of a setting still work and are listed under it, but
-  are deprecated ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)): `fleet doctor` warns about each one it
-  finds and `fleet config migrate-env --write` rewrites the env file to the canonical names. Some `CHAT_`/`CUTLASS_` names
-  are canonical (not aliases) and are listed as settings of their own.
+- **No `CHAT_`/`CUTLASS_` aliases.** The legacy `CHAT_<X>`/`CUTLASS_<X>` spellings of a `FLEET_<X>` setting were removed
+  ([ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md)): nothing reads them. When one is set, `fleet serve` logs a
+  warning at boot, `fleet doctor` warns, and `fleet config explain` names the `FLEET_` key to use instead. The `CHAT_`/
+  `CUTLASS_` names listed below are canonical settings of their own, not aliases.
 - **Inherited defaults.** A default shown as *inherited from `X`* is setting `X`'s value, resolved the same way
   (`FLEET_METADATA_MODEL` follows `FLEET_TITLE_MODEL` unless set).
 - **Inspect a box** with `fleet config explain [KEY…]`. It reports each setting's *configured* value and its source,
@@ -52,31 +52,30 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 - [Install, update and doctor scripts](#install-update-and-doctor-scripts)
 - [Tests and harnesses](#tests-and-harnesses)
 - [Retired](#retired)
-- [Deprecated aliases](#deprecated-aliases)
 
 ## Server, network and TLS
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_SERVER_ADDR` | string | `127.0.0.1:8080` | server | Listen address of the chat API (and the webhooks it serves). Bound at startup; a change needs a restart. Deprecated aliases: `CHAT_SERVER_ADDR`, `CUTLASS_SERVER_ADDR` (process env only). Helm: set by the chart (fixed: 0.0.0.0:8080). |
+| `FLEET_SERVER_ADDR` | string | `127.0.0.1:8080` | server | Listen address of the chat API (and the webhooks it serves). Bound at startup; a change needs a restart. Helm: set by the chart (fixed: 0.0.0.0:8080). |
 | `FLEET_WEB_ADDR` | string | `127.0.0.1:3000` | server | Listen address of the browser tier (the embedded web UI and every browser /api route, ADR-0091). `off`, `none`, `disabled` or `0` runs API-only with no browser tier. Helm: set by the chart (fixed: 0.0.0.0:3000). |
 | `FLEET_ORCHESTRATOR_ADDR` | string | `127.0.0.1:8000` | server | Listen address of the orchestrator (scheduler HTTP API, /v1, triggers). Loopback by default; multi-host topologies opt in explicitly. Helm: set by the chart (fixed: 0.0.0.0:8000). |
-| `FLEET_SERVER_TOKEN` | string | — | server | Shared bearer token between the browser gateway and the chat/orchestrator APIs. Not reloadable. **Secret.** Deprecated aliases: `CHAT_SERVER_TOKEN`, `CUTLASS_SERVER_TOKEN` (process env only). |
+| `FLEET_SERVER_TOKEN` | string | — | server | Shared bearer token between the browser gateway and the chat/orchestrator APIs. Not reloadable. **Secret.** |
 | `ORCHESTRATOR_SERVER_TOKEN` | string | inherited from `FLEET_SERVER_TOKEN` | server | Bearer token the browser gateway presents to the orchestrator; defaults to FLEET_SERVER_TOKEN. **Secret.** |
 | `ADMIN_API_KEY` | string | — | server | Admin API key for the orchestrator's admin endpoints (and `fleet mcp reload`). Not reloadable. **Secret.** |
-| `FLEET_PUBLIC_BASE_URL` | url | — | server | Public origin of this deployment (https://fleet.example.com). Used for OAuth redirect URIs, links and the browser tier's origin checks; a trailing slash is trimmed. Deprecated aliases: `CHAT_PUBLIC_BASE_URL` (process env only), `CUTLASS_PUBLIC_BASE_URL` (process env only). |
+| `FLEET_PUBLIC_BASE_URL` | url | — | server | Public origin of this deployment (https://fleet.example.com). Used for OAuth redirect URIs, links and the browser tier's origin checks; a trailing slash is trimmed. |
 | `FLEET_PUBLIC_URL` | url | — | server | Public URL used to build deep links in task notifications and Web Push messages. |
-| `FLEET_TLS_MODE` | enum: off, manual, auto | `off` | server | TLS termination by the chat listener itself. Most deployments leave it off and terminate TLS in Caddy. Deprecated aliases: `CHAT_TLS_MODE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_MODE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
-| `FLEET_TLS_CERT_FILE` | path | — | server | Certificate file for FLEET_TLS_MODE=manual. Deprecated aliases: `CHAT_TLS_CERT_FILE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_CERT_FILE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
+| `FLEET_TLS_MODE` | enum: off, manual, auto | `off` | server | TLS termination by the chat listener itself. Most deployments leave it off and terminate TLS in Caddy. |
+| `FLEET_TLS_CERT_FILE` | path | — | server | Certificate file for FLEET_TLS_MODE=manual. |
 | `FLEET_TLS_KEY_FILE` | path | — | server | Private-key file for FLEET_TLS_MODE=manual. |
-| `FLEET_TLS_DOMAIN` | string | — | server | Domain the ACME certificate is issued for (FLEET_TLS_MODE=auto). Deprecated aliases: `CHAT_TLS_DOMAIN` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_DOMAIN` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
+| `FLEET_TLS_DOMAIN` | string | — | server | Domain the ACME certificate is issued for (FLEET_TLS_MODE=auto). |
 | `FLEET_TLS_ACME_DIR` | path | `/var/lib/fleet/acme-cache` | server | ACME certificate cache directory. |
 | `FLEET_TLS_ACME_EMAIL` | string | — | server | Contact email registered with the ACME CA. |
 | `FLEET_TLS_HTTP_ADDR` | string | `:80` | server | The HTTP→HTTPS redirect and ACME HTTP-01 challenge listener, when fleet terminates TLS itself. |
-| `FLEET_IP_ALLOWLIST` | csv | — | server | Comma-separated IPs/CIDRs allowed to reach fleet; empty allows every source. A malformed entry refuses to boot. Deprecated aliases: `CHAT_IP_ALLOWLIST` (process env only), `CUTLASS_IP_ALLOWLIST` (process env only). |
-| `FLEET_IP_DENYLIST` | csv | — | server | Comma-separated IPs/CIDRs always blocked (deny overrides allow). Deprecated aliases: `CHAT_IP_DENYLIST` (process env only), `CUTLASS_IP_DENYLIST` (process env only). |
-| `FLEET_TRUSTED_PROXIES` | csv | — | server | Comma-separated reverse-proxy IPs whose X-Forwarded-For fleet trusts. Empty (the default) never reads X-Forwarded-For. Deprecated aliases: `CHAT_TRUSTED_PROXIES` (process env only), `CUTLASS_TRUSTED_PROXIES` (process env only). |
-| `FLEET_SHUTDOWN_GRACE_SECONDS` | int | `30` | server | How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. *Validated at boot*. Deprecated aliases: `CHAT_SHUTDOWN_GRACE_SECONDS` (process env only), `CUTLASS_SHUTDOWN_GRACE_SECONDS` (process env only). |
+| `FLEET_IP_ALLOWLIST` | csv | — | server | Comma-separated IPs/CIDRs allowed to reach fleet; empty allows every source. A malformed entry refuses to boot. |
+| `FLEET_IP_DENYLIST` | csv | — | server | Comma-separated IPs/CIDRs always blocked (deny overrides allow). |
+| `FLEET_TRUSTED_PROXIES` | csv | — | server | Comma-separated reverse-proxy IPs whose X-Forwarded-For fleet trusts. Empty (the default) never reads X-Forwarded-For. |
+| `FLEET_SHUTDOWN_GRACE_SECONDS` | int | `30` | server | How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. *Validated at boot*. |
 | `FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE` | int | `10` | server | Per-slug rate limit on inbound webhook triggers. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_BUFFER_DURATION` | duration | `60m` | server | How long a finished turn's SSE events stay in memory for reattach. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN` | int | `5242880` | server | Cap on the in-memory SSE replay buffer per turn, in bytes. *Validated at boot* (≥ 0). |
@@ -126,40 +125,40 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `DB_PASSWORD` | string | — | server | Postgres password for the discrete DSN parts. **Secret.** |
 | `DB_NAME` | string | `fleet` | server | Postgres database name for the discrete DSN parts. |
 | `DB_SSLMODE` | string | `disable` | server | Postgres sslmode for the discrete DSN parts. |
-| `FLEET_CHAT_DB_MAX_CONNS` | int | `25` | server | Chat pool: maximum open connections. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MAX_CONNS` (process env only), `CUTLASS_CHAT_DB_MAX_CONNS` (process env only). |
-| `FLEET_CHAT_DB_MIN_CONNS` | int | `5` | server | Chat pool: maximum idle connections kept. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MIN_CONNS` (process env only), `CUTLASS_CHAT_DB_MIN_CONNS` (process env only). |
-| `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | duration | `0` | server | Chat pool: close a connection idle this long; 0 never does. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MAX_CONN_IDLE_TIME` (process env only), `CUTLASS_CHAT_DB_MAX_CONN_IDLE_TIME` (process env only). |
-| `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | duration | `5m` | server | Chat pool: maximum connection lifetime; 0 is unlimited. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MAX_CONN_LIFETIME` (process env only), `CUTLASS_CHAT_DB_MAX_CONN_LIFETIME` (process env only). |
-| `FLEET_CHAT_DB_CONNECT_TIMEOUT` | duration | `5s` | server | Chat pool: timeout of the initial ping at startup. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_CONNECT_TIMEOUT` (process env only), `CUTLASS_CHAT_DB_CONNECT_TIMEOUT` (process env only). |
-| `FLEET_SCHED_DB_MAX_CONNS` | int | `25` | server | Scheduler pool: maximum open connections. *Validated at boot*. Deprecated aliases: `CHAT_SCHED_DB_MAX_CONNS` (process env only), `CUTLASS_SCHED_DB_MAX_CONNS` (process env only). |
-| `FLEET_SCHED_DB_MIN_CONNS` | int | `5` | server | Scheduler pool: maximum idle connections kept. *Validated at boot*. Deprecated aliases: `CHAT_SCHED_DB_MIN_CONNS` (process env only), `CUTLASS_SCHED_DB_MIN_CONNS` (process env only). |
-| `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | duration | `0` | server | Scheduler pool: close a connection idle this long; 0 never does. *Validated at boot*. Deprecated aliases: `CHAT_SCHED_DB_MAX_CONN_IDLE_TIME` (process env only), `CUTLASS_SCHED_DB_MAX_CONN_IDLE_TIME` (process env only). |
-| `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | duration | `5m` | server | Scheduler pool: maximum connection lifetime; 0 is unlimited. *Validated at boot*. Deprecated aliases: `CHAT_SCHED_DB_MAX_CONN_LIFETIME` (process env only), `CUTLASS_SCHED_DB_MAX_CONN_LIFETIME` (process env only). |
-| `FLEET_SCHED_DB_CONNECT_TIMEOUT` | duration | `10s` | server | Scheduler pool: timeout of the initial ping at startup. *Validated at boot*. Deprecated aliases: `CHAT_SCHED_DB_CONNECT_TIMEOUT` (process env only), `CUTLASS_SCHED_DB_CONNECT_TIMEOUT` (process env only). |
+| `FLEET_CHAT_DB_MAX_CONNS` | int | `25` | server | Chat pool: maximum open connections. *Validated at boot*. |
+| `FLEET_CHAT_DB_MIN_CONNS` | int | `5` | server | Chat pool: maximum idle connections kept. *Validated at boot*. |
+| `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | duration | `0` | server | Chat pool: close a connection idle this long; 0 never does. *Validated at boot*. |
+| `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | duration | `5m` | server | Chat pool: maximum connection lifetime; 0 is unlimited. *Validated at boot*. |
+| `FLEET_CHAT_DB_CONNECT_TIMEOUT` | duration | `5s` | server | Chat pool: timeout of the initial ping at startup. *Validated at boot*. |
+| `FLEET_SCHED_DB_MAX_CONNS` | int | `25` | server | Scheduler pool: maximum open connections. *Validated at boot*. |
+| `FLEET_SCHED_DB_MIN_CONNS` | int | `5` | server | Scheduler pool: maximum idle connections kept. *Validated at boot*. |
+| `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | duration | `0` | server | Scheduler pool: close a connection idle this long; 0 never does. *Validated at boot*. |
+| `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | duration | `5m` | server | Scheduler pool: maximum connection lifetime; 0 is unlimited. *Validated at boot*. |
+| `FLEET_SCHED_DB_CONNECT_TIMEOUT` | duration | `10s` | server | Scheduler pool: timeout of the initial ping at startup. *Validated at boot*. |
 
 ## Conversations, data and retention
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Also read as `DATA_DIR` (read only by the operator CLI's API-key store lookup (fleet sched apikey); the server ignores it). Deprecated aliases: `CHAT_DATA_DIR`, `CUTLASS_DATA_DIR` (process env only). Helm: set by the chart from `dataDir`. |
+| `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Helm: set by the chart from `dataDir`. |
 | `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. A relative value is resolved against the working directory (not FLEET_DATA_DIR) to an absolute path at load. Helm: set by the chart from `dataDir (+ /attachments)`. |
 | `CONVERSATION_TTL_DAYS` | int | `14` | server | Days an unpinned conversation is kept. *Validated at boot*. |
 | `CONVERSATION_UNPINNED_CAP` | int | `50` | server | Maximum unpinned conversations kept per user. *Validated at boot*. |
-| `FLEET_INPUT_QUEUE_RETENTION_DAYS` | int | `30` | server | Days finished input-queue rows keep their idempotency keys; 0 disables the purge. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_INPUT_QUEUE_RETENTION_DAYS` (process env only), `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` (process env only). |
-| `FLEET_TURN_EVENT_RETENTION_DAYS` | int | `14` | server | Days a finished turn keeps its durable SSE ledger; 0 disables the sweep. *Validated at boot*. Deprecated aliases: `CHAT_TURN_EVENT_RETENTION_DAYS` (process env only), `CUTLASS_TURN_EVENT_RETENTION_DAYS` (process env only). |
-| `FLEET_UPLOAD_MAX_BYTES` | int64 | `1073741824` | server | Per-file cap on chat attachment uploads, in bytes. *Validated at boot*. Deprecated aliases: `CHAT_UPLOAD_MAX_BYTES` (process env only), `CUTLASS_UPLOAD_MAX_BYTES` (process env only). |
-| `FLEET_SHARED_FILES_MAX_TOTAL_MB` | int | `10240` | server | Total size cap on shared files, in MB. Also an admin setting. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_SHARED_FILES_MAX_TOTAL_MB` (process env only), `CUTLASS_SHARED_FILES_MAX_TOTAL_MB` (process env only). |
-| `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | int | `0` | server | Auto-archive a conversation this many days after its last activity; 0 leaves archiving to the user. *Validated at boot*. Deprecated aliases: `CHAT_AUTO_ARCHIVE_AFTER_DAYS` (process env only), `CUTLASS_AUTO_ARCHIVE_AFTER_DAYS` (process env only). |
+| `FLEET_INPUT_QUEUE_RETENTION_DAYS` | int | `30` | server | Days finished input-queue rows keep their idempotency keys; 0 disables the purge. *Validated at boot* (≥ 0). |
+| `FLEET_TURN_EVENT_RETENTION_DAYS` | int | `14` | server | Days a finished turn keeps its durable SSE ledger; 0 disables the sweep. *Validated at boot*. |
+| `FLEET_UPLOAD_MAX_BYTES` | int64 | `1073741824` | server | Per-file cap on chat attachment uploads, in bytes. *Validated at boot*. |
+| `FLEET_SHARED_FILES_MAX_TOTAL_MB` | int | `10240` | server | Total size cap on shared files, in MB. Also an admin setting. *Validated at boot* (≥ 0). |
+| `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | int | `0` | server | Auto-archive a conversation this many days after its last activity; 0 leaves archiving to the user. *Validated at boot*. |
 | `FLEET_SEARCH_ENABLED` | bool | `true` | server | Conversation search. *Validated at boot*. |
 | `FLEET_CONVERSATION_SOFT_DELETE` | bool | `false` | server | Deleting a conversation hides it instead of removing it. *Validated at boot*. |
-| `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | bool | `false` | server | New chats are shared with the creator's team by default. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_TEAM_CHATS_SHARED_BY_DEFAULT` (process env only), `CUTLASS_TEAM_CHATS_SHARED_BY_DEFAULT` (process env only). |
-| `FLEET_CONTEXT_HANDLES_ENABLED` | bool | `false` | server | Composer context handles. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_CONTEXT_HANDLES_ENABLED` (process env only), `CUTLASS_CONTEXT_HANDLES_ENABLED` (process env only). |
+| `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | bool | `false` | server | New chats are shared with the creator's team by default. Also an admin setting. *Validated at boot*. |
+| `FLEET_CONTEXT_HANDLES_ENABLED` | bool | `false` | server | Composer context handles. Also an admin setting. *Validated at boot*. |
 | `CHAT_RATE_PER_MIN` | int | `40` | server | Per-user chat message rate limit per minute. (Canonical name; not a legacy alias.) *Validated at boot*. |
 | `CHAT_RATE_PER_DAY` | int | `2000` | server | Per-user chat message rate limit per day. (Canonical name; not a legacy alias.) *Validated at boot*. |
 | `FLEET_CHAT_RATE_LIMIT_ENABLED` | bool | `true` | server | Chat rate limiting. *Validated at boot*. |
 | `FLEET_CHAT_RATE_LIMIT_CONCURRENT` | int | `5` | server | Concurrent chat turns per user. *Validated at boot*. |
-| `FLEET_DISK_MIN_FREE_PERCENT` | int | `5` | server | Below this free-space percentage, scheduled work is shed. *Validated at boot* (0–100). Deprecated aliases: `CHAT_DISK_MIN_FREE_PERCENT` (process env only), `CUTLASS_DISK_MIN_FREE_PERCENT` (process env only). |
-| `FLEET_WORKTREE_PRUNE_AGE` | duration | `24h` | server | Age after which idle git worktrees are pruned; 0 disables the sweep. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_WORKTREE_PRUNE_AGE` (process env only), `CUTLASS_WORKTREE_PRUNE_AGE` (process env only). |
+| `FLEET_DISK_MIN_FREE_PERCENT` | int | `5` | server | Below this free-space percentage, scheduled work is shed. *Validated at boot* (0–100). |
+| `FLEET_WORKTREE_PRUNE_AGE` | duration | `24h` | server | Age after which idle git worktrees are pruned; 0 disables the sweep. *Validated at boot* (≥ 0). |
 | `FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES` | int64 | `52428800` | server | Cap on a task-workspace download, in bytes. *Validated at boot* (≥ 1). |
 
 ## Models and providers
@@ -168,156 +167,156 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | --- | --- | --- | --- | --- |
 | `OPENROUTER_API_KEY` | string | — | server | OpenRouter API key. Set it with `fleet config set-openrouter-key`. **Secret.** |
 | `OPENROUTER_BASE_URL` | url | — | server | Override of the OpenRouter API base URL (tests point it at the fake LLM). |
-| `FLEET_OPENROUTER_BASE_URL` | url | — | server | Prefixed spelling of OPENROUTER_BASE_URL, read when that is unset. Deprecated aliases: `CHAT_OPENROUTER_BASE_URL` (process env only), `CUTLASS_OPENROUTER_BASE_URL` (process env only). |
+| `FLEET_OPENROUTER_BASE_URL` | url | — | server | Prefixed spelling of OPENROUTER_BASE_URL, read when that is unset. |
 | `OPENROUTER_HTTP_REFERER` | string | — | server | HTTP-Referer header sent with image-generation calls (OpenRouter app attribution). |
 | `OPENROUTER_X_TITLE` | string | — | server | X-Title header sent with image-generation calls (OpenRouter app attribution). |
 | `OPENAI_CUSTOM_HEADERS` | string | — | server | The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. Treated as a secret: a header line can carry an Authorization value or an API key. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's everyday model tier (admin setting default_model). Deprecated aliases: `CHAT_DEFAULT_MODEL` (process env only), `CUTLASS_DEFAULT_MODEL` (process env only). |
-| `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the advanced model tier (admin setting advanced_model). Deprecated aliases: `CHAT_ADVANCED_MODEL` (process env only), `CUTLASS_ADVANCED_MODEL` (process env only). |
-| `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). Deprecated aliases: `CHAT_PINNED_MODELS` (process env only), `CUTLASS_PINNED_MODELS` (process env only). |
-| `FLEET_TITLE_MODEL` | string | `anthropic/claude-opus-5.5` | server | Model that titles conversations. Deprecated aliases: `CHAT_TITLE_MODEL`, `CUTLASS_TITLE_MODEL` (process env only). |
-| `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. Deprecated aliases: `CHAT_METADATA_MODEL`, `CUTLASS_METADATA_MODEL` (process env only). |
-| `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. Deprecated aliases: `CHAT_ERROR_ANALYSIS_MODEL` (process env only), `CUTLASS_ERROR_ANALYSIS_MODEL` (process env only). |
-| `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. Deprecated aliases: `CHAT_MEMORY_MODEL` (process env only), `CUTLASS_MEMORY_MODEL` (process env only). |
-| `FLEET_MEMORY_GRAPH_MODEL` | string | inherited from `FLEET_MEMORY_MODEL` | server | Model for the memory graph. Deprecated aliases: `CHAT_MEMORY_GRAPH_MODEL` (process env only), `CUTLASS_MEMORY_GRAPH_MODEL` (process env only). |
-| `FLEET_RECURRING_TASK_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts recurring tasks. Deprecated aliases: `CHAT_RECURRING_TASK_MODEL` (process env only), `CUTLASS_RECURRING_TASK_MODEL` (process env only). |
-| `FLEET_LIBRARY_PROMPT_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts prompt-library entries. Deprecated aliases: `CHAT_LIBRARY_PROMPT_MODEL` (process env only), `CUTLASS_LIBRARY_PROMPT_MODEL` (process env only). |
-| `FLEET_ESCALATION_CLASSIFIER_MODE` | enum: off, observe, suggest | `suggest` | server | Chat escalation classifier mode (docs/CHAT-ESCALATION.md). A mistyped value refuses to boot. Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_MODE` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_MODE` (process env only). |
-| `FLEET_ESCALATION_CLASSIFIER_MODEL` | string | `~typesafe/jev-latest` | server | Model the escalation classifier calls. Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_MODEL` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_MODEL` (process env only). |
-| `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | int | `80` | server | Classifier confidence, in percent, above which a card is staged. *Validated at boot* (50–99). Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_THRESHOLD` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_THRESHOLD` (process env only). |
-| `FLEET_ESCALATION_SIGNALS_ENABLED` | bool | `true` | server | Escalation signals. *Validated at boot*. Deprecated aliases: `CHAT_ESCALATION_SIGNALS_ENABLED` (process env only), `CUTLASS_ESCALATION_SIGNALS_ENABLED` (process env only). |
-| `FLEET_PHONE_A_FRIEND_MODEL` | string | — | server | Model the phone-a-friend review calls. Deprecated aliases: `CHAT_PHONE_A_FRIEND_MODEL` (process env only), `CUTLASS_PHONE_A_FRIEND_MODEL` (process env only). |
-| `FLEET_SUBAGENTS_MODEL` | string | (the parent's model) | server | Model sub-agents run on. Deprecated aliases: `CHAT_SUBAGENTS_MODEL` (process env only), `CUTLASS_SUBAGENTS_MODEL` (process env only). |
-| `FLEET_VERIFIER_MODEL` | string | (the run's own model) | server | Dedicated model for the scheduled end-of-run completeness verifier. The verifier runs when a fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) or this variable is set; the fallback model only retries a verifier call that produced no verdict. A slug that does not resolve is logged and the run's own model verifies. Deprecated aliases: `CHAT_VERIFIER_MODEL` (process env only), `CUTLASS_VERIFIER_MODEL` (process env only). |
-| `FLEET_A2A_MODEL` | string | — | server | Model inbound A2A tasks run on. Deprecated aliases: `CHAT_A2A_MODEL` (process env only), `CUTLASS_A2A_MODEL` (process env only). |
-| `FLEET_IMAGE_MODEL` | string | — | server | Default model of the generate_image tool. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_IMAGE_MODEL` (process env only). |
-| `FLEET_MODEL_CACHE_TTL_MINUTES` | int | `60` | server | Minutes the live OpenRouter model catalog is cached. *Validated at boot* (≥ 1). Deprecated aliases: `CHAT_MODEL_CACHE_TTL_MINUTES` (process env only), `CUTLASS_MODEL_CACHE_TTL_MINUTES` (process env only). |
-| `FLEET_DISABLE_OPENROUTER_MODELS` | strict-bool | `false` | server | Never fetch the live OpenRouter model catalog. *Validated at boot*. Deprecated aliases: `CHAT_DISABLE_OPENROUTER_MODELS` (process env only), `CUTLASS_DISABLE_OPENROUTER_MODELS` (process env only). |
-| `FLEET_DISABLE_PROMPT_CACHE` | strict-bool | `false` | server | Disable explicit prompt-cache breakpoints. *Validated at boot*. Deprecated aliases: `CHAT_DISABLE_PROMPT_CACHE` (process env only), `CUTLASS_DISABLE_PROMPT_CACHE` (process env only). |
-| `FLEET_RETRY_MAX_ATTEMPTS` | int | `5` | server | Retries of a failed provider call. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_RETRY_MAX_ATTEMPTS` (process env only), `CUTLASS_RETRY_MAX_ATTEMPTS` (process env only). |
-| `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | float | `75` | server | Base deadline for a provider's first streamed event (floor 5 s, scaled with the prompt). *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (process env only), `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (process env only). |
-| `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | float | `180` | server | Cap on the prompt-scaled first-chunk deadline. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` (process env only), `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` (process env only). |
+| `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's everyday model tier (admin setting default_model). |
+| `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the advanced model tier (admin setting advanced_model). |
+| `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). |
+| `FLEET_TITLE_MODEL` | string | `anthropic/claude-opus-5.5` | server | Model that titles conversations. |
+| `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. |
+| `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. |
+| `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. |
+| `FLEET_MEMORY_GRAPH_MODEL` | string | inherited from `FLEET_MEMORY_MODEL` | server | Model for the memory graph. |
+| `FLEET_RECURRING_TASK_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts recurring tasks. |
+| `FLEET_LIBRARY_PROMPT_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts prompt-library entries. |
+| `FLEET_ESCALATION_CLASSIFIER_MODE` | enum: off, observe, suggest | `suggest` | server | Chat escalation classifier mode (docs/CHAT-ESCALATION.md). A mistyped value refuses to boot. |
+| `FLEET_ESCALATION_CLASSIFIER_MODEL` | string | `~typesafe/jev-latest` | server | Model the escalation classifier calls. |
+| `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | int | `80` | server | Classifier confidence, in percent, above which a card is staged. *Validated at boot* (50–99). |
+| `FLEET_ESCALATION_SIGNALS_ENABLED` | bool | `true` | server | Escalation signals. *Validated at boot*. |
+| `FLEET_PHONE_A_FRIEND_MODEL` | string | — | server | Model the phone-a-friend review calls. |
+| `FLEET_SUBAGENTS_MODEL` | string | (the parent's model) | server | Model sub-agents run on. |
+| `FLEET_VERIFIER_MODEL` | string | (the run's own model) | server | Dedicated model for the scheduled end-of-run completeness verifier. The verifier runs when a fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) or this variable is set; the fallback model only retries a verifier call that produced no verdict. A slug that does not resolve is logged and the run's own model verifies. |
+| `FLEET_A2A_MODEL` | string | — | server | Model inbound A2A tasks run on. |
+| `FLEET_IMAGE_MODEL` | string | — | server | Default model of the generate_image tool. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_MODEL_CACHE_TTL_MINUTES` | int | `60` | server | Minutes the live OpenRouter model catalog is cached. *Validated at boot* (≥ 1). |
+| `FLEET_DISABLE_OPENROUTER_MODELS` | strict-bool | `false` | server | Never fetch the live OpenRouter model catalog. *Validated at boot*. |
+| `FLEET_DISABLE_PROMPT_CACHE` | strict-bool | `false` | server | Disable explicit prompt-cache breakpoints. *Validated at boot*. |
+| `FLEET_RETRY_MAX_ATTEMPTS` | int | `5` | server | Retries of a failed provider call. *Validated at boot* (≥ 0). |
+| `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | float | `75` | server | Base deadline for a provider's first streamed event (floor 5 s, scaled with the prompt). *Validated at boot* (≥ 0). |
+| `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | float | `180` | server | Cap on the prompt-scaled first-chunk deadline. *Validated at boot* (≥ 0). |
 | `LLM_MAX_TOKENS` | int | `16384` | server | Maximum output tokens per model call. *Validated at boot*. |
-| `FLEET_TEMPERATURE` | float | `0.3` | server | Sampling temperature for chat and scheduled runs. Hot-reloadable. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_TEMPERATURE`, `CUTLASS_TEMPERATURE`. |
-| `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | int | `0` | server | Default reasoning budget in tokens; 0 leaves it to the model. *Validated at boot*. Deprecated aliases: `CHAT_DEFAULT_THINKING_BUDGET_TOKENS` (process env only), `CUTLASS_DEFAULT_THINKING_BUDGET_TOKENS` (process env only). |
+| `FLEET_TEMPERATURE` | float | `0.3` | server | Sampling temperature for chat and scheduled runs. Hot-reloadable. *Validated at boot* (≥ 0). |
+| `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | int | `0` | server | Default reasoning budget in tokens; 0 leaves it to the model. *Validated at boot*. |
 
 ## Agent runtime and limits
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_MAX_ITERATIONS` | int | `300` | server | Maximum agent loop iterations per run. Hot-reloadable. *Validated at boot* (1–10000). Deprecated aliases: `CHAT_MAX_ITERATIONS`, `CUTLASS_MAX_ITERATIONS` (process env only). |
-| `FLEET_MAX_COST_USD` | float | `50` | server | Cost ceiling per run, in USD. Hot-reloadable; an admin override wins. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_MAX_COST_USD`, `CUTLASS_MAX_COST_USD`. |
-| `FLEET_MAX_TOTAL_TOKENS` | int | `10000000` | server | Token ceiling per run. Hot-reloadable; an admin override wins. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_MAX_TOTAL_TOKENS`, `CUTLASS_MAX_TOTAL_TOKENS`. |
-| `FLEET_TURN_TIMEOUT_SECONDS` | int | `14400` | server | Wall-clock limit of one chat turn. *Validated at boot*. Deprecated aliases: `CHAT_TURN_TIMEOUT_SECONDS`, `CUTLASS_TURN_TIMEOUT_SECONDS` (process env only). |
-| `FLEET_MAX_CONCURRENT_AGENTS` | int | `8` | server | Box-wide cap on concurrently running agents (chat turns and scheduled runs). Sizes the admission semaphore and the warm pool at startup. *Validated at boot* (≥ 1). Deprecated aliases: `CHAT_MAX_CONCURRENT_AGENTS` (process env only), `CUTLASS_MAX_CONCURRENT_AGENTS` (process env only). |
-| `FLEET_APPROVAL_TIMEOUT_SECONDS` | int | `86400` | server | How long an approval card waits. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_APPROVAL_TIMEOUT_SECONDS` (process env only), `CUTLASS_APPROVAL_TIMEOUT_SECONDS` (process env only). |
-| `FLEET_AUTO_APPROVE_IN_TEST` | bool | `false` | server | Test harness only: auto-approve approval cards. *Validated at boot*. Deprecated aliases: `CHAT_AUTO_APPROVE_IN_TEST` (process env only), `CUTLASS_AUTO_APPROVE_IN_TEST` (process env only). |
-| `FLEET_AUTO_TITLE` | bool | `true` | server | Title conversations automatically. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_AUTO_TITLE` (process env only), `CUTLASS_AUTO_TITLE` (process env only). |
-| `FLEET_ERROR_ANALYSIS_ENABLED` | bool | `true` | server | Analyse failed runs with FLEET_ERROR_ANALYSIS_MODEL. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_ERROR_ANALYSIS_ENABLED` (process env only), `CUTLASS_ERROR_ANALYSIS_ENABLED` (process env only). |
-| `FLEET_SELF_IMPROVE_ENABLED` | bool | `false` | server | Agent self-improvement notes. *Validated at boot*. Deprecated aliases: `CHAT_SELF_IMPROVE_ENABLED` (process env only), `CUTLASS_SELF_IMPROVE_ENABLED` (process env only). |
-| `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `false` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_MEMORY_AUTOINDEX_ENABLED` (process env only), `CUTLASS_MEMORY_AUTOINDEX_ENABLED` (process env only). |
-| `FLEET_MEMORY_GRAPH_ENABLED` | bool | `false` | server | Build the memory graph. *Validated at boot*. Deprecated aliases: `CHAT_MEMORY_GRAPH_ENABLED` (process env only), `CUTLASS_MEMORY_GRAPH_ENABLED` (process env only). |
-| `FLEET_PHONE_A_FRIEND_ENABLED` | bool | `false` | server | Super-LLM review (phone a friend). Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_PHONE_A_FRIEND_ENABLED` (process env only), `CUTLASS_PHONE_A_FRIEND_ENABLED` (process env only). |
-| `FLEET_SUBAGENTS_ENABLED` | bool | `true` | server | Sub-agent delegation; false is the fleet-wide kill switch. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_SUBAGENTS_ENABLED` (process env only), `CUTLASS_SUBAGENTS_ENABLED` (process env only). |
-| `FLEET_SUBAGENTS_MAX_DEPTH` | int | `1` | server | Maximum delegation depth (1 = the root may delegate, children may not). *Validated at boot*. Deprecated aliases: `CHAT_SUBAGENTS_MAX_DEPTH` (process env only), `CUTLASS_SUBAGENTS_MAX_DEPTH` (process env only). |
-| `FLEET_SUBAGENTS_MAX_CHILDREN` | int | `20` | server | Maximum children one parent may spawn. *Validated at boot*. Deprecated aliases: `CHAT_SUBAGENTS_MAX_CHILDREN` (process env only), `CUTLASS_SUBAGENTS_MAX_CHILDREN` (process env only). |
-| `FLEET_SUBAGENTS_BUDGET_FRACTION` | float | `0.10` | server | Each child's share of the parent's remaining budget; out-of-range values are clamped. *Validated at boot*. Deprecated aliases: `CHAT_SUBAGENTS_BUDGET_FRACTION` (process env only), `CUTLASS_SUBAGENTS_BUDGET_FRACTION` (process env only). |
-| `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | float | `0.75` | server | Context-window fraction at which the agent is warned; clamped to (0,1]. *Validated at boot*. Deprecated aliases: `CHAT_CONTEXT_PRESSURE_WARN_THRESHOLD` (process env only), `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD` (process env only). |
-| `FLEET_CONTEXT_COMPACTION_THRESHOLD` | float | `0.90` | server | Context-window fraction at which the transcript is compacted; clamped to (0,1]. *Validated at boot*. Deprecated aliases: `CHAT_CONTEXT_COMPACTION_THRESHOLD` (process env only), `CUTLASS_CONTEXT_COMPACTION_THRESHOLD` (process env only). |
-| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | int | `80000` | server | Scheduled runs: resent-prompt budget per call before compaction; 0 disables. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_CONTEXT_RESEND_BUDGET_TOKENS` (process env only), `CUTLASS_CONTEXT_RESEND_BUDGET_TOKENS` (process env only). |
-| `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | strict-bool | `true` | server | Scheduled compaction elides stale tool results before summarising. *Validated at boot*. Deprecated aliases: `CHAT_CONTEXT_ELIDE_BEFORE_SUMMARY` (process env only), `CUTLASS_CONTEXT_ELIDE_BEFORE_SUMMARY` (process env only). |
-| `FLEET_BUDGET_WINDDOWN_FRACTION` | float | `0.8` | server | Budget fraction at which the agent is told to wind down; clamped to (0,1]. *Validated at boot*. Deprecated aliases: `CHAT_BUDGET_WINDDOWN_FRACTION` (process env only), `CUTLASS_BUDGET_WINDDOWN_FRACTION` (process env only). |
-| `FLEET_SCHEDULED_AUTO_COMPACT` | strict-bool | `false` | server | Let scheduled runs compact their context automatically. *Validated at boot*. Deprecated aliases: `CHAT_SCHEDULED_AUTO_COMPACT` (process env only), `CUTLASS_SCHEDULED_AUTO_COMPACT` (process env only). |
+| `FLEET_MAX_ITERATIONS` | int | `300` | server | Maximum agent loop iterations per run. Hot-reloadable. *Validated at boot* (1–10000). |
+| `FLEET_MAX_COST_USD` | float | `50` | server | Cost ceiling per run, in USD. Hot-reloadable; an admin override wins. *Validated at boot* (≥ 0). |
+| `FLEET_MAX_TOTAL_TOKENS` | int | `10000000` | server | Token ceiling per run. Hot-reloadable; an admin override wins. *Validated at boot* (≥ 0). |
+| `FLEET_TURN_TIMEOUT_SECONDS` | int | `14400` | server | Wall-clock limit of one chat turn. *Validated at boot*. |
+| `FLEET_MAX_CONCURRENT_AGENTS` | int | `8` | server | Box-wide cap on concurrently running agents (chat turns and scheduled runs). Sizes the admission semaphore and the warm pool at startup. *Validated at boot* (≥ 1). |
+| `FLEET_APPROVAL_TIMEOUT_SECONDS` | int | `86400` | server | How long an approval card waits. Also an admin setting. *Validated at boot*. |
+| `FLEET_AUTO_APPROVE_IN_TEST` | bool | `false` | server | Test harness only: auto-approve approval cards. *Validated at boot*. |
+| `FLEET_AUTO_TITLE` | bool | `true` | server | Title conversations automatically. Also an admin setting. *Validated at boot*. |
+| `FLEET_ERROR_ANALYSIS_ENABLED` | bool | `true` | server | Analyse failed runs with FLEET_ERROR_ANALYSIS_MODEL. Also an admin setting. *Validated at boot*. |
+| `FLEET_SELF_IMPROVE_ENABLED` | bool | `false` | server | Agent self-improvement notes. *Validated at boot*. |
+| `FLEET_MEMORY_AUTOINDEX_ENABLED` | bool | `false` | server | Index conversations into memory automatically. Also an admin setting. *Validated at boot*. |
+| `FLEET_MEMORY_GRAPH_ENABLED` | bool | `false` | server | Build the memory graph. *Validated at boot*. |
+| `FLEET_PHONE_A_FRIEND_ENABLED` | bool | `false` | server | Super-LLM review (phone a friend). Also an admin setting. *Validated at boot*. |
+| `FLEET_SUBAGENTS_ENABLED` | bool | `true` | server | Sub-agent delegation; false is the fleet-wide kill switch. Also an admin setting. *Validated at boot*. |
+| `FLEET_SUBAGENTS_MAX_DEPTH` | int | `1` | server | Maximum delegation depth (1 = the root may delegate, children may not). *Validated at boot*. |
+| `FLEET_SUBAGENTS_MAX_CHILDREN` | int | `20` | server | Maximum children one parent may spawn. *Validated at boot*. |
+| `FLEET_SUBAGENTS_BUDGET_FRACTION` | float | `0.10` | server | Each child's share of the parent's remaining budget; out-of-range values are clamped. *Validated at boot*. |
+| `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | float | `0.75` | server | Context-window fraction at which the agent is warned; clamped to (0,1]. *Validated at boot*. |
+| `FLEET_CONTEXT_COMPACTION_THRESHOLD` | float | `0.90` | server | Context-window fraction at which the transcript is compacted; clamped to (0,1]. *Validated at boot*. |
+| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | int | `80000` | server | Scheduled runs: resent-prompt budget per call before compaction; 0 disables. *Validated at boot* (≥ 0). |
+| `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | strict-bool | `true` | server | Scheduled compaction elides stale tool results before summarising. *Validated at boot*. |
+| `FLEET_BUDGET_WINDDOWN_FRACTION` | float | `0.8` | server | Budget fraction at which the agent is told to wind down; clamped to (0,1]. *Validated at boot*. |
+| `FLEET_SCHEDULED_AUTO_COMPACT` | strict-bool | `false` | server | Let scheduled runs compact their context automatically. *Validated at boot*. |
 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | int | (the provider's tool ceiling) | server | Tool count above which tools are disclosed on demand rather than all up front. *Validated at boot* (≥ 1). |
 | `FLEET_MAX_TOOL_OUTPUT_BYTES` | int | `65536` | server | Cap on one tool result handed to the model, in bytes (clamped to the built-in bounds). *Validated at boot*. |
-| `FLEET_ALLOWED_DIRS` | string | — | server | Extra colon-separated directories the host-side file tools may touch, beyond the workspace. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_ALLOWED_DIRS` (process env only). |
-| `FLEET_AUDIT_DIR` | path | inherited from `FLEET_DATA_DIR` (derived) | server | Directory of the bash tool's audit log. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_AUDIT_DIR` (process env only). |
-| `FLEET_LOCKDOWN_ONLY` | bool | `false` | server | Only lockdown (no-egress) conversations; needs a sandbox image. A mistyped value refuses to boot. *Validated at boot*. Deprecated aliases: `CHAT_LOCKDOWN_ONLY`, `CUTLASS_LOCKDOWN_ONLY` (process env only). |
-| `FLEET_LOCKDOWN_ALLOWED_MODELS` | csv | (the two model tiers) | server | Comma-separated model slugs (or `*` globs) a lockdown conversation may run on; the first literal entry is the lockdown default. Unset, the list is the workspace's current default and advanced models, so lockdown follows a tier change live. A lockdown conversation whose model is no longer listed moves to the lockdown default on its next turn; a list of globs only has no literal to move to, so give it a literal first entry. Deprecated aliases: `CHAT_LOCKDOWN_ALLOWED_MODELS`, `CUTLASS_LOCKDOWN_ALLOWED_MODELS` (process env only). |
-| `FLEET_PII_REDACTION_ENABLED` | bool | `false` | server | PII redaction with the built-in pattern engine. *Validated at boot*. Deprecated aliases: `CHAT_PII_REDACTION_ENABLED` (process env only), `CUTLASS_PII_REDACTION_ENABLED` (process env only). |
-| `FLEET_PII_REDACTION_MODE` | string | — | server | PII redaction mode. Deprecated aliases: `CHAT_PII_REDACTION_MODE` (process env only), `CUTLASS_PII_REDACTION_MODE` (process env only). |
-| `FLEET_GUARDRAIL_MODE` | string | — | server | Guardrail mode (docs/GUARDRAILS.md). Deprecated aliases: `CHAT_GUARDRAIL_MODE` (process env only), `CUTLASS_GUARDRAIL_MODE` (process env only). |
-| `FLEET_GUARDRAIL_PROFILE` | string | — | server | Guardrail profile. Deprecated aliases: `CHAT_GUARDRAIL_PROFILE` (process env only), `CUTLASS_GUARDRAIL_PROFILE` (process env only). |
-| `FLEET_GUARDRAIL_URL` | url | — | server | Guardrail service URL. Deprecated aliases: `CHAT_GUARDRAIL_URL` (process env only), `CUTLASS_GUARDRAIL_URL` (process env only). |
-| `FLEET_MOCK_MODE` | bool | `false` | server | Test harness: run without a real model (requires a build with the host-executor tag). *Validated at boot*. Deprecated aliases: `CHAT_MOCK_MODE`, `CUTLASS_MOCK_MODE` (process env only). |
-| `FLEET_PERSONA` | path | `personas/assistant.yaml` | server | Persona FILE the drivers load (by basename, from the bundle's personas/); .yaml is appended when no known extension is given. Also read as `PERSONA`. Deprecated aliases: `CHAT_PERSONA` (process env only), `CUTLASS_PERSONA` (process env only). |
-| `FLEET_PERSONA_DEFAULT` | string | `assistant` | server | Default persona name for new conversations. Also read as `PERSONA_DEFAULT`. Deprecated aliases: `CHAT_PERSONA_DEFAULT` (process env only), `CUTLASS_PERSONA_DEFAULT` (process env only). |
+| `FLEET_ALLOWED_DIRS` | string | — | server | Extra colon-separated directories the host-side file tools may touch, beyond the workspace. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_AUDIT_DIR` | path | inherited from `FLEET_DATA_DIR` (derived) | server | Directory of the bash tool's audit log. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_LOCKDOWN_ONLY` | bool | `false` | server | Only lockdown (no-egress) conversations; needs a sandbox image. A mistyped value refuses to boot. *Validated at boot*. |
+| `FLEET_LOCKDOWN_ALLOWED_MODELS` | csv | (the two model tiers) | server | Comma-separated model slugs (or `*` globs) a lockdown conversation may run on; the first literal entry is the lockdown default. Unset, the list is the workspace's current default and advanced models, so lockdown follows a tier change live. A lockdown conversation whose model is no longer listed moves to the lockdown default on its next turn; a list of globs only has no literal to move to, so give it a literal first entry. |
+| `FLEET_PII_REDACTION_ENABLED` | bool | `false` | server | PII redaction with the built-in pattern engine. *Validated at boot*. |
+| `FLEET_PII_REDACTION_MODE` | string | — | server | PII redaction mode. |
+| `FLEET_GUARDRAIL_MODE` | string | — | server | Guardrail mode (docs/GUARDRAILS.md). |
+| `FLEET_GUARDRAIL_PROFILE` | string | — | server | Guardrail profile. |
+| `FLEET_GUARDRAIL_URL` | url | — | server | Guardrail service URL. |
+| `FLEET_MOCK_MODE` | bool | `false` | server | Test harness: run without a real model (requires a build with the host-executor tag). *Validated at boot*. |
+| `FLEET_PERSONA` | path | `personas/assistant.yaml` | server | Persona FILE the drivers load (by basename, from the bundle's personas/); .yaml is appended when no known extension is given. Also read as `PERSONA`. |
+| `FLEET_PERSONA_DEFAULT` | string | `assistant` | server | Default persona name for new conversations. Also read as `PERSONA_DEFAULT`. |
 | `SYSTEM_PROMPT` | path | `default.md` | server | System-prompt file name in the bundle; .md is appended when no known extension is given. |
-| `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | bool | `false` | server | Connector auto-recommendation. Also an admin setting. *Validated at boot*. Deprecated aliases: `CHAT_CONNECTOR_RECOMMENDATIONS_ENABLED` (process env only), `CUTLASS_CONNECTOR_RECOMMENDATIONS_ENABLED` (process env only). |
+| `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | bool | `false` | server | Connector auto-recommendation. Also an admin setting. *Validated at boot*. |
 
 ## Scheduler and tasks
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_TASK_MODEL` | string | — | server | Default model of scheduled tasks. Deprecated aliases: `CHAT_TASK_MODEL` (process env only), `CUTLASS_TASK_MODEL`. |
-| `FLEET_TASK_FALLBACK_MODEL` | string | — | server | Model the scheduler falls back to when a task's own model is unavailable. Deprecated aliases: `CHAT_TASK_FALLBACK_MODEL` (process env only), `CUTLASS_TASK_FALLBACK_MODEL`. |
-| `FLEET_TASK_DEFAULT_MAX_RETRIES` | int | `1` | server | max_retries of a task created without one. *Validated at boot* (0–10). Deprecated aliases: `CHAT_TASK_DEFAULT_MAX_RETRIES` (process env only), `CUTLASS_TASK_DEFAULT_MAX_RETRIES` (process env only). |
+| `FLEET_TASK_MODEL` | string | — | server | Default model of scheduled tasks. |
+| `FLEET_TASK_FALLBACK_MODEL` | string | — | server | Model the scheduler falls back to when a task's own model is unavailable. |
+| `FLEET_TASK_DEFAULT_MAX_RETRIES` | int | `1` | server | max_retries of a task created without one. *Validated at boot* (0–10). |
 | `FLEET_TASK_WALL_TIMEOUT` | duration | `4h` | server | Wall-clock limit of one scheduled run; 0 disables. *Validated at boot* (≥ 0). |
-| `FLEET_SCHED_TICK_SECONDS` | int | `30` | server | Interval of the due-task scan. *Validated at boot* (≥ 1). Deprecated aliases: `CHAT_SCHED_TICK_SECONDS` (process env only), `CUTLASS_SCHED_TICK_SECONDS` (process env only). |
-| `FLEET_SCHEDULED_SHARED_WORKSPACE` | bool | `false` | server | Kill switch for per-job workspaces: scheduled runs share the workspace root (ADR-0097). *Validated at boot*. Deprecated aliases: `CHAT_SCHEDULED_SHARED_WORKSPACE` (process env only), `CUTLASS_SCHEDULED_SHARED_WORKSPACE` (process env only). |
-| `FLEET_TASK_MEMORY_MAX_KEYS` | int | `100` | server | Maximum persistent memory keys per task. *Validated at boot*. Deprecated aliases: `CHAT_TASK_MEMORY_MAX_KEYS` (process env only), `CUTLASS_TASK_MEMORY_MAX_KEYS` (process env only). |
-| `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | int | `4096` | server | Maximum size of one task memory value. *Validated at boot*. Deprecated aliases: `CHAT_TASK_MEMORY_MAX_VALUE_BYTES` (process env only), `CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES` (process env only). |
-| `FLEET_RUN_LOG_RETENTION_DAYS` | int | `90` | server | Days run logs are kept. *Validated at boot*. Deprecated aliases: `CHAT_RUN_LOG_RETENTION_DAYS` (process env only), `CUTLASS_RUN_LOG_RETENTION_DAYS` (process env only). |
-| `FLEET_KEEP_RUNS_PER_TASK` | int | `10` | server | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. *Validated at boot*. Deprecated aliases: `CHAT_KEEP_RUNS_PER_TASK` (process env only), `CUTLASS_KEEP_RUNS_PER_TASK` (process env only). |
-| `FLEET_CLEANUP_HOUR` | int | `4` | server | Hour of day (server time) of the retention cleanup. *Validated at boot*. Deprecated aliases: `CHAT_CLEANUP_HOUR` (process env only), `CUTLASS_CLEANUP_HOUR` (process env only). |
-| `FLEET_TASK_STARVATION_WINDOW_MINUTES` | int | `30` | server | Anti-starvation window of the priority queue; 0 disables. *Validated at boot*. Deprecated aliases: `CHAT_TASK_STARVATION_WINDOW_MINUTES` (process env only), `CUTLASS_TASK_STARVATION_WINDOW_MINUTES` (process env only). |
-| `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | int | `0` | server | Expire a paused task after this long; 0 waits forever. *Validated at boot*. Deprecated aliases: `CHAT_PAUSED_TASK_EXPIRY_MINUTES` (process env only), `CUTLASS_PAUSED_TASK_EXPIRY_MINUTES` (process env only). |
+| `FLEET_SCHED_TICK_SECONDS` | int | `30` | server | Interval of the due-task scan. *Validated at boot* (≥ 1). |
+| `FLEET_SCHEDULED_SHARED_WORKSPACE` | bool | `false` | server | Kill switch for per-job workspaces: scheduled runs share the workspace root (ADR-0097). *Validated at boot*. |
+| `FLEET_TASK_MEMORY_MAX_KEYS` | int | `100` | server | Maximum persistent memory keys per task. *Validated at boot*. |
+| `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | int | `4096` | server | Maximum size of one task memory value. *Validated at boot*. |
+| `FLEET_RUN_LOG_RETENTION_DAYS` | int | `90` | server | Days run logs are kept. *Validated at boot*. |
+| `FLEET_KEEP_RUNS_PER_TASK` | int | `10` | server | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. *Validated at boot*. |
+| `FLEET_CLEANUP_HOUR` | int | `4` | server | Hour of day (server time) of the retention cleanup. *Validated at boot*. |
+| `FLEET_TASK_STARVATION_WINDOW_MINUTES` | int | `30` | server | Anti-starvation window of the priority queue; 0 disables. *Validated at boot*. |
+| `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | int | `0` | server | Expire a paused task after this long; 0 waits forever. *Validated at boot*. |
 | `FLEET_SCHED_RATE_LIMIT_PER_MINUTE` | int | `60` | server | Per-principal task create/upload limit per minute; 0 disables. *Validated at boot* (≥ 0). |
 | `FLEET_SCHED_RATE_LIMIT_PER_DAY` | int | `500` | server | Per-principal task create/upload limit per day; 0 disables. *Validated at boot* (≥ 0). |
 | `FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE` | int | `200` | server | Global task create/upload limit per minute; 0 disables. *Validated at boot* (≥ 0). |
 | `FLEET_TIMEZONE` | string | `UTC` | server | IANA timezone of the server clock used by the scheduler. |
 | `FLEET_DEFAULT_TIMEZONE` | string | `UTC` | server | IANA timezone given to a task created without one. |
-| `FLEET_A2A_ENABLED` | bool | `false` | server | The inbound A2A protocol server (routes answer 501 until enabled). *Validated at boot*. Deprecated aliases: `CHAT_A2A_ENABLED` (process env only), `CUTLASS_A2A_ENABLED` (process env only). |
-| `FLEET_A2A_PUSH_ALLOW_PRIVATE` | bool | `false` | server | Allow A2A push notifications to private addresses. *Validated at boot*. Deprecated aliases: `CHAT_A2A_PUSH_ALLOW_PRIVATE` (process env only), `CUTLASS_A2A_PUSH_ALLOW_PRIVATE` (process env only). |
-| `FLEET_A2A_UNARY_WAIT_SECONDS` | int | `1800` | server | How long a blocking A2A message/send waits for the task. *Validated at boot* (≥ 1). Deprecated aliases: `CHAT_A2A_UNARY_WAIT_SECONDS` (process env only), `CUTLASS_A2A_UNARY_WAIT_SECONDS` (process env only). |
-| `FLEET_A2A_PERSONA` | string | — | server | Persona inbound A2A tasks run as. Deprecated aliases: `CHAT_A2A_PERSONA` (process env only), `CUTLASS_A2A_PERSONA` (process env only). |
-| `FLEET_A2A_MAX_DELEGATION_DEPTH` | int | `3` | server | Ceiling on A2A delegation depth, inbound and outbound. *Validated at boot* (≥ 1). Deprecated aliases: `CHAT_A2A_MAX_DELEGATION_DEPTH` (process env only), `CUTLASS_A2A_MAX_DELEGATION_DEPTH` (process env only). |
-| `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | bool | `false` | server | Allow outbound A2A calls to private addresses. *Validated at boot*. Deprecated aliases: `CHAT_A2A_CLIENT_ALLOW_PRIVATE` (process env only), `CUTLASS_A2A_CLIENT_ALLOW_PRIVATE` (process env only). |
+| `FLEET_A2A_ENABLED` | bool | `false` | server | The inbound A2A protocol server (routes answer 501 until enabled). *Validated at boot*. |
+| `FLEET_A2A_PUSH_ALLOW_PRIVATE` | bool | `false` | server | Allow A2A push notifications to private addresses. *Validated at boot*. |
+| `FLEET_A2A_UNARY_WAIT_SECONDS` | int | `1800` | server | How long a blocking A2A message/send waits for the task. *Validated at boot* (≥ 1). |
+| `FLEET_A2A_PERSONA` | string | — | server | Persona inbound A2A tasks run as. |
+| `FLEET_A2A_MAX_DELEGATION_DEPTH` | int | `3` | server | Ceiling on A2A delegation depth, inbound and outbound. *Validated at boot* (≥ 1). |
+| `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | bool | `false` | server | Allow outbound A2A calls to private addresses. *Validated at boot*. |
 
 ## Sandbox
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_SANDBOX_BACKEND` | enum: podman, kubernetes | `podman` | sandbox | Sandbox backend (ADR-0049). Validated fail-closed at boot against the bundle. Deprecated aliases: `CHAT_SANDBOX_BACKEND` (process env only), `CUTLASS_SANDBOX_BACKEND` (process env only). Helm: set by the chart from `sandbox.backend`. |
-| `FLEET_SANDBOX_IMAGE` | string | — | sandbox | Sandbox image. Without one, lockdown is unavailable. Deprecated aliases: `CHAT_SANDBOX_IMAGE`, `CUTLASS_SANDBOX_IMAGE` (process env only). Helm: set by the chart from `sandbox.image`. |
-| `FLEET_SANDBOX_RUNTIME` | string | — | sandbox | OCI runtime for podman sandboxes (e.g. a Kata or libkrun runtime, ADR-0010); fail-closed when unavailable. Deprecated aliases: `CHAT_SANDBOX_RUNTIME`, `CUTLASS_SANDBOX_RUNTIME` (process env only). |
+| `FLEET_SANDBOX_BACKEND` | enum: podman, kubernetes | `podman` | sandbox | Sandbox backend (ADR-0049). Validated fail-closed at boot against the bundle. Helm: set by the chart from `sandbox.backend`. |
+| `FLEET_SANDBOX_IMAGE` | string | — | sandbox | Sandbox image. Without one, lockdown is unavailable. Helm: set by the chart from `sandbox.image`. |
+| `FLEET_SANDBOX_RUNTIME` | string | — | sandbox | OCI runtime for podman sandboxes (e.g. a Kata or libkrun runtime, ADR-0010); fail-closed when unavailable. |
 | `FLEET_SANDBOX_SECCOMP_PROFILE` | string | (the embedded profile) | sandbox | Podman seccomp override: a profile path, or `none`/`unconfined` (logged loudly). Refused by the kubernetes backend. |
-| `FLEET_SANDBOX_MEMORY` | string | — | sandbox | Per-sandbox memory limit (podman format, e.g. 512m). Deprecated aliases: `CHAT_SANDBOX_MEMORY` (process env only), `CUTLASS_SANDBOX_MEMORY` (process env only). Helm: set by the chart from `sandbox.memory`. |
-| `FLEET_SANDBOX_CPUS` | string | — | sandbox | Per-sandbox CPU limit (e.g. 1.0). Deprecated aliases: `CHAT_SANDBOX_CPUS` (process env only), `CUTLASS_SANDBOX_CPUS` (process env only). Helm: set by the chart from `sandbox.cpus`. |
+| `FLEET_SANDBOX_MEMORY` | string | — | sandbox | Per-sandbox memory limit (podman format, e.g. 512m). Helm: set by the chart from `sandbox.memory`. |
+| `FLEET_SANDBOX_CPUS` | string | — | sandbox | Per-sandbox CPU limit (e.g. 1.0). Helm: set by the chart from `sandbox.cpus`. |
 | `FLEET_SANDBOX_PIDS` | int | `0` | sandbox | Per-sandbox process limit; 0 uses the backend default. *Validated at boot*. |
 | `FLEET_SANDBOX_DISK_GB` | int | `0` | sandbox | Per-sandbox disk limit in GB; 0 uses the backend default. *Validated at boot*. Helm: set by the chart from `sandbox.diskGB`. |
 | `FLEET_SANDBOX_START_TIMEOUT_SECONDS` | int | (the backend's default) | sandbox | Sandbox start timeout. *Validated at boot* (≥ 1). |
-| `FLEET_SANDBOX_MEMORY_MAX_MB` | int | `8192` | sandbox | Ceiling a task may raise its sandbox memory to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_MEMORY_MAX_MB` (process env only), `CUTLASS_SANDBOX_MEMORY_MAX_MB` (process env only). |
-| `FLEET_SANDBOX_CPUS_MAX` | float | `16` | sandbox | Ceiling a task may raise its sandbox CPUs to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_CPUS_MAX` (process env only), `CUTLASS_SANDBOX_CPUS_MAX` (process env only). |
-| `FLEET_SANDBOX_PIDS_MAX` | int | `1024` | sandbox | Ceiling a task may raise its sandbox process limit to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_PIDS_MAX` (process env only), `CUTLASS_SANDBOX_PIDS_MAX` (process env only). |
-| `FLEET_SANDBOX_WARM_SIZE` | int | inherited from `FLEET_MAX_CONCURRENT_AGENTS` (derived) | sandbox | Warm-pool depth; 0 disables the warm pool. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_SANDBOX_WARM_SIZE` (process env only), `CUTLASS_SANDBOX_WARM_SIZE` (process env only). Helm: set by the chart from `sandbox.warmSize`. |
-| `FLEET_SANDBOX_WARM_TTL` | int | `300` | sandbox | Seconds an unused warm sandbox lives. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_WARM_TTL` (process env only), `CUTLASS_SANDBOX_WARM_TTL` (process env only). |
+| `FLEET_SANDBOX_MEMORY_MAX_MB` | int | `8192` | sandbox | Ceiling a task may raise its sandbox memory to. *Validated at boot*. |
+| `FLEET_SANDBOX_CPUS_MAX` | float | `16` | sandbox | Ceiling a task may raise its sandbox CPUs to. *Validated at boot*. |
+| `FLEET_SANDBOX_PIDS_MAX` | int | `1024` | sandbox | Ceiling a task may raise its sandbox process limit to. *Validated at boot*. |
+| `FLEET_SANDBOX_WARM_SIZE` | int | inherited from `FLEET_MAX_CONCURRENT_AGENTS` (derived) | sandbox | Warm-pool depth; 0 disables the warm pool. *Validated at boot* (≥ 0). Helm: set by the chart from `sandbox.warmSize`. |
+| `FLEET_SANDBOX_WARM_TTL` | int | `300` | sandbox | Seconds an unused warm sandbox lives. *Validated at boot*. |
 | `FLEET_SANDBOX_KATA_OVERHEAD_MB` | int | `512` | sandbox | Guest-memory overhead added for Kata sandboxes, in MiB. *Validated at boot* (≥ 1). |
 | `FLEET_SANDBOX_STATS_INTERVAL_SECONDS` | int | `10` | sandbox | Poll cadence of sandbox resource stats (floor 5 s). |
-| `FLEET_DEFAULT_NETWORK_MODE` | enum: open, allowlisted, lockdown | `open` | sandbox | Default sandbox egress mode. An unknown value refuses to boot. Deprecated aliases: `CHAT_DEFAULT_NETWORK_MODE` (process env only), `CUTLASS_DEFAULT_NETWORK_MODE` (process env only). |
-| `FLEET_WORKSPACE_ROOT` | path | `./workspace` | sandbox | Workspace root the sandbox mounts and the file tools are confined to. Deprecated aliases: `CHAT_WORKSPACE_ROOT`, `CUTLASS_WORKSPACE_ROOT` (process env only). Helm: set by the chart from `workspaceRoot`. |
-| `FLEET_PYTHON_REPL_MODE` | enum: per-turn, persistent | `per-turn` | sandbox | Python REPL lifetime: a fresh interpreter per turn, or one per conversation. Deprecated aliases: `CHAT_PYTHON_REPL_MODE` (process env only), `CUTLASS_PYTHON_REPL_MODE` (process env only). |
-| `FLEET_PYTHON_CELL_TIMEOUT` | int | `0` | sandbox | Per-cell timeout in seconds; 0 uses the tool default. *Validated at boot*. Deprecated aliases: `CHAT_PYTHON_CELL_TIMEOUT` (process env only), `CUTLASS_PYTHON_CELL_TIMEOUT` (process env only). |
-| `FLEET_PYTHON_REPL_IDLE_TTL` | int | `21600` | sandbox | Seconds an idle persistent REPL lives. *Validated at boot*. Deprecated aliases: `CHAT_PYTHON_REPL_IDLE_TTL` (process env only), `CUTLASS_PYTHON_REPL_IDLE_TTL` (process env only). |
-| `FLEET_PYTHON_REPL_MAX` | int | `64` | sandbox | Maximum persistent REPL sessions. *Validated at boot*. Deprecated aliases: `CHAT_PYTHON_REPL_MAX` (process env only), `CUTLASS_PYTHON_REPL_MAX` (process env only). |
+| `FLEET_DEFAULT_NETWORK_MODE` | enum: open, allowlisted, lockdown | `open` | sandbox | Default sandbox egress mode. An unknown value refuses to boot. |
+| `FLEET_WORKSPACE_ROOT` | path | `./workspace` | sandbox | Workspace root the sandbox mounts and the file tools are confined to. Helm: set by the chart from `workspaceRoot`. |
+| `FLEET_PYTHON_REPL_MODE` | enum: per-turn, persistent | `per-turn` | sandbox | Python REPL lifetime: a fresh interpreter per turn, or one per conversation. |
+| `FLEET_PYTHON_CELL_TIMEOUT` | int | `0` | sandbox | Per-cell timeout in seconds; 0 uses the tool default. *Validated at boot*. |
+| `FLEET_PYTHON_REPL_IDLE_TTL` | int | `21600` | sandbox | Seconds an idle persistent REPL lives. *Validated at boot*. |
+| `FLEET_PYTHON_REPL_MAX` | int | `64` | sandbox | Maximum persistent REPL sessions. *Validated at boot*. |
 
 ## Kubernetes sandbox backend
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_SANDBOX_K8S_NAMESPACE` | string | (the kubeconfig context's namespace, else the control plane's own, else fleet-sandboxes) | sandbox | Namespace of sandbox pods. Deprecated aliases: `CHAT_SANDBOX_K8S_NAMESPACE` (process env only), `CUTLASS_SANDBOX_K8S_NAMESPACE` (process env only). Helm: set by the chart from `sandbox.kubernetes.namespace`. |
-| `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | string | — | sandbox | Shared workspace PersistentVolumeClaim every sandbox pod mounts. Deprecated aliases: `CHAT_SANDBOX_K8S_WORKSPACE_CLAIM` (process env only), `CUTLASS_SANDBOX_K8S_WORKSPACE_CLAIM` (process env only). Helm: set by the chart from `workspace.claimName`. |
-| `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | string | — | sandbox | ServiceAccount stamped on sandbox pods (no token is mounted). Deprecated aliases: `CHAT_SANDBOX_K8S_SERVICE_ACCOUNT` (process env only), `CUTLASS_SANDBOX_K8S_SERVICE_ACCOUNT` (process env only). Helm: set by the chart from `sandbox.kubernetes.podServiceAccount`. |
-| `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | string | — | sandbox | Pull secret for the sandbox image. Deprecated aliases: `CHAT_SANDBOX_K8S_IMAGE_PULL_SECRET` (process env only), `CUTLASS_SANDBOX_K8S_IMAGE_PULL_SECRET` (process env only). Helm: set by the chart from `sandbox.kubernetes.imagePullSecret`. |
-| `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | string | — | sandbox | RuntimeClass of sandbox pods (e.g. kata); preflighted fail-closed. Deprecated aliases: `CHAT_SANDBOX_K8S_RUNTIME_CLASS` (process env only), `CUTLASS_SANDBOX_K8S_RUNTIME_CLASS` (process env only). Helm: set by the chart from `sandbox.kubernetes.runtimeClass`. |
-| `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | string | (RuntimeDefault) | sandbox | Node-local Localhost seccomp profile for sandbox pods. Deprecated aliases: `CHAT_SANDBOX_K8S_SECCOMP_PROFILE` (process env only), `CUTLASS_SANDBOX_K8S_SECCOMP_PROFILE` (process env only). Helm: set by the chart from `sandbox.kubernetes.seccompProfile`. |
-| `FLEET_SANDBOX_K8S_KUBECONFIG` | path | (in-cluster credentials) | sandbox | Kubeconfig for a control plane running outside the cluster. Deprecated aliases: `CHAT_SANDBOX_K8S_KUBECONFIG` (process env only), `CUTLASS_SANDBOX_K8S_KUBECONFIG` (process env only). |
-| `FLEET_SANDBOX_K8S_NETWORK_POLICY` | string | `fleet-sandbox-deny-all` | sandbox | Name of the deny-all egress NetworkPolicy the boot preflight requires. Deprecated aliases: `CHAT_SANDBOX_K8S_NETWORK_POLICY` (process env only), `CUTLASS_SANDBOX_K8S_NETWORK_POLICY` (process env only). Helm: set by the chart from `networkPolicies.denyAll.name`. |
-| `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | string | `fleet-sandbox-open-egress` | sandbox | Name of the NetworkPolicy shaping open-mode sandbox egress. Deprecated aliases: `CHAT_SANDBOX_K8S_OPEN_EGRESS_POLICY` (process env only), `CUTLASS_SANDBOX_K8S_OPEN_EGRESS_POLICY` (process env only). Helm: set by the chart from `networkPolicies.openEgress.name`. |
+| `FLEET_SANDBOX_K8S_NAMESPACE` | string | (the kubeconfig context's namespace, else the control plane's own, else fleet-sandboxes) | sandbox | Namespace of sandbox pods. Helm: set by the chart from `sandbox.kubernetes.namespace`. |
+| `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | string | — | sandbox | Shared workspace PersistentVolumeClaim every sandbox pod mounts. Helm: set by the chart from `workspace.claimName`. |
+| `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | string | — | sandbox | ServiceAccount stamped on sandbox pods (no token is mounted). Helm: set by the chart from `sandbox.kubernetes.podServiceAccount`. |
+| `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | string | — | sandbox | Pull secret for the sandbox image. Helm: set by the chart from `sandbox.kubernetes.imagePullSecret`. |
+| `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | string | — | sandbox | RuntimeClass of sandbox pods (e.g. kata); preflighted fail-closed. Helm: set by the chart from `sandbox.kubernetes.runtimeClass`. |
+| `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | string | (RuntimeDefault) | sandbox | Node-local Localhost seccomp profile for sandbox pods. Helm: set by the chart from `sandbox.kubernetes.seccompProfile`. |
+| `FLEET_SANDBOX_K8S_KUBECONFIG` | path | (in-cluster credentials) | sandbox | Kubeconfig for a control plane running outside the cluster. |
+| `FLEET_SANDBOX_K8S_NETWORK_POLICY` | string | `fleet-sandbox-deny-all` | sandbox | Name of the deny-all egress NetworkPolicy the boot preflight requires. Helm: set by the chart from `networkPolicies.denyAll.name`. |
+| `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | string | `fleet-sandbox-open-egress` | sandbox | Name of the NetworkPolicy shaping open-mode sandbox egress. Helm: set by the chart from `networkPolicies.openEgress.name`. |
 | `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED` | bool | `false` | sandbox | Waive the open-egress policy requirement (logged as a warning on every start). *Validated at boot*. Helm: set by the chart from `networkPolicies.openEgress.acknowledgeUnrestricted`. |
-| `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | string | — | sandbox | Declares the sandbox image carries the bundle's doc dirs at the control plane's paths. Deprecated aliases: `CHAT_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` (process env only), `CUTLASS_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` (process env only). Helm: set by the chart from `sandbox.kubernetes.bundleDocsInImage`. |
-| `FLEET_SANDBOX_K8S_NODE_SELECTOR` | csv | — | sandbox | Comma-separated key=value node selector for sandbox pods. Deprecated aliases: `CHAT_SANDBOX_K8S_NODE_SELECTOR` (process env only), `CUTLASS_SANDBOX_K8S_NODE_SELECTOR` (process env only). Helm: set by the chart from `sandbox.kubernetes.nodeSelector`. |
-| `FLEET_SANDBOX_K8S_TOLERATIONS` | string | — | sandbox | Tolerations for sandbox pods, as a JSON array. Deprecated aliases: `CHAT_SANDBOX_K8S_TOLERATIONS` (process env only), `CUTLASS_SANDBOX_K8S_TOLERATIONS` (process env only). Helm: set by the chart from `sandbox.kubernetes.tolerations`. |
+| `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | string | — | sandbox | Declares the sandbox image carries the bundle's doc dirs at the control plane's paths. Helm: set by the chart from `sandbox.kubernetes.bundleDocsInImage`. |
+| `FLEET_SANDBOX_K8S_NODE_SELECTOR` | csv | — | sandbox | Comma-separated key=value node selector for sandbox pods. Helm: set by the chart from `sandbox.kubernetes.nodeSelector`. |
+| `FLEET_SANDBOX_K8S_TOLERATIONS` | string | — | sandbox | Tolerations for sandbox pods, as a JSON array. Helm: set by the chart from `sandbox.kubernetes.tolerations`. |
 | `FLEET_POD_UID` | string | — | sandbox | The control-plane pod's UID, used to tell its own sandbox pods from a predecessor's. *Process env only* (fleet's env-file loader does not admit it; export it). Helm: set by the chart (downward API: metadata.uid). |
 | `FLEET_OWNER_ID` | string | — | sandbox | The owning release, so the orphan sweep never touches a co-tenant release's pods. *Process env only* (fleet's env-file loader does not admit it; export it). Helm: set by the chart (downward API: release instance label). |
 | `KUBERNETES_SERVICE_HOST` | string | — | sandbox | Set by Kubernetes inside a pod; with KUBERNETES_SERVICE_PORT it locates the in-cluster apiserver. *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -328,8 +327,8 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
 | `FLEET_CLIENT_CONFIG_DIR` | path | (the built-in config/default bundle) | server | Client-config bundle directory (branding, MCP catalog, personas, sandbox Containerfile). Set by the systemd unit; not read from the env file. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | base64 | — | server | Base64 AES-256 key sealing per-user remote-MCP OAuth tokens. Unset or malformed keeps remote MCP OAuth off. **Secret.** Deprecated aliases: `CHAT_MCP_OAUTH_ENCRYPTION_KEY` (process env only), `CUTLASS_MCP_OAUTH_ENCRYPTION_KEY` (process env only). |
-| `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | bool | `false` | server | Allow remote MCP servers over plain http (development only). *Validated at boot*. Deprecated aliases: `CHAT_REMOTE_MCP_ALLOW_INSECURE_HTTP` (process env only), `CUTLASS_REMOTE_MCP_ALLOW_INSECURE_HTTP` (process env only). |
+| `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | base64 | — | server | Base64 AES-256 key sealing per-user remote-MCP OAuth tokens. Unset or malformed keeps remote MCP OAuth off. **Secret.** |
+| `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | bool | `false` | server | Allow remote MCP servers over plain http (development only). *Validated at boot*. |
 | `TAVILY_API_KEY` | string | — | server | Tavily key for the web-search tool. **Secret.** |
 | `BROWSERBASE_API_KEY` | string | — | server | Browserbase key that mints live-view links (docs/BROWSERBASE.md). Set it with `fleet config set-browserbase-key`. **Secret.** |
 | `CUTLASS_ALLOWED_DIRS` | string | — | broker | Connector wire key: the workspace directories passed to cutlass-family MCP servers. A canonical name, not a legacy alias. |
@@ -375,15 +374,15 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_LOG_FILE` | path | — | server | Opt-in rotating process log file; empty logs to stderr only. Agent session logs are written beside it. Deprecated aliases: `CHAT_LOG_FILE` (process env only), `CUTLASS_LOG_FILE`. |
-| `FLEET_LOG_MAX_SIZE_MB` | int | `100` | server | Rotate the log file at this size. *Validated at boot*. Deprecated aliases: `CHAT_LOG_MAX_SIZE_MB` (process env only), `CUTLASS_LOG_MAX_SIZE_MB` (process env only). |
-| `FLEET_LOG_MAX_AGE_DAYS` | int | `0` | server | Delete rotated files older than this; 0 keeps them. *Validated at boot*. Deprecated aliases: `CHAT_LOG_MAX_AGE_DAYS` (process env only), `CUTLASS_LOG_MAX_AGE_DAYS` (process env only). |
-| `FLEET_LOG_MAX_BACKUPS` | int | `7` | server | Rotated files kept. *Validated at boot*. Deprecated aliases: `CHAT_LOG_MAX_BACKUPS` (process env only), `CUTLASS_LOG_MAX_BACKUPS` (process env only). |
-| `FLEET_LOG_COMPRESS` | bool | `true` | server | Gzip rotated files. *Validated at boot*. Deprecated aliases: `CHAT_LOG_COMPRESS` (process env only), `CUTLASS_LOG_COMPRESS` (process env only). |
-| `FLEET_LOG_FORMAT` | enum: json, text | `json` | server | Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). Deprecated aliases: `CHAT_LOG_FORMAT` (process env only), `CUTLASS_LOG_FORMAT` (process env only). |
-| `FLEET_LOG_LEVEL` | enum: debug, info, warn, error | `info` | server | Minimum level of the process log, both formats. Deprecated aliases: `CHAT_LOG_LEVEL` (process env only), `CUTLASS_LOG_LEVEL` (process env only). |
-| `FLEET_LOG_ARCHIVE_AFTER_DAYS` | int | `0` | server | Archive run logs older than this; 0 disables. *Validated at boot*. Deprecated aliases: `CHAT_LOG_ARCHIVE_AFTER_DAYS` (process env only), `CUTLASS_LOG_ARCHIVE_AFTER_DAYS` (process env only). |
-| `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | base64 | — | server | Base64 AES-256 key encrypting log archives; unset or malformed archives gzip-only. **Secret.** Deprecated aliases: `CHAT_LOG_ARCHIVE_ENCRYPTION_KEY` (process env only), `CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY` (process env only). |
+| `FLEET_LOG_FILE` | path | — | server | Opt-in rotating process log file; empty logs to stderr only. Agent session logs are written beside it. |
+| `FLEET_LOG_MAX_SIZE_MB` | int | `100` | server | Rotate the log file at this size. *Validated at boot*. |
+| `FLEET_LOG_MAX_AGE_DAYS` | int | `0` | server | Delete rotated files older than this; 0 keeps them. *Validated at boot*. |
+| `FLEET_LOG_MAX_BACKUPS` | int | `7` | server | Rotated files kept. *Validated at boot*. |
+| `FLEET_LOG_COMPRESS` | bool | `true` | server | Gzip rotated files. *Validated at boot*. |
+| `FLEET_LOG_FORMAT` | enum: json, text | `json` | server | Process log format: json (one JSON object per line; use it for log tooling) or text (slog logfmt key=value lines). |
+| `FLEET_LOG_LEVEL` | enum: debug, info, warn, error | `info` | server | Minimum level of the process log, both formats. |
+| `FLEET_LOG_ARCHIVE_AFTER_DAYS` | int | `0` | server | Archive run logs older than this; 0 disables. *Validated at boot*. |
+| `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | base64 | — | server | Base64 AES-256 key encrypting log archives; unset or malformed archives gzip-only. **Secret.** |
 | `FLEET_SENTRY_DSN` | url | — | server | Sentry-protocol ingest URL; unset makes Sentry a no-op. A public identifier, not a secret. |
 | `FLEET_ENVIRONMENT` | string | `dev` | server | Deployment tier tag on Sentry events (production, staging, dev). |
 | `FLEET_OTEL_ENDPOINT` | string | — | server | OTLP/gRPC endpoint for traces; unset leaves tracing off. |
@@ -529,10 +528,10 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_PII_REDACTION_ENGINE` | string | — | server | Retired with the Rampart engine (ADR-0063): nothing reads it; boot warns when it is set. Deprecated aliases: `CHAT_PII_REDACTION_ENGINE` (process env only), `CUTLASS_PII_REDACTION_ENGINE` (process env only). |
-| `FLEET_PII_RAMPART_URL` | url | — | server | Retired with the Rampart engine (ADR-0063): nothing reads it; boot warns when it is set. Deprecated aliases: `CHAT_PII_RAMPART_URL` (process env only), `CUTLASS_PII_RAMPART_URL` (process env only). |
-| `FLEET_ACCOUNT_EVENTS_URL` | url | — | server | Retired with the account-events feed (ADR-0096): boot warns when it is set. Deprecated aliases: `CHAT_ACCOUNT_EVENTS_URL` (process env only), `CUTLASS_ACCOUNT_EVENTS_URL` (process env only). |
-| `FLEET_ACCOUNT_EVENTS_SECRET` | string | — | server | Retired with the account-events feed (ADR-0096): boot warns when it is set. **Secret.** Deprecated aliases: `CHAT_ACCOUNT_EVENTS_SECRET` (process env only), `CUTLASS_ACCOUNT_EVENTS_SECRET` (process env only). |
+| `FLEET_PII_REDACTION_ENGINE` | string | — | server | Retired with the Rampart engine (ADR-0063): nothing reads it; boot warns when it is set. |
+| `FLEET_PII_RAMPART_URL` | url | — | server | Retired with the Rampart engine (ADR-0063): nothing reads it; boot warns when it is set. |
+| `FLEET_ACCOUNT_EVENTS_URL` | url | — | server | Retired with the account-events feed (ADR-0096): boot warns when it is set. |
+| `FLEET_ACCOUNT_EVENTS_SECRET` | string | — | server | Retired with the account-events feed (ADR-0096): boot warns when it is set. **Secret.** |
 | `FLEET_UPDATE_FROM_SOURCE` | bool | — | scripts | Retired with the on-box build (ADR-0101): update.sh installs signed releases only. Set to 1 it stops with a message; 0 is ignored (an update.sh from before the removal forwards it on its self-update re-exec). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_BOOTSTRAP_FROM_SOURCE` | bool | — | scripts | Retired with the on-box build (ADR-0101): bootstrap.sh installs a published, signed release only. Set to 1 it stops with a message. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `MAX_ITERATIONS` | int | — | broker | A cutlass-era knob: fleet reads nothing from it, but it stays admitted from the env file and reserved from connectors for MCP servers and scripts that predate fleet. Use FLEET_MAX_ITERATIONS. |
@@ -540,320 +539,3 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `DEBUG` | string | — | broker | A cutlass-era knob: fleet reads nothing from it, but it stays admitted from the env file and reserved from connectors. |
 | `VERBOSE` | string | — | broker | A cutlass-era knob: fleet reads nothing from it, but it stays admitted from the env file and reserved from connectors. |
 
-## Deprecated aliases
-
-Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether
-fleet's own env-file loader admits the alias. One it does not admit is still effective on the standard install,
-because the systemd unit's `EnvironmentFile=` exports every line, so migrate-env rewrites it too. The exception is a
-*reader-specific* alias, which only the named reader honours and the server ignores: migrate-env leaves it in place,
-because renaming it would start applying it to the server.
-
-| Alias | Canonical | Env file | Read by |
-| --- | --- | --- | --- |
-| `CHAT_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no | every reader of the setting |
-| `CHAT_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no | every reader of the setting |
-| `CHAT_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no | every reader of the setting |
-| `CHAT_A2A_MODEL` | `FLEET_A2A_MODEL` | no | every reader of the setting |
-| `CHAT_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no | every reader of the setting |
-| `CHAT_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no | every reader of the setting |
-| `CHAT_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no | every reader of the setting |
-| `CHAT_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no | every reader of the setting |
-| `CHAT_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no | every reader of the setting |
-| `CHAT_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no | every reader of the setting |
-| `CHAT_ALLOWED_DIRS` | `FLEET_ALLOWED_DIRS` | no | every reader of the setting |
-| `CHAT_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no | every reader of the setting |
-| `CHAT_AUDIT_DIR` | `FLEET_AUDIT_DIR` | no | every reader of the setting |
-| `CHAT_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no | every reader of the setting |
-| `CHAT_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
-| `CHAT_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no | every reader of the setting |
-| `CHAT_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no | every reader of the setting |
-| `CHAT_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
-| `CHAT_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no | every reader of the setting |
-| `CHAT_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
-| `CHAT_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
-| `CHAT_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no | every reader of the setting |
-| `CHAT_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no | every reader of the setting |
-| `CHAT_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no | every reader of the setting |
-| `CHAT_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no | every reader of the setting |
-| `CHAT_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no | every reader of the setting |
-| `CHAT_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no | every reader of the setting |
-| `CHAT_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no | every reader of the setting |
-| `CHAT_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no | every reader of the setting |
-| `CHAT_DATA_DIR` | `FLEET_DATA_DIR` | yes | every reader of the setting |
-| `CHAT_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no | every reader of the setting |
-| `CHAT_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no | every reader of the setting |
-| `CHAT_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no | every reader of the setting |
-| `CHAT_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no | every reader of the setting |
-| `CHAT_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no | every reader of the setting |
-| `CHAT_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no | every reader of the setting |
-| `CHAT_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no | every reader of the setting |
-| `CHAT_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no | every reader of the setting |
-| `CHAT_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no | every reader of the setting |
-| `CHAT_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no | every reader of the setting |
-| `CHAT_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no | every reader of the setting |
-| `CHAT_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no | every reader of the setting |
-| `CHAT_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no | every reader of the setting |
-| `CHAT_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no | every reader of the setting |
-| `CHAT_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no | every reader of the setting |
-| `CHAT_IMAGE_MODEL` | `FLEET_IMAGE_MODEL` | no | every reader of the setting |
-| `CHAT_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no | every reader of the setting |
-| `CHAT_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no | every reader of the setting |
-| `CHAT_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no | every reader of the setting |
-| `CHAT_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no | every reader of the setting |
-| `CHAT_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no | every reader of the setting |
-| `CHAT_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | yes | every reader of the setting |
-| `CHAT_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | yes | every reader of the setting |
-| `CHAT_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
-| `CHAT_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no | every reader of the setting |
-| `CHAT_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no | every reader of the setting |
-| `CHAT_LOG_FILE` | `FLEET_LOG_FILE` | no | every reader of the setting |
-| `CHAT_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no | every reader of the setting |
-| `CHAT_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no | every reader of the setting |
-| `CHAT_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no | every reader of the setting |
-| `CHAT_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no | every reader of the setting |
-| `CHAT_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no | every reader of the setting |
-| `CHAT_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no | every reader of the setting |
-| `CHAT_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes | every reader of the setting |
-| `CHAT_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | yes | every reader of the setting |
-| `CHAT_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes | every reader of the setting |
-| `CHAT_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no | every reader of the setting |
-| `CHAT_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no | every reader of the setting |
-| `CHAT_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no | every reader of the setting |
-| `CHAT_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no | every reader of the setting |
-| `CHAT_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no | every reader of the setting |
-| `CHAT_METADATA_MODEL` | `FLEET_METADATA_MODEL` | yes | every reader of the setting |
-| `CHAT_MOCK_MODE` | `FLEET_MOCK_MODE` | yes | every reader of the setting |
-| `CHAT_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no | every reader of the setting |
-| `CHAT_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no | every reader of the setting |
-| `CHAT_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no | every reader of the setting |
-| `CHAT_PERSONA` | `FLEET_PERSONA` | no | every reader of the setting |
-| `CHAT_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no | every reader of the setting |
-| `CHAT_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no | every reader of the setting |
-| `CHAT_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no | every reader of the setting |
-| `CHAT_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no | every reader of the setting |
-| `CHAT_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no | every reader of the setting |
-| `CHAT_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no | every reader of the setting |
-| `CHAT_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no | every reader of the setting |
-| `CHAT_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no | every reader of the setting |
-| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no | every reader of the setting |
-| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no | every reader of the setting |
-| `CHAT_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no | every reader of the setting |
-| `CHAT_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no | every reader of the setting |
-| `CHAT_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no | every reader of the setting |
-| `CHAT_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no | every reader of the setting |
-| `CHAT_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no | every reader of the setting |
-| `CHAT_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no | every reader of the setting |
-| `CHAT_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no | every reader of the setting |
-| `CHAT_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no | every reader of the setting |
-| `CHAT_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no | every reader of the setting |
-| `CHAT_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no | every reader of the setting |
-| `CHAT_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no | every reader of the setting |
-| `CHAT_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no | every reader of the setting |
-| `CHAT_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | yes | every reader of the setting |
-| `CHAT_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no | every reader of the setting |
-| `CHAT_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no | every reader of the setting |
-| `CHAT_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no | every reader of the setting |
-| `CHAT_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no | every reader of the setting |
-| `CHAT_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no | every reader of the setting |
-| `CHAT_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | yes | every reader of the setting |
-| `CHAT_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no | every reader of the setting |
-| `CHAT_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no | every reader of the setting |
-| `CHAT_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no | every reader of the setting |
-| `CHAT_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no | every reader of the setting |
-| `CHAT_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
-| `CHAT_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no | every reader of the setting |
-| `CHAT_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
-| `CHAT_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
-| `CHAT_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no | every reader of the setting |
-| `CHAT_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no | every reader of the setting |
-| `CHAT_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no | every reader of the setting |
-| `CHAT_SERVER_ADDR` | `FLEET_SERVER_ADDR` | yes | every reader of the setting |
-| `CHAT_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | yes | every reader of the setting |
-| `CHAT_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no | every reader of the setting |
-| `CHAT_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no | every reader of the setting |
-| `CHAT_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no | every reader of the setting |
-| `CHAT_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no | every reader of the setting |
-| `CHAT_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no | every reader of the setting |
-| `CHAT_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no | every reader of the setting |
-| `CHAT_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no | every reader of the setting |
-| `CHAT_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no | every reader of the setting |
-| `CHAT_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | no | every reader of the setting |
-| `CHAT_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no | every reader of the setting |
-| `CHAT_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no | every reader of the setting |
-| `CHAT_TASK_MODEL` | `FLEET_TASK_MODEL` | no | every reader of the setting |
-| `CHAT_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no | every reader of the setting |
-| `CHAT_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no | every reader of the setting |
-| `CHAT_TEMPERATURE` | `FLEET_TEMPERATURE` | yes | every reader of the setting |
-| `CHAT_TITLE_MODEL` | `FLEET_TITLE_MODEL` | yes | every reader of the setting |
-| `CHAT_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CHAT_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CHAT_TLS_MODE` | `FLEET_TLS_MODE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CHAT_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no | every reader of the setting |
-| `CHAT_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no | every reader of the setting |
-| `CHAT_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | yes | every reader of the setting |
-| `CHAT_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no | every reader of the setting |
-| `CHAT_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no | every reader of the setting |
-| `CHAT_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | yes | every reader of the setting |
-| `CHAT_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no | every reader of the setting |
-| `CUTLASS_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no | every reader of the setting |
-| `CUTLASS_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no | every reader of the setting |
-| `CUTLASS_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no | every reader of the setting |
-| `CUTLASS_A2A_MODEL` | `FLEET_A2A_MODEL` | no | every reader of the setting |
-| `CUTLASS_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no | every reader of the setting |
-| `CUTLASS_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no | every reader of the setting |
-| `CUTLASS_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no | every reader of the setting |
-| `CUTLASS_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no | every reader of the setting |
-| `CUTLASS_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no | every reader of the setting |
-| `CUTLASS_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no | every reader of the setting |
-| `CUTLASS_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no | every reader of the setting |
-| `CUTLASS_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no | every reader of the setting |
-| `CUTLASS_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
-| `CUTLASS_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no | every reader of the setting |
-| `CUTLASS_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no | every reader of the setting |
-| `CUTLASS_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
-| `CUTLASS_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no | every reader of the setting |
-| `CUTLASS_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
-| `CUTLASS_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
-| `CUTLASS_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no | every reader of the setting |
-| `CUTLASS_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no | every reader of the setting |
-| `CUTLASS_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no | every reader of the setting |
-| `CUTLASS_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no | every reader of the setting |
-| `CUTLASS_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no | every reader of the setting |
-| `CUTLASS_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no | every reader of the setting |
-| `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no | every reader of the setting |
-| `CUTLASS_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no | every reader of the setting |
-| `CUTLASS_DATA_DIR` | `FLEET_DATA_DIR` | no | every reader of the setting |
-| `CUTLASS_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no | every reader of the setting |
-| `CUTLASS_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no | every reader of the setting |
-| `CUTLASS_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no | every reader of the setting |
-| `CUTLASS_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no | every reader of the setting |
-| `CUTLASS_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no | every reader of the setting |
-| `CUTLASS_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no | every reader of the setting |
-| `CUTLASS_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no | every reader of the setting |
-| `CUTLASS_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no | every reader of the setting |
-| `CUTLASS_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no | every reader of the setting |
-| `CUTLASS_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no | every reader of the setting |
-| `CUTLASS_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no | every reader of the setting |
-| `CUTLASS_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no | every reader of the setting |
-| `CUTLASS_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no | every reader of the setting |
-| `CUTLASS_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no | every reader of the setting |
-| `CUTLASS_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no | every reader of the setting |
-| `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no | every reader of the setting |
-| `CUTLASS_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no | every reader of the setting |
-| `CUTLASS_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no | every reader of the setting |
-| `CUTLASS_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no | every reader of the setting |
-| `CUTLASS_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no | every reader of the setting |
-| `CUTLASS_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | no | every reader of the setting |
-| `CUTLASS_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | no | every reader of the setting |
-| `CUTLASS_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
-| `CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no | every reader of the setting |
-| `CUTLASS_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no | every reader of the setting |
-| `CUTLASS_LOG_FILE` | `FLEET_LOG_FILE` | yes | every reader of the setting |
-| `CUTLASS_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no | every reader of the setting |
-| `CUTLASS_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no | every reader of the setting |
-| `CUTLASS_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no | every reader of the setting |
-| `CUTLASS_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no | every reader of the setting |
-| `CUTLASS_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no | every reader of the setting |
-| `CUTLASS_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no | every reader of the setting |
-| `CUTLASS_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes | every reader of the setting |
-| `CUTLASS_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | no | every reader of the setting |
-| `CUTLASS_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes | every reader of the setting |
-| `CUTLASS_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no | every reader of the setting |
-| `CUTLASS_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no | every reader of the setting |
-| `CUTLASS_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no | every reader of the setting |
-| `CUTLASS_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no | every reader of the setting |
-| `CUTLASS_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no | every reader of the setting |
-| `CUTLASS_METADATA_MODEL` | `FLEET_METADATA_MODEL` | no | every reader of the setting |
-| `CUTLASS_MOCK_MODE` | `FLEET_MOCK_MODE` | no | every reader of the setting |
-| `CUTLASS_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no | every reader of the setting |
-| `CUTLASS_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no | every reader of the setting |
-| `CUTLASS_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no | every reader of the setting |
-| `CUTLASS_PERSONA` | `FLEET_PERSONA` | no | every reader of the setting |
-| `CUTLASS_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no | every reader of the setting |
-| `CUTLASS_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no | every reader of the setting |
-| `CUTLASS_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no | every reader of the setting |
-| `CUTLASS_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no | every reader of the setting |
-| `CUTLASS_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no | every reader of the setting |
-| `CUTLASS_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no | every reader of the setting |
-| `CUTLASS_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no | every reader of the setting |
-| `CUTLASS_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no | every reader of the setting |
-| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no | every reader of the setting |
-| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no | every reader of the setting |
-| `CUTLASS_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no | every reader of the setting |
-| `CUTLASS_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no | every reader of the setting |
-| `CUTLASS_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no | every reader of the setting |
-| `CUTLASS_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no | every reader of the setting |
-| `CUTLASS_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no | every reader of the setting |
-| `CUTLASS_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no | every reader of the setting |
-| `CUTLASS_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no | every reader of the setting |
-| `CUTLASS_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no | every reader of the setting |
-| `CUTLASS_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no | every reader of the setting |
-| `CUTLASS_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no | every reader of the setting |
-| `CUTLASS_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no | every reader of the setting |
-| `CUTLASS_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no | every reader of the setting |
-| `CUTLASS_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
-| `CUTLASS_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no | every reader of the setting |
-| `CUTLASS_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
-| `CUTLASS_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
-| `CUTLASS_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no | every reader of the setting |
-| `CUTLASS_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no | every reader of the setting |
-| `CUTLASS_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no | every reader of the setting |
-| `CUTLASS_SERVER_ADDR` | `FLEET_SERVER_ADDR` | no | every reader of the setting |
-| `CUTLASS_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | no | every reader of the setting |
-| `CUTLASS_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no | every reader of the setting |
-| `CUTLASS_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no | every reader of the setting |
-| `CUTLASS_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no | every reader of the setting |
-| `CUTLASS_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no | every reader of the setting |
-| `CUTLASS_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no | every reader of the setting |
-| `CUTLASS_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no | every reader of the setting |
-| `CUTLASS_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no | every reader of the setting |
-| `CUTLASS_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no | every reader of the setting |
-| `CUTLASS_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | yes | every reader of the setting |
-| `CUTLASS_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no | every reader of the setting |
-| `CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no | every reader of the setting |
-| `CUTLASS_TASK_MODEL` | `FLEET_TASK_MODEL` | yes | every reader of the setting |
-| `CUTLASS_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no | every reader of the setting |
-| `CUTLASS_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no | every reader of the setting |
-| `CUTLASS_TEMPERATURE` | `FLEET_TEMPERATURE` | yes | every reader of the setting |
-| `CUTLASS_TITLE_MODEL` | `FLEET_TITLE_MODEL` | no | every reader of the setting |
-| `CUTLASS_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CUTLASS_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CUTLASS_TLS_MODE` | `FLEET_TLS_MODE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
-| `CUTLASS_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no | every reader of the setting |
-| `CUTLASS_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no | every reader of the setting |
-| `CUTLASS_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | no | every reader of the setting |
-| `CUTLASS_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no | every reader of the setting |
-| `CUTLASS_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no | every reader of the setting |
-| `CUTLASS_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | no | every reader of the setting |
-| `CUTLASS_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no | every reader of the setting |

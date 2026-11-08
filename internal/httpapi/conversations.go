@@ -33,7 +33,7 @@ type createConversationRequest struct {
 	Model           string `json:"model"`
 	// Lockdown, when true, marks this conversation as locked-down: the
 	// agent loop forces a per-turn container sandbox and the model slug
-	// is restricted to CHAT_LOCKDOWN_ALLOWED_MODELS. Frontend exposes
+	// is restricted to FLEET_LOCKDOWN_ALLOWED_MODELS. Frontend exposes
 	// this as a "New lockdown chat" affordance. Server rejects when
 	// CHAT_LOCKDOWN_ENABLED is false.
 	Lockdown bool `json:"lockdown,omitempty"`

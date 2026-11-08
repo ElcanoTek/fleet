@@ -39,33 +39,6 @@ func TestTableIsWellFormed(t *testing.T) {
 		if e.Knob != nil && e.Knob.Lenient && strings.TrimSpace(e.Knob.Why) == "" {
 			t.Errorf("%s is a lenient knob without a Why", e.Name)
 		}
-		for _, a := range e.Aliases {
-			if a.EnvFile && e.ProcessOnly && a.Deprecated {
-				t.Errorf("%s: deprecated alias %s is file-admitted but the canonical is not", e.Name, a.Name)
-			}
-		}
-	}
-}
-
-// TestDeprecatedAliasesAreOnlyLegacyPrefixed — ADR-0099 deprecates the
-// CHAT_/CUTLASS_ spellings and nothing else; every deprecated alias must be
-// one of them, and its canonical must be the FLEET_ spelling of the same
-// suffix.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env
-func TestDeprecatedAliasesAreOnlyLegacyPrefixed(t *testing.T) {
-	for _, e := range All() {
-		for _, a := range e.DeprecatedAliases() {
-			ok := false
-			for _, p := range LegacyPrefixes {
-				if suffix, cut := strings.CutPrefix(a.Name, p); cut && e.Name == CanonicalPrefix+suffix {
-					ok = true
-				}
-			}
-			if !ok {
-				t.Errorf("%s: deprecated alias %s is not the CHAT_/CUTLASS_ spelling of the canonical name", e.Name, a.Name)
-			}
-		}
 	}
 }
 
@@ -78,15 +51,54 @@ func TestLookupPanicsOnUnregisteredNameInTests(t *testing.T) {
 	_ = Get("FLEET_THIS_NAME_IS_NOT_REGISTERED")
 }
 
-func TestChainSpellingsOrder(t *testing.T) {
-	got := ChainSpellings("FLEET_MAX_COST_USD")
-	want := []string{"FLEET_MAX_COST_USD", "CHAT_MAX_COST_USD", "CUTLASS_MAX_COST_USD"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("ChainSpellings = %v, want %v", got, want)
+// TestRetiredAliases pins ADR-0106: a removed CHAT_/CUTLASS_ spelling (and
+// the bare DATA_DIR) is not registered, so nothing can read it, and
+// RetiredAlias names the FLEET_ key to use; the canonical CHAT_/CUTLASS_
+// settings are not retired.
+func TestRetiredAliases(t *testing.T) {
+	for name, want := range map[string]string{
+		"CHAT_MAX_COST_USD":    "FLEET_MAX_COST_USD",
+		"CUTLASS_MAX_COST_USD": "FLEET_MAX_COST_USD",
+		"CHAT_SERVER_TOKEN":    "FLEET_SERVER_TOKEN",
+		"CHAT_TLS_MODE":        "FLEET_TLS_MODE",
+		"CUTLASS_TLS_DOMAIN":   "FLEET_TLS_DOMAIN",
+		"CHAT_IMAGE_MODEL":     "FLEET_IMAGE_MODEL",
+		"CUTLASS_LOG_FILE":     "FLEET_LOG_FILE",
+		"DATA_DIR":             "FLEET_DATA_DIR",
+	} {
+		if IsRegistered(name) {
+			t.Errorf("%s is still registered", name)
+		}
+		if got, ok := RetiredAlias(name); !ok || got != want {
+			t.Errorf("RetiredAlias(%s) = %q, %v; want %q", name, got, ok, want)
+		}
 	}
-	a, e, ok := AliasOf("CUTLASS_MAX_COST_USD")
-	if !ok || e.Name != "FLEET_MAX_COST_USD" || !a.Deprecated || !a.EnvFile {
-		t.Fatalf("AliasOf(CUTLASS_MAX_COST_USD) = %+v %s %v", a, e.Name, ok)
+	for _, name := range []string{
+		"CHAT_RATE_PER_MIN", "CUTLASS_ALLOWED_DIRS", "CUTLASS_IMAGE_MODEL", "CHAT_DB_NAME",
+		"FLEET_MAX_COST_USD", "PERSONA", "CHAT_NOT_A_SETTING", "CHAT_", "HOME",
+	} {
+		if c, ok := RetiredAlias(name); ok {
+			t.Errorf("RetiredAlias(%s) = %q; it is not a removed spelling", name, c)
+		}
+	}
+	for _, e := range All() {
+		for _, a := range e.Aliases {
+			if _, retired := RetiredAlias(a.Name); retired || retiredPrefixed(a.Name) {
+				t.Errorf("%s declares alias %s, a spelling ADR-0106 removed", e.Name, a.Name)
+			}
+		}
+	}
+}
+
+func TestRetiredSpellings(t *testing.T) {
+	want := "FLEET_SERVER_TOKEN,CHAT_SERVER_TOKEN,CUTLASS_SERVER_TOKEN"
+	for _, n := range []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"} {
+		if got := strings.Join(RetiredSpellings(n), ","); got != want {
+			t.Errorf("RetiredSpellings(%s) = %s, want %s", n, got, want)
+		}
+	}
+	if got := RetiredSpellings("OPENROUTER_API_KEY"); len(got) != 1 || got[0] != "OPENROUTER_API_KEY" {
+		t.Errorf("RetiredSpellings(OPENROUTER_API_KEY) = %v", got)
 	}
 }
 

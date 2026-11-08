@@ -28,6 +28,15 @@ func TestToAgentcoreProviders(t *testing.T) {
 			t.Errorf("empty bundle => %v, want nil", got)
 		}
 	})
+	t.Run("a removed api_key_env spelling yields no key (ADR-0106)", func(t *testing.T) {
+		t.Setenv("CHAT_SERVER_TOKEN", "stale-token") // exported by the unit's EnvironmentFile=
+		got := toAgentcoreProviders(&clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
+			{Name: "p", Type: "openai", APIKeyEnv: "CHAT_SERVER_TOKEN"},
+		}})
+		if len(got) != 1 || got[0].APIKey != "" {
+			t.Fatalf("provider key = %q, want none from a removed spelling", got[0].APIKey)
+		}
+	})
 	t.Run("populated block translated with host-side key resolution", func(t *testing.T) {
 		t.Setenv("TEST_ANTHROPIC_KEY", "sk-ant-secret")
 		bundle := &clientconfig.Bundle{Providers: []clientconfig.ProviderDef{

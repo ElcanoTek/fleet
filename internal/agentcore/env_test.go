@@ -64,13 +64,14 @@ func TestFleetEnv_lookupFloatDefault(t *testing.T) {
 	}
 }
 
-// TestFleetEnv_legacyAlias pins that a CHAT_/CUTLASS_ alias is still honored
-// when the FLEET_ name is unset, and that FLEET_ wins when both are set.
-func TestFleetEnv_legacyAlias(t *testing.T) {
+// TestFleetEnv_readsOnlyTheCanonicalName pins that the removed CHAT_/CUTLASS_
+// spellings (ADR-0106) are not read, and that FLEET_ is.
+func TestFleetEnv_readsOnlyTheCanonicalName(t *testing.T) {
 	t.Setenv("FLEET_GUARDRAIL_PROFILE", "")
+	t.Setenv("CHAT_GUARDRAIL_PROFILE", "legacy")
 	t.Setenv("CUTLASS_GUARDRAIL_PROFILE", "legacy")
-	if got := fleetEnv.lookup("GUARDRAIL_PROFILE"); got != "legacy" {
-		t.Fatalf("lookup with only the CUTLASS_ alias set = %q, want %q", got, "legacy")
+	if got := fleetEnv.lookup("GUARDRAIL_PROFILE"); got != "" {
+		t.Fatalf("lookup with only the removed spellings set = %q, want empty", got)
 	}
 	t.Setenv("FLEET_GUARDRAIL_PROFILE", "canonical")
 	if got := fleetEnv.lookup("GUARDRAIL_PROFILE"); got != "canonical" {

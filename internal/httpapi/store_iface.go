@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -409,8 +410,10 @@ type chatStore interface {
 	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	TotalSharedFileBytes(ctx context.Context) (int64, error)
 
-	// In-chat patrols and timers (migration 086): recurring cron patrols and
-	// one-shot timers bound directly to a conversation.
+	// In-chat patrols and timers: recurring cron patrols and one-shot timers
+	// bound directly to a conversation. The rows are the scheduler's
+	// (sched.chat_schedules, ADR-0104); the chat store edits their
+	// definitions and delivers each fire the scheduler claims.
 	CreateChatSchedule(ctx context.Context, in store.ChatScheduleInput) (*store.ChatSchedule, error)
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
@@ -418,8 +421,7 @@ type chatStore interface {
 	SetChatOrder(ctx context.Context, userEmail, scope string, ids []string) ([]string, error)
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
-	TriggerChatScheduleNow(ctx context.Context, userEmail, convID, scheduleID string, maxPending int) (*store.ClaimedChatSchedule, error)
-	ClaimDueChatSchedules(ctx context.Context, now time.Time, maxPending int) ([]store.ClaimedChatSchedule, error)
+	DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, maxPending int) (models.ChatScheduleDelivery, error)
 }
 
 // Compile-time proof that the concrete Postgres store satisfies the interface —

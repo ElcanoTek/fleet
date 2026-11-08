@@ -251,7 +251,7 @@ func TestEnvEdit_TrueEditor(t *testing.T) {
 		if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'B=2' >> \"$1\"\nchmod 644 \"$1\"\n"), 0o700); err != nil {
 			t.Fatalf("write script: %v", err)
 		}
-		if code := envEdit([]string{"--env-file", path, "--editor", script}); code != 0 {
+		if code := envEdit([]string{"--env-file", path, "--editor", shEditor(t, script)}); code != 0 {
 			t.Fatalf("envEdit = %d, want 0", code)
 		}
 		b, err := os.ReadFile(path)
@@ -285,7 +285,7 @@ func TestEnvEdit_TrueEditor(t *testing.T) {
 		if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'A=1\\nB=2\\n' > \"$1.new\"\nchmod 644 \"$1.new\"\nmv \"$1.new\" \"$1\"\n"), 0o700); err != nil {
 			t.Fatalf("write script: %v", err)
 		}
-		if code := envEdit([]string{"--env-file", path, "--editor", script}); code != 0 {
+		if code := envEdit([]string{"--env-file", path, "--editor", shEditor(t, script)}); code != 0 {
 			t.Fatalf("envEdit = %d, want 0", code)
 		}
 		after, err := os.Stat(path)
@@ -357,4 +357,31 @@ func TestCmdEnv_Dispatch(t *testing.T) {
 	if code := cmdEnv([]string{"help"}); code != 0 {
 		t.Fatalf("help: code = %d, want 0", code)
 	}
+}
+
+// shEditor runs a just-written editor script through /bin/sh rather than
+// exec'ing it directly. Exec'ing a file this test process has just written can
+// fail with ETXTBSY ("text file busy") when a parallel test forks while the
+// write fd is still open: the child inherits it until its own exec closes it
+// (golang/go#22315). /bin/sh is never open for writing, so the race can't hit.
+//
+// --editor is split on whitespace (like $EDITOR), so the script is copied to a
+// directory directly under /tmp whose name has no whitespace, even when TMPDIR
+// (and so t.TempDir) does.
+func shEditor(t *testing.T, script string) string {
+	t.Helper()
+	b, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	dir, err := os.MkdirTemp("/tmp", "fleet-editor-")
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	p := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	return "/bin/sh " + p
 }

@@ -101,12 +101,7 @@ func runMCPBroker() error {
 
 func mcpBrokerRemoteConfigured() bool {
 	configured := func(name string) bool {
-		for _, alias := range config.EnvAliases(name) {
-			if strings.TrimSpace(envreg.Get(alias)) != "" {
-				return true
-			}
-		}
-		return false
+		return strings.TrimSpace(envreg.Get(name)) != ""
 	}
 	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
 }

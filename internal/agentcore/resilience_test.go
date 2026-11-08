@@ -2,8 +2,8 @@ package agentcore
 
 // Lifted+adapted from cutlass resilience_test.go. The only structural change is
 // *Agent → *engine (agentcore's focused resilience host) and newMockAgent →
-// newMockEngine; the assertions are unchanged. "CUTLASS_RETRY_MAX_ATTEMPTS" resolves
-// through the EnvPrefix back-compat aliases so t.Setenv still works.
+// newMockEngine; the assertions are unchanged, and the knob is set under its
+// canonical FLEET_RETRY_MAX_ATTEMPTS name.
 
 import (
 	"context"
@@ -130,37 +130,37 @@ func TestClassifyStreamError(t *testing.T) {
 
 func TestLoadResilienceConfig(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("override", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "2")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "2")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 2 {
 			t.Errorf("got %d, want 2", got)
 		}
 	})
 	t.Run("zero disables", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "0")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "0")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 0 {
 			t.Errorf("got %d, want 0", got)
 		}
 	})
 	t.Run("negative falls back to default", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "-1")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "-1")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("non-numeric falls back to default", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "not-a-number")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "not-a-number")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("canonical FLEET prefix", func(t *testing.T) {
-		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "")
+		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "")
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "7")
 		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 7 {
 			t.Errorf("got %d, want 7 via FLEET_ prefix", got)

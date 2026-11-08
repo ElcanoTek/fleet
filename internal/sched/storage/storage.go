@@ -478,6 +478,13 @@ func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStat
 	return s.db.UpdateTasksStatusBatch(context.Background(), taskIDs, fromStatus, toStatus)
 }
 
+// UpdateTasksStatusBatchCtx is UpdateTasksStatusBatch under ctx: the
+// scheduler's promotion passes its bounded, Stop-cancelled sweep context so a
+// row lock held elsewhere cannot hang the tick.
+func (s *Storage) UpdateTasksStatusBatchCtx(ctx context.Context, taskIDs []uuid.UUID, fromStatus, toStatus models.TaskStatus) (int, error) {
+	return s.db.UpdateTasksStatusBatch(ctx, taskIDs, fromStatus, toStatus)
+}
+
 // SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
 // but only while the row still carries the scheduled_for the gate evaluation
 // was dispatched against — a concurrent cancel, claim, edit, or reschedule
@@ -485,6 +492,12 @@ func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStat
 // rows transitioned (0 or 1).
 func (s *Storage) SettleGatedTask(taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
 	return s.db.SettleGatedTask(context.Background(), taskID, observedScheduledFor, toStatus)
+}
+
+// SettleGatedTaskCtx is SettleGatedTask under ctx (the scheduler's bounded
+// context).
+func (s *Storage) SettleGatedTaskCtx(ctx context.Context, taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	return s.db.SettleGatedTask(ctx, taskID, observedScheduledFor, toStatus)
 }
 
 // GetPendingTasks gets all pending tasks, sorted by priority.
@@ -824,6 +837,12 @@ func (s *Storage) RevokeSessionToken(ctx context.Context, token string) (bool, e
 // the beginning. See db.GetScheduledTasks for why keyset paging (#566).
 func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
 	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
+}
+
+// GetScheduledTasksCtx is GetScheduledTasks under ctx (the scheduler's
+// bounded context).
+func (s *Storage) GetScheduledTasksCtx(ctx context.Context, cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
+	return s.db.GetScheduledTasks(ctx, cutoff, afterScheduledFor, afterID, limit)
 }
 
 // DeleteTask permanently removes a task row and its transcripts.
