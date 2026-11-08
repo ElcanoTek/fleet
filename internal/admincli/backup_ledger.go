@@ -79,6 +79,27 @@ func tocHasTable(toc, schema, table string) bool {
 	return false
 }
 
+// checkLedgerVersions refuses a one-store restore of a dump whose ledger is
+// at another version than the live one — the case that needs no other
+// check's context, so it runs before anything can change the database.
+func checkLedgerVersions(ctx context.Context, dsn, inPath, target string) error {
+	dumpMax, dumpHas, err := dumpLedger(ctx, inPath)
+	if err != nil || !dumpHas {
+		return err
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	liveMax, liveHas, err := migrations.LedgerMax(ctx, db)
+	if err != nil || !liveHas || liveMax == dumpMax {
+		return err
+	}
+	_, err = planLedgerRestore(ctx, dsn, inPath, target)
+	return err
+}
+
 // planLedgerRestore checks the dump's ledger against the live one before a
 // restore of target ("chat", "sched" or "all") touches anything.
 func planLedgerRestore(ctx context.Context, dsn, inPath, target string) (ledgerRestore, error) {

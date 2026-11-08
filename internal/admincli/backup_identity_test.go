@@ -14,6 +14,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -183,23 +184,18 @@ func TestChatRestoreRefusesToSkipAPendingMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The target: the scheduler migrated first, its accounts not merged yet.
+	// The target: migrated (#2049 M6: one runner, every schema), the
+	// scheduler's accounts not merged yet (no scheduler open since).
 	target := testdb.Empty(t)
-	st := storage.New()
-	if err := st.Initialize(config.WithSchema(target, config.SchedSchema), fleetdb.SchedPool()); err != nil {
+	if err := migrations.UpDSN(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	if st.DB().IdentityMerge().Ready {
-		t.Fatal("the target merged without a chat store")
-	}
-	st.Close()
-
 	err = runPgRestoreWith(ctx, config.WithSchema(target, config.ChatSchema), chatDump, restoreOpts{allowUnresolved: true})
 	if err == nil || !strings.Contains(err.Error(), "unmerged scheduler accounts") || !strings.Contains(err.Error(), "--db=all") {
 		t.Fatalf("chat restore over a pending merge = %v, want a refusal", err)
 	}
 	var n int
-	if err := sqlOne(t, target, `SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'core')`, &n); err != nil || n != 0 {
-		t.Fatalf("a refused restore created %d schema(s) (%v)", n, err)
+	if err := sqlOne(t, target, `SELECT (SELECT count(*) FROM core.identity_merge) + (SELECT count(*) FROM pg_tables WHERE schemaname = 'sched' AND tablename = 'users')`, &n); err != nil || n != 1 {
+		t.Fatalf("a refused restore changed the pending merge (marker + sched.users = %d, want 1; %v)", n, err)
 	}
 }

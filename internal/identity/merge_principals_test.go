@@ -44,9 +44,7 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	exec(budgetSQL, "Lee@X.test", "week", 2.0, 20.0, nil, 1000)
 	// Audit labels move too; an API key's label does not.
 	taskID := uuid.New()
-	if err := l.sched.AddTask(ctx, &models.Task{ID: taskID, Prompt: "p", Status: models.TaskStatusPending}); err != nil {
-		t.Fatal(err)
-	}
+	exec(`INSERT INTO sched.tasks (id, prompt, priority, status, created_at) VALUES ($1, 'p', 0, $2, now())`, taskID, string(models.TaskStatusPending))
 	exec(`INSERT INTO sched.task_feedback (task_id, rating, created_at, created_by) VALUES ($1, 'down', 1, 'Brad@X.test'), ($1, 'up', 2, 'api-key:ci')`, taskID)
 
 	res := l.merge()
@@ -56,12 +54,12 @@ func TestMergeMovesUsernameKeyedRows(t *testing.T) {
 	rep := res.Report
 
 	st := storage.New()
-	st.SetDatabase(l.sched)
+	st.SetDatabase(l.openSched())
 	list, err := st.ListPromptLibrary(ctx, "brad@x.test")
 	if err != nil || len(list) != 1 || list[0].Name != "Daily brief" {
 		t.Fatalf("brad's prompts after the merge = %+v, %v", list, err)
 	}
-	enforcer := budget.New(budget.Config{Store: l.sched})
+	enforcer := budget.New(budget.Config{Store: l.openSched()})
 	var exceeded *budget.ExceededError
 	if err := enforcer.CheckCreate(ctx, models.BudgetPrincipals{User: "brad@x.test"}); !errors.As(err, &exceeded) {
 		t.Fatalf("brad's hard budget after the merge: CheckCreate = %v, want a refusal", err)
@@ -134,7 +132,7 @@ func TestMergeQuarantinesDuplicateUsernamesRows(t *testing.T) {
 	res := l.merge()
 	rep := res.Report
 	st := storage.New()
-	st.SetDatabase(l.sched)
+	st.SetDatabase(l.openSched())
 	for _, c := range []struct {
 		email, ownPrompt, lostOwner string
 		hard                        float64

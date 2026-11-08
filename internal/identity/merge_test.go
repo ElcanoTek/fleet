@@ -66,6 +66,18 @@ func newLegacy(t *testing.T) *legacy {
 	return l
 }
 
+// openSched opens the scheduler store (after the test's merge: its own
+// open-time merge is then one read), closed when the test ends.
+func (l *legacy) openSched() *scheddb.Database {
+	l.t.Helper()
+	sd := &scheddb.Database{}
+	if err := sd.Init(config.WithSchema(l.dsn, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
+		l.t.Fatalf("open sched: %v", err)
+	}
+	l.t.Cleanup(func() { _ = sd.Close() })
+	return sd
+}
+
 func (l *legacy) schedUser(id uuid.UUID, username, role string, enabled bool) {
 	l.t.Helper()
 	if _, err := l.raw.Exec(`INSERT INTO sched.users (id, username, password_hash, role, created_at, enabled, last_login)

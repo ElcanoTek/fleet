@@ -152,11 +152,10 @@ advises on each demoted split admin, unknown role and duplicate username in it.
   `fleet import` maps sched users onto accounts (never making an admin).
   The account verbs (`sched user …`, `sched task set-owner`, `sched task
   import`, and `fleet import` of a bundle with sched users or tasks) need the
-  identity table, which the chat store creates: run first on a fresh database,
-  or mid-upgrade before the chat store migrated, they stop with "the identity
-  table (core.users) does not exist yet" and ask you to start `fleet serve`
-  once (or run a chat verb such as `fleet chat user list`). They do not migrate
-  the chat store themselves. `fleet serve` migrates chat before sched.
+  identity table. Since the one migration runner (#2049 M6, ADR-0107) every
+  store open migrates chat, core and sched together, so it always exists by
+  the time a verb runs. (Before M6 such a verb, run first on a fresh database,
+  stopped with "the identity table (core.users) does not exist yet".)
 - Grants are exact strings: `admin`, `client`, `readonly`, `none`, `view`,
   `run`. Padded or re-cased values (`" none "`, `Admin`) are refused, not
   trimmed.

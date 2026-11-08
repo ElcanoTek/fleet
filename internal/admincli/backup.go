@@ -232,6 +232,12 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 	// -n below: only the store's schema is restored — plus, for the chat
 	// store, the identity schema core its migrations own (#2049 M4).
 	schemas := []string{want}
+	// A ledger at another version is refused before anything below can
+	// change the database (planSchedRestore may complete a pending identity
+	// merge); the rest of the ledger plan runs just before the restore.
+	if err := checkLedgerVersions(ctx, dsn, inPath, want); err != nil {
+		return err
+	}
 	if want == config.SchedSchema {
 		if err := planSchedRestore(ctx, dsn, inPath, slices.Contains(got, config.IdentitySchema), opts); err != nil {
 			return err

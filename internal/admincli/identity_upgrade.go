@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -15,14 +15,14 @@ import (
 // migrates it (store.Open) and then completes the upgrade to the one identity
 // table (#2049 M4) before the verb touches an account.
 //
-// Between chat migration 099 (core.users exists) and the scheduler's first
-// open on this release (identity.MergeLegacySchedUsers), the scheduler's
-// legacy accounts are still in sched.users. A verb that changed core.users
-// in that window — `fleet admin rm`, `fleet chat user del` — would be undone
-// by the merge that follows, which folds the legacy row back in. So when the
-// database still has an unmerged sched.users, this opens the scheduler store
-// here, in this process: its open runs the scheduler's migrations and the
-// merge, the same as `fleet serve`'s first start would.
+// Until the identity merge has run (identity.MergeLegacySchedUsers, which the
+// scheduler's open runs), the scheduler's legacy accounts are still in
+// sched.users. A verb that changed core.users before it — `fleet admin rm`,
+// `fleet chat user del` — would be undone by the merge that follows, which
+// folds the legacy row back in. Since #2049 M6 store.Open runs the one
+// migration runner, which migrates chat, core and sched alike, so the merge
+// can run right here, the same as `fleet serve`'s first start would (and it
+// is one read once it has run).
 func openChatStoreDSN(dsn string) (*store.Store, error) {
 	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
@@ -35,22 +35,27 @@ func openChatStoreDSN(dsn string) (*store.Store, error) {
 	return st, nil
 }
 
-// completeIdentityMerge runs the scheduler's identity merge on the database
-// of chatDSN when it is still pending: sched.users (the legacy table) is
-// there and core.users is too (the chat store migrated). A database with no
-// scheduler schema, or one already merged (sched.users renamed away), is
-// left alone.
+// completeIdentityMerge runs the identity merge on the database of chatDSN
+// when it is pending: the scheduler's legacy sched.users is there next to
+// core.users. A database without either (empty), or already merged, is left
+// alone.
 func completeIdentityMerge(ctx context.Context, chatDSN string) error {
 	pending, err := identityMergePending(ctx, chatDSN)
 	if err != nil || !pending {
 		return err
 	}
-	sd := &scheddb.Database{}
-	if err := sd.Init(config.WithSchema(chatDSN, config.SchedSchema), scheddb.DefaultPoolConfig()); err != nil {
+	db, err := sql.Open("pgx", chatDSN)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	res, err := identity.MergeLegacySchedUsers(ctx, db, config.SchedSchema)
+	if err != nil {
 		return fmt.Errorf("complete the upgrade to the one identity table (merge the scheduler's accounts into core.users): %w — start fleet once to complete it, then retry", err)
 	}
-	defer sd.Close()
-	if m := sd.IdentityMerge(); !m.Ready {
+	if !res.Ready {
 		return fmt.Errorf("the scheduler's accounts (sched.users) are not merged into core.users yet and could not be merged now: start fleet once to complete the upgrade, then retry")
 	}
 	return nil
