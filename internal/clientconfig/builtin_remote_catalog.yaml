@@ -762,20 +762,15 @@ servers:
       Official hosted server covering 494 tools across 39 Vultr API categories
       (instances, Kubernetes, managed databases, DNS, block storage, IAM).
       Category-scoped paths like /instances or /kubernetes reduce token load;
-      auth via X-Vultr-API-Key header, Bearer token, or api_key query param
-      (OAuth also supported).
-    url: "https://vultrmcp.com/"
+      OAuth sign-in.
+    url: "https://mcp.vultr.com/"
     vendor: The Constant Company, LLC (Vultr)
     docs_url: "https://github.com/vultr/vultr-mcp"
     repo_url: "https://github.com/vultr/vultr-mcp"
     category: cloud-infrastructure
     tags: [vultr, vps, kubernetes, dns, compute]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      In the Vultr customer portal (my.vultr.com), go to Account → API to
-      enable and copy your personal API key, then paste it here.
-    setup_url: "https://github.com/vultr/vultr-mcp"
+    auth: oauth
 
   # ── databases ───────────────────────────────────────────────────
   - name: aiven
@@ -1483,11 +1478,7 @@ servers:
     category: web-search
     tags: [web-search, research, async-tasks, automation]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create an account at platform.parallel.ai and generate an API key
-      from the platform dashboard, then paste it here.
-    setup_url: "https://docs.parallel.ai/integrations/mcp/getting-started"
+    auth: oauth
   - name: scrapfly
     display_name: Scrapfly
     description: >-
@@ -1554,12 +1545,7 @@ servers:
     category: web-search
     tags: [search, research, answers, citations]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create an API key in your Perplexity account's API settings (the API is
-      billed separately from the consumer app) and paste it here; it is sent
-      as a bearer token.
-    setup_url: "https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server"
+    auth: oauth
   - name: airtable
     display_name: Airtable
     description: >-
@@ -1677,12 +1663,7 @@ servers:
     category: productivity
     tags: [docs, tables, wiki, beta]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      In your Coda account settings, scroll to the API settings section
-      and click Generate API token (choose the MCP restriction type), then
-      paste it here. Free-plan use is capped and read-only.
-    setup_url: "https://help.coda.io/hc/en-us/articles/44722661982989-Connect-to-the-Coda-MCP"
+    auth: oauth
   - name: craft
     display_name: Craft
     description: >-
@@ -2817,13 +2798,7 @@ servers:
     category: commerce-payments
     tags: [payments, billing, subscriptions, merchant-of-record]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create an API key in your Paddle dashboard under Developer Tools →
-      Authentication, granting only the permissions the agent needs (start
-      read-only), then paste it here. Sandbox keys go with
-      sandbox-mcp.paddle.com.
-    setup_url: "https://developer.paddle.com/build/tools/ai/mcp"
+    auth: oauth
   - name: paypal
     display_name: PayPal
     description: >-
@@ -2867,14 +2842,7 @@ servers:
     category: commerce-payments
     tags: [payments, payment-links, orders, refunds, india]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Generate a Key ID and Secret in the Razorpay Dashboard under Account
-      & Settings → API Keys, then paste `Basic <base64 of
-      key_id:key_secret>` here — it is sent as the raw Authorization
-      header.
-    setup_url: "https://razorpay.com/docs/mcp-server/remote/"
-    api_key_header: Authorization
+    auth: oauth
   - name: saleor
     display_name: Saleor Commerce
     description: >-
@@ -2935,20 +2903,15 @@ servers:
     description: >-
       Whop-hosted MCP that lets agents list, create, and update live Whop
       resources (products, memberships, payments, promo codes, affiliates) over
-      HTTP streaming or SSE (/sse), authenticated with a Company or App API key.
-      A separate docs.whop.com/mcp server exists for docs search.
+      Streamable HTTP (/mcp) with browser OAuth sign-in. A separate
+      docs.whop.com/mcp server exists for docs search.
     url: "https://mcp.whop.com/mcp"
     vendor: Whop Technologies, Inc.
     docs_url: "https://docs.whop.com/developer/guides/ai_and_mcp"
     category: commerce-payments
     tags: [commerce, payments, memberships, creator-economy]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create a Company API key (or an App API key for cross-company
-      access) in the Whop dashboard under Developer settings, then paste
-      it here.
-    setup_url: "https://docs.whop.com/developer/guides/ai_and_mcp"
+    auth: oauth
 
   # ── finance ─────────────────────────────────────────────────────
   - name: alchemy
@@ -3509,19 +3472,14 @@ servers:
       Official hosted MCP for the Braintrust eval/observability platform,
       exposing search_docs, resolve_object, list_recent_objects, infer_schema,
       sql_query, summarize_experiment, and generate_permalink tools. Separate EU
-      data-plane endpoint at https://api-eu.braintrust.dev/mcp; supports OAuth
-      as an alternative to API-key bearer auth.
+      data-plane endpoint at https://api-eu.braintrust.dev/mcp; OAuth sign-in.
     url: "https://api.braintrust.dev/mcp"
     vendor: Braintrust Data, Inc.
     docs_url: "https://www.braintrust.dev/docs/integrations/developer-tools/mcp"
     category: observability
     tags: [evals, experiments, tracing, sql, datasets]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create an API key in Braintrust under your organization's Settings →
-      API Keys and paste it here.
-    setup_url: "https://www.braintrust.dev/docs/integrations/developer-tools/mcp"
+    auth: oauth
   - name: bugsnag
     display_name: BugSnag MCP (SmartBear)
     description: >-
@@ -3821,7 +3779,7 @@ servers:
     description: >-
       Hosted MCP endpoint for error/crash reporting with stack traces,
       deployment tracking, RUM and performance insights, and time-series
-      analytics. Bearer auth with a Raygun Personal Access Token.
+      analytics over Streamable HTTP with OAuth sign-in.
     url: "https://api.raygun.com/v3/mcp"
     vendor: Raygun Limited
     docs_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
@@ -3829,11 +3787,7 @@ servers:
     category: observability
     tags: [errors, crash-reporting, rum, deployments]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create a Personal Access Token at app.raygun.com/user/tokens (Create
-      New Token, pick the permissions you need) and paste it here.
-    setup_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
+    auth: oauth
   - name: rootly
     display_name: Rootly
     description: >-
@@ -3970,12 +3924,7 @@ servers:
     category: security
     tags: [attack-surface, internet-scanning, threat-hunting, recon, cve]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create a Platform Personal Access Token in the Censys Platform
-      console (requires the API Access role) and paste it here; requests
-      also need your organization ID in an X-Organization-ID header.
-    setup_url: "https://docs.censys.com/docs/platform-mcp-server"
+    auth: oauth
   - name: orca-security
     display_name: Orca Security
     description: >-
@@ -4096,18 +4045,15 @@ servers:
       Official hosted MCP for the fal platform: 9 tools across discovery
       (search_models, get_model_schema, get_pricing, search_docs), execution
       (run_model, submit_job, check_job), and utility (upload_file,
-      recommend_model) over 1,000+ generative media models. Stateless Streamable
-      HTTP; OAuth not yet supported (bearer API key header only).
+      recommend_model) over 1,000+ generative media models over Stateless
+      Streamable HTTP with OAuth sign-in.
     url: "https://mcp.fal.ai/mcp"
     vendor: fal.ai
     docs_url: "https://fal.ai/docs/documentation/setting-up/mcp"
     category: ai-ml
     tags: [inference, image-generation, video-generation, media-generation]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      Create an API key at fal.ai/dashboard/keys and paste it here.
-    setup_url: "https://fal.ai/docs/documentation/setting-up/mcp"
+    auth: oauth
   - name: google-gemini-agent-platform
     display_name: Google Gemini Enterprise Agent Platform (Vertex AI)
     description: >-
