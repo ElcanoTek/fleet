@@ -786,10 +786,14 @@ func TestBuildSandboxImageTargetsServiceStore(t *testing.T) {
 }
 
 // TestUpdateSandboxGatePresent — the sandbox rebuild gate must key on the
-// resolved image tag as well as the Containerfile hash, and must rebuild when
-// the tag is missing from the service user's store (a rename with an unchanged
-// Containerfile, or an image lost to a prune/pre-fix root build, otherwise
-// boots clean and breaks only on the first tool call).
+// resolved image tag as well as the build-context hash (the Containerfile and
+// every file beside it), and must rebuild when the tag is missing from the
+// service user's store (a rename with an unchanged Containerfile, or an image
+// lost to a prune/pre-fix root build, otherwise boots clean and breaks only on
+// the first tool call). After pulling a new release image by digest it also
+// reclaims the superseded one, which `image prune` never removes.
+// scripts/sandbox_context_test.go runs the hash, the stamp gate and the
+// reclaim against fixtures and a stubbed sandbox_podman.
 func TestUpdateSandboxGatePresent(t *testing.T) {
 	t.Parallel()
 
@@ -802,6 +806,9 @@ func TestUpdateSandboxGatePresent(t *testing.T) {
 	for _, want := range []string{
 		`build-sandbox-image.sh" --print-tag`,
 		"sandbox-image.ref",
+		`cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")"`,
+		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now" "$sandbox_image_ref"`,
+		`SANDBOX_RECLAIM_FILE="$STATE_DIR/sandbox-image.reclaim"`,
 		"sandbox_podman image exists",
 		"sandbox_podman image prune -f",
 		`FLEET_SERVICE_NAME="$SERVICE_NAME"`,
@@ -1192,7 +1199,7 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 		`--print-tag 2>"$ref_err_file"`,
 		`ref_err="$(head -n 1 "$ref_err_file"`,
 		// The success line only fires with a ref in hand.
-		"${cf_now:0:12}, ${ref_now}) — skipping the image build.",
+		"${cf_now:0:17}, ${ref_now}) — skipping the image build.",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)

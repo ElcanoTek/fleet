@@ -1203,7 +1203,9 @@ SANDBOX_CONTAINERFILE="$(fleet_sandbox_containerfile "$CLIENT_CONFIG_DIR")"
 SANDBOX_IMAGE_REF="$(resolve_sandbox_image "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 sandbox_published=0
-if fleet_sandbox_uses_release_image "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default"; then
+# (Not asked with a prebuilt sandbox.image: it wins, and the check would hash
+# both build contexts for nothing — as in update.sh.)
+if [[ -z "$SANDBOX_IMAGE_REF" ]] && fleet_sandbox_uses_release_image "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default"; then
   sandbox_published=1
 fi
 if [[ -z "$SANDBOX_IMAGE_REF" && ! -f "$SANDBOX_CONTAINERFILE" ]] && fleet_sandbox_containerfile_named "$CLIENT_CONFIG_DIR"; then

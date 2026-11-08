@@ -303,7 +303,7 @@ releases. Retention counts published releases.
 
 | Bundle ships | What the box runs |
 | --- | --- |
-| no Containerfile (none at `sandbox/Containerfile` and none named by `sandbox.containerfile`), or the generic build context unchanged (its Containerfile and `requirements.txt`) | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
+| no Containerfile (none at `sandbox/Containerfile` and none named by `sandbox.containerfile`), or the generic build context unchanged (its Containerfile, `requirements.txt` and `requirements.in`, and no other file) | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
 | its own Containerfile starting `ARG FLEET_SANDBOX_BASE` / `FROM ${FLEET_SANDBOX_BASE}` | built on the box on top of the verified release image; rebuilt when a release moves the base |
 | any other Containerfile | built on the box from its own base, as before (with the max-age freshness backstop) |
 | `sandbox.image` in its manifest | that image; nothing is pulled or built here |
@@ -330,6 +330,45 @@ A bundle that **does** ship its own Containerfile is still a supported
 feature, and it is still built on the box (layered on the release image when
 it declares `ARG FLEET_SANDBOX_BASE`). That build is of the bundle's sandbox
 image, not of fleet, and needs only podman; ADR-0101 left it in place.
+`update` rebuilds it when anything in its build context changes — the
+Containerfile or any file beside it (a `requirements.txt`, a script it
+copies), compared by one hash of the whole directory: relative paths (the
+Containerfile's own name included), file contents, directories (an empty one
+too) and permission bits (`mode & 0755`, so a
+`chmod +x` counts but a umask-dependent group/other write bit does not). A
+Containerfile that is a symlink also counts by the bytes it resolves to,
+inside the context or not. It
+excludes nothing: `.git`, `.containerignore` / `.dockerignore` and the paths
+they name all count, even though the build never sends the ignored ones.
+Erring that way costs at most an extra rebuild, never a stale image. The
+trade-off is a context that holds often-changing files the build ignores (a
+Containerfile at the bundle root, beside the bundle's `.git`): it rebuilds
+whenever they change. The default `sandbox/` directory holds only the build's
+own files and is unaffected. The first update from a release that hashed the
+context differently (only the Containerfile, or an earlier context format)
+rebuilds once. A context that cannot be hashed completely (an unreadable
+file, a root-squashed NFS bundle) fails closed: `update` names the path,
+rebuilds, and records no hash, and such a context never counts as the
+release image. With a prebuilt `sandbox.image` nothing is built or compared,
+so the context is not hashed at all.
+
+After pulling a new release image by digest, `update` removes the previous
+one (it keeps its `@sha256` name, so `podman image prune` never would),
+without `--force`. The same goes for a custom build's previous
+`FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one, and for
+the image left under the old `sandbox.tag` when the bundle renames it. A box
+that changes sandbox mode (release image, custom build with or without
+`FLEET_SANDBOX_BASE`, prebuilt `sandbox.image`) queues, once, what the mode it
+leaves held: the release digest when it stops running the release image, the
+base digest when it stops layering on one, and the old tag when it moves to a
+prebuilt image. A prebuilt image itself is never removed. When a
+container still uses it, the removal is refused and the ref is kept in
+`sandbox-image.reclaim` under the state directory; `update`
+retries every listed ref after the service restart and on each later run, and
+drops it once it is removed or gone. The current release ref, the bundle's
+tag, a custom build's base, the manifest's prebuilt `sandbox.image` and their
+images are never removed: a listed ref that names one of them is skipped but
+stays listed, and is removed once it is no longer current.
 
 A bundle Containerfile that only adds packages should become:
 
