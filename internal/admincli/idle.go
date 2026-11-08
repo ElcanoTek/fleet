@@ -355,10 +355,8 @@ func sanitizeSummaryText(s string) string {
 }
 
 func localHealthTLSMode() string {
-	for _, k := range []string{"FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE"} { // LEGACY-ENV-ALIAS: remove after migrate-env
-		if v := strings.ToLower(strings.TrimSpace(envOrFile(k))); v != "" {
-			return v
-		}
+	if v := strings.ToLower(strings.TrimSpace(envOrFile("FLEET_TLS_MODE"))); v != "" {
+		return v
 	}
 	return "off"
 }
@@ -368,41 +366,20 @@ func localHealthTLSConfig(requireCert bool) (*tls.Config, error) {
 	if err != nil || rootCAs == nil {
 		rootCAs = x509.NewCertPool()
 	}
-	var serverName string
-	for _, k := range []string{"FLEET_TLS_DOMAIN", "CHAT_TLS_DOMAIN", "CUTLASS_TLS_DOMAIN"} { // LEGACY-ENV-ALIAS: remove after migrate-env
-		if v := strings.TrimSpace(envOrFile(k)); v != "" {
-			serverName = v
-			break
-		}
-	}
-	for _, k := range []string{"FLEET_TLS_CERT_FILE", "CHAT_TLS_CERT_FILE", "CUTLASS_TLS_CERT_FILE"} { // LEGACY-ENV-ALIAS: remove after migrate-env
-		certFile := strings.TrimSpace(envOrFile(k))
-		if certFile == "" {
-			continue
-		}
-		//nolint:gosec // G304: operator-configured TLS certificate path from fleet.env.
-		pemBytes, err := os.ReadFile(certFile)
+	serverName := strings.TrimSpace(envOrFile("FLEET_TLS_DOMAIN"))
+	if certFile := strings.TrimSpace(envOrFile("FLEET_TLS_CERT_FILE")); certFile != "" {
+		pemBytes, err := readLocalHealthCert(certFile, requireCert)
 		if err != nil {
-			if requireCert {
-				return nil, fmt.Errorf("read TLS cert %s: %w", certFile, err)
+			return nil, err
+		}
+		if pemBytes != nil {
+			if !rootCAs.AppendCertsFromPEM(pemBytes) && requireCert {
+				return nil, fmt.Errorf("parse TLS cert PEM %s", certFile)
 			}
-			break
-		}
-		if !rootCAs.AppendCertsFromPEM(pemBytes) && requireCert {
-			return nil, fmt.Errorf("parse TLS cert PEM %s", certFile)
-		}
-		if serverName == "" {
-			if block, _ := pem.Decode(pemBytes); block != nil {
-				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
-					if len(cert.DNSNames) > 0 {
-						serverName = cert.DNSNames[0]
-					} else if cert.Subject.CommonName != "" {
-						serverName = cert.Subject.CommonName
-					}
-				}
+			if serverName == "" {
+				serverName = certServerName(pemBytes)
 			}
 		}
-		break
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -411,14 +388,40 @@ func localHealthTLSConfig(requireCert bool) (*tls.Config, error) {
 	}, nil
 }
 
+// readLocalHealthCert reads the operator's TLS certificate. A read failure
+// is an error only when requireCert; otherwise the probe goes on without the
+// certificate (nil bytes).
+func readLocalHealthCert(certFile string, requireCert bool) ([]byte, error) {
+	//nolint:gosec // G304: operator-configured TLS certificate path from fleet.env.
+	pemBytes, err := os.ReadFile(certFile)
+	if err == nil {
+		return pemBytes, nil
+	}
+	if requireCert {
+		return nil, fmt.Errorf("read TLS cert %s: %w", certFile, err)
+	}
+	return nil, nil // without requireCert the probe runs without the certificate
+}
+
+// certServerName is the first DNS name (else the common name) of the first
+// certificate in pemBytes, or "".
+func certServerName(pemBytes []byte) string {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	if len(cert.DNSNames) > 0 {
+		return cert.DNSNames[0]
+	}
+	return cert.Subject.CommonName
+}
+
 func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int, hasApprovalsHeader bool, err error) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
-	if addr == "" {
-		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR")) // LEGACY-ENV-ALIAS: remove after migrate-env
-	}
-	if addr == "" {
-		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR")) // LEGACY-ENV-ALIAS: remove after migrate-env
-	}
 	if addr == "" && (svcState == "active" || svcState == "unknown") && !truthy(envreg.Get("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		addr = "127.0.0.1:8080"
 	}

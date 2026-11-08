@@ -282,7 +282,7 @@ sync-guides:
 # fails on drift.
 config-docs:
 	go test ./internal/config/envreg -run TestGeneratedFilesAreUpToDate -count=1 -update
-	@echo "generated: docs/CONFIGURATION.md, deploy/helm/fleet/values.schema.json (config.env)"
+	@echo "generated: docs/CONFIGURATION.md, deploy/helm/fleet/values.schema.json (config.env), scripts/lib/retired-env.sh"
 
 clean:
 	go clean ./...

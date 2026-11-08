@@ -69,16 +69,20 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 2. User Token
+		// 2. User Token. A readonly user may not stage an upload, exactly as it
+		// may not create the task that would use it (userMayMutate).
 		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
+		if !isAuthed && authHeader != "" {
 			token := ""
 			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
 				token = authHeader[7:]
 			} else {
 				token = authHeader
 			}
-			if h.userFromPasswordToken(token) != nil {
+			if user := h.userFromPasswordToken(token); user != nil {
+				if refuseReadonlyUserMutation(w, r, user) {
+					return
+				}
 				isAuthed = true
 			}
 		}

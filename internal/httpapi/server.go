@@ -33,6 +33,13 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that the web tier (internal/webui) calls in-process.
 type Server struct {
+	// patrolDraftInFlight holds the users with a draft being synthesized. A
+	// draft is a model call of up to 45 seconds; one at a time per user is all
+	// the wizard needs, and anything more is spend nobody asked for. (The
+	// route's rateLimitMiddleware bounds the rate; this bounds concurrency.)
+	// Per-Server, not package-global, so parallel tests' servers don't share it.
+	patrolDraftInFlight sync.Map
+
 	// approvalRuns admits and counts claimed approvals still executing. An
 	// execution can outlive its POST (a call on a server with a declared
 	// approved-call budget answers "executing" early), so shutdown drains it
@@ -708,7 +715,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 // scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
 // audits and large interactive workflows are bounded by the per-turn cost
 // and iteration ceilings rather than a 30-minute wall-clock cutoff.
-// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
 const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling

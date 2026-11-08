@@ -114,11 +114,19 @@ describe("LaunchpadButton", () => {
     stubPatrols([{ id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "x", cron: "0 * * * *", status: "active" }]);
     render(<LaunchpadButton />);
     fireEvent.click(screen.getByTestId("launchpad-button"));
-    fireEvent.click(await screen.findByTestId("patrols-menu-new"));
+    // The menu is open for a person once it has focused its first item — Menu
+    // does that in a passive effect, which runs a task AFTER the items appear
+    // in the DOM. Clicking "New patrol" before it ran (a loaded CI runner can
+    // resolve findBy in that gap) let the late effect move the focus onto the
+    // first item right after openWizard put it on the rail button; that item
+    // then unmounted and dropped the focus on <body>. Wait for that signal, as
+    // a user (who can only act on a menu that has opened) always does.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("patrols-menu-item-s1")));
+    fireEvent.click(screen.getByTestId("patrols-menu-new"));
     await screen.findByTestId("patrol-launchpad");
-    // The menu's close runs in React effects; wait for the focus to settle
-    // (it must END on the item — a focus left on the page body still fails).
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("launchpad-button")));
+    // openWizard focuses the item synchronously, before the menu unmounts, and
+    // nothing after it may move the focus: it must already be (and stay) there.
+    expect(document.activeElement).toBe(screen.getByTestId("launchpad-button"));
   });
 
   it("caps the patrols menu to the viewport and lets it scroll", async () => {

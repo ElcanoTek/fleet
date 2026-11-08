@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -23,13 +24,11 @@ import (
 // interactive prompts call the same underlying writes.
 func cmdConfig(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key | set-env <KEY> | unset-env <KEY> | explain [KEY...] | migrate-env [--write]")
+		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key | set-env <KEY> | unset-env <KEY> | explain [KEY...]")
 	}
 	switch argv[0] {
 	case "explain":
 		return configExplain(argv[1:])
-	case "migrate-env": // LEGACY-ENV-ALIAS: remove after migrate-env
-		return configMigrateEnv(argv[1:])
 	case "set-env":
 		return configSetEnv(argv[1:])
 	case "unset-env":
@@ -272,6 +271,9 @@ func configSetEnv(argv []string) int {
 	}
 	if !envKeyPattern.MatchString(key) {
 		return errf(1, "invalid env key %q (want [A-Za-z_][A-Za-z0-9_]*)", key)
+	}
+	if canonical, retired := envreg.RetiredAlias(key); retired {
+		return errf(1, "%s is a removed alias of %s (ADR-0106): nothing reads it — set %s instead", key, canonical, canonical)
 	}
 	val, err := resolveSecret(*value, key+": ", false)
 	if err != nil {

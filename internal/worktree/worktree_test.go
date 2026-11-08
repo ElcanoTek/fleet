@@ -195,12 +195,12 @@ func TestResolveWorkspaceRootPrecedence(t *testing.T) {
 		t.Errorf("explicit value should win and be trimmed; got %q", got)
 	}
 	if got := ResolveWorkspaceRoot(""); got != "/from/fleet" {
-		t.Errorf("FLEET_WORKSPACE_ROOT should win over the legacy key; got %q", got)
+		t.Errorf("FLEET_WORKSPACE_ROOT should apply; got %q", got)
 	}
 
 	t.Setenv("FLEET_WORKSPACE_ROOT", "")
-	if got := ResolveWorkspaceRoot(""); got != "/from/chat" {
-		t.Errorf("legacy CHAT_WORKSPACE_ROOT should apply when the canonical key is unset; got %q", got)
+	if got := ResolveWorkspaceRoot(""); got == "/from/chat" {
+		t.Errorf("the removed CHAT_WORKSPACE_ROOT (ADR-0106) must not apply; got %q", got)
 	}
 }
 

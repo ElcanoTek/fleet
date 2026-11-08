@@ -264,7 +264,7 @@ func canonicalPath(p string) string {
 
 // ResolveWorkspaceRoot mirrors how the running server resolves the workspace
 // root (internal/agent/manager.go): an explicit value wins, else
-// FLEET_WORKSPACE_ROOT (legacy CHAT_WORKSPACE_ROOT), else ./workspace.
+// FLEET_WORKSPACE_ROOT, else ./workspace.
 //
 // Shared so the CLI's `--workspace` flag and the server's in-process sweep can
 // never disagree about which tree they are reclaiming.
@@ -273,9 +273,6 @@ func ResolveWorkspaceRoot(explicit string) string {
 		return v
 	}
 	if v := envreg.Get("FLEET_WORKSPACE_ROOT"); v != "" {
-		return v
-	}
-	if v := envreg.Get("CHAT_WORKSPACE_ROOT"); v != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return v
 	}
 	if abs, err := filepath.Abs("workspace"); err == nil {

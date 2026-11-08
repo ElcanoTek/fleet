@@ -164,13 +164,9 @@ func TestPoolDisabledFallsThroughToColdStart(t *testing.T) {
 // pull); point FLEET_SANDBOX_TEST_IMAGE at another ref to override.
 const defaultTestImage = "localhost/fleet-sandbox:latest"
 
-// sandboxEnv reads the canonical FLEET_SANDBOX_* variable, falling back
-// to the legacy CHAT_SANDBOX_* name for back-compat.
+// sandboxEnv reads the FLEET_SANDBOX_* test variable.
 func sandboxEnv(name string) string {
-	if v := os.Getenv("FLEET_SANDBOX_" + name); v != "" {
-		return v
-	}
-	return os.Getenv("CHAT_SANDBOX_" + name)
+	return os.Getenv("FLEET_SANDBOX_" + name)
 }
 
 func testImage() string {

@@ -145,8 +145,8 @@ func TestContextResendBudgetTokensKnob(t *testing.T) {
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "")
 	t.Setenv("CHAT_CONTEXT_RESEND_BUDGET_TOKENS", "12345")
-	if got := contextResendBudgetTokens(); got != 12345 {
-		t.Fatalf("legacy alias must be honoured, got %d", got)
+	if got := contextResendBudgetTokens(); got != defaultContextResendBudgetTokens {
+		t.Fatalf("the removed CHAT_ spelling (ADR-0106) must not be read, got %d", got)
 	}
 }
 

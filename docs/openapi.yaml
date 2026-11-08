@@ -987,7 +987,12 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/Task" } }
     post:
       summary: Create (schedule) a task.
-      description: Authenticated in-handler — accepts an admin key, a scoped key, a user bearer token, or the Elcano cookie.
+      description: >-
+        Authenticated in-handler — accepts an admin key, a scoped key, a user
+        bearer token, or the Elcano cookie. A user whose role is readonly is
+        refused with 403 ("insufficient role: a readonly user cannot modify
+        resources"), as on every mutating route. A task name that is already
+        taken answers 409.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: create_task
       requestBody:
@@ -1002,6 +1007,12 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Duplicate task name — a task with that name already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /tasks/batch:
     post:
       summary: Create multiple tasks in a single call.
@@ -1014,7 +1025,7 @@ paths:
         created/failed results. Same auth + rate limiter as POST /tasks; the
         scoped API key's hourly cap is charged N tokens for a batch of N tasks
         (one by the auth check, N-1 by the handler) so the batch path is never a
-        rate-limit bypass.
+        rate-limit bypass. A readonly user is refused with 403.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: create_task
       requestBody:
@@ -1058,6 +1069,7 @@ paths:
           description: Atomic rollback or every task failed validation.
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
   /tasks/estimate:
     post:
@@ -1067,7 +1079,8 @@ paths:
         and creates nothing. Pure local computation (no model call). Returns 200
         with cost fields populated for a model whose pricing is known, or 202
         with null cost fields and an explanatory note when the model's pricing is
-        unknown. Same authentication and rate limiter as POST /tasks.
+        unknown. Same authentication and rate limiter as POST /tasks, so a
+        readonly user is refused with 403.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: create_task
       requestBody:
@@ -1087,6 +1100,7 @@ paths:
               schema: { $ref: "#/components/schemas/CostForecast" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/tags:
     get:
       summary: >-
@@ -1272,11 +1286,13 @@ paths:
         principal with cancel permission on a task it can see (its own tasks,
         or every task for admin and view_all_logs principals), or for the
         task's creator — the user or API key that created it. A task outside
-        the caller's scope answers 404.
+        the caller's scope answers 404. A readonly user is refused with 403,
+        even on a task it created.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: view_tasks
       responses:
         "200": { description: Cancelled (attribution on the task's result). }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/permanent:
     parameters:
       - name: task_id
@@ -1311,7 +1327,7 @@ paths:
                 properties:
                   deleted: { type: boolean }
                   id: { type: string }
-        "403": { description: Not the task's creator and lacking cancel permission. }
+        "403": { description: "Not the task's creator and lacking cancel permission, or a readonly user (refused on every mutating route)." }
         "404": { description: No such task. }
         "409": { description: The task is running; stop it before deleting. }
   /tasks/{task_id}/output:
@@ -2081,7 +2097,8 @@ paths:
         Records a thumbs up/down (optional critique) signal. When fresh
         down-signals cross the distillation threshold and self-improvement is
         enabled, a learned instruction is DISTILLED and staged as 'proposed'
-        (off-thread) — it does not change behavior until activated.
+        (off-thread) — it does not change behavior until activated. A readonly
+        user is refused with 403.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: view_tasks
       requestBody:
@@ -2101,6 +2118,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TaskFeedback" }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/learned-instructions:
     parameters:
       - name: task_id
@@ -2207,7 +2225,7 @@ paths:
         Supplies the human answer to a task in paused_awaiting_input and
         re-queues it (status → pending); the next run is given the Q&A and
         continues. 409 when the task is not paused. Requires operator (cancel)
-        permission.
+        permission; a readonly user is refused with 403.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: cancel_task
       requestBody:
@@ -2245,7 +2263,8 @@ paths:
         never wake an arbitrary sleeping task. The next run is told the event
         fired (with the optional note). 409 when the task is not awaiting a
         wake or waits for a different event. Requires operator (cancel)
-        permission, mirroring /tasks/{task_id}/resume. See docs/SELF-WAKE.md.
+        permission, mirroring /tasks/{task_id}/resume; a readonly user is
+        refused with 403. See docs/SELF-WAKE.md.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: cancel_task
       requestBody:
@@ -3208,7 +3227,8 @@ paths:
         carrying create_task permission (#719: an uploaded file is only usable
         via a subsequent task create, so the same keys that may create tasks may
         stage uploads; a valid readonly/webhook key gets a definitive 403), a
-        user bearer token, or the Elcano cookie.
+        user bearer token, or the Elcano cookie. A readonly user gets the same
+        403.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       x-fleet-permission: create_task
       requestBody:

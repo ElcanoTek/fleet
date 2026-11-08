@@ -111,7 +111,7 @@ func run(argv []string, in io.Reader, out, errOut io.Writer, listen func() <-cha
 	var f chattui.Flags
 	fs.StringVar(&f.Server, "server", "", "fleet server URL (default $FLEET_CHAT_URL, else http://$FLEET_SERVER_ADDR, else http://127.0.0.1:8080)")
 	fs.StringVar(&f.Email, "email", "", "the fleet user ACP turns run as — X-User-Email (default $FLEET_USER_EMAIL)")
-	fs.StringVar(&f.TokenFile, "token-file", "", "path to a file holding the shared server token (mode 0600); else $FLEET_SERVER_TOKEN / $CHAT_SERVER_TOKEN")
+	fs.StringVar(&f.TokenFile, "token-file", "", "path to a file holding the shared server token (mode 0600); else $FLEET_SERVER_TOKEN")
 	fs.StringVar(&f.EnvFile, "env-file", "", "server env file to auto-read the token/addr from (default $FLEET_ENV_FILE, else .env.local, else /etc/fleet/fleet.env)")
 	fs.StringVar(&f.Model, "model", "", "model slug for new sessions (default: the workspace default)")
 	fs.StringVar(&f.Persona, "persona", "", "persona for new sessions")

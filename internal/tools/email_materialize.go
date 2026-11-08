@@ -548,8 +548,8 @@ func copyFromRoot(base, rel, dst string, budget int64) (int64, error) {
 	return n, nil
 }
 
-// workspaceRootForContainment is the workspace root: $FLEET_WORKSPACE_ROOT /
-// $CHAT_WORKSPACE_ROOT, else ./workspace — the same resolution
+// workspaceRootForContainment is the workspace root: $FLEET_WORKSPACE_ROOT,
+// else ./workspace — the same resolution
 // WorkspaceDirForConversation applies before appending the id. The shared-file
 // library is staged directly under it.
 func workspaceRootForContainment() string {

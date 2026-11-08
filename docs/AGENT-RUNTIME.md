@@ -170,8 +170,8 @@ rather than failing the run.
 
 **Budget wind-down (#990).** The hard stop gets a soft leading edge, borrowed
 from Prime Agent's goal budget wind-down: once a run's spend crosses
-`FLEET_BUDGET_WINDDOWN_FRACTION` (default **0.8**, clamped to `(0,1]`; the
-usual prefix aliases apply) of a configured cost or token ceiling, every
+`FLEET_BUDGET_WINDDOWN_FRACTION` (default **0.8**, clamped to `(0,1]`)
+of a configured cost or token ceiling, every
 subsequent provider call carries a **request-local** `BUDGET WIND-DOWN`
 notice — stop starting substantive work, wrap up with progress made, remaining
 work, blockers, and a concrete next step. Request-local means it is appended
@@ -496,8 +496,7 @@ after a `context_length_exceeded` error:
 | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. When the prompt floor (system prompt + tool schemas + task prompt) takes more than half of it, it applies to the history on top of the floor instead (#1600). |
 | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | on | **Scheduled runs only** (#1742). When either compaction above fires, first replace bulky tool results older than the recent window with short previews, and summarize only if that did not free enough; `0` (or `false`) turns it off. |
 
-Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
-`(0,1]` falls back to its default. The size signal is the **per-call** input
+A value outside `(0,1]` falls back to its default. The size signal is the **per-call** input
 size (`LastStepPromptTokens`, or the run orchestration's `LastStepInputTokens`
 when the policy carries no session — the interactive one does not), never the
 cumulative token total, so a long run does not ratchet the trigger into a
