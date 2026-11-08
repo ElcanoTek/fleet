@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -114,7 +115,9 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 		case error:
 			return slog.String(a.Key, Redact(errorText(x)))
 		case fmt.Stringer:
-			return slog.String(a.Key, Redact(x.String()))
+			if !stringerHidesSecretKeys(x) {
+				return slog.String(a.Key, Redact(x.String()))
+			}
 		case []byte:
 			return slog.String(a.Key, Redact(string(x)))
 		}
@@ -190,7 +193,14 @@ func redactComposite(v any) any {
 	case error:
 		return Redact(errorText(x))
 	case fmt.Stringer:
-		return Redact(x.String())
+		if !stringerHidesSecretKeys(x) {
+			return Redact(x.String())
+		}
+		// A composite whose fields the secret-key rule names: walked by
+		// structure below, never flattened by its own String().
+		if marshalsItself(x) {
+			return unloggable(x)
+		}
 	case []byte:
 		return Redact(string(x))
 	}
@@ -252,6 +262,97 @@ func uniqueKey(seen map[string]bool, k string) string {
 	}
 	seen[c] = true
 	return c
+}
+
+// stringerHidesSecretKeys reports a fmt.Stringer that must not be logged by
+// its String(): a struct, map, slice or array (behind any pointers) whose
+// type carries a field or key the secret-key rule names — a Credential
+// field, a map keyed "api_key" — so String() could print that value with no
+// key left to redact it by. Such a value is walked structurally like any
+// composite. Every other Stringer (time.Time, a UUID, net.IP: values whose
+// String() is their meaning) keeps String(), which is still scrubbed by
+// pattern and literal.
+func stringerHidesSecretKeys(v any) bool {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return false
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.Type().Key().Kind() == reflect.String {
+			for _, k := range rv.MapKeys() {
+				if secretAttrKey(k.String()) {
+					return true
+				}
+			}
+		}
+		return typeHasSecretPath(rv.Type().Elem())
+	case reflect.Struct, reflect.Slice, reflect.Array:
+		return typeHasSecretPath(rv.Type())
+	default:
+		// scalars, strings, funcs, chans: String() is all there is
+		return false
+	}
+}
+
+// secretPathTypes caches typeHasSecretPath per type.
+var secretPathTypes sync.Map // reflect.Type -> bool
+
+// typeHasSecretPath reports whether t (a struct, or a pointer, slice, array
+// or map reaching one) has an exported field whose name — or json tag name —
+// the secret-key rule matches, at any depth. Interface-typed fields cannot be
+// known statically and count as no match.
+func typeHasSecretPath(t reflect.Type) bool {
+	if hit, ok := secretPathTypes.Load(t); ok {
+		return hit.(bool)
+	}
+	hit := typeHasSecretPathVisit(t, map[reflect.Type]bool{})
+	secretPathTypes.Store(t, hit)
+	return hit
+}
+
+func typeHasSecretPathVisit(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return typeHasSecretPathVisit(t.Elem(), seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			name := f.Name
+			if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag != "" && tag != "-" {
+				name = tag
+			}
+			if secretAttrKey(name) || secretAttrKey(f.Name) || typeHasSecretPathVisit(f.Type, seen) {
+				return true
+			}
+		}
+		return false
+	default:
+		// scalars, strings and interfaces carry no static field names
+		return false
+	}
+}
+
+// marshalsItself reports a value whose JSON form its own code chooses
+// (json.Marshaler or encoding.TextMarshaler): the structural walk goes
+// through encoding/json, which would hand it that form — as likely the
+// String() text as its fields — so a secret-keyed one fails closed instead.
+func marshalsItself(v any) bool {
+	switch v.(type) {
+	case json.Marshaler, encoding.TextMarshaler:
+		return true
+	}
+	return false
 }
 
 // unloggable is what a composite value that cannot be walked logs as: its

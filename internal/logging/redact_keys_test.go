@@ -42,7 +42,7 @@ func TestMapKeysAreRedacted(t *testing.T) {
 	t.Run("child record array of objects", func(t *testing.T) {
 		out := captureOutput(t)
 		w := ChildStderr("mcp-broker")
-		_, _ = w.Write([]byte(`{"msg":"seats","items":[{"` + opaque + `":1},{"name":{"` + other + `":"x"}}],"` + opaque + `":"top"}` + "\n"))
+		_, _ = w.Write([]byte(`{"level":"INFO","msg":"seats","items":[{"` + opaque + `":1},{"name":{"` + other + `":"x"}}],"` + opaque + `":"top"}` + "\n"))
 		got := out.String()
 		if strings.Contains(got, opaque) || strings.Contains(got, other) {
 			t.Fatalf("a secret key in a child record leaked: %s", got)

@@ -732,8 +732,9 @@ Operator notes:
   stderr. The parent re-logs each child record through its own handler (your
   `FLEET_LOG_FORMAT`, `FLEET_LOG_LEVEL`, redactor and sinks), adding
   `child=mcp-broker`. Any other child line (a panic trace, a library's raw
-  print) is logged at `warn` as `msg="child stderr"` with the redacted text
-  in `line`. A PEM private-key block in subprocess output is replaced by one
+  print, JSON without a valid slog `level`) is logged as `msg="child stderr"`
+  with the redacted text in `line`, labelled `warn` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. A PEM private-key block in subprocess output is replaced by one
   `[REDACTED PEM block]` line.
 - A number under a secret-named key (`password`, `api_token`, …) is redacted
   like a string. Only count-like keys keep their numbers: keys ending in

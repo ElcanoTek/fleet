@@ -275,25 +275,44 @@ func forwardChildLine(child string, line []byte, dropped int) {
 	ctx := context.Background()
 	if dropped == 0 {
 		if rec, ok := childRecord(line); ok {
-			rec.AddAttrs(slog.String("child", child))
+			rec.AddAttrs(slog.String(childKey, child))
 			if h := slog.Default().Handler(); h.Enabled(ctx, rec.Level) {
 				_ = h.Handle(ctx, rec)
 			}
 			return
 		}
 	}
-	attrs := []slog.Attr{slog.String("child", child)}
+	rec := slog.NewRecord(time.Now(), slog.LevelWarn, ChildLineMessage, 0)
+	rec.AddAttrs(slog.String(childKey, child))
 	if dropped > 0 {
-		attrs = append(attrs, slog.String("line", truncatedLine(line, dropped)), slog.Bool("truncated", true))
+		rec.AddAttrs(slog.String(lineKey, truncatedLine(line, dropped)), slog.Bool(truncatedKey, true))
 	} else {
-		attrs = append(attrs, slog.String("line", Redact(string(line))))
+		rec.AddAttrs(slog.String(lineKey, Redact(string(line))))
 	}
-	slog.Default().LogAttrs(ctx, slog.LevelWarn, ChildLineMessage, attrs...)
+	// Not gated by FLEET_LOG_LEVEL, like the stdlib-log bridge: the line's
+	// true severity is unknown — a Go panic trace or a library's fatal print
+	// is exactly what it looks like — so raising the level to error must not
+	// silently erase it. It is labelled warn and goes through the handler
+	// (format, redactor, sinks) as every other record.
+	_ = slog.Default().Handler().Handle(ctx, rec)
 }
 
+// The attribute keys the parent adds to a child's records. A child field of
+// the same name is suffixed (childRecord), so a child cannot pose as another
+// child or forge the parent's wrapping.
+const (
+	childKey     = "child"
+	lineKey      = "line"
+	truncatedKey = "truncated"
+)
+
 // childRecord parses line as exactly one JSON object carrying a string "msg"
-// and returns it as a record: time and level from the object when they parse
-// (now and info otherwise), every other field an attribute in order.
+// and a "level" that is one of slog's level strings (what the child's own
+// handler writes), and returns it as a record: its time (now when it does
+// not parse) and level, every other field an attribute in order. A JSON
+// line without a valid level ({"msg":"x","severity":"fatal"}) is not a
+// record: re-logging it at an assumed info would drop it at FLEET_LOG_LEVEL
+// warn or error, so it takes the ungated "child stderr" path instead.
 func childRecord(line []byte) (slog.Record, bool) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
@@ -309,9 +328,12 @@ func childRecord(line []byte) (slog.Record, bool) {
 		level  = slog.LevelInfo
 		msg    string
 		hasMsg bool
-		attrs  []slog.Attr
+		// a record is only what the child's slog handler writes: a valid
+		// slog level string beside the message
+		hasLevel bool
+		attrs    []slog.Attr
 		// the record's own keys, so a child field named like one is suffixed
-		seenKeys = map[string]bool{slog.TimeKey: true, slog.LevelKey: true, slog.MessageKey: true}
+		seenKeys = map[string]bool{slog.TimeKey: true, slog.LevelKey: true, slog.MessageKey: true, childKey: true, lineKey: true, truncatedKey: true}
 	)
 	for dec.More() {
 		tok, err := dec.Token()
@@ -335,12 +357,15 @@ func childRecord(line []byte) (slog.Record, bool) {
 			}
 			continue
 		case slog.LevelKey:
-			if s, ok := v.(string); ok {
-				var l slog.Level
-				if l.UnmarshalText([]byte(s)) == nil {
-					level = l
-				}
+			s, ok := v.(string)
+			if !ok {
+				return slog.Record{}, false
 			}
+			var l slog.Level
+			if l.UnmarshalText([]byte(s)) != nil {
+				return slog.Record{}, false
+			}
+			level, hasLevel = l, true
 			continue
 		case slog.MessageKey:
 			if s, ok := v.(string); ok {
@@ -359,7 +384,7 @@ func childRecord(line []byte) (slog.Record, bool) {
 	if _, err := dec.Token(); err != io.EOF {
 		return slog.Record{}, false
 	}
-	if !hasMsg {
+	if !hasMsg || !hasLevel {
 		return slog.Record{}, false
 	}
 	rec := slog.NewRecord(when, level, msg, 0)
