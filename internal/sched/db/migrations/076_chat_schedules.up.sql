@@ -68,8 +68,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_schedules_user_patrols
     ON chat_schedules (user_email, status, next_run_at, id)
     WHERE cron_expr <> '' AND status IN ('active', 'paused');
 
--- chat_schedule_runs is the run history: one row per settled fire that did
--- something. trigger_kind is 'schedule' (the tick) or 'manual' (Run now).
+-- chat_schedule_runs is the run history: one row per fire that ran (queued)
+-- or was turned away (busy, gone). A Run now that coalesced onto a turn in
+-- flight, was refused, or a stale or deferred fire, adds none. trigger_kind is 'schedule' (the tick) or 'manual' (Run now).
 -- run_number is the run's number for a counted run ('queued') and NULL for
 -- every other outcome, so no row ever claims a number a later run will take.
 -- outcome: 'queued' (a turn was enqueued; input_id names it), 'busy' (the chat had a
@@ -82,7 +83,7 @@ CREATE TABLE IF NOT EXISTS chat_schedule_runs (
     schedule_id TEXT NOT NULL REFERENCES chat_schedules(id) ON DELETE CASCADE,
     run_number  INTEGER,
     trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('schedule', 'manual')),
-    outcome     TEXT NOT NULL CHECK (outcome IN ('queued', 'coalesced', 'busy', 'gone')),
+    outcome     TEXT NOT NULL CHECK (outcome IN ('queued', 'busy', 'gone')),
     input_id    TEXT NOT NULL DEFAULT '',
     due_at      BIGINT,
     fired_at    TIMESTAMPTZ NOT NULL DEFAULT now()
