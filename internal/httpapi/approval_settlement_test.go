@@ -86,7 +86,7 @@ func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
 
 	s := &Server{cfg: &config.Config{MockMode: true}, store: &failedOutcomeStore{&expiredClickFakeStore{approval: store.Approval{ID: "a", ConversationID: "c", ToolName: "bash", Status: "pending"}}}}
 	req := httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
+	req = req.WithContext(asUser(req.Context(), "u"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c", "a")
 	var body map[string]any
@@ -98,7 +98,7 @@ func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
 	}
 	retry := httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
+	req = req.WithContext(asUser(req.Context(), "u"))
 	s.handleApproval(retry, req, "c", "a")
 	if !strings.Contains(retry.Body.String(), `"execution_unknown":true`) || strings.Contains(retry.Body.String(), `"executing":true`) {
 		t.Fatalf("retry regressed to running: %s", retry.Body.String())
@@ -179,7 +179,7 @@ func TestSuggestionReplayReturnsPinnedModel(t *testing.T) {
 		ID: "a", ConversationID: "c", ToolName: "suggest_advanced_model", Status: "approved",
 	}}}}
 	req := httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
+	req = req.WithContext(asUser(req.Context(), "u"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c", "a")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"model":"pinned/model"`) {

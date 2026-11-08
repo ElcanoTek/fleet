@@ -195,7 +195,7 @@ func TestHandleApproval_ExpiredClickResolvesTimeoutNow(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/conversations/c1/approvals/ap1",
 		strings.NewReader(`{"approved":true}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 

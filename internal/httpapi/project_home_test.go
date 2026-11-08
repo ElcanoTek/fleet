@@ -16,7 +16,7 @@ import (
 func getProjectSub(t *testing.T, srv *Server, user, projectID, sub string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/projects/"+projectID+"/"+sub, nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	srv.projectByID(w, req)
 	return w

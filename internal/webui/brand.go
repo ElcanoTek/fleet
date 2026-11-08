@@ -75,15 +75,9 @@ func (b *brandingCache) get() Branding {
 	return b.value
 }
 
-func (g *Gateway) tokenOnlyHeaders() http.Header {
-	h := http.Header{}
-	h.Set("X-Chat-Server-Token", g.cfg.ChatToken)
-	return h
-}
-
 func (g *Gateway) fetchBranding() Branding {
 	v := DefaultBranding
-	status, _, body, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/brand/meta", header: g.tokenOnlyHeaders()})
+	status, _, body, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/brand/meta", header: http.Header{}, who: gatewayPrincipal("")})
 	if !ok || status != http.StatusOK {
 		return v
 	}
@@ -133,7 +127,7 @@ func (g *Gateway) registerBrand(mux *http.ServeMux) {
 	// paint.
 	mux.HandleFunc("GET /api/theme", func(w http.ResponseWriter, r *http.Request) {
 		css := []byte{}
-		if status, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/theme.css", header: g.tokenOnlyHeaders()}, maxThemeCSSBytes); ok && status >= 200 && status < 300 {
+		if status, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/theme.css", header: http.Header{}, who: gatewayPrincipal("")}, maxThemeCSSBytes); ok && status >= 200 && status < 300 {
 			css = body
 		}
 		// A stable URL whose content follows the bundle: revalidated on every
@@ -174,14 +168,14 @@ func (g *Gateway) brandAsset(w http.ResponseWriter, r *http.Request, target stri
 		temporaryRedirect(w, fallbackURL)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://127.0.0.1"+target, http.NoBody)
+	req, err := http.NewRequestWithContext(backendContext(r.Context(), gatewayPrincipal("")), http.MethodGet, "http://127.0.0.1"+target, http.NoBody)
 	if err != nil {
 		temporaryRedirect(w, fallbackURL)
 		return
 	}
 	req.RequestURI = target
 	req.RemoteAddr = backendRemoteAddr
-	req.Header = g.tokenOnlyHeaders()
+	req.Header = http.Header{}
 	bw := &brandWriter{w: w, hdr: http.Header{}, allowed: allowed, fallback: fallbackURL, csp: csp}
 	g.chat.ServeHTTP(bw, req)
 	if !bw.wrote {

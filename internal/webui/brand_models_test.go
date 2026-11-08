@@ -27,8 +27,8 @@ import (
 func TestThemeIsAlwaysValidCSS(t *testing.T) {
 	e := newTestEnv(t)
 	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Chat-Server-Token") != testChatToken || r.Header.Get("X-User-Email") != "" {
-			t.Errorf("theme must be token-only: %v", r.Header)
+		if !gatewayOnly(r) {
+			t.Errorf("theme must carry only the gateway's principal: %v", r.Header)
 		}
 		_, _ = io.WriteString(w, `html:root[data-theme="dark"]{--color-bg:#000}`)
 	}

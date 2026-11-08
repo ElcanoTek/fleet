@@ -10,18 +10,22 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
 // The two backends are the chat-server and orchestrator handlers of the SAME
-// process. The Next.js tier reached them over loopback HTTP; the gateway calls
-// them in-process, which keeps their contract exactly as it was:
+// process, called in-process. Each call keeps the contract the loopback hop
+// had, with identity moved out of the headers (#2050, ADR-0108):
 //
-//   - a FRESH header set per call — the shared-secret channel header, the
-//     verified identity, and only the few request headers a route forwarded
-//     (Last-Event-ID, If-None-Match, a multipart Content-Type). Nothing the
-//     browser sent is copied, so a browser can never present
-//     X-Chat-Server-Token or X-User-Email to a backend;
+//   - the caller's identity travels as a principal.Principal in the call's
+//     context, never as a header. A request context cannot be written by any
+//     network peer, so a browser can never present an identity to a backend,
+//     whatever headers it sends;
+//   - a FRESH header set per call: only the few request headers a route
+//     forwarded (Last-Event-ID, If-None-Match, a multipart Content-Type) and,
+//     for the Operations Center, a presented bearer. Nothing else the browser
+//     sent is copied;
 //   - RemoteAddr 127.0.0.1 and no X-Forwarded-For, which is what the backends
 //     saw from Next (it did not forward the header), so their per-IP filters
 //     and rate limits behave exactly as before;
@@ -30,60 +34,57 @@ import (
 // backendRemoteAddr is the peer address an in-process call presents.
 const backendRemoteAddr = "127.0.0.1:0"
 
-// identity is what a backend call asserts about the caller.
-type identity struct {
-	Email   string
-	Epoch   string
-	Source  websession.Source
-	Issuer  string
-	Subject string
-}
-
-func identityOf(s *websession.Session) identity {
-	return identity{Email: s.Email, Epoch: s.Epoch, Source: s.Source, Issuer: s.Issuer, Subject: s.Subject}
-}
-
-// setIdentity writes X-User-Email, the session-epoch claim, and — only for a
-// central-Auth session — the issuer/subject the epoch is keyed by.
-func setIdentity(h http.Header, id identity) {
-	h.Set("X-User-Email", id.Email)
-	if id.Epoch != "" {
-		h.Set("X-User-Session-Epoch", id.Epoch)
+// sessionPrincipal is the principal a browser session asserts: the email and
+// the session claim the cookie carried. The backend resolves it (membership,
+// role, the live session epoch) with principal.Resolve.
+func sessionPrincipal(s *websession.Session) principal.Principal {
+	p := principal.Principal{
+		Email:      s.Email,
+		AuthMethod: principal.MethodSession,
+		Session:    principal.Session{Epoch: s.Epoch},
 	}
-	if id.Source == websession.SourceOIDC && id.Issuer != "" && id.Subject != "" {
-		h.Set("X-User-Session-Source", "oidc")
-		h.Set("X-External-Issuer", id.Issuer)
-		h.Set("X-External-Subject", id.Subject)
+	// The issuer/subject key a central-Auth session's epoch; they are only
+	// meaningful for one.
+	if s.Source == websession.SourceOIDC && s.Issuer != "" && s.Subject != "" {
+		p.Session.Source = principal.SourceOIDC
+		p.Session.Issuer = s.Issuer
+		p.Session.Subject = s.Subject
 	}
+	return p
 }
 
-// chatHeaders is chatServerHeaders: the shared secret plus the identity.
-func (g *Gateway) chatHeaders(id identity) http.Header {
-	h := http.Header{}
-	h.Set("X-Chat-Server-Token", g.cfg.ChatToken)
-	setIdentity(h, id)
-	return h
+// gatewayPrincipal is the gateway's own principal: a pre-session sign-in leg
+// or a verified provider event for email, or an identity-less brand asset
+// (email ""). Only the gateway can attach one; the backends admit it on the
+// legs no user principal may reach.
+func gatewayPrincipal(email string) principal.Principal {
+	return principal.Principal{Email: email, AuthMethod: principal.MethodGateway}
 }
 
 // orchAuth is the credential an orchestrator call carries: a presented bearer
 // (forwarded verbatim; the orchestrator owns and validates it) or the cookie
-// session's identity over the X-Orchestrator-Server-Token channel.
+// session's principal.
 type orchAuth struct {
 	bearer string
-	id     identity
+	who    principal.Principal
 }
 
 func (g *Gateway) orchHeaders(a orchAuth) http.Header {
 	h := http.Header{}
 	if a.bearer != "" {
 		h.Set("Authorization", "Bearer "+a.bearer)
-		return h
 	}
-	if g.cfg.OrchestratorToken != "" {
-		h.Set("X-Orchestrator-Server-Token", g.cfg.OrchestratorToken)
-	}
-	setIdentity(h, a.id)
 	return h
+}
+
+// backendContext is the context a backend call runs under: the caller's
+// principal, or none — a call never inherits one from the browser request's
+// context by accident.
+func backendContext(ctx context.Context, who principal.Principal) context.Context {
+	if who.AuthMethod == "" {
+		return principal.Without(ctx)
+	}
+	return principal.With(ctx, who)
 }
 
 // call is one in-process backend request.
@@ -92,7 +93,9 @@ type call struct {
 	// target is the backend path plus query, already encoded.
 	target string
 	header http.Header
-	body   io.Reader
+	// who is the caller's principal; the zero value calls with none.
+	who  principal.Principal
+	body io.Reader
 	// contentLength is the body length when known (-1 otherwise).
 	contentLength int64
 	// detach: the backend keeps running when the browser goes away. The Next
@@ -153,7 +156,7 @@ func (g *Gateway) dispatch(w http.ResponseWriter, r *http.Request, h http.Handle
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": name + " unreachable: no backend"})
 		return
 	}
-	ctx := r.Context()
+	ctx := backendContext(r.Context(), c.who)
 	if c.detach {
 		ctx = context.WithoutCancel(ctx)
 	}

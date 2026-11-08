@@ -137,7 +137,7 @@ func narrowServer(t *testing.T, st chatStore, child *narrowChild) *Server {
 func postNarrowApproval(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/conversations/c1/approvals/ap1", strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 	return rec
@@ -372,7 +372,7 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 	post := func(st *narrowGroupStore, body string) *httptest.ResponseRecorder {
 		s := &Server{store: st, cfg: &config.Config{MockMode: true}}
 		req := httptest.NewRequest("POST", "/conversations/c1/approval-groups/turn-1", strings.NewReader(body))
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+		req = req.WithContext(asUser(req.Context(), "u@example.com"))
 		rec := httptest.NewRecorder()
 		s.handleApprovalGroup(rec, req, "c1", "turn-1")
 		return rec

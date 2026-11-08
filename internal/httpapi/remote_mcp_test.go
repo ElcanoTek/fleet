@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,7 +31,7 @@ func TestRemoteMCPEndpointsDisabledReturn503(t *testing.T) {
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+		req = req.WithContext(asUser(req.Context(), "u@x.com"))
 		w := httptest.NewRecorder()
 		tc.handler(w, req)
 		if w.Code != http.StatusServiceUnavailable {

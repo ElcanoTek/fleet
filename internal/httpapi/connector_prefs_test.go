@@ -73,7 +73,7 @@ func prefsRequest(t *testing.T, s *Server, method, target, body string) *httptes
 	} else {
 		r = httptest.NewRequest(method, target, strings.NewReader(body))
 	}
-	r = r.WithContext(context.WithValue(r.Context(), ctxKeyUser, "u@x.com"))
+	r = r.WithContext(asUser(r.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	s.connectorPrefs(w, r)
 	return w

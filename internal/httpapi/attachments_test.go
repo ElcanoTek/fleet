@@ -175,7 +175,7 @@ func TestPostAttachments_ScopesPathsPerUser(t *testing.T) {
 		t.Helper()
 		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n1,2\n")})
 		req := httptest.NewRequestWithContext(
-			context.WithValue(context.Background(), ctxKeyUser, user),
+			asUser(context.Background(), user),
 			http.MethodPost, "/attachments", body)
 		req.Header.Set("Content-Type", ct)
 		rec := httptest.NewRecorder()

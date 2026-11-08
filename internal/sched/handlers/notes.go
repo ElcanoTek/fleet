@@ -254,8 +254,7 @@ func parseUUID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
 // The auth middleware sets a principal; absent one (admin-key path), "admin".
 func actorEmail(r *http.Request) string {
 	// The authenticated user from the auth middleware — never a raw request
-	// header: X-User-Email is only meaningful on the web tier's token-guarded
-	// path, where headerTrustUser has already resolved it into this user. An
+	// header: the user is the request principal userPrincipal resolved. An
 	// admin- or API-key caller has no user and is attributed to "admin"
 	// whatever headers it sends.
 	if u := GetUserFromContext(r.Context()); u != nil && strings.TrimSpace(u.Username) != "" {

@@ -1101,6 +1101,9 @@ paths:
                           type: integer
                         name:
                           type: string
+                  problem:
+                    type: string
+                    description: a refusal the legacy ledgers cause (adoption, or reconciliation below the boundary); fleet refuses to start
                   unknown:
                     type: array
                     description: applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start

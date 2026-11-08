@@ -42,7 +42,7 @@ func TestConversationMCPServersSeats(t *testing.T) {
 	post := func(body string) (int, string) {
 		t.Helper()
 		req := httptest.NewRequest("POST", "/conversations/"+conv.ID+"/mcp-servers", strings.NewReader(body))
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+		req = req.WithContext(asUser(req.Context(), user))
 		w := httptest.NewRecorder()
 		srv.conversationByID(w, req)
 		return w.Code, w.Body.String()
@@ -50,7 +50,7 @@ func TestConversationMCPServersSeats(t *testing.T) {
 	get := func() []map[string]any {
 		t.Helper()
 		req := httptest.NewRequest("GET", "/conversations/"+conv.ID+"/mcp-servers", nil)
-		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+		req = req.WithContext(asUser(req.Context(), user))
 		w := httptest.NewRecorder()
 		srv.conversationByID(w, req)
 		if w.Code != 200 {

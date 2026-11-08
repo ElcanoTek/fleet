@@ -15,11 +15,7 @@ func TestCallerIsAdmin(t *testing.T) {
 	t.Parallel()
 
 	ctxFor := func(email, role string) context.Context {
-		ctx := context.WithValue(context.Background(), ctxKeyUser, email)
-		if role != "" {
-			ctx = context.WithValue(ctx, ctxKeyRole, role)
-		}
-		return ctx
+		return asUserRole(context.Background(), email, role)
 	}
 	cases := []struct {
 		name        string

@@ -201,8 +201,9 @@ naming its `FLEET_` key.
 - the model chain: `FLEET_METADATA_MODEL` ← `FLEET_TITLE_MODEL`, then the
   error-analysis, memory, recurring-task and library-prompt models ←
   metadata, and the memory graph ← memory;
-- `ORCHESTRATOR_SERVER_TOKEN` ← `FLEET_SERVER_TOKEN`, canonical spelling only,
-  as the gateway reads it;
+- `ORCHESTRATOR_SERVER_TOKEN` ← `FLEET_SERVER_TOKEN`, canonical spelling only
+  (declared, but nothing reads it since the gateway hands the backends a
+  typed principal, [ADR-0108](adr/0108-typed-principal.md));
 - the drain sentinel: `FLEET_UPDATE_DRAIN_FILE` ← `FLEET_DRAIN_FILE` ←
   `<FLEET_ENV_FILE>.update.drain`;
 - `FLEET_AUDIT_DIR` ← `<FLEET_DATA_DIR>/audit`;

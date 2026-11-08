@@ -425,6 +425,8 @@ export interface paths {
                                 version?: number;
                                 name?: string;
                             }[] | null;
+                            /** @description a refusal the legacy ledgers cause (adoption, or reconciliation below the boundary); fleet refuses to start */
+                            problem?: string;
                             /** @description applied versions this build does not ship (a newer fleet migrated the database); fleet refuses to start */
                             unknown?: {
                                 version?: number;

@@ -15,9 +15,9 @@
 //
 // It replaced a Next.js server whose route handlers verified the session and
 // proxied to the chat-server and orchestrator listeners over loopback; the
-// gateway calls those same handlers in-process (backend.go), so their
-// contracts — shared-secret channel, X-User-Email scoping, session epochs —
-// are unchanged.
+// gateway calls those same handlers in-process (backend.go), handing each
+// call the caller's identity as a typed principal in the request context
+// (internal/principal, ADR-0108) rather than as headers.
 package webui
 
 import (
