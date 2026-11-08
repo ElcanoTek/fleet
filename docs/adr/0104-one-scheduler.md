@@ -64,8 +64,16 @@ are fired by it; the chat server is only the deliverer of a fire.**
   pending fire's retry (lease expiry) — (and that the chat server
   requests when a schedule is created, edited or resumed; a request is kept
   when it is within one tick interval or five minutes, whichever is longer).
-  A pass drains everything due, bounded by the sweep's deadline (and a
-  10,000-fire backstop), never re-claiming a row it already attempted. The
+  A pass only claims — at most as many fires as a bounded pool of delivery
+  workers (4) has free — and returns to its select at once; each worker
+  delivers its fire under its own bounded context, records the result under
+  a fresh one (so a delivery that ran out of time still leaves its settle,
+  or its failure and backoff, on record), and asks for the next pass, which
+  claims more while any is due. A claimed row stays out of the claims until
+  something durable changes it, so a pass that finds nothing claimable asks
+  for nothing: the backlog drains without a deadline or cap, and never
+  spins. Promotion on the task loop likewise reruns at once past its
+  per-pass row cap only when the pass promoted something. The
   daily maintenance (run-history prunes, log archival) runs in its own
   single-flight goroutine, so its long sweeps never delay a tick or a
   wake-up; Stop cancels and waits for it. The
