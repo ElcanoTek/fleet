@@ -942,8 +942,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM approvals WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete approvals: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM chat_schedules WHERE user_email = $1`, email); err != nil {
+	if err := deleteUserChatSchedulesTx(ctx, tx, email); err != nil {
 		return fmt.Errorf("delete chat schedules: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,

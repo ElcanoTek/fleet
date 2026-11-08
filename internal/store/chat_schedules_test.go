@@ -5,12 +5,69 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config"
+	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+// openSchedOn opens the scheduler's database on the chat test database dsn
+// (its sched schema), as `fleet serve` does on one DATABASE_URL.
+func openSchedOn(t *testing.T, dsn string) *scheddb.Database {
+	t.Helper()
+	d := scheddb.New()
+	if err := d.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
+		t.Fatalf("open sched: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+type firedChatSchedule struct {
+	fire     models.ChatScheduleFire
+	delivery models.ChatScheduleDelivery
+}
+
+// fireDueChatSchedules runs one pass of the scheduler's chat schedule cycle at
+// `at` — claim (lease) → s.DeliverChatScheduleFire → settle — the way
+// internal/sched/scheduler does with the chat server as deliverer.
+func fireDueChatSchedules(t *testing.T, s *Store, dsn string, at time.Time) []firedChatSchedule {
+	t.Helper()
+	ctx := context.Background()
+	sd := openSchedOn(t, dsn)
+	fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
+	if err != nil {
+		t.Fatalf("ClaimDueChatSchedules: %v", err)
+	}
+	out := make([]firedChatSchedule, 0, len(fires))
+	for _, f := range fires {
+		d, err := s.DeliverChatScheduleFire(ctx, f, 20)
+		if err != nil {
+			t.Fatalf("DeliverChatScheduleFire(%s): %v", f.ScheduleID, err)
+		}
+		if ok, err := sd.SettleChatScheduleFire(ctx, f, d, at); err != nil || !ok {
+			t.Fatalf("SettleChatScheduleFire(%s) = %v, %v", f.ScheduleID, ok, err)
+		}
+		out = append(out, firedChatSchedule{fire: f, delivery: d})
+	}
+	return out
+}
+
+// inputByID reads one input-queue row.
+func inputByID(t *testing.T, s *Store, convID, id string) InputQueueRow {
+	t.Helper()
+	row, err := scanInputRow(s.db.QueryRowContext(context.Background(),
+		inputQueueSelect+` WHERE conversation_id = $1 AND id = $2`, convID, id))
+	if err != nil {
+		t.Fatalf("input %s: %v", id, err)
+	}
+	return row
+}
 
 func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 	t.Parallel()
 
-	s := newTestStore(t)
+	s, dsn := newTestStoreDSN(t)
 	ctx := context.Background()
 
 	conv, err := s.CreateConversation(ctx, "trader@elcanotek.com", "Deal Pacing Chat", "victoria", "", false)
@@ -79,32 +136,40 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 		t.Fatalf("unexpected timer schedule: %+v", timerSched)
 	}
 
-	// 4. ClaimDueChatSchedules when timer is due.
+	// 4. The scheduler fires the timer when it is due.
 	future := time.Unix(timerSched.NextRunAt+1, 0).UTC()
-	claimed, err := s.ClaimDueChatSchedules(ctx, future, 20)
-	if err != nil {
-		t.Fatalf("ClaimDueChatSchedules: %v", err)
-	}
-	if len(claimed) == 0 {
-		t.Fatalf("expected at least 1 claimed schedule at %v", future)
+	fired := fireDueChatSchedules(t, s, dsn, future)
+	if len(fired) == 0 {
+		t.Fatalf("expected at least 1 fired schedule at %v", future)
 	}
 	var foundTimer bool
-	for _, c := range claimed {
-		if c.Schedule.ID == timerSched.ID {
-			foundTimer = true
-			if c.Schedule.Status != ChatScheduleStatusCompleted || c.Schedule.RunCount != 1 {
-				t.Errorf("expected one-shot timer to complete after 1 run, got %+v", c.Schedule)
-			}
-			if !strings.HasPrefix(c.Input.ClientInputID, ChatPatrolInputKeyPrefix) {
-				t.Errorf("unexpected client_input_id: %q", c.Input.ClientInputID)
-			}
-			if !strings.Contains(c.Input.Message, "30m Backfill Check") {
-				t.Errorf("unexpected patrol message: %q", c.Input.Message)
-			}
+	for _, f := range fired {
+		if f.fire.ScheduleID != timerSched.ID {
+			continue
+		}
+		foundTimer = true
+		if f.delivery.Outcome != models.ChatScheduleQueued {
+			t.Fatalf("timer delivery = %+v, want queued", f.delivery)
+		}
+		row := inputByID(t, s, conv.ID, f.delivery.InputID)
+		if !strings.HasPrefix(row.ClientInputID, ChatPatrolInputKeyPrefix) {
+			t.Errorf("unexpected client_input_id: %q", row.ClientInputID)
+		}
+		if !strings.Contains(row.Message, "30m Backfill Check") {
+			t.Errorf("unexpected patrol message: %q", row.Message)
 		}
 	}
 	if !foundTimer {
-		t.Errorf("timer schedule %s was not in claimed set", timerSched.ID)
+		t.Errorf("timer schedule %s was not fired", timerSched.ID)
+	}
+	all, err := s.ListChatSchedules(ctx, "trader@elcanotek.com", conv.ID, true)
+	if err != nil {
+		t.Fatalf("ListChatSchedules: %v", err)
+	}
+	for _, sc := range all {
+		if sc.ID == timerSched.ID && (sc.Status != ChatScheduleStatusCompleted || sc.RunCount != 1 || sc.LastRunAt == nil) {
+			t.Errorf("expected one-shot timer to complete after 1 run, got %+v", sc)
+		}
 	}
 
 	// 5. Cancel the recurring patrol.
@@ -239,7 +304,7 @@ func TestListUserPatrols_UsesItsIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err := tx.QueryContext(ctx,
-		`EXPLAIN SELECT cs.id FROM chat_schedules cs
+		`EXPLAIN SELECT cs.id FROM `+chatSchedulesTable+` cs
 		   JOIN conversations c ON c.id = cs.conversation_id
 		  WHERE cs.user_email = $1
 		    AND c.deleted_at IS NULL
@@ -267,7 +332,7 @@ func TestListUserPatrols_UsesItsIndex(t *testing.T) {
 func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T) {
 	t.Parallel()
 
-	s := newTestStore(t)
+	s, dsn := newTestStoreDSN(t)
 	ctx := context.Background()
 	const user = "patroller@elcanotek.com"
 
@@ -291,13 +356,9 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 	}
 
 	due := time.Unix(sched.NextRunAt+1, 0).UTC()
-	claimed, err := s.ClaimDueChatSchedules(ctx, due, 20)
-	if err != nil {
-		t.Fatalf("ClaimDueChatSchedules: %v", err)
-	}
 	var found bool
-	for _, c := range claimed {
-		if c.Schedule.ID == sched.ID {
+	for _, f := range fireDueChatSchedules(t, s, dsn, due) {
+		if f.fire.ScheduleID == sched.ID && f.delivery.Outcome == models.ChatScheduleQueued {
 			found = true
 		}
 	}
@@ -310,5 +371,62 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 	}
 	if len(pending) != 0 {
 		t.Fatalf("expected pending suggest_advanced_model card to be superseded when patrol is claimed, got %+v", pending)
+	}
+}
+
+// A pause or cancel that lands between a fire's delivery and its settle
+// revokes the fire: the queued turn is cancelled, the settle finds no lease
+// and records nothing, so the run is not counted and a paused one-shot timer
+// stays paused (not completed).
+func TestChatSchedulePauseBetweenDeliveryAndSettle(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const user = "pauser@elcanotek.com"
+	sd := openSchedOn(t, dsn)
+
+	for _, tc := range []struct {
+		name   string
+		in     ChatScheduleInput
+		status string
+	}{
+		{"paused timer", ChatScheduleInput{Prompt: "Ping.", DurationSeconds: 600}, ChatScheduleStatusPaused},
+		{"cancelled patrol", ChatScheduleInput{Prompt: "Check.", CronExpr: "*/10 * * * *"}, ChatScheduleStatusCancelled},
+	} {
+		conv, err := s.CreateConversation(ctx, user, tc.name, "victoria", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tc.in.ConversationID, tc.in.UserEmail = conv.ID, user
+		sc, err := s.CreateChatSchedule(ctx, tc.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := time.Unix(sc.NextRunAt+1, 0)
+		fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
+		if err != nil || len(fires) != 1 {
+			t.Fatalf("%s: claim = %+v, %v", tc.name, fires, err)
+		}
+		d, err := s.DeliverChatScheduleFire(ctx, fires[0], 20)
+		if err != nil || d.Outcome != models.ChatScheduleQueued {
+			t.Fatalf("%s: deliver = %+v, %v", tc.name, d, err)
+		}
+		st := tc.status
+		if _, err := s.UpdateChatSchedule(ctx, user, conv.ID, sc.ID, ChatSchedulePatch{Status: &st}); err != nil {
+			t.Fatalf("%s: %s: %v", tc.name, st, err)
+		}
+		if ok, err := sd.SettleChatScheduleFire(ctx, fires[0], d, at); err != nil || ok {
+			t.Fatalf("%s: settle after %s = %v, %v; want the fire revoked", tc.name, st, ok, err)
+		}
+		if row := inputByID(t, s, conv.ID, d.InputID); row.State != InputStateCancelled {
+			t.Errorf("%s: delivered turn state = %q, want cancelled", tc.name, row.State)
+		}
+		all, err := s.ListChatSchedules(ctx, user, conv.ID, true)
+		if err != nil || len(all) != 1 || all[0].Status != st || all[0].RunCount != 0 {
+			t.Fatalf("%s: schedule = %+v, %v; want %s with no run counted", tc.name, all, err, st)
+		}
+		if runs, _ := sd.ListChatScheduleRuns(ctx, sc.ID, 10); len(runs) != 0 {
+			t.Errorf("%s: run history = %+v, want none", tc.name, runs)
+		}
 	}
 }

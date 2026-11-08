@@ -3,8 +3,8 @@
 //   - the chat HTTP/SSE server (httpapi) on :8080, driven by the concrete
 //     interactive turnEngine (agent.Manager over agentcore.Run);
 //   - the orchestrator HTTP server (sched/handlers) on :8000;
-//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending +
-//     recovers expired leases every 30s;
+//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending,
+//     recovers expired leases and fires in-chat patrols/timers (ADR-0104);
 //   - the capped in-process worker pool (internal/runner) whose TaskRunner is
 //     the scheduled agent.Agent.Execute over the SAME shared sandbox pool.
 //
@@ -735,7 +735,16 @@ func run() error {
 	// config already in taskNotifier keeps serving.
 	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
+	// The scheduler is the box's one tick loop (ADR-0104): it fires scheduled
+	// tasks and in-chat patrols/timers alike. Chat's Run now and early wake-ups
+	// go through it; it is configured and started below, once the
+	// orchestrator side is up.
+	sch := scheduler.New(schedStorage, timezone())
+	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
+	// The chat server delivers each chat schedule fire the scheduler claims.
+	sch.SetChatScheduleDeliverer(chatSrv)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
 	// before the listeners come up, so the very first turn already reads a
@@ -851,8 +860,7 @@ func run() error {
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
-	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
-	sch := scheduler.New(schedStorage, timezone())
+	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
 	// Automatic run-history retention (#252): a daily sweep prunes old terminal
 	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
@@ -1146,9 +1154,6 @@ func run() error {
 			}
 		}
 	}()
-	// In-chat patrol and timer sweep (migration 086): claims due chat_schedules
-	// rows every 10 seconds and enqueues their turns into chat_input_queue.
-	startChatScheduleSweeper(ctx, chatSrv)
 	// One maintenance loop drives every periodic reclaimer on the box (chat
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
@@ -1169,26 +1174,6 @@ func run() error {
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
 	return nil
-}
-
-func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
-	go func() {
-		defer safe.Recover("cmd.chat-schedule-sweep", nil)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if _, err := chatSrv.SweepDueChatSchedules(sweepCtx); err != nil {
-					log.Printf("chat schedule sweep: %v", err)
-				}
-				cancel()
-			}
-		}
-	}()
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant

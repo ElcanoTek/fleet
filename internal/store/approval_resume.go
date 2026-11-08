@@ -261,7 +261,7 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	if allTimedOut {
 		var hasSchedule bool
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM chat_schedules WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
+			`SELECT EXISTS (SELECT 1 FROM `+chatSchedulesTable+` WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
 			req.ConversationID).Scan(&hasSchedule); err != nil {
 			return out, err
 		}

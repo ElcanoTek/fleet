@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,6 +105,30 @@ type Scheduler struct {
 	gateMu       sync.Mutex
 	gateInFlight map[uuid.UUID]struct{}
 	gateWG       sync.WaitGroup
+
+	// Chat schedules (#2049 M5, ADR-0104): the chat server that delivers
+	// their fires (nil leaves them unfired), and the wake-up requests that
+	// let a schedule due before the next tick fire on time. See
+	// chat_schedules.go.
+	chatDeliverer   ChatScheduleDeliverer
+	chatWake        chan time.Time
+	chatLoopDone    chan struct{}
+	chatLoopStarted bool
+
+	// The daily maintenance (retention prune, chat run prune, log archival)
+	// runs off the loop, in its own goroutine, so its up-to-30-minute sweeps
+	// never hold up ticks or chat schedule wake-ups. maintRunning makes it
+	// single-flight (a day's run still going skips the next); maintWG lets
+	// Stop wait for it (its sweeps run under s.ctx, which Stop cancels).
+	// maintenance and firstCleanupIn are overridable only by tests.
+	maintRunning   atomic.Bool
+	maintWG        sync.WaitGroup
+	maintenance    func()
+	firstCleanupIn time.Duration
+
+	// storeTimeout bounds one task-path storage statement (storeCtx);
+	// 0 means sweepTimeout. A field only so tests can shorten it.
+	storeTimeout time.Duration
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -229,17 +254,25 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		ctx:                ctx,
 		cancel:             cancel,
 		loopDone:           make(chan struct{}),
+		chatLoopDone:       make(chan struct{}),
 		scheduledBatchSize: defaultScheduledBatchSize,
 		tickInterval:       defaultTickInterval,
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
 		gateInFlight:       make(map[uuid.UUID]struct{}),
+		chatWake:           make(chan time.Time, 16),
 	}
 }
 
-// Start starts the scheduler.
+// Start starts the scheduler: the task loop and, when a chat server is wired
+// in, the chat schedule loop (chat_schedules.go) — separate goroutines, so no
+// task-path work (promotion, claims, maintenance) can delay a chat fire.
 func (s *Scheduler) Start() {
 	log.Println("Starting scheduler...")
 	s.loopStarted = true
+	if s.chatDeliverer != nil {
+		s.chatLoopStarted = true
+		go s.runChatLoop()
+	}
 	go s.runLoop()
 }
 
@@ -274,7 +307,11 @@ func (s *Scheduler) Stop() {
 		if s.loopStarted {
 			<-s.loopDone
 		}
+		if s.chatLoopStarted {
+			<-s.chatLoopDone
+		}
 		s.gateWG.Wait()
+		s.maintWG.Wait()
 		close(settled)
 	}()
 	select {
@@ -282,6 +319,49 @@ func (s *Scheduler) Stop() {
 	case <-time.After(gateDrainTimeout):
 		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
+}
+
+// storeCtx is a context for one storage call or pass off the sweep helper:
+// a child of the scheduler's lifetime context (cancelled by Stop), bounded by
+// sweepTimeout.
+func (s *Scheduler) storeCtx() (context.Context, context.CancelFunc) {
+	timeout := s.storeTimeout
+	if timeout <= 0 {
+		timeout = sweepTimeout
+	}
+	return context.WithTimeout(s.ctx, timeout)
+}
+
+// settleCtx bounds a run_if gate's verdict write (promote, skip, end of
+// recurrence). Bounded by sweepTimeout but NOT cancelled by Stop: Stop drains
+// in-flight gate evaluations (gateDrainTimeout) precisely so a passing
+// gate's write lands before it returns.
+func (s *Scheduler) settleCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), sweepTimeout)
+}
+
+// startMaintenance runs the daily maintenance in its own goroutine, unless the
+// previous run is still going.
+func (s *Scheduler) startMaintenance() {
+	if !s.maintRunning.CompareAndSwap(false, true) {
+		log.Printf("scheduler: daily maintenance still running from the last run; skipping this one")
+		return
+	}
+	run := s.maintenance
+	if run == nil {
+		run = func() {
+			s.runCleanup()
+			s.runChatScheduleCleanup()
+			s.runLogArchival()
+		}
+	}
+	s.maintWG.Add(1)
+	go func() {
+		defer s.maintWG.Done()
+		defer s.maintRunning.Store(false)
+		defer safe.Recover("scheduler.cleanup", nil)
+		run()
+	}()
 }
 
 func (s *Scheduler) runLoop() {
@@ -296,7 +376,11 @@ func (s *Scheduler) runLoop() {
 	var cleanupC <-chan time.Time
 	var cleanupTimer *time.Timer
 	if s.retentionDays > 0 || s.archiveAfterDays > 0 {
-		cleanupTimer = time.NewTimer(durationUntilHour(time.Now().UTC(), s.cleanupHour))
+		first := durationUntilHour(time.Now().UTC(), s.cleanupHour)
+		if s.firstCleanupIn > 0 {
+			first = s.firstCleanupIn
+		}
+		cleanupTimer = time.NewTimer(first)
 		defer cleanupTimer.Stop()
 		cleanupC = cleanupTimer.C
 	}
@@ -343,11 +427,7 @@ func (s *Scheduler) runLoop() {
 				s.ProcessScheduledTasks()
 			}()
 		case <-cleanupC:
-			func() {
-				defer safe.Recover("scheduler.cleanup", nil)
-				s.runCleanup()
-				s.runLogArchival()
-			}()
+			s.startMaintenance()
 			cleanupTimer.Reset(24 * time.Hour)
 		case <-s.stop:
 			return
@@ -529,6 +609,11 @@ func (s *Scheduler) RecoverExpiredLeases() {
 // promoted when the check passes (or when it errors under on_error:"run"),
 // skipped via handleSkip otherwise — so this tick never blocks on a gate.
 func (s *Scheduler) ProcessScheduledTasks() {
+	// Bounded and cancelled by Stop, like every other sweep: a row lock held
+	// by another transaction must not hang the tick (or Stop) forever.
+	// Each page fetch and each promotion statement gets a context of its own
+	// (storeCtx: bounded, cancelled by Stop), so one slow statement cannot
+	// spend the budget of the pages and fallbacks after it.
 	now := time.Now().In(s.location)
 	batchSize := s.scheduledBatchSize
 	if batchSize <= 0 {
@@ -562,7 +647,12 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			return
 		}
 
-		tasks, err := s.storage.GetScheduledTasks(now, cursorScheduledFor, cursorID, batchSize)
+		if s.ctx.Err() != nil {
+			return // stopping
+		}
+		pageCtx, pageCancel := s.storeCtx()
+		tasks, err := s.storage.GetScheduledTasksCtx(pageCtx, now, cursorScheduledFor, cursorID, batchSize)
+		pageCancel()
 		if err != nil {
 			log.Printf("Error getting scheduled tasks: %v", err)
 			return
@@ -604,14 +694,21 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		log.Printf("Processing %d scheduled tasks (%d recurring, %d gated dispatched async, %d gated deferred)",
 			len(tasks), recurringCount, gatedCount-deferredGates, deferredGates)
 
-		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
+		batchCtx, batchCancel := s.storeCtx()
+		promoted, err := s.storage.UpdateTasksStatusBatchCtx(batchCtx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
+		batchCancel()
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
 			// A row that still fails is already behind the cursor, so a persistent
 			// DB error can't re-loop it this tick.
 			for _, taskID := range promoteIDs {
-				n, perr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				if s.ctx.Err() != nil {
+					return // stopping
+				}
+				oneCtx, oneCancel := s.storeCtx()
+				n, perr := s.storage.UpdateTasksStatusBatchCtx(oneCtx, []uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				oneCancel()
 				if perr != nil {
 					log.Printf("Error updating task %s: %v", taskID, perr)
 					continue
@@ -699,7 +796,9 @@ func (s *Scheduler) evalAndSettleGate(task *models.Task) {
 // makes a concurrent edit/reschedule win: a task postponed while its gate ran
 // must not run on the stale verdict (the next due tick re-evaluates it).
 func (s *Scheduler) promoteGatedTask(task *models.Task) {
-	n, err := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusPending)
+	ctx, cancel := s.settleCtx()
+	defer cancel()
+	n, err := s.storage.SettleGatedTaskCtx(ctx, task.ID, task.ScheduledFor, models.TaskStatusPending)
 	if err != nil {
 		log.Printf("Error promoting gated task %s: %v", task.ID, err)
 		return
@@ -816,7 +915,9 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			// Settled conditionally like the other verdict writes: an edit or
 			// reschedule that landed while the gate ran (it may have changed the
 			// recurrence or its end date) invalidates this cancel too.
-			n, cerr := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			sctx, scancel := s.settleCtx()
+			n, cerr := s.storage.SettleGatedTaskCtx(sctx, task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			scancel()
 			switch {
 			case cerr != nil:
 				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
@@ -838,7 +939,8 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	if nextRun.IsZero() {
 		nextRun = time.Now().UTC().Add(gateSkipBackoff(task.SkipCount))
 	}
-	ctx := context.Background()
+	ctx, cancel := s.settleCtx()
+	defer cancel()
 	_, recorded, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun, task.ScheduledFor)
 	if err != nil {
 		log.Printf("Error recording skip for task %s: %v", task.ID, err)
