@@ -8,21 +8,34 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-// chatTemplate is the chat store alone, migrated in schema chat — the
-// production layout (ADR-0098). This package cannot use internal/testdb/fleetdb
-// (it imports this package), so its tests clone a template of their own.
+// chatTemplate is the production layout (ADR-0098): the chat store migrated
+// in schema chat and the scheduler in schema sched. The scheduler is in it
+// because the chat store reads and edits chat schedules, which are sched rows
+// (ADR-0104). This package cannot use internal/testdb/fleetdb (it imports this
+// package), so its tests clone a template of their own — the same one fleetdb
+// builds (same name and fingerprint), so the two share it.
 var chatTemplate = testdb.Spec{
-	Name:        "chat",
-	Fingerprint: MigrationFingerprint,
+	Name: "fleet",
+	Fingerprint: func() string {
+		return "chat:" + MigrationFingerprint() + " sched:" + scheddb.MigrationFingerprint()
+	},
 	Migrate: func(_ context.Context, dsn string) error {
 		s, err := Open(config.WithSchema(dsn, config.ChatSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
 		if err != nil {
 			return err
 		}
-		return s.Close()
+		if err := s.Close(); err != nil {
+			return err
+		}
+		sched := scheddb.New()
+		if err := sched.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
+			return err
+		}
+		return sched.Close()
 	},
 }
 

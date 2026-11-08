@@ -25,6 +25,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
@@ -262,6 +263,16 @@ type Server struct {
 	// and calls the storage create path. nil → schedule_task approvals report the
 	// feature is unconfigured (no task is created).
 	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+
+	// chatSchedules is the scheduler that fires chat schedules (ADR-0104):
+	// Run now goes through it, and a schedule created or edited to fire soon
+	// asks it for an early pass. nil (tests, a scheduler-less embedding)
+	// answers Run now with 503 and leaves firing to whoever does run one.
+	chatSchedules ChatScheduleEngine
+
+	// publishHook, when set (tests only), sees every queue/patrol update and
+	// drain kick, so a test can count them.
+	publishHook func(kind string)
 
 	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
 	// approved chat manage_tasks call (#1152). Same seam discipline as
@@ -570,6 +581,29 @@ func WithWorkerStats(fn func(context.Context) (*WorkerStats, error)) Option {
 // approvals reporting the feature unconfigured.
 func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)) Option {
 	return func(s *Server) { s.scheduleTask = fn }
+}
+
+// ChatScheduleEngine is the scheduler's chat schedule surface
+// (internal/sched/scheduler.Scheduler), injected so httpapi need not import
+// the sched packages.
+type ChatScheduleEngine interface {
+	// RunChatScheduleNow fires one schedule now, through the scheduler's
+	// claim → delivery → settle path.
+	RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error)
+	// WakeChatSchedulesAt asks for a firing pass at t (non-blocking).
+	WakeChatSchedulesAt(t time.Time)
+}
+
+// notePublish reports one queue/patrol update or drain kick to publishHook.
+func (s *Server) notePublish(kind string) {
+	if s.publishHook != nil {
+		s.publishHook(kind)
+	}
+}
+
+// WithChatScheduleEngine wires the scheduler that fires chat schedules.
+func WithChatScheduleEngine(e ChatScheduleEngine) Option {
+	return func(s *Server) { s.chatSchedules = e }
 }
 
 // WithTaskManager injects the orchestrator update/stop seam used to resolve an

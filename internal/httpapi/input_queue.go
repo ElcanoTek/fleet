@@ -165,6 +165,7 @@ func queueItemsPayloadForBuffer(items []store.InputQueueRow) []map[string]any {
 // buffer, when one is running (nil-safe otherwise — the GET endpoint is the
 // authoritative snapshot for idle conversations).
 func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
+	s.notePublish("queue.updated")
 	entry, ok := s.getInflight(convID)
 	if !ok || entry.buf == nil {
 		return
@@ -469,6 +470,7 @@ func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, s
 // stopGateForRow / registerTurnGated, and each launched turn tail-calls back
 // here on completion.
 func (s *Server) maybeDrainQueue(convID string) {
+	s.notePublish("drain")
 	if s.IsDraining() {
 		if !s.shuttingDown.Load() && UpdateDrainActive() {
 			s.rekickDrainAfter(convID, 3*time.Second)

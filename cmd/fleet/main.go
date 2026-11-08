@@ -3,8 +3,8 @@
 //   - the chat HTTP/SSE server (httpapi) on :8080, driven by the concrete
 //     interactive turnEngine (agent.Manager over agentcore.Run);
 //   - the orchestrator HTTP server (sched/handlers) on :8000;
-//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending +
-//     recovers expired leases every 30s;
+//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending,
+//     recovers expired leases and fires in-chat patrols/timers (ADR-0104);
 //   - the capped in-process worker pool (internal/runner) whose TaskRunner is
 //     the scheduled agent.Agent.Execute over the SAME shared sandbox pool.
 //
@@ -735,6 +735,13 @@ func run() error {
 	// config already in taskNotifier keeps serving.
 	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
+	// The scheduler is the box's one tick loop (ADR-0104): it fires scheduled
+	// tasks and in-chat patrols/timers alike. Chat's Run now and early wake-ups
+	// go through it; it is configured and started below, once the
+	// orchestrator side is up.
+	sch := scheduler.New(schedStorage, timezone())
+	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
@@ -851,8 +858,7 @@ func run() error {
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
-	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
-	sch := scheduler.New(schedStorage, timezone())
+	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
 	// Automatic run-history retention (#252): a daily sweep prunes old terminal
 	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
@@ -871,8 +877,7 @@ func run() error {
 	// Paused-task expiry (#510): fail tasks stuck awaiting input past the
 	// window. Off (wait forever) when TaskPausedExpiryMinutes<=0.
 	sch.SetPausedExpiry(cfg.TaskPausedExpiryMinutes)
-	sch.Start()
-	defer sch.Stop()
+	// Started below, after the last boot step that can fail.
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
 	taskRunner := scheduledrun.New(scheduledrun.Options{
@@ -1061,6 +1066,16 @@ func run() error {
 		return err
 	}
 
+	// Every boot step that can fail has succeeded: only now does the
+	// scheduler start firing — promoting due tasks and delivering chat
+	// patrols and timers (the chat server is their deliverer). Started any
+	// earlier, a failed boot could leave a chat turn running, with its side
+	// effects, while fleet reports the failure and closes the stores under
+	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this.
+	sch.SetChatScheduleDeliverer(chatSrv)
+	sch.Start()
+	defer sch.Stop()
+
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
 	//     within FLEET_SHUTDOWN_GRACE_SECONDS, then force-cancel the stragglers.
@@ -1070,6 +1085,13 @@ func run() error {
 	// design) does NOT touch detached chat turns or in-flight tasks — those drain
 	// through their own decoupled contexts so the grace period is meaningful.
 	ctx, cancel := context.WithCancel(context.Background())
+	// Both stores are migrated: make sure a deleted conversation takes its
+	// chat schedules with it (ADR-0104). Sched migration 077 installs the
+	// cascade when the chat schema already exists; on a database the
+	// scheduler initialised first this installs it and removes any schedule
+	// orphaned in between — retried with backoff for the life of the process
+	// if it fails, so a boot-time error cannot leave it missing.
+	go keepChatScheduleCascade(ctx, schedStorage)
 	defer cancel()
 
 	// SLA monitor (#274): a 60s sweep that warns/fails in-flight tasks running
@@ -1146,9 +1168,6 @@ func run() error {
 			}
 		}
 	}()
-	// In-chat patrol and timer sweep (migration 086): claims due chat_schedules
-	// rows every 10 seconds and enqueues their turns into chat_input_queue.
-	startChatScheduleSweeper(ctx, chatSrv)
 	// One maintenance loop drives every periodic reclaimer on the box (chat
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
@@ -1171,24 +1190,20 @@ func run() error {
 	return nil
 }
 
-func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
-	go func() {
-		defer safe.Recover("cmd.chat-schedule-sweep", nil)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if _, err := chatSrv.SweepDueChatSchedules(sweepCtx); err != nil {
-					log.Printf("chat schedule sweep: %v", err)
-				}
-				cancel()
+// keepChatScheduleCascade runs db.KeepChatScheduleCascade (5s doubling to a
+// 5m cap) until the cascade is in place or the process stops, logging each
+// failure and the install.
+func keepChatScheduleCascade(ctx context.Context, st *storage.Storage) {
+	defer safe.Recover("cmd.chat-schedule-cascade", nil)
+	scheddb.KeepChatScheduleCascade(ctx, st.DB().EnsureChatScheduleCascade, 5*time.Second, 5*time.Minute,
+		func(installed bool, orphans int, err error, retryIn time.Duration) {
+			switch {
+			case err != nil:
+				log.Printf("WARNING: chat schedules: could not install the conversation-delete cascade: %v (retrying in %s)", err, retryIn)
+			case installed:
+				log.Printf("chat schedules: installed the conversation-delete cascade; removed %d orphaned schedule(s)", orphans)
 			}
-		}
-	}()
+		})
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant

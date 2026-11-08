@@ -1,6 +1,6 @@
 # ADR-0005: Separate Postgres databases for chat and sched
 
-- **Status:** Superseded by ADR-0098 ([one database, a schema per store](0098-one-database-two-schemas.md), 2026-11-07)
+- **Status:** Superseded by ADR-0098 ([one database, a schema per store](0098-one-database-two-schemas.md), 2026-11-07); its scheduler part ("the scheduling engine" as one of two domains) amended by ADR-0104 ([one scheduler](0104-one-scheduler.md))
 - **Date:** 2026-06-28 (documents a decision that predates this record)
 - **Deciders:** fleet maintainers
 
