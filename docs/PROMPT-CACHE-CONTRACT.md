@@ -343,8 +343,8 @@ into `fantasy.Usage.CacheCreationTokens`).
 
 ## Kill switch & observability
 
-- **Kill switch:** `FLEET_DISABLE_PROMPT_CACHE` (with `CHAT_`/`CUTLASS_` back-compat
-  aliases) makes `PromptCachingStep` a no-op.
+- **Kill switch:** `FLEET_DISABLE_PROMPT_CACHE` makes `PromptCachingStep` a
+  no-op (the `CHAT_`/`CUTLASS_` spellings were removed, ADR-0106).
 - **Observability:** cached-token counts are tracked (`CachedTokens`) and surfaced
   in the admin stats / cost accounting, so an operator can watch the cache-hit
   ratio and notice a regression the guard test didn't catch (e.g. a system-prompt

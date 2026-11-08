@@ -2,17 +2,11 @@ package tools
 
 import "github.com/ElcanoTek/fleet/internal/config/envreg"
 
-// fleetEnv reads the canonical FLEET_<name> environment variable,
-// falling back to the legacy CHAT_<name> alias for back-compat. During
-// the fleet monorepo migration the chat/cutlass tools converged on the
-// FLEET_ prefix; the old names keep working so existing deployments and
-// .env files aren't broken.
+// fleetEnv reads the canonical FLEET_<name> environment variable. The
+// legacy CHAT_<name> fallback was removed (ADR-0106).
 //
 // `name` is the suffix after the prefix, e.g. fleetEnv("WORKSPACE_ROOT")
-// reads FLEET_WORKSPACE_ROOT then CHAT_WORKSPACE_ROOT.
+// reads FLEET_WORKSPACE_ROOT.
 func fleetEnv(name string) string {
-	if v := envreg.Get("FLEET_" + name); v != "" {
-		return v
-	}
-	return envreg.Get("CHAT_" + name) // LEGACY-ENV-ALIAS: remove after migrate-env
+	return envreg.Get("FLEET_" + name)
 }

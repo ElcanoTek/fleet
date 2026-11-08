@@ -494,8 +494,8 @@ type bashResult struct {
 // which fold the failure into the tool result) rather than being silenced
 // after the first occurrence. We still emit a once-per-process log line as
 // a server-side breadcrumb, but the returned error is the per-turn signal.
-// Log dir resolution: $FLEET_AUDIT_DIR (or legacy $CHAT_AUDIT_DIR), else
-// $FLEET_DATA_DIR/audit (or legacy $CHAT_DATA_DIR/audit), else ./data/audit.
+// Log dir resolution: $FLEET_AUDIT_DIR, else
+// $FLEET_DATA_DIR/audit, else ./data/audit.
 func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
 	dir := AuditDir()
 	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
@@ -710,9 +710,8 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 	return wd, nil
 }
 
-// AuditDir resolves the bash audit log directory: $FLEET_AUDIT_DIR (or the
-// legacy $CHAT_AUDIT_DIR), else <$FLEET_DATA_DIR>/audit (or the legacy
-// $CHAT_DATA_DIR), else ./data/audit. Exported so the configuration
+// AuditDir resolves the bash audit log directory: $FLEET_AUDIT_DIR, else
+// <$FLEET_DATA_DIR>/audit, else ./data/audit. Exported so the configuration
 // registry's inherited default for FLEET_AUDIT_DIR is checked against it.
 func AuditDir() string {
 	dir := fleetEnv("AUDIT_DIR")

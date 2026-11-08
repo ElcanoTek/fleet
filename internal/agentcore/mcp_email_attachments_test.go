@@ -42,7 +42,7 @@ func (b *attachmentReadingBroker) CallMCP(_ context.Context, _, _ string, args m
 // workspace, and the connector reads a private copy that is removed after.
 func TestMCPTool_EmailAttachmentsPreparedBeforeDispatch(t *testing.T) {
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	conv := "conv-a"
 	if err := os.MkdirAll(filepath.Join(wsRoot, conv), 0o755); err != nil {
 		t.Fatal(err)

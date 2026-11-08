@@ -428,7 +428,7 @@ func TestWebhookMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestWebhookHonorsLockdownOnly asserts that on a CHAT_LOCKDOWN_ONLY server the
+// TestWebhookHonorsLockdownOnly asserts that on a FLEET_LOCKDOWN_ONLY server the
 // webhook-triggered conversation is created network-sealed (lockdown=true), the
 // same as every human chat turn — the webhook path must not silently drop the
 // operator's global seal on the untrusted-payload path.
@@ -476,7 +476,7 @@ func TestWebhookHonorsLockdownOnly(t *testing.T) {
 	conv := st.convs[resp.ConversationID]
 	st.mu.Unlock()
 	if conv == nil || !conv.Lockdown {
-		t.Fatalf("conversation lockdown = %+v, want lockdown=true (CHAT_LOCKDOWN_ONLY must apply to webhooks)", conv)
+		t.Fatalf("conversation lockdown = %+v, want lockdown=true (FLEET_LOCKDOWN_ONLY must apply to webhooks)", conv)
 	}
 }
 

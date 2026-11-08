@@ -398,11 +398,15 @@ func TestMCPBrokerRemoteConfigured(t *testing.T) {
 	if mcpBrokerRemoteConfigured() {
 		t.Fatal("encryption key without public base URL reported configured")
 	}
-	// Config's canonical/legacy lookup is per field, so a canonical key and
-	// legacy base URL are a valid inherited combination too.
+	// The removed CHAT_ spelling (ADR-0106) does not count: config.Load
+	// does not read it either.
 	t.Setenv("CHAT_PUBLIC_BASE_URL", "https://fleet.example.com")
+	if mcpBrokerRemoteConfigured() {
+		t.Fatal("a removed CHAT_ base URL spelling reported configured")
+	}
+	t.Setenv("FLEET_PUBLIC_BASE_URL", "https://fleet.example.com")
 	if !mcpBrokerRemoteConfigured() {
-		t.Fatal("complete canonical/legacy remote environment reported disabled")
+		t.Fatal("complete canonical remote environment reported disabled")
 	}
 }
 

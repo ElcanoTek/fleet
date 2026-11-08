@@ -128,8 +128,7 @@ func firstChunkTimeoutFor(promptTokens int) time.Duration {
 	return timeout
 }
 
-// secondsKnob reads a whole-or-fractional-seconds env knob through the
-// prefix aliases; unset or unparseable yields def (the registry in
+// secondsKnob reads a whole-or-fractional-seconds FLEET_ env knob; unset or unparseable yields def (the registry in
 // internal/config refuses a malformed value at boot, this is the lenient
 // embedder fallback).
 func secondsKnob(suffix string, def time.Duration) time.Duration {
@@ -248,7 +247,7 @@ type resilienceConfig struct {
 }
 
 // loadResilienceConfig reads the retry budget from FLEET_RETRY_MAX_ATTEMPTS
-// (or its CHAT_/CUTLASS_ alias, via fleetEnv).
+// (via fleetEnv).
 //
 // The knob is a scopeExternal row in the config package's env-knob registry
 // (#1273), so a malformed value refuses the boot; the warn-and-default branch

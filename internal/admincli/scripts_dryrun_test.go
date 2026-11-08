@@ -923,8 +923,11 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 		`absent) build_reason="${ref_now} missing from the sandbox image store"`,
 		// The image ref is resolved from the service's env file (doctor.sh's
 		// env_get idiom), never from the update shell's environment — the
-		// unit reads EnvironmentFile=, not this shell.
-		`env_get "$var" "$backend_env_file"`,
+		// unit reads EnvironmentFile=, not this shell — through the shared
+		// resolver that reads a removed CHAT_/CUTLASS_ spelling as unset
+		// (scripts/sandbox_bundle_test.go pins its behaviour).
+		`service_env_value() { env_get "$1" "$backend_env_file"; }`,
+		`fleet_sandbox_resolve_scalar image "$1" service_env_value`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)

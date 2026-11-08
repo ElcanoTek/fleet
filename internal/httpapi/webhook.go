@@ -195,7 +195,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// POST /conversations (server.go). A webhook is an external caller and cannot
 	// opt a conversation OUT of the global seal, so lockdown is simply
 	// s.cfg.LockdownOnly (no per-request override). This matters precisely on the
-	// untrusted-payload path: on a CHAT_LOCKDOWN_ONLY box the triggered turn must
+	// untrusted-payload path: on a FLEET_LOCKDOWN_ONLY box the triggered turn must
 	// run in the same --network=none sandbox as every human turn. Fail closed
 	// (never create an unenforceable lockdown conversation) on misconfiguration.
 	lockdown := s.cfg.LockdownOnly

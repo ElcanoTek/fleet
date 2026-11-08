@@ -66,7 +66,7 @@ type Config struct {
 	// (agentcore.CurrentTaskModel: the admin task_model setting, else
 	// FLEET_TASK_MODEL, else the advanced tier), the same slug the scheduled
 	// runner resolves at dispatch; see defaultTaskModel. MaxCostUSD is the
-	// per-turn cost ceiling (CUTLASS_MAX_COST_USD); 0 disables the
+	// per-turn cost ceiling (FLEET_MAX_COST_USD); 0 disables the
 	// would-hit-ceiling check.
 	// DefaultMaxIterations is the loop iteration cap applied when a task omits
 	// one (FLEET_MAX_ITERATIONS via config.MaxIterations).
@@ -95,7 +95,7 @@ type Config struct {
 	SchedRateLimitPerDay          int // default 500
 	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
-	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
+	// SharedToken is the chat-server shared secret (FLEET_SERVER_TOKEN), reused as
 	// the orchestrator's channel authenticator. The web tier — the SOLE
 	// client of this backend — verifies the user's session cookie, then forwards
 	// the resolved identity as X-User-Email guarded by this token in

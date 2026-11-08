@@ -74,8 +74,8 @@ func clearEnvVars() {
 		"NO_QUOTES",
 		"SPACED_KEY",
 		"TEST_VAR",
-		"CUTLASS_TASK_MODEL",
-		"CUTLASS_TASK_FALLBACK_MODEL",
+		"FLEET_TASK_MODEL",
+		"FLEET_TASK_FALLBACK_MODEL",
 		"CUTLASS_ALLOWED_DIRS",
 		"GH_TOKEN",
 		"FAST_IO_MCP_TOKEN",
@@ -263,7 +263,7 @@ func TestLoad_SandboxDiskGB(t *testing.T) {
 func TestLoad_TitleModelOverride(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
-	t.Setenv("CHAT_TITLE_MODEL", "~anthropic/claude-sonnet-latest")
+	t.Setenv("FLEET_TITLE_MODEL", "~anthropic/claude-sonnet-latest")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -608,8 +608,8 @@ func TestLockdownAvailable(t *testing.T) {
 
 func TestLoad_LockdownOnlyRequiresImage(t *testing.T) {
 	isolateEnv(t)
-	t.Setenv("CHAT_LOCKDOWN_ONLY", "true")
-	t.Setenv("CHAT_SANDBOX_IMAGE", "")
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "true")
+	t.Setenv("FLEET_SANDBOX_IMAGE", "")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -624,8 +624,8 @@ func TestLoad_LockdownOnlyRequiresImage(t *testing.T) {
 
 func TestLoad_LockdownOnlyRespectedWithImage(t *testing.T) {
 	isolateEnv(t)
-	t.Setenv("CHAT_LOCKDOWN_ONLY", "true")
-	t.Setenv("CHAT_SANDBOX_IMAGE", "ghcr.io/example/sandbox:test")
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "true")
+	t.Setenv("FLEET_SANDBOX_IMAGE", "ghcr.io/example/sandbox:test")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -640,7 +640,7 @@ func TestLoad_LockdownOnlyRespectedWithImage(t *testing.T) {
 
 func TestLoad_LockdownAllowedModelsEnvOverride(t *testing.T) {
 	isolateEnv(t)
-	t.Setenv("CHAT_LOCKDOWN_ALLOWED_MODELS", "anthropic/claude-opus-4.7,openai/gpt-5")
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "anthropic/claude-opus-4.7,openai/gpt-5")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -656,9 +656,9 @@ func TestLoad_LockdownAllowedModelsEnvOverride(t *testing.T) {
 	}
 }
 
-// TestLoad_LockdownEnvSpellings pins that both lockdown knobs resolve through
-// the FLEET_ → CHAT_ → CUTLASS_ alias chain (#1080): the canonical spelling
-// must seal turns, and the legacy spellings must keep existing deploys sealed.
+// TestLoad_LockdownEnvSpellings pins that both lockdown knobs read the
+// canonical FLEET_ spelling (#1080), and that the CHAT_/CUTLASS_ spellings,
+// removed by ADR-0106, are not read.
 func TestLoad_LockdownEnvSpellings(t *testing.T) {
 	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
 		t.Run(prefix, func(t *testing.T) {
@@ -670,19 +670,19 @@ func TestLoad_LockdownEnvSpellings(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if !cfg.LockdownOnly {
-				t.Errorf("%sLOCKDOWN_ONLY=true did not set LockdownOnly", prefix)
+			read := prefix == "FLEET_"
+			if cfg.LockdownOnly != read {
+				t.Errorf("%sLOCKDOWN_ONLY=true: LockdownOnly = %v, want %v", prefix, cfg.LockdownOnly, read)
 			}
-			want := []string{"foo/bar", "baz/quux"}
-			if !slices.Equal(cfg.LockdownAllowedModels, want) {
-				t.Errorf("LockdownAllowedModels = %v, want %v", cfg.LockdownAllowedModels, want)
+			if got := slices.Equal(cfg.LockdownAllowedModels, []string{"foo/bar", "baz/quux"}); got != read {
+				t.Errorf("%sLOCKDOWN_ALLOWED_MODELS: LockdownAllowedModels = %v (read=%v, want %v)", prefix, cfg.LockdownAllowedModels, got, read)
 			}
 		})
 	}
 }
 
-// TestLoad_LockdownFleetSpellingWins pins alias precedence: when both the
-// canonical and a legacy spelling are set, FLEET_ wins.
+// TestLoad_LockdownFleetSpellingWins pins that a removed CHAT_ spelling set
+// beside the canonical one never overrides it.
 func TestLoad_LockdownFleetSpellingWins(t *testing.T) {
 	isolateEnv(t)
 	t.Setenv("FLEET_LOCKDOWN_ONLY", "true")
@@ -813,11 +813,11 @@ func TestLoad_SandboxPidsRejectTrailingGarbage(t *testing.T) {
 }
 
 // TestLoad_TemperatureEnvSpellings pins that the ONE temperature knob — which
-// drives both interactive and scheduled sampling (#1079) — resolves through the
-// FLEET_ → CHAT_ → CUTLASS_ alias chain: the canonical spelling must work, and
-// the legacy spellings must keep existing deploys sampling where they were.
+// drives both interactive and scheduled sampling (#1079) — reads
+// FLEET_TEMPERATURE, and that the CHAT_/CUTLASS_ spellings, removed by
+// ADR-0106, leave the default in place.
 func TestLoad_TemperatureEnvSpellings(t *testing.T) {
-	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
+	for prefix, want := range map[string]float64{"FLEET_": 0.7, "CHAT_": 0.3, "CUTLASS_": 0.3} {
 		t.Run(prefix, func(t *testing.T) {
 			isolateEnv(t)
 			t.Setenv(prefix+"TEMPERATURE", "0.7")
@@ -825,8 +825,8 @@ func TestLoad_TemperatureEnvSpellings(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if cfg.Temperature != 0.7 {
-				t.Errorf("%sTEMPERATURE=0.7: Temperature = %v, want 0.7", prefix, cfg.Temperature)
+			if cfg.Temperature != want {
+				t.Errorf("%sTEMPERATURE=0.7: Temperature = %v, want %v", prefix, cfg.Temperature, want)
 			}
 		})
 	}
@@ -1179,8 +1179,8 @@ func TestLoadPreservesTaskModelOverride(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
-	os.Setenv("CUTLASS_TASK_MODEL", "deepseek/deepseek-v3.2")
-	defer os.Unsetenv("CUTLASS_TASK_MODEL")
+	os.Setenv("FLEET_TASK_MODEL", "deepseek/deepseek-v3.2")
+	defer os.Unsetenv("FLEET_TASK_MODEL")
 
 	tmpfile, err := os.CreateTemp("", "test-task-model.env")
 	if err != nil {
@@ -1460,32 +1460,8 @@ func TestLoadEnvFileExportPrefix(t *testing.T) {
 	t.Cleanup(func() { os.Unsetenv("TAVILY_API_KEY") })
 }
 
-// EnvAliases must return the exact spelling family lookupFleet resolves —
-// callers (the MCP broker's env-separation gate) rely on it covering every
-// legacy spelling of a canonical name and on non-prefixed names having none.
-func TestEnvAliases(t *testing.T) {
-	tests := []struct {
-		name string
-		want []string
-	}{
-		{"FLEET_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
-		{"CHAT_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
-		{"CUTLASS_TASK_MODEL", []string{"FLEET_TASK_MODEL", "CHAT_TASK_MODEL", "CUTLASS_TASK_MODEL"}},
-		{"OPENROUTER_API_KEY", []string{"OPENROUTER_API_KEY"}},
-		{"HOME", []string{"HOME"}},
-		{"http_proxy", []string{"http_proxy"}},
-		{"FLEET_", []string{"FLEET_"}},
-		{"CHATTY_KEY", []string{"CHATTY_KEY"}},
-	}
-	for _, tt := range tests {
-		if got := EnvAliases(tt.name); !slices.Equal(got, tt.want) {
-			t.Errorf("EnvAliases(%q) = %v, want %v", tt.name, got, tt.want)
-		}
-	}
-}
-
-// The two default-persona knobs read through the prefix alias machinery with a
-// bare-name fallback (#956). They used to be bare os.Getenv reads, so an operator
+// The two default-persona knobs read FLEET_<X> with a bare-name fallback
+// (#956). They used to be bare os.Getenv reads, so an operator
 // following the documented FLEET_ convention got silence and the built-in
 // default; the unprefixed spellings must keep working exactly as before.
 func TestLoad_PersonaEnvAliases(t *testing.T) {
@@ -1513,10 +1489,10 @@ func TestLoad_PersonaEnvAliases(t *testing.T) {
 			wantDefaultName: "victoria",
 		},
 		{
-			name:            "legacy prefixes honored",
+			name:            "removed CHAT_/CUTLASS_ spellings are not read (ADR-0106)",
 			env:             map[string]string{"CHAT_PERSONA": "personas/victoria.yaml", "CUTLASS_PERSONA_DEFAULT": "victoria"},
-			wantPersona:     "personas/victoria.yaml",
-			wantDefaultName: "victoria",
+			wantPersona:     "personas/assistant.yaml",
+			wantDefaultName: "assistant",
 		},
 		{
 			name:            "canonical wins over the bare spelling",
@@ -1572,14 +1548,14 @@ func TestLoad_PersonaFleetSpellingFromEnvFile(t *testing.T) {
 	}
 }
 
-// TestTaskModelResolvesEveryPrefix pins that the task-model knobs resolve the
-// whole FLEET_/CHAT_/CUTLASS_ alias family, in that precedence order.
+// TestTaskModelResolvesEveryPrefix pins that the task-model knob reads
+// FLEET_TASK_MODEL and nothing else.
 //
-// These two were the only model knobs in Load() read with a bare os.Getenv, so
-// FLEET_TASK_MODEL — the documented canonical spelling, and the one EnvAliases
-// advertises — was silently dropped. A deployment that used it got no task model
-// at all and dead-lettered every scheduled task with "no model configured"
-// (#1015). TestEnvAliases covers the advertiser; this covers the consumer.
+// These two were the only model knobs in Load() read with a bare os.Getenv of
+// the legacy CUTLASS_ name, so FLEET_TASK_MODEL — the documented canonical
+// spelling — was silently dropped. A deployment that used it got no task
+// model at all and dead-lettered every scheduled task with "no model
+// configured" (#1015). The CHAT_/CUTLASS_ spellings were removed (ADR-0106).
 func TestTaskModelResolvesEveryPrefix(t *testing.T) {
 	tmpfile, err := os.CreateTemp("", "test-task-model-prefix.env")
 	if err != nil {
@@ -1597,17 +1573,13 @@ func TestTaskModelResolvesEveryPrefix(t *testing.T) {
 		want string
 	}{
 		{"canonical FLEET_ prefix", map[string]string{"FLEET_TASK_MODEL": "a/fleet"}, "a/fleet"},
-		{"legacy CHAT_ prefix", map[string]string{"CHAT_TASK_MODEL": "a/chat"}, "a/chat"},
-		{"legacy CUTLASS_ prefix", map[string]string{"CUTLASS_TASK_MODEL": "a/cutlass"}, "a/cutlass"},
-		{"FLEET_ wins over both legacy spellings", map[string]string{
+		{"removed CHAT_ prefix", map[string]string{"CHAT_TASK_MODEL": "a/chat"}, ""},
+		{"removed CUTLASS_ prefix", map[string]string{"CUTLASS_TASK_MODEL": "a/cutlass"}, ""},
+		{"FLEET_ beside the removed spellings", map[string]string{
 			"FLEET_TASK_MODEL":   "a/fleet",
 			"CHAT_TASK_MODEL":    "a/chat",
 			"CUTLASS_TASK_MODEL": "a/cutlass",
 		}, "a/fleet"},
-		{"CHAT_ wins over CUTLASS_", map[string]string{
-			"CHAT_TASK_MODEL":    "a/chat",
-			"CUTLASS_TASK_MODEL": "a/cutlass",
-		}, "a/chat"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearEnvVars()
@@ -1640,12 +1612,12 @@ func TestTaskFallbackModelResolvesEveryPrefix(t *testing.T) {
 	}
 	tmpfile.Close()
 
-	for name, env := range map[string]string{
-		"canonical FLEET_ prefix": "FLEET_TASK_FALLBACK_MODEL",
-		"legacy CHAT_ prefix":     "CHAT_TASK_FALLBACK_MODEL",
-		"legacy CUTLASS_ prefix":  "CUTLASS_TASK_FALLBACK_MODEL",
+	for env, want := range map[string]string{
+		"FLEET_TASK_FALLBACK_MODEL":   "a/fallback",
+		"CHAT_TASK_FALLBACK_MODEL":    "", // removed (ADR-0106)
+		"CUTLASS_TASK_FALLBACK_MODEL": "", // removed (ADR-0106)
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(env, func(t *testing.T) {
 			clearEnvVars()
 			defer clearEnvVars()
 			os.Setenv(env, "a/fallback")
@@ -1654,8 +1626,8 @@ func TestTaskFallbackModelResolvesEveryPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if cfg.TaskFallbackModel != "a/fallback" {
-				t.Errorf("TaskFallbackModel via %s = %q, want %q", env, cfg.TaskFallbackModel, "a/fallback")
+			if cfg.TaskFallbackModel != want {
+				t.Errorf("TaskFallbackModel via %s = %q, want %q", env, cfg.TaskFallbackModel, want)
 			}
 		})
 	}

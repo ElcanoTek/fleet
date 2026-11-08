@@ -34,8 +34,7 @@ import (
 //     exactly where a hand-maintained inventory drifts.
 //
 // Every key found that way must be in the envKnobs registry (any of the three
-// classes) or in sweepExemptKeys with a written reason. Legacy CHAT_/CUTLASS_
-// spellings resolve to their canonical FLEET_ row.
+// classes) or in sweepExemptKeys with a written reason.
 //
 // The heuristic is deliberately over-eager: a false positive costs one exempt
 // row with a reason, while a false negative is the bug class this test exists
@@ -91,10 +90,9 @@ var sweepSkipDirs = map[string]bool{
 type sweepFinding struct {
 	key  string
 	file string
-	// kind is how the read spelled the name: "key" (a verbatim os.Getenv on the
-	// canonical name) or "suffix" (through agentcore's fleetEnv, which also
-	// honors the CHAT_/CUTLASS_ aliases). It must match the row's fleet flag —
-	// see TestExternalKnobAliasFlagMatchesItsReader.
+	// kind is how the read spelled the name: "key" (a verbatim read of the
+	// canonical name) or "suffix" (a FLEET_ suffix, through agentcore's
+	// fleetEnv).
 	kind string
 }
 
@@ -133,19 +131,11 @@ func envReadKind(call *ast.CallExpr) string {
 }
 
 // canonicalizeKey maps a collected key/suffix onto the registry's canonical
-// spelling: a suffix gains the FLEET_ prefix, and the legacy CHAT_/CUTLASS_
-// prefixes fold onto their FLEET_ twin (lookupFleet reads all three).
+// spelling: a suffix gains the FLEET_ prefix.
 func canonicalizeKey(raw, kind string) string {
 	raw = strings.TrimSpace(raw)
 	if kind == "suffix" {
 		return canonicalPrefix + strings.TrimLeft(raw, "_")
-	}
-	for _, legacy := range []string{"CHAT_", "CUTLASS_"} {
-		if suffix, ok := strings.CutPrefix(raw, legacy); ok {
-			if k := envKnobByKey[canonicalPrefix+suffix]; k != nil && k.fleet {
-				return canonicalPrefix + suffix
-			}
-		}
 	}
 	return raw
 }
@@ -485,23 +475,5 @@ func TestEnvKnobRegistryCoversAdHocReadsAcrossTheRepo(t *testing.T) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		t.Errorf("%s is parsed ad hoc in %s but has no envKnobs entry — add a scopeExternal row in knobs.go (strict, or lenient WITH a rationale) so boot and `fleet validate-config` validate it; if it is not a typed knob of ours, add it to sweepExemptKeys with a reason (#1273)", k, missing[k])
-	}
-
-	// The registry's `fleet` flag must match HOW the consumer spells the read:
-	// a row marked fleet resolves the CHAT_/CUTLASS_ aliases too, so marking it
-	// on a knob read with a plain os.Getenv("FLEET_…") would refuse boot over an
-	// alias spelling nothing ever reads — and NOT marking it on a fleetEnv
-	// read would leave the alias spelling unvalidated.
-	for _, f := range findings {
-		k := envKnobByKey[f.key]
-		if k == nil || k.scope != scopeExternal {
-			continue
-		}
-		switch {
-		case f.kind == "suffix" && !k.fleet:
-			t.Errorf("%s is read through the FLEET_/CHAT_/CUTLASS_ alias chain in %s but its envKnobs row is not marked fleet — the alias spellings would go unvalidated", f.key, f.file)
-		case f.kind == "key" && k.fleet:
-			t.Errorf("%s is read with a plain os.Getenv on the canonical name in %s but its envKnobs row is marked fleet — boot would refuse over a CHAT_/CUTLASS_ spelling nothing reads", f.key, f.file)
-		}
 	}
 }

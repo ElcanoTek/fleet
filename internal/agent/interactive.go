@@ -444,7 +444,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 		// The run's out-of-roster recovery (#1744), as on the main stream.
 		RepairToolCall: repair,
-		// The run's step cap (CHAT_MAX_ITERATIONS) applies to the retry too —
+		// The run's step cap (FLEET_MAX_ITERATIONS) applies to the retry too —
 		// it streams with tools, so it is a real loop, not a single call.
 		StopWhen: in.StopWhen,
 		OnTextDelta: func(_, text string) error {

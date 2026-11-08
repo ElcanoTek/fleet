@@ -98,19 +98,22 @@ func TestConfigExplainNeverPrintsACredentialTextOrJSON(t *testing.T) {
 }
 
 // Codex P2 (#2057): with the standard systemd unit (EnvironmentFile=) every
-// env-file line is effective, so explain and doctor must count a spelling
-// fleet's own loader would not admit; without the unit they must not.
+// env-file line is effective, so explain must count a spelling fleet's own
+// loader would not admit; without the unit it must not. A removed alias
+// (ADR-0106) is never effective, and doctor reports it either way.
 func TestConfigExplainAndDoctorFollowSystemdExport(t *testing.T) {
-	clearEnvNames(t, "FLEET_MAX_ITERATIONS", "CHAT_MAX_ITERATIONS", "CUTLASS_MAX_ITERATIONS")
+	clearEnvNames(t, "FLEET_IMAGE_MODEL", "FLEET_MAX_ITERATIONS", "CHAT_MAX_ITERATIONS", "CUTLASS_MAX_ITERATIONS")
 	path := filepath.Join(t.TempDir(), "fleet.env")
-	if err := os.WriteFile(path, []byte("CUTLASS_MAX_ITERATIONS=70\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("FLEET_IMAGE_MODEL=img-model\nCUTLASS_MAX_ITERATIONS=70\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FLEET_ENV_FILE", path)
 
 	for _, exported := range []bool{false, true} {
 		withUnitDir(t, path, exported)
-		out := captureStdout(t, func() { configExplain([]string{"FLEET_MAX_ITERATIONS", "--json", "--env-file", path}) })
+		out := captureStdout(t, func() {
+			configExplain([]string{"FLEET_IMAGE_MODEL", "FLEET_MAX_ITERATIONS", "--json", "--env-file", path})
+		})
 		var doc struct {
 			Sources struct {
 				Unit *struct {
@@ -118,52 +121,34 @@ func TestConfigExplainAndDoctorFollowSystemdExport(t *testing.T) {
 				} `json:"systemd_unit"`
 			} `json:"sources"`
 			Settings []struct {
-				Value  string `json:"configured_value"`
-				Set    bool   `json:"set"`
-				Source string `json:"source"`
+				Value  string   `json:"configured_value"`
+				Set    bool     `json:"set"`
+				Source string   `json:"source"`
+				Notes  []string `json:"notes"`
 			} `json:"settings"`
 		}
 		if err := json.Unmarshal([]byte(out), &doc); err != nil {
 			t.Fatalf("not JSON: %v\n%s", err, out)
 		}
-		gotExported := doc.Sources.Unit != nil && len(doc.Sources.Unit.Files) == 1 && doc.Sources.Unit.Files[0] == path
-		if gotExported != exported || doc.Settings[0].Set != exported {
-			t.Errorf("exported=%v: explain reported unit=%+v setting=%+v", exported, doc.Sources.Unit, doc.Settings[0])
+		if len(doc.Settings) != 2 {
+			t.Fatalf("want 2 settings, got %+v", doc.Settings)
 		}
-		if exported && (doc.Settings[0].Value != "70" || doc.Settings[0].Source != "systemd unit") {
-			t.Errorf("exported: setting %+v, want 70 from the systemd unit", doc.Settings[0])
+		img, iters := doc.Settings[0], doc.Settings[1]
+		gotExported := doc.Sources.Unit != nil && len(doc.Sources.Unit.Files) == 1 && doc.Sources.Unit.Files[0] == path
+		if gotExported != exported || img.Set != exported {
+			t.Errorf("exported=%v: explain reported unit=%+v setting=%+v", exported, doc.Sources.Unit, img)
+		}
+		if exported && (img.Value != "img-model" || img.Source != "systemd unit") {
+			t.Errorf("exported: setting %+v, want img-model from the systemd unit", img)
+		}
+		if iters.Set || !strings.Contains(strings.Join(iters.Notes, "\n"), "CUTLASS_MAX_ITERATIONS is set") {
+			t.Errorf("exported=%v: the removed alias must stay unread and noted: %+v", exported, iters)
 		}
 		var buf bytes.Buffer
-		warnDeprecatedEnvAliases(&buf)
-		want := "is ignored today"
-		if exported {
-			want = "reaches the server only through the systemd unit's EnvironmentFile="
-		}
-		if !strings.Contains(buf.String(), want) {
-			t.Errorf("exported=%v: doctor output lacks %q:\n%s", exported, want, buf.String())
-		}
-	}
-}
-
-func TestConfigMigrateEnvRenamesLoaderIgnoredAliases(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "fleet.env")
-	if err := os.WriteFile(path, []byte("CUTLASS_MAX_ITERATIONS=70\nCHAT_TLS_MODE=auto\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out := captureStdout(t, func() {
-		if rc := configMigrateEnv([]string{"--env-file", path, "--write"}); rc != 0 {
-			t.Errorf("rc = %d", rc)
-		}
-	})
-	if b, _ := os.ReadFile(path); string(b) != "FLEET_MAX_ITERATIONS=70\nCHAT_TLS_MODE=auto\n" {
-		t.Fatalf("rewritten file:\n%s", b)
-	}
-	for _, want := range []string{
-		"effective only through the systemd unit's EnvironmentFile=",
-		"CHAT_TLS_MODE left as is: only the operator CLI's local health probe",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("plan lacks %q:\n%s", want, out)
+		warnRetiredEnvAliases(&buf)
+		want := "CUTLASS_MAX_ITERATIONS is set in the env file, but fleet no longer reads it"
+		if !strings.Contains(buf.String(), want) || strings.Count(buf.String(), "CUTLASS_MAX_ITERATIONS is set") != 1 {
+			t.Errorf("exported=%v: doctor output must report %q once:\n%s", exported, want, buf.String())
 		}
 	}
 }

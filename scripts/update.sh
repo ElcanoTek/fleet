@@ -135,6 +135,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/release.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
+# shellcheck source=lib/retired-bundle.sh
+. "$SCRIPT_DIR/lib/retired-bundle.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same
 # implementation bootstrap.sh writes from and doctor.sh repairs against.
 # shellcheck source=lib/caddyfile.sh
@@ -969,43 +971,27 @@ ref_prev=""
 [[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
 
 # resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image,
-# the SAME way the running SERVICE does: extract the scalar under the sandbox:
-# block (the awk mirrors bootstrap.sh — keep that part in sync), then
-# interpolate a bare ${VAR:-default} / ${VAR} reference against the service's
-# env file (env_get), NOT this shell's environment. The service resolves the
-# var from EnvironmentFile=$backend_env_file, which update.sh deliberately
-# never sources — resolving from the shell diverged both ways: a var set only
-# in the env file forced a pointless on-box build every update (and could trip
-# the missing-image die spuriously), while a var exported only in the
-# operator's shell skipped the sandbox gate entirely, absence probe included.
-# (bootstrap.sh legitimately interpolates from ITS shell: at bootstrap time
-# the operator's env is the source the env file is being written from.)
+# the SAME way the running SERVICE does (fleet_sandbox_resolve_scalar, shared
+# with bootstrap.sh and doctor.sh), interpolating a bare ${VAR:-default} /
+# ${VAR} reference against the service's env file (env_get), NOT this shell's
+# environment. The service resolves the var from
+# EnvironmentFile=$backend_env_file, which update.sh deliberately never
+# sources — resolving from the shell diverged both ways: a var set only in the
+# env file forced a pointless on-box build every update (and could trip the
+# missing-image die spuriously), while a var exported only in the operator's
+# shell skipped the sandbox gate entirely, absence probe included. A spelling
+# ADR-0106 removed reads as unset, as it does in the service, so a stale
+# CHAT_SANDBOX_IMAGE line cannot make update skip the pull/build.
 # A non-empty result means the service pulls/uses that prebuilt ref (image WINS
 # over tag) and never reads an on-box build, so the sandbox step skips
 # entirely; empty — the generic bundle's "${FLEET_SANDBOX_IMAGE:-}" with the
 # var absent from the env file — means build-on-box.
+service_env_value() { env_get "$1" "$backend_env_file"; }
+# A reference the service would refuse (unset ${X}, or ${X:?m}) stops the
+# update BEFORE anything is installed, with the loader's reason.
 resolve_sandbox_image() {
-  local file="$1" raw
-  [[ -f "$file" ]] || return 0
-  raw="$(awk '
-    /^sandbox:[[:space:]]*$/ { in_block=1; next }
-    /^[^[:space:]]/          { in_block=0 }
-    in_block && $0 ~ "^[[:space:]]+image:" {
-      sub("^[[:space:]]+image:[[:space:]]*", "")
-      sub(/[[:space:]]+#.*$/, "")
-      gsub(/^["'\'']|["'\'']$/, "")
-      print; exit
-    }
-  ' "$file")"
-  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
-  # default bundle uses). Anything else is treated as a literal image ref.
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}" val
-    val="$(env_get "$var" "$backend_env_file")"
-    printf '%s' "${val:-$def}"
-  else
-    printf '%s' "$raw"
-  fi
+  [[ -f "$1" ]] || return 0
+  fleet_sandbox_resolve_scalar image "$1" service_env_value || die "client bundle $1: fleet would refuse this sandbox.image at startup (see above) — nothing was installed"
 }
 sandbox_image_ref="$(resolve_sandbox_image "$CLIENT_DIR/manifest.yaml")"
 
@@ -1087,6 +1073,20 @@ resolve_install_dir() {
 NEW_FLEET=""     # the verified binary this update installs
 RELEASE_DIR=""   # its staging dir (SHA256SUMS, signatures, release.json, binary)
 resolve_install_dir
+# fleet_update_retired_scan — refuse, before anything is installed, when a
+# bundle the restarted service could load uses a removed CHAT_/CUTLASS_
+# variable (ADR-0106), or when the new binary's scan of one fails.
+fleet_update_retired_scan() {
+  local svc_bundle rc=0
+  svc_bundle="$(env_get FLEET_CLIENT_CONFIG_DIR "$backend_env_file")"
+  fleet_retired_bundles_check "$NEW_FLEET" "$svc_bundle" "$CLIENT_DIR" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) die "a client bundle ${SERVICE_NAME} could load uses removed CHAT_/CUTLASS_ variables (above) — nothing was installed and ${SERVICE_NAME} was not restarted; rename these in the client bundle and re-run fleet update" ;;
+    *) die "the removed-variable check of the client bundle failed (above) — nothing was installed and ${SERVICE_NAME} was not restarted" ;;
+  esac
+}
+
 step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
 # Staging lives under the root-owned release cache, never under the
 # checkout (which another user may own): it must be private — see
@@ -1099,6 +1099,7 @@ _fetch_flags=()
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
   info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
+  info "[dry-run] would refuse before installing if the client bundle uses a removed CHAT_/CUTLASS_ variable (fleet validate-config --retired-only, ADR-0106)"
 else
   # Only the release being installed is staged: earlier releases' staging
   # dirs (~100 MB each) are dropped first — the previous binary lives on as
@@ -1119,6 +1120,15 @@ else
   NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
     || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
   ok "verified ${RELEASE_TAG}: $("$NEW_FLEET" version 2>/dev/null || echo "$NEW_FLEET")"
+  # Removed CHAT_/CUTLASS_ variables (ADR-0106): the NEW binary reads them as
+  # unset, so a bundle that still uses one could fail to load after the
+  # restart. Ask the new binary's read-only scan (no load, no writes) and
+  # refuse BEFORE installing anything (scripts/lib/retired-bundle.sh).
+  # Every bundle the restarted service could load is scanned: the one the
+  # service env file names (re-read now: step 2 may have repointed it) and
+  # the one this run updated when it differs (an explicit --client-config).
+  fleet_update_retired_scan
+
 fi
 
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────

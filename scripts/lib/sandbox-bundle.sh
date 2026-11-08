@@ -7,6 +7,14 @@
 # (relative to the bundle) when set, else sandbox/Containerfile. A bundle that
 # names its own path must never be mistaken for one that ships no Containerfile
 # and get the generic release image tagged over its own.
+#
+# It is also the ONE place a script resolves a manifest sandbox scalar that
+# names an env variable (fleet_sandbox_resolve_scalar): bootstrap.sh, update.sh
+# and doctor.sh each used to carry a copy, and the copies drifted (#2081).
+
+fleet__sandbox_bundle_scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=retired-env.sh
+. "$fleet__sandbox_bundle_scripts/lib/retired-env.sh"
 
 # fleet_sandbox_manifest_value KEY MANIFEST — a scalar under the top-level
 # `sandbox:` block. Tiny purpose-built parser (no yq dependency): finds the
@@ -28,6 +36,88 @@ fleet_sandbox_manifest_value() {
     }
   ' "$file"
 }
+
+# fleet_sandbox_resolve_scalar KEY MANIFEST LOOKUP — the sandbox.KEY scalar
+# with a whole-value ${...} reference interpolated the way the Go loader does
+# (internal/clientconfig expandExpr / retiredExpr; TestShellResolverMatchesGo
+# runs both over the same table):
+#   ${X}       X's value; X unset or empty → an error (the loader refuses an
+#              unresolved reference in this field)
+#   ${X:-d}    X's value, else d
+#   ${X:?m}    X's value, else an error carrying m
+#   ${X:<other>…} the whole text is the name (as in Go): unset → an error
+# Values are trimmed; empty counts as unset. A spelling ADR-0106 removed is
+# never looked up — it is unset, exactly as fleet reads it: ${X:-d} gives d,
+# and ${X} / ${X:?m} fail with the rename spelled out (envreg.RetiredAlias;
+# retired-env.sh).
+# Anything that is not a single whole-value ${...} is returned literally.
+# LOOKUP is the name of a function printing a variable's value — the caller
+# picks the source: bootstrap and doctor read their shell
+# (fleet_shell_env_value), update reads the service's env file. On an error
+# it prints the reason to stderr and returns 1.
+fleet_sandbox_resolve_scalar() {
+  local key="$1" file="$2" lookup="$3" raw expr name op="" body="" val=""
+  raw="$(fleet_sandbox_manifest_value "$key" "$file")"
+  if [[ ! "$raw" =~ ^\$\{([^{}]*)\}$ ]]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+  expr="${BASH_REMATCH[1]}"
+  name="$expr"
+  if [[ "$expr" == *:* ]]; then
+    local rest="${expr#*:}"
+    if [[ -n "$rest" ]]; then
+      name="${expr%%:*}" op="${rest:0:1}" body="${rest:1}"
+    fi
+  fi
+  local retired=""
+  if fleet_env_name_retired "$(fleet__trim "$name")"; then
+    retired="$(fleet__trim "$name")"
+    [[ "$op" == "-" ]] && { printf '%s' "$(fleet__trim "$body")"; return 0; }
+    printf 'sandbox.%s: manifest references removed variable %s; rename it to %s (ADR-0106)\n' "$key" "$retired" "$(fleet_env_canonical_name "$retired")" >&2
+    return 1
+  fi
+  case "$op" in
+    -|\?) ;;
+    *) op="" name="$expr" ;;
+  esac
+  name="$(fleet__trim "$name")"
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && val="$(fleet__trim "$("$lookup" "$name")")"
+  if [[ -n "$val" ]]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  case "$op" in
+    -) printf '%s' "$(fleet__trim "$body")" ;;
+    \?)
+      body="$(fleet__trim "$body")"
+      printf 'sandbox.%s: ${%s:?...}: %s\n' "$key" "$name" "${body:-required value is unset or empty}" >&2
+      return 1 ;;
+    *)
+      printf 'sandbox.%s: ${%s} is unset or empty (set it, or use ${%s:-default})\n' "$key" "$name" "$name" >&2
+      return 1 ;;
+  esac
+}
+
+# fleet_env_canonical_name NAME — the FLEET_ name a removed spelling maps to
+# (CHAT_X / CUTLASS_X → FLEET_X; the bare DATA_DIR → FLEET_DATA_DIR).
+fleet_env_canonical_name() {
+  case "$1" in
+    CHAT_*) printf 'FLEET_%s' "${1#CHAT_}" ;;
+    CUTLASS_*) printf 'FLEET_%s' "${1#CUTLASS_}" ;;
+    *) printf 'FLEET_%s' "$1" ;;
+  esac
+}
+
+# fleet__trim TEXT — TEXT without leading/trailing whitespace.
+fleet__trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+# fleet_shell_env_value NAME — NAME's value in this shell's environment.
+fleet_shell_env_value() { printf '%s' "${!1:-}"; }
 
 # fleet_sandbox_containerfile BUNDLE_DIR — the bundle's Containerfile path.
 fleet_sandbox_containerfile() {

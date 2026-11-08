@@ -12,7 +12,7 @@ prompt: |
   Write a short greeting to a file named hello.txt in your workspace, then read
   it back and confirm the contents.
 
-# Optional: pin the model + fallback. Omit to use CUTLASS_TASK_MODEL / the
+# Optional: pin the model + fallback. Omit to use FLEET_TASK_MODEL / the
 # configured task model.
 model: anthropic/claude-opus-4.8
 fallback_model: anthropic/claude-sonnet-4-6

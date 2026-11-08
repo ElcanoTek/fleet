@@ -100,7 +100,7 @@ func checkBundle(r *report, dir string) *clientconfig.Bundle {
 // flag the credentials the env file must carry. OPENROUTER_API_KEY is treated as
 // required unless mock mode is on (matching config.Validate).
 func checkEnv(r *report) {
-	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE")) // LEGACY-ENV-ALIAS: remove after migrate-env
+	mock := truthy(envOrFile("FLEET_MOCK_MODE"))
 	type envCheck struct {
 		name     string
 		required bool
@@ -244,7 +244,7 @@ func redactScheduledTaskTitle(item string) string {
 }
 
 // checkSandbox resolves the image ref the running process would consume
-// (FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE env wins, else the bundle's
+// (FLEET_SANDBOX_IMAGE env wins, else the bundle's
 // ResolvedImageRef) and runs a throwaway `podman run --rm <ref> true` to confirm
 // the image is present + the runtime can launch it.
 func checkSandbox(r *report, bundle *clientconfig.Bundle) {
@@ -288,15 +288,12 @@ func checkSandbox(r *report, bundle *clientconfig.Bundle) {
 	r.pass("sandbox image", ref+" present + runnable"+storeNote)
 }
 
-// sandboxImageEnv is the operator's sandbox image override — FLEET_SANDBOX_IMAGE,
-// else the legacy CHAT_SANDBOX_IMAGE — read from the process env or the env
-// file (envOrFile), which is where doctor.sh reads it too. status and diagnose
-// share it so neither can probe a different image than the unit runs.
+// sandboxImageEnv is the operator's sandbox image override, FLEET_SANDBOX_IMAGE,
+// read from the process env or the env file (envOrFile), which is where
+// doctor.sh reads it too. status and diagnose share it so neither can probe a
+// different image than the unit runs.
 func sandboxImageEnv() string {
-	if ref := strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE")); ref != "" {
-		return ref
-	}
-	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE")) // LEGACY-ENV-ALIAS: remove after migrate-env
+	return strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE"))
 }
 
 // ServiceUserAndHome is the exported companion of

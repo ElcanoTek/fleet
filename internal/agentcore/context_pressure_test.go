@@ -211,15 +211,15 @@ func TestContextThresholds_Defaults(t *testing.T) {
 	}
 }
 
-func TestContextThresholds_OverrideAndAlias(t *testing.T) {
+func TestContextThresholds_OverrideIgnoresRemovedAlias(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", "0.6")
 	if got := contextPressureWarnThreshold(); got != 0.6 {
 		t.Errorf("warn override = %v, want 0.6", got)
 	}
-	// Legacy CHAT_ alias resolves when the canonical var is unset.
+	// The removed CHAT_ spelling (ADR-0106) is not read.
 	t.Setenv("CHAT_CONTEXT_COMPACTION_THRESHOLD", "0.8")
-	if got := contextCompactionThreshold(); got != 0.8 {
-		t.Errorf("compaction via CHAT_ alias = %v, want 0.8", got)
+	if got := contextCompactionThreshold(); got != defaultContextCompactionThreshold {
+		t.Errorf("compaction via the removed CHAT_ spelling = %v, want the default %v", got, defaultContextCompactionThreshold)
 	}
 }
 

@@ -49,8 +49,7 @@ const openRouterBaseURLOverrideEnv = "OPENROUTER_BASE_URL"
 // openRouterBaseURLOverride returns the configured base-URL override, or "".
 // The bare OPENROUTER_BASE_URL is honored first (matching OPENROUTER_API_KEY,
 // which is also un-prefixed because OpenRouter vars are vendor-named, not
-// fleet-namespaced), then the canonical FLEET_/legacy CHAT_/CUTLASS_ family so
-// it still composes with the prefixed env config when desired.
+// fleet-namespaced), then FLEET_OPENROUTER_BASE_URL so it still composes with the prefixed env config when desired.
 func openRouterBaseURLOverride() string {
 	if v := strings.TrimSpace(envreg.Get(openRouterBaseURLOverrideEnv)); v != "" {
 		return v
