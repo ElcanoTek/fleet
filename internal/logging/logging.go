@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ElcanoTek/fleet/internal/logging/rotate"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -129,6 +130,7 @@ func Configure(cfg Config) (io.Closer, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
 		newHandler = newTextHandler
 	}
+	configured.Store(true)
 	levelVar.Set(ParseLevel(cfg.Level))
 	setOutput(dest)
 	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
@@ -136,7 +138,9 @@ func Configure(cfg Config) (io.Closer, error) {
 	// configured format, level and file sink.
 	replayStartup(slog.Default().Handler())
 	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
-	safe.SetPanicHandler(newHandler(dest, slog.LevelError))
+	// contextAttrHandler: a panic recovered under a request or a run carries
+	// that context's correlation (safe.EmitPanicWithMetadataContext).
+	safe.SetPanicHandler(contextAttrHandler{inner: newHandler(dest, slog.LevelError)})
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
@@ -196,8 +200,25 @@ func (logBridge) Write(p []byte) (int, error) {
 // replacement for log.Fatalf. Like log.Fatal it does not run deferred calls,
 // so use it only where the process has nothing left to unwind (main, a CLI
 // verb's top level).
+//
+// Before Configure there is no redacting handler yet: Go's default slog
+// handler, or the startup buffer. Fatal then logs through the emergency
+// handler (redacting JSON on stderr, as FlushStartup uses) after seeding the
+// redactor with the process's secret-named env values, so a config or bundle
+// error quoting an interpolated secret does not reach stderr as written.
 func Fatal(msg string, args ...any) {
+	seedEnvLiterals()
 	FlushStartup() // a fatal error before Configure must not lose the startup lines
-	slog.Error(msg, args...)
-	os.Exit(1)
+	logger := slog.Default()
+	if !configured.Load() {
+		logger = slog.New(emergencyHandler())
+	}
+	logger.Error(msg, args...)
+	exitFunc(1)
 }
+
+// exitFunc is os.Exit; tests replace it.
+var exitFunc = os.Exit
+
+// configured records that Configure installed the process handler.
+var configured atomic.Bool

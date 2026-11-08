@@ -56,20 +56,19 @@ func SetPanicHandler(h slog.Handler) {
 
 // logPanic writes one error record through the configured handler, falling
 // back to panicLogger when there is none or it fails.
-func logPanic(msg string, args ...any) {
-	if hp := panicHandler.Load(); hp != nil && handleSafely(*hp, msg, args) {
+func logPanic(ctx context.Context, msg string, args ...any) {
+	if hp := panicHandler.Load(); hp != nil && handleSafely(ctx, *hp, msg, args) {
 		return
 	}
 	panicLogger.Error(msg, args...)
 }
 
-func handleSafely(h slog.Handler, msg string, args []any) (ok bool) {
+func handleSafely(ctx context.Context, h slog.Handler, msg string, args []any) (ok bool) {
 	defer func() {
 		if recover() != nil {
 			ok = false
 		}
 	}()
-	ctx := context.Background()
 	if !h.Enabled(ctx, slog.LevelError) {
 		return false
 	}
@@ -146,7 +145,15 @@ func EmitPanic(location string, v any, stack []byte) {
 // caller did not already provide one; returning it lets an in-band error carry
 // the same reference. stack is accepted for source compatibility but is
 // deliberately discarded together with the recovered value.
-func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
+func EmitPanicWithMetadata(meta PanicMetadata, v any, stack []byte) PanicEvent {
+	return EmitPanicWithMetadataContext(context.Background(), meta, v, stack)
+}
+
+// EmitPanicWithMetadataContext is EmitPanicWithMetadata for a panic recovered
+// while serving a request or a run: ctx is that request's or run's context,
+// and the configured handler (logging.Configure) adds its correlation —
+// request_id, trace_id, span_id, conv_id, run_id … — to the event.
+func EmitPanicWithMetadataContext(ctx context.Context, meta PanicMetadata, v any, _ []byte) PanicEvent {
 	if meta.Location == "" {
 		meta.Location = "unknown"
 	}
@@ -155,7 +162,7 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 	}
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
-	logPanic("panic recovered",
+	logPanic(ctx, "panic recovered",
 		"incident_id", LogSafe(meta.IncidentID),
 		"goroutine", LogSafe(meta.Location),
 		"boundary", LogSafe(meta.Boundary),
@@ -213,7 +220,7 @@ func newIncidentID() string {
 func callReportingHook(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			logPanic("panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
+			logPanic(context.Background(), "panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
 		}
 	}()
 	fn()

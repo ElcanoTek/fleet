@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // accountSeparatorFolder maps the separators an operator might type in an
@@ -79,6 +80,11 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 	for k, v := range env {
 		if override := envreg.Unregistered(k + suffix); override != "" {
 			out[k] = StripEnvQuotes(override)
+			// A brokered account's value comes from the host, whatever the
+			// variable is called: the log redactor learns it before the
+			// connector is spawned with it (see clientconfig's
+			// registerHostValues for the unsuffixed seat).
+			logging.RegisterSecretLiterals("", false, out[k])
 			overrides++
 			continue
 		}

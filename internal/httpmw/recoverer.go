@@ -41,7 +41,7 @@ func RecoverWith(boundary string, respond func(w http.ResponseWriter, r *http.Re
 				if rvr == http.ErrAbortHandler { //nolint:errorlint // identity, as net/http's own check
 					panic(rvr)
 				}
-				safe.EmitPanicWithMetadata(safe.PanicMetadata{
+				safe.EmitPanicWithMetadataContext(r.Context(), safe.PanicMetadata{
 					Location: boundary + " " + r.Method + " " + r.URL.Path,
 					Boundary: boundary,
 				}, rvr, nil)

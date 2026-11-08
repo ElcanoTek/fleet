@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -336,7 +337,28 @@ func interpolate(v string) (out string, assembled bool) {
 	if usertoken.AssembledFrom(out, fromEnv) {
 		return "", true
 	}
+	registerHostValues(out, fromEnv)
 	return out, false
+}
+
+// registerHostValues hands every fragment of a connector env or header value
+// that came from the host process env — a ${VAR} the manifest interpolates,
+// whatever VAR is called — to the log redactor as a secret literal, before
+// any connector is spawned with it. The secret-NAME heuristic misses
+// credentials under names like AUTH or SESSION or a vendor's own; provenance
+// does not: a value the bundle writes literally (REGION: us-east-1) lives in
+// the bundle repo and is not a secret, while one interpolated from the host
+// is the operator's to protect. The redactor's minimum literal length keeps
+// "1" or "true" out.
+func registerHostValues(out string, fromEnv [][2]int) {
+	if len(fromEnv) == 0 {
+		return
+	}
+	values := make([]string, 0, len(fromEnv))
+	for _, r := range fromEnv {
+		values = append(values, out[r[0]:r[1]])
+	}
+	logging.RegisterSecretLiterals("", false, values...)
 }
 
 // warnUserTokenAssembled logs, once per env key, that a value assembling a

@@ -1670,7 +1670,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 		if line == "" && foundData {
 			jsonData := dataBuffer.String()
 			if jsonData != "" {
-				result, err := t.tryParseJSONRPCFromSSE(jsonData, wantID)
+				result, err := t.tryParseJSONRPCFromSSE(ctx, jsonData, wantID)
 				if err == nil {
 					return result, nil
 				}
@@ -1706,7 +1706,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 
 	// Try parsing any remaining data
 	if foundData && dataBuffer.Len() > 0 {
-		return t.tryParseJSONRPCFromSSE(dataBuffer.String(), wantID)
+		return t.tryParseJSONRPCFromSSE(ctx, dataBuffer.String(), wantID)
 	}
 
 	return nil, fmt.Errorf("no valid JSON-RPC response found in SSE stream")
@@ -1717,7 +1717,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 // differs from wantID returns a plain error so the SSE loop skips it and
 // keeps reading — the same treatment stdio gives a stale response line —
 // rather than attributing another request's result (or error) to this call.
-func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (json.RawMessage, error) {
+func (t *HTTPTransport) tryParseJSONRPCFromSSE(ctx context.Context, jsonData string, wantID int) (json.RawMessage, error) {
 	var response struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      JSONRPCID       `json:"id"`
@@ -1737,7 +1737,7 @@ func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (jso
 	// Never hand this caller a response for a different request — checked
 	// before the error branch so a stale error isn't returned as this call's.
 	if !response.ID.matchesInt(wantID) {
-		slog.Info("MCP http: discarding SSE response for another request id", "response_id", response.ID.String(), "want_id", wantID)
+		logging.From(ctx).Info("MCP http: discarding SSE response for another request id", "response_id", response.ID.String(), "want_id", wantID)
 		return nil, fmt.Errorf("JSON-RPC response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 

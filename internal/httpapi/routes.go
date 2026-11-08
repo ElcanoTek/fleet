@@ -196,7 +196,13 @@ func (s *Server) Routes() http.Handler {
 	// matched route pattern; it sits inside bodyLimitMiddleware (after recover/IP
 	// filter/body cap) and is a no-op-cost non-recording span when tracing is off,
 	// while always setting the X-Request-Id response header.
-	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(mux))))
+	//
+	// recoverMiddleware is applied twice. The inner one sits just inside
+	// otelsetup.Middleware, so a handler panic is reported with the
+	// request's request_id, trace_id and span_id; the outer one is the last
+	// resort for a panic in the IP filter, the body cap or the tracing
+	// middleware itself.
+	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(recoverMiddleware(mux)))))
 }
 
 // maxJSONBodyBytes caps non-upload request bodies on the chat server, matching

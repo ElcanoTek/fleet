@@ -50,7 +50,7 @@ func TestExclusiveAllowlistRegistersOnlyTheNarrowedTools(t *testing.T) {
 	native := []fantasy.AgentTool{fantasy.NewAgentTool("task_tracker", "track", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("ok"), nil
 	})}
-	registered, roster, err := buildFantasyTools(native, pagesRosterCatalog(), &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil,
+	registered, roster, err := buildFantasyTools(context.Background(), native, pagesRosterCatalog(), &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil,
 		toolBuildConfig{includeConfirmAudit: true, exclusiveAllowlist: true})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestExclusiveAllowlistIsAnExactLookup(t *testing.T) {
 		variantTool("pages_archive", "get_page_data"),
 		variantTool("notes", "list_notes"),
 	)
-	_, narrowed, err := buildFantasyTools(nil, catalog, &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{exclusiveAllowlist: true})
+	_, narrowed, err := buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{exclusiveAllowlist: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestExclusiveAllowlistIsAnExactLookup(t *testing.T) {
 	// Without the exhaustive flag the same allowlist keeps the ordinary rule:
 	// the seat and the prefix-named server inherit the pages entry, and a
 	// server with no entry at all is open.
-	_, open, err := buildFantasyTools(nil, catalog, &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{})
+	_, open, err := buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestExclusiveAllowlistIsAnExactLookup(t *testing.T) {
 // serialize byte-identically, in catalog order (docs/PROMPT-CACHE-CONTRACT.md).
 func TestExclusiveAllowlistPrefixDeterministic(t *testing.T) {
 	build := func() []byte {
-		tools, _, err := buildFantasyTools(nil, pagesRosterCatalog(), &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{exclusiveAllowlist: true})
+		tools, _, err := buildFantasyTools(context.Background(), nil, pagesRosterCatalog(), &fakeBroker{}, pagesNarrowed, passPolicy{}, nil, nil, toolBuildConfig{exclusiveAllowlist: true})
 		if err != nil {
 			t.Fatal(err)
 		}

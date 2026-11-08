@@ -240,7 +240,7 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 	if err != nil {
 		return PythonResult{}, err
 	}
-	return parseBridgeResponse(respBytes)
+	return parseBridgeResponse(ctx, respBytes)
 }
 
 func (h *hostImpl) close() {

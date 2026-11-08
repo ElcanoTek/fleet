@@ -205,3 +205,26 @@ func (h ctxHandler) WithGroup(name string) slog.Handler {
 	// them at the top level first so they keep their standard keys.
 	return h.inner.WithAttrs(h.attrs).WithGroup(name)
 }
+
+// contextAttrHandler adds the correlation attributes of the context each
+// record is HANDLED with (Attrs(ctx)), where ctxHandler adds those of the
+// context From was called with. It is the handler installed for a package
+// that cannot import this one (internal/safe) and so cannot call From: it
+// passes its context to Handle instead.
+type contextAttrHandler struct{ inner slog.Handler }
+
+func (h contextAttrHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.inner.Enabled(ctx, l)
+}
+
+func (h contextAttrHandler) Handle(ctx context.Context, r slog.Record) error {
+	return ctxHandler{inner: h.inner, attrs: Attrs(ctx)}.Handle(ctx, r)
+}
+
+func (h contextAttrHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return contextAttrHandler{inner: h.inner.WithAttrs(attrs)}
+}
+
+func (h contextAttrHandler) WithGroup(name string) slog.Handler {
+	return contextAttrHandler{inner: h.inner.WithGroup(name)}
+}

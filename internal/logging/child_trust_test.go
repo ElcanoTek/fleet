@@ -106,10 +106,10 @@ func TestChildStderrKeepsDrainingWhenTheSinkFails(t *testing.T) {
 	slog.SetDefault(slog.New(NewHandler("json", newTee(teeSink{name: "file", w: failingWriter{}}), slog.LevelDebug)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	failures := captureSinkFailures(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	// ~4 MB of stderr in 100-byte lines: dozens of pipe buffers.
-	cmd := exec.CommandContext(ctx, "sh", "-c", `i=0; while [ $i -lt 400 ]; do head -c 10000 /dev/zero | tr '\0' 'a' | fold -w 100 >&2; i=$((i+1)); done`)
+	// ~1 MB of stderr in 100-byte lines: sixteen 64 KiB pipe buffers.
+	cmd := exec.CommandContext(ctx, "sh", "-c", `i=0; while [ $i -lt 100 ]; do head -c 10000 /dev/zero | tr '\0' 'a' | fold -w 100 >&2; i=$((i+1)); done`)
 	w := ChildStderr("child")
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {

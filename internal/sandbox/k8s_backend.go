@@ -1265,7 +1265,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 		if r.discarded > 0 {
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
 		}
-		return parseBridgeResponse(r.data)
+		return parseBridgeResponse(ctx, r.data)
 	}
 }
 

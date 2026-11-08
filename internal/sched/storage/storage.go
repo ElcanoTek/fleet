@@ -141,7 +141,7 @@ func (s *Storage) SetDefaultTaskTimezone(timezone string) {
 // rather than failing the enqueue (the HTTP path validates earlier; here the
 // caller is an already-authorized run and we prefer a scheduled task in UTC over
 // a dropped one).
-func (s *Storage) resolveTaskTimezone(tc *models.TaskCreate) *time.Location {
+func (s *Storage) resolveTaskTimezone(ctx context.Context, tc *models.TaskCreate) *time.Location {
 	tzName := strings.TrimSpace(tc.Timezone)
 	if tzName == "" {
 		tzName = s.defaultTaskTZ
@@ -151,7 +151,7 @@ func (s *Storage) resolveTaskTimezone(tc *models.TaskCreate) *time.Location {
 	}
 	loc, err := time.LoadLocation(tzName)
 	if err != nil {
-		slog.Warn("EnqueueTask: invalid timezone, using UTC", "timezone", tzName, "err", err)
+		logging.From(ctx).Warn("EnqueueTask: invalid timezone, using UTC", "timezone", tzName, "err", err)
 		tc.Timezone = "UTC"
 		return time.UTC
 	}
@@ -342,7 +342,7 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 	// zone AND models.NewTask persists that name — otherwise it defaulted to "UTC"
 	// and every occurrence after the first fired in UTC regardless of
 	// FLEET_DEFAULT_TIMEZONE (the recurrence path reads task.Timezone).
-	loc := s.resolveTaskTimezone(&tc)
+	loc := s.resolveTaskTimezone(ctx, &tc)
 
 	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
 		// With no explicit one-time run, wait for the next cron trigger (evaluated

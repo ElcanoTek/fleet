@@ -57,15 +57,28 @@ func BufferStartup() {
 // early return (a config error) still shows what was logged; Fatal calls it
 // too.
 func FlushStartup() {
-	h := newJSONHandler(lockedStderr, slog.LevelInfo)
+	h := emergencyHandler()
 	if replayStartup(h) {
 		slog.SetDefault(slog.New(h))
 	}
 }
 
+// emergencyHandler is the handler for output before Configure (FlushStartup,
+// Fatal): redacting JSON on the locked stderr at info.
+func emergencyHandler() slog.Handler {
+	return newJSONHandler(lockedStderr, slog.LevelInfo)
+}
+
 // replayStartup hands every buffered record to h (subject to h's level) and
 // stops buffering. It reports whether a buffer was active.
+//
+// It seeds the redactor with the process's secret-named env values first:
+// the buffered records are redacted only now, as h handles them, and by now
+// the env file has been applied — whichever path replays (Configure, the
+// FlushStartup emergency flush, Fatal), no record goes out before the
+// redactor knows the process's own secrets.
 func replayStartup(h slog.Handler) bool {
+	seedEnvLiterals()
 	startupMu.Lock()
 	buf := startup
 	startup = nil

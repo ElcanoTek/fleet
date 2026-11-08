@@ -585,7 +585,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 	// On any error after this point, NewContainer calls close(), which removes
 	// the bridge script (tracked via c.bridgeScriptPath); the seccomp temp file
 	// is cleaned up by the deferred seccompCleanup below.
-	seccompArg, seccompCleanup, err := resolveSeccompArg(bridgeDir)
+	seccompArg, seccompCleanup, err := resolveSeccompArg(ctx, bridgeDir)
 	if err != nil {
 		return fmt.Errorf("seccomp profile: %w", err)
 	}
@@ -1380,7 +1380,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 			// not fatal to the sandbox).
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
 		}
-		return parseBridgeResponse(r.data)
+		return parseBridgeResponse(ctx, r.data)
 	}
 }
 

@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -95,7 +96,7 @@ func TestGate1GatesVariantSeatUnderBaseOptionalKey(t *testing.T) {
 
 	// Not opted in: the default seat AND the variant seat are both withheld.
 	// The non-Optional server is unaffected.
-	registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestGate1GatesVariantSeatUnderBaseOptionalKey(t *testing.T) {
 
 	// Opted in by the base key — the key the interactive/scheduled producers
 	// actually put in optIn for a {server: jira, account: prod} selection.
-	registered, _, err = buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, map[string]bool{"jira": true}, toolBuildConfig{})
+	registered, _, err = buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, map[string]bool{"jira": true}, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestGate1VariantSeatWithOwnOptionalKey(t *testing.T) {
 
 	// Variant-only key: the variant is gated by "jira_prod"; the base server is
 	// not Optional at all and always registers.
-	registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, mcpOptionalSet{"jira_prod": true}, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, nil, passPolicy{}, mcpOptionalSet{"jira_prod": true}, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestGate1VariantSeatWithOwnOptionalKey(t *testing.T) {
 		{optIn: "jira", want: "mcp_jira_search", other: "mcp_jira_prod_search"},
 		{optIn: "jira_prod", want: "mcp_jira_prod_search", other: "mcp_jira_search"},
 	} {
-		registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, both, map[string]bool{tc.optIn: true}, toolBuildConfig{})
+		registered, _, err := buildFantasyTools(context.Background(), nil, catalog, &fakeBroker{}, nil, passPolicy{}, both, map[string]bool{tc.optIn: true}, toolBuildConfig{})
 		if err != nil {
 			t.Fatalf("buildFantasyTools: %v", err)
 		}

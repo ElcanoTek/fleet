@@ -18,6 +18,7 @@ import (
 	fantasyschema "charm.land/fantasy/schema"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
@@ -1421,7 +1422,7 @@ func ToolSchemaRecordSince() time.Time { return toolSchemaRecordSince }
 // A new or changed finding is logged once and counted in
 // fleet_mcp_tool_schema_issues_total; repeats of the same finding, every turn,
 // are silent.
-func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
+func noteToolSchemaIssue(ctx context.Context, server, tool string, issue ToolSchemaIssue, ok bool) {
 	key := server + "\x00" + tool
 	toolSchemaRecord.Lock()
 	prev, had := toolSchemaRecord.issues[key]
@@ -1429,7 +1430,7 @@ func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
 		delete(toolSchemaRecord.issues, key)
 		toolSchemaRecord.Unlock()
 		if had {
-			slog.Info("MCP tool: schema issue cleared", "server", server, "tool", tool, "prev_status", prev.Status)
+			logging.From(ctx).Info("MCP tool: schema issue cleared", "server", server, "tool", tool, "prev_status", prev.Status)
 		}
 		return
 	}
@@ -1441,9 +1442,9 @@ func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
 	}
 	switch issue.Status {
 	case ToolSchemaInvalid:
-		slog.Warn("MCP tool skipped: input schema is not valid JSON Schema draft 2020-12 — the connector must fix its schema", "server", server, "tool", tool, "detail", issue.Detail)
+		logging.From(ctx).Warn("MCP tool skipped: input schema is not valid JSON Schema draft 2020-12 — the connector must fix its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	default:
-		slog.Warn("MCP tool: input schema uses older JSON Schema drafts, translated for the model — the connector should update its schema", "server", server, "tool", tool, "detail", issue.Detail)
+		logging.From(ctx).Warn("MCP tool: input schema uses older JSON Schema drafts, translated for the model — the connector should update its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	}
 	metrics.RecordToolSchemaIssue(server, issue.Status)
 }

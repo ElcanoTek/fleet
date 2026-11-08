@@ -16,7 +16,9 @@ func restoreLogging(t *testing.T) {
 	prevSlog := slog.Default()
 	prevBridge := bridgeLogger
 	prevOut := currentOutput()
+	prevConfigured := configured.Load()
 	t.Cleanup(func() {
+		configured.Store(prevConfigured)
 		startupMu.Lock()
 		startup = nil
 		startupMu.Unlock()
