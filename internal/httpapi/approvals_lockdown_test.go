@@ -231,7 +231,7 @@ func TestTakeStagedBashSandboxLockdownFailsClosed(t *testing.T) {
 
 // TestStagedBashLockdownResolution pins how the approved-bash path resolves
 // the seal: the conversation's own Lockdown flag OR'd with the server-wide
-// CHAT_LOCKDOWN_ONLY switch (the same disjunction postChat applies), failing
+// FLEET_LOCKDOWN_ONLY switch (the same disjunction postChat applies), failing
 // CLOSED when the conversation can't be resolved.
 func TestStagedBashLockdownResolution(t *testing.T) {
 	t.Parallel()

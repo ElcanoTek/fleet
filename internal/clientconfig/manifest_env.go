@@ -379,6 +379,12 @@ func unresolvedManifestRefs(sites []manifestRefSite) []string {
 		if site.lazy {
 			continue
 		}
+		if msg := retiredRefMessage(site.ref.name); msg != "" {
+			// ADR-0106: read as unset, so it fails here like any unset
+			// variable — with the rename spelled out.
+			problems = append(problems, fmt.Sprintf("%s: %s", site.path, msg))
+			continue
+		}
 		if _, ok := lookupNonEmpty(site.ref.name); !ok {
 			problems = append(problems, fmt.Sprintf(
 				"%s: ${%s} is unset or empty in the process environment and the FLEET_ENV_FILE env file; set the variable, use ${%s:-default} for an optional value, or write $${...} for a literal",

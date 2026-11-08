@@ -36,7 +36,7 @@ func TestWorkspaceFile_HappyPath(t *testing.T) {
 
 	// Drop a file into the conv's workspace, the way run_python would.
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	convDir := filepath.Join(wsRoot, convID)
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
 		t.Fatalf("mkdir convDir: %v", err)
@@ -86,7 +86,7 @@ func TestWorkspaceFile_PathTraversal(t *testing.T) {
 	// Workspace exists and is empty — but a real file at /etc/passwd is
 	// readable by the chat-server process. The handler must NOT serve it.
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	if err := os.MkdirAll(filepath.Join(wsRoot, convID), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestWorkspaceFile_AuthRequired(t *testing.T) {
 	}
 
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	convDir := filepath.Join(wsRoot, convID)
 	_ = os.MkdirAll(convDir, 0o755)
 	_ = os.WriteFile(filepath.Join(convDir, "secret.png"), []byte("\x89PNG"), 0o644)
@@ -170,7 +170,7 @@ func TestWorkspaceFile_SymlinkEscape(t *testing.T) {
 	}
 
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	convDir := filepath.Join(wsRoot, convID)
 	_ = os.MkdirAll(convDir, 0o755)
 
@@ -210,7 +210,7 @@ func TestWorkspaceFile_NotFound(t *testing.T) {
 	}
 
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	_ = os.MkdirAll(filepath.Join(wsRoot, convID), 0o755)
 
 	w = do(t, h, http.MethodGet,
@@ -243,7 +243,7 @@ func TestWorkspaceFile_PercentInName(t *testing.T) {
 	convID := createResp.ID
 
 	wsRoot := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	convDir := filepath.Join(wsRoot, convID)
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
 		t.Fatalf("mkdir convDir: %v", err)

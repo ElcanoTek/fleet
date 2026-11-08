@@ -152,9 +152,8 @@ func EnvReferencesWorkspaceRoot(env map[string]string) bool {
 }
 
 // WorkspaceRootDir returns the absolute workspace root every spawn path
-// substitutes for ${FLEET_WORKSPACE_ROOT}: FLEET_WORKSPACE_ROOT (legacy
-// CHAT_/CUTLASS_ aliases honored), else ./workspace resolved against the
-// process cwd — the same root SharedMCPWorkspaceDir and OpenStableMCPWorkspace
+// substitutes for ${FLEET_WORKSPACE_ROOT}: FLEET_WORKSPACE_ROOT, else
+// ./workspace resolved against the process cwd — the same root SharedMCPWorkspaceDir and OpenStableMCPWorkspace
 // nest under. It creates nothing on disk.
 func WorkspaceRootDir() string {
 	root := mcpWorkspaceRoot()
@@ -279,7 +278,7 @@ func AdmitOutboundAttachmentDir(env map[string]string) map[string]string {
 }
 
 // mcpWorkspaceRoot resolves the base directory MCP workspace dirs live under:
-// FLEET_WORKSPACE_ROOT (or the legacy CHAT_/CUTLASS_ aliases), else the
+// FLEET_WORKSPACE_ROOT, else the
 // conventional ./workspace — the same root the per-conversation workspaces use
 // (internal/tools.WorkspaceDirForConversation), kept as an inlined lookup so
 // agentcore stays dependency-free of the driver tool package.

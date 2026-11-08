@@ -35,8 +35,8 @@ func (e *PathSecurityError) Error() string {
 // symlinks and re-checks the real path against this list, so a symlink planted
 // inside the workspace that points at DataDir is rejected too.
 //
-// The system temp dir and any operator-opted FLEET_ALLOWED_DIRS (legacy
-// CHAT_ALLOWED_DIRS) entries remain allowed in both modes.
+// The system temp dir and any operator-opted FLEET_ALLOWED_DIRS
+// entries remain allowed in both modes.
 func AllowedBaseDirs() ([]string, error) {
 	var dirs []string
 	if root := workspaceRootBase(); root != "" {
@@ -66,7 +66,7 @@ func AllowedBaseDirs() ([]string, error) {
 	}
 
 	// Allow additional directories via environment variable
-	// (FLEET_ALLOWED_DIRS, or legacy CHAT_ALLOWED_DIRS).
+	// (FLEET_ALLOWED_DIRS).
 	if extra := fleetEnv("ALLOWED_DIRS"); extra != "" {
 		for _, dir := range strings.Split(extra, ":") {
 			dir = strings.TrimSpace(dir)

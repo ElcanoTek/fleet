@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
@@ -27,14 +29,16 @@ type fakeDeliverer struct {
 	deferAll  bool                     // the chat server is draining: every fire is deferred
 	coalesce  bool                     // a patrol turn is in flight: a manual fire coalesces
 	block     map[string]chan struct{} // delivery to these schedules waits on the channel
+	delay     time.Duration            // every delivery takes this long
 	queueFull bool                     // the conversation's input queue is full
+	hang      bool                     // every delivery waits until its context ends
 }
 
 func newFakeDeliverer() *fakeDeliverer {
 	return &fakeDeliverer{fail: map[string]bool{}, delivered: map[string][]string{}}
 }
 
-func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
+func (d *fakeDeliverer) DeliverChatScheduleFire(ctx context.Context, f models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
 	d.mu.Lock()
 	if d.fail[f.ScheduleID] {
 		d.mu.Unlock()
@@ -47,6 +51,17 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.coalesce && f.Trigger == models.ChatScheduleTriggerManual {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: "in-flight"}, nil
+	}
+	if d.hang {
+		d.mu.Unlock()
+		<-ctx.Done()
+		return models.ChatScheduleDelivery{}, ctx.Err()
+	}
+	if d.delay > 0 {
+		dl := d.delay
+		d.mu.Unlock()
+		time.Sleep(dl)
+		d.mu.Lock()
 	}
 	if ch := d.block[f.ScheduleID]; ch != nil {
 		d.mu.Unlock()
@@ -121,16 +136,16 @@ func TestChatSchedules_FailingBatchDoesNotStarve(t *testing.T) {
 	t.Parallel()
 	s, d := newEngineScheduler(t)
 	past := time.Now().Add(-time.Hour).Unix()
-	for i := 0; i < chatScheduleBatch; i++ {
+	for i := 0; i < testChatBatch; i++ {
 		id := fmt.Sprintf("bad-%02d", i)
 		addChatSchedule(t, s, id, "active", past) // due first
 		d.fail[id] = true
 	}
 	addChatSchedule(t, s, "healthy", "active", past+60)
 
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	if d.deliveredTo("healthy") != 1 {
-		t.Fatalf("healthy schedule behind %d failing ones was not fired", chatScheduleBatch)
+		t.Fatalf("healthy schedule behind %d failing ones was not fired", testChatBatch)
 	}
 	if n, leased := runCountOf(t, s, "bad-00"); n != 0 || !leased {
 		t.Fatalf("failing schedule: run count %d, leased %v; want 0 and held for its backoff", n, leased)
@@ -142,11 +157,11 @@ func TestChatSchedules_LargeBacklogDrainsInOnePass(t *testing.T) {
 	t.Parallel()
 	s, d := newEngineScheduler(t)
 	past := time.Now().Add(-time.Hour).Unix()
-	const n = 4*chatScheduleBatch + 30
+	const n = 4*testChatBatch + 30
 	for i := 0; i < n; i++ {
 		addChatSchedule(t, s, fmt.Sprintf("s-%03d", i), "active", past)
 	}
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	d.mu.Lock()
 	got := len(d.delivered)
 	d.mu.Unlock()
@@ -232,15 +247,15 @@ func TestChatSchedules_DeferredFiresAreRetried(t *testing.T) {
 	if err != nil || got.Outcome != models.ChatScheduleDeferred {
 		t.Fatalf("run now while draining = %+v, %v", got, err)
 	}
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 
 	d.mu.Lock()
 	d.deferAll = false
 	d.mu.Unlock()
 	expireChatLease(t, s, "paused")
 	expireChatLease(t, s, "due")
-	s.runChatSchedules()
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
+	s.runChatSchedulesAndWait()
 
 	for _, id := range []string{"paused", "due"} {
 		if n := d.deliveredTo(id); n != 1 {
@@ -260,7 +275,7 @@ func TestChatSchedules_FailedDeliveryArmsRetryWake(t *testing.T) {
 	s.tickInterval = time.Hour
 	addChatSchedule(t, s, "bad", "active", time.Now().Add(-time.Minute).Unix())
 	d.fail["bad"] = true
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	at := s.takeChatWake()
 	if at.IsZero() {
 		t.Fatal("no wake-up armed for the failed fire's retry")
@@ -411,7 +426,7 @@ func TestChatSchedules_RejectedRunNowIsTerminal(t *testing.T) {
 	d.queueFull = false
 	d.mu.Unlock()
 	expireChatLease(t, s, "p")
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	if n := d.deliveredTo("p"); n != 0 {
 		t.Fatalf("the rejected Run now was delivered %d time(s) after the queue drained", n)
 	}
@@ -549,5 +564,423 @@ func TestChatSchedules_EarlyWakeSurvivesABusyLoop(t *testing.T) {
 	}
 	if d.deliveredTo("early") != 1 {
 		t.Fatal("the early wake was lost behind the late ones; its schedule waits for the next tick")
+	}
+}
+
+// TestChatSchedules_BacklogBeyondOnePassDrainsWithoutWaitingForTick: a pass
+// that runs out of time with schedules still due asks for the next pass at
+// once, so a backlog larger than one pass can fire drains well before the
+// next tick (an hour away) — and no fire it had claimed is stranded.
+func TestChatSchedules_BacklogBeyondOnePassDrainsWithoutWaitingForTick(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.chatPassTimeoutOverride = 300 * time.Millisecond
+	d.delay = 20 * time.Millisecond // a batch of 25 takes ~500ms: past the pass deadline
+	const n = 3*testChatBatch + 5
+	past := time.Now().Add(-time.Minute).Unix()
+	for i := 0; i < n; i++ {
+		addChatSchedule(t, s, fmt.Sprintf("b-%03d", i), "active", past)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		got := len(d.delivered)
+		d.mu.Unlock()
+		if got == n {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	d.mu.Lock()
+	got := len(d.delivered)
+	d.mu.Unlock()
+	if got != n {
+		t.Fatalf("%d of %d due schedules fired; the rest wait for the next tick", got, n)
+	}
+	// The last deliveries are settling on their workers: give them a moment.
+	var leased int
+	for settleBy := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL`).Scan(&leased); err != nil {
+			t.Fatal(err)
+		}
+		if leased == 0 || time.Now().After(settleBy) {
+			break
+		}
+	}
+	if leased != 0 {
+		t.Fatalf("%d fire(s) left leased", leased)
+	}
+}
+
+// TestProcessScheduledTasks_RowCapAsksForAnotherPass: promotion that stops at
+// its per-pass row cap with due tasks left runs again right away instead of
+// leaving them to the next tick.
+func TestProcessScheduledTasks_RowCapAsksForAnotherPass(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.scheduledBatchSize = 2
+	s.maxScheduledRows = 2
+	ids := make([]uuid.UUID, 0, 7)
+	for i := 0; i < 7; i++ {
+		at := time.Now().UTC().Add(-time.Duration(10-i) * time.Minute)
+		task := &models.Task{ID: uuid.New(), Prompt: "due", Status: models.TaskStatusScheduled, ScheduledFor: &at, CreatedAt: time.Now().UTC()}
+		if _, err := s.storage.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, task.ID)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+	s.ProcessScheduledTasks() // one capped pass, as a tick would run it
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pending := 0
+		for _, id := range ids {
+			task, err := s.storage.GetTask(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.Status == models.TaskStatusPending {
+				pending++
+			}
+		}
+		if pending == len(ids) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d due tasks promoted; the rest wait for the next tick", pending, len(ids))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// testChatBatch is a batch-sized number of schedules for the backlog tests.
+const testChatBatch = 25
+
+// runChatSchedulesAndWait runs chat schedule passes, waiting for each pass's
+// deliveries, until a pass finds nothing to claim — the loop's passes and
+// worker wake-ups, run in step. The final pass arms the next wake-up from the
+// settled state (earlier workers' wake-up requests are dropped).
+func (s *Scheduler) runChatSchedulesAndWait() {
+	for i := 0; i < 10000; i++ {
+		s.takeChatWake()
+		n := s.chatPass()
+		s.chatWorkers.Wait()
+		if n == 0 {
+			return
+		}
+	}
+}
+
+// TestChatSchedules_SlowDeliveriesDoNotHoldTheLoop: deliveries run on
+// workers, so while two are stuck a new short timer still fires on time.
+func TestChatSchedules_SlowDeliveriesDoNotHoldTheLoop(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	release := make(chan struct{})
+	d.block = map[string]chan struct{}{"slow-1": release, "slow-2": release}
+	addChatSchedule(t, s, "slow-1", "active", time.Now().Add(-time.Minute).Unix())
+	addChatSchedule(t, s, "slow-2", "active", time.Now().Add(-time.Minute).Unix())
+	s.Start()
+	t.Cleanup(func() {
+		close(release)
+		s.Stop()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var leased int
+		if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL`).Scan(&leased); err != nil {
+			t.Fatal(err)
+		}
+		if leased == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the slow fires were never claimed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	due := time.Now().Add(time.Second)
+	addChatSchedule(t, s, "timer", "active", due.Unix())
+	s.WakeChatSchedulesAt(due)
+	deadline = time.Now().Add(4 * time.Second)
+	for d.deliveredTo("timer") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d.deliveredTo("timer") != 1 {
+		t.Fatal("a 1s timer did not fire while two slow deliveries were in flight")
+	}
+}
+
+// TestArmNextChatScheduleWake_LookupFailureRetries: a failed next-due lookup
+// is retried after chatScheduleErrorRetry instead of arming nothing.
+func TestArmNextChatScheduleWake_LookupFailureRetries(t *testing.T) {
+	t.Parallel()
+	s := New(nil, "UTC")
+	s.nextChatDueAt = func(context.Context, int64) (int64, bool, error) {
+		return 0, false, errors.New("injected: database unavailable")
+	}
+	s.armNextChatScheduleWake(context.Background())
+	at := s.takeChatWake()
+	if at.IsZero() {
+		t.Fatal("no retry armed after the next-due lookup failed")
+	}
+	if until := time.Until(at); until < chatScheduleErrorRetry-time.Second || until > chatScheduleErrorRetry+time.Second {
+		t.Fatalf("retry in %s, want about %s", until, chatScheduleErrorRetry)
+	}
+}
+
+// TestChatSchedules_TimedOutDeliveryRecordsItsFailure: a delivery that uses
+// up its context still has its failure recorded — fire_failures grows and
+// the lease backoff with it — because the bookkeeping runs on a fresh context.
+func TestChatSchedules_TimedOutDeliveryRecordsItsFailure(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.chatFireTimeoutOverride = 100 * time.Millisecond
+	d.hang = true
+	addChatSchedule(t, s, "p", "active", time.Now().Add(-time.Minute).Unix())
+	state := func() (int, float64) {
+		t.Helper()
+		var (
+			failures int
+			left     float64
+		)
+		if err := s.storage.DB().Conn().QueryRow(`SELECT fire_failures, EXTRACT(EPOCH FROM lease_expires_at - now()) FROM chat_schedules WHERE id = 'p'`).Scan(&failures, &left); err != nil {
+			t.Fatal(err)
+		}
+		return failures, left
+	}
+	s.runChatSchedulesAndWait()
+	f1, left1 := state()
+	if f1 != 1 || left1 < 20 {
+		t.Fatalf("after a timed-out delivery: fire_failures=%d, lease ends in %.0fs; want 1 and the ~30s backoff", f1, left1)
+	}
+	expireChatLease(t, s, "p")
+	s.runChatSchedulesAndWait()
+	f2, left2 := state()
+	if f2 != 2 || left2 <= left1 {
+		t.Fatalf("after a second one: fire_failures=%d, lease ends in %.0fs; want 2 and a longer backoff than %.0fs", f2, left2, left1)
+	}
+}
+
+// TestChatSchedules_NoSpinWithoutProgress: a loop whose fires all come back
+// deferred makes no progress and must not spin (a bounded number of passes in
+// a window), while fires that do move keep the backlog draining.
+func TestChatSchedules_NoSpinWithoutProgress(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	d.deferAll = true
+	past := time.Now().Add(-time.Minute).Unix()
+	for i := 0; i < 3*testChatBatch; i++ {
+		addChatSchedule(t, s, fmt.Sprintf("d-%03d", i), "active", past)
+	}
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(time.Second)
+	if n := s.chatPasses.Load(); n > 2*(3*testChatBatch/chatScheduleWorkers)+5 {
+		t.Fatalf("%d passes in 1s with every fire deferred: the loop is spinning", n)
+	}
+}
+
+// TestProcessScheduledTasks_CapWithoutProgressDoesNotContinue: a capped pass
+// that promoted nothing (every row a gated task with every gate slot busy)
+// does not ask for an immediate rerun.
+func TestProcessScheduledTasks_CapWithoutProgressDoesNotContinue(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.scheduledBatchSize = 2
+	s.maxScheduledRows = 2
+	for i := 0; i < 5; i++ {
+		task := &models.Task{ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, ScheduledFor: pastDue(), RunIf: decliningGate(), CreatedAt: time.Now().UTC()}
+		if _, err := s.storage.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < cap(s.gateSlots); i++ {
+		s.gateSlots <- struct{}{} // every gate slot busy: each gated row is deferred
+	}
+	s.ProcessScheduledTasks()
+	if len(s.promoteAgain) != 0 {
+		t.Fatal("a capped pass with no progress asked for an immediate rerun")
+	}
+}
+
+// holdRowLock holds FOR UPDATE on one row of table in another transaction
+// until the returned release is called (or the test ends).
+func holdRowLock(t *testing.T, s *Scheduler, table, id string) (release func()) {
+	t.Helper()
+	tx, err := s.storage.DB().Conn().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := tx.QueryRow(`SELECT id::text FROM `+table+` WHERE id::text = $1 FOR UPDATE`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = tx.Rollback() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// TestChatSchedules_LockedDueRowIsRetriedSoon: a due schedule another
+// transaction holds locked is passed over (SKIP LOCKED); the pass arms a
+// bounded retry for the overdue work, so it fires within seconds of the lock
+// being released, not at the next tick (an hour away).
+func TestChatSchedules_LockedDueRowIsRetriedSoon(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	addChatSchedule(t, s, "locked", "active", time.Now().Add(-time.Minute).Unix())
+	release := holdRowLock(t, s, "chat_schedules", "locked")
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(time.Second) // the startup pass has passed over the locked row
+	if d.deliveredTo("locked") != 0 {
+		t.Fatal("a locked row was claimed")
+	}
+	release()
+	deadline := time.Now().Add(chatScheduleErrorRetry + 5*time.Second)
+	for d.deliveredTo("locked") == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d.deliveredTo("locked") != 1 {
+		t.Fatal("the schedule passed over under a row lock waited for the next tick")
+	}
+}
+
+// TestProcessScheduledTasks_LockedRowIsRetriedSoon: promotion that passed
+// over a due row held locked asks for one more pass after a short bounded
+// retry, so the row is promoted soon after the lock goes, not a tick later.
+func TestProcessScheduledTasks_LockedRowIsRetriedSoon(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.promoteSkipRetry = 300 * time.Millisecond
+	task := &models.Task{ID: uuid.New(), Prompt: "due", Status: models.TaskStatusScheduled, ScheduledFor: pastDue(), CreatedAt: time.Now().UTC()}
+	if _, err := s.storage.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	release := holdRowLock(t, s, "tasks", task.ID.String())
+	s.Start()
+	t.Cleanup(s.Stop)
+	s.ProcessScheduledTasks() // a tick's pass: the row is passed over
+	if got, _ := s.storage.GetTask(task.ID); got.Status != models.TaskStatusScheduled {
+		t.Fatalf("locked task is %s, want scheduled while locked", got.Status)
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := s.storage.GetTask(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == models.TaskStatusPending {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the task passed over under a row lock waited for the next tick")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestChatSchedules_SettleIsTimedAfterDelivery: an every-minute patrol whose
+// delivery straddles minute boundaries settles to the first minute after the
+// delivery finished — never one already past, which would fire again at once
+// — and its history row is stamped with that time.
+func TestChatSchedules_SettleIsTimedAfterDelivery(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	var offset atomic.Int64
+	s.clock = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	d.after = func() { offset.Store(int64(3 * time.Minute)) } // the delivery "took" 3 minutes
+	if _, err := s.storage.DB().Conn().Exec(`INSERT INTO chat_schedules
+		(id, conversation_id, user_email, title, prompt, cron_expr, timezone, status, next_run_at, created_at, updated_at)
+		VALUES ('every-minute', 'conv', 'u@x.com', 'T', 'P', '* * * * *', 'UTC', 'active', $1, $1, $1)`,
+		time.Now().Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	s.runChatSchedulesAndWait()
+	finished := s.now()
+	var next int64
+	if err := s.storage.DB().Conn().QueryRow(`SELECT next_run_at FROM chat_schedules WHERE id = 'every-minute'`).Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	if next <= finished.Add(-time.Second).Unix() {
+		t.Fatalf("next slot %s is not after the delivery finished (%s): it would fire again at once",
+			time.Unix(next, 0).UTC().Format(time.RFC3339), finished.UTC().Format(time.RFC3339))
+	}
+	if d.deliveredTo("every-minute") != 1 {
+		t.Fatalf("delivered %d times, want 1", d.deliveredTo("every-minute"))
+	}
+	runs, err := s.storage.DB().ListChatScheduleRuns(context.Background(), "every-minute", 5)
+	if err != nil || len(runs) != 1 || runs[0].FiredAt.Before(finished.Add(-5*time.Second)) {
+		t.Fatalf("run history = %+v, %v; want one row stamped when the delivery finished", runs, err)
+	}
+}
+
+// TestChatSchedules_EditBeforeDeliveryIsSuperseded: on its own (without the
+// chat server's in-transaction check), the scheduler supersedes a fire whose
+// definition was edited between its claim and its delivery: nothing is
+// delivered, counted or recorded, and the fire is ended.
+func TestChatSchedules_EditBeforeDeliveryIsSuperseded(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	addChatSchedule(t, s, "p", "active", time.Now().Add(-time.Minute).Unix())
+	fs, err := s.storage.DB().ClaimDueChatSchedules(context.Background(), time.Now(), time.Minute, 25, nil)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("claim = %+v, %v", fs, err)
+	}
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET def_version = def_version + 1, prompt = 'edited' WHERE id = 'p'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.fireChatSchedule(context.Background(), fs[0])
+	if err != nil || got.Outcome != models.ChatScheduleSuperseded {
+		t.Fatalf("fire = %+v, %v; want superseded", got, err)
+	}
+	if d.deliveredTo("p") != 0 {
+		t.Fatal("a fire claimed under the old definition was delivered")
+	}
+	if n, leased := runCountOf(t, s, "p"); n != 0 || leased {
+		t.Fatalf("run count %d, leased %v; want 0, ended", n, leased)
+	}
+}
+
+// TestChatSchedules_DeferredRunNowRetriesOnTime: a Run now the chat server
+// defers keeps its fire with a short retry; Run now re-arms the loop for it,
+// so it is delivered within the retry, not at the next tick (an hour away).
+func TestChatSchedules_DeferredRunNowRetriesOnTime(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	addChatSchedule(t, s, "p", "paused", time.Now().Add(time.Hour).Unix())
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(300 * time.Millisecond) // the startup pass is done
+	d.mu.Lock()
+	d.deferAll = true
+	d.mu.Unlock()
+	got, err := s.RunChatScheduleNow(context.Background(), "p")
+	if err != nil || got.Outcome != models.ChatScheduleDeferred {
+		t.Fatalf("run now = %+v, %v; want deferred", got, err)
+	}
+	d.mu.Lock()
+	d.deferAll = false
+	d.mu.Unlock()
+	deadline := time.Now().Add(db.ChatScheduleDeferRetry + 5*time.Second)
+	for d.deliveredTo("p") == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d.deliveredTo("p") != 1 {
+		t.Fatal("the deferred Run now waited for the next tick")
 	}
 }

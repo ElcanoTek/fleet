@@ -270,6 +270,10 @@ type Server struct {
 	// answers Run now with 503 and leaves firing to whoever does run one.
 	chatSchedules ChatScheduleEngine
 
+	// publishHook, when set (tests only), sees every queue/patrol update and
+	// drain kick, so a test can count them.
+	publishHook func(kind string)
+
 	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
 	// approved chat manage_tasks call (#1152). Same seam discipline as
 	// scheduleTask: httpapi stays sched-agnostic and main.go supplies the
@@ -584,6 +588,13 @@ type ChatScheduleEngine interface {
 	WakeChatSchedulesAt(t time.Time)
 }
 
+// notePublish reports one queue/patrol update or drain kick to publishHook.
+func (s *Server) notePublish(kind string) {
+	if s.publishHook != nil {
+		s.publishHook(kind)
+	}
+}
+
 // WithChatScheduleEngine wires the scheduler that fires chat schedules.
 func WithChatScheduleEngine(e ChatScheduleEngine) Option {
 	return func(s *Server) { s.chatSchedules = e }
@@ -709,7 +720,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 // scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
 // audits and large interactive workflows are bounded by the per-turn cost
 // and iteration ceilings rather than a 30-minute wall-clock cutoff.
-// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
 const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling

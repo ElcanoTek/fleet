@@ -15,6 +15,13 @@
 -- that dies mid-fire expires and is re-claimed, and the chat side's
 -- idempotency key makes the re-delivery a no-op.
 --
+-- def_version counts edits of the schedule's definition (prompt, title,
+-- cadence, kind, limits): the chat server bumps it on every such edit, never
+-- on a settle or on lease bookkeeping. A claim records it as
+-- fire_def_version, and a fire whose definition was edited after the claim
+-- is superseded: it delivers nothing and settles nothing, and the next pass
+-- fires the new definition.
+--
 -- fire_id / fire_trigger / fire_run_number are the fire a lease is for. They
 -- survive the lease's expiry: the recovery pass re-claims the SAME fire (same
 -- id, so the same idempotency key), whatever the schedule's status or due
@@ -49,7 +56,9 @@ CREATE TABLE IF NOT EXISTS chat_schedules (
     fire_id          TEXT,
     fire_trigger     TEXT CHECK (fire_trigger IN ('schedule', 'manual')),
     fire_run_number  INTEGER,
-    fire_failures    INTEGER NOT NULL DEFAULT 0
+    fire_failures    INTEGER NOT NULL DEFAULT 0,
+    def_version      BIGINT NOT NULL DEFAULT 0,
+    fire_def_version BIGINT
 );
 
 -- Leases whose holder may have died, for the recovery pass.

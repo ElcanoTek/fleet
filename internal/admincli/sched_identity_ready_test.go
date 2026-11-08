@@ -1,9 +1,6 @@
 package admincli
 
 import (
-	"bytes"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -12,27 +9,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/testdb"
 	"github.com/google/uuid"
 )
-
-// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stderr = w
-	done := make(chan string)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		done <- buf.String()
-	}()
-	fn()
-	os.Stderr = orig
-	_ = w.Close()
-	return <-done
-}
 
 // A sched-only verb that needs accounts, run first on a fresh one-database
 // fleet (or mid-upgrade before the chat store migrated), refuses up front

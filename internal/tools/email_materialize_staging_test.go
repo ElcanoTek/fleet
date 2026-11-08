@@ -118,7 +118,7 @@ func TestSnapshotEmailAttachmentsRewritesBareStrings(t *testing.T) {
 // the absolute workspace path, and the item stays a string.
 func TestMaterializeAttachmentPathsRewritesBareStrings(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	convID := "conv-bare"
 	out, err := MaterializeAttachmentPaths(convID, `{"attachments":["report.csv"],"inline_attachments":["chart.png"]}`)
 	if err != nil {

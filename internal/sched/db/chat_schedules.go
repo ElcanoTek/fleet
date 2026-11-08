@@ -68,7 +68,7 @@ func ChatScheduleFailureBackoff(n int) time.Duration {
 
 const chatScheduleFireReturning = `cs.id, cs.conversation_id, cs.user_email, cs.title, cs.prompt, cs.cron_expr,
 	cs.timezone, cs.duration_seconds, cs.next_run_at, cs.lease_owner, cs.fire_id,
-	cs.fire_trigger, cs.fire_run_number`
+	cs.fire_trigger, cs.fire_run_number, cs.fire_def_version`
 
 func scanChatScheduleFire(row interface{ Scan(...any) error }, claimedAt time.Time) (models.ChatScheduleFire, error) {
 	var (
@@ -77,7 +77,7 @@ func scanChatScheduleFire(row interface{ Scan(...any) error }, claimedAt time.Ti
 	)
 	if err := row.Scan(&f.ScheduleID, &f.ConversationID, &f.UserEmail, &f.Title, &f.Prompt,
 		&f.CronExpr, &f.Timezone, &f.DurationSeconds, &f.DueAt, &f.LeaseToken, &f.FireID,
-		&trigger, &f.RunNumber); err != nil {
+		&trigger, &f.RunNumber, &f.DefVersion); err != nil {
 		return models.ChatScheduleFire{}, err
 	}
 	f.Trigger = models.ChatScheduleTrigger(trigger)
@@ -143,7 +143,8 @@ func (db *Database) ClaimDueChatSchedules(ctx context.Context, now time.Time, le
 		       lease_expires_at = now() + make_interval(secs => $3),
 		       fire_id = gen_random_uuid()::text,
 		       fire_trigger = 'schedule',
-		       fire_run_number = cs.run_count + 1
+		       fire_run_number = cs.run_count + 1,
+		       fire_def_version = cs.def_version
 		  FROM due
 		 WHERE cs.id = due.id
 		RETURNING `+chatScheduleFireReturning,
@@ -177,7 +178,8 @@ func (db *Database) RecoverChatScheduleFires(ctx context.Context, now time.Time,
 		       lease_expires_at = now() + make_interval(secs => $2),
 		       fire_id = COALESCE(cs.fire_id, gen_random_uuid()::text),
 		       fire_trigger = COALESCE(cs.fire_trigger, 'schedule'),
-		       fire_run_number = COALESCE(cs.fire_run_number, cs.run_count + 1)
+		       fire_run_number = COALESCE(cs.fire_run_number, cs.run_count + 1),
+		       fire_def_version = COALESCE(cs.fire_def_version, cs.def_version)
 		  FROM stuck
 		 WHERE cs.id = stuck.id
 		RETURNING `+chatScheduleFireReturning,
@@ -199,7 +201,8 @@ func (db *Database) ClaimChatScheduleNow(ctx context.Context, scheduleID string,
 		       lease_expires_at = now() + make_interval(secs => $2),
 		       fire_id = gen_random_uuid()::text,
 		       fire_trigger = 'manual',
-		       fire_run_number = cs.run_count + 1
+		       fire_run_number = cs.run_count + 1,
+		       fire_def_version = cs.def_version
 		 WHERE cs.id = $1 AND cs.status IN ('active', 'paused') AND cs.lease_owner IS NULL
 		RETURNING `+chatScheduleFireReturning,
 		scheduleID, leaseSeconds(lease)), now)
@@ -225,7 +228,7 @@ func (db *Database) ClaimChatScheduleNow(ctx context.Context, scheduleID string,
 
 // releaseFireSQL ends a fire: no lease, no fire in flight, failures reset.
 const releaseFireSQL = `lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
-	fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0`
+	fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0, fire_def_version = NULL`
 
 // FailChatScheduleFire records a delivery that errored. The fire stays in
 // flight (its id, so its idempotency key, is kept — the delivery may have
@@ -306,6 +309,13 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 	if err != nil {
 		return false, err
 	}
+	// The definition version guards delivery only (the chat server refuses
+	// to deliver a fire claimed under an edited definition: superseded).
+	// Once a fire's turn is queued the run has happened, so the settle counts
+	// it whatever has been edited since — the slot advances (computed from
+	// the definition as it is now, read above) and the run is recorded —
+	// rather than leave the old turn running and the slot unadvanced, which
+	// would let the edited definition fire that slot again.
 
 	nowUnix := now.Unix()
 	live := status == models.ChatScheduleStatusActive || status == models.ChatScheduleStatusPaused
@@ -361,7 +371,7 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 			UPDATE chat_schedules SET lease_expires_at = now() + make_interval(secs => $2)
 			 WHERE id = $1`,
 			fire.ScheduleID, ChatScheduleDeferRetry.Seconds())
-	default: // coalesced, stale, rejected
+	default: // coalesced, stale, rejected, superseded
 		recordRun = false
 		_, err = tx.ExecContext(ctx, `UPDATE chat_schedules SET `+releaseFireSQL+` WHERE id = $1`, fire.ScheduleID)
 	}
@@ -409,6 +419,28 @@ func (db *Database) NextChatScheduleDueAt(ctx context.Context, after int64) (int
 		return 0, false, err
 	}
 	return next.Int64, next.Valid, nil
+}
+
+// ChatScheduleDefVersion is a schedule's current definition version.
+func (db *Database) ChatScheduleDefVersion(ctx context.Context, scheduleID string) (int64, error) {
+	var v int64
+	err := db.conn.QueryRowContext(ctx, `SELECT def_version FROM chat_schedules WHERE id = $1`, scheduleID).Scan(&v)
+	return v, err
+}
+
+// OverdueChatScheduleWork reports whether any chat schedule work is already
+// due and unclaimed: an active, unleased schedule whose slot has passed, or a
+// fire whose lease has expired. After a pass this means a claim passed it
+// over (another transaction held the row; or every worker was busy).
+func (db *Database) OverdueChatScheduleWork(ctx context.Context) (bool, error) {
+	var overdue bool
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM chat_schedules
+		                WHERE status = 'active' AND lease_owner IS NULL AND next_run_at <= $1)
+		    OR EXISTS (SELECT 1 FROM chat_schedules
+		                WHERE lease_owner IS NOT NULL AND lease_expires_at <= now())`,
+		time.Now().Unix()).Scan(&overdue)
+	return overdue, err
 }
 
 // ListChatScheduleRuns returns a schedule's run history, newest first.

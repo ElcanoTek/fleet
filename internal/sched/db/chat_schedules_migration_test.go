@@ -90,7 +90,7 @@ const (
 func seedOldChatSchedules(t *testing.T, chatConn *sql.DB, convA, convB string, now int64) {
 	t.Helper()
 	owner, teammate := ownerMv, teammateMv
-	seed := make([]string, 0, 14)
+	seed := make([]string, 0, 16)
 	seed = append(seed,
 		`INSERT INTO chat_schedules VALUES ('`+dueID+`', '`+convA+`', '`+owner+`', 'Deal sweep', 'Check pacing.', '0 */2 * * *', 'America/New_York', 0, 'active', `+itoa(now-90)+`, `+itoa(now-7200)+`, 7, 0, `+itoa(now-86400)+`, `+itoa(now-7200)+`)`,
 		`INSERT INTO chat_schedules VALUES ('`+futureID+`', '`+convA+`', '`+owner+`', 'Weekly', 'Summarize.', '0 9 * * 1', 'Europe/London', 0, 'active', `+itoa(now+86400)+`, NULL, 0, 4, `+itoa(now-600)+`, `+itoa(now-600)+`)`,
@@ -115,6 +115,15 @@ func seedOldChatSchedules(t *testing.T, chatConn *sql.DB, convA, convB string, n
 		seed = append(seed, `INSERT INTO chat_input_queue (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
 			VALUES ('`+in[0]+`', '`+convA+`', '`+owner+`', '`+in[1]+`', 'm', '[]', 'patrol', 'completed', `+itoa(int64(i+1))+`, `+itoa(now-int64(10000-i))+`, `+itoa(now)+`)`)
 	}
+	// Forged provenance the backfill must ignore: a USER input that borrows
+	// a chat-patrol: key, and a patrol turn in another conversation than the
+	// schedule's.
+	seed = append(seed,
+		`INSERT INTO chat_input_queue (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
+			VALUES ('in-forged-user', '`+convA+`', '`+owner+`', 'chat-patrol:`+dueID+`:5', 'm', '[]', 'queued', 'completed', 50, `+itoa(now-20000)+`, `+itoa(now)+`)`,
+		`INSERT INTO chat_input_queue (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
+			VALUES ('in-other-conv', '`+convB+`', '`+teammate+`', 'chat-patrol:`+dueID+`:4', 'm', '[]', 'patrol', 'completed', 51, `+itoa(now-20001)+`, `+itoa(now)+`)`,
+	)
 	for _, q := range seed {
 		if _, err := chatConn.Exec(q); err != nil {
 			t.Fatalf("seed %q: %v", q, err)
@@ -297,4 +306,109 @@ func deleteTriggerCount(t *testing.T, conn *sql.DB) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// TestMigration077DownCountsAnUnsettledDeliveredFire: a fire whose turn was
+// delivered but never settled (the process died between the two), then a
+// rollback. 077's down must count the fire in the old-shape row — run_count
+// advanced, last_run_at set, a one-shot completed, a patrol moved to the slot
+// recorded with the delivery — so the old engine does not fire it again. A
+// forged user input with the fire's key does not count.
+func TestMigration077DownCountsAnUnsettledDeliveredFire(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := testdb.Empty(t)
+	chat, err := store.Open(config.WithSchema(base, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chat.Close() })
+	conv, err := chat.CreateConversation(ctx, ownerMv, "Deals", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedConn, err := sql.Open("pgx", config.WithSchema(base, config.SchedSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = schedConn.Close() })
+	if err := RunMigrations(schedConn); err != nil {
+		t.Fatal(err)
+	}
+	d := &Database{conn: schedConn}
+	now := time.Now()
+	nextSlot := now.Add(2 * time.Hour).Unix()
+	for _, q := range []string{
+		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, duration_seconds, status, next_run_at, run_count, max_runs, created_at, updated_at)
+			VALUES ('timer', '` + conv.ID + `', '` + ownerMv + `', 'P', '', 60, 'active', ` + itoa(now.Unix()-5) + `, 0, 1, 1, 1)`,
+		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
+			VALUES ('patrol', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 3, 1, 1)`,
+		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
+			VALUES ('edited', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 5, 1, 1)`,
+		`INSERT INTO chat_schedules (id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, run_count, created_at, updated_at)
+			VALUES ('forged', '` + conv.ID + `', '` + ownerMv + `', 'P', '0 */2 * * *', 'active', ` + itoa(now.Unix()-5) + `, 0, 1, 1)`,
+	} {
+		if _, err := schedConn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fires, err := d.ClaimDueChatSchedules(ctx, now, time.Minute, 25, nil)
+	if err != nil || len(fires) != 4 {
+		t.Fatalf("claim = %+v, %v", fires, err)
+	}
+	for _, f := range fires {
+		mode := "patrol"
+		if f.ScheduleID == "forged" {
+			mode = "queued" // a user input wearing the fire's key
+		}
+		key := "chat-patrol:" + f.ScheduleID + ":" + itoa(int64(f.RunNumber)) + ":s-" + f.FireID
+		if _, err := schedConn.Exec(`INSERT INTO chat.chat_input_queue (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'm', '[]', $5, 'completed', 1, $6, $6)`,
+			"in-"+f.ScheduleID, conv.ID, ownerMv, key, mode, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := schedConn.Exec(`UPDATE chat_schedules SET fire_next_run_at = $2 WHERE id = $1`, f.ScheduleID, nextSlot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// After delivering, 'edited' has its cadence edited (def_version moves,
+	// and the edit recomputes next_run_at for the new cron).
+	editedSlot := now.Add(5 * time.Hour).Unix()
+	if _, err := schedConn.Exec(`UPDATE chat_schedules SET def_version = def_version + 1, cron_expr = '0 */5 * * *', next_run_at = $1 WHERE id = 'edited'`, editedSlot); err != nil {
+		t.Fatal(err)
+	}
+	// ...the process dies here: nothing settles. The operator rolls back.
+	down, err := fs.ReadFile(migrationsFS, "migrations/077_move_chat_schedules.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := schedConn.Exec(string(down)); err != nil {
+		t.Fatalf("077 down: %v", err)
+	}
+	got := map[string]chatScheduleRow{}
+	for _, r := range readChatScheduleRows(t, mustOpen(t, config.WithSchema(base, config.ChatSchema))) {
+		got[r.ID] = r
+	}
+	if r := got["timer"]; r.RunCount != 1 || r.Status != "completed" || !r.LastRunAt.Valid {
+		t.Errorf("one-shot after down = %+v; want counted and completed", r)
+	}
+	if r := got["patrol"]; r.RunCount != 4 || r.Status != "active" || r.NextRunAt != nextSlot || !r.LastRunAt.Valid {
+		t.Errorf("patrol after down = %+v; want run 4 counted and moved to %d", r, nextSlot)
+	}
+	if r := got["edited"]; r.RunCount != 6 || r.CronExpr != "0 */5 * * *" || r.NextRunAt != editedSlot {
+		t.Errorf("patrol edited after delivery, after down = %+v; want run 6 counted and the edited slot %d kept", r, editedSlot)
+	}
+	if r := got["forged"]; r.RunCount != 0 || r.NextRunAt != now.Unix()-5 {
+		t.Errorf("schedule with only a forged user input = %+v; want nothing counted", r)
+	}
+}
+
+func mustOpen(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	c, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }

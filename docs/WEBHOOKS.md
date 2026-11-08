@@ -170,7 +170,7 @@ sweep removes records older than 24 hours.
   host-side at request time, like an MCP connector credential.
 - **The turn runs through the one governed core** (`agentcore.Run`): same policy,
   ceilings, audit, and mandatory sandbox as any chat turn. It honors
-  `CHAT_LOCKDOWN_ONLY` too — on a lockdown-only server the triggered conversation
+  `FLEET_LOCKDOWN_ONLY` too — on a lockdown-only server the triggered conversation
   runs network-sealed like every human turn.
 - **A webhook acts as its configured `notify_user`** and cannot impersonate any
   other account.

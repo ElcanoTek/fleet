@@ -17,7 +17,7 @@ import (
 //	go test ./internal/config/envreg -run TestGeneratedFilesAreUpToDate -update
 //
 // (`make config-docs` runs exactly that).
-var update = flag.Bool("update", false, "rewrite docs/CONFIGURATION.md and the Helm schema's config.env from the registry")
+var update = flag.Bool("update", false, "rewrite docs/CONFIGURATION.md, the Helm schema's config.env and scripts/lib/retired-env.sh from the registry")
 
 // TestGeneratedFilesAreUpToDate is the drift check for the two files
 // generated from the registry: docs/CONFIGURATION.md, and the config.env
@@ -38,6 +38,8 @@ func TestGeneratedFilesAreUpToDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkGenerated(t, schemaPath, want)
+
+	checkGenerated(t, filepath.Join(root, "scripts", "lib", "retired-env.sh"), RetiredEnvShell())
 }
 
 func checkGenerated(t *testing.T, path string, want []byte) {

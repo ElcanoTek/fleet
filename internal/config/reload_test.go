@@ -79,15 +79,15 @@ func TestReload_AppliesChangedReloadable(t *testing.T) {
 	}
 }
 
-// TestReload_TemperatureHonorsAliasChain pins that the temperature reload walks
-// the FLEET_ → CHAT_ → CUTLASS_ chain rather than one exact name (#1079): an
-// env file carrying only the legacy CUTLASS_TEMPERATURE spelling still moves
-// the live value, which drives BOTH interactive and scheduled sampling.
-func TestReload_TemperatureHonorsAliasChain(t *testing.T) {
+// TestReload_TemperatureFromEnvFile pins that a FLEET_TEMPERATURE change in
+// the env file moves the live value on reload (#1079), which drives BOTH
+// interactive and scheduled sampling, and that the removed CUTLASS_ spelling
+// (ADR-0106) does not.
+func TestReload_TemperatureFromEnvFile(t *testing.T) {
 	isolateEnv(t)
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	writeEnv(t, envPath, "CUTLASS_TEMPERATURE=0.3\n")
+	writeEnv(t, envPath, "FLEET_TEMPERATURE=0.3\n")
 
 	cfg, err := Load(envPath)
 	if err != nil {
@@ -97,13 +97,13 @@ func TestReload_TemperatureHonorsAliasChain(t *testing.T) {
 		t.Fatalf("initial LiveTemperature = %v, want 0.3", got)
 	}
 
-	writeEnv(t, envPath, "CUTLASS_TEMPERATURE=0.7\n")
+	writeEnv(t, envPath, "FLEET_TEMPERATURE=0.7\nCUTLASS_TEMPERATURE=0.9\n")
 	res, err := cfg.Reload(envPath)
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
 	if cfg.LiveTemperature() != 0.7 {
-		t.Errorf("LiveTemperature = %v, want 0.7 (CUTLASS_ spelling must reload via the chain)", cfg.LiveTemperature())
+		t.Errorf("LiveTemperature = %v, want 0.7 from FLEET_TEMPERATURE", cfg.LiveTemperature())
 	}
 	if len(res.Errors) != 0 {
 		t.Errorf("unexpected errors: %+v", res.Errors)

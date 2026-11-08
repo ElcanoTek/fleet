@@ -62,10 +62,10 @@ What to know:
   everything. Legacy `--role` keys are `sk-<base64>`. `--help` and the create
   output both say this.
 - **The store.** The service reads `api_keys.json` under **its** data dir —
-  `FLEET_DATA_DIR`/`DATA_DIR` from `/etc/fleet/fleet.env`, else `./data`,
+  `FLEET_DATA_DIR` from `/etc/fleet/fleet.env`, else `./data`,
   relative to the unit's `WorkingDirectory` (`/var/lib/fleet`). The CLI now
   derives the same path, prints `key store: …` on every run, and **warns**
-  when `FLEET_DATA_DIR`/`DATA_DIR` in your shell points it somewhere else.
+  when `FLEET_DATA_DIR` in your shell points it somewhere else.
   A key minted into any other file is invisible to the service, and the
   caller sees a `401` indistinguishable from a typo.
 - **Ownership.** A root-run mint re-owned `api_keys.json` to root inside the
