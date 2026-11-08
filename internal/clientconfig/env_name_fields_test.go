@@ -9,49 +9,65 @@ import (
 	"testing"
 )
 
-// manifestYAMLTags collects every yaml key reachable from the manifest type.
-func manifestYAMLTags(t reflect.Type, seen map[reflect.Type]bool, out map[string]bool) {
-	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array || t.Kind() == reflect.Map {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct || seen[t] {
+// manifestSchemaPaths collects the schema path ("mcp_servers[].enabled_env")
+// of every typed field reachable from the manifest type. Opaque fields (any,
+// map[string]any) end the walk: nothing under them is a typed field.
+func manifestSchemaPaths(t reflect.Type, prefix string, depth int, out map[string]bool) {
+	if depth > 12 {
 		return
 	}
-	seen[t] = true
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		manifestSchemaPaths(t.Elem(), prefix+"[]", depth+1, out)
+		return
+	case reflect.Struct:
+	default:
+		return
+	}
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); tag != "" && tag != "-" {
-			out[tag] = true
+		tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+		if tag == "" || tag == "-" || !f.IsExported() {
+			continue
 		}
-		manifestYAMLTags(f.Type, seen, out)
+		p := tag
+		if prefix != "" {
+			p = prefix + "." + tag
+		}
+		out[p] = true
+		manifestSchemaPaths(f.Type, p, depth+1, out)
 	}
 }
 
-// TestEnvNameFieldsCoverTheSchema — every manifest field that names an env
-// variable (*_env, *_vars, enabled_groups) is classified exactly once: read by
-// fleet (envNameFields, warned about and admitted) or a connector env key
-// (envKeyFields). A new such field fails here until it is classified, and
-// every listed field still exists.
+// TestEnvNameFieldsCoverTheSchema — every typed manifest field that names an
+// env variable (*_env, *_vars, enabled_groups) is classified exactly once, by
+// its schema path: read by fleet (envNameFields: checked by the scanner and
+// admitted) or a connector env key (envKeyFields). A new such field fails
+// here until it is classified, and every listed path still exists.
 func TestEnvNameFieldsCoverTheSchema(t *testing.T) {
-	tags := map[string]bool{}
-	manifestYAMLTags(reflect.TypeFor[manifest](), map[reflect.Type]bool{}, tags)
-	for tag := range tags {
-		if !strings.HasSuffix(tag, "_env") && !strings.HasSuffix(tag, "_vars") && tag != "enabled_groups" {
+	paths := map[string]bool{}
+	manifestSchemaPaths(reflect.TypeFor[manifest](), "", 0, paths)
+	for p := range paths {
+		leaf := p[strings.LastIndex(p, ".")+1:]
+		if !strings.HasSuffix(leaf, "_env") && !strings.HasSuffix(leaf, "_vars") && leaf != "enabled_groups" {
 			continue
 		}
-		_, key := envKeyFields[tag]
-		if envNameFields[tag] == key {
-			t.Errorf("manifest field %q must be in exactly one of envNameFields / envKeyFields (clientconfig.go)", tag)
+		_, key := envKeyFields[p]
+		if envNameFields[p] == key {
+			t.Errorf("manifest field %q must be in exactly one of envNameFields / envKeyFields (retired_refs.go)", p)
 		}
 	}
-	for tag := range envNameFields {
-		if !tags[tag] {
-			t.Errorf("envNameFields lists %q, which no manifest type has", tag)
+	for p := range envNameFields {
+		if !paths[p] {
+			t.Errorf("envNameFields lists %q, which is not a typed manifest field", p)
 		}
 	}
-	for tag := range envKeyFields {
-		if !tags[tag] {
-			t.Errorf("envKeyFields lists %q, which no manifest type has", tag)
+	for p := range envKeyFields {
+		if !paths[p] {
+			t.Errorf("envKeyFields lists %q, which is not a typed manifest field", p)
 		}
 	}
 }

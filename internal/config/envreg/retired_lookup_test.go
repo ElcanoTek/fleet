@@ -43,8 +43,17 @@ func TestRetiredEnvShellAgreesWithTheRegistry(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	lib := filepath.Join(moduleRoot(t), "scripts", "lib", "retired-env.sh")
-	script := `. "$1"; for n in CHAT_SANDBOX_IMAGE CUTLASS_TEMPERATURE DATA_DIR CUTLASS_ALLOWED_DIRS CHAT_RATE_PER_MIN FLEET_SANDBOX_IMAGE; do if fleet_env_name_retired "$n"; then echo "$n retired"; else echo "$n live"; fi; done`
-	out, err := exec.Command(bash, "-c", script, "bash", lib).CombinedOutput()
+	// Every registered name (all live), every removed spelling, their
+	// account-suffixed variants, and the bundle wire keys.
+	names := []string{"CUTLASS_RUN_WORKDIR", "CUTLASS_MOC_TASK_ID", "CUTLASS_REPORT_DIR", "CUTLASS_INPUT_DIR", "CUTLASS_USER_AGENT", "CHAT_NOT_A_SETTING"}
+	for _, e := range All() {
+		names = append(names, e.Name, e.Name+"_ACME", e.Name+"_CLIENT_A")
+		for _, r := range RetiredAliasesOf(e.Name) {
+			names = append(names, r, r+"_ACME", r+"_CLIENT_A", r+"_lower")
+		}
+	}
+	script := `. "$1"; shift; for n in "$@"; do if fleet_env_name_retired "$n"; then echo "$n retired"; else echo "$n live"; fi; done`
+	out, err := exec.Command(bash, append([]string{"-c", script, "bash", lib}, names...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("bash: %v\n%s", err, out)
 	}
@@ -54,5 +63,37 @@ func TestRetiredEnvShellAgreesWithTheRegistry(t *testing.T) {
 		if (verdict == "retired") != retired {
 			t.Errorf("shell says %s is %s; RetiredAlias says retired=%v", name, verdict, retired)
 		}
+	}
+}
+
+// Codex P2 on #2081: an account-suffixed removed spelling
+// (<BASE>_<ACCOUNT>, creds.ApplyClientSuffix's form) is removed too and maps to
+// the suffixed canonical; suffixed variants of live names never are.
+func TestRetiredAliasCoversAccountSuffixes(t *testing.T) {
+	for name, want := range map[string]string{
+		"CHAT_SERVER_TOKEN_ACME":        "FLEET_SERVER_TOKEN_ACME",
+		"CUTLASS_SERVER_TOKEN_CLIENT_A": "FLEET_SERVER_TOKEN_CLIENT_A",
+		"DATA_DIR_ACME":                 "FLEET_DATA_DIR_ACME",
+	} {
+		if got, ok := RetiredAlias(name); !ok || got != want {
+			t.Errorf("RetiredAlias(%s) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+	for _, name := range []string{
+		"FLEET_SERVER_TOKEN_ACME", "CUTLASS_ALLOWED_DIRS_ACME", "CUTLASS_IMAGE_MODEL_ACME",
+		"CHAT_RATE_PER_MIN_ACME", "CHAT_SERVER_TOKEN_acme", "CHAT_SERVER_TOKEN_",
+		"CUTLASS_RUN_WORKDIR", "CUTLASS_MOC_TASK_ID", "CUTLASS_REPORT_DIR", "CUTLASS_INPUT_DIR",
+	} {
+		if c, ok := RetiredAlias(name); ok {
+			t.Errorf("RetiredAlias(%s) = %q; it is live", name, c)
+		}
+	}
+	t.Setenv("CHAT_SERVER_TOKEN_ACME", "stale")
+	t.Setenv("FLEET_SERVER_TOKEN_ACME", "live")
+	if v := Unregistered("CHAT_SERVER_TOKEN_ACME"); v != "" {
+		t.Errorf("a suffixed removed spelling was read: %q", v)
+	}
+	if v := Unregistered("FLEET_SERVER_TOKEN_ACME"); v != "live" {
+		t.Errorf("a live suffixed name did not resolve: %q", v)
 	}
 }

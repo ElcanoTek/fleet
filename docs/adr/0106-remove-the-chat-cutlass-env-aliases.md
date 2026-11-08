@@ -46,7 +46,11 @@ spelling: it is refused before install, not tolerated at run time.
    That covers fleet's own reads and every name the client bundle supplies.
    `envreg.RetiredAlias` recognises one: `CHAT_<X>` or `CUTLASS_<X>` when
    `FLEET_<X>` is a registered setting and the name is not a setting of its
-   own, plus the bare `DATA_DIR`.
+   own, plus the bare `DATA_DIR` — and any of these with a per-account suffix
+   (`CHAT_SERVER_TOKEN_ACME`, the `<BASE>_<ACCOUNT>` form
+   `creds.ApplyClientSuffix` reads), which maps to the suffixed canonical
+   (`FLEET_SERVER_TOKEN_ACME`). The shell copy (`fleet_env_name_retired`)
+   applies the same rule.
 4. **In a client bundle, a removed spelling is an unset variable — and the
    upgrade refuses the bundle before installing.**
    - **Load** treats it exactly like any unset variable: `${CHAT_<X>:-d}`
@@ -61,8 +65,11 @@ spelling: it is refused before install, not tolerated at run time.
      replacement. There is no partial-load or entry-disabling machinery.
    - **One read-only scanner**, `clientconfig.RetiredManifestRefs`, finds
      every use: each `${…}` reference anywhere in the manifest (any section,
-     whole or embedded) and each literal name in an env-name field. It
-     loads nothing, applies no env file and writes nothing.
+     whole or embedded — opaque pass-through blocks included, since the
+     loader interpolates the whole text) and each literal name at a typed
+     env-name schema path (`mcp_servers[].enabled_env`, …; a same-named key
+     inside an opaque block is not one). It loads nothing, applies no env
+     file and writes nothing.
    - **`fleet update` refuses** a bundle with any use BEFORE installing: right
      after the new release verifies, it runs the NEW binary's
      `fleet validate-config --retired-only` (that scanner; exit 7 when it

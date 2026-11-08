@@ -24,29 +24,31 @@ import (
 // down over it. This file is the ONE read-only scanner behind that refusal,
 // `fleet doctor`, `fleet validate-config` and the load-time warnings.
 
-// envNameFields are the manifest fields (by YAML key) whose VALUE is the name
-// of an environment variable fleet reads — the fields literalEnvVarNames
-// admits to the .env allowlist and the readers resolve through envreg:
-// a provider's API key, a connector's enable gates and account/identity
-// variables, a webhook trigger's signing secret. It is the ONE list: the
-// scanner walks exactly these keys for literal names, and
-// TestEnvNameFieldsCoverTheSchema fails when a manifest type gains a *_env /
-// *_vars field that is in neither this list nor envKeyFields.
+// envNameFields are the typed manifest fields — by SCHEMA PATH, a list
+// written "[]" — whose VALUE is the name of an environment variable fleet
+// reads: the fields literalEnvVarNames admits to the .env allowlist and the
+// readers resolve through envreg (a provider's API key, a connector's enable
+// gates and account/identity variables, a webhook trigger's signing secret).
+// It is the ONE list: the scanner checks literal names at exactly these
+// paths (never at a same-named key inside an opaque pass-through section),
+// and TestEnvNameFieldsCoverTheSchema walks the manifest types and fails when
+// one gains a *_env / *_vars field that is in neither this list nor
+// envKeyFields, or when a listed path no longer exists.
 var envNameFields = map[string]bool{
-	"api_key_env":      true, // providers[]
-	"enabled_env":      true, // mcp_servers[]
-	"enabled_groups":   true, // mcp_servers[] (lists of names)
-	"account_vars":     true, // mcp_servers[]
-	"identity_env":     true, // mcp_servers[] (their <VAR>_<ACCOUNT> forms are read)
-	"hmac_secret_env":  true, // webhook_triggers[]
-	"token_secret_env": true, // webhook_triggers[]
+	"providers[].api_key_env":             true,
+	"mcp_servers[].enabled_env":           true,
+	"mcp_servers[].enabled_groups":        true, // lists of names
+	"mcp_servers[].account_vars":          true,
+	"mcp_servers[].identity_env":          true, // their <VAR>_<ACCOUNT> forms are read
+	"webhook_triggers[].hmac_secret_env":  true,
+	"webhook_triggers[].token_secret_env": true,
 }
 
-// envKeyFields are *_env fields whose values are KEYS of a connector's own
-// env map — the wire names fleet hands to the MCP server — not variables
-// fleet reads, so a CHAT_/CUTLASS_ value there is legitimate.
+// envKeyFields are *_env fields (by schema path) whose values are KEYS of a
+// connector's own env map — the wire names fleet hands to the MCP server —
+// not variables fleet reads, so a CHAT_/CUTLASS_ value there is legitimate.
 var envKeyFields = map[string]string{
-	"optional_env": "names keys of the connector's env map to drop when empty; never read from fleet's environment",
+	"mcp_servers[].optional_env": "names keys of the connector's env map to drop when empty; never read from fleet's environment",
 }
 
 // RetiredRef is one use of a removed spelling in a client bundle manifest.
@@ -70,8 +72,9 @@ func (r RetiredRef) String() string {
 // RetiredManifestRefs reads the manifest of the bundle in dir and returns every
 // use of a removed spelling: each ${...} reference anywhere in it (a whole
 // field or embedded in a larger string, in any section — servers, tools,
-// personas, pricing, sandbox, …), and each literal variable name in an
-// envNameFields field. Read-only: it loads nothing, applies no env file and
+// personas, pricing, sandbox, and opaque pass-through blocks too, because the
+// loader interpolates the whole manifest text), and each literal variable
+// name at an envNameFields schema path. Read-only: it loads nothing, applies no env file and
 // writes nothing. A missing manifest yields none. Sorted by path.
 func RetiredManifestRefs(dir string) ([]RetiredRef, error) {
 	if strings.TrimSpace(dir) == "" {
@@ -120,8 +123,10 @@ func retiredRefsIn(raw []byte) ([]RetiredRef, error) {
 	return out, nil
 }
 
-// walkEnvNameFields calls fn for every string under an envNameFields key,
-// with its rendered path.
+// walkEnvNameFields calls fn for every string at (or, for lists of lists,
+// under) an envNameFields schema path, with its rendered path. The schema
+// path drops list indices ("mcp_servers[].enabled_env"), so a same-named key
+// anywhere else — inside an opaque pass-through block — never matches.
 func walkEnvNameFields(node any, segs []string, fn func(path, name string)) {
 	var collect func(n any, segs []string)
 	collect = func(n any, segs []string) {
@@ -134,26 +139,34 @@ func walkEnvNameFields(node any, segs []string, fn func(path, name string)) {
 			fn(renderManifestPath(segs), strings.TrimSpace(v))
 		}
 	}
-	switch v := node.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			kid := append(append([]string(nil), segs...), k)
-			if envNameFields[k] {
-				collect(v[k], kid)
-				continue
+	var walk func(n any, segs []string, schema string)
+	walk = func(n any, segs []string, schema string) {
+		switch v := n.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
 			}
-			walkEnvNameFields(v[k], kid, fn)
-		}
-	case []any:
-		for i, c := range v {
-			walkEnvNameFields(c, append(append([]string(nil), segs...), fmt.Sprintf("[%d]", i)), fn)
+			sort.Strings(keys)
+			for _, k := range keys {
+				kid := append(append([]string(nil), segs...), k)
+				ks := k
+				if schema != "" {
+					ks = schema + "." + k
+				}
+				if envNameFields[ks] {
+					collect(v[k], kid)
+					continue
+				}
+				walk(v[k], kid, ks)
+			}
+		case []any:
+			for i, c := range v {
+				walk(c, append(append([]string(nil), segs...), fmt.Sprintf("[%d]", i)), schema+"[]")
+			}
 		}
 	}
+	walk(node, segs, "")
 }
 
 // warnRetiredManifestRefs logs each use at bundle load. A required ${...}

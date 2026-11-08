@@ -216,3 +216,42 @@ sandbox:
 		t.Errorf("found %d uses, want 6: %+v", len(refs), refs)
 	}
 }
+
+// Codex P2 on #2081: literal env-name detection follows the typed schema
+// path. A same-named key inside an opaque pass-through block (empty_state
+// cards) is not an env field and is not flagged — its ${...} references
+// still are, because the loader interpolates the whole manifest text.
+func TestRetiredManifestRefsFollowsTheSchemaPath(t *testing.T) {
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: s
+    command: python3
+    enabled_env: ["CHAT_SERVER_TOKEN"]
+empty_state:
+  cards:
+    - title: "x"
+      enabled_env: CHAT_SERVER_TOKEN
+      api_key_env: CHAT_SERVER_TOKEN
+      body: "${CHAT_TITLE_MODEL:-x}"
+`)
+	refs, err := RetiredManifestRefs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range refs {
+		got[r.Path] = true
+	}
+	if !got["mcp_servers[0].enabled_env[0]"] {
+		t.Errorf("the real mcp_servers[].enabled_env was not flagged: %+v", refs)
+	}
+	if got["empty_state.cards[0].enabled_env"] || got["empty_state.cards[0].api_key_env"] {
+		t.Errorf("an opaque empty_state key was flagged as an env field: %+v", refs)
+	}
+	if !got["empty_state.cards[0].body"] {
+		t.Errorf("a ${...} reference in an opaque block (interpolated) was not flagged: %+v", refs)
+	}
+	if len(refs) != 2 {
+		t.Errorf("found %d uses, want 2: %+v", len(refs), refs)
+	}
+}

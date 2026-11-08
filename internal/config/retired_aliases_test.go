@@ -79,3 +79,22 @@ func TestRetiredAliasFindingsOneWarningPerSpelling(t *testing.T) {
 		t.Fatalf("findings = %+v, want one each: CHAT_MAX_COST_USD in the env file, CUTLASS_TEMPERATURE in the process env", mine)
 	}
 }
+
+// A suffixed removed spelling is reported with the suffixed canonical name.
+func TestRetiredAliasFindingsNameTheSuffixedCanonical(t *testing.T) {
+	unsetForTest(t, "CHAT_SERVER_TOKEN_ACME")
+	t.Setenv("CHAT_SERVER_TOKEN_ACME", "stale")
+	got, err := RetiredAliasFindings("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range got {
+		if f.Name == "CHAT_SERVER_TOKEN_ACME" {
+			if f.Canonical != "FLEET_SERVER_TOKEN_ACME" || !strings.Contains(f.String(), "rename it to FLEET_SERVER_TOKEN_ACME") || strings.Contains(f.String(), "stale") {
+				t.Errorf("finding = %+v / %s", f, f)
+			}
+			return
+		}
+	}
+	t.Errorf("CHAT_SERVER_TOKEN_ACME not reported: %+v", got)
+}

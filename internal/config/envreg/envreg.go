@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -362,10 +363,40 @@ func EnvFileNames() []string {
 // canonical name to set instead. It is CHAT_<X> or CUTLASS_<X> when FLEET_<X>
 // is a registered setting and the name is not itself registered (CHAT_RATE_PER_MIN,
 // CUTLASS_ALLOWED_DIRS and the other canonical CHAT_/CUTLASS_ names stay
-// settings), or a bare spelling in retiredBare. Nothing reads such a name:
-// boot and `fleet doctor` warn when one is set, and `fleet config explain`
-// refuses it with the canonical name.
+// settings), or a bare spelling in retiredBare — or such a spelling with a
+// per-account suffix, <BASE>_<ACCOUNT> as creds.ApplyClientSuffix forms it
+// (ACCOUNT is upper-case letters, digits and underscores), which maps to
+// the canonical name with the same suffix (CHAT_SERVER_TOKEN_ACME →
+// FLEET_SERVER_TOKEN_ACME). A registered name, a live FLEET_ name, or a
+// suffixed variant of a canonical CHAT_/CUTLASS_ setting is never retired.
+// Nothing reads such a name: boot and `fleet doctor` warn when one is set,
+// and `fleet config explain` refuses it with the canonical name.
 func RetiredAlias(name string) (canonical string, ok bool) {
+	if IsRegistered(name) {
+		return "", false
+	}
+	if c, ok := retiredExact(name); ok {
+		return c, true
+	}
+	for i := strings.IndexByte(name, '_'); i > 0 && i < len(name)-1; {
+		if c, ok := retiredExact(name[:i]); ok && accountSuffix.MatchString(name[i+1:]) {
+			return c + name[i:], true
+		}
+		next := strings.IndexByte(name[i+1:], '_')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return "", false
+}
+
+// accountSuffix is the per-account suffix grammar creds.ApplyClientSuffix
+// produces: the account upper-cased with separators folded to '_'.
+var accountSuffix = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]*$`)
+
+// retiredExact is RetiredAlias without the account suffix.
+func retiredExact(name string) (string, bool) {
 	if IsRegistered(name) {
 		return "", false
 	}
