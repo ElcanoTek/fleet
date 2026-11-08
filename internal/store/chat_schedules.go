@@ -312,7 +312,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 				`UPDATE `+chatSchedulesTable+`
 				    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 				        duration_seconds = 0, status = 'active', next_run_at = $5,
-				        max_runs = $6, updated_at = $7
+				        max_runs = $6, updated_at = $7, def_version = def_version + 1
 				  WHERE id = $8
 				  RETURNING `+chatScheduleSelectCols,
 				title, prompt, cronSpec, normTZ, nextRunAt, maxRuns, nowUnix, existingID,
@@ -492,12 +492,13 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		`UPDATE `+chatSchedulesTable+`
 		    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 		        duration_seconds = $5, status = $6, next_run_at = $7,
-		        max_runs = $8, updated_at = $9
+		        max_runs = $8, updated_at = $9,
+		        def_version = def_version + CASE WHEN $11 THEN 1 ELSE 0 END
 		  WHERE id = $10
 		  RETURNING `+chatScheduleSelectCols,
 		cur.Title, cur.Prompt, cur.CronExpr, cur.Timezone,
 		cur.DurationSeconds, cur.Status, cur.NextRunAt,
-		cur.MaxRuns, nowUnix, cur.ID,
+		cur.MaxRuns, nowUnix, cur.ID, patch.editsDefinition(),
 	))
 	if err != nil {
 		return nil, err
@@ -531,6 +532,15 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		return nil, err
 	}
 	return &updated, nil
+}
+
+// editsDefinition reports whether the patch edits the schedule's definition
+// (what a fire delivers or how the next slot is computed) rather than only
+// its status. Such an edit bumps def_version, superseding any fire claimed
+// under the old definition.
+func (p ChatSchedulePatch) editsDefinition() bool {
+	return p.Title != nil || p.Prompt != nil || p.CronExpr != nil || p.Timezone != nil ||
+		p.DurationSeconds != nil || p.MaxRuns != nil
 }
 
 func isNoOpTerminalSchedulePatch(curStatus string, patch ChatSchedulePatch) bool {
@@ -675,12 +685,15 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 		return models.ChatScheduleDelivery{}, err
 	}
 
-	var status string
-	var lease sql.NullString
+	var (
+		status     string
+		lease      sql.NullString
+		defVersion int64
+	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT status, lease_owner FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`,
+		`SELECT status, lease_owner, def_version FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`,
 		fire.ScheduleID,
-	).Scan(&status, &lease)
+	).Scan(&status, &lease, &defVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return gone, nil
 	}
@@ -694,6 +707,20 @@ func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatSch
 	manual := fire.Trigger == models.ChatScheduleTriggerManual
 	if status != ChatScheduleStatusActive && (!manual || status != ChatScheduleStatusPaused) {
 		return stale, nil
+	}
+	if defVersion != fire.DefVersion {
+		// The definition was edited after the claim (a new prompt, cadence or
+		// kind): this fire's snapshot is out of date. Queue nothing and end
+		// the fire; the scheduler records nothing and its next pass fires the
+		// definition as it is now.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE `+chatSchedulesTable+`
+			    SET lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL, fire_trigger = NULL,
+			        fire_run_number = NULL, fire_failures = 0, fire_def_version = NULL
+			  WHERE id = $1`, fire.ScheduleID); err != nil {
+			return models.ChatScheduleDelivery{}, err
+		}
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleSuperseded}, tx.Commit()
 	}
 
 	// Patrol provenance is the server-owned mode, never the caller-supplied

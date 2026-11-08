@@ -470,3 +470,86 @@ func TestChatScheduleDeliveryTrustsOnlyPatrolMode(t *testing.T) {
 		t.Fatalf("the user's own input was cancelled by pausing the schedule: %+v", row)
 	}
 }
+
+// TestChatScheduleEditSupersedesAClaimedFire: a fire claimed before its
+// schedule's definition was edited (a new prompt; a patrol turned into a
+// timer) queues nothing with the old definition, writes no history, and the
+// definition as edited fires at its slot. Pause and cancel keep revoking the
+// fire, as before (TestChatSchedulePauseBetweenDeliveryAndSettle).
+func TestChatScheduleEditSupersedesAClaimedFire(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	sd := openSchedOn(t, dsn)
+	const user = "editor@elcanotek.com"
+	patrolTurns := func(convID string) []InputQueueRow {
+		t.Helper()
+		rows, err := s.db.QueryContext(ctx, inputQueueSelect+` WHERE conversation_id = $1 AND mode = 'patrol' ORDER BY position`, convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []InputQueueRow
+		for rows.Next() {
+			r, err := scanInputRow(rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name  string
+		patch func() ChatSchedulePatch
+		want  string // text the next fire must carry
+	}{
+		{"new prompt", func() ChatSchedulePatch { p := "Check the NEW thing."; return ChatSchedulePatch{Prompt: &p} }, "Check the NEW thing."},
+		{"patrol to timer", func() ChatSchedulePatch { d := 600; return ChatSchedulePatch{DurationSeconds: &d} }, "Scheduled timer"},
+	} {
+		conv, err := s.CreateConversation(ctx, user, tc.name, "victoria", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc, err := s.CreateChatSchedule(ctx, ChatScheduleInput{ConversationID: conv.ID, UserEmail: user, Prompt: "Check the OLD thing.", CronExpr: "0 9 * * *"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := time.Unix(sc.NextRunAt+1, 0)
+		fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
+		if err != nil || len(fires) != 1 {
+			t.Fatalf("%s: claim = %+v, %v", tc.name, fires, err)
+		}
+		edited, err := s.UpdateChatSchedule(ctx, user, conv.ID, sc.ID, tc.patch())
+		if err != nil {
+			t.Fatalf("%s: edit: %v", tc.name, err)
+		}
+		d, err := s.DeliverChatScheduleFire(ctx, fires[0], 20)
+		if err != nil || d.Outcome != models.ChatScheduleSuperseded {
+			t.Fatalf("%s: delivery of the stale fire = %+v, %v; want superseded", tc.name, d, err)
+		}
+		if turns := patrolTurns(conv.ID); len(turns) != 0 {
+			t.Fatalf("%s: the stale fire queued %+v", tc.name, turns)
+		}
+		if _, err := sd.SettleChatScheduleFire(ctx, fires[0], d, at); err != nil {
+			t.Fatal(err)
+		}
+		if runs, _ := sd.ListChatScheduleRuns(ctx, sc.ID, 10); len(runs) != 0 {
+			t.Fatalf("%s: run history = %+v, want none", tc.name, runs)
+		}
+		all, _ := s.ListChatSchedules(ctx, user, conv.ID, true)
+		if len(all) != 1 || all[0].RunCount != 0 {
+			t.Fatalf("%s: schedule = %+v; want nothing counted", tc.name, all)
+		}
+
+		// The definition as edited fires at its slot.
+		fired := fireDueChatSchedules(t, s, dsn, time.Unix(edited.NextRunAt+1, 0))
+		if len(fired) != 1 || fired[0].delivery.Outcome != models.ChatScheduleQueued {
+			t.Fatalf("%s: next fire = %+v", tc.name, fired)
+		}
+		turns := patrolTurns(conv.ID)
+		if len(turns) != 1 || !strings.Contains(turns[0].Message, tc.want) || strings.Contains(turns[0].Message, "OLD thing") && tc.name == "new prompt" {
+			t.Fatalf("%s: queued %+v; want one turn carrying %q", tc.name, turns, tc.want)
+		}
+	}
+}

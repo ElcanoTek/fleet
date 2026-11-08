@@ -603,7 +603,7 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 	case models.ChatScheduleGone:
 		writeScheduleError(w, store.ErrConversationNotFound)
 		return
-	case models.ChatScheduleStale:
+	case models.ChatScheduleStale, models.ChatScheduleSuperseded:
 		http.Error(w, "the schedule changed while it was being run; try again", http.StatusConflict)
 		return
 	case models.ChatScheduleDeferred:
