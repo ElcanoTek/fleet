@@ -332,14 +332,20 @@ it declares `ARG FLEET_SANDBOX_BASE`). That build is of the bundle's sandbox
 image, not of fleet, and needs only podman; ADR-0101 left it in place.
 `update` rebuilds it when anything in its build context changes — the
 Containerfile or any file beside it (a `requirements.txt`, a script it
-copies), compared by one hash of the whole directory that ignores VCS
-metadata and whatever the context's `.containerignore` / `.dockerignore`
-excludes. The first update from a release that hashed only the Containerfile
-rebuilds once.
+copies), compared by one hash of the whole directory: file contents,
+directories (an empty one too) and permission bits (`mode & 0755`, so a
+`chmod +x` counts but a umask-dependent group/other write bit does not). It
+ignores VCS metadata and whatever the context's `.containerignore` /
+`.dockerignore` excludes. The first update from a release that hashed less
+(only the Containerfile, or contents only) rebuilds once.
 
 After pulling a new release image by digest, `update` removes the previous
 one (it keeps its `@sha256` name, so `podman image prune` never would),
-without `--force`: an image a container still uses stays.
+without `--force`. When a container still uses it, the removal is refused and
+the ref is kept in `sandbox-image.reclaim` under the state directory; `update`
+retries every listed ref after the service restart and on each later run, and
+drops it once it is removed or gone. The current release ref, the bundle's
+tag and their image are never removed.
 
 A bundle Containerfile that only adds packages should become:
 

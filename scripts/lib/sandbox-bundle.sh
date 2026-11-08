@@ -239,12 +239,28 @@ fleet__context_ignored() {
   return "$ignored"
 }
 
+# fleet__mode PATH — PATH's permission bits that the build preserves and that
+# do not depend on the umask of whoever checked the bundle out: mode & 0755
+# (owner rwx, group/other read + execute). A group/other WRITE bit is what a
+# 002 vs 022 umask flips, so hashing it would make two identical checkouts —
+# or one checkout rewritten by a pull under another umask — read as different
+# images. GNU stat: update.sh, bootstrap.sh and build-sandbox-image.sh run
+# only on Linux (BSD/macOS stat would need `stat -f %Lp`).
+fleet__mode() {
+  local m
+  m="$(stat -c %a "$1")" || return 1
+  printf '%o' $(( 8#$m & 8#755 ))
+}
+
 # fleet_sandbox_context_hash CONTAINERFILE — one SHA-256 over the build
 # context `podman build -f CONTAINERFILE "$(dirname CONTAINERFILE)"` uses
 # (build-sandbox-image.sh), or `absent` when CONTAINERFILE does not exist.
-# Deterministic: every regular file and symlink under the context, sorted
-# bytewise by relative path, each hashed as its path plus its contents (a
-# symlink as its target). VCS metadata (.git, .hg, .svn) never counts, nor
+# Deterministic: every directory, regular file and symlink under the context,
+# sorted bytewise by relative path, each hashed as its kind, its path, its
+# permission bits (fleet__mode — COPY preserves them, so a chmod +x makes a
+# new image) and, for a file, its contents (a symlink: its target).
+# Directories count on their own, so an added empty directory or a directory
+# mode change is a change. VCS metadata (.git, .hg, .svn) never counts, nor
 # does a path the context's .containerignore / .dockerignore excludes (the
 # build never sends it). The Containerfile and the ignore file itself always
 # count — the Containerfile under a fixed name, so the same context at another
@@ -253,8 +269,9 @@ fleet__context_ignored() {
 # generic one this way).
 # update.sh stores this as the sandbox build stamp, so an edit to ANY file the
 # build can COPY — not only to the Containerfile — triggers a rebuild. The
-# `ctx1-` prefix keeps it distinct from the bare Containerfile sha256 earlier
-# releases stored there.
+# prefix names the format: a `ctx2-` hash (modes and directories) never
+# equals a `ctx1-` stamp (contents only) or the bare Containerfile sha256 of
+# earlier releases, so a format change rebuilds once.
 fleet_sandbox_context_hash() {
   local cf="$1" ctx ignore path rel cf_rel ignore_rel=""
   if [[ ! -f "$cf" ]]; then
@@ -266,7 +283,7 @@ fleet_sandbox_context_hash() {
   ignore="$(fleet_sandbox_ignore_file "$ctx")"
   [[ -n "$ignore" ]] && ignore_rel="$(basename "$ignore")"
   {
-    printf 'containerfile\0%s\0' "$(sha256sum < "$cf" | awk '{print $1}')"
+    printf 'containerfile\0%s\0%s\0' "$(fleet__mode "$cf")" "$(sha256sum < "$cf" | awk '{print $1}')"
     while IFS= read -r -d '' path; do
       rel="${path#"$ctx"/}"
       [[ "$rel" == "$cf_rel" ]] && continue
@@ -275,36 +292,77 @@ fleet_sandbox_context_hash() {
       fi
       if [[ -L "$path" ]]; then
         printf 'link\0%s\0%s\0' "$rel" "$(readlink "$path")"
+      elif [[ -d "$path" ]]; then
+        printf 'dir\0%s\0%s\0' "$rel" "$(fleet__mode "$path")"
       else
-        printf 'file\0%s\0%s\0' "$rel" "$(sha256sum < "$path" | awk '{print $1}')"
+        printf 'file\0%s\0%s\0%s\0' "$rel" "$(fleet__mode "$path")" "$(sha256sum < "$path" | awk '{print $1}')"
       fi
-    done < <(find "$ctx" -mindepth 1 \( -name .git -o -name .hg -o -name .svn \) -prune -o \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
-  } | sha256sum | awk '{printf "ctx1-%s", $1}'
+    done < <(find "$ctx" -mindepth 1 \( -name .git -o -name .hg -o -name .svn \) -prune -o \( -type f -o -type l -o -type d \) -print0 | LC_ALL=C sort -z)
+  } | sha256sum | awk '{printf "ctx2-%s", $1}'
 }
 
-# fleet_sandbox_reclaim_release_image PREV_REF CURRENT_REF TAG — remove the
-# superseded digest-pulled release image PREV_REF once CURRENT_REF has been
-# pulled and tagged TAG. `podman pull repo@sha256:…` keeps that digest
-# reference among the image's names, so the old image never goes dangling and
-# `image prune` never reclaims it (~1.5 GB per release). Runs the caller's
-# sandbox_podman (the service user's store). It never removes the image in use:
-#   - only a digest reference (`…@sha256:…`) that is neither CURRENT_REF nor
-#     TAG is considered;
-#   - nothing happens when PREV_REF is not in the store, or is the same image
-#     (by ID) as TAG or CURRENT_REF under another name;
-#   - a plain `rmi`, never --force: podman refuses to remove an image any
-#     container, running or stopped, still uses, and that refusal is ignored.
+# fleet_sandbox_reclaim_release_images LIST_FILE NEW_REF PROTECTED_REF… —
+# remove superseded digest-pulled release sandbox images. `podman pull
+# repo@sha256:…` keeps that digest reference among the image's names, so an
+# old release image never goes dangling and `image prune` never reclaims it
+# (~1.5 GB per release). LIST_FILE holds the refs still waiting, one per line;
+# NEW_REF (may be empty) is the one this update just superseded. Each is tried
+# with a plain `sandbox_podman rmi` (the caller's: the service user's store).
+# A ref that is removed, already gone, or not a digest reference leaves the
+# list; one whose removal is refused (a container still uses it — work that
+# started after the idle gate, or a --force update) stays for the next try, so
+# overwriting the digest file never strands it.
+# It never removes what is in use:
+#   - never a PROTECTED_REF (the current release ref, the bundle's tag, a
+#     custom build's base) — such a ref leaves the list, it is current again —
+#     nor an image whose ID is one of theirs (that ref stays listed: once it is
+#     no longer current, a later run removes it);
+#   - never --force: podman refuses an image any container, running or
+#     stopped, or any child image still uses;
+#   - a store that cannot be read keeps the ref (only `image exists` exit 1
+#     means gone).
 # Best-effort: always returns 0.
-fleet_sandbox_reclaim_release_image() {
-  local prev="$1" cur="$2" tag="$3" prev_id ref
-  [[ -n "$prev" && "$prev" != "$cur" && "$prev" != "$tag" ]] || return 0
-  [[ "$prev" == *@sha256:* ]] || return 0
-  prev_id="$(sandbox_podman image inspect --format '{{.Id}}' "$prev" 2>/dev/null)" || return 0
-  [[ -n "$prev_id" ]] || return 0
-  for ref in "$tag" "$cur"; do
+fleet_sandbox_reclaim_release_images() {
+  local list="$1" new="$2" ref id rc seen=" " ids=" "
+  shift 2
+  local -a protect=("$@") pending=() keep=()
+  if [[ -f "$list" ]]; then
+    while IFS= read -r ref || [[ -n "$ref" ]]; do
+      ref="$(fleet__trim "$ref")"
+      [[ -n "$ref" ]] && pending+=("$ref")
+    done < "$list"
+  fi
+  [[ -n "$new" ]] && pending+=("$new")
+  (( ${#pending[@]} > 0 )) || return 0
+  for ref in "${protect[@]}"; do
     [[ -n "$ref" ]] || continue
-    [[ "$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" == "$prev_id" ]] && return 0
+    id="$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" || continue
+    [[ -n "$id" ]] && ids+="$id "
   done
-  sandbox_podman rmi "$prev" >/dev/null 2>&1 || true
+  for ref in "${pending[@]}"; do
+    [[ "$seen" == *" $ref "* ]] && continue
+    seen+="$ref "
+    [[ "$ref" == *@sha256:* ]] || continue
+    [[ " ${protect[*]} " == *" $ref "* ]] && continue
+    rc=0
+    sandbox_podman image exists "$ref" >/dev/null 2>&1 || rc=$?
+    (( rc == 1 )) && continue
+    if (( rc != 0 )); then
+      keep+=("$ref")
+      continue
+    fi
+    id="$(sandbox_podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" || id=""
+    if [[ -z "$id" || "$ids" == *" $id "* ]]; then
+      keep+=("$ref")
+      continue
+    fi
+    sandbox_podman rmi "$ref" >/dev/null 2>&1 || keep+=("$ref")
+  done
+  if (( ${#keep[@]} == 0 )); then
+    rm -f "$list" 2>/dev/null || true
+  else
+    mkdir -p "$(dirname "$list")" 2>/dev/null || true
+    { printf '%s\n' "${keep[@]}" > "$list.tmp" && mv -f "$list.tmp" "$list"; } 2>/dev/null || true
+  fi
   return 0
 }

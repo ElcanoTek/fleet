@@ -1159,6 +1159,9 @@ fi
 sandbox_base=""   # the verified release image a custom Containerfile layers on
 SANDBOX_DIGEST_FILE="$STATE_DIR/sandbox-image.digest"
 SANDBOX_BASE_FILE="$STATE_DIR/sandbox-base.ref"
+# Superseded release image refs whose removal podman refused (still in use),
+# one per line; fleet_sandbox_reclaim_release_images retries them.
+SANDBOX_RECLAIM_FILE="$STATE_DIR/sandbox-image.reclaim"
 if [[ -n "$sandbox_image_ref" ]]; then
   # image wins over tag (internal/clientconfig): the service pulls/uses the
   # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
@@ -1190,12 +1193,13 @@ elif [[ "$sandbox_published" == "1" ]]; then
       ok "sandbox image ${ref_now} = ${pub_ref} (verified, pulled by digest)"
       # The previous release image keeps its own @sha256 name from its pull, so
       # it is never dangling and `image prune` alone never reclaims it (~1.5 GB
-      # per release). Remove it by that name — only when it is a different
-      # image from the one just tagged, and never forced, so an image a
-      # container still uses stays (fleet_sandbox_reclaim_release_image).
-      if [[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]]; then
-        fleet_sandbox_reclaim_release_image "$pub_prev" "$pub_ref" "$ref_now"
-      fi
+      # per release). Remove it by that name, with any earlier one whose
+      # removal was refused — never the image just tagged, never forced, so an
+      # image a container still uses stays listed in SANDBOX_RECLAIM_FILE and
+      # is retried after the restart below and on the next update.
+      sandbox_superseded=""
+      [[ -n "$pub_prev" && "$pub_prev" != "$pub_ref" ]] && sandbox_superseded="$pub_prev"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "$sandbox_superseded" "$pub_ref" "$ref_now"
       sandbox_podman image prune -f >/dev/null 2>&1 || true
     elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
       warn "pulling ${pub_ref} failed — the restarted service keeps the existing ${ref_now}; re-run: sudo fleet update --no-pull"
@@ -1811,6 +1815,15 @@ else
     INSTALL_STATE=restarted
     ok "${SERVICE_NAME} is active${RELEASE_TAG:+ and ready on ${RELEASE_TAG}}"
     fleet_remove_web_tier "$SRC_DIR" || true
+    # The restart ended the old process's sandbox containers, so a superseded
+    # release image step 3 could not remove (in use then) may be free now.
+    # Same rules as there: the current release ref, the tag and a custom
+    # build's base are protected, nothing is forced, a refusal stays listed.
+    if [[ -f "$SANDBOX_RECLAIM_FILE" ]] && command -v podman >/dev/null 2>&1; then
+      sandbox_current=""
+      [[ -f "$SANDBOX_DIGEST_FILE" ]] && sandbox_current="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
+      fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$ref_now" "$sandbox_base"
+    fi
   else
     if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
       warn "the old web tier (fleet-web) was stopped but NOT removed; with fleet back on the previous binary, restore it with: sudo systemctl enable --now fleet-web"
