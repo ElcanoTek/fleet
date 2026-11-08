@@ -417,3 +417,86 @@ func TestChatSchedules_RejectedRunNowIsTerminal(t *testing.T) {
 		t.Fatalf("run history = %+v, want none", runs)
 	}
 }
+
+// TestProcessScheduledTasks_LockedRowDoesNotBlockOthers: the earliest due
+// task is held FOR UPDATE by another transaction for longer than a statement
+// may take, across several ticks. Promotion must pass over it — every other
+// due task, on later pages too, is promoted — and promote it once the lock is
+// released; Stop still returns promptly.
+func TestProcessScheduledTasks_LockedRowDoesNotBlockOthers(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = 100 * time.Millisecond
+	s.storeTimeout = 300 * time.Millisecond
+	s.scheduledBatchSize = 2
+
+	add := func(age time.Duration) uuid.UUID {
+		t.Helper()
+		at := time.Now().UTC().Add(-age)
+		task := &models.Task{ID: uuid.New(), Prompt: "due", Status: models.TaskStatusScheduled, ScheduledFor: &at, CreatedAt: time.Now().UTC()}
+		if _, err := s.storage.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+		return task.ID
+	}
+	locked := add(time.Hour) // the earliest: first in the first page
+	others := make([]uuid.UUID, 0, 5)
+	for i := 0; i < 5; i++ {
+		others = append(others, add(time.Duration(30-i)*time.Minute))
+	}
+	tx, err := s.storage.DB().Conn().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var id string
+	if err := tx.QueryRow(`SELECT id::text FROM tasks WHERE id = $1 FOR UPDATE`, locked).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	status := func(id uuid.UUID) models.TaskStatus {
+		t.Helper()
+		task, err := s.storage.GetTask(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.Status
+	}
+	s.Start()
+	stopped := false
+	defer func() {
+		if !stopped {
+			s.Stop()
+		}
+	}()
+	time.Sleep(4 * s.storeTimeout) // several ticks, each longer than a statement may take
+	for _, o := range others {
+		if st := status(o); st != models.TaskStatusPending {
+			t.Fatalf("task %s behind the locked row is %s, want pending", o, st)
+		}
+	}
+	if st := status(locked); st != models.TaskStatusScheduled {
+		t.Fatalf("locked task is %s while its lock is held, want scheduled", st)
+	}
+
+	_ = tx.Rollback()
+	deadline := time.Now().Add(5 * time.Second)
+	for status(locked) != models.TaskStatusPending && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st := status(locked); st != models.TaskStatusPending {
+		t.Fatalf("locked task is %s after its lock was released, want pending", st)
+	}
+
+	start := time.Now()
+	s.Stop()
+	stopped = true
+	select {
+	case <-s.loopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the task loop did not exit after Stop")
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("Stop took %s", took)
+	}
+}

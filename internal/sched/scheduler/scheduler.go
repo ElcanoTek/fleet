@@ -125,6 +125,10 @@ type Scheduler struct {
 	maintWG        sync.WaitGroup
 	maintenance    func()
 	firstCleanupIn time.Duration
+
+	// storeTimeout bounds one task-path storage statement (storeCtx);
+	// 0 means sweepTimeout. A field only so tests can shorten it.
+	storeTimeout time.Duration
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -321,7 +325,11 @@ func (s *Scheduler) Stop() {
 // a child of the scheduler's lifetime context (cancelled by Stop), bounded by
 // sweepTimeout.
 func (s *Scheduler) storeCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(s.ctx, sweepTimeout)
+	timeout := s.storeTimeout
+	if timeout <= 0 {
+		timeout = sweepTimeout
+	}
+	return context.WithTimeout(s.ctx, timeout)
 }
 
 // settleCtx bounds a run_if gate's verdict write (promote, skip, end of
@@ -603,8 +611,9 @@ func (s *Scheduler) RecoverExpiredLeases() {
 func (s *Scheduler) ProcessScheduledTasks() {
 	// Bounded and cancelled by Stop, like every other sweep: a row lock held
 	// by another transaction must not hang the tick (or Stop) forever.
-	ctx, cancel := s.storeCtx()
-	defer cancel()
+	// Each page fetch and each promotion statement gets a context of its own
+	// (storeCtx: bounded, cancelled by Stop), so one slow statement cannot
+	// spend the budget of the pages and fallbacks after it.
 	now := time.Now().In(s.location)
 	batchSize := s.scheduledBatchSize
 	if batchSize <= 0 {
@@ -638,7 +647,12 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			return
 		}
 
-		tasks, err := s.storage.GetScheduledTasksCtx(ctx, now, cursorScheduledFor, cursorID, batchSize)
+		if s.ctx.Err() != nil {
+			return // stopping
+		}
+		pageCtx, pageCancel := s.storeCtx()
+		tasks, err := s.storage.GetScheduledTasksCtx(pageCtx, now, cursorScheduledFor, cursorID, batchSize)
+		pageCancel()
 		if err != nil {
 			log.Printf("Error getting scheduled tasks: %v", err)
 			return
@@ -680,17 +694,21 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		log.Printf("Processing %d scheduled tasks (%d recurring, %d gated dispatched async, %d gated deferred)",
 			len(tasks), recurringCount, gatedCount-deferredGates, deferredGates)
 
-		promoted, err := s.storage.UpdateTasksStatusBatchCtx(ctx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
+		batchCtx, batchCancel := s.storeCtx()
+		promoted, err := s.storage.UpdateTasksStatusBatchCtx(batchCtx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
+		batchCancel()
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
 			// A row that still fails is already behind the cursor, so a persistent
 			// DB error can't re-loop it this tick.
 			for _, taskID := range promoteIDs {
-				if ctx.Err() != nil {
-					return
+				if s.ctx.Err() != nil {
+					return // stopping
 				}
-				n, perr := s.storage.UpdateTasksStatusBatchCtx(ctx, []uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				oneCtx, oneCancel := s.storeCtx()
+				n, perr := s.storage.UpdateTasksStatusBatchCtx(oneCtx, []uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				oneCancel()
 				if perr != nil {
 					log.Printf("Error updating task %s: %v", taskID, perr)
 					continue
