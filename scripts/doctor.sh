@@ -1040,6 +1040,32 @@ else
   fi
 fi
 
+# ── One migration ledger (#2049 M6, ADR-0107) ────────────────────────────────
+# Every store open migrates the whole database through one runner, recorded in
+# core.schema_versions. A box upgraded from a release before it adopts its two
+# legacy ledgers on the first start; until then (or with migrations pending, a
+# server not restarted since the update) that is an advisory. A dirty ledger
+# stops fleet from starting, so it fails.
+if [[ -z "$id_cli" ]] || ! command -v jq >/dev/null 2>&1; then
+  advise "migration ledger check skipped (needs the fleet binary and jq)"
+elif ! mig_json="$(FLEET_ENV_FILE="$ENV_FILE" "$id_cli" migrate status --json 2>/dev/null)" || ! jq -e 'has("adopted")' >/dev/null 2>&1 <<<"$mig_json"; then
+  advise "could not read the migration ledger — run: fleet migrate status"
+elif [[ -n "$(jq -r '.problem // ""' <<<"$mig_json")" ]]; then
+  fail "migrations: fleet will not start on this database: $(jq -r '.problem' <<<"$mig_json")"
+elif (( $(jq -r '(.unknown // []) | length' <<<"$mig_json") > 0 )); then
+  fail "migrations: core.schema_versions has version(s) $(jq -r '[.unknown[].version] | join(", ")' <<<"$mig_json") this release does not ship (a newer fleet migrated this database; fleet will not start) — run that release, or restore a backup taken before it"
+elif (( $(jq -r '(.mismatched // []) | length' <<<"$mig_json") > 0 )); then
+  fail "migrations: version(s) $(jq -r '[.mismatched[].version] | join(", ")' <<<"$mig_json") were recorded from a different file than this release ships (an edited migration; fleet will not start) — see docs/MIGRATIONS.md"
+elif [[ "$(jq -r '.dirty' <<<"$mig_json")" == "true" ]]; then
+  fail "migrations: core.schema_versions has a DIRTY version (a migration was left half-applied; fleet will not start) — see docs/MIGRATIONS.md, then: fleet migrate force <version>"
+elif [[ "$(jq -r '.adopted' <<<"$mig_json")" != "true" ]]; then
+  advise "migrations: not adopted yet — the next fleet start moves the legacy ledgers into core.schema_versions ($(jq -r '.legacy // ""' <<<"$mig_json"))"
+elif (( $(jq -r '.pending | length' <<<"$mig_json") > 0 )); then
+  advise "migrations: $(jq -r '.pending | length' <<<"$mig_json") pending (restart fleet to apply them)"
+else
+  pass "migrations: adopted (core.schema_versions), at version $(jq -r '.current_version' <<<"$mig_json"), none pending"
+fi
+
 # ── 7. scheduled maintenance + disk headroom ─────────────────────────────────
 step "7/9  Scheduled maintenance + disk headroom"
 

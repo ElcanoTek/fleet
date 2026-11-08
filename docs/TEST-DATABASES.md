@@ -58,14 +58,16 @@ template and dropped when the test ends, and the whole tree runs in one
   `Run` returns only after every drop — so a finished run leaves no `fleet_t_`
   database. Every DB package has the `TestMain`; a scripts check keeps it so.
 
-**`internal/testdb/fleetdb`** clones the one-database template — both stores
-migrated through their own runners, `chat` and `sched` schemas, the
-production layout — and opens them: `fleetdb.New(t)` (`.DSN` is what
+**`internal/testdb/onedb`** is the one template since #2049 M6: the whole
+database migrated by the one runner (`internal/migrations` — schemas `chat`,
+`core` and `sched`, the production layout) plus the identity merge, keyed by
+`migrations.Fingerprint()`. **`internal/testdb/fleetdb`** clones it and opens
+the stores: `fleetdb.New(t)` (`.DSN` is what
 `DATABASE_URL` holds; `.ChatDSN()`, `.SchedDSN()`, `.Chat(t)`, `.SchedDB(t)`),
 `fleetdb.Chat(t)`, `fleetdb.SchedDB(t)`, `DeleteRows`. Pools are small
 (`testdb.PoolMaxOpen` = 4). `internal/store` and `internal/sched/db` cannot
-import it, so their internal tests clone single-store templates (`chat`,
-`sched`) through `testdb.New`; `fleetdb` deliberately does not import
+import it, so their internal tests clone the same template through
+`testdb.New(t, onedb.Spec)`; `fleetdb` deliberately does not import
 `internal/sched/storage`, so storage's own tests can use it.
 
 **Every helper migrated**: `newTestStore`, the httpapi fixtures, sched/db's

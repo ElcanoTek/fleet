@@ -11,8 +11,8 @@ verbs are the operator CLI. (The `fleet-admin` shim was removed —
 Every verb is idempotent and exposed both as a shell script
 (`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
 the same state rather than double-applying. None of them ever run application
-migrations — each service self-migrates on start (chat's advisory-lock runner;
-sched's golang-migrate-compatible runner). `make install` puts the `fleet` binary on PATH.
+migrations — the service self-migrates on start (the one migration runner,
+[MIGRATIONS.md](MIGRATIONS.md)). `make install` puts the `fleet` binary on PATH.
 
 For a terminal chat with the agent, `fleet chat` opens a Bubble Tea TUI that
 streams replies from the running server's chat API (or `fleet chat --message
@@ -838,13 +838,11 @@ database (`DATABASE_URL`). `fleet backup` takes them with `pg_dump -Fc` /
 fleet backup                          # ONE dump of chat, core and sched (one snapshot): fleet-all-<UTC>.dump
 fleet backup --db=chat --out /backups # dump just chat (+ core) into /backups
 fleet restore --db=all FILE.dump      # restore the whole fleet from a fleet-all dump (one transaction)
-fleet restore --db=chat FILE.dump     # restore one store (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout. `restore` has no default `--db`: it
-overwrites a live database, so the target is named explicitly. Only `--db=all`
-is self-contained; a sched-only restore needs the accounts already in the
-database (restore chat first) — see BACKUP_RESTORE.md. Connection params,
+`backup` prints each dump path on stdout. `restore` puts back the whole
+database from a `fleet-all` dump (`--db=all`, the only restore since #2049
+M6; single-store restores are refused) — see BACKUP_RESTORE.md. Connection params,
 including the password, are passed to the child processes through the
 environment, never argv.
 

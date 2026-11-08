@@ -210,8 +210,8 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 
 	// Restore into the (empty) destination DB and verify the sentinel survived.
-	if err := runPgRestore(ctx, dstDSN, dumpPath); err != nil {
-		t.Fatalf("runPgRestore: %v", err)
+	if err := pgRestore(ctx, dstDSN, dumpPath, []string{config.SchedSchema}, false); err != nil {
+		t.Fatalf("pgRestore: %v", err)
 	}
 	dst, err := sql.Open("pgx", dstDSN)
 	if err != nil {

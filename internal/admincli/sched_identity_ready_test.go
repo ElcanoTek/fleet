@@ -7,58 +7,39 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
-	"github.com/google/uuid"
 )
 
-// A sched-only verb that needs accounts, run first on a fresh one-database
-// fleet (or mid-upgrade before the chat store migrated), refuses up front
-// with what to do, instead of failing on a missing core.users relation
-// (Codex 4504695148 on #2083). Once the chat store has created the identity
-// table, the same verb works: the scheduler's next open merges.
-func TestSchedUserVerbsRefuseBeforeTheIdentityTableExists(t *testing.T) {
+// A sched-only verb run first on a fresh one-database fleet works (#2049 M6):
+// the scheduler's open runs the one migration runner, which migrates chat,
+// core and sched together, so the identity table exists before any sched
+// verb reads it. (Before M6 such a verb could run ahead of the chat store and
+// was refused with what to do; Codex 4504695148 on #2083.)
+func TestSchedUserVerbsWorkSchedFirst(t *testing.T) {
 	dsn := testdb.Empty(t)
 	schedURL := config.WithSchema(dsn, config.SchedSchema)
 
-	verbs := [][]string{
-		{"list", "--database-url", schedURL},
-		{"add", "ops@x.com", "--password", "placeholder-not-a-secret", "--role", "client", "--database-url", schedURL},
-		{"set-role", "ops@x.com", "--role", "readonly", "--database-url", schedURL},
-	}
-	for _, argv := range verbs {
-		var code int
-		out := captureStderr(t, func() { code = cmdSchedUser(argv) })
-		if code != 1 || !strings.Contains(out, "core.users) does not exist yet") || !strings.Contains(out, "fleet serve") {
-			t.Fatalf("sched user %s before chat migrated: exit %d, stderr %q", argv[0], code, out)
-		}
-		if strings.Contains(out, "relation") {
-			t.Fatalf("sched user %s leaked the SQL error: %q", argv[0], out)
-		}
-	}
-	// A legacy bundle with Operations Center users is refused the same way.
-	path := writeBundle(t, migrationBundle{
-		Format: migrationBundleFormat, Version: 1, Source: "sched-first test",
-		Sched: &schedSection{Users: []bundleSchedUser{{ID: uuid.New(), Username: "brad", Role: "client"}}},
-	})
 	var code int
-	out := captureStderr(t, func() { code = cmdImport([]string{path, "--sched-database-url", schedURL}) })
-	if code != 1 || !strings.Contains(out, "core.users) does not exist yet") {
-		t.Fatalf("import sched users before chat migrated: exit %d, stderr %q", code, out)
+	out := captureStderr(t, func() { code = cmdSchedUser([]string{"list", "--database-url", schedURL}) })
+	if code != 0 || strings.Contains(out, "does not exist yet") {
+		t.Fatalf("sched user list on a fresh database: exit %d, stderr %q", code, out)
 	}
-	// A verb that needs no accounts still runs sched-first.
+	if code := cmdSchedUser([]string{"add", "ops@x.com", "--password", "placeholder-not-a-secret", "--role", "client", "--database-url", schedURL}); code != 0 {
+		t.Fatalf("sched user add on a fresh database: exit %d", code)
+	}
+	if code := cmdSchedUser([]string{"set-role", "ops@x.com", "--role", "readonly", "--database-url", schedURL}); code != 0 {
+		t.Fatalf("sched user set-role on a fresh database: exit %d", code)
+	}
 	if code := cmdSchedBudget([]string{"list", "--database-url", schedURL}); code != 0 {
 		t.Fatalf("sched budget list sched-first: exit %d", code)
 	}
-
-	// The chat store creates core.users; now the account verbs work.
+	// The chat store sees the account the scheduler verb created: one table.
 	chat, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.DefaultPoolConfig())
 	if err != nil {
-		t.Fatalf("migrate chat store: %v", err)
+		t.Fatalf("open chat store: %v", err)
 	}
-	_ = chat.Close()
-	if code := cmdSchedUser([]string{"add", "ops@x.com", "--password", "placeholder-not-a-secret", "--role", "client", "--database-url", schedURL}); code != 0 {
-		t.Fatalf("sched user add after chat migrated: exit %d", code)
-	}
-	if code := cmdSchedUser([]string{"list", "--database-url", schedURL}); code != 0 {
-		t.Fatalf("sched user list after chat migrated: exit %d", code)
+	defer chat.Close()
+	users, err := chat.ListUsers(t.Context())
+	if err != nil || len(users) != 1 || users[0].Email != "ops@x.com" {
+		t.Fatalf("chat ListUsers = %+v, %v; want ops@x.com", users, err)
 	}
 }

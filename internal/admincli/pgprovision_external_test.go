@@ -147,7 +147,7 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	// Pre-created schemas OWNED by the role are the other accepted shape —
 	// without CREATE on the database.
 	mustExec(t, admin, "REVOKE CREATE ON DATABASE "+db+" FROM "+role)
-	mustExec(t, tdb, "CREATE SCHEMA chat AUTHORIZATION "+role+"; CREATE SCHEMA sched AUTHORIZATION "+role)
+	mustExec(t, tdb, "CREATE SCHEMA chat AUTHORIZATION "+role+"; CREATE SCHEMA core AUTHORIZATION "+role+"; CREATE SCHEMA sched AUTHORIZATION "+role)
 	if !can() {
 		t.Fatal("pre-created schemas owned by the role were not accepted")
 	}
@@ -195,7 +195,7 @@ func checkManyFindings(t *testing.T, tdb *sql.DB, readiness func() int) {
 // shell gate's exit code and printed findings.
 func assertReadinessParity(t *testing.T, db *sql.DB, shellCode int, shellOut string) {
 	t.Helper()
-	r, err := dbschema.CheckReadiness(t.Context(), db, []string{"chat", "sched"})
+	r, err := dbschema.CheckReadiness(t.Context(), db, dbschema.Schemas)
 	if err != nil {
 		t.Fatalf("CheckReadiness: %v", err)
 	}

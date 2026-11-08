@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/migrations"
 )
 
 // TestConversationHardDeleteDropsChatSchedules pins the conversation-delete
@@ -161,49 +164,54 @@ func TestDeleteUserWithoutSchedSchema(t *testing.T) {
 	}
 }
 
-// TestDeleteUserErasesLegacyChatSchedules: on a database from the previous
-// release that only the chat store has opened (a chat-only verb; the
-// scheduler has not migrated), a user's patrols still live in
-// chat.chat_schedules — here in a teammate's conversation, which the
-// conversation cascade does not touch. Erasing the user removes them, so
-// sched migration 077 has none of theirs to carry over.
+// TestDeleteUserErasesLegacyChatSchedules: a database from the release before
+// the one scheduler, migrated through chat 099 and sched 076 only — a user's
+// patrols still in chat.chat_schedules, here in a teammate's conversation,
+// which the conversation cascade does not touch. Since #2049 M6 every store
+// open runs the one migration runner, so opening the chat store moves them
+// (077) before anything else; erasing the user then removes theirs.
 func TestDeleteUserErasesLegacyChatSchedules(t *testing.T) {
 	t.Parallel()
 	dsn := emptyTestDSN(t)
-	s, err := Open(dsn, testPool())
+	ctx := context.Background()
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if err := migrations.UpTo(ctx, raw, 176); err != nil {
+		t.Fatal(err)
+	}
+	const gone, mate = "leaving@elcanotek.com", "staying@elcanotek.com"
+	now := time.Now().Unix()
+	for _, u := range []string{gone, mate} {
+		if _, err := raw.Exec(`INSERT INTO core.users (email, password_hash, created_at, updated_at) VALUES ($1, 'x', $2, $2)`, u, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := raw.Exec(`INSERT INTO chat.conversations (id, user_email, title, created_at, updated_at) VALUES ('team-chat', $1, 'team chat', $2, $2)`, mate, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range [][2]string{{"theirs", gone}, {"mine", mate}} {
+		if _, err := raw.Exec(`INSERT INTO chat.chat_schedules
+			(id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, created_at, updated_at)
+			VALUES ($1, 'team-chat', $2, 'P', '0 9 * * *', 'active', $3, $3, $3)`, row[0], row[1], now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := Open(dsn, testPool()) // migrates: 077 moves both schedules
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	ctx := context.Background()
-	const gone, mate = "leaving@elcanotek.com", "staying@elcanotek.com"
-	for _, u := range []string{gone, mate} {
-		if _, err := s.CreateUser(ctx, u, "test-password-123"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	conv, err := s.CreateConversation(ctx, mate, "team chat", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().Unix()
-	for _, row := range [][2]string{{"theirs", gone}, {"mine", mate}} {
-		if _, err := s.db.Exec(`INSERT INTO chat.chat_schedules
-			(id, conversation_id, user_email, prompt, cron_expr, status, next_run_at, created_at, updated_at)
-			VALUES ($1, $2, $3, 'P', '0 9 * * *', 'active', $4, $4, $4)`, row[0], conv.ID, row[1], now); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := s.DeleteUser(ctx, gone); err != nil {
-		t.Fatalf("DeleteUser on the legacy layout: %v", err)
+		t.Fatalf("DeleteUser: %v", err)
 	}
-	sd := openSchedOn(t, dsn) // the scheduler migrates now: 077 moves what is left
 	var theirs, kept int
 	if err := s.db.QueryRow(`SELECT count(*) FILTER (WHERE user_email = $1), count(*) FILTER (WHERE user_email = $2) FROM sched.chat_schedules`, gone, mate).Scan(&theirs, &kept); err != nil {
 		t.Fatal(err)
 	}
 	if theirs != 0 || kept != 1 {
-		t.Fatalf("after erasure and 077: %d of the erased user's schedules, %d of the teammate's; want 0 and 1", theirs, kept)
+		t.Fatalf("after 077 and erasure: %d of the erased user's schedules, %d of the teammate's; want 0 and 1", theirs, kept)
 	}
-	_ = sd
 }

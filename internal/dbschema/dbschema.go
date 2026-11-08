@@ -1,15 +1,13 @@
-// Package dbschema creates a store's Postgres schema before its migration
-// runner runs (#2049, ADR-0098).
+// Package dbschema creates fleet's Postgres schemas before the migration
+// runner runs (#2049, ADR-0098, ADR-0107).
 //
-// Both stores live in one database, each connecting with its schema as the
-// connection's only search_path, set by the DSN (config.WithSchema).
-// Postgres reports current_schema() as NULL while that schema does not
-// exist, so the first boot against a fresh database must create it before
-// either runner can create its schema_migrations table. Both runners
-// (internal/store and internal/sched/db) call Ensure on their migration
-// connection first. A connection that names no store schema — the default
-// search_path, "$user", public, which the package test databases still use
-// (#2049 M2 moves them to schemas) — is left alone: Ensure does nothing.
+// Every fleet store lives in one database, in three schemas: chat and sched
+// (the two stores, each connecting with its schema as the connection's only
+// search_path, set by the DSN — config.WithSchema) and core (what both read:
+// the identity table and the one migration ledger, core.schema_versions).
+// The one migration runner (internal/migrations) calls Ensure on its
+// connection first, whatever that connection's search_path: it creates the
+// schemas that do not exist yet, after the one readiness check.
 package dbschema
 
 import (
@@ -54,59 +52,68 @@ const PublicStoreSQL = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 	WHERE n.nspname = 'public' AND c.relname = 'schema_migrations' AND c.relkind IN ('r', 'p'))`
 
+// Schemas are fleet's schemas in the one database, in byte order: the chat
+// store, the identity schema both stores read (and the one migration ledger,
+// core.schema_versions), and the scheduler. internal/config names the same
+// three (ChatSchema, IdentitySchema, SchedSchema); a test pins them equal, and
+// scripts/lib/pgprovision.sh's fleet_db_store_readiness lists them too.
+var Schemas = []string{"chat", "core", "sched"}
+
 // lockKeyBase namespaces the transaction-level advisory lock Ensure takes so
 // two processes creating the same schema serialise rather than race into a
 // duplicate-key error on pg_namespace (CREATE SCHEMA IF NOT EXISTS is not
 // safe against a concurrent create).
 const lockKeyBase = "fleet.dbschema."
 
-// Ensure creates the connection's configured schema (Configured) when it
-// does not exist yet, and is a no-op otherwise or for a connection that
-// names no store schema.
+// Ensure creates each of fleet's schemas (Schemas) that does not exist yet,
+// whatever the connection's search_path, and is a no-op when they all exist.
 //
-// It refuses one shape, on every open: a store schema in a database whose
-// public schema holds a fleet store (a schema_migrations table). That is a
-// database of the removed two-database layout someone pointed DATABASE_URL
-// at, and running a store in an empty (or stray) chat/sched schema next to
-// that data would boot an apparently empty fleet over it. The probe runs
-// even when the schema already exists: an earlier boot, or a hand-made
+// It refuses first, on every call, what CheckReadiness refuses: above all a
+// database whose public schema holds a fleet store (a schema_migrations
+// table). That is a database of the removed two-database layout someone
+// pointed DATABASE_URL at, and running the stores in empty (or stray) schemas
+// next to that data would boot an apparently empty fleet over it. The probe
+// runs even when the schemas already exist: an earlier boot, or a hand-made
 // schema, must not turn the refusal into a one-time check.
 func Ensure(ctx context.Context, db Execer) error {
-	schema, err := Configured(ctx, db)
-	if err != nil || schema == "" {
-		return err
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("ensure schema %s: %w", schema, err)
+		return fmt.Errorf("ensure schemas: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	// The one readiness check — the same that `fleet validate-config` runs and
 	// bootstrap's shell gate mirrors (TestExternalSchemaPrivilegeCheck pins
 	// the two).
-	r, err := CheckReadiness(ctx, tx, []string{schema})
+	r, err := CheckReadiness(ctx, tx, Schemas)
 	if err != nil {
-		return fmt.Errorf("ensure schema %s: %w", schema, err)
+		return fmt.Errorf("ensure schemas: %w", err)
 	}
 	if r.LegacyPublicStore {
-		return LegacyDatabaseError{Schema: schema}
+		return LegacyDatabaseError{Schema: strings.Join(Schemas, "/")}
 	}
 	if !r.OK() {
-		return fmt.Errorf("ensure schema %s: %s", schema, r.Problem())
+		return fmt.Errorf("ensure schemas: %s", r.Problem())
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKeyBase+schema); err != nil {
-		return fmt.Errorf("ensure schema %s: lock: %w", schema, err)
+	created := false
+	for _, schema := range Schemas {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKeyBase+schema); err != nil {
+			return fmt.Errorf("ensure schema %s: lock: %w", schema, err)
+		}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&exists); err != nil {
+			return fmt.Errorf("ensure schema %s: %w", schema, err)
+		}
+		if exists {
+			continue
+		}
+		// schema is a constant plain identifier, so quoting is belt and braces.
+		if _, err := tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(schema)); err != nil {
+			return fmt.Errorf("create schema %s: %w", schema, err)
+		}
+		created = true
 	}
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&exists); err != nil {
-		return fmt.Errorf("ensure schema %s: %w", schema, err)
-	}
-	if exists {
+	if !created {
 		return nil
-	}
-	// schema is a plain identifier (Configured), so quoting is belt and braces.
-	if _, err := tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(schema)); err != nil {
-		return fmt.Errorf("create schema %s: %w", schema, err)
 	}
 	return tx.Commit()
 }
@@ -148,7 +155,7 @@ func (r Readiness) OK() bool {
 func (r Readiness) Problem() string {
 	switch {
 	case r.LegacyPublicStore:
-		return LegacyDatabaseError{Schema: "chat/sched"}.Error()
+		return LegacyDatabaseError{Schema: strings.Join(Schemas, "/")}.Error()
 	case len(r.NotOwned) > 0:
 		shown := r.NotOwned
 		if len(shown) > 5 {
@@ -215,7 +222,7 @@ type LegacyDatabaseError struct{ Schema string }
 func (e LegacyDatabaseError) Error() string {
 	return fmt.Sprintf("refusing to run a store in schema %q: this database's public schema holds a fleet store "+
 		"(a database of the removed two-database layout). Point DATABASE_URL at the one database whose "+
-		"schemas chat and sched hold the stores, or at a new database (docs/ONE-DATABASE.md)", e.Schema)
+		"schemas chat, core and sched hold the stores, or at a new database (docs/ONE-DATABASE.md)", e.Schema)
 }
 
 // IsLegacyDatabase reports whether err is (or wraps) LegacyDatabaseError.
