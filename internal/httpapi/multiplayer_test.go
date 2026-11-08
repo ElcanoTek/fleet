@@ -27,8 +27,7 @@ func doAuthedJSONRequest(t *testing.T, srv *Server, method, path, userEmail stri
 		buf.Write(raw)
 	}
 	req := httptest.NewRequestWithContext(context.Background(), method, path, &buf)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", userEmail)
+	req = req.WithContext(asUser(req.Context(), userEmail))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

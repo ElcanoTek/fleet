@@ -76,6 +76,12 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown key type %q (want admin|task|webhook|readonly)", keyCreate.Type))
 			return
 		}
+		if kt == apikeys.KeyTypeUser {
+			// A user key acts as a person on the chat API (ADR-0108); it is
+			// minted on the box, where the operator names the account.
+			writeError(w, http.StatusBadRequest, "user keys are minted with `fleet sched apikey create <name> --type user --user <email>`")
+			return
+		}
 		if kt == apikeys.KeyTypeWebhook {
 			if len(keyCreate.AllowedTriggerSlugs) == 0 {
 				writeError(w, http.StatusBadRequest, "webhook key requires at least one allowed_trigger_slugs entry")

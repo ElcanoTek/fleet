@@ -32,17 +32,15 @@ func serverFixture(t *testing.T) *Server {
 		t.Fatalf("open store: %v", err)
 	}
 	cfg := &config.Config{
-		SharedToken:     "tok",
 		PersonaDefault:  "victoria",
 		ConversationTTL: 14,
 		UnpinnedCap:     50,
 	}
 	srv := &Server{
-		cfg:         cfg,
-		store:       st,
-		dir:         st.Identity(),
-		sharedToken: cfg.SharedToken,
-		inflight:    make(map[string]inflightEntry),
+		cfg:      cfg,
+		store:    st,
+		dir:      st.Identity(),
+		inflight: make(map[string]inflightEntry),
 		// Handler tests aren't about the scoped-tier gate — admit every
 		// authenticated user so fixtures needn't provision each email.
 		// Cross-user isolation is still exercised at the handler level
@@ -447,11 +445,11 @@ func TestConversations_AuthEnforced(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
 
-	// No auth headers → 403.
+	// No principal and no credential → 401.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/conversations", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
+	if w.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated: %d", w.Code)
 	}
 }

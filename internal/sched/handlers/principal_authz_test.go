@@ -49,7 +49,7 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
+	h := New(Config{DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)

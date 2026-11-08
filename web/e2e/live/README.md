@@ -56,7 +56,7 @@ trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 | `E2E_WORKSPACE_BASE` | `$TMPDIR/fleet-e2e-<uid>` | sandbox workspace base; **must be world-traversable** (the container runs as uid 1000 and the workspace is bind-mounted at the same host path, so a path under a `0550` `$HOME` like `/root` breaks `run_python`'s chdir). |
 | `WEB_PORT` / `CHAT_PORT` / `ORCH_PORT` / `FAKE_LLM_ADDR` | 3100 / 18080 / 18000 / 127.0.0.1:18090 | fixed ports for determinism. |
 | `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` | `e2e@example.com` / `e2e-test-password` | the seeded test user: one Fleet admin account (`fleet admin add`), so chat and the Operations Center. |
-| `FLEET_SERVER_TOKEN` / `ADMIN_API_KEY` / `APP_SESSION_SECRET` / `AUTH_SIGNING_PUBKEY` | throwaway test values | shared secrets; never real. |
+| `ADMIN_API_KEY` / `APP_SESSION_SECRET` / `AUTH_SIGNING_PUBKEY` | throwaway test values | shared secrets; never real. |
 | `E2E_CANARY` | `0` | `1` swaps the fake for a REAL model (see the canary note below). |
 | `CANARY_MODEL` | empty (Fleet default) | Optional OpenRouter slug override in canary mode; sets the chat default as well as title/task models. |
 

@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,10 @@ type APIKey struct {
 	Description         string     `json:"description"`
 	PreviousKeyHash     *string    `json:"previous_key_hash,omitempty"`
 	PreviousKeyExpires  *time.Time `json:"previous_key_expires,omitempty"`
+
+	// UserEmail is the person a user-type key acts as (KeyTypeUser); empty
+	// for every other type.
+	UserEmail string `json:"user_email,omitempty"`
 
 	// MaxPriority caps the task urgency this key may submit (#230): a task at a
 	// priority MORE urgent (lower integer) than this value is rejected. nil =
@@ -114,6 +119,7 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		ExpiresAt:           k.ExpiresAt,
 		Enabled:             k.Enabled,
 		Description:         k.Description,
+		UserEmail:           k.UserEmail,
 		MaxPriority:         k.MaxPriority,
 	}
 }
@@ -160,10 +166,10 @@ type Manager struct {
 	keys         map[string]*APIKey
 	keyHashIndex map[string]string
 	rateLimits   map[string]*RateLimitState
-	// loadedModTime is the key file's mtime as of the last (re)load — the
-	// cheap staleness check behind refreshIfChangedLocked.
-	loadedModTime time.Time
-	mu            sync.RWMutex
+	// stamp identifies the key file's content as of the last load, sync or
+	// save — the cheap staleness check behind syncLocked.
+	stamp fileStamp
+	mu    sync.RWMutex
 }
 
 // NewManager creates a new API key manager.
@@ -227,10 +233,23 @@ func (m *Manager) generateKeyID() (string, error) {
 	return "key_" + hex.EncodeToString(b), nil
 }
 
+// fileStamp identifies one version of the key file: its mtime and size (one
+// Stat, the steady-state check) and its raw bytes (the tie-breaker when
+// the Stat looks unchanged but cannot be trusted).
+type fileStamp struct {
+	mod  time.Time
+	size int64
+	raw  string
+	ok   bool
+}
+
+// stampSettle is how long after a write a file's mtime is trusted to tell
+// versions apart. A filesystem with coarse timestamps can give two writes in
+// the same tick the same mtime (and a revoke-vs-rotate pair can keep the
+// size); within this window syncLocked compares content hashes instead.
+const stampSettle = 2 * time.Second
+
 func (m *Manager) load() error {
-	if st, err := os.Stat(m.storagePath); err == nil {
-		m.loadedModTime = st.ModTime()
-	}
 	data, err := os.ReadFile(m.storagePath)
 	if os.IsNotExist(err) {
 		return nil
@@ -238,69 +257,113 @@ func (m *Manager) load() error {
 	if err != nil {
 		return err
 	}
-	var fileData struct {
-		Keys []json.RawMessage `json:"keys"`
+	keys, err := parseKeyFile(data)
+	if err != nil {
+		return err
 	}
-	if err := json.Unmarshal(data, &fileData); err != nil {
-		return fmt.Errorf("failed to parse API keys file: %w", err)
-	}
-	for _, keyData := range fileData.Keys {
-		var key APIKey
-		if err := json.Unmarshal(keyData, &key); err != nil {
-			continue
-		}
-		m.keys[key.KeyID] = &key
-		m.keyHashIndex[key.KeyHash] = key.KeyID
-		if key.PreviousKeyHash != nil {
-			m.keyHashIndex[*key.PreviousKeyHash] = key.KeyID
-		}
-	}
+	m.adoptLocked(keys)
+	m.stampLocked(data)
 	return nil
 }
 
-// refreshIfChangedLocked re-reads the key file when its mtime moved past what
-// this Manager last loaded — the seam that makes a key minted by the CLI (a
-// SEPARATE process appending to api_keys.json) usable without restarting the
-// server. Called with m.mu held, only on a LOOKUP MISS, so the steady state
-// (known key, or garbage key against an unchanged file) never touches the
-// filesystem beyond one Stat. Existing in-memory keys are kept (their runtime
-// rate/budget state lives on the structs); only unseen key IDs are added, so a
-// reload can never resurrect a key RevokeKey just removed but hadn't yet
-// persisted. Returns true when new keys appeared and a retry is worthwhile.
-func (m *Manager) refreshIfChangedLocked() bool {
-	st, err := os.Stat(m.storagePath)
-	if err != nil || !st.ModTime().After(m.loadedModTime) {
-		return false
-	}
-	m.loadedModTime = st.ModTime()
-	data, err := os.ReadFile(m.storagePath)
-	if err != nil {
-		return false
-	}
+// parseKeyFile decodes api_keys.json; a malformed record is skipped.
+func parseKeyFile(data []byte) ([]APIKey, error) {
 	var fileData struct {
 		Keys []json.RawMessage `json:"keys"`
 	}
 	if err := json.Unmarshal(data, &fileData); err != nil {
-		return false
+		return nil, fmt.Errorf("failed to parse API keys file: %w", err)
 	}
-	added := false
+	keys := make([]APIKey, 0, len(fileData.Keys))
 	for _, keyData := range fileData.Keys {
 		var key APIKey
 		if err := json.Unmarshal(keyData, &key); err != nil {
 			continue
 		}
-		if _, known := m.keys[key.KeyID]; known {
-			continue
-		}
-		k := key
-		m.keys[k.KeyID] = &k
-		m.keyHashIndex[k.KeyHash] = k.KeyID
-		if k.PreviousKeyHash != nil {
-			m.keyHashIndex[*k.PreviousKeyHash] = k.KeyID
-		}
-		added = true
+		keys = append(keys, key)
 	}
-	return added
+	return keys, nil
+}
+
+// adoptLocked makes the file's records the whole in-memory state. An
+// existing record is updated IN PLACE (a *APIKey a caller already holds sees
+// the change); a record gone from the file is dropped with its rate state;
+// the hash index is rebuilt from scratch, so a revoked key's state, a
+// rotated-out hash whose grace was cut, or a deleted key's hashes take effect
+// at once.
+func (m *Manager) adoptLocked(records []APIKey) {
+	next := make(map[string]*APIKey, len(records))
+	for i := range records {
+		rec := records[i]
+		if cur, ok := m.keys[rec.KeyID]; ok {
+			*cur = rec
+			next[rec.KeyID] = cur
+		} else {
+			next[rec.KeyID] = &rec
+		}
+	}
+	for id := range m.keys {
+		if _, ok := next[id]; !ok {
+			delete(m.rateLimits, id)
+		}
+	}
+	m.keys = next
+	m.keyHashIndex = make(map[string]string, 2*len(next))
+	for id, k := range next {
+		m.keyHashIndex[k.KeyHash] = id
+		if k.PreviousKeyHash != nil {
+			m.keyHashIndex[*k.PreviousKeyHash] = id
+		}
+	}
+}
+
+// stampLocked records data (just read or just written) as the file's
+// current version.
+func (m *Manager) stampLocked(data []byte) {
+	st, err := os.Stat(m.storagePath)
+	if err != nil {
+		m.stamp = fileStamp{}
+		return
+	}
+	m.stamp = fileStamp{mod: st.ModTime(), size: st.Size(), raw: string(data), ok: true}
+}
+
+// syncLocked makes this Manager observe every change another process (the
+// `fleet sched apikey` CLI, a second Manager) made to the key file — new
+// keys, and also revocations, rotations, deletions and edits of keys this
+// Manager already knows. It runs with m.mu held at the top of every read and
+// write, so a revoked or rotated key stops (and a rotated-in key starts)
+// authenticating on the very next request, and no write of ours overwrites a
+// change we have not seen. The steady state costs one Stat; the file is read
+// only when its mtime or size moved, or its mtime is too recent to trust
+// (stampSettle), and re-adopted only when its bytes changed.
+//
+// A file that cannot be read or parsed leaves the in-memory state as it is:
+// writes are atomic renames, so that is a transient or operator error, not a
+// reason to forget every key.
+func (m *Manager) syncLocked() {
+	st, err := os.Stat(m.storagePath)
+	if err != nil {
+		return
+	}
+	if m.stamp.ok && st.ModTime().Equal(m.stamp.mod) && st.Size() == m.stamp.size &&
+		time.Since(st.ModTime()) > stampSettle {
+		return
+	}
+	data, err := os.ReadFile(m.storagePath)
+	if err != nil {
+		return
+	}
+	if m.stamp.ok && string(data) == m.stamp.raw {
+		m.stamp.mod, m.stamp.size = st.ModTime(), st.Size()
+		return
+	}
+	records, err := parseKeyFile(data)
+	if err != nil {
+		return
+	}
+	m.adoptLocked(records)
+	m.stampLocked(data)
 }
 
 func (m *Manager) save() error {
@@ -328,7 +391,11 @@ func (m *Manager) save() error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, m.storagePath)
+	if err := os.Rename(tmp, m.storagePath); err != nil {
+		return err
+	}
+	m.stampLocked(data)
+	return nil
 }
 
 func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
@@ -359,6 +426,7 @@ func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
 func (m *Manager) CreateKey(ctx context.Context, name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 
 	rawKey, keyHash, keyPrefix, err := m.generateKey()
 	if err != nil {
@@ -439,11 +507,41 @@ func (m *Manager) CreateKey(ctx context.Context, name string, permissions []mode
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
 func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	if kt == KeyTypeUser {
+		return nil, "", errors.New("a user key names its user: use CreateUserKey")
+	}
+	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", rateLimit, expiresInDays, description)
+}
+
+// CreateUserKey mints a user-type key (KeyTypeUser) that acts as email on the
+// chat API. The account is not checked here: it is resolved on every
+// request, so a key for an address that has no enabled account is refused
+// then.
+//
+// A user key takes no per-key rate limit (rateLimit must be 0): RateLimit is
+// an hourly request budget ValidateKey charges on EVERY request, which on the
+// chat API would count the client's identity checks and config reads, not
+// turns — a small value would leave `fleet chat` unable to post. A user key's
+// turns are limited as its person's are, by the chat's per-user limiter
+// (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY).
+func (m *Manager) CreateUserKey(ctx context.Context, name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return nil, "", fmt.Errorf("a user key needs the email of the account it acts as")
+	}
+	if rateLimit != 0 {
+		return nil, "", fmt.Errorf("a user key takes no per-key rate limit: its turns are limited by the chat's per-user limit, like its person's")
+	}
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, rateLimit, expiresInDays, description)
+}
+
+func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 
 	rawKey, keyHash, keyPrefix, err := m.generateTypedKey(kt)
 	if err != nil {
@@ -473,6 +571,7 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 		KeyPrefix:           keyPrefix,
 		Type:                kt,
 		AllowedTriggerSlugs: allowedTriggerSlugs,
+		UserEmail:           userEmail,
 		Permissions:         perms,
 		RateLimit:           rateLimit,
 		CreatedAt:           time.Now().UTC(),
@@ -503,6 +602,7 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 			"name":                  name,
 			"type":                  string(kt),
 			"allowed_trigger_slugs": allowedTriggerSlugs,
+			"user_email":            userEmail,
 			"permissions":           permStrings,
 			"rate_limit":            rateLimit,
 		},
@@ -515,6 +615,7 @@ func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, a
 func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours int) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 
 	key, ok := m.keys[keyID]
 	if !ok {
@@ -573,6 +674,7 @@ func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours 
 func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("key %s not found", keyID)
@@ -589,6 +691,7 @@ func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
 func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("key %s not found", keyID)
@@ -605,17 +708,35 @@ func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
 	return nil
 }
 
-// ValidateKey validates an API key and checks permissions.
+// ValidateKey validates an API key and checks permissions, on no particular
+// surface. HTTP edges must not call it: they call ValidateKeyOn, which also
+// refuses a key type that does not authenticate on that surface
+// (KeyType.AllowsSurface; TestKeyEdgesNameTheirSurface pins this).
 func (m *Manager) ValidateKey(ctx context.Context, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+	return m.validate(ctx, rawKey, "", requiredPermission, ipAddress, userAgent)
+}
+
+// ReasonWrongSurface is ValidateKeyOn's reason for a key whose type does not
+// authenticate on the surface. An edge may answer it like an unknown key, or
+// name the key type the surface wants.
+const ReasonWrongSurface = "this API key type does not authenticate here"
+
+// ValidateKeyOn is ValidateKey for a request on surface s: a key whose type
+// does not authenticate there is refused (ReasonWrongSurface) before any
+// rate-limit token is charged or a permission checked, so no edge has to
+// remember which key types to turn away.
+func (m *Manager) ValidateKeyOn(ctx context.Context, s Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+	return m.validate(ctx, rawKey, s, requiredPermission, ipAddress, userAgent)
+}
+
+func (m *Manager) validate(ctx context.Context, rawKey string, surface Surface, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
 	keyHash := m.hashKey(rawKey)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 
 	keyID, ok := m.keyHashIndex[keyHash]
-	if !ok && m.refreshIfChangedLocked() {
-		keyID, ok = m.keyHashIndex[keyHash]
-	}
 	if !ok {
 		return false, nil, "Invalid API key"
 	}
@@ -623,7 +744,9 @@ func (m *Manager) ValidateKey(ctx context.Context, rawKey string, requiredPermis
 	if !ok {
 		return false, nil, "Invalid API key"
 	}
-
+	if surface != "" && !key.Type.AllowsSurface(surface) {
+		return false, nil, ReasonWrongSurface
+	}
 	if key.PreviousKeyHash != nil && keyHash == *key.PreviousKeyHash {
 		if key.PreviousKeyExpires != nil && time.Now().UTC().After(*key.PreviousKeyExpires) {
 			delete(m.keyHashIndex, *key.PreviousKeyHash)
@@ -679,61 +802,62 @@ func (m *Manager) ValidateKey(ctx context.Context, rawKey string, requiredPermis
 // override WITHOUT enforcing or mutating any rate-limit state — a read-only
 // helper for the orchestrator's sliding-window task limiter (#247), which keys
 // its window by the stable key ID and treats RateLimit (when > 0) as that key's
-// per-minute cap. Returns ok=false for unknown, disabled, or expired keys.
-func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok bool) {
-	keyHash := m.hashKey(rawKey)
-	m.mu.RLock()
-	id, found := m.keyHashIndex[keyHash]
-	if !found {
-		// Miss: the key may have been minted by another process (the CLI) since
-		// this Manager loaded. Upgrade to a write lock, refresh, retry once.
-		m.mu.RUnlock()
-		m.mu.Lock()
-		if m.refreshIfChangedLocked() {
-			id, found = m.keyHashIndex[keyHash]
-		}
-		m.mu.Unlock()
-		m.mu.RLock()
-	}
-	defer m.mu.RUnlock()
-	if !found {
-		return "", 0, false
-	}
-	key, found := m.keys[id]
-	if !found || !key.IsValid() {
+// per-minute cap. Returns ok=false for unknown, disabled, or expired keys, and
+// for a key whose type does not authenticate on surface s.
+func (m *Manager) LookupKeyMetaOn(s Surface, rawKey string) (keyID string, rateLimit int, ok bool) {
+	key := m.lookup(s, rawKey)
+	if key == nil {
 		return "", 0, false
 	}
 	return key.KeyID, key.RateLimit, true
 }
 
-// LookupKeyType resolves a raw key to its access class and whether it carries
-// task-create permission, WITHOUT enforcing or mutating any rate-limit state
-// (#190) — a read-only helper for the task-create paths' under-scope gate.
-// Returns ok=false for unknown, disabled, or expired keys. A legacy (untyped)
-// key returns KeyTypeLegacy, so callers can preserve historical behavior for it.
-func (m *Manager) LookupKeyType(rawKey string) (kt KeyType, hasCreate, ok bool) {
-	keyHash := m.hashKey(rawKey)
-	m.mu.RLock()
-	id, found := m.keyHashIndex[keyHash]
-	if !found {
-		// Same CLI-minted-key refresh as LookupKeyMeta.
-		m.mu.RUnlock()
-		m.mu.Lock()
-		if m.refreshIfChangedLocked() {
-			id, found = m.keyHashIndex[keyHash]
-		}
-		m.mu.Unlock()
-		m.mu.RLock()
-	}
-	defer m.mu.RUnlock()
-	if !found {
-		return "", false, false
-	}
-	key, found := m.keys[id]
-	if !found || !key.IsValid() {
+// LookupKeyTypeOn resolves a raw key to its access class and whether it
+// carries task-create permission, WITHOUT enforcing or mutating any
+// rate-limit state (#190) — a read-only helper for the task-create paths'
+// under-scope gate. Returns ok=false for unknown, disabled, or expired keys,
+// and for a key whose type does not authenticate on surface s. A legacy
+// (untyped) key returns KeyTypeLegacy, so callers can preserve historical
+// behavior for it.
+func (m *Manager) LookupKeyTypeOn(s Surface, rawKey string) (kt KeyType, hasCreate, ok bool) {
+	key := m.lookup(s, rawKey)
+	if key == nil {
 		return "", false, false
 	}
 	return key.Type, key.HasPermission(models.PermissionCreateTask), true
+}
+
+// LookupKeyMeta is LookupKeyMetaOn on no particular surface (tests, tools).
+func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok bool) {
+	return m.LookupKeyMetaOn("", rawKey)
+}
+
+// LookupKeyType is LookupKeyTypeOn on no particular surface (tests, tools).
+func (m *Manager) LookupKeyType(rawKey string) (kt KeyType, hasCreate, ok bool) {
+	return m.LookupKeyTypeOn("", rawKey)
+}
+
+// lookup is the read-only key resolution behind the Lookup helpers: a copy
+// of the valid key rawKey names, or nil.
+func (m *Manager) lookup(s Surface, rawKey string) *APIKey {
+	keyHash := m.hashKey(rawKey)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncLocked()
+	id, found := m.keyHashIndex[keyHash]
+	if !found {
+		return nil
+	}
+	key, found := m.keys[id]
+	if !found || !key.IsValid() || (s != "" && !key.Type.AllowsSurface(s)) {
+		return nil
+	}
+	if key.PreviousKeyHash != nil && keyHash == *key.PreviousKeyHash &&
+		key.PreviousKeyExpires != nil && time.Now().UTC().After(*key.PreviousKeyExpires) {
+		return nil // a rotated-out key past its grace
+	}
+	k := *key
+	return &k
 }
 
 // ConsumeN charges a key's hourly rate-limit counter for n additional requests
@@ -752,6 +876,7 @@ func (m *Manager) ConsumeN(keyID string, n int) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 	key, ok := m.keys[keyID]
 	if !ok || key.RateLimit <= 0 {
 		return true
@@ -775,6 +900,7 @@ func (m *Manager) ConsumeN(keyID string, n int) bool {
 func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked()
 	key, ok := m.keys[keyID]
 	if !ok {
 		return fmt.Errorf("api key not found: %s", keyID)
@@ -785,15 +911,17 @@ func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
 
 // GetKey gets a key by ID.
 func (m *Manager) GetKey(keyID string) *APIKey {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncLocked()
 	return m.keys[keyID]
 }
 
 // ListKeys lists all API keys.
 func (m *Manager) ListKeys() []*APIKey {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncLocked()
 	keys := make([]*APIKey, 0, len(m.keys))
 	for _, key := range m.keys {
 		keys = append(keys, key)

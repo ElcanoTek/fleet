@@ -235,10 +235,11 @@ on the cookie path must carry an `Origin` header whose host matches the server's
 (`X-Forwarded-Host` when behind a proxy, else `Host`). A missing, malformed, or
 cross-origin `Origin` is rejected with `403 Cross-origin request blocked`.
 
-Requests authenticated with `X-API-Key`, `X-Registration-Token`,
-`Authorization: Bearer …`, or the loopback `X-Orchestrator-Server-Token` are
-**exempt** — browsers do not auto-attach custom headers cross-origin, so those
-paths are not CSRF-reachable. So is a call the browser gateway (`internal/webui`)
+Requests authenticated with `X-API-Key`, `X-Registration-Token` or
+`Authorization: Bearer …` are **exempt** — browsers do not auto-attach custom
+headers cross-origin, so those paths are not CSRF-reachable. (The retired
+`X-Orchestrator-Server-Token` exempts nothing: a request presenting it is
+answered 401 before the CSRF check, ADR-0108.) So is a call the browser gateway (`internal/webui`)
 makes in-process with a session or gateway principal in the request context
 (ADR-0108): the gateway enforced the browser's Origin itself before the call,
 and does not forward the header.

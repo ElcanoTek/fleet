@@ -71,29 +71,62 @@ func TestRetiredEnvShellAgreesWithTheRegistry(t *testing.T) {
 // the suffixed canonical; suffixed variants of live names never are.
 func TestRetiredAliasCoversAccountSuffixes(t *testing.T) {
 	for name, want := range map[string]string{
-		"CHAT_SERVER_TOKEN_ACME":        "FLEET_SERVER_TOKEN_ACME",
-		"CUTLASS_SERVER_TOKEN_CLIENT_A": "FLEET_SERVER_TOKEN_CLIENT_A",
-		"DATA_DIR_ACME":                 "FLEET_DATA_DIR_ACME",
+		"CHAT_SMTP_PASSWORD_ACME":        "FLEET_SMTP_PASSWORD_ACME",
+		"CUTLASS_SMTP_PASSWORD_CLIENT_A": "FLEET_SMTP_PASSWORD_CLIENT_A",
+		"DATA_DIR_ACME":                  "FLEET_DATA_DIR_ACME",
 	} {
 		if got, ok := RetiredAlias(name); !ok || got != want {
 			t.Errorf("RetiredAlias(%s) = %q, %v; want %q", name, got, ok, want)
 		}
 	}
 	for _, name := range []string{
-		"FLEET_SERVER_TOKEN_ACME", "CUTLASS_ALLOWED_DIRS_ACME", "CUTLASS_IMAGE_MODEL_ACME",
-		"CHAT_RATE_PER_MIN_ACME", "CHAT_SERVER_TOKEN_acme", "CHAT_SERVER_TOKEN_",
+		"FLEET_SMTP_PASSWORD_ACME", "CUTLASS_ALLOWED_DIRS_ACME", "CUTLASS_IMAGE_MODEL_ACME",
+		"CHAT_RATE_PER_MIN_ACME", "CHAT_SMTP_PASSWORD_acme", "CHAT_SMTP_PASSWORD_",
 		"CUTLASS_RUN_WORKDIR", "CUTLASS_MOC_TASK_ID", "CUTLASS_REPORT_DIR", "CUTLASS_INPUT_DIR",
 	} {
 		if c, ok := RetiredAlias(name); ok {
 			t.Errorf("RetiredAlias(%s) = %q; it is live", name, c)
 		}
 	}
-	t.Setenv("CHAT_SERVER_TOKEN_ACME", "stale")
-	t.Setenv("FLEET_SERVER_TOKEN_ACME", "live")
-	if v := Unregistered("CHAT_SERVER_TOKEN_ACME"); v != "" {
+	t.Setenv("CHAT_SMTP_PASSWORD_ACME", "stale")
+	t.Setenv("FLEET_SMTP_PASSWORD_ACME", "live")
+	if v := Unregistered("CHAT_SMTP_PASSWORD_ACME"); v != "" {
 		t.Errorf("a suffixed removed spelling was read: %q", v)
 	}
-	if v := Unregistered("FLEET_SERVER_TOKEN_ACME"); v != "live" {
+	if v := Unregistered("FLEET_SMTP_PASSWORD_ACME"); v != "live" {
 		t.Errorf("a live suffixed name did not resolve: %q", v)
+	}
+}
+
+// ADR-0108: the internal service token is a setting removed outright. Its
+// names (and the CHAT_/CUTLASS_ spellings ADR-0106 had already removed) read
+// as unset, are reported with no canonical name, and RetiredFix says what
+// replaced them.
+func TestRemovedServiceTokenSettings(t *testing.T) {
+	for _, name := range []string{"FLEET_SERVER_TOKEN", "ORCHESTRATOR_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"} {
+		if IsRegistered(name) {
+			t.Errorf("%s is still registered", name)
+		}
+		c, ok := RetiredAlias(name)
+		if !ok || c != "" {
+			t.Errorf("RetiredAlias(%s) = %q, %v; want \"\", true", name, c, ok)
+		}
+		if fix := RetiredFix(name); !strings.Contains(fix, "ADR-0108") || !strings.Contains(fix, "--type user") {
+			t.Errorf("RetiredFix(%s) = %q", name, fix)
+		}
+		t.Setenv(name, "stale-secret")
+		if v := Unregistered(name); v != "" {
+			t.Errorf("%s was read: %q", name, v)
+		}
+	}
+	if fix := RetiredFix("CHAT_MAX_COST_USD"); fix != "rename it to FLEET_MAX_COST_USD (ADR-0106)" {
+		t.Errorf("alias fix = %q", fix)
+	}
+	// A per-account suffix of a removed setting is removed with it.
+	if c, ok := RetiredAlias("FLEET_SERVER_TOKEN_ACME"); !ok || c != "" || !strings.Contains(RetiredFix("FLEET_SERVER_TOKEN_ACME"), "ADR-0108") {
+		t.Errorf("FLEET_SERVER_TOKEN_ACME: %q, %v", c, ok)
+	}
+	if RetiredFix("FLEET_MAX_COST_USD") != "" {
+		t.Error("a live setting has a fix")
 	}
 }

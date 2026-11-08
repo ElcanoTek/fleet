@@ -70,7 +70,7 @@ func TestClientStream_SendsAuthAndStreams(t *testing.T) {
 	srv := fakeSSEServer(t, &hdr)
 	defer srv.Close()
 
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"})
 	var names []string
 	convID, err := c.Stream(context.Background(), "what is 6*7?", "", func(e Event) {
 		names = append(names, e.Name)
@@ -78,8 +78,10 @@ func TestClientStream_SendsAuthAndStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hdr.Get("X-Chat-Server-Token") != "sekret" || hdr.Get("X-User-Email") != "u@x.co" {
-		t.Errorf("auth headers not sent: token=%q email=%q", hdr.Get("X-Chat-Server-Token"), hdr.Get("X-User-Email"))
+	// The key is the only credential, and no header names the user
+	// (ADR-0108).
+	if hdr.Get("X-API-Key") != "sekret" || hdr.Get("X-Chat-Server-Token") != "" || hdr.Get("X-User-Email") != "" {
+		t.Errorf("auth headers: key=%q token=%q email=%q", hdr.Get("X-API-Key"), hdr.Get("X-Chat-Server-Token"), hdr.Get("X-User-Email"))
 	}
 	if hdr.Get("Accept") != "text/event-stream" {
 		t.Errorf("Accept = %q, want text/event-stream", hdr.Get("Accept"))
@@ -99,7 +101,7 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	defer srv.Close()
 
 	var out, errOut bytes.Buffer
-	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}), "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
+	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "sekret"}), "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit %d; stderr=%s", code, errOut.String())
 	}
@@ -144,7 +146,7 @@ func TestClientStream_403ErrorRedactsToken(t *testing.T) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 	}))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "super-secret-token"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "super-secret-token"})
 	_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
 	if err == nil {
 		t.Fatal("want error on 403")
@@ -167,22 +169,22 @@ func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
 		{
 			name:   "403 proxy debug page",
 			status: http.StatusForbidden,
-			body:   "<html><body><h1>403 Forbidden</h1><pre>X-Chat-Server-Token: super-secret-token\nAuthorization: Bearer super-secret-token</pre></body></html>",
+			body:   "<html><body><h1>403 Forbidden</h1><pre>X-API-Key: super-secret-token\nAuthorization: Bearer super-secret-token</pre></body></html>",
 		},
 		{
 			name:   "401 echoing the header",
 			status: http.StatusUnauthorized,
-			body:   "unauthorized: X-Chat-Server-Token: super-secret-token",
+			body:   "unauthorized: X-API-Key: super-secret-token",
 		},
 		{
 			name:   "502 echoing the header",
 			status: http.StatusBadGateway,
-			body:   "upstream refused; request had X-Chat-Server-Token: super-secret-token",
+			body:   "upstream refused; request had X-API-Key: super-secret-token",
 		},
 		{
 			name:   "400 echoing the header",
 			status: http.StatusBadRequest,
-			body:   "bad request; request had X-Chat-Server-Token: super-secret-token",
+			body:   "bad request; request had X-API-Key: super-secret-token",
 		},
 	}
 	for _, tt := range tests {
@@ -192,7 +194,7 @@ func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
-			c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "super-secret-token"})
+			c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "super-secret-token"})
 			_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
 			var se *StatusError
 			if !errors.As(err, &se) || se.Code != tt.status {
@@ -201,7 +203,7 @@ func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
 			if strings.Contains(err.Error(), "super-secret-token") || strings.Contains(err.Error(), "Bearer super-secret") {
 				t.Errorf("error must NOT leak the token: %v", err)
 			}
-			if !strings.Contains(err.Error(), "X-Chat-Server-Token: [redacted]") {
+			if !strings.Contains(err.Error(), "X-API-Key: [redacted]") {
 				t.Errorf("error should quote the body with the token redacted: %v", err)
 			}
 		})
@@ -243,7 +245,7 @@ func TestClientStream_ErrorBodyDropsTokenCutByReadCap(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
-			_, err := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: token}).Stream(context.Background(), "hi", "", func(Event) {})
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: token}).Stream(context.Background(), "hi", "", func(Event) {})
 			var se *StatusError
 			if !errors.As(err, &se) || se.Code != tt.status {
 				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
@@ -312,7 +314,7 @@ func TestClientStream_RequiresSuccessfulTerminalEvent(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "token"})
+			client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "token"})
 			_, err := client.Stream(context.Background(), "hi", "", func(Event) {})
 			if err == nil {
 				t.Fatal("Stream returned nil error")
@@ -351,7 +353,7 @@ func TestClientStream_PropagatesInFlightCancellation(t *testing.T) {
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "token"})
+	client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "token"})
 	_, err := client.Stream(ctx, "hi", "", func(ev Event) {
 		if ev.Name == "turn.started" {
 			cancel()

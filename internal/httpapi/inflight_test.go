@@ -410,8 +410,7 @@ func TestStreamEndpoint_ReplaysFromLastEventID(t *testing.T) {
 	// Simulate a reconnect that already saw events 1-2.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		"/conversations/"+conv.ID+"/stream?turn_id="+turnID, bytes.NewReader(nil))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", "alice@x.com")
+	req = req.WithContext(asUser(req.Context(), "alice@x.com"))
 	req.Header.Set("Last-Event-ID", "2")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)

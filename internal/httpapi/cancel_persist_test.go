@@ -135,8 +135,7 @@ func TestChatCancel_PersistsPartialTurn(t *testing.T) {
 	go func() {
 		defer close(postDone)
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(body))
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", user)
+		req = req.WithContext(asUser(req.Context(), user))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		s.Routes().ServeHTTP(w, req)
@@ -219,8 +218,7 @@ func TestChatClientDisconnect_TurnSurvives(t *testing.T) {
 	go func() {
 		defer close(postDone)
 		req := httptest.NewRequestWithContext(reqCtx, http.MethodPost, "/chat", bytes.NewReader(body))
-		req.Header.Set("X-Chat-Server-Token", "tok")
-		req.Header.Set("X-User-Email", user)
+		req = req.WithContext(asUser(req.Context(), user))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		s.Routes().ServeHTTP(w, req)

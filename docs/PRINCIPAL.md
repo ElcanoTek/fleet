@@ -15,7 +15,7 @@ context, and handlers read identity from there:
 | the gateway | a sign-in leg, a verified identity-provider event | `gateway` | the email being signed in or acted on |
 | the gateway | the brand assets, a public shared conversation | `gateway` | nothing |
 | the Operations Center's auth paths | the admin key, a scoped API key | `admin_key`, `api_key` | the key's id and permissions |
-| a listener's edge (`edge.go` in `httpapi` and `sched/handlers`) | the legacy service token on the listener's own port | `service_token` | the email the caller named |
+| the chat listener's edge (`internal/httpapi/edge.go`) | a user API key on the listener's own port | `api_key` (`X-API-Key`) or `bearer` | the key's account and id |
 
 The gateway sends no identity header and no shared secret to a backend any
 more. A backend resolves a user principal with `principal.Resolve`: one read
@@ -36,8 +36,58 @@ limiter counts any principal as an authenticated caller.
 
 `TestNoIdentityHeaderReaders` fails the build on any non-test Go file that
 spells `X-User-Email`, `X-User-Session-Epoch`, `X-User-Session-Source`,
-`X-External-Issuer` or `X-External-Subject`. In phase 1 its allowlist holds
-the two listener edges and the two clients of the service-token channel.
+`X-External-Issuer` or `X-External-Subject`. Its allowlist is empty.
+
+**Phase 2: the internal service tokens are retired.**
+
+- Nothing reads `X-Chat-Server-Token` or `X-Orchestrator-Server-Token` as a
+  credential. A request that still presents one gets **401
+  `{"error":"service_token_retired","message":…}`**, the message naming the
+  replacement: on the chat listener from its edge, on the orchestrator from
+  `RetiredServiceTokenMiddleware` (ahead of CSRF and every auth path).
+- `FLEET_SERVER_TOKEN` and `ORCHESTRATOR_SERVER_TOKEN` (and the
+  `CHAT_`/`CUTLASS_` spellings of the first) are removed settings
+  (`envreg.removedSettings`). Like ADR-0106's removed aliases they read as
+  unset whatever the environment holds; boot and `fleet doctor` warn about
+  one still set (never printing it); `fleet config explain` notes it and
+  `fleet config set-env` refuses it; and `fleet validate-config
+  --retired-only` exits 7 on a bundle that still references one, so `fleet
+  update` refuses to install over it. `config.Validate` no longer requires a
+  server token, and `bootstrap.sh` no longer generates one.
+- **User API keys.** `fleet sched apikey create <name> --type user --user
+  <email>` mints a `fleet_user_…` key that names one account. The chat
+  listener accepts it as `X-API-Key` or `Authorization: Bearer`; the account
+  is resolved on every request (an unknown or disabled account is
+  `not_a_member`). A user key carries no Operations Center permission and
+  reaches no scoped-key route; any other key type is refused on the chat API
+  with 403 `not_a_user_key`. Rotation and revocation are the ordinary key
+  verbs, and take effect on the server's next request: the key store
+  re-reads `api_keys.json` whenever its mtime, size or (for a fresh write)
+  content changed, re-adopting every record, so a revoked key, a rotated-out
+  key past its grace and a deleted key stop authenticating, and a
+  rotated-in key starts, without a restart (this held for new keys only
+  before, and applies to every key type). A user key takes no per-key rate
+  limit (`--rate-limit-per-minute` is refused for it): that budget is charged
+  on every request, identity checks included, so its turns are limited by
+  the chat's per-user limit instead, like its person's.
+- **Which key authenticates where** is one table,
+  `apikeys.KeyType.AllowsSurface`: user keys on the chat API only; admin,
+  task, readonly and legacy keys on the orchestrator API and A2A; webhook
+  keys on triggers (and recognised on the orchestrator and A2A only to be
+  refused by their scope checks, as before). Every edge validates through
+  `ValidateKeyOn` / `LookupKeyTypeOn` / `LookupKeyMetaOn` with its surface,
+  and `TestKeyEdgesNameTheirSurface` fails on an edge that does not. The HTTP `/keys` API refuses to mint one (the box's CLI names the
+  account), so its request schema is unchanged.
+- **Clients.** `fleet chat` and `fleet acp` read the key from `--key-file`,
+  else `$FLEET_API_KEY`, else `~/.config/fleet/api-key`, never from argv, and
+  send it as `X-API-Key`; `--email`/`$FLEET_USER_EMAIL` is now a check (a key
+  for another account is refused before any turn), and the account is read
+  from `GET /me`. The retired `--token-file` is refused with an error naming
+  the replacement. fleet-bench takes the key from `--key-env` (default
+  `FLEET_API_KEY`); `--token-env` is refused.
+- **Caddy.** The `header_up` deletions of the retired headers stay in the
+  rendered layout as defence in depth, so no installed Caddyfile drifts and
+  `fleet doctor` rewrites nothing.
 
 ## Deviations from the issue
 
@@ -52,6 +102,15 @@ the two listener edges and the two clients of the service-token channel.
   it hands the backend an asserted principal and the backend resolves it.
 - **`Principal.Scopes`** holds an API key's permissions. A person's access is
   their role and `OpsScope`.
+
+- **A new key type, not a per-user token store.** "Ordinary API keys" in the
+  issue meant the existing keys; they name no person, which the chat API
+  needs, so the key store gained a `user` type and `UserEmail` rather than a
+  second credential system.
+- **The Buzz gateway** (`fleet-buzz-gateway`, outside this repository)
+  injected the server token and `X-User-Email`. It must send a user key as
+  `X-API-Key` instead (docs/ACP.md); until it does, fleet answers it 401
+  `service_token_retired`.
 
 ## Not done here
 

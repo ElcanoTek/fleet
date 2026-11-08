@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -39,7 +40,7 @@ var ownerMayAct = map[string]bool{
 // TestOrchestratorUserRoleCannotMutateWhenReadonly drives every operation a
 // user principal can reach (security lists elcanoAuthCookie) through the real
 // router, as an account of each Operations Center role on the user path — the
-// web tier's header-trust session (shared token + X-User-Email; the password
+// web tier's session principal (ADR-0108; the password
 // bearer is retired, #2049 M4) — and pins the role gate:
 //
 //   - readonly on any mutating method (POST/PUT/PATCH/DELETE) is a definitive
@@ -87,8 +88,8 @@ func TestOrchestratorUserRoleCannotMutateWhenReadonly(t *testing.T) {
 		apply func(r *http.Request, a actor)
 	}{
 		{"session", func(r *http.Request, a actor) {
-			r.Header.Set("X-Orchestrator-Server-Token", env.sharedToken)
-			r.Header.Set("X-User-Email", a.user.Username)
+			// What the gateway hands an in-process call (ADR-0108).
+			*r = *r.WithContext(principal.With(r.Context(), principal.Principal{Email: a.user.Username, AuthMethod: principal.MethodSession}))
 		}},
 	}
 

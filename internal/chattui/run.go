@@ -21,9 +21,10 @@ func Run(argv []string) int {
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	var f Flags
 	fs.StringVar(&f.Server, "server", "", "fleet server URL (default $FLEET_CHAT_URL, else http://$FLEET_SERVER_ADDR, else http://127.0.0.1:8080)")
-	fs.StringVar(&f.Email, "email", "", "your user email — X-User-Email (default $FLEET_USER_EMAIL)")
-	fs.StringVar(&f.TokenFile, "token-file", "", "path to a file holding the shared server token (mode 0600); else $FLEET_SERVER_TOKEN")
-	fs.StringVar(&f.EnvFile, "env-file", "", "server env file to auto-read the token/addr from when not set otherwise (default $FLEET_ENV_FILE, else .env.local, else /etc/fleet/fleet.env)")
+	fs.StringVar(&f.KeyFile, "key-file", "", "path to a file holding your user API key (mode 0600); else $FLEET_API_KEY, else ~/.config/fleet/api-key")
+	fs.StringVar(&f.Email, "email", "", "the account your API key must act as — a check, the key is the identity (default $FLEET_USER_EMAIL)")
+	fs.StringVar(&f.TokenFile, "token-file", "", "RETIRED (ADR-0108): the shared server token is gone; use --key-file")
+	fs.StringVar(&f.EnvFile, "env-file", "", "server env file to auto-read the server address from when not set otherwise (default $FLEET_ENV_FILE, else .env.local, else /etc/fleet/fleet.env)")
 	fs.StringVar(&f.Model, "model", "", "model slug for the turn(s) (default: the conversation/server default)")
 	fs.StringVar(&f.Persona, "persona", "", "persona for a NEW conversation")
 	conv := fs.String("conversation", "", "resume an existing conversation by id")
@@ -45,8 +46,9 @@ func Run(argv []string) int {
 		fmt.Fprintln(os.Stderr, "usage: fleet chat [--message <text>|--no-tui] [--conversation <id>] [--model <slug>] [--email …] [--server …]")
 		fmt.Fprintln(os.Stderr, "       fleet chat --conversation <id> --approve|--deny <approval-id>")
 		fmt.Fprintln(os.Stderr, "\nInteractive TUI by default; --message/--no-tui runs one turn to stdout (scriptable).")
-		fmt.Fprintln(os.Stderr, "On the box running fleet, the shared token is read from the server env file automatically;")
-		fmt.Fprintln(os.Stderr, "you usually only need: fleet chat --email you@org")
+		fmt.Fprintln(os.Stderr, "Authenticate with a user API key: create one on the box with")
+		fmt.Fprintln(os.Stderr, "  fleet sched apikey create my-cli --type user --user you@org")
+		fmt.Fprintln(os.Stderr, "and save it to ~/.config/fleet/api-key (mode 0600), or set $FLEET_API_KEY.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
@@ -77,6 +79,13 @@ func Run(argv []string) int {
 	// server's own "choose a model" error stands. Resumed conversations keep
 	// their stored model — turnModel only sends the default on a NEW thread.
 	client := NewClient(cfg)
+	// The key names the account (ADR-0108): learn it (and refuse a key for
+	// another account than --email, or a viewer) before anything runs.
+	if err := client.CheckIdentity(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "fleet chat: "+err.Error())
+		return 1
+	}
+	cfg.Email = client.Email()
 	if cfg.Model == "" {
 		if slug, derr := client.DefaultModel(context.Background()); derr == nil && slug != "" {
 			client.AdoptDefaultModel(slug)

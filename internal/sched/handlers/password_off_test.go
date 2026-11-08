@@ -173,8 +173,7 @@ func TestCreateUserPromotesAnExistingChatAccount(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	me := func(email string) int {
 		req := httptest.NewRequest("GET", "/api/me", nil)
-		req.Header.Set("X-Orchestrator-Server-Token", testSharedToken)
-		req.Header.Set("X-User-Email", email)
+		req = asSession(req, email)
 		w := httptest.NewRecorder()
 		h.AdminOrUserAuthMiddleware(ok).ServeHTTP(w, req)
 		return w.Code

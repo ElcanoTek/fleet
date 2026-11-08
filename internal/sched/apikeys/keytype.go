@@ -28,6 +28,12 @@ const (
 	KeyTypeWebhook KeyType = "webhook"
 	// KeyTypeReadonly is GET-only on tasks/stats/usage endpoints.
 	KeyTypeReadonly KeyType = "readonly"
+	// KeyTypeUser acts as one person (APIKey.UserEmail) on the chat API —
+	// `fleet chat`, `fleet acp`, fleet-bench (ADR-0108). It carries no
+	// Operations Center permission and reaches no scoped-key route: what it
+	// may do is its user's account, resolved on every request (disable the
+	// account and the key stops working).
+	KeyTypeUser KeyType = "user"
 
 	// KeyTypeLegacy is the zero value: an untyped key minted before typed keys
 	// existed (the "sk-" format). Legacy keys are NOT subject to the type-scope
@@ -47,11 +53,11 @@ const (
 	keySuffixLen = 32
 )
 
-// Valid reports whether kt is one of the four real key types (i.e. not the
+// Valid reports whether kt is one of the real key types (i.e. not the
 // legacy zero value and not an unknown string).
 func (kt KeyType) Valid() bool {
 	switch kt {
-	case KeyTypeAdmin, KeyTypeTask, KeyTypeWebhook, KeyTypeReadonly:
+	case KeyTypeAdmin, KeyTypeTask, KeyTypeWebhook, KeyTypeReadonly, KeyTypeUser:
 		return true
 	default:
 		return false
@@ -74,10 +80,58 @@ func (kt KeyType) Permissions() []models.Permission {
 		return []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks, models.PermissionViewLogs}
 	case KeyTypeReadonly:
 		return []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs}
-	case KeyTypeWebhook:
+	case KeyTypeWebhook, KeyTypeUser:
 		return []models.Permission{}
 	default:
 		return []models.Permission{}
+	}
+}
+
+// Surface is an HTTP surface that authenticates API keys. Every edge names
+// its surface when it validates a key (Manager.ValidateKeyOn,
+// LookupKeyTypeOn, LookupKeyMetaOn), and KeyType.AllowsSurface — this one
+// table — decides which key types it recognises, so no edge has to remember
+// which types to turn away (ADR-0108).
+type Surface string
+
+const (
+	// SurfaceOrchestrator is the orchestrator HTTP API: /v1 and the bare
+	// routes, the admin group, task create and upload. A recognised key's
+	// route scope is then decided by TypeAllowsMethod and its permissions.
+	SurfaceOrchestrator Surface = "orchestrator"
+	// SurfaceA2A is the A2A JSON-RPC endpoint (/a2a); each method then checks
+	// its permission.
+	SurfaceA2A Surface = "a2a"
+	// SurfaceTrigger is POST /triggers/{slug}, where a key is an alternative to
+	// the per-trigger HMAC signature, scoped by AllowedTriggerSlugs.
+	SurfaceTrigger Surface = "trigger"
+	// SurfaceChat is the chat listener's own port, where a key acts as the
+	// person it names (`fleet chat`, `fleet acp`, fleet-bench).
+	SurfaceChat Surface = "chat"
+)
+
+// Surfaces lists every surface, for tests that walk the table.
+var Surfaces = []Surface{SurfaceOrchestrator, SurfaceA2A, SurfaceTrigger, SurfaceChat}
+
+// AllowsSurface reports whether a key of this type authenticates on s at
+// all. It only RECOGNISES the key: an orchestrator route still applies
+// TypeAllowsMethod (a webhook key there is a definitive 403), A2A each
+// method's permission, a trigger the key's slugs.
+//   - user          → chat only: it acts as a person and carries no
+//     Operations Center scope
+//   - webhook       → triggers; recognised on the orchestrator and A2A only to
+//     be refused by their scope checks, as before
+//   - admin / task / readonly / legacy → the orchestrator and A2A
+func (kt KeyType) AllowsSurface(s Surface) bool {
+	switch kt {
+	case KeyTypeUser:
+		return s == SurfaceChat
+	case KeyTypeWebhook:
+		return s == SurfaceTrigger || s == SurfaceOrchestrator || s == SurfaceA2A
+	case KeyTypeAdmin, KeyTypeTask, KeyTypeReadonly, KeyTypeLegacy:
+		return s == SurfaceOrchestrator || s == SurfaceA2A
+	default:
+		return false
 	}
 }
 
@@ -96,7 +150,7 @@ func TypeAllowsMethod(kt KeyType, method string) bool {
 		return true
 	case KeyTypeReadonly:
 		return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
-	default: // webhook, legacy, unknown
+	default: // webhook, user, legacy, unknown
 		return false
 	}
 }

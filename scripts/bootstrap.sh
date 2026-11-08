@@ -565,8 +565,8 @@ sandbox_manifest_tag() {
 gen_secret() { head -c "${1:-32}" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "${1:-32}"; }
 
 # ensure_env_secret KEY LEN — set KEY=<random> in $ENV_FILE only when ABSENT, so
-# re-runs never rotate a shared secret (rotating FLEET_SERVER_TOKEN would 403 the
-# web↔backend link; rotating APP_SESSION_SECRET would log everyone out).
+# re-runs never rotate a shared secret (rotating APP_SESSION_SECRET would log
+# everyone out).
 ensure_env_secret() {
   local key="$1" len="${2:-32}"
   [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE" && return 0
@@ -629,7 +629,6 @@ configure_web_tier() {
   # paths cannot drift: session secret, SSO/cookie keys, OIDC, catwalk, plus
   # the origin and a non-default bind under their new names.
   fleet_migrate_web_env "$old_env" "$ENV_FILE"
-  ensure_env_secret FLEET_SERVER_TOKEN 32
   ensure_env_secret ADMIN_API_KEY 32
   ensure_env_secret APP_SESSION_SECRET 48
   # The canonical public origin: redirect targets, the Secure-cookie decision
@@ -724,7 +723,7 @@ configure_web_tier() {
   # One renderer (scripts/lib/caddyfile.sh) writes the whole file: the web
   # tier as the default upstream, the public API (/v1/*, /api-info, the A2A
   # agent card, /triggers/*) to the orchestrator and /webhooks/* to the chat
-  # listener, with the web tier's header-trust channel stripped on both. The
+  # listener, with the retired identity headers stripped on both. The
   # upstream addresses follow the env file when an operator moved a listener.
   render_fleet_caddyfile "$WEB_DOMAIN" "${FLEET_ACME_EMAIL:-}" \
     "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
@@ -783,7 +782,7 @@ configure_web_tier() {
   fi
   if systemctl is-active caddy >/dev/null 2>&1; then
     ok "caddy serving https://${WEB_DOMAIN} (Let's Encrypt; requires inbound 80/443 reachable)"
-    ok "  browser → web tier (:3000); /v1/*, /api-info, agent card, /triggers/* → orchestrator; /webhooks/* → chat (X-API-Key / signed webhooks only — header-trust stripped)"
+    ok "  browser → web tier (:3000); /v1/*, /api-info, agent card, /triggers/* → orchestrator; /webhooks/* → chat (X-API-Key / signed webhooks only)"
   else
     warn "caddy not active — check: journalctl -u caddy -n 50"
   fi
@@ -1763,7 +1762,7 @@ fi
 if [[ "$ENABLE_WEB" == "1" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
     step "Web tier (--enable-web): plan"
-    info "[dry-run] would ensure FLEET_SERVER_TOKEN + ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
+    info "[dry-run] would ensure ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
     if [[ -n "$WEB_DOMAIN" ]]; then
       info "[dry-run] would set APP_SESSION_SECRET (if absent) + FLEET_PUBLIC_BASE_URL=https://${WEB_DOMAIN} in ${ENV_FILE}, restart ${SERVICE_NAME} (it serves the web UI), install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."

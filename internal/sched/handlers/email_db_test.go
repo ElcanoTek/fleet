@@ -44,7 +44,7 @@ func setupEmailTest(t *testing.T) (*chi.Mux, *storage.Storage, func()) {
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Use(asSeededSession)
 	r.Post("/triggers/email/{slug}", h.HandleEmailTrigger)

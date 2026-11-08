@@ -7,9 +7,9 @@ import { test, expect } from "./fixtures";
 // which clears the scheduled-mode self-audit enforcement gate so the task can
 // reach success). Logs are then retrievable through the real log viewer.
 //
-// Auth is the shared chat cookie: the browser tier forwards the session as
-// X-User-Email, and the e2e seed provisions that email as an Operations Center
-// admin. The leftover moc username/password form is gone.
+// Auth is the shared chat cookie: the browser tier hands the session to the
+// Operations Center as a typed principal (ADR-0108), and the e2e seed
+// provisions that email as an Operations Center admin. The leftover moc username/password form is gone.
 
 test.describe("live scheduled task → real worker pool + sandbox", () => {
   test("create a task, the real worker runs it to success, logs are retrievable", async ({

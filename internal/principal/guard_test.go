@@ -27,15 +27,12 @@ var identityHeaders = []string{
 	"X-External-Subject",
 }
 
-// identityHeaderAllowlist names the non-test files still allowed to spell an
-// identity header, each with the reason. Every entry is a listener EDGE (or
-// its client) on the legacy internal-service-token channel; retiring that
-// channel empties the list.
+// identityHeaderAllowlist names the non-test files allowed to spell an
+// identity header, each with the reason. It is empty: the last readers were
+// the listener edges of the internal service-token channel, which ADR-0108
+// removed. Adding an entry reopens a header-trust path; supersede ADR-0108
+// first.
 var identityHeaderAllowlist = map[string]string{
-	"internal/httpapi/edge.go":         "chat listener edge: the legacy service-token channel names its user",
-	"internal/sched/handlers/edge.go":  "orchestrator listener edge: the legacy service-token channel names its user",
-	"internal/chattui/client.go":       "`fleet chat` / `fleet acp`: a client of the legacy service-token channel",
-	"cmd/fleet-bench/chat.go":          "fleet-bench: a client of the legacy service-token channel",
 	"internal/principal/guard_test.go": "this guard",
 }
 

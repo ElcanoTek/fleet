@@ -189,33 +189,33 @@ func TestBrandMeta_AcceptsFunctionalColorForms(t *testing.T) {
 	}
 }
 
-// Token-gated but identity-less: reachable without X-User-Email (the login page
-// has no session), refused without the shared secret (the browser must not be
-// able to reach chat-server directly).
+// Principal-gated but identity-less: reachable with the gateway's principal and
+// no user (the login page has no session), refused with none (the browser must
+// not be able to reach chat-server directly).
 func TestBrandMeta_TokenGatedIdentityLess(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{sharedToken: "topsecret"}
+	s := &Server{}
 	h := s.tokenOnlyMiddleware(http.HandlerFunc(s.brandMeta))
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/meta", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("no token: status = %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no principal: status = %d, want 401", w.Code)
 	}
 
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/meta", nil)
 	req.Header.Set("X-Chat-Server-Token", "wrong")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("wrong token: status = %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("retired token: status = %d, want 401", w.Code)
 	}
 
-	// Correct token, NO X-User-Email — the pre-auth case.
+	// The gateway's principal, no user — the pre-auth case.
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/meta", nil)
-	req.Header.Set("X-Chat-Server-Token", "topsecret")
+	req = req.WithContext(asGateway(req.Context()))
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

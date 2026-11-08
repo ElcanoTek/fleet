@@ -47,21 +47,11 @@ var inheritReaders = map[string]inheritReader{
 	"FLEET_LIBRARY_PROMPT_MODEL":  {loadField(func(c *config.Config) string { return c.LibraryPromptModel }), "vendor/library-model"},
 	"FLEET_SANDBOX_WARM_SIZE":     {loadField(func(c *config.Config) string { return strconv.Itoa(agent.WarmPoolSize(c)) }), "3"},
 	"FLEET_MAX_CONCURRENT_AGENTS": {loadField(func(c *config.Config) string { return strconv.Itoa(c.MaxConcurrentAgents) }), "5"},
-	// Nothing reads ORCHESTRATOR_SERVER_TOKEN since the gateway calls the
-	// orchestrator with a typed principal (ADR-0108); this is the
-	// inheritance its registry entry still declares.
-	"ORCHESTRATOR_SERVER_TOKEN": {func(*testing.T) string {
-		if v := os.Getenv("ORCHESTRATOR_SERVER_TOKEN"); v != "" {
-			return v
-		}
-		return os.Getenv("FLEET_SERVER_TOKEN")
-	}, "orch-placeholder"},
-	"FLEET_SERVER_TOKEN":      {func(*testing.T) string { return os.Getenv("FLEET_SERVER_TOKEN") }, "chat-placeholder"},
-	"FLEET_UPDATE_DRAIN_FILE": {func(*testing.T) string { return httpapi.UpdateDrainFile() }, "/srv/drain/update"},
-	"FLEET_DRAIN_FILE":        {func(*testing.T) string { return httpapi.UpdateDrainFile() }, "/srv/drain/legacy"},
-	"FLEET_ENV_FILE":          {func(*testing.T) string { return os.Getenv("FLEET_ENV_FILE") }, "/srv/fleet/custom.env"},
-	"FLEET_AUDIT_DIR":         {func(*testing.T) string { return tools.AuditDir() }, "/srv/audit"},
-	"FLEET_DATA_DIR":          {loadField(func(c *config.Config) string { return c.DataDir }), "/srv/data"},
+	"FLEET_UPDATE_DRAIN_FILE":     {func(*testing.T) string { return httpapi.UpdateDrainFile() }, "/srv/drain/update"},
+	"FLEET_DRAIN_FILE":            {func(*testing.T) string { return httpapi.UpdateDrainFile() }, "/srv/drain/legacy"},
+	"FLEET_ENV_FILE":              {func(*testing.T) string { return os.Getenv("FLEET_ENV_FILE") }, "/srv/fleet/custom.env"},
+	"FLEET_AUDIT_DIR":             {func(*testing.T) string { return tools.AuditDir() }, "/srv/audit"},
+	"FLEET_DATA_DIR":              {loadField(func(c *config.Config) string { return c.DataDir }), "/srv/data"},
 	"FLEET_OIDC_REDIRECT_URI": {func(*testing.T) string {
 		c := webui.ConfigFromEnv()
 		if c.OIDC != nil && c.OIDC.RedirectURI != "" {

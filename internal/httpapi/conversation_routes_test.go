@@ -317,8 +317,7 @@ func TestOptionalBodyMalformedIs400(t *testing.T) {
 		t.Run(sub, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 				"/conversations/"+id+"/"+sub, strings.NewReader(`{"expires_at": "not a number", "visible": "yes", "branch_point_message_id": "1"`))
-			req.Header.Set("X-Chat-Server-Token", "tok")
-			req.Header.Set("X-User-Email", user)
+			req = req.WithContext(asUser(req.Context(), user))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)

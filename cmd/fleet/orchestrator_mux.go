@@ -44,6 +44,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)
+	// A caller still presenting the retired service token (ADR-0108) gets a
+	// 401 naming the replacement, before CSRF could answer 403 instead.
+	r.Use(h.RetiredServiceTokenMiddleware)
 	r.Use(h.CSRFMiddleware)
 
 	r.Get("/health", h.HealthCheck)
@@ -113,15 +116,15 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		// SLA report (#274): per-prompt actual-duration p50/p95 + breach rate over a
-		// window. Registered here (not under AdminAuthMiddleware) so the Next proxy's
-		// header-trust/bearer path resolves the caller into a principal; the handler
+		// window. Registered here (not under AdminAuthMiddleware) so the gateway's
+		// session principal resolves the caller into a principal; the handler
 		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
 		// unreachable from the dashboard — the proxy can never send X-API-Key.
 		r.Get("/sla-report", h.GetSLAReport)
 		// Usage analytics (#601 part 1): cost/token roll-up by principal /
 		// project / model / time bucket over the persisted metering. Same
 		// placement rationale as /sla-report: behind AdminOrUserAuthMiddleware
-		// so the Next proxy's header-trust/bearer path resolves a principal,
+		// so the gateway's session principal resolves a principal,
 		// with the admin gate enforced in-handler on PermissionAdmin.
 		r.Get("/admin/usage", h.GetUsageReport)
 		// Adoption analytics: the per-user AI-adoption read model behind the

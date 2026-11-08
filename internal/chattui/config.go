@@ -8,24 +8,30 @@
 package chattui
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
-// Config is the resolved connection identity for `fleet chat`. The Token is the
-// shared server secret a host-local CLI legitimately holds; it is NEVER logged,
-// printed, or accepted on argv (only via env or a 0600 token file), so a verbose
-// run can't leak it.
+// Config is the resolved connection identity for `fleet chat`. The APIKey is
+// a user API key (`fleet sched apikey create <name> --type user --user
+// <email>`, ADR-0108): the server acts as the account it names. It is NEVER
+// logged, printed, or accepted on argv (only via env or a 0600 key file), so a
+// verbose run can't leak it.
 type Config struct {
 	ServerURL string // e.g. http://127.0.0.1:8080
-	Email     string // X-User-Email — the authenticated identity (audit-attributed)
-	Token     string // X-Chat-Server-Token shared secret
-	Model     string // optional per-turn model slug ("" = server/conversation default)
-	Persona   string // optional persona for a new conversation
+	// Email is the account the key acts as: the --email/$FLEET_USER_EMAIL
+	// the caller expects (CheckIdentity refuses a key for another account),
+	// else filled in from GET /me. It is never sent: the key is the identity.
+	Email   string
+	APIKey  string // X-API-Key: a user API key
+	Model   string // optional per-turn model slug ("" = server/conversation default)
+	Persona string // optional persona for a new conversation
 
 	// ModelNewConversationsOnly sends Model only on a turn that starts a new
 	// conversation, leaving an existing conversation's stored model alone
@@ -57,10 +63,13 @@ type Config struct {
 
 // Flags are the command-line overrides; empty fields fall back to env.
 type Flags struct {
-	Server    string
-	Email     string
+	Server  string
+	Email   string
+	KeyFile string
+	// TokenFile is the retired --token-file (the server token, ADR-0108):
+	// accepted only so its use gets an error naming the replacement.
 	TokenFile string
-	EnvFile   string // server env file to auto-discover the token/addr from
+	EnvFile   string // server env file to auto-discover the server address from
 	Model     string
 	Persona   string
 	// PublicURL is an explicit web UI base URL for deep links. It always
@@ -92,20 +101,16 @@ var defaultEnvFilePaths = []string{".env.local", "/etc/fleet/fleet.env"}
 // Resolution order (first non-empty wins):
 //
 //	server: --server | $FLEET_CHAT_URL | http://$FLEET_SERVER_ADDR | env-file FLEET_SERVER_ADDR | http://127.0.0.1:8080
-//	email:  --email  | $FLEET_USER_EMAIL                                                          (required)
-//	token:  --token-file (contents) | $FLEET_SERVER_TOKEN | env-file FLEET_SERVER_TOKEN (required)
+//	key:    --key-file (contents) | $FLEET_API_KEY | ~/.config/fleet/api-key (contents)    (required)
+//	email:  --email  | $FLEET_USER_EMAIL                         (optional: the account the key must act as)
 //
-// The env-file step (#480) is the on-box convenience: when the token (or server
-// address) wasn't given explicitly, Resolve reads it from the SAME 0600
-// credential file the server reads — so an operator who can administer the box
-// (i.e. read that file) can just run `fleet chat --email me@org` with no token
-// wrangling. This keeps the host-side-secret invariant intact: the token is
-// still never accepted on argv and never logged; the file's own permissions are
-// the access gate, and reading a local file the operator already controls grants
-// no access they didn't already have.
+// The key is a user API key (ADR-0108); the server acts as the account it
+// names. The shared server token this used to read from the server env file
+// is retired: --token-file and $FLEET_SERVER_TOKEN are refused with an error
+// naming the replacement. The env file still supplies the server address.
 //
 // It returns a clear, actionable error when a required value is missing, and
-// NEVER includes the token value in any error.
+// NEVER includes the key value in any error.
 func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, error) {
 	cfg := Config{
 		Model:      strings.TrimSpace(f.Model),
@@ -113,17 +118,29 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		Connectors: normalizeConnectors(f.Connectors),
 	}
 
-	// Token from explicit sources first: a --token-file (so it can live 0600
-	// outside the env) then the process env. NEVER read off argv.
-	if tf := strings.TrimSpace(f.TokenFile); tf != "" {
-		b, err := rf(tf)
-		if err != nil {
-			return Config{}, fmt.Errorf("read --token-file %q: %w", tf, err)
-		}
-		cfg.Token = strings.TrimSpace(string(b))
+	// The retired server token: refuse it by name, before anything else, so
+	// an old invocation learns what replaced it.
+	if strings.TrimSpace(f.TokenFile) != "" {
+		return Config{}, errors.New(serviceTokenRetired("--token-file"))
 	}
-	if cfg.Token == "" {
-		cfg.Token = strings.TrimSpace(env("FLEET_SERVER_TOKEN"))
+	// Key from explicit sources first: a --key-file (so it can live 0600
+	// outside the env) then the process env, then the per-user default file.
+	// NEVER read off argv.
+	if kf := strings.TrimSpace(f.KeyFile); kf != "" {
+		b, err := rf(kf)
+		if err != nil {
+			return Config{}, fmt.Errorf("read --key-file %q: %w", kf, err)
+		}
+		cfg.APIKey = strings.TrimSpace(string(b))
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = strings.TrimSpace(env("FLEET_API_KEY"))
+	}
+	defaultKeyFile := defaultKeyFilePath(env)
+	if cfg.APIKey == "" && defaultKeyFile != "" {
+		if b, err := rf(defaultKeyFile); err == nil {
+			cfg.APIKey = strings.TrimSpace(string(b))
+		}
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
@@ -137,22 +154,14 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		cfg.ServerURL = "http://" + strings.TrimSpace(env("FLEET_SERVER_ADDR"))
 	}
 
-	// On-box auto-discovery: fill any still-missing token/addr from the server
-	// env file. Skipped entirely once both are already resolved.
+	// On-box auto-discovery: fill a still-missing address from the server
+	// env file. Skipped entirely once it is resolved.
 	candidates := envFileCandidates(f.EnvFile, env)
-	// serverFile is the env file that supplied the token or address, if any —
-	// the deployment this client is talking to.
+	// serverFile is the env file that supplied the address, if any — the
+	// deployment this client is talking to.
 	serverFile := ""
-	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
-			// serverFile is recorded only when the file actually fills a
-			// missing value: a file that merely matched on a key we already
-			// had says nothing about which deployment we are talking to.
-			if cfg.Token == "" {
-				if tok := strings.TrimSpace(vals["FLEET_SERVER_TOKEN"]); tok != "" {
-					cfg.Token, serverFile = tok, path
-				}
-			}
+	if cfg.ServerURL == "" {
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_ADDR"); vals != nil {
 			if cfg.ServerURL == "" {
 				if addr := strings.TrimSpace(vals["FLEET_SERVER_ADDR"]); addr != "" {
 					cfg.ServerURL, serverFile = "http://"+addr, path
@@ -198,19 +207,37 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
 
-	// Email (required) — never inferred. Not from $USER, and deliberately NOT
-	// from the shared env file either: one box can serve several operators, so
-	// the audit trail needs the identity the caller chose, not a shared default.
+	// Email (optional) — the account the caller expects the key to act as.
+	// Never inferred from $USER or the shared env file: the key is the
+	// identity, and this is only a check on it (CheckIdentity).
 	cfg.Email = strings.ToLower(strings.TrimSpace(firstNonEmpty(f.Email, env("FLEET_USER_EMAIL"))))
-	if cfg.Email == "" {
-		return Config{}, fmt.Errorf("no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)")
-	}
 
-	if cfg.Token == "" {
-		return Config{}, fmt.Errorf("no server token: on the box, `fleet chat` reads FLEET_SERVER_TOKEN from the server env file (tried %s) — ensure you can read it, or set FLEET_SERVER_TOKEN, or pass --token-file <path> (mode 0600)",
-			strings.Join(candidates, ", "))
+	if cfg.APIKey == "" {
+		// The shared server token this used to read from the env file is
+		// retired (ADR-0108); the error says so, since an old setup still
+		// holding one would otherwise wonder why it stopped working.
+		where := "$FLEET_API_KEY or --key-file <path> (mode 0600)"
+		if defaultKeyFile != "" {
+			where += ", or save it to " + defaultKeyFile
+		}
+		return Config{}, fmt.Errorf("no API key (the shared server token is retired, ADR-0108): create a user key on the box with `fleet sched apikey create <name> --type user --user <you@example.com>` and pass it as %s", where)
 	}
 	return cfg, nil
+}
+
+// serviceTokenRetired is the error for a caller still configured with the
+// retired server token (ADR-0108).
+func serviceTokenRetired(source string) string {
+	return source + " held the shared server token, which was removed (ADR-0108): create a user API key with `fleet sched apikey create <name> --type user --user <you@example.com>` and pass it as $FLEET_API_KEY or --key-file <path>"
+}
+
+// defaultKeyFilePath is the per-user key file Resolve falls back to,
+// ~/.config/fleet/api-key ("" when $HOME is unset).
+func defaultKeyFilePath(env getenv) string {
+	if h := strings.TrimSpace(env("HOME")); h != "" {
+		return filepath.Join(h, ".config", "fleet", "api-key")
+	}
+	return ""
 }
 
 // ResolveFromEnvironment is Resolve against the real process environment,

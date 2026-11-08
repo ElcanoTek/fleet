@@ -59,13 +59,13 @@ func TestSpoof_HeadersAloneAreRefused(t *testing.T) {
 	h := s.Routes()
 
 	code, _ := meAs(context.Background(), t, h, map[string]string{"X-User-Email": "mallory@x.com"})
-	if code != http.StatusForbidden {
-		t.Fatalf("bare identity header: status %d, want 403", code)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("bare identity header: status %d, want 401", code)
 	}
-	// A wrong service token is no better.
+	// The retired service token is no better, whatever its value.
 	code, _ = meAs(context.Background(), t, h, map[string]string{"X-User-Email": "mallory@x.com", "X-Chat-Server-Token": "guess"})
-	if code != http.StatusForbidden {
-		t.Fatalf("wrong token: status %d, want 403", code)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("retired token: status %d, want 401", code)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestSpoof_BrandRoutesTakeTheGatewayPrincipal(t *testing.T) {
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/meta", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("/brand/meta with nothing: status %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("/brand/meta with nothing: status %d, want 401", w.Code)
 	}
 }

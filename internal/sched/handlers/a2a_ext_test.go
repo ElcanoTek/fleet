@@ -71,7 +71,7 @@ func TestA2AExtendedCardNotConfigured(t *testing.T) {
 	t.Parallel()
 
 	// Declared-but-unconfigured (spec §3.1.11): -32007, never MethodNotFound.
-	h := New(Config{SharedToken: testSharedToken, AdminAPIKey: "admin-key"}, nil, nil)
+	h := New(Config{AdminAPIKey: "admin-key"}, nil, nil)
 	h.SetA2A(&A2AConfig{CardJSON: []byte(`{}`), CardETag: `"x"`})
 	mux := newA2ATestMux(h)
 

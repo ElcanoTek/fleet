@@ -172,7 +172,6 @@ func TestCheckEnvVarsLenientKnobIsAdvisory(t *testing.T) {
 	t.Setenv("FLEET_OTEL_SAMPLE_RATIO", "half")
 
 	cfg := &config.Config{
-		SharedToken:     "placeholder-token",
 		MockMode:        true,
 		DatabaseURL:     "postgres://u:p@127.0.0.1:5432/chat?sslmode=disable",
 		ConversationTTL: 30,
@@ -667,7 +666,6 @@ func TestCheckDatabaseSameDB(t *testing.T) {
 func TestCheckEnvVarsMockMode(t *testing.T) {
 	cfg := &config.Config{
 		MockMode:        true,
-		SharedToken:     "tok",
 		ConversationTTL: 14,
 		UnpinnedCap:     50,
 		UploadMaxBytes:  1 << 30,
@@ -682,21 +680,21 @@ func TestCheckEnvVarsMockMode(t *testing.T) {
 	}
 }
 
-// TestCheckEnvVarsMissingToken: a missing FLEET_SERVER_TOKEN is a blocking
-// failure surfaced via cfg.Validate.
-func TestCheckEnvVarsMissingToken(t *testing.T) {
+// TestCheckEnvVarsNeedsNoServerToken: the internal service token is retired
+// (ADR-0108); a configuration without one passes the env check.
+func TestCheckEnvVarsNeedsNoServerToken(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
 		MockMode:        true,
 		ConversationTTL: 14,
 		UnpinnedCap:     50,
+		UploadMaxBytes:  1 << 30,
 		DatabaseURL:     "postgres://u:p@localhost:5432/fleet_chat?sslmode=disable",
 		TLSMode:         "off",
 	}
-	res := checkEnvVars(cfg, nil)
-	if res.Status != statusFail || !strings.Contains(res.Detail, "FLEET_SERVER_TOKEN") {
-		t.Errorf("missing token should fail, got %s: %s", res.Status, res.Detail)
+	if err := cfg.Validate(); err != nil && strings.Contains(err.Error(), "SERVER_TOKEN") {
+		t.Errorf("Validate still requires a server token: %v", err)
 	}
 }
 
@@ -2106,7 +2104,6 @@ func TestValidateConfigRemovedAliases(t *testing.T) {
 	}
 	t.Setenv("FLEET_ENV_FILE", envFile)
 	cfg := &config.Config{
-		SharedToken:     "placeholder-token",
 		MockMode:        true,
 		DatabaseURL:     "postgres://u:p@127.0.0.1:5432/chat?sslmode=disable",
 		ConversationTTL: 30,
@@ -2160,5 +2157,26 @@ func TestValidateConfigRetiredOnly(t *testing.T) {
 	out.Reset()
 	if rc := runRetiredOnly(&out, repoConfigDefault(t)); rc != 0 {
 		t.Fatalf("the generic bundle: rc=%d output:\n%s", rc, out.String())
+	}
+}
+
+// ADR-0108: the retired service-token settings are reported by the same
+// pre-install scan, so `fleet update` refuses a bundle that still hands one to
+// a connector, with the advice instead of a rename.
+func TestValidateConfigRetiredOnlyReportsTheServiceToken(t *testing.T) {
+	stale := mcpTestBundle(t, `mcp_servers:
+  - name: stale
+    type: http
+    url: "https://example.com/mcp?t=${FLEET_SERVER_TOKEN}"
+    always: true
+    env:
+      LEGACY: "${ORCHESTRATOR_SERVER_TOKEN}"
+`)
+	var out strings.Builder
+	rc := runRetiredOnly(&out, stale)
+	got := out.String()
+	if rc != exitRetiredRefs || !strings.Contains(got, "references the removed setting ${FLEET_SERVER_TOKEN}") ||
+		!strings.Contains(got, "${ORCHESTRATOR_SERVER_TOKEN}") || !strings.Contains(got, "ADR-0108") {
+		t.Fatalf("rc=%d output:\n%s", rc, got)
 	}
 }

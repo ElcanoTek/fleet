@@ -24,9 +24,8 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_SHARED_FILES_MAX_TOTAL_MB":  true,
 
 	// ── fleet transport / data (canonical) ──
-	"FLEET_SERVER_ADDR":  true,
-	"FLEET_SERVER_TOKEN": true,
-	"FLEET_DATA_DIR":     true,
+	"FLEET_SERVER_ADDR": true,
+	"FLEET_DATA_DIR":    true,
 
 	// ── IP access control (network-level allow/deny + trusted proxies) ──
 	"FLEET_IP_ALLOWLIST":    true,
@@ -340,7 +339,6 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_OIDC_ALLOW_PASSWORD":     true,
 	"FLEET_OIDC_GENERIC":            true,
 	"CATWALK_URL":                   true,
-	"ORCHESTRATOR_SERVER_TOKEN":     true,
 	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
 
 	// Retired with the account-events feed (ADR-0096). Still loaded from the

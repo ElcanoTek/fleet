@@ -45,3 +45,9 @@ func gatewayContext(path, user string) context.Context {
 func sessionContext(user string, s principal.Session) context.Context {
 	return principal.With(context.Background(), principal.Principal{Email: user, AuthMethod: principal.MethodSession, Session: s})
 }
+
+// asGateway is ctx carrying the gateway's identity-less principal: what the
+// gateway attaches to a brand-asset or shared-conversation call.
+func asGateway(ctx context.Context) context.Context {
+	return principal.With(ctx, principal.Principal{AuthMethod: principal.MethodGateway})
+}

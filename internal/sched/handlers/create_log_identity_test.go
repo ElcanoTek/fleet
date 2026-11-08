@@ -68,7 +68,7 @@ func TestCreateTaskLogLineCarriesTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", SharedToken: "topsecret", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	member := seedOpsUser(t, store, uuid.New(), "alice@elcanotek.com", "client", "")
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
@@ -90,10 +90,7 @@ func TestCreateTaskLogLineCarriesTheCaller(t *testing.T) {
 		}
 	}
 	post(func(req *http.Request) { req.Header.Set("X-API-Key", raw) })
-	post(func(req *http.Request) {
-		req.Header.Set("X-Orchestrator-Server-Token", "topsecret")
-		req.Header.Set("X-User-Email", member.Username)
-	})
+	post(func(req *http.Request) { *req = *asSession(req, member.Username) })
 	post(func(req *http.Request) { req.Header.Set("X-API-Key", "test-admin-key") })
 
 	got := out.userIDsOf("Task created")

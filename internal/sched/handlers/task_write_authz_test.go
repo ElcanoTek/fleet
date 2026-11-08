@@ -35,10 +35,9 @@ import (
 func taskAuthzRouter(t *testing.T) (*chi.Mux, *Handlers, func()) {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
-	h := New(Config{SharedToken: testSharedToken,
-		DefaultTaskModel: "test/model",
-		AdminAPIKey:      "test-admin-key",
-		Version:          "0.1.0",
+	h := New(Config{DefaultTaskModel: "test/model",
+		AdminAPIKey: "test-admin-key",
+		Version:     "0.1.0",
 	}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Use(asSeededSession)
@@ -195,7 +194,7 @@ func resumeWakeRouter(t *testing.T) (*chi.Mux, *Handlers, *models.User) {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {

@@ -83,11 +83,12 @@ copy in `deploy/Caddyfile`) routes the public API past the web tier (fleet's web
 So `https://<domain>/v1/tasks` with `X-API-Key` is the supported way in;
 the **legacy bare paths are not routed publicly** (`https://<domain>/tasks`
 reaches the web app, not the orchestrator) — they are reachable only from the
-box, which is one more reason to migrate to `/v1`. Both backend routes strip
-the web tier's header-trust headers (`X-User-Email`, `X-User-Session-Epoch`,
-`X-Orchestrator-Server-Token` / `X-Chat-Server-Token`), so `X-API-Key` and the
-webhook signatures are the only public authentication paths
-([ADR-0053](adr/0053-public-api-through-the-tls-front.md)).
+box, which is one more reason to migrate to `/v1`. `X-API-Key` and the
+webhook signatures are the only public authentication paths: no fleet
+listener reads an identity header or honours a service token
+([ADR-0108](adr/0108-typed-principal.md)), and both backend routes still strip
+the retired ones (`X-User-Email`, `X-User-Session-Epoch`,
+`X-Orchestrator-Server-Token` / `X-Chat-Server-Token`) as defence in depth.
 
 If `curl https://<domain>/api-info` returns the web app's HTML 404 instead of
 the JSON above, the box is running a Caddyfile that predates these routes:

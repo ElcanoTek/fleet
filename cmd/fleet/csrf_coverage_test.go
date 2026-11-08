@@ -51,19 +51,17 @@ func TestOrchestratorCSRFCoverage(t *testing.T) {
 			t.Errorf("POST %s same-origin: still CSRF-blocked (%q); the Origin check should have passed", path, rr.Body.String())
 		}
 
-		// The Next-proxy shared-token exemption composes with fail-closed auth:
-		// a present-but-WRONG X-Orchestrator-Server-Token skips the CSRF gate
-		// (a custom header cannot be attached by a cross-site browser request,
-		// so it is not CSRF-forgeable) and is then rejected by the handler's
-		// own auth — 403 Forbidden, never the CSRF message, never a success.
+		// The retired service token (ADR-0108) is refused ahead of CSRF with
+		// a 401 that names the replacement — never the CSRF message, never a
+		// success, whatever identity header rides along.
 		req := httptest.NewRequest("POST", path, nil)
 		req.Host = host
-		req.Header.Set("X-Orchestrator-Server-Token", "wrong-token")
+		req.Header.Set("X-Orchestrator-Server-Token", "any-token")
 		req.Header.Set("X-User-Email", "attacker@example.com")
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)
-		if rr.Code != http.StatusForbidden || strings.Contains(rr.Body.String(), csrfMsg) {
-			t.Errorf("POST %s wrong shared token: code=%d body=%q, want 403 from fail-closed auth (not CSRF, not success)", path, rr.Code, rr.Body.String())
+		if rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "service_token_retired") {
+			t.Errorf("POST %s retired service token: code=%d body=%q, want 401 service_token_retired", path, rr.Code, rr.Body.String())
 		}
 	}
 

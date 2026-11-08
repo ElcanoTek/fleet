@@ -192,10 +192,10 @@ func TestSharedEndpoint_RequiresSharedSecret(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/shared/anything", nil)
-	// No X-Chat-Server-Token header.
+	// No principal and no credential.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("no-secret /shared: got %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no-principal /shared: got %d, want 401", w.Code)
 	}
 }

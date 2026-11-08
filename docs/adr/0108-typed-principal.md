@@ -1,8 +1,11 @@
 # ADR-0108: Typed Principal; internal service tokens retired
 
-- **Status:** Proposed. Decision 1 is implemented (#2050 phase 1); decisions 2 and 3 land with phase 2, which marks this record Accepted.
+- **Status:** Accepted
 - **Date:** 2026-11-08
 - **Deciders:** fleet maintainers
+- **Supersedes:** [ADR-0053](0053-public-api-through-the-tls-front.md) (its routing
+  stands; its header-trust channel, and the Caddy strip that guarded it, no
+  longer carry any trust)
 - **Issue:** #2050 ("One HTTP surface"), phases 1 and 2
 - **Design note:** [docs/PRINCIPAL.md](../PRINCIPAL.md)
 
@@ -33,9 +36,8 @@ at Caddy.
 1. **Identity is a typed `principal.Principal` in the request context.**
    `internal/principal` defines it: email, `UserID`, role, Operations Center
    scope, an API key's id and permissions, the `AuthMethod` (`session`,
-   `gateway`, `api_key`, `bearer`, `admin_key`, plus the legacy
-   `service_token` until decision 2) and a session's claim (epoch, source,
-   issuer, subject). A request context cannot be written by a network peer,
+   `gateway`, `api_key`, `bearer`, `admin_key`) and a session's claim (epoch,
+   source, issuer, subject). A request context cannot be written by a network peer,
    so a principal is only ever there because fleet code put it there:
    - the gateway attaches one to every in-process call — a browser session's
      asserted principal, or its own (`gateway`) for the sign-in legs, a
@@ -61,16 +63,63 @@ at Caddy.
    the principal's `AuthMethod`: a `session` or `gateway` principal passed
    the gateway's Origin check and is exempt from the Operations Center's.
 
-2. **The internal service-token channel is retired** (phase 2).
-3. **`fleet chat`, `fleet acp` and fleet-bench authenticate with an API key**
-   (phase 2).
+2. **The internal service-token channel is retired.** `FLEET_SERVER_TOKEN`
+   and `ORCHESTRATOR_SERVER_TOKEN` are no longer settings, and nothing reads
+   `X-Chat-Server-Token`, `X-Orchestrator-Server-Token` or an identity header.
+   A request that still presents a service token gets **401
+   `service_token_retired`** with a message naming the replacement — on the
+   chat listener from its edge, on the orchestrator ahead of CSRF and every
+   auth path — never a silent fall-through. The retired names follow the
+   configuration registry's retirement path (ADR-0106): they read as unset
+   whatever the environment holds; boot, `fleet doctor`, `fleet config
+   explain`/`set-env` report them with the advice; and `fleet validate-config
+   --retired-only` (the pre-install check of `fleet update` and bootstrap)
+   exits 7 on a bundle that still references one. `bootstrap.sh` no longer
+   generates `FLEET_SERVER_TOKEN`. The Caddy `header_up` deletions of these
+   headers stay in the rendered layout as harmless defence in depth, so no
+   installed Caddyfile drifts.
+3. **`fleet chat`, `fleet acp` and fleet-bench authenticate with a user API
+   key.** A new key type, `user` (`fleet_user_…`, minted with `fleet sched
+   apikey create <name> --type user --user <email>`), names one account
+   (`APIKey.UserEmail`). The chat listener's edge accepts it as `X-API-Key`
+   or `Authorization: Bearer` and attaches an `api_key`/`bearer` principal
+   for that account, which the membership gate then resolves like any other
+   — so disabling the account ends the key's access. A user key carries no
+   Operations Center permission and reaches no scoped-key route
+   (`x-fleet-key-types.user` is `{permissions: [], methods: []}`); the other
+   key types name no user and are refused on the chat API with 403
+   `not_a_user_key`. The clients read the key from `--key-file`, else
+   `$FLEET_API_KEY`, else `~/.config/fleet/api-key`, never from argv; a
+   user key takes no per-key rate limit (the chat's per-user limit applies).
+   Which key type authenticates on which surface (chat, orchestrator, A2A,
+   triggers) is one table, `apikeys.KeyType.AllowsSurface`, that every edge
+   consults through `ValidateKeyOn`, so a user key cannot reach A2A or the
+   orchestrator; and the key store re-reads its file on any change, so a
+   revoke or rotate made by the CLI takes effect on the server's next request;
+   `--email` only checks which account the key acts as. The HTTP `/keys`
+   API does not mint user keys (the CLI on the box does), so the public
+   API's request contract is unchanged.
 
 ## Enforcement
 
 - `internal/principal/guard_test.go` (`TestNoIdentityHeaderReaders`) fails on
   any non-test Go file under `cmd/` or `internal/` that spells an identity
-  header. Its allowlist holds only the legacy service-token edges and their
-  clients until decision 2 empties it.
+  header. Its allowlist is empty.
+- `internal/httpapi/auth_test.go`, `user_key_client_test.go`: the chat edge
+  (retired token 401, no credential 401, a key naming no user 403, a user key
+  as X-API-Key and as bearer) and `fleet chat`'s client against the real
+  listener; `cmd/fleet/csrf_coverage_test.go` and
+  `internal/sched/handlers/header_trust_test.go`: the orchestrator's 401.
+- `internal/sched/apikeys/sync_test.go` (a revoke, rotate, delete or edit by
+  another process takes effect at once; `TestKeyTypeSurfaces`),
+  `edge_guard_test.go` (`TestKeyEdgesNameTheirSurface`: no edge validates a
+  key without its surface), and `internal/sched/handlers/key_surface_test.go`
+  (key types × orchestrator edges).
+- `internal/config/envreg/retired_lookup_test.go`,
+  `internal/config/retired_aliases_test.go`,
+  `cmd/fleet/validate_config_test.go`
+  (`TestValidateConfigRetiredOnlyReportsTheServiceToken`): the retirement
+  path.
 - `internal/principal/principal_test.go`: `Resolve`'s verdicts and order.
 - Spoofing: `internal/httpapi/principal_spoof_test.go`,
   `internal/webui/principal_spoof_test.go`,
@@ -83,8 +132,12 @@ at Caddy.
 
 - A handler that needs to know who is calling reads `principal.From`; there
   is no header to read and the guard test refuses one.
-- The gateway no longer needs `FLEET_SERVER_TOKEN` or
-  `ORCHESTRATOR_SERVER_TOKEN`; the latter is read by nothing.
+- No shared secret lets any caller name a user. A process on the box that
+  wants to act as a person needs that person's key, which an admin mints and
+  can revoke on its own.
+- Every existing setup of `fleet chat`, `fleet acp`, fleet-bench and the
+  Buzz `fleet-buzz-gateway` that relied on the server token must move to a
+  user key; until it does it gets the 401 that says how.
 - The Operations Center's API-key checks (`verifyAdminKey`, the scoped-key
   paths in `AdminOrUserAuthMiddleware`, `authorizeTaskCreator`,
   `HandleUpload`) stay where they are and now also record an `api_key` or

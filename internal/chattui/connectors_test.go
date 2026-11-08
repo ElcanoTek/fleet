@@ -77,7 +77,7 @@ func (s *connectorServer) lastEnabled(t *testing.T) ([]string, bool) {
 func TestNewConversationOpensWithTheWebChatsDefaultConnectors(t *testing.T) {
 	s := &connectorServer{}
 	srv := s.start(t)
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "tok", DefaultConnectors: true})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "tok", DefaultConnectors: true})
 	if _, err := c.Stream(context.Background(), "hi", "", func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestExplicitConnectorsReplaceTheDefaults(t *testing.T) {
 	srv := s.start(t)
 	cfg, err := Resolve(Flags{Server: srv.URL, Email: "u@x.co", Connectors: []string{" Lens ", "lens", "EMAIL"}},
 		func(k string) string {
-			if k == "FLEET_SERVER_TOKEN" {
+			if k == "FLEET_API_KEY" {
 				return "tok"
 			}
 			return ""
@@ -114,7 +114,7 @@ func TestAnUnknownOrUnusableConnectorIsRefusedBeforeAnyTurn(t *testing.T) {
 	for _, name := range []string{"nope", "plugin_notes", "fastio"} {
 		s := &connectorServer{}
 		srv := s.start(t)
-		c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "tok", DefaultConnectors: true,
+		c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "tok", DefaultConnectors: true,
 			Connectors: []string{name}})
 		_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
 		if err == nil || !strings.Contains(err.Error(), "not an optional connector you can use here") {
@@ -129,7 +129,7 @@ func TestAnUnknownOrUnusableConnectorIsRefusedBeforeAnyTurn(t *testing.T) {
 func TestAResumedConversationKeepsItsOwnConnectors(t *testing.T) {
 	s := &connectorServer{}
 	srv := s.start(t)
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "tok", DefaultConnectors: true})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "tok", DefaultConnectors: true})
 	if _, err := c.Stream(context.Background(), "hi", "conv-existing", func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestClientsThatDoNotAskForDefaultsAreUnchanged(t *testing.T) {
 	// fleet acp builds its Config without DefaultConnectors.
 	s := &connectorServer{}
 	srv := s.start(t)
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "tok"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "tok"})
 	if _, err := c.Stream(context.Background(), "hi", "", func(Event) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestClientsThatDoNotAskForDefaultsAreUnchanged(t *testing.T) {
 func TestAnUnreadableCatalogStopsTheTurnInsteadOfStartingWithoutConnectors(t *testing.T) {
 	s := &connectorServer{catalogStatus: http.StatusInternalServerError}
 	srv := s.start(t)
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "tok", DefaultConnectors: true})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", APIKey: "tok", DefaultConnectors: true})
 	_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
 	if err == nil || !strings.Contains(err.Error(), "connector catalog") {
 		t.Fatalf("err = %v, want a connector catalog error", err)

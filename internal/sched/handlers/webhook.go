@@ -76,15 +76,15 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	// same code as before.
 	authorizedByKey := false
 	if rawKey := webhookKeyFromRequest(r); rawKey != "" {
-		if kt, _, perr := apikeys.ParseAPIKey(rawKey); perr == nil && kt == apikeys.KeyTypeWebhook {
-			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), rawKey, nil, nil, nil); valid && key != nil {
-				if !key.AllowsTriggerSlug(slug) {
-					writeError(w, http.StatusForbidden, "trigger slug not permitted for this key")
-					return
-				}
-				authorizedByKey = true
-				r = withAuthIdentity(r, apiKeyIdentity(key.KeyID))
+		// Only the key types SurfaceTrigger admits (webhook) are recognised;
+		// any other key falls through to the signature path, as before.
+		if valid, key, _ := h.apiKeys.ValidateKeyOn(r.Context(), apikeys.SurfaceTrigger, rawKey, nil, nil, nil); valid && key != nil {
+			if !key.AllowsTriggerSlug(slug) {
+				writeError(w, http.StatusForbidden, "trigger slug not permitted for this key")
+				return
 			}
+			authorizedByKey = true
+			r = withAuthIdentity(r, apiKeyIdentity(key.KeyID))
 		}
 	}
 

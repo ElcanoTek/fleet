@@ -37,7 +37,7 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-			valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKeyOn(r.Context(), apikeys.SurfaceOrchestrator, apiKey, nil, nil, nil)
 			if valid && key != nil {
 				if key.Type == apikeys.KeyTypeAdmin {
 					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
@@ -143,7 +143,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		//     deployed sk- key behaves.
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != "" {
-			valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKeyOn(r.Context(), apikeys.SurfaceOrchestrator, apiKey, nil, nil, nil)
 			if valid && key != nil {
 				authorized := false
 				switch {
@@ -292,17 +292,6 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 		// enforced the browser's Origin itself (internal/webui), WITHOUT
 		// forwarding the Origin header.
 		if p, ok := authn.From(r.Context()); ok && p.IsBrowserSession() {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Skip for the legacy internal service token on this listener's own
-		// port. Like X-API-Key and Bearer above, a custom header cannot be
-		// attached to a cross-site browser request (it would require a CORS
-		// preflight we never grant), so its presence proves a programmatic
-		// caller. Presence is enough here: the auth paths fail-closed reject a
-		// wrong token value.
-		if r.Header.Get("X-Orchestrator-Server-Token") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}

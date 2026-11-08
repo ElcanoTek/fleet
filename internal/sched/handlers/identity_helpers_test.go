@@ -9,24 +9,26 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
-// testSharedToken is the web gateway's shared token in these tests' handler
-// configs: a request carrying it plus X-User-Email is what a signed-in person
-// looks like to the Operations Center (header trust).
-const testSharedToken = "test-shared-token-placeholder"
+// asSession is r as the gateway hands it to the Operations Center for a
+// signed-in person: a session principal for email in the context (ADR-0108).
+func asSession(r *http.Request, email string) *http.Request {
+	return r.WithContext(authn.With(r.Context(), authn.Principal{Email: email, AuthMethod: authn.MethodSession}))
+}
 
 // seededSessions maps a test "session token" to the account it signs in as.
 // Before #2049 M4 these tests signed people in with the Operations Center's
 // password bearer; that bearer is retired, and a person reaches the
-// Operations Center only as the web gateway's header-trusted session. A test
+// Operations Center only as the web gateway's session principal. A test
 // still presents `Authorization: Bearer <token>`, and asSeededSession turns a
-// known token into exactly what the gateway forwards for that person's
-// session — the real header-trust path then authenticates it against the
-// identity table. An unknown token is left alone, so it fails as an unknown
+// known token into exactly what the gateway hands over for that person's
+// session — the real principal path then resolves it against the identity
+// table. An unknown token is left alone, so it fails as an unknown
 // bearer always did (401). Tokens are unique per test, so parallel tests do
 // not collide.
 var seededSessions sync.Map // token → email
@@ -81,20 +83,20 @@ func identityTestStorage(t *testing.T) *storage.Storage {
 // gateway (see seededSessions).
 func asSeededSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applySeededSession(r)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, applySeededSession(r))
 	})
 }
 
-// applySeededSession rewrites one request (see seededSessions).
-func applySeededSession(r *http.Request) {
+// applySeededSession is r as the gateway would hand it over (see
+// seededSessions).
+func applySeededSession(r *http.Request) *http.Request {
 	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok {
-		return
+		return r
 	}
 	if email, known := seededSessions.Load(strings.TrimSpace(tok)); known {
 		r.Header.Del("Authorization")
-		r.Header.Set("X-Orchestrator-Server-Token", testSharedToken)
-		r.Header.Set("X-User-Email", email.(string))
+		return asSession(r, email.(string))
 	}
+	return r
 }

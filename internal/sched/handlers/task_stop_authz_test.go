@@ -25,7 +25,7 @@ func TestTaskStopFollowsTaskScope(t *testing.T) {
 
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {

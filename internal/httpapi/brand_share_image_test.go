@@ -22,7 +22,6 @@ func shareImageFixture(t *testing.T, name string, content []byte) *Server {
 		t.Fatalf("write fixture: %v", err)
 	}
 	return &Server{
-		sharedToken: "topsecret",
 		clientConfig: &clientconfig.Bundle{
 			Dir:                 dir,
 			Branding:            clientconfig.Branding{ShareImage: name},
@@ -148,12 +147,12 @@ func TestBrandShareImage_TokenGatedIdentityLess(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/share-image", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("no token: status = %d, want 403", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no principal: status = %d, want 401", w.Code)
 	}
 
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/brand/share-image", nil)
-	req.Header.Set("X-Chat-Server-Token", "topsecret")
+	req = req.WithContext(asGateway(req.Context()))
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

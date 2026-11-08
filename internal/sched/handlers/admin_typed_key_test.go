@@ -42,10 +42,9 @@ func setupAdminAuthz(t *testing.T) (*apikeys.Manager, *chi.Mux) {
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken,
-		DefaultTaskModel: "test/model",
-		AdminAPIKey:      "bootstrap-admin-key",
-		DataDir:          tmpDir,
+	h := New(Config{DefaultTaskModel: "test/model",
+		AdminAPIKey: "bootstrap-admin-key",
+		DataDir:     tmpDir,
 	}, store, keyMgr)
 
 	r := chi.NewRouter()

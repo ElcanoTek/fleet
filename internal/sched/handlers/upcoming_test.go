@@ -94,7 +94,7 @@ func TestGetUpcomingRuns_HandlerReturnsSortedFeed(t *testing.T) {
 
 	mux := chi.NewRouter()
 	mux.Use(asSeededSession)
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
 	mux.Group(func(rt chi.Router) {
 		rt.Use(h.AdminAuthMiddleware)
 		rt.Get("/tasks/upcoming", h.GetUpcomingRuns)

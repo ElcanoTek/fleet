@@ -133,7 +133,7 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
 	fs.BoolVar(&opts.skipNetworkChecks, "skip-network-checks", false, "skip the DB live probe, MCP HTTP ping, and OpenRouter key check (CI with no outbound access)")
 	fs.BoolVar(&opts.jsonOutput, "json", false, "emit the report as JSON for CI parsing")
-	fs.BoolVar(&opts.retiredOnly, "retired-only", false, "only scan the bundle for removed CHAT_/CUTLASS_ variables (ADR-0106), read-only; exit 7 when it uses any (fleet update's pre-install check)")
+	fs.BoolVar(&opts.retiredOnly, "retired-only", false, "only scan the bundle for removed variables (CHAT_/CUTLASS_ spellings, ADR-0106; the service token, ADR-0108), read-only; exit 7 when it uses any (fleet update's pre-install check)")
 	return fs
 }
 
@@ -155,10 +155,10 @@ func runRetiredOnly(w io.Writer, bundlePath string) int {
 		return 1
 	}
 	if len(refs) == 0 {
-		fmt.Fprintf(w, "ok: the client bundle %s uses no removed CHAT_/CUTLASS_ variable\n", dir)
+		fmt.Fprintf(w, "ok: the client bundle %s uses no removed CHAT_/CUTLASS_ variable or removed setting\n", dir)
 		return 0
 	}
-	fmt.Fprintf(w, "the client bundle %s uses removed CHAT_/CUTLASS_ variables (ADR-0106):\n", dir)
+	fmt.Fprintf(w, "the client bundle %s uses removed variables (CHAT_/CUTLASS_ spellings, ADR-0106; the service token, ADR-0108):\n", dir)
 	for _, r := range refs {
 		fmt.Fprintf(w, "  - %s\n", r)
 	}
@@ -265,7 +265,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 // ── 1. env vars (blocking) ──
 
 // checkEnvVars reuses cfg.Validate (the SAME required-field gate the server boots
-// through: OPENROUTER_API_KEY unless MockMode, FLEET_SERVER_TOKEN, the
+// through: OPENROUTER_API_KEY unless MockMode, the
 // conversation caps, DATABASE_URL, TLS) plus config.ValidateEnvKnobs — the
 // registry-driven preflight of every numeric/bool/duration knob the BINARY
 // parses: the ones config.Load consumes (#1119) and, since #1273, the ones

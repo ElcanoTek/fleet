@@ -133,8 +133,7 @@ func postChatJSON(t *testing.T, s *Server, user string, body map[string]any) *ht
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/chat", bytes.NewReader(raw))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", user)
+	req = req.WithContext(asUser(req.Context(), user))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)
@@ -342,8 +341,7 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	// Stop (default scope=all): cancels the active turn AND the queued row.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 		"/conversations/"+conv.ID+"/cancel", strings.NewReader(`{}`))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", user)
+	req = req.WithContext(asUser(req.Context(), user))
 	wc := httptest.NewRecorder()
 	s.Routes().ServeHTTP(wc, req)
 	if wc.Code != http.StatusNoContent {
@@ -848,8 +846,7 @@ func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 		"/conversations/"+conv.ID+"/cancel", strings.NewReader(`{}`))
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	req.Header.Set("X-User-Email", user)
+	req = req.WithContext(asUser(req.Context(), user))
 	wc := httptest.NewRecorder()
 	s.Routes().ServeHTTP(wc, req)
 	if wc.Code != http.StatusNoContent {

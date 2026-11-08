@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	authn "github.com/ElcanoTek/fleet/internal/principal"
 )
 
 // TestCSRFMiddlewareOrigin exercises the stateless Origin-based CSRF defense
@@ -141,22 +143,31 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 		}
 	})
 
-	t.Run("web-tier shared-token request is exempt", func(t *testing.T) {
-		// The web tier's orchestrator proxy forwards the cookie user's identity as
-		// X-User-Email + X-Orchestrator-Server-Token and does NOT forward the
-		// browser's Origin — it enforced same-origin itself before proxying.
-		// Without this exemption every cookie-path mutation (e.g. launching a
-		// task from the web UI) dies with "Cross-origin request blocked".
+	t.Run("a gateway session principal is exempt", func(t *testing.T) {
+		// The gateway calls in-process with the session's principal and does
+		// NOT forward the browser's Origin — it enforced same-origin itself
+		// (ADR-0108). Without this exemption every cookie-path mutation (e.g.
+		// launching a task from the web UI) dies with "Cross-origin request
+		// blocked".
+		rr := do("POST", "/tasks", func(r *http.Request) {
+			*r = *r.WithContext(authn.With(r.Context(), authn.Principal{Email: "u@example.com", AuthMethod: authn.MethodSession})) // no Origin
+		})
+		if rr.Code != http.StatusOK || !reached {
+			t.Fatalf("session-principal POST should bypass CSRF: code=%d", rr.Code)
+		}
+	})
+
+	t.Run("the retired service token exempts nothing", func(t *testing.T) {
 		rr := do("POST", "/tasks", func(r *http.Request) {
 			r.Header.Set("X-Orchestrator-Server-Token", "shared-secret") // no Origin
 			r.Header.Set("X-User-Email", "u@example.com")
 		})
-		if rr.Code != http.StatusOK || !reached {
-			t.Fatalf("shared-token POST should bypass CSRF: code=%d", rr.Code)
+		if rr.Code != http.StatusForbidden || reached {
+			t.Fatalf("retired-token POST bypassed CSRF: code=%d", rr.Code)
 		}
 	})
 
-	t.Run("cross-origin POST without the shared token still rejected", func(t *testing.T) {
+	t.Run("cross-origin POST without a principal still rejected", func(t *testing.T) {
 		// The exemption keys on the header the browser can't attach cross-site;
 		// a plain forged form POST (cookie only, evil Origin) stays blocked.
 		rr := do("POST", "/tasks", func(r *http.Request) {

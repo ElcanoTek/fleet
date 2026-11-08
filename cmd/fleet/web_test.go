@@ -71,7 +71,7 @@ func TestWebServerCallsBothBackendsWithThePrincipal(t *testing.T) {
 		gotChat.headers = r.Header.Clone()
 		_, _ = io.WriteString(w, `{"epoch":"e1"}`)
 	})
-	srv, err := buildWebServer(&config.Config{SharedToken: "the-shared-token"}, backendHandlers{chat: chat, orch: orch})
+	srv, err := buildWebServer(&config.Config{}, backendHandlers{chat: chat, orch: orch})
 	if err != nil || srv == nil {
 		t.Fatalf("buildWebServer: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestWebServerTakesThePasswordSwitchFromConfig(t *testing.T) {
 			verified = verified || r.URL.Path == "/auth/verify"
 			_, _ = io.WriteString(w, `{"ok":false}`)
 		})
-		srv, err := buildWebServer(&config.Config{SharedToken: "tok", PasswordLoginDisabled: off}, backendHandlers{chat: chat, orch: http.NotFoundHandler()})
+		srv, err := buildWebServer(&config.Config{PasswordLoginDisabled: off}, backendHandlers{chat: chat, orch: http.NotFoundHandler()})
 		if err != nil || srv == nil {
 			t.Fatalf("buildWebServer: %v", err)
 		}

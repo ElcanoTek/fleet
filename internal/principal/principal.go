@@ -14,7 +14,8 @@
 // no network peer can write: net/http starts every inbound request with a
 // fresh context, so the only way a Principal reaches a handler is that fleet
 // code put it there — the gateway for a browser session, or a listener's own
-// edge middleware for a credential it verified itself (an API key). Backends
+// edge middleware for a credential it verified itself (an API key). There is
+// no shared-secret channel that lets a caller name a user (ADR-0108). Backends
 // read identity from here and nowhere else; TestNoIdentityHeaderReaders fails
 // the build on a non-test read of an identity header.
 //
@@ -55,11 +56,6 @@ const (
 	MethodBearer AuthMethod = "bearer"
 	// MethodAdminKey is the bootstrap ADMIN_API_KEY.
 	MethodAdminKey AuthMethod = "admin_key"
-	// MethodServiceToken is the legacy loopback channel: a caller holding the
-	// shared FLEET_SERVER_TOKEN asserting a user by header on a backend's own
-	// listener (`fleet chat`, `fleet acp`, fleet-bench). Only the listeners'
-	// edge middleware produces it.
-	MethodServiceToken AuthMethod = "service_token"
 )
 
 // Session is the session claim a MethodSession principal carries: what the
@@ -124,7 +120,7 @@ func (p Principal) IsBrowserSession() bool {
 // browser, so a cross-site request cannot carry it.
 func (p Principal) IsCredential() bool {
 	switch p.AuthMethod {
-	case MethodAPIKey, MethodBearer, MethodAdminKey, MethodServiceToken:
+	case MethodAPIKey, MethodBearer, MethodAdminKey:
 		return true
 	case MethodSession, MethodGateway:
 		return false

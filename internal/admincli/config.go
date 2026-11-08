@@ -273,6 +273,9 @@ func configSetEnv(argv []string) int {
 		return errf(1, "invalid env key %q (want [A-Za-z_][A-Za-z0-9_]*)", key)
 	}
 	if canonical, retired := envreg.RetiredAlias(key); retired {
+		if canonical == "" {
+			return errf(1, "%s is a removed setting: nothing reads it — %s", key, envreg.RetiredFix(key))
+		}
 		return errf(1, "%s is a removed alias of %s (ADR-0106): nothing reads it — set %s instead", key, canonical, canonical)
 	}
 	val, err := resolveSecret(*value, key+": ", false)

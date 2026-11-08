@@ -55,9 +55,8 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		t.Fatalf("Failed to initialize API key manager: %v", err)
 	}
 
-	h := New(Config{SharedToken: testSharedToken,
-		AdminAPIKey: "test-admin-key",
-		Version:     "0.1.0",
+	h := New(Config{AdminAPIKey: "test-admin-key",
+		Version: "0.1.0",
 		// A deployment with no default task model can only accept tasks that pin
 		// their own — validateTaskCreate refuses the rest, because the dispatcher
 		// would only dead-letter them (#1014). These tests post model-less tasks

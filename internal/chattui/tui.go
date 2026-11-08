@@ -126,7 +126,7 @@ func newModel(cfg Config) *model {
 	vp := viewport.New()
 	m := &model{client: NewClient(cfg), input: ti, vp: vp}
 	m.history = append(m.history, styleDim.Render(
-		"fleet chat — talking to "+cfg.ServerURL+" as "+cfg.Email+
+		"fleet chat — talking to "+cfg.ServerURL+" as "+orDefault(cfg.Email, "your API key's account")+
 			func() string {
 				if cfg.Model != "" {
 					return "  (model: " + cfg.Model + ")"

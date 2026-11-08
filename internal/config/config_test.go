@@ -420,14 +420,12 @@ func TestValidate(t *testing.T) {
 	}{
 		{"ok", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
-			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
 			c.UploadMaxBytes = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, false},
 		{"missing openrouter", func(c *Config) {
-			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
@@ -440,26 +438,22 @@ func TestValidate(t *testing.T) {
 		}, true},
 		{"bad ttl", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
-			c.SharedToken = "t"
 			c.UnpinnedCap = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, true},
 		{"bad cap", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
-			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, true},
 		{"bad upload max", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
-			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, true},
 		{"missing database url", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
-			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
 			c.UploadMaxBytes = 1
@@ -1237,7 +1231,7 @@ func TestLoadWithQuotedEnvFromPodman(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
-	os.Setenv("OPENROUTER_API_KEY", `"sk-or-v1-abc123def"`)
+	os.Setenv("OPENROUTER_API_KEY", `"sk-or-v1-abc123def"`) // gitleaks:allow — a FAKE key fixture for quote stripping
 
 	cfg, err := Load("/nonexistent/.env")
 	if err != nil {
@@ -1252,7 +1246,7 @@ func TestLoadWithSingleQuotedEnvFromPodman(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
-	os.Setenv("OPENROUTER_API_KEY", `'sk-or-v1-xyz789'`)
+	os.Setenv("OPENROUTER_API_KEY", `'sk-or-v1-xyz789'`) // gitleaks:allow — a FAKE key fixture for quote stripping
 
 	cfg, err := Load("/nonexistent/.env")
 	if err != nil {

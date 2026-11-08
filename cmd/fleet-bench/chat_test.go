@@ -56,7 +56,7 @@ func TestReadTurnToTerminal(t *testing.T) {
 func fakeChatSSE(t *testing.T) *httptest.Server {
 	t.Helper()
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Chat-Server-Token") == "" || r.Header.Get("X-User-Email") == "" {
+		if r.Header.Get("X-API-Key") == "" || r.Header.Get("X-Chat-Server-Token") != "" {
 			http.Error(w, "missing auth headers", http.StatusBadRequest)
 			return
 		}
@@ -87,7 +87,7 @@ func TestRunChatLoad(t *testing.T) {
 	opts := chatOptions{
 		server:      srv.URL,
 		email:       "bench@example.com",
-		token:       "test-token",
+		key:         "test-key",
 		message:     "[[echo:hi]] go",
 		concurrency: 4,
 		duration:    300 * time.Millisecond,
@@ -116,7 +116,7 @@ func TestRunChatLoad_ErrorsCounted(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	opts := chatOptions{
-		server: srv.URL, email: "b@x.co", token: "t",
+		server: srv.URL, email: "b@x.co", key: "t",
 		concurrency: 2, duration: 150 * time.Millisecond, timeout: 2 * time.Second,
 	}
 	r := runChatLoad(opts)

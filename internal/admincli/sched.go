@@ -362,7 +362,7 @@ func cmdSchedAPIKey(argv []string) int {
 // keyFormatNote is the one line every key-minting surface prints: operators
 // handed a key to look for need to know its shape, and the two families look
 // nothing alike.
-const keyFormatNote = "typed keys look like fleet_<type>_<base58> (fleet_task_…, fleet_readonly_…, fleet_webhook_…, fleet_admin_…); legacy --role keys are sk-<base64>. Send either as the X-API-Key header (the /v1 API and A2A accept nothing else)."
+const keyFormatNote = "typed keys look like fleet_<type>_<base58> (fleet_task_…, fleet_readonly_…, fleet_webhook_…, fleet_admin_…, fleet_user_…); legacy --role keys are sk-<base64>. Send either as the X-API-Key header (the /v1 API and A2A accept nothing else). A user key (--type user --user <email>) is for the chat API only."
 
 // openKeyManager opens the store `fleet sched apikey` operates on — the
 // service's own store when it can be derived (see keyStore), announced on
@@ -381,8 +381,8 @@ func openKeyManager() (*apikeys.Manager, keyStore, int) {
 // apiKeyCreateFlags is the parsed `sched apikey create` flag surface, built by
 // newAPIKeyCreateFlagSet so the rate-limit alias handling is unit-testable.
 type apiKeyCreateFlags struct {
-	keyType, triggerSlugs, role string
-	rateLimit                   int
+	keyType, triggerSlugs, role, user string
+	rateLimit                         int
 	// legacyRateLimit is the deprecated --rate-limit spelling (#722: the
 	// primary flag names its unit because v1's numbers were per HOUR).
 	legacyRateLimit int
@@ -391,7 +391,8 @@ type apiKeyCreateFlags struct {
 func newAPIKeyCreateFlagSet() (*flag.FlagSet, *apiKeyCreateFlags) {
 	fs := flag.NewFlagSet("sched apikey create", flag.ContinueOnError)
 	f := &apiKeyCreateFlags{}
-	fs.StringVar(&f.keyType, "type", "", "typed key class: admin|task|webhook|readonly (#190). When set, supersedes --role")
+	fs.StringVar(&f.keyType, "type", "", "typed key class: admin|task|webhook|readonly|user (#190). When set, supersedes --role")
+	fs.StringVar(&f.user, "user", "", "the account a --type user key acts as on the chat API (`fleet chat`, `fleet acp`, fleet-bench; ADR-0108)")
 	fs.StringVar(&f.triggerSlugs, "trigger-slugs", "", "comma-separated trigger slugs a webhook key may fire (required for --type webhook)")
 	fs.StringVar(&f.role, "role", "admin", "legacy role granted to the key (used only when --type is empty)")
 	// #722: the flag names its unit so an operator porting v1 numbers (which
@@ -399,7 +400,7 @@ func newAPIKeyCreateFlagSet() (*flag.FlagSet, *apiKeyCreateFlags) {
 	fs.IntVar(&f.rateLimit, "rate-limit-per-minute", 0, "per-minute request rate limit (0 = unlimited)")
 	fs.IntVar(&f.legacyRateLimit, "rate-limit", 0, "DEPRECATED alias for --rate-limit-per-minute (same per-MINUTE unit; warns)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]")
+		fmt.Fprintln(fs.Output(), "usage: fleet sched apikey create <name> [--type admin|task|webhook|readonly|user] [--user <email>] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]")
 		fmt.Fprintln(fs.Output(), "  "+keyFormatNote)
 		fmt.Fprintln(fs.Output(), "  The key is written to the store the fleet.service process reads (announced as \"key store:\"); FLEET_DATA_DIR overrides.")
 		fs.PrintDefaults()
@@ -446,11 +447,18 @@ func schedAPIKeyCreate(argv []string) int {
 		return code
 	}
 
+	if strings.TrimSpace(f.user) != "" && apikeys.KeyType(strings.TrimSpace(*keyType)) != apikeys.KeyTypeUser {
+		return errf(1, "--user names the account of a --type user key only")
+	}
+
 	// Typed-key path (#190): the type determines the permission set.
 	if t := strings.TrimSpace(*keyType); t != "" {
 		kt := apikeys.KeyType(t)
 		if !kt.Valid() {
-			return errf(1, "unknown key type %q (want admin|task|webhook|readonly)", t)
+			return errf(1, "unknown key type %q (want admin|task|webhook|readonly|user)", t)
+		}
+		if kt == apikeys.KeyTypeUser {
+			return createUserKey(mgr, ks, name, f.user, *rateLimit)
 		}
 		slugs := parseCSVList(*triggerSlugs)
 		if kt == apikeys.KeyTypeWebhook {
@@ -492,6 +500,28 @@ func schedAPIKeyCreate(argv []string) int {
 	return 0
 }
 
+// createUserKey mints a user key (ADR-0108): the credential `fleet chat`,
+// `fleet acp` and fleet-bench authenticate with, acting as email on the chat
+// API. The account is resolved on every request, so a key for an address with
+// no enabled account is refused then, not here.
+func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLimit int) int {
+	if strings.TrimSpace(email) == "" {
+		return errf(1, "--type user requires --user <email> (the account the key acts as)")
+	}
+	if rateLimit != 0 {
+		return errf(1, "--rate-limit-per-minute does not apply to a user key: its turns are limited by the chat's per-user limit, like its person's (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY)")
+	}
+	key, raw, err := mgr.CreateUserKey(context.Background(), name, email, rateLimit, nil, "created via the fleet CLI")
+	if err != nil {
+		return errf(5, "%v", err)
+	}
+	ks.fixOwnership()
+	fmt.Printf("created API key %s (id=%s type=user user=%s)\n", key.Name, key.KeyID, key.UserEmail)
+	fmt.Printf("secret (shown once): %s\n", raw)
+	fmt.Println("format: fleet_user_<base58> — the chat API (`fleet chat`, `fleet acp`, fleet-bench) acts as its user; save it to ~/.config/fleet/api-key (mode 0600) or export FLEET_API_KEY.")
+	return 0
+}
+
 func schedAPIKeyList(argv []string) int {
 	fs := flag.NewFlagSet("sched apikey list", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
@@ -514,6 +544,7 @@ func schedAPIKeyList(argv []string) int {
 			KeyID   string `json:"key_id"`
 			Name    string `json:"name"`
 			Type    string `json:"type"`
+			User    string `json:"user,omitempty"`
 			Enabled bool   `json:"enabled"`
 		}
 		rows := make([]row, 0, len(keys))
@@ -523,7 +554,7 @@ func schedAPIKeyList(argv []string) int {
 				typeStr = "legacy"
 			}
 			// Never the raw key — the same fields as the text listing.
-			rows = append(rows, row{KeyID: k.KeyID, Name: k.Name, Type: typeStr, Enabled: k.Enabled})
+			rows = append(rows, row{KeyID: k.KeyID, Name: k.Name, Type: typeStr, User: k.UserEmail, Enabled: k.Enabled})
 		}
 		return printJSON(rows)
 	}
@@ -537,6 +568,9 @@ func schedAPIKeyList(argv []string) int {
 			typeStr = "legacy"
 		}
 		// Never print the raw key — only its stable ID, name, type and state.
+		if k.UserEmail != "" {
+			typeStr += "\tuser=" + k.UserEmail
+		}
 		fmt.Printf("%s\t%s\ttype=%s\tenabled=%v\n", k.KeyID, k.Name, typeStr, k.Enabled)
 	}
 	return 0

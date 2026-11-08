@@ -87,8 +87,7 @@ func (s *Server) requestPrincipal(w http.ResponseWriter, r *http.Request) (princ
 	return s.edgePrincipal(w, r)
 }
 
-// gatewayMiddleware admits only the gateway's own in-process calls (and,
-// until the internal service token is retired, a caller holding it). It
+// gatewayMiddleware admits only the gateway's own in-process calls. It
 // guards the /auth/* legs that act on an email the caller names — the
 // password check, the session-epoch mint, central Auth's verified access and
 // session events — which a user principal must never reach: a user could
@@ -99,7 +98,7 @@ func (s *Server) gatewayMiddleware(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		if p.AuthMethod != principal.MethodGateway && p.AuthMethod != principal.MethodServiceToken {
+		if p.AuthMethod != principal.MethodGateway {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

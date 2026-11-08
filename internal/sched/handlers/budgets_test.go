@@ -100,7 +100,7 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		now: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC),
 	}
 
-	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
+	h := New(Config{DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)
@@ -380,7 +380,7 @@ func TestBudgetSoftAlert_OncePerWindow_AcrossRestart(t *testing.T) {
 
 	// "Restart": a brand-new enforcer over the same database must see the
 	// persisted marker and stay silent.
-	h2 := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
+	h2 := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
 	h2.SetBudgetGate(env.newEnforcer())
 	r2 := chi.NewRouter()
 	r2.Use(asSeededSession)

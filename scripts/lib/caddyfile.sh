@@ -18,11 +18,10 @@
 #   * The public HTTP API — the orchestrator's versioned /v1 surface plus the
 #     unversioned-forever paths it fixes (/api-info, the A2A agent card, /a2a,
 #     the /triggers/… inbound task triggers) — goes to the orchestrator
-#     listener with the web tier's header-trust channel STRIPPED
-#     (X-Orchestrator-Server-Token / X-User-Email / X-User-Session-Epoch), so
-#     the impersonation path stays reachable from loopback only even though the
-#     API is now reachable from the internet. API-key (X-API-Key) auth is the
-#     public contract; nothing else is.
+#     listener with the retired identity headers stripped
+#     (X-Orchestrator-Server-Token / X-User-Email / X-User-Session-Epoch) as
+#     defence in depth: since ADR-0108 no fleet listener honours them. API-key
+#     (X-API-Key) auth is the public contract; nothing else is.
 #   * The chat listener's signed inbound webhooks (/webhooks/…, GitHub/Slack
 #     HMAC-authenticated) go to the chat listener, likewise stripped.
 #
@@ -284,11 +283,13 @@ ${domain} {
 	# email). Nothing else on the orchestrator is exposed — its legacy bare
 	# paths (/tasks, /keys, …) stay loopback-only behind the web tier's /api/*.
 	#
-	# The header_up deletions are load-bearing: the orchestrator trusts
-	# X-User-Email when X-Orchestrator-Server-Token matches (the web tier's
-	# impersonation channel, #157). Stripping them here means that channel is
-	# reachable from loopback ONLY, so exposing the API adds exactly one
-	# public auth path — X-API-Key — and no header-trust surface (ADR-0053).
+	# The header_up deletions are defence in depth since ADR-0108: no fleet
+	# listener reads an identity header or honours the retired service token
+	# (identity rides the request context; a request still presenting the
+	# token gets 401), so nothing behind them depends on the strip. They are
+	# kept so the rendered layout, and every box's installed copy, stay
+	# unchanged; removing them is harmless too. The public auth paths are
+	# X-API-Key and the webhook signatures (ADR-0053, superseded by ADR-0108).
 	@fleet_api path /v1 /v1/* /api-info /.well-known/agent-card.json /a2a /a2a/* /triggers/*
 	handle @fleet_api {
 		reverse_proxy ${orch} {
@@ -305,7 +306,7 @@ ${domain} {
 	}
 
 	# Signed inbound chat webhooks (docs/WEBHOOKS.md: GitHub/Slack HMAC) →
-	# the chat listener. Same stripping rule for chat's header-trust channel.
+	# the chat listener. The same (now defence-in-depth) strip as above.
 	@fleet_chat_webhooks path /webhooks/*
 	handle @fleet_chat_webhooks {
 		reverse_proxy ${chat} {

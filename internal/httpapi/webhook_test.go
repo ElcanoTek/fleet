@@ -442,7 +442,6 @@ func TestWebhookHonorsLockdownOnly(t *testing.T) {
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	cfg := &config.Config{
-		SharedToken:        "tok",
 		PersonaDefault:     "generic",
 		ConversationTTL:    14,
 		UnpinnedCap:        50,

@@ -14,7 +14,7 @@ import (
 func TestCancelReportsATurnThatAlreadyEnded(t *testing.T) {
 	for status, want := range map[int]error{http.StatusConflict: ErrTurnNotRunning, http.StatusNoContent: nil} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
-		c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"})
+		c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", APIKey: "t"})
 		if err := c.Cancel("conv", "turn"); !errors.Is(err, want) || (want == nil && err != nil) {
 			t.Errorf("status %d: err = %v, want %v", status, err, want)
 		}
@@ -22,7 +22,7 @@ func TestCancelReportsATurnThatAlreadyEnded(t *testing.T) {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
 	defer srv.Close()
-	if err := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"}).Cancel("conv", "turn"); err == nil || errors.Is(err, ErrTurnNotRunning) {
+	if err := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", APIKey: "t"}).Cancel("conv", "turn"); err == nil || errors.Is(err, ErrTurnNotRunning) {
 		t.Errorf("500: err = %v, want an ordinary failure", err)
 	}
 }
@@ -32,7 +32,7 @@ func TestCancelReportsATurnThatAlreadyEnded(t *testing.T) {
 func TestCancelInputReportsAFinishedInput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusConflict) }))
 	defer srv.Close()
-	if err := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"}).CancelInput("conv", "key"); !errors.Is(err, ErrTurnNotRunning) {
+	if err := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", APIKey: "t"}).CancelInput("conv", "key"); !errors.Is(err, ErrTurnNotRunning) {
 		t.Fatalf("err = %v, want ErrTurnNotRunning", err)
 	}
 }
@@ -46,7 +46,7 @@ func TestQueuedReplayIsTheServersStatus(t *testing.T) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"queued":true,"input":{"id":"r","mode":"queued","state":"queued","position":2},"conversation_id":"c"}`))
 		}))
-		c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"})
+		c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", APIKey: "t"})
 		_, err := c.StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
 		var q *QueuedError
 		if !errors.As(err, &q) || q.Replayed() != want {
@@ -60,7 +60,7 @@ func TestQueuedReplayIsTheServersStatus(t *testing.T) {
 func TestCancelReportsAnUnconfirmedStop(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer srv.Close()
-	c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"})
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", APIKey: "t"})
 	if err := c.Cancel("conv", "turn"); !errors.Is(err, ErrStopUnconfirmed) {
 		t.Fatalf("Cancel: %v, want ErrStopUnconfirmed", err)
 	}

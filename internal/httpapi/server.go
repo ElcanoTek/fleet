@@ -73,7 +73,6 @@ type Server struct {
 	cfg                *config.Config
 	agent              turnEngine
 	store              chatStore
-	sharedToken        string
 	rate               *ratelimit.Limiter
 	// concurrent caps simultaneous in-flight turns per user. nil disables it
 	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
@@ -121,6 +120,9 @@ type Server struct {
 	// dir overrides the account lookup membershipMiddleware resolves
 	// against (tests); nil uses the chat store's identity table.
 	dir principal.Directory
+	// apiKeys validates the user API keys the listener's own port accepts
+	// (edge.go); nil accepts none.
+	apiKeys keyValidator
 
 	// inflight tracks the currently-running turn for each conversation.
 	// Lets the server keep generating after the SSE connection drops
@@ -690,7 +692,6 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		cfg:              cfg,
 		agent:            mgr,
 		store:            st,
-		sharedToken:      cfg.SharedToken,
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		processStart:     time.Now(),

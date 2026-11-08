@@ -1,6 +1,6 @@
 # ADR-0053: The public HTTP API is served through the TLS front, with the header-trust channel stripped
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0108 (the routing stands; the header-trust channel it guarded is gone, so the header strips are defence in depth)
 - **Date:** 2026-09-01
 - **Deciders:** fleet maintainers
 - **Amends:** [ADR-0004](0004-single-box-vm-native-deployment.md) (the

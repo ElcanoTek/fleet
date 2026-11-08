@@ -223,6 +223,7 @@ func TestOrchestratorMiddlewareChainOrder(t *testing.T) {
 		"fleet.orchestratorMetricsMiddleware",
 		"handlers.(*Handlers).SecurityHeadersMiddleware",
 		"handlers.(*Handlers).BodySizeLimitMiddleware",
+		"handlers.(*Handlers).RetiredServiceTokenMiddleware",
 		"handlers.(*Handlers).CSRFMiddleware",
 	}
 	if !slices.Equal(got, want) {

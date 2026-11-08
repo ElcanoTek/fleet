@@ -95,14 +95,6 @@ type Config struct {
 	SchedRateLimitPerDay          int // default 500
 	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
-	// SharedToken is the legacy internal service token (FLEET_SERVER_TOKEN):
-	// a caller holding it may name a user by header on this listener's own
-	// port (edge.go). The browser gateway no longer uses it — it calls these
-	// handlers in-process with a typed principal (ADR-0108). It is
-	// impersonation-load-bearing, so the orchestrator MUST stay bound to
-	// 127.0.0.1 and Caddy strips the header (ADR-0053).
-	SharedToken string
-
 	// AccountsManagedByAuth mirrors config.Config.AccountsManagedByAuth:
 	// central Auth owns who is in this Fleet and with which roles, so the
 	// admin-key POST /users (also public as /v1/users) refuses rather than

@@ -45,7 +45,6 @@
 #                        current user, or a throwaway cluster if none is up)
 #   E2E_TEST_EMAIL       test user, a Fleet admin (default e2e@example.com)
 #   E2E_TEST_PASSWORD    test password   (default e2e-test-password)
-#   FLEET_SERVER_TOKEN   chat shared secret (default e2e-shared-secret)
 #   ADMIN_API_KEY        orchestrator admin key (default e2e-admin-key)
 #   APP_SESSION_SECRET   web HMAC session secret
 #   E2E_ENV_FILE         where to write resolved env (default web/.e2e-live.env)
@@ -67,7 +66,6 @@ FAKE_LLM_ADDR="${FAKE_LLM_ADDR:-127.0.0.1:18090}"
 FLEET_SANDBOX_IMAGE="${FLEET_SANDBOX_IMAGE:-localhost/fleet-sandbox:latest}"
 E2E_TEST_EMAIL="${E2E_TEST_EMAIL:-e2e@example.com}"
 E2E_TEST_PASSWORD="${E2E_TEST_PASSWORD:-e2e-test-password}"
-FLEET_SERVER_TOKEN="${FLEET_SERVER_TOKEN:-e2e-shared-secret}"
 ADMIN_API_KEY="${ADMIN_API_KEY:-e2e-admin-key}"
 APP_SESSION_SECRET="${APP_SESSION_SECRET:-e2e-session-secret-0123456789abcdef}"
 # TEST ONLY — throwaway Ed25519 pubkey so the "Use Elcano email" login path
@@ -408,7 +406,6 @@ start_fleet() {
   FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
   FLEET_WORKSPACE_ROOT="$WORKSPACE_DIR" \
   FLEET_DATA_DIR="$DATA_DIR" \
-  FLEET_SERVER_TOKEN="$FLEET_SERVER_TOKEN" \
   ADMIN_API_KEY="$ADMIN_API_KEY" \
   AUTH_SIGNING_PUBKEY="$AUTH_SIGNING_PUBKEY" \
   FLEET_DEFAULT_MODEL="$chat_model" \
@@ -425,8 +422,8 @@ start_fleet() {
 # One identity table (#2049 M4, ADR-0105): a person is one account, and
 # Operations Center admin IS the Fleet admin role. `fleet admin add` makes the
 # test email that account — password login for chat, and the Operations
-# Center through the same session cookie (header trust: lookupMember reads
-# core.users). Idempotent, so E2E_REUSE_DB=1 re-runs are fine.
+# Center through the same session cookie (the gateway's session principal,
+# resolved against core.users; ADR-0108). Idempotent, so E2E_REUSE_DB=1 re-runs are fine.
 seed_users() {
   log "seed: Fleet admin $E2E_TEST_EMAIL (chat + Operations Center)"
   DATABASE_URL="$DB_DSN" \
@@ -452,7 +449,6 @@ ORCH_PORT=$ORCH_PORT
 FAKE_LLM_ADDR=$FAKE_LLM_ADDR
 CHAT_SERVER_URL=http://127.0.0.1:$CHAT_PORT
 ORCHESTRATOR_SERVER_URL=http://127.0.0.1:$ORCH_PORT
-FLEET_SERVER_TOKEN=$FLEET_SERVER_TOKEN
 ADMIN_API_KEY=$ADMIN_API_KEY
 APP_SESSION_SECRET=$APP_SESSION_SECRET
 AUTH_SIGNING_PUBKEY=$AUTH_SIGNING_PUBKEY

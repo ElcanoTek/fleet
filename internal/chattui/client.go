@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,8 +35,9 @@ func (e Event) Str(key string) string {
 
 // Client streams turns from a running fleet server's POST /chat.
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg     Config
+	emailMu sync.Mutex
+	http    *http.Client
 
 	// defaultModel is the workspace default slug adopted from GET /client-config
 	// when the operator passed no --model. It is sent ONLY on turns that start a
@@ -101,13 +103,21 @@ func (c *Client) inputIDScope(inputID string) string {
 	return ""
 }
 
-// setAuthHeaders applies the shared-secret + identity headers every chattui
-// request carries. The token is a header, never a URL/query value, so it cannot
-// land in access logs.
+// setAuthHeaders applies the credential every chattui request carries: the
+// user API key, whose account the server acts as (ADR-0108). It is a header,
+// never a URL/query value, so it cannot land in access logs. No header names
+// the user: the key does.
 func (c *Client) setAuthHeaders(req *http.Request) {
-	req.Header.Set("X-Chat-Server-Token", c.cfg.Token)
-	req.Header.Set("X-User-Email", c.cfg.Email)
+	req.Header.Set("X-API-Key", c.cfg.APIKey)
 	req.Header.Set("X-Fleet-Client", orDefault(c.cfg.ClientName, "fleet-chat"))
+}
+
+// who names the account in a message: the expected email, else "this key".
+func (c *Client) who() string {
+	if email := c.Email(); email != "" {
+		return email
+	}
+	return "this API key's account"
 }
 
 // turnRequest is the subset of the server's chatRequest the TUI sends.
@@ -477,20 +487,19 @@ func (c *Client) refusal(resp *http.Response) *StatusError {
 	// client that may write it to a log. fleet never echoes the token, but a
 	// proxy in between might (a debug page dumping request headers), so
 	// redact it once here, before any branch quotes the body.
-	excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
+	excerpt = redactToken(excerpt, c.cfg.APIKey, len(excerpt) == excerptCap)
 	msg := strings.TrimSpace(string(excerpt))
 	switch resp.StatusCode {
 	case http.StatusForbidden:
-		return &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
+		return &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.who(), excerpt)}
 	case http.StatusUnauthorized:
-		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.who(), unauthorizedText(excerpt, msg))}
 	case http.StatusBadRequest:
 		// A 400 is fleet refusing the request itself (a body over the chat
 		// server's 1 MB cap, an empty message, a model lockdown mode refuses),
-		// not who sent it: the one identity 400, a missing X-User-Email,
-		// never comes from `fleet chat` or `fleet acp`, which refuse an
-		// empty email before sending anything. So it is quoted as a
-		// rejection, never as "not authorized".
+		// not who sent it: a key always names its account, so there is no
+		// identity 400 for `fleet chat` or `fleet acp` to meet. So it is
+		// quoted as a rejection, never as "not authorized".
 		if msg == "" {
 			return &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400)"}
 		}
@@ -504,19 +513,17 @@ func (c *Client) refusal(resp *http.Response) *StatusError {
 const forbiddenPrefix = "server rejected the request (403)"
 
 // forbiddenMessage turns a 403 from POST /chat (or GET /me) into fix-it text,
-// keyed on the body each fleet refusal writes: the shared-token check answers
-// a plain-text "forbidden", membershipMiddleware {"error":"not_a_member"} for
-// an X-User-Email that is not a provisioned user, rejectViewerWrites
-// {"error":"read_only"} for a viewer, and the IP filter a plain-text "Access
-// denied" (it is the outermost middleware and /healthz skips it, so Ping
-// passes and only CheckIdentity and the turn fail). Advice is given only for
-// a body that names its cause: the token is blamed only for the token check's
-// own body, because sending a non-member or a filtered address after
-// FLEET_SERVER_TOKEN chases the one setting that is already right. Anything
-// else — a reverse proxy's page, a refusal added later — is quoted as a short
-// excerpt rather than guessed at. The IP-filter text keeps that filter's
-// uniformity: it does not say which list matched, because the server
-// deliberately does not say either. No branch ever includes the token value.
+// keyed on the body each fleet refusal writes: the key check answers
+// {"error":"not_a_user_key"} for a key that names no user,
+// membershipMiddleware {"error":"not_a_member"} for a key whose account is
+// not an enabled user, rejectViewerWrites {"error":"read_only"} for a viewer,
+// and the IP filter a plain-text "Access denied" (it is the outermost
+// middleware and /healthz skips it, so Ping passes and only CheckIdentity and
+// the turn fail). Advice is given only for a body that names its cause.
+// Anything else — a reverse proxy's page, a refusal added later — is quoted
+// as a short excerpt rather than guessed at. The IP-filter text keeps that
+// filter's uniformity: it does not say which list matched, because the server
+// deliberately does not say either. No branch ever includes the key value.
 func forbiddenMessage(email string, body []byte) string {
 	var refusal struct {
 		Error string `json:"error"`
@@ -524,13 +531,13 @@ func forbiddenMessage(email string, body []byte) string {
 	_ = json.Unmarshal(body, &refusal)
 	switch refusal.Error {
 	case "not_a_member":
-		return fmt.Sprintf("%s: %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", forbiddenPrefix, email, email)
+		return fmt.Sprintf("%s: %s is not an enabled fleet user; an admin can add it with `fleet chat user add <email> --password -`, or use a user key for a provisioned account", forbiddenPrefix, email)
 	case "read_only":
 		return readOnlyMessage(email)
+	case "not_a_user_key":
+		return forbiddenPrefix + ": this API key names no user; the chat API takes a user key (`fleet sched apikey create <name> --type user --user <you@example.com>`)"
 	}
 	switch text := strings.TrimSpace(string(body)); text {
-	case "forbidden":
-		return forbiddenPrefix + ": check FLEET_SERVER_TOKEN matches the server"
 	case "Access denied":
 		return forbiddenPrefix + ": the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one"
 	case "":
@@ -538,6 +545,20 @@ func forbiddenMessage(email string, body []byte) string {
 	default:
 		return forbiddenPrefix + ": " + shortExcerpt(text, 160)
 	}
+}
+
+// unauthorizedText is a 401 body as fix-it text: the server's JSON refusals
+// carry a "message" naming the fix (a retired token, a missing, invalid or
+// expired key); anything else is quoted.
+func unauthorizedText(body []byte, msg string) string {
+	var refusal struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &refusal) == nil && refusal.Message != "" {
+		return refusal.Message
+	}
+	return msg
 }
 
 // readOnlyMessage is the viewer's refusal text, in one place for both ways it
@@ -898,11 +919,36 @@ func (c *Client) CheckIdentity(ctx context.Context) error {
 		return c.refusal(resp)
 	case http.StatusOK:
 		var me struct {
-			Role string `json:"role"`
+			Email string `json:"email"`
+			Role  string `json:"role"`
 		}
-		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&me) == nil && me.Role == roleViewer {
-			return &StatusError{Code: http.StatusForbidden, msg: readOnlyMessage(c.cfg.Email)}
+		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&me) != nil {
+			return nil
+		}
+		// The key names the account; --email / $FLEET_USER_EMAIL only says
+		// which account the caller expects, so a key for another one is
+		// refused before any turn runs as the wrong person.
+		got := strings.ToLower(strings.TrimSpace(me.Email))
+		c.emailMu.Lock()
+		expect := c.cfg.Email
+		if expect == "" {
+			c.cfg.Email = got
+		}
+		c.emailMu.Unlock()
+		if expect != "" && got != "" && got != expect {
+			return &StatusError{Code: http.StatusForbidden, msg: fmt.Sprintf("%s: this API key acts as %s, not %s; use a key for %s, or drop --email/$FLEET_USER_EMAIL", forbiddenPrefix, got, expect, expect)}
+		}
+		if me.Role == roleViewer {
+			return &StatusError{Code: http.StatusForbidden, msg: readOnlyMessage(c.who())}
 		}
 	}
 	return nil
+}
+
+// Email is the account the client acts as: the expected one, or the one
+// CheckIdentity read off GET /me ("" before that).
+func (c *Client) Email() string {
+	c.emailMu.Lock()
+	defer c.emailMu.Unlock()
+	return c.cfg.Email
 }

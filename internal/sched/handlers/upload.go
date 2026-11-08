@@ -22,6 +22,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -69,7 +70,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 			perm := models.PermissionCreateTask
-			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKeyOn(r.Context(), apikeys.SurfaceOrchestrator, apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
 				identity = apiKeyIdentity(key.KeyID)
 			}
@@ -93,7 +94,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// (32 MiB) — bigger parts spill to temp files instead of buffering the
 	// whole upload in RAM (the old code passed the full cap here).
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+(1<<20))
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := r.ParseMultipartForm(32 << 20); err != nil { //nolint:gosec // G120: the body is capped by the http.MaxBytesReader set on the line above (maxBytes + 1 MiB framing); parts past 32 MiB spill to temp files.
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
 			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("File is over this server's %d MB upload limit", maxBytes/(1024*1024)))
@@ -157,7 +158,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Save checksum to sidecar file in the dedicated checksums directory
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
-	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
+	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: filename is IsLocal-gated + sanitizeFilename-reduced, and the upload path was asserted within tempDir via withinDir.
 		// Non-critical error, just log it
 		logging.From(logCtx).Error("Failed to save checksum sidecar", "filename", safe.LogSafe(filename), "err", err)
 	}
@@ -190,7 +191,7 @@ func writeUploadFile(path string, src io.Reader) (size int64, checksum string, e
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(path) //nolint:gosec // G703: path was asserted within tempDir via withinDir by the sole caller before the file was created.
 		return 0, "", err
 	}
 	return size, hex.EncodeToString(hasher.Sum(nil)), nil

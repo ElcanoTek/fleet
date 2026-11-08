@@ -378,12 +378,14 @@ func RetiredEnvShell() []byte {
 	for _, e := range entries {
 		names = append(names, RetiredAliasesOf(e.Name)...)
 	}
+	names = append(names, RemovedSettings()...)
 	sort.Strings(names)
 	var b bytes.Buffer
 	b.WriteString("# shellcheck shell=bash\n")
 	b.WriteString("# scripts/lib/retired-env.sh — GENERATED from internal/config/envreg by `make config-docs`; do not edit.\n")
 	b.WriteString("#\n")
-	b.WriteString("# The CHAT_/CUTLASS_ (and bare DATA_DIR) env spellings ADR-0106 removed. fleet\n")
+	b.WriteString("# The CHAT_/CUTLASS_ (and bare DATA_DIR) env spellings ADR-0106 removed, and the\n")
+	b.WriteString("# settings removed outright (the service token, ADR-0108). fleet\n")
 	b.WriteString("# reads every one as unset, whatever the environment holds; a script that\n")
 	b.WriteString("# interpolates a manifest ${VAR} must do the same (fleet_env_name_retired).\n\n")
 	b.WriteString("FLEET_RETIRED_ENV_NAMES=\" ")

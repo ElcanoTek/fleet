@@ -242,6 +242,9 @@ func retiredRefMessage(name string) string {
 	if !ok {
 		return ""
 	}
+	if canonical == "" {
+		return fmt.Sprintf("manifest references removed setting %s: %s", strings.TrimSpace(name), envreg.RetiredFix(strings.TrimSpace(name)))
+	}
 	return fmt.Sprintf("manifest references removed variable %s; rename it to %s (ADR-0106)", strings.TrimSpace(name), canonical)
 }
 
