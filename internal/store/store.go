@@ -29,6 +29,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/dbtrace"
 	"github.com/ElcanoTek/fleet/internal/migrations"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -279,7 +280,7 @@ func Open(dsn string, pool PoolConfig) (*Store, error) {
 	if dsn == "" {
 		return nil, errors.New("empty database DSN (set DATABASE_URL)")
 	}
-	db, err := sql.Open("pgx", dsn)
+	db, err := dbtrace.Open(dsn) // transactions traced (#2052)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

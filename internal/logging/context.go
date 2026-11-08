@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"go.opentelemetry.io/otel/trace"
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // The standard correlation attribute keys. Every log line that concerns a
@@ -32,7 +32,9 @@ type ctxAttrs []slog.Attr
 // WithAttrs returns a child of ctx whose context logger (From) also carries
 // attrs. An attribute whose key is already present replaces the earlier value,
 // so re-attaching (e.g. the turn id of a resumed turn) never duplicates a key.
-// Empty-string values are skipped: an unset id is absent, not "".
+// Empty-string values are skipped: an unset id is absent, not "". trace_id and
+// span_id are skipped too — they always come from the context's span, so
+// WithAttrs(ctx, Attrs(other)...) copies another context's ids safely.
 func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -45,6 +47,11 @@ func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	changed := false
 	for _, a := range attrs {
 		if a.Key == "" || (a.Value.Kind() == slog.KindString && a.Value.String() == "") {
+			continue
+		}
+		if a.Key == KeyTraceID || a.Key == KeySpanID {
+			// Always derived from the live span (Attrs), never stored: a
+			// stored copy would go stale the moment a child span starts.
 			continue
 		}
 		changed = true
@@ -96,16 +103,17 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 }
 
 // Attrs returns the correlation attributes ctx carries, followed by trace_id
-// and span_id when ctx holds a valid span context (a recording span, or an
-// inbound traceparent this process continues). The slice is a fresh copy.
+// and span_id when ctx's trace is one this process records and exports
+// (telemetry.PublishableSpanContext): with tracing off a caller's traceparent
+// is not logged, and neither is a sampled-out span. The slice is a fresh copy.
 func Attrs(ctx context.Context) []slog.Attr {
 	if ctx == nil {
 		return nil
 	}
 	stored, _ := ctx.Value(ctxAttrsKey{}).(ctxAttrs)
-	sc := trace.SpanContextFromContext(ctx)
+	sc, traced := telemetry.PublishableSpanContext(ctx)
 	n := len(stored)
-	if sc.IsValid() {
+	if traced {
 		n += 2
 	}
 	if n == 0 {
@@ -113,7 +121,7 @@ func Attrs(ctx context.Context) []slog.Attr {
 	}
 	out := make([]slog.Attr, 0, n)
 	out = append(out, stored...)
-	if sc.IsValid() {
+	if traced {
 		out = append(out,
 			slog.String(KeyTraceID, sc.TraceID().String()),
 			slog.String(KeySpanID, sc.SpanID().String()))

@@ -1,0 +1,160 @@
+// Package telemetry is the span vocabulary fleet's instrumented seams share
+// (#2052): one tracer, one error-recording rule, and the attribute keys a
+// span may carry. Exporter wiring (OTLP, TLS, sampling) lives in
+// internal/otelsetup; this package only starts and ends spans, so any package
+// can import it without pulling in the HTTP middleware.
+//
+// TWO RULES every span here keeps:
+//
+//  1. Attributes are identifiers and sizes only. A span never carries prompt
+//     or completion text, tool arguments or results, file contents, command
+//     lines, URLs with credentials, or an error MESSAGE — those can hold a
+//     secret or a user's words, and a trace backend is not redacted. The log
+//     line for the same event (which carries the span's trace_id) is where
+//     the redacted detail lives.
+//  2. Disabled tracing costs nothing that matters. With FLEET_OTEL_ENDPOINT
+//     unset the global provider is OpenTelemetry's no-op: Start returns a
+//     non-recording span without allocating, and attribute work is skipped
+//     behind span.IsRecording() where it would cost anything.
+package telemetry
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+)
+
+// TracerName is the instrumentation scope of every fleet span.
+const TracerName = "github.com/ElcanoTek/fleet"
+
+// Attribute keys fleet spans use. The fleet.* ids mirror the log
+// correlation keys (internal/logging), so a span and its log lines join on
+// the same values.
+const (
+	AttrConvID   = attribute.Key("fleet.conv_id")
+	AttrTurnID   = attribute.Key("fleet.turn_id")
+	AttrTaskID   = attribute.Key("fleet.task_id")
+	AttrRunID    = attribute.Key("fleet.run_id")
+	AttrRunMode  = attribute.Key("fleet.run_mode")
+	AttrErrClass = attribute.Key("error.type")
+)
+
+// Start starts a span named name under ctx's span (if any) with the global
+// tracer provider. kind defaults to internal.
+func Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return otel.Tracer(TracerName).Start(ctx, name, opts...)
+}
+
+// End ends span, recording err as the span's error status first. Only the
+// error's CLASS is recorded (ErrorClass), never its message — see the
+// package comment.
+func End(span trace.Span, err error) {
+	RecordError(span, err)
+	span.End()
+}
+
+// ErrPanicked is the error a span records when the code it covers panicked;
+// its class is "panic".
+var ErrPanicked = errors.New("panic")
+
+// EndPanicked records a panic on span and ends it. A deferred span end calls
+// it from its recover branch before re-panicking (see Finish).
+func EndPanicked(span trace.Span) {
+	RecordError(span, ErrPanicked)
+	span.End()
+}
+
+// Finish is the deferred end of a span on every path: `defer
+// telemetry.Finish(span, &err)` with err the function's named error. A
+// normal or early return ends the span with *err; a panic is recorded (class
+// "panic"), the span ended, and the panic re-raised unchanged.
+func Finish(span trace.Span, err *error) {
+	if r := recover(); r != nil {
+		EndPanicked(span)
+		panic(r)
+	}
+	var e error
+	if err != nil {
+		e = *err
+	}
+	End(span, e)
+}
+
+// RecordError marks span as failed with err's class. A nil err is a no-op.
+func RecordError(span trace.Span, err error) {
+	if err == nil || !span.IsRecording() {
+		return
+	}
+	class := ErrorClass(err)
+	span.SetAttributes(AttrErrClass.String(class))
+	span.SetStatus(codes.Error, class)
+}
+
+// ErrorClass names err without its message: "canceled" and
+// "deadline_exceeded" for the context sentinels, otherwise the Go type of the
+// outermost error (e.g. "*url.Error", "*errors.errorString").
+func ErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrPanicked):
+		return "panic"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	}
+	return fmt.Sprintf("%T", err)
+}
+
+// TraceID returns the trace id of ctx's span as 32 hex characters when this
+// process records and exports that trace, else "". It is the id fleet
+// PUBLISHES (turn.started, the persisted run log), so a span context that is
+// merely valid is not enough: with tracing off, a caller's traceparent still
+// yields a valid, non-recording span context, and publishing it would name a
+// trace fleet never recorded (or one the caller made up). The id counts when
+// the span is sampled and either recording here, or a local (non-remote)
+// span context — the detached copy ContextWithRemoteParent makes of a span
+// this process recorded, which a chat turn carries after its request ends.
+func TraceID(ctx context.Context) string {
+	if sc, ok := PublishableSpanContext(ctx); ok {
+		return sc.TraceID().String()
+	}
+	return ""
+}
+
+// PublishableSpanContext returns ctx's span context when this process records
+// and exports that trace: the span is sampled and either recording here, or a
+// local (non-remote) span context — the detached copy ContextWithRemoteParent
+// makes of a span this process recorded. A caller's traceparent with tracing
+// off (valid but remote and non-recording) and a sampled-out span are not.
+// It is the one rule for every id fleet publishes or logs: TraceID, and the
+// trace_id/span_id attributes of a log line (internal/logging).
+func PublishableSpanContext(ctx context.Context) (trace.SpanContext, bool) {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if !sc.IsValid() || !sc.IsSampled() {
+		return trace.SpanContext{}, false
+	}
+	if span.IsRecording() || !sc.IsRemote() {
+		return sc, true
+	}
+	return trace.SpanContext{}, false
+}
+
+// ContextWithRemoteParent returns ctx carrying parent's span context, so a
+// span started under the returned context joins parent's trace. It is how a
+// DETACHED context (a chat turn outlives its HTTP request) keeps the request's
+// trace without inheriting its cancellation.
+func ContextWithRemoteParent(ctx, parent context.Context) context.Context {
+	sc := trace.SpanContextFromContext(parent)
+	if !sc.IsValid() {
+		return ctx
+	}
+	return trace.ContextWithSpanContext(ctx, sc)
+}

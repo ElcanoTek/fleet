@@ -1855,8 +1855,13 @@ type LogMessage struct {
 
 // LogSession is an agent session with its messages.
 type LogSession struct {
-	ID                  string       `json:"id"`
-	Title               string       `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// TraceID / RunID name the run's trace and its run (the claim's lease
+	// token) so the admin run log can link a run to its trace and its process
+	// log lines (#2052). TraceID is empty when tracing is off.
+	TraceID             string       `json:"trace_id,omitempty"`
+	RunID               string       `json:"run_id,omitempty"`
 	PromptTokens        int          `json:"prompt_tokens"`
 	CompletionTokens    int          `json:"completion_tokens"`
 	CachedTokens        int          `json:"cached_tokens,omitempty"`

@@ -732,6 +732,8 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 	// to the underlying model rather than constructing an uncached call site.
 	decoratorFiles := map[string]bool{
 		"internal/agentcore/gemini_schema.go": true,
+		// The tracing decorator (#2052): spans around the delegated call.
+		"internal/agentcore/telemetry.go": true,
 	}
 
 	dirs := []string{

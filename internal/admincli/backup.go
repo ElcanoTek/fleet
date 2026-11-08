@@ -240,12 +240,6 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 // than the dump survives next to the restored ledger, and any failure rolls
 // back the schema reset together with the restore.
 func pgRestoreAll(ctx context.Context, dsn, inPath string) error {
-	if _, err := exec.LookPath("psql"); err != nil {
-		if err := resetRestoreSchemas(ctx, dsn, allSchemas); err != nil {
-			return err
-		}
-		return pgRestore(ctx, dsn, inPath, allSchemas, true)
-	}
 	c, err := parsePGConn(dsn)
 	if err != nil {
 		return err
@@ -263,7 +257,6 @@ func pgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	}
 	dumpArgs = append(dumpArgs, "-f", "-", inPath)
 
-	//nolint:gosec // G204: fixed "pg_restore" and "psql" binaries; inPath is an operator-supplied path passed as a separate argv; connection params (incl. password) ride in the env, never argv.
 	restoreCmd := exec.CommandContext(ctx, "pg_restore", dumpArgs...)
 	restoreCmd.Stderr = os.Stderr
 	dumpOut, err := restoreCmd.StdoutPipe()
@@ -291,6 +284,9 @@ func pgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	if copyErr == nil {
 		_, copyErr = io.Copy(psqlIn, dumpOut)
 	}
+	if copyErr != nil {
+		_ = restoreCmd.Process.Kill()
+	}
 	restoreErr := restoreCmd.Wait()
 	if copyErr == nil && restoreErr == nil {
 		_, copyErr = io.WriteString(psqlIn, "\nCOMMIT;\n")
@@ -303,39 +299,6 @@ func pgRestoreAll(ctx context.Context, dsn, inPath string) error {
 		}
 	}
 	return nil
-}
-
-// resetRestoreSchemas drops and recreates each schema in one transaction when
-// psql is not available to stream the reset and pg_restore together.
-func resetRestoreSchemas(ctx context.Context, dsn string, schemas []string) (err error) {
-	for _, schema := range schemas {
-		if !config.PlainIdentifier(schema) {
-			return fmt.Errorf("schema %q is not a plain identifier", schema)
-		}
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-	for _, schema := range schemas {
-		if _, err = tx.ExecContext(ctx, `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`); err != nil {
-			return fmt.Errorf("clear schema %s before the restore: %w", schema, err)
-		}
-		if _, err = tx.ExecContext(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
-			return fmt.Errorf("create schema %s before the restore: %w", schema, err)
-		}
-	}
-	return tx.Commit()
 }
 
 // pgRestore runs one pg_restore of the given schemas, creating each first if

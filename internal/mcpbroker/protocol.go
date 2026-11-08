@@ -282,12 +282,13 @@ type request struct {
 	// BaseVars names the env-var bases of a server's credential seat, for
 	// methodListAccounts (the broker scans ITS env for <BASE>_<ACCOUNT> variants).
 	BaseVars []string `json:"baseVars,omitempty"`
-	// Correlation carries the parent's non-secret log correlation for this
-	// request (conv_id, turn_id, task_id, run_id, request_id, trace_id,
-	// span_id): the child attaches it to the call's context, so its log lines
-	// about the call name the conversation, run and request that made it. A
-	// fixed key allowlist (correlationKeys) on both ends; nothing else crosses.
-	Correlation map[string]string `json:"correlation,omitempty"`
+	// Trace is the caller's W3C trace context (traceparent/tracestate) and Log
+	// its correlation ids (conv_id, turn_id, task_id, run_id, user_id,
+	// request_id), so the child's span and log lines for this request join the
+	// caller's trace and carry its ids (#2052, telemetry.go). Public
+	// identifiers only; absent when the caller has none.
+	Trace map[string]string `json:"trace,omitempty"`
+	Log   map[string]string `json:"log,omitempty"`
 }
 
 // response is a server -> client frame answering a request by ID.

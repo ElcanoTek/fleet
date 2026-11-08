@@ -156,6 +156,14 @@ var recoverAllowed = map[string]string{
 	"internal/safe/":                     "the panic emitter itself",
 	"internal/logging/redact.go":         "errorText, stringText and resolveOne guard a caller's Error(), String() or LogValue() while formatting an attribute (a placeholder, never the panic value), not a panic boundary",
 	"internal/tools/workspace_reader.go": "readMisses undoes its reservations and re-panics the value unchanged (defer panic(r)); nothing is logged or swallowed",
+	"internal/telemetry/telemetry.go":    "Finish marks the span panicked (class only) and re-panics the value unchanged; the enclosing safe boundary logs the panic",
+	"internal/agentcore/telemetry.go":    "tracedModel marks the model.* span panicked (class only) and re-panics the value unchanged",
+	"internal/dbtrace/dbtrace.go":        "BeginTx and finish mark the db.tx span panicked (class only) and re-panic the value unchanged",
+	"internal/mcpbroker/client.go":       "callMCP marks the client span panicked (class only) and re-panics the value unchanged",
+	"internal/otelsetup/middleware.go":   "Middleware marks the HTTP server span panicked (class only) and re-panics the value unchanged to httpmw.Recoverer",
+	"internal/runner/runner.go":          "recordRunPanic marks the task.run span panicked and re-panics the value unchanged to tryClaim's safe recovery",
+	"internal/sandbox/fileops.go":        "RunFileOp marks the sandbox.exec span panicked (class only) and re-panics the value unchanged",
+	"internal/sandbox/sandbox.go":        "RunBash and RunPython mark the sandbox.exec span panicked (class only) and re-panic the value unchanged",
 }
 
 func TestPanicRecoveryGoesThroughSafe(t *testing.T) {

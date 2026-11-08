@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"syscall"
+	"testing"
+	"time"
+)
 
 // The broker child logs JSON (the wire format the parent parses and re-logs
 // in the operator's format) at the parent's level, and opens no log file of
@@ -16,6 +21,21 @@ func TestMCPBrokerLogConfigFollowsTheParent(t *testing.T) {
 	}
 	if got.File != "" {
 		t.Fatalf("broker log config opens its own file %q; the parent owns FLEET_LOG_FILE", got.File)
+	}
+}
+
+// SIGTERM ends the broker's Serve (its context), so the deferred span flush
+// runs instead of the process dying mid-flush.
+func TestMCPBrokerServeContextEndsOnSIGTERM(t *testing.T) {
+	ctx, stop := mcpBrokerServeContext()
+	defer stop()
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGTERM did not end the broker's serve context")
 	}
 }
 

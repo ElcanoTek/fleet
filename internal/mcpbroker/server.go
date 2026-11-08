@@ -136,12 +136,9 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	// so a methodCancel for it always finds it) and released when fn ends.
 	// A non-cancellable request runs on Serve's ctx and ignores methodCancel.
 	spawn := func(req request, location string, cancellable bool, fn func(context.Context) response) {
-		// The parent's correlation (request.Correlation): the call's log
-		// lines carry its conv_id, turn_id, run_id, request_id …
-		reqCtx := withCorrelation(ctx, req.Correlation)
-		runCtx, cancel := reqCtx, context.CancelFunc(func() {})
+		runCtx, cancel := ctx, context.CancelFunc(func() {})
 		if cancellable {
-			runCtx, cancel = context.WithCancel(reqCtx)
+			runCtx, cancel = context.WithCancel(ctx)
 			mu.Lock()
 			inflight[req.ID] = cancel
 			mu.Unlock()
@@ -154,7 +151,19 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			// sees the group empty, or Serve can return with the panic
 			// response still unwritten.
 			defer wg.Done()
-			defer recoverBackendPanic(runCtx, location, req.ID, write)
+			// The request's server span, under the caller's propagated
+			// trace context, with its correlation ids on the context
+			// (telemetry.go, #2052). It ends AFTER the panic recovery
+			// below (LIFO), and the recovery hands it the incident
+			// response it wrote, so a backend panic is exported as a
+			// failed span, not a success.
+			spanCtx, span := startServeSpan(runCtx, req, location)
+			var resp response
+			defer func() { endServeSpan(span, resp) }()
+			defer recoverBackendPanic(spanCtx, location, req.ID, func(r response) {
+				resp = r
+				write(r)
+			})
 			defer func() {
 				if cancellable {
 					mu.Lock()
@@ -163,7 +172,8 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				}
 				cancel()
 			}()
-			write(fn(runCtx))
+			resp = fn(spanCtx)
+			write(resp)
 		}()
 	}
 

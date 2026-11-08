@@ -19,6 +19,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
+	"github.com/ElcanoTek/fleet/internal/dbtrace"
 	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/migrations"
@@ -100,7 +101,7 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 		return ErrEmptyDSN
 	}
 
-	conn, err := sql.Open("pgx", connStr)
+	conn, err := dbtrace.Open(connStr) // transactions traced (#2052)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

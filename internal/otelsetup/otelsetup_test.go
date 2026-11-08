@@ -190,7 +190,8 @@ func TestInitNoopWhenEndpointUnset(t *testing.T) {
 func TestNewResourceCarriesServiceIdentity(t *testing.T) {
 	// Regression guard: a semconv/SDK schema-URL mismatch must NOT drop our
 	// service identity (the schemaless merge keeps service.name + version).
-	res := newResource("1.2.3")
+	t.Setenv("FLEET_SERVICE_NAME", "")
+	res := newResource(Options{ServiceVersion: "1.2.3", Process: "server"})
 	var name, ver string
 	for _, kv := range res.Attributes() {
 		switch string(kv.Key) {
