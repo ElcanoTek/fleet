@@ -550,7 +550,7 @@ func countKeyedRows(ctx context.Context, tx *sql.Tx, schema, username string) (p
 			return 0, err
 		}
 		var n int
-		q := `SELECT count(*) FROM ` + schema + `.` + table + ` WHERE ` + where //nolint:gosec // G202: schema passed plainIdentifier; table/where are fixed
+		q := `SELECT count(*) FROM ` + schema + `.` + table + ` WHERE ` + where // schema passed plainIdentifier; table/where are fixed
 		err := tx.QueryRowContext(ctx, q, username).Scan(&n)
 		return n, err
 	}
