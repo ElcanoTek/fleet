@@ -163,3 +163,46 @@ func TestUpdatePinsRewritesTheDocsThatRestateAPin(t *testing.T) {
 		t.Fatalf("prefix-less docs rewrite:\n got %q\nwant %q", got, want)
 	}
 }
+
+// withGoInstall gives the fixture's FOO pin a `--go-install` fallback, as
+// ci.yml's tools have.
+func withGoInstall(t *testing.T, root string) {
+	t.Helper()
+	wf := filepath.Join(root, ".github/workflows/ci.yml")
+	b, err := os.ReadFile(wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = append(b, []byte("        run: |\n          scripts/install-pinned-tool.sh \\\n            --go-install \"example.com/foo/cmd/foo@v${FOO_VERSION}\" \\\n            foo\n")...)
+	if err := os.WriteFile(wf, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUpdatePinsRefusesAMajorBumpOfAGoInstallFallback — the fallback's module
+// path carries the major-version suffix (gitleaks/v8, golangci-lint/v2), so an
+// automatic major bump would leave `…/v8@v9.x`, which fails in exactly the
+// outage the fallback is for. Refuse it and say what to do; a minor bump of
+// the same pin still applies.
+func TestUpdatePinsRefusesAMajorBumpOfAGoInstallFallback(t *testing.T) {
+	root, run := pinsFixtureTag(t, time.Now().Add(-30*24*time.Hour), false, "v2.0.0")
+	withGoInstall(t, root)
+	out, err := run()
+	if err == nil || !strings.Contains(out, "FOO: 1.0.0 → 2.0.0 is a major upgrade; update its --go-install module path by hand") {
+		t.Fatalf("want a refused major bump, got err=%v\n%s", err, out)
+	}
+	wf, _ := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(wf), "FOO_VERSION: '1.0.0'") {
+		t.Fatalf("a major bump of a go-install pin was applied:\n%s", wf)
+	}
+
+	root, run = pinsFixture(t, time.Now().Add(-30*24*time.Hour), false)
+	withGoInstall(t, root)
+	if out, err := run(); err != nil {
+		t.Fatalf("a minor bump of a go-install pin was refused: %v\n%s", err, out)
+	}
+	wf, _ = os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(wf), "FOO_VERSION: '1.1.0'") {
+		t.Fatalf("minor bump not applied:\n%s", wf)
+	}
+}

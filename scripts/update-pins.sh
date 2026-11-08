@@ -184,6 +184,16 @@ checked_sha() {
   printf '%s' "$want"
 }
 
+# has_go_install NAME — a workflow installs NAME's fallback with
+# `--go-install "<module path>@v${NAME_VERSION}"` (scripts/install-pinned-tool.sh).
+# That path carries the module's major-version suffix (/v2, /v8, none for
+# v0/v1), so a major bump must move the path too, by hand.
+has_go_install() {
+  KEY="@v\${$1_VERSION}" awk '
+    index($0, "--go-install") && index($0, ENVIRON["KEY"]) { found = 1; exit }
+    END { exit !found }' "${WORKFLOWS[@]}"
+}
+
 update_github() { # NAME REPO ASSET SUMS ID ISS
   local name="$1" repo="$2" asset_t="$3" sums_t="$4" id="$5" iss="$6" cur tag v base asset sums sha cursha
   cur="$(current_value "$name" VERSION)"
@@ -195,6 +205,9 @@ update_github() { # NAME REPO ASSET SUMS ID ISS
   [[ "$v" == "$cur" ]] && { note "$name: $cur is current"; return; }
   if [[ "$(printf '%s\n%s\n' "$cur" "$v" | sort -V | tail -n1)" != "$v" ]]; then
     note "$name: pinned $cur is newer than upstream's $v (cooldown) — leaving it"; return
+  fi
+  if [[ "${cur%%.*}" != "${v%%.*}" ]] && has_go_install "$name"; then
+    fail "$name: $cur → $v is a major upgrade; update its --go-install module path by hand (the /vN suffix) and move the pin with it — not updating"; return
   fi
   if [[ "$CHECK" == "1" ]]; then note "$name: $cur → $v (would update)"; return; fi
   base="$GH_DL/$repo/releases/download/$tag"
