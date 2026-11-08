@@ -1177,31 +1177,70 @@ SANDBOX_BASE_FILE="$STATE_DIR/sandbox-base.ref"
 # Superseded release image refs whose removal podman refused (still in use),
 # one per line; fleet_sandbox_reclaim_release_images retries them.
 SANDBOX_RECLAIM_FILE="$STATE_DIR/sandbox-image.reclaim"
+
+# ── leaving a sandbox mode: queue what it left behind, once ──
+# Three modes, each persisting the images it holds: the published release
+# image (its digest in SANDBOX_DIGEST_FILE), a custom build (the
+# FLEET_SANDBOX_BASE digest it layered on in SANDBOX_BASE_FILE), and — for
+# both, as REF_FILE — the sandbox.tag they wrote; a prebuilt sandbox.image
+# holds none of ours. Whenever this update stops using one of those, every
+# transition included (published ↔ custom ↔ prebuilt, base ↔ no base), the
+# images it names are nobody's, and nothing on the new path would ever name
+# them again (a digest pull keeps its @sha256 name, so no prune removes it).
+# Queue each on the reclaim list and clear its file, so it is queued exactly
+# once. Nothing is removed here — the old service may still run on it — but by
+# this update's own reclaim call or the retry after the restart, under the
+# usual rules: protected refs and anything sharing their image ID stay listed,
+# nothing is forced, a refusal stays listed.
+sandbox_mode=custom
+if [[ -n "$sandbox_image_ref" ]]; then
+  sandbox_mode=prebuilt
+elif [[ "$sandbox_published" == "1" ]]; then
+  sandbox_mode=published
+fi
+sandbox_uses_base=0
+if [[ "$sandbox_mode" == "custom" ]] && grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
+  sandbox_uses_base=1
+fi
+# sandbox_queue_leftover FILE [PREFIX] — queue the ref FILE names (as
+# PREFIX+ref, e.g. tag:NAME) for reclaim and clear FILE.
+sandbox_queue_leftover() {
+  local file="$1" prefix="${2:-}" ref=""
+  [[ -f "$file" ]] && ref="$(tr -d '[:space:]' < "$file")"
+  [[ -n "$ref" ]] || return 0
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would queue ${prefix}${ref} (left by the previous sandbox mode) for removal after the restart"
+  elif fleet_sandbox_reclaim_enqueue "$SANDBOX_RECLAIM_FILE" "${prefix}${ref}"; then
+    rm -f "$file"
+    info "queued ${prefix}${ref} (left by the previous sandbox mode) for removal after the restart"
+  else
+    warn "could not queue ${prefix}${ref} for removal (${SANDBOX_RECLAIM_FILE}) — the next update tries again"
+  fi
+  return 0
+}
+# (Not for a bundle that names a missing Containerfile: step 3 stops this
+# update on it, and the box keeps running what it ran.)
+if [[ "$sandbox_mode" == "custom" && "$cf_now" == "absent" ]]; then
+  :
+else
+  if [[ "$sandbox_mode" != "published" ]]; then
+    sandbox_queue_leftover "$SANDBOX_DIGEST_FILE"
+  fi
+  if [[ "$sandbox_uses_base" != "1" ]]; then
+    sandbox_queue_leftover "$SANDBOX_BASE_FILE"
+  fi
+  if [[ "$sandbox_mode" == "prebuilt" ]]; then
+    # The tag the release image or the custom build was written under.
+    sandbox_queue_leftover "$REF_FILE" "tag:"
+  fi
+fi
+
 if [[ -n "$sandbox_image_ref" ]]; then
   # image wins over tag (internal/clientconfig): the service pulls/uses the
   # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
   # here would burn one pointless multi-GB build the first update after a
   # client switches to registry images. Same skip bootstrap.sh applies.
   info "manifest resolves sandbox.image=${sandbox_image_ref} — using a prebuilt/registry image; skipping the on-box build."
-  # A box that ran the release image until now leaves it behind (its digest
-  # name, and the sandbox.tag it was tagged as): nothing on this path pulls or
-  # prunes, so queue both for the reclaim retry after the restart — not
-  # removed here, while the old service may still be running on them — and
-  # clear the digest file so they are queued once. The usual rules apply
-  # there: the prebuilt image (and its ID) is protected, nothing is forced,
-  # a refusal stays listed.
-  sandbox_prev_digest=""
-  [[ -f "$SANDBOX_DIGEST_FILE" ]] && sandbox_prev_digest="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
-  if [[ -n "$sandbox_prev_digest" ]]; then
-    if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would queue the release image this box ran until now (${sandbox_prev_digest}${ref_prev:+, tag ${ref_prev}}) for removal after the restart"
-    elif fleet_sandbox_reclaim_enqueue "$SANDBOX_RECLAIM_FILE" "$sandbox_prev_digest" ${ref_prev:+"tag:${ref_prev}"}; then
-      rm -f "$SANDBOX_DIGEST_FILE"
-      info "queued the release image this box ran until now (${sandbox_prev_digest##*@}${ref_prev:+, tag ${ref_prev}}) for removal after the restart"
-    else
-      warn "could not queue ${sandbox_prev_digest} for removal (${SANDBOX_RECLAIM_FILE}) — the next update tries again"
-    fi
-  fi
 elif [[ "$sandbox_published" == "1" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would verify the release's signed sandbox image (fleet release sandbox: its digest from the verified release.json, its cosign signature), pull it BY DIGEST into ${service_user:-the invoking user}'s store and tag it ${ref_now:-<sandbox.tag>}"

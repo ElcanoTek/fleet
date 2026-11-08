@@ -24,7 +24,7 @@ func TestUpdateQueuesReleaseImageOnSwitchToPrebuilt(t *testing.T) {
 		prebuilt = "registry.example/sandbox@sha256:ffff000000000000000000000000000000000000000000000000000000000000"
 	)
 	update := readFile(t, repoRoot(t), "scripts/update.sh")
-	queue := updateBlock(t, update, "  sandbox_prev_digest=\"\"", `warn "could not queue`) + "    fi\n  fi\n"
+	queue := leftoverBlock(t, update)
 	retry := updateBlock(t, update, "      sandbox_current=\"\"\n      if [[ \"$sandbox_published\"",
 		`fleet_sandbox_reclaim_release_images "$SANDBOX_RECLAIM_FILE" "" "$sandbox_current" "$sandbox_current_tag" "$sandbox_base" "$sandbox_image_ref"`)
 	if !strings.Contains(update, `if [[ -z "$sandbox_image_ref" ]] && fleet_sandbox_uses_release_image`) {
@@ -33,13 +33,14 @@ func TestUpdateQueuesReleaseImageOnSwitchToPrebuilt(t *testing.T) {
 
 	run := func(s *reclaimStore) {
 		t.Helper()
-		digest := filepath.Join(filepath.Dir(s.list), "sandbox-image.digest")
+		state := filepath.Dir(s.list)
+		digest := filepath.Join(state, "sandbox-image.digest")
 		writeTestFile(t, digest, oldRel+"\n")
-		prelude := reclaimStub + reclaimPrelude + `info() { printf 'INFO %s\n' "$*"; }
-DRY_RUN=0; SANDBOX_DIGEST_FILE="$DF"; ref_prev="$TAG"; ref_now="$TAG"; sandbox_image_ref="$IMG"
-sandbox_published=0; sandbox_base=""
+		writeTestFile(t, filepath.Join(state, "sandbox-image.ref"), tag+"\n")
+		prelude := reclaimStub + reclaimPrelude + leftoverPrelude + `ref_prev="$TAG"; ref_now="$TAG"; sandbox_image_ref="$IMG"
+sandbox_published=0; sandbox_base=""; sandbox_cf=/nonexistent/Containerfile; cf_now=prebuilt
 `
-		env := s.env("DF="+digest, "TAG="+tag, "IMG="+prebuilt)
+		env := s.env("ST="+state, "DF="+digest, "TAG="+tag, "IMG="+prebuilt)
 		// Step 3 queues; nothing is removed yet.
 		libBash(t, prelude+queue, env...)
 		if got := strings.Join(s.pending(), " "); got != oldRel+" tag:"+tag {

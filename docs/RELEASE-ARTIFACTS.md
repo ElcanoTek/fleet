@@ -357,9 +357,11 @@ one (it keeps its `@sha256` name, so `podman image prune` never would),
 without `--force`. The same goes for a custom build's previous
 `FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one, and for
 the image left under the old `sandbox.tag` when the bundle renames it. A box
-that switches from the release image to a prebuilt `sandbox.image` queues the
-release image it ran (its digest and its old tag) for removal after the
-restart. When a
+that changes sandbox mode (release image, custom build with or without
+`FLEET_SANDBOX_BASE`, prebuilt `sandbox.image`) queues, once, what the mode it
+leaves held: the release digest when it stops running the release image, the
+base digest when it stops layering on one, and the old tag when it moves to a
+prebuilt image. A prebuilt image itself is never removed. When a
 container still uses it, the removal is refused and the ref is kept in
 `sandbox-image.reclaim` under the state directory; `update`
 retries every listed ref after the service restart and on each later run, and
