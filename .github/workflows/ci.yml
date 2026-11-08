@@ -1509,6 +1509,92 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  upgrade-from-release:
+    # #2049 M6 (ADR-0107): a box on the latest published release upgrades to
+    # this change. The release binary is fetched and verified exactly as a box
+    # verifies it (scripts/lib/release.sh: the pinned cosign, SHA256SUMS signed
+    # by release.yml on main, the binary's own signature —
+    # docs/RELEASE-ARTIFACTS.md), boots on the job's Postgres so its runners
+    # migrate it, is seeded through its CLI and API, then this change's binary
+    # boots on the same database. scripts/upgrade-from-release.sh asserts
+    # `fleet migrate status --json` (adopted, current, clean), the schema
+    # (equal to a fresh install by this build), `fleet doctor` and GET /tasks.
+    name: Upgrade from the latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:18  # see the go job's Postgres
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Prefetch Go modules (retried — the proxy is not always up)
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
+
+      - name: Build this change's fleet
+        # Outside the checkout, so `fleet doctor` finds no scripts/doctor.sh
+        # beside the binary and runs its in-process checks (fleet status).
+        run: go build -o "$RUNNER_TEMP/new/fleet" ./cmd/fleet
+
+      - name: Fetch and verify the latest published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The tag through the authenticated API (the anonymous one is rate
+          # limited per runner IP); the bytes are trusted for their signatures,
+          # not for where the tag came from.
+          tag="$("$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "the latest release tag" -- \
+            gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          echo "latest published release: $tag"
+          # shellcheck source=scripts/lib/release.sh
+          . "$GITHUB_WORKSPACE/scripts/lib/release.sh"
+          install -d -m 0700 "$RUNNER_TEMP/release" "$RUNNER_TEMP/cosign"
+          bin="$(fleet_release_fetch "$GITHUB_WORKSPACE" "$tag" "$RUNNER_TEMP/release" "$RUNNER_TEMP/cosign")"
+          "$bin" version
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      - name: Upgrade rehearsal
+        env:
+          OLD_FLEET: ${{ steps.release.outputs.bin }}
+          FLEET_UPGRADE_PG_CONTAINER: ${{ job.services.postgres.id }}
+          FLEET_UPGRADE_LOG_DIR: ${{ runner.temp }}/upgrade-logs
+        run: scripts/upgrade-from-release.sh "$OLD_FLEET" "$RUNNER_TEMP/new/fleet" "postgres://fleet:fleet@127.0.0.1:5432/fleet?sslmode=disable"
+
+      - name: Upload the rehearsal's logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upgrade-from-release-logs
+          path: ${{ runner.temp }}/upgrade-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
   grype-scan:
     name: Container image vulnerability scan (Grype)
     runs-on: ubuntu-latest
@@ -1693,7 +1779,7 @@ jobs:
     # (cancelled upstream jobs, none failed) concludes neutral (#1302).
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, playwright, e2e-live, upgrade-from-release, grype-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
