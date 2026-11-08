@@ -8,7 +8,8 @@
 #   * github: download the release's checksums file, check its keyless
 #     signature when upstream signs it (with the cosign pinned in
 #     internal/release/cosign.lock), download the asset and require its SHA-256
-#     to match, then rewrite <NAME>_VERSION / <NAME>_SHA256 in every workflow;
+#     to match, then rewrite <NAME>_VERSION / <NAME>_SHA256 in every workflow
+#     and the prose copies of the version listed in scripts/lib/pin-docs.tsv;
 #   * pypi: rewrite <NAME>_VERSION (these are `pip install x==v` pins);
 #   * cosign: verify cosign_checksums.txt's keyless signature with the
 #     CURRENTLY pinned cosign (the trust chain carries forward, never resets),
@@ -117,6 +118,37 @@ rewrite() {
   done
 }
 
+# rewrite_docs NAME OLD NEW — the prose copies of NAME's version listed in
+# scripts/lib/pin-docs.tsv, so the update PR lands without hand edits. Same
+# rules as rewrite(): values only through ENVIRON, an exact string match, and
+# only on lines carrying the row's marker (any case). A match must be the
+# whole version (8.30.1 does not match inside 18.30.1, 8.30.10 or 8.30.1.2).
+rewrite_docs() {
+  local table="$ROOT/scripts/lib/pin-docs.tsv" pin marker prefix file f tmp
+  [[ -f "$table" ]] || return 0
+  while IFS=$'\t' read -r pin marker prefix file; do
+    [[ -z "$pin" || "$pin" == \#* || "$pin" != "$1" ]] && continue
+    [[ "$prefix" == "-" ]] && prefix=""
+    f="$ROOT/$file"
+    [[ -f "$f" ]] || { fail "$1: scripts/lib/pin-docs.tsv lists $file, which does not exist"; continue; }
+    tmp="$(mktemp)"
+    MARK="$marker" OLD="$prefix$2" NEW="$prefix$3" awk '
+      index(tolower($0), tolower(ENVIRON["MARK"])) == 0 { print; next }
+      {
+        line = $0; out = ""; old = ENVIRON["OLD"]; n = length(old)
+        while ((i = index(line, old)) > 0) {
+          prev = (i > 1) ? substr(line, i - 1, 1) : substr(out, length(out), 1)
+          nxt = substr(line, i + n, 2)
+          if (prev ~ /[0-9.]/ || nxt ~ /^[0-9]/ || nxt ~ /^\.[0-9]/) { out = out substr(line, 1, i + n - 1) }
+          else { out = out substr(line, 1, i - 1) ENVIRON["NEW"] }
+          line = substr(line, i + n)
+        }
+        print out line
+      }' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+  done < "$table"
+}
+
 COSIGN_BIN=""
 cosign_bin() {
   [[ -n "$COSIGN_BIN" ]] || COSIGN_BIN="$(fleet_release_cosign "$ROOT" "${FLEET_RELEASE_CACHE_DIR:-$WORK/cosign-cache}")"
@@ -152,6 +184,16 @@ checked_sha() {
   printf '%s' "$want"
 }
 
+# has_go_install NAME — a workflow installs NAME's fallback with
+# `--go-install "<module path>@v${NAME_VERSION}"` (scripts/install-pinned-tool.sh).
+# That path carries the module's major-version suffix (/v2, /v8, none for
+# v0/v1), so a major bump must move the path too, by hand.
+has_go_install() {
+  KEY="@v\${$1_VERSION}" awk '
+    index($0, "--go-install") && index($0, ENVIRON["KEY"]) { found = 1; exit }
+    END { exit !found }' "${WORKFLOWS[@]}"
+}
+
 update_github() { # NAME REPO ASSET SUMS ID ISS
   local name="$1" repo="$2" asset_t="$3" sums_t="$4" id="$5" iss="$6" cur tag v base asset sums sha cursha
   cur="$(current_value "$name" VERSION)"
@@ -164,6 +206,9 @@ update_github() { # NAME REPO ASSET SUMS ID ISS
   if [[ "$(printf '%s\n%s\n' "$cur" "$v" | sort -V | tail -n1)" != "$v" ]]; then
     note "$name: pinned $cur is newer than upstream's $v (cooldown) — leaving it"; return
   fi
+  if [[ "${cur%%.*}" != "${v%%.*}" ]] && has_go_install "$name"; then
+    fail "$name: $cur → $v is a major upgrade; update its --go-install module path by hand (the /vN suffix) and move the pin with it — not updating"; return
+  fi
   if [[ "$CHECK" == "1" ]]; then note "$name: $cur → $v (would update)"; return; fi
   base="$GH_DL/$repo/releases/download/$tag"
   asset="${asset_t//\{v\}/$v}"; sums="${sums_t//\{v\}/$v}"
@@ -175,6 +220,7 @@ update_github() { # NAME REPO ASSET SUMS ID ISS
   cursha="$(current_value "$name" SHA256)"
   rewrite "$name" VERSION "$cur" "$v"
   [[ -n "$cursha" ]] && rewrite "$name" SHA256 "$cursha" "$sha"
+  rewrite_docs "$name" "$cur" "$v"
   CHANGES+=("$name $cur → $v")
   note "$name: $cur → $v (sha256 ${sha:0:12}…, checksums$([[ "$id" != "-" ]] && echo ' signature') verified)"
 }
@@ -191,6 +237,7 @@ update_pypi() { # NAME PROJECT
   fi
   if [[ "$CHECK" == "1" ]]; then note "$name: $cur → $v (would update)"; return; fi
   rewrite "$name" VERSION "$cur" "$v"
+  rewrite_docs "$name" "$cur" "$v"
   CHANGES+=("$name $cur → $v")
   note "$name: $cur → $v"
 }
@@ -219,6 +266,7 @@ update_cosign() { # REPO ASSET SUMS ID ISS
     printf 'linux/%s %s\n' "$arch" "$sha" >> "$out"
   done
   cp "$out" "$lock"
+  rewrite_docs COSIGN "${cur#v}" "${tag#v}"
   CHANGES+=("COSIGN $cur → $tag")
   note "COSIGN: $cur → $tag (checksums signature verified by cosign $cur; both binaries hash-checked)"
 }

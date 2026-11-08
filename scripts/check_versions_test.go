@@ -6,6 +6,7 @@ package scripts
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -346,40 +347,197 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 	}
 }
 
-// TestGolangciLintPinAgreesWithDocs: the golangci-lint binary version is
-// declared in ci.yml and then RESTATED in prose in two docs that tell a
-// contributor which
-// version to install. Those copies are invisible to every other check, and they
-// drift exactly the way you would expect: the v2.12.2 -> v2.13.1 bump that Go
-// 1.27 forced updated ONBOARDING.md and missed docs/TESTING.md, which went on
-// telling contributors to install the version that cannot lint the tree.
+// TestPinnedVersionsInDocsAreListedAndCurrent: every pin in scripts/lib/pins.tsv
+// is declared once (<NAME>_VERSION in the workflows, or cosign.lock), but some
+// are RESTATED in prose or a Makefile that tells a contributor which version
+// to install. Those copies drift exactly the way you would expect: the
+// golangci-lint v2.12.2 -> v2.13.1 bump that Go 1.27 forced updated
+// ONBOARDING.md and missed docs/TESTING.md, which went on telling contributors
+// to install the version that cannot lint the tree.
 //
-// Asserting them is the same rule this file already applies to the node major
-// and the Go minor: one declaration point, and anything that must agree with it
-// is a test failure rather than something to remember.
-func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
+// Every copy is listed in scripts/lib/pin-docs.tsv, which scripts/update-pins.sh
+// rewrites along with the pin, so the monthly pins PR lands green with no hand
+// edits. This test holds both ends, for every pin: each listed copy matches the
+// pin, and no tracked file states a version of a pinned tool without being
+// listed (an unlisted copy would rot) unless it is an exemption below.
+//
+// "States a version" is the tool's name followed, within 40 non-digits, by
+// an X.Y.Z with the pinned MAJOR, so "golangci-lint ... Go version (1.27.0)"
+// or "cosign verify ...:v2026.11.07" are not read as tool versions.
+func TestPinnedVersionsInDocsAreListedAndCurrent(t *testing.T) {
 	root := repoRoot(t)
-
-	pin := regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`).
-		FindStringSubmatch(readFile(t, root, ".github/workflows/ci.yml"))
-	if pin == nil {
-		t.Fatal("ci.yml: could not find the golangci-lint-action version pin")
+	version := pinnedVersions(t, root, loadPins(t))
+	listed := checkListedDocCopies(t, root, version)
+	if len(listed) == 0 {
+		t.Fatal("pin-docs.tsv lists nothing — the matcher is broken or the table was emptied")
 	}
-	want := pin[1]
+	checkNoUnlistedDocCopies(t, root, version, listed)
+}
 
-	// Each doc names the version in prose. Match any golangci-lint-adjacent
-	// vN.N.N so a stale copy is caught rather than skipped for not matching.
-	for _, rel := range []string{"ONBOARDING.md", "docs/TESTING.md"} {
-		body := readFile(t, root, rel)
-		found := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`).FindAllStringSubmatch(body, -1)
+// pinDocExemptions are tracked files allowed to name a pinned tool's version
+// without being rewritten, each with the reason. Keys are paths or directory
+// prefixes.
+var pinDocExemptions = map[string]string{
+	"docs/CODEQL.md": "a historical record: it names the golangci-lint that was current then (v2.13.1), which the updater must not rewrite",
+	"internal/release/testdata/sigstore-vector/": "upstream's signed cosign_checksums.txt, kept byte-for-byte as a signature test vector",
+}
+
+// skipPinDocScan reports the pins' own declarations, and tests that carry
+// fixture versions.
+func skipPinDocScan(rel string) bool {
+	return strings.HasPrefix(rel, ".github/workflows/") || strings.HasSuffix(rel, "_test.go") ||
+		rel == "scripts/lib/pins.tsv" || rel == "scripts/lib/pin-docs.tsv" || rel == "internal/release/cosign.lock"
+}
+
+func pinMarker(name string) string { return strings.ToLower(strings.ReplaceAll(name, "_", "-")) }
+
+// pinnedVersions returns the pinned X.Y.Z of each tool in pins.tsv.
+func pinnedVersions(t *testing.T, root string, pins map[string]pinRow) map[string]string {
+	t.Helper()
+	version := map[string]string{}
+	var workflows strings.Builder
+	for _, body := range workflowFiles(t) {
+		workflows.WriteString(body)
+	}
+	for name, p := range pins {
+		if p.kind == "cosign" {
+			m := regexp.MustCompile(`(?m)^version v?(\d+\.\d+\.\d+)$`).FindStringSubmatch(readFile(t, root, "internal/release/cosign.lock"))
+			if m == nil {
+				t.Fatal("internal/release/cosign.lock: no version line")
+			}
+			version[name] = m[1]
+			continue
+		}
+		m := regexp.MustCompile(`(?m)^\s+` + name + `_VERSION:\s*'v?(\d+\.\d+\.\d+)'`).FindStringSubmatch(workflows.String())
+		if m == nil {
+			t.Errorf("%s: no %s_VERSION: 'X.Y.Z' pin in the workflows", name, name)
+			continue
+		}
+		version[name] = m[1]
+	}
+	return version
+}
+
+// checkListedDocCopies checks every pin-docs.tsv copy names the tool's
+// version and that it is the pinned one; it returns the listed (pin, file)
+// pairs.
+func checkListedDocCopies(t *testing.T, root string, version map[string]string) map[[2]string]bool {
+	t.Helper()
+	listed := map[[2]string]bool{}
+	for _, row := range loadPinDocs(t) {
+		want, ok := version[row.name]
+		if !ok {
+			continue // loadPinDocs reported the unknown pin
+		}
+		if row.marker != pinMarker(row.name) {
+			t.Errorf("pin-docs.tsv: the %s row for %s has marker %q, want %q", row.name, row.file, row.marker, pinMarker(row.name))
+		}
+		prefix := row.prefix
+		if prefix == "-" {
+			prefix = ""
+		} else if prefix != "v" {
+			t.Errorf("pin-docs.tsv: the %s row for %s has prefix %q, want v or -", row.name, row.file, row.prefix)
+		}
+		listed[[2]string{row.name, row.file}] = true
+		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(row.marker) + `\D{0,40}?` + regexp.QuoteMeta(prefix) + `(\d+\.\d+\.\d+)`)
+		found := re.FindAllStringSubmatch(readFile(t, root, row.file), -1)
 		if len(found) == 0 {
-			t.Errorf("%s names no golangci-lint version; ci.yml pins %s — keep the doc honest or drop the mention", rel, want)
+			t.Errorf("%s names no %s version; drop its pin-docs.tsv row or restore the mention (pinned: %s%s)", row.file, row.marker, prefix, want)
 			continue
 		}
 		for _, m := range found {
 			if m[1] != want {
-				t.Errorf("%s says golangci-lint %s but ci.yml pins %s — a contributor following the doc installs a binary that cannot lint the tree", rel, m[1], want)
+				t.Errorf("%s says %s %s%s but the pin is %s%s — a contributor following it installs a different version than CI runs", row.file, row.marker, prefix, m[1], prefix, want)
 			}
 		}
 	}
+	return listed
+}
+
+// checkNoUnlistedDocCopies fails when a tracked file states a pinned tool's
+// version without a pin-docs.tsv row (an unlisted copy would rot), unless it is
+// exempt, and when an exemption no longer matches anything.
+func checkNoUnlistedDocCopies(t *testing.T, root string, version map[string]string, listed map[[2]string]bool) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Skipf("git ls-files unavailable: %v", err)
+	}
+	scan := map[string]*regexp.Regexp{}
+	for name := range version {
+		scan[name] = regexp.MustCompile(`(?i)` + regexp.QuoteMeta(pinMarker(name)) + `\D{0,40}?v?(\d+)\.\d+\.\d+`)
+	}
+	used := map[string]bool{}
+	for _, rel := range strings.Fields(string(out)) {
+		if skipPinDocScan(rel) {
+			continue
+		}
+		if fi, err := os.Lstat(filepath.Join(root, rel)); err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
+			continue
+		}
+		body := readFile(t, root, rel)
+		for name, want := range version {
+			if m := firstUnlistedMention(scan[name], body, want, listed[[2]string{name, rel}]); m != "" {
+				if k := pinDocExemptionFor(rel); k != "" {
+					used[k] = true
+					continue
+				}
+				t.Errorf("%s states %s (%q) but has no %s row in scripts/lib/pin-docs.tsv, so scripts/update-pins.sh would leave it stale — list it, or point at %s_VERSION instead", rel, pinMarker(name), m, name, name)
+			}
+		}
+	}
+	for k, why := range pinDocExemptions {
+		if !used[k] {
+			t.Errorf("exemption %s (%s) no longer matches anything — drop it", k, why)
+		}
+	}
+}
+
+// firstUnlistedMention returns the first mention in body whose major matches
+// the pin, or "" when there is none or the file is already listed.
+func firstUnlistedMention(re *regexp.Regexp, body, want string, isListed bool) string {
+	if isListed {
+		return ""
+	}
+	major := strings.SplitN(want, ".", 2)[0]
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		if m[1] == major {
+			return m[0]
+		}
+	}
+	return ""
+}
+
+// pinDocExemptionFor returns the exemption key covering rel, or "".
+func pinDocExemptionFor(rel string) string {
+	for k := range pinDocExemptions {
+		if rel == k || (strings.HasSuffix(k, "/") && strings.HasPrefix(rel, k)) {
+			return k
+		}
+	}
+	return ""
+}
+
+type pinDocRow struct{ name, marker, prefix, file string }
+
+// loadPinDocs reads scripts/lib/pin-docs.tsv and checks each row names a pin
+// update-pins.sh actually moves.
+func loadPinDocs(t *testing.T) []pinDocRow {
+	t.Helper()
+	pins := loadPins(t)
+	var rows []pinDocRow
+	for _, line := range strings.Split(readFile(t, repoRoot(t), "scripts/lib/pin-docs.tsv"), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if len(cols) != 4 {
+			t.Fatalf("pin-docs.tsv: %q has %d columns, want 4", line, len(cols))
+		}
+		if _, ok := pins[cols[0]]; !ok {
+			t.Errorf("pin-docs.tsv: %s is not a pins.tsv pin, so nothing would rewrite %s", cols[0], cols[3])
+		}
+		rows = append(rows, pinDocRow{cols[0], cols[1], cols[2], cols[3]})
+	}
+	return rows
 }
