@@ -1136,7 +1136,7 @@ func run() error {
 	// ticker closes that gap. Bound to ctx so it stops on shutdown; a panic is
 	// contained so the sweep can't crash the process.
 	go func() {
-		defer safe.Recover("cmd.approval-expiry-sweep", nil)
+		defer safe.RecoverContext(ctx, "cmd.approval-expiry-sweep", nil)
 		ticker := time.NewTicker(approvalExpirySweepInterval)
 		defer ticker.Stop()
 		for {
@@ -1180,7 +1180,7 @@ func run() error {
 // 5m cap) until the cascade is in place or the process stops, logging each
 // failure and the install.
 func keepChatScheduleCascade(ctx context.Context, st *storage.Storage) {
-	defer safe.Recover("cmd.chat-schedule-cascade", nil)
+	defer safe.RecoverContext(ctx, "cmd.chat-schedule-cascade", nil)
 	scheddb.KeepChatScheduleCascade(ctx, st.DB().EnsureChatScheduleCascade, 5*time.Second, 5*time.Minute,
 		func(installed bool, orphans int, err error, retryIn time.Duration) {
 			switch {
@@ -1227,7 +1227,7 @@ func startA2APush(ctx context.Context, d *push.Dispatcher) {
 		return
 	}
 	go func() {
-		defer safe.Recover("cmd.a2a-push", nil)
+		defer safe.RecoverContext(ctx, "cmd.a2a-push", nil)
 		d.Run(ctx)
 	}()
 }

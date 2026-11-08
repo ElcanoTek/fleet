@@ -202,8 +202,8 @@ const (
 // persistCh is closed.
 func (b *turnBuffer) runPersister() {
 	defer b.persistWG.Done()
-	defer safe.Recover("httpapi.turn_buffer.persister", nil)
 	logCtx := b.logContext()
+	defer safe.RecoverContext(logCtx, "httpapi.turn_buffer.persister", nil)
 
 	pending := make([]bufferedEvent, 0, flushBatchSize)
 	tick := time.NewTicker(flushInterval)

@@ -1337,7 +1337,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// single-host process. Surface it as a read error instead (ch is
 		// buffered, and the normal send cannot have happened if ReadBytes
 		// panicked, so this send never blocks).
-		defer safe.Recover("sandbox.container.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.container.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		// Capped read (mirrors the bash path's BashOutputCaptureCap): the

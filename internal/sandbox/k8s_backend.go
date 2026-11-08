@@ -1235,7 +1235,7 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 	// arms nil the field via terminateBridgeLocked (#583's lesson, upheld).
 	stdout := k.bridgeStdout
 	go func() {
-		defer safe.Recover("sandbox.k8s.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.k8s.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		data, discarded, err := readCappedLine(stdout, bridgeResponseCaptureCap)

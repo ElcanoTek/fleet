@@ -1438,7 +1438,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		defer s.approvalRuns.leave()
 		defer s.disarmApprovalStop(approvalID)
 		defer s.executingApprovals.unregister(approvalID)
-		defer safe.Recover("httpapi.approval_execute", func(any) {
+		defer safe.RecoverContext(ctx, "httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
 			// never success or failure, and never a re-run.

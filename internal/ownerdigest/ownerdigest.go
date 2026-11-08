@@ -305,7 +305,7 @@ func (s *Service) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				func() {
-					defer safe.Recover("ownerdigest.tick", nil)
+					defer safe.RecoverContext(ctx, "ownerdigest.tick", nil)
 					s.Tick(ctx)
 				}()
 			}

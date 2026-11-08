@@ -295,7 +295,7 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 		// (defers run last-first), so that pass can claim into it.
 		defer func() { s.WakeChatSchedulesAt(time.Now()) }()
 		defer func() { <-s.chatSlots }()
-		defer safe.Recover("scheduler.chat-schedule-fire", nil)
+		defer safe.RecoverContext(logging.WithConversation(s.ctx, f.ConversationID), "scheduler.chat-schedule-fire", nil)
 		timeout := chatScheduleFireTimeout
 		if s.chatFireTimeoutOverride > 0 {
 			timeout = s.chatFireTimeoutOverride
@@ -369,7 +369,7 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 // deliverChatSchedule calls the deliverer with a panic boundary: a panic in
 // the chat side fails this fire (its lease is released), not the tick.
 func (s *Scheduler) deliverChatSchedule(ctx context.Context, fire models.ChatScheduleFire) (d models.ChatScheduleDelivery, err error) {
-	defer safe.Recover("scheduler.chat-schedule-deliver", func(any) {
+	defer safe.RecoverContext(ctx, "scheduler.chat-schedule-deliver", func(any) {
 		err = chatSchedError("chat schedule delivery panicked")
 	})
 	return s.chatDeliverer.DeliverChatScheduleFire(ctx, fire)

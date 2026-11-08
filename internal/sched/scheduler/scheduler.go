@@ -421,7 +421,7 @@ func (s *Scheduler) startMaintenance() {
 
 func (s *Scheduler) runLoop() {
 	defer close(s.loopDone)
-	defer safe.Recover("scheduler.runLoop", nil)
+	defer safe.RecoverContext(s.ctx, "scheduler.runLoop", nil)
 	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
 

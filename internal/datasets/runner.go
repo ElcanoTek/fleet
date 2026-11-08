@@ -225,7 +225,7 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 			// that marks the row failed; this is the backstop for a panic
 			// in the claim loop itself.
 			defer wg.Done()
-			defer safe.Recover("datasets.worker", nil)
+			defer safe.RecoverContext(ctx, "datasets.worker", nil)
 			for {
 				if ctx.Err() != nil {
 					return
@@ -264,7 +264,7 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	// A panic in one row's turn (a nil turn result, a schema edge case) is
 	// that ROW's failure, not the process's: record it as failed so it is not
 	// stranded 'running', and let the worker continue with the next row.
-	defer safe.Recover("datasets.runRow", func(v any) {
+	defer safe.RecoverContext(ctx, "datasets.runRow", func(v any) {
 		msg := clamp("row run panicked: "+safe.PanicClass(v), maxNoteChars)
 		if ferr := r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", msg, 0); ferr != nil {
 			logging.From(ctx).Error("dataset row: could not record panic", "dataset", d.ID, "row", row.RowIndex, "err", ferr)

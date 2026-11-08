@@ -348,7 +348,7 @@ func (h *hostImpl) readLocked(ctx context.Context, timeout time.Duration) ([]byt
 	// panic (#583). Mirrors containerImpl.runPython.
 	stdout := h.bridgeStdout
 	go func() {
-		defer safe.Recover("sandbox.host.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.host.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		data, err := stdout.ReadBytes('\n')
