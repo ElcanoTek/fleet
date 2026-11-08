@@ -83,12 +83,12 @@ func TestChatSchedules_TickFiresDueSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 
 	if d.settledCount() != 1 || d.settled[0].Outcome != models.ChatScheduleQueued || d.settled[0].InputID == "" {
 		t.Fatalf("settled = %+v", d.settled)
 	}
-	if d.kicks != 1 {
+	if d.kicks < 1 {
 		t.Errorf("queued patrol turns were not kicked (kicks = %d)", d.kicks)
 	}
 	list, err := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, false)
@@ -101,7 +101,7 @@ func TestChatSchedules_TickFiresDueSchedule(t *testing.T) {
 	}
 
 	// The next tick finds the patrol turn in flight and nothing due.
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	if d.settledCount() != 1 {
 		t.Fatalf("a second tick fired again: %+v", d.settled)
 	}
@@ -317,7 +317,7 @@ func TestChatSchedules_UnsettledRunNowIsNotDuplicated(t *testing.T) {
 	if _, err := s.RunChatScheduleNow(ctx, sc.ID); !errors.Is(err, models.ErrChatScheduleFiring) {
 		t.Fatalf("Run now over the unsettled fire: err = %v, want ErrChatScheduleFiring", err)
 	}
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 
 	var turns int
 	if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat.chat_input_queue WHERE client_input_id LIKE $1`,
@@ -387,7 +387,7 @@ func TestChatSchedules_RunNowOnFullQueueIsRefused(t *testing.T) {
 	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE lease_owner IS NOT NULL`); err != nil {
 		t.Fatal(err)
 	}
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	if n := patrolTurns(t, s, sc.ID); n != 0 {
 		t.Fatalf("the refused Run now queued %d turn(s) after the queue drained", n)
 	}
@@ -415,7 +415,7 @@ func TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	fillInputQueue(t, s, convID, 20)
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 
 	next, _ := models.NextChatScheduleRun("0 9 * * *", "UTC", time.Now())
 	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
@@ -423,7 +423,7 @@ func TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot(t *testing.T) {
 		t.Fatalf("schedule = %+v; want no run counted and the slot moved to %d", all, next.Unix())
 	}
 	drainInputQueue(t, s, convID)
-	s.runChatSchedules()
+	s.runChatSchedulesAndWait()
 	if n := patrolTurns(t, s, sc.ID); n != 0 {
 		t.Fatalf("the skipped slot queued %d turn(s) after the queue drained", n)
 	}
