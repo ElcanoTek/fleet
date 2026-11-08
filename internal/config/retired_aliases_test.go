@@ -54,3 +54,28 @@ func TestLoadWarnsAboutRemovedAliases(t *testing.T) {
 		t.Errorf("boot log flagged a canonical setting or printed a value:\n%s", out)
 	}
 }
+
+// Codex P3 on #2081: under systemd every env-file line is also in the process
+// environment, so a stale alias set in both is reported ONCE, as the env file
+// (where the operator fixes it).
+func TestRetiredAliasFindingsOneWarningPerSpelling(t *testing.T) {
+	unsetForTest(t, "CHAT_MAX_COST_USD", "CUTLASS_TEMPERATURE")
+	path := filepath.Join(t.TempDir(), "fleet.env")
+	writeEnv(t, path, "CHAT_MAX_COST_USD=7.5\n")
+	t.Setenv("CHAT_MAX_COST_USD", "7.5") // what EnvironmentFile= exports
+	t.Setenv("CUTLASS_TEMPERATURE", "0.9")
+	got, err := RetiredAliasFindings(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []RetiredAliasFinding
+	for _, f := range got {
+		if f.Name == "CHAT_MAX_COST_USD" || f.Name == "CUTLASS_TEMPERATURE" {
+			mine = append(mine, f)
+		}
+	}
+	if len(mine) != 2 || mine[0].Name != "CHAT_MAX_COST_USD" || mine[0].Where != SourceEnvFile ||
+		mine[1].Name != "CUTLASS_TEMPERATURE" || mine[1].Where != SourceProcessEnv {
+		t.Fatalf("findings = %+v, want one each: CHAT_MAX_COST_USD in the env file, CUTLASS_TEMPERATURE in the process env", mine)
+	}
+}

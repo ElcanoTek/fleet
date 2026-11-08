@@ -190,6 +190,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# shellcheck source=lib/retired-env.sh
+. "$SCRIPT_DIR/lib/retired-env.sh"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Uninstall Cockpit (bootstrap only).
@@ -1142,7 +1144,8 @@ resolve_sandbox_image() {
   # default bundle uses). Anything else is treated as a literal image ref.
   if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
     local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-    printf '%s' "${!var:-$def}"
+    # A spelling ADR-0106 removed reads as unset, as it does in fleet.
+    if fleet_env_name_retired "$var"; then printf '%s' "$def"; else printf '%s' "${!var:-$def}"; fi
   else
     printf '%s' "$raw"
   fi

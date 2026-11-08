@@ -34,13 +34,24 @@ compatibility window.
    that `fleet sched apikey` read goes too.
 2. **The env-file loader does not admit a removed spelling** (the 22 it used
    to admit are gone from the allowlist).
-3. **A removed spelling is reported, never silently ignored.**
+3. **A removed spelling is unreadable everywhere.** Every lookup in
+   `envreg` (`Get`, `Lookup`, `Unregistered`, `LookupUnregistered`) reads one
+   as unset whatever the process environment holds (the shipped systemd unit
+   exports every env-file line, so a stale value can sit in `os.Environ`).
+   That covers fleet's own reads and every name the client bundle supplies:
+   `${…}` references and literal variable-name fields (`api_key_env`,
+   `enabled_env`, `enabled_groups`, the webhook `*_secret_env` fields, …),
+   which read as unset (no key, gate closed). The shell scripts that
+   interpolate a manifest value (`doctor.sh`, `bootstrap.sh`) do the same
+   through the generated `scripts/lib/retired-env.sh`.
+4. **A removed spelling is reported, never silently ignored.**
    `envreg.RetiredAlias` recognises one: `CHAT_<X>` or `CUTLASS_<X>` when
    `FLEET_<X>` is a registered setting and the name is not a setting of its
    own, plus the bare `DATA_DIR`. Then:
    - `fleet serve` (any `config.Load`) logs one warning per removed spelling
      set in the process environment or the env file, naming the `FLEET_`
-     key. It does not refuse to boot.
+     key — once per spelling, attributed to the env file when it is there.
+     It does not refuse to boot.
    - `fleet doctor` prints the same warning first, from the process
      environment, the systemd unit's environment and the env file.
    - `fleet config explain FLEET_<X>` adds a note when a removed spelling of
@@ -54,10 +65,10 @@ compatibility window.
      it as a non-blocking advisory (as they do a removed spelling still set
      in the environment).
    None of these prints a value.
-4. **`fleet config migrate-env` is removed**, with its tests and docs. The
+5. **`fleet config migrate-env` is removed**, with its tests and docs. The
    boxes are migrated; an operator who finds a leftover line renames it by
    hand (`fleet env edit`, or `fleet config set-env` + `unset-env`).
-5. **The MCP broker still keeps the `CHAT_`/`CUTLASS_` spellings of
+6. **The MCP broker still keeps the `CHAT_`/`CUTLASS_` spellings of
    parent-owned names out of connector env** (`envreg.RetiredSpellings`). fleet
    no longer reads them, but a stale line on a box still holds the same value
    (a server token, a DSN), and a connector must not be able to claim it.

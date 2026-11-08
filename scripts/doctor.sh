@@ -63,6 +63,8 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# shellcheck source=lib/retired-env.sh
+. "$SCRIPT_DIR/lib/retired-env.sh"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
@@ -1424,7 +1426,8 @@ if [[ -z "$sandbox_img" ]]; then
     ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
     if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
       local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-      printf '%s' "${!var:-$def}"
+      # A spelling ADR-0106 removed reads as unset, as it does in fleet.
+      if fleet_env_name_retired "$var"; then printf '%s' "$def"; else printf '%s' "${!var:-$def}"; fi
     else
       printf '%s' "$raw"
     fi

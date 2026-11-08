@@ -435,7 +435,16 @@ func Get(name string) string {
 }
 
 // Lookup is os.LookupEnv for a registered name.
+//
+// A spelling ADR-0106 removed (RetiredAlias) always reads as unset, from this
+// and every other lookup in this package, whatever the process environment
+// holds: the shipped systemd unit exports every env-file line, so a stale
+// CHAT_SERVER_TOKEN can sit in os.Environ, and no reader — fleet's own code
+// or a name the client bundle supplies — may pick it up.
 func Lookup(name string) (string, bool) {
+	if _, retired := RetiredAlias(name); retired {
+		return "", false
+	}
 	if !IsRegistered(name) {
 		unregistered(name, "is not declared in the configuration registry (internal/config/envreg/table.go)")
 	}
@@ -445,13 +454,19 @@ func Lookup(name string) (string, bool) {
 // Unregistered reads a variable whose NAME comes from data — the client
 // bundle's manifest, a per-account suffix, an operator's flag — and so
 // cannot be declared in the table. Never pass it a literal.
+//
+// A removed spelling reads as unset (see Lookup).
 func Unregistered(name string) string {
-	return os.Getenv(name)
+	v, _ := LookupUnregistered(name)
+	return v
 }
 
 // LookupUnregistered is os.LookupEnv for a data-named variable (see
-// Unregistered).
+// Unregistered). A removed spelling reads as unset (see Lookup).
 func LookupUnregistered(name string) (string, bool) {
+	if _, retired := RetiredAlias(strings.TrimSpace(name)); retired {
+		return "", false
+	}
 	return os.LookupEnv(name)
 }
 

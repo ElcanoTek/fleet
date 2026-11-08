@@ -33,9 +33,11 @@ func (f RetiredAliasFinding) String() string {
 
 // RetiredAliasFindings lists every removed alias spelling set (non-empty) in
 // the process environment, the systemd unit's own environment (unit, nil
-// when not modelled) or envFile, sorted by name then source. A line the unit
-// takes from envFile itself is reported once, as the env-file finding. A
-// missing env file is not an error; an unreadable one is.
+// when not modelled) or envFile — ONE finding per spelling, sorted by name.
+// Under systemd every env-file line is also in the process environment (and
+// the unit's), so a name found in several places is reported where the
+// operator fixes it: the env file first, then the unit, then the process env.
+// A missing env file is not an error; an unreadable one is.
 func RetiredAliasFindings(envFile string, unit *UnitEnv) ([]RetiredAliasFinding, error) {
 	var file map[string]string
 	if envFile != "" {
@@ -45,13 +47,31 @@ func RetiredAliasFindings(envFile string, unit *UnitEnv) ([]RetiredAliasFinding,
 		}
 		file = vals
 	}
-	var out []RetiredAliasFinding
+	found := map[string]RetiredAliasFinding{}
+	// add records name at where unless an earlier (higher-priority) source
+	// already did; sources are visited env file → unit → process env.
 	add := func(name, value, where string) {
 		if strings.TrimSpace(value) == "" {
 			return
 		}
+		if _, dup := found[name]; dup {
+			return
+		}
 		if c, ok := envreg.RetiredAlias(name); ok {
-			out = append(out, RetiredAliasFinding{Name: name, Canonical: c, Where: where})
+			found[name] = RetiredAliasFinding{Name: name, Canonical: c, Where: where}
+		}
+	}
+	for k, v := range file {
+		add(k, v, SourceEnvFile)
+	}
+	if unit != nil {
+		for k, v := range unit.Env {
+			origin := unit.Origin[k]
+			where := SourceUnit + " (" + origin + ")"
+			if envFile != "" && filepath.Clean(strings.TrimPrefix(origin, "EnvironmentFile=")) == filepath.Clean(envFile) {
+				where = SourceEnvFile
+			}
+			add(k, v, where)
 		}
 	}
 	for _, kv := range os.Environ() {
@@ -59,24 +79,11 @@ func RetiredAliasFindings(envFile string, unit *UnitEnv) ([]RetiredAliasFinding,
 			add(k, v, SourceProcessEnv)
 		}
 	}
-	if unit != nil {
-		for k, v := range unit.Env {
-			origin := unit.Origin[k]
-			if envFile != "" && filepath.Clean(strings.TrimPrefix(origin, "EnvironmentFile=")) == filepath.Clean(envFile) {
-				continue
-			}
-			add(k, v, SourceUnit+" ("+origin+")")
-		}
+	out := make([]RetiredAliasFinding, 0, len(found))
+	for _, f := range found {
+		out = append(out, f)
 	}
-	for k, v := range file {
-		add(k, v, SourceEnvFile)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		return out[i].Where < out[j].Where
-	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

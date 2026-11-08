@@ -142,3 +142,44 @@ mcp_servers:
 		})
 	}
 }
+
+// Codex P2 on #2081: a manifest field whose VALUE is a variable name
+// (enabled_env here, api_key_env in cmd/fleet's provider test) and names a
+// removed spelling reads it as unset even when the process env holds it, so
+// the connector stays disabled; the load warns and goes on.
+func TestRetiredLiteralEnvNameIsUnset(t *testing.T) {
+	unsetTracked(t, "CHAT_SERVER_TOKEN")
+	armEnvFile(t, "")
+	t.Setenv("CHAT_SERVER_TOKEN", "stale-token") // what EnvironmentFile= exports
+	if v, ok := lookupNonEmpty("CHAT_SERVER_TOKEN"); ok || v != "" {
+		t.Fatalf("lookupNonEmpty(CHAT_SERVER_TOKEN) = %q, %v; want unset", v, ok)
+	}
+	var buf bytes.Buffer
+	orig, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(orig); log.SetFlags(flags) })
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: gated
+    command: python3
+    enabled_env: ["CHAT_SERVER_TOKEN"]
+providers:
+  - name: p
+    type: openai
+    api_key_env: CHAT_SERVER_TOKEN
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, on := b.MCPServerConfigs()["gated"]; on {
+		t.Error("a connector gated on a removed spelling must stay disabled")
+	}
+	if !strings.Contains(buf.String(), "names the variable CHAT_SERVER_TOKEN, a removed alias of FLEET_SERVER_TOKEN") || strings.Contains(buf.String(), "stale-token") {
+		t.Errorf("load log:\n%s", buf.String())
+	}
+	if ws, err := RetiredManifestRefWarnings(dir); err != nil || len(ws) != 1 {
+		t.Errorf("RetiredManifestRefWarnings = %q, %v; want the one literal-name warning", ws, err)
+	}
+}
