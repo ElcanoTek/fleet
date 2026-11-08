@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -106,6 +107,25 @@ type LogSession struct {
 	TraceID string `json:"trace_id,omitempty"`
 	RunID   string `json:"run_id,omitempty"`
 	TurnID  string `json:"turn_id,omitempty"`
+}
+
+// Clone returns a copy of the session: every exported field, with the
+// message and aux-usage slices copied, so the copy can be edited (redacted)
+// without touching the live session. Fields are copied by reflection, so a
+// field added to LogSession is carried without a change here.
+func (ls *LogSession) Clone() *LogSession {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := &LogSession{}
+	src, dst := reflect.ValueOf(ls).Elem(), reflect.ValueOf(out).Elem()
+	for i := 0; i < src.NumField(); i++ {
+		if src.Type().Field(i).IsExported() {
+			dst.Field(i).Set(src.Field(i))
+		}
+	}
+	out.Messages = append([]LogMessage{}, ls.Messages...)
+	out.AuxUsage = append([]AuxUsageRecord(nil), ls.AuxUsage...)
+	return out
 }
 
 // SetCorrelation records the run's trace, run and turn ids on first use; a

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -15,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/telemetry/spantest"
 )
 
 // correlationEngine records the correlation a turn's context carries and
@@ -53,14 +53,10 @@ func (e *correlationEngine) snapshot() (conv, turn, user, req, trace string, see
 
 // turnSpanRecorder installs a recording tracer provider for one test (the
 // global provider; these tests must not run in parallel).
+// The cleanup also fails the test if a span the test started was never ended.
 func turnSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
-	prev := otel.GetTracerProvider()
-	sr := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()); otel.SetTracerProvider(prev) })
-	return sr
+	return spantest.InstallChecked(t).SpanRecorder
 }
 
 func waitEndedSpan(t *testing.T, sr *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {

@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/telemetry/spantest"
 )
 
 // traceEchoBackend answers every call with what its call context carries on
@@ -52,17 +53,10 @@ func serveTraceChild() {
 
 // withSpanRecorder installs a recording provider for the test (global state:
 // these tests do not run in parallel).
+// The cleanup also fails the test if a span the test started was never ended.
 func withSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
-	prev := otel.GetTracerProvider()
-	sr := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prev)
-	})
-	return sr
+	return spantest.InstallChecked(t).SpanRecorder
 }
 
 // A delegated MCP call lands in the caller's trace across a REAL process

@@ -72,8 +72,20 @@ func (c tracedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 // intercepted.
 type tracedConn struct{ *stdlib.Conn }
 
-func (c *tracedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+func (c *tracedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (_ driver.Tx, err error) {
 	ctx, span := telemetry.Start(ctx, "db.tx", trace.WithSpanKind(trace.SpanKindClient))
+	// Until the transaction is handed back, BeginTx owns the span: a panic or
+	// a failed begin ends it here; afterwards Commit/Rollback end it.
+	handedOff := false
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if !handedOff {
+			telemetry.End(span, err)
+		}
+	}()
 	if span.IsRecording() {
 		fn := callerFunction()
 		if fn != "" {
@@ -88,9 +100,9 @@ func (c *tracedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver
 	}
 	tx, err := c.Conn.BeginTx(ctx, opts)
 	if err != nil {
-		telemetry.End(span, err)
 		return nil, err
 	}
+	handedOff = true
 	return &tracedTx{Tx: tx, span: span}, nil
 }
 
@@ -100,23 +112,28 @@ type tracedTx struct {
 	span trace.Span
 }
 
-func (t *tracedTx) Commit() error {
-	err := t.Tx.Commit()
-	t.end("commit", err)
-	return err
+func (t *tracedTx) Commit() (err error) {
+	defer t.finish("commit", &err)
+	return t.Tx.Commit()
 }
 
-func (t *tracedTx) Rollback() error {
-	err := t.Tx.Rollback()
-	t.end("rollback", err)
-	return err
+func (t *tracedTx) Rollback() (err error) {
+	defer t.finish("rollback", &err)
+	return t.Tx.Rollback()
 }
 
-func (t *tracedTx) end(outcome string, err error) {
+// finish, deferred by Commit and Rollback, ends the span on every path: with
+// the driver's error, or — when the driver panics — with the panic recorded
+// before it is re-raised.
+func (t *tracedTx) finish(outcome string, err *error) {
 	if t.span.IsRecording() {
 		t.span.SetAttributes(attrDBOutcome.String(outcome))
 	}
-	telemetry.End(t.span, err)
+	if r := recover(); r != nil {
+		telemetry.EndPanicked(t.span)
+		panic(r)
+	}
+	telemetry.End(t.span, *err)
 }
 
 // callerFunction is the first function on the stack outside database/sql and

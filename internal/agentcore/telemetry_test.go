@@ -12,21 +12,16 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/telemetry/spantest"
 )
 
 // recordSpans installs a recording provider for one test (global state: not
 // parallel).
+// recordSpans installs a recording provider; at cleanup it also fails the
+// test if a span the test started was never ended (spantest).
 func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
-	prev := otel.GetTracerProvider()
-	sr := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prev)
-	})
-	return sr
+	return spantest.InstallChecked(t).SpanRecorder
 }
 
 func spanNamed(t *testing.T, sr *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {

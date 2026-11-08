@@ -85,29 +85,50 @@ func recordUsage(span trace.Span, u fantasy.Usage, finish fantasy.FinishReason) 
 	}
 }
 
-func (m tracedModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+// Every model span ends on every path (#2052): the deferred end records the
+// usage and error of a normal return and, when the provider panics, records
+// the panic and re-raises it.
+
+func (m tracedModel) Generate(ctx context.Context, call fantasy.Call) (resp *fantasy.Response, err error) {
 	ctx, span := m.start(ctx, "generate", len(call.Prompt), len(call.Tools))
-	resp, err := m.LanguageModel.Generate(ctx, call)
-	if resp != nil {
-		recordUsage(span, resp.Usage, resp.FinishReason)
-	}
-	telemetry.End(span, err)
-	return resp, err
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if resp != nil {
+			recordUsage(span, resp.Usage, resp.FinishReason)
+		}
+		telemetry.End(span, err)
+	}()
+	return m.LanguageModel.Generate(ctx, call)
 }
 
 // Stream's span covers the whole stream: it ends when the consumer stops
 // iterating (fantasy always drains or abandons the sequence), recording the
 // finish part's usage and an error part's class.
-func (m tracedModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+func (m tracedModel) Stream(ctx context.Context, call fantasy.Call) (_ fantasy.StreamResponse, err error) {
 	ctx, span := m.start(ctx, "stream", len(call.Prompt), len(call.Tools))
+	// Until the stream is handed back, this function owns the span: a panic
+	// or an error ends it here; after the hand-off the iterator ends it.
+	handedOff := false
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if !handedOff {
+			telemetry.End(span, err)
+		}
+	}()
 	seq, err := m.LanguageModel.Stream(ctx, call)
 	if err != nil {
-		telemetry.End(span, err)
 		return nil, err
 	}
+	handedOff = true
 	return func(yield func(fantasy.StreamPart) bool) {
 		var streamErr error
-		defer func() { telemetry.End(span, streamErr) }()
+		defer telemetry.Finish(span, &streamErr)
 		for part := range seq {
 			switch part.Type {
 			case fantasy.StreamPartTypeFinish:
@@ -124,26 +145,41 @@ func (m tracedModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.Str
 	}, nil
 }
 
-func (m tracedModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+func (m tracedModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (resp *fantasy.ObjectResponse, err error) {
 	ctx, span := m.start(ctx, "generate_object", len(call.Prompt), 0)
-	resp, err := m.LanguageModel.GenerateObject(ctx, call)
-	if resp != nil {
-		recordUsage(span, resp.Usage, resp.FinishReason)
-	}
-	telemetry.End(span, err)
-	return resp, err
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if resp != nil {
+			recordUsage(span, resp.Usage, resp.FinishReason)
+		}
+		telemetry.End(span, err)
+	}()
+	return m.LanguageModel.GenerateObject(ctx, call)
 }
 
-func (m tracedModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+func (m tracedModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (_ fantasy.ObjectStreamResponse, err error) {
 	ctx, span := m.start(ctx, "stream_object", len(call.Prompt), 0)
+	handedOff := false
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		if !handedOff {
+			telemetry.End(span, err)
+		}
+	}()
 	seq, err := m.LanguageModel.StreamObject(ctx, call)
 	if err != nil {
-		telemetry.End(span, err)
 		return nil, err
 	}
+	handedOff = true
 	return func(yield func(fantasy.ObjectStreamPart) bool) {
 		var streamErr error
-		defer func() { telemetry.End(span, streamErr) }()
+		defer telemetry.Finish(span, &streamErr)
 		for part := range seq {
 			if part.Error != nil {
 				streamErr = part.Error

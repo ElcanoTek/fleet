@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"go.opentelemetry.io/otel/trace"
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // The standard correlation attribute keys. Every log line that concerns a
@@ -101,16 +101,17 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 }
 
 // Attrs returns the correlation attributes ctx carries, followed by trace_id
-// and span_id when ctx holds a valid span context (a recording span, or an
-// inbound traceparent this process continues). The slice is a fresh copy.
+// and span_id when ctx's trace is one this process records and exports
+// (telemetry.PublishableSpanContext): with tracing off a caller's traceparent
+// is not logged, and neither is a sampled-out span. The slice is a fresh copy.
 func Attrs(ctx context.Context) []slog.Attr {
 	if ctx == nil {
 		return nil
 	}
 	stored, _ := ctx.Value(ctxAttrsKey{}).(ctxAttrs)
-	sc := trace.SpanContextFromContext(ctx)
+	sc, traced := telemetry.PublishableSpanContext(ctx)
 	n := len(stored)
-	if sc.IsValid() {
+	if traced {
 		n += 2
 	}
 	if n == 0 {
@@ -118,7 +119,7 @@ func Attrs(ctx context.Context) []slog.Attr {
 	}
 	out := make([]slog.Attr, 0, n)
 	out = append(out, stored...)
-	if sc.IsValid() {
+	if traced {
 		out = append(out,
 			slog.String(KeyTraceID, sc.TraceID().String()),
 			slog.String(KeySpanID, sc.SpanID().String()))

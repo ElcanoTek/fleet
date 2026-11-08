@@ -42,6 +42,14 @@ func (s *Sandbox) startExecSpan(ctx context.Context, op string, timeout time.Dur
 	return ctx, span
 }
 
+// setExecTimeout replaces the span's timeout with the effective one (the
+// request's, after a host-side clamp).
+func setExecTimeout(span trace.Span, timeout time.Duration) {
+	if span.IsRecording() {
+		span.SetAttributes(attrSandboxTimeout.Int64(timeout.Milliseconds()))
+	}
+}
+
 func endBashSpan(span trace.Span, res BashResult, err error) {
 	if span.IsRecording() {
 		span.SetAttributes(

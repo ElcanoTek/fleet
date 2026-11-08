@@ -139,24 +139,15 @@ func redactLogSession(session *LogSession) *LogSession {
 	if session == nil {
 		return nil
 	}
-	msgs := session.SnapshotMessages()
-	redacted := &LogSession{
-		ID:                  session.ID,
-		Title:               agentcore.RedactSecrets(session.Title),
-		ParentTaskID:        session.ParentTaskID,
-		PromptTokens:        session.PromptTokens,
-		CompletionTokens:    session.CompletionTokens,
-		CachedTokens:        session.CachedTokens,
-		CacheCreationTokens: session.CacheCreationTokens,
-		Cost:                session.Cost,
-		CreatedAt:           session.CreatedAt,
-		UpdatedAt:           session.UpdatedAt,
-		Messages:            make([]LogMessage, len(msgs)),
-		// Aux-usage ledger (#1118): carried as-is — records hold only
-		// label/model/token counts/cost, nothing redactable.
-		AuxUsage: session.SnapshotAuxUsage(),
-	}
-	for i, msg := range msgs {
+	// Copy the whole session, then scrub its text: a field added to
+	// LogSession is carried by default (the correlation ids, #2052, were once
+	// dropped by a field-by-field rebuild). The aux-usage ledger (#1118) holds
+	// only label/model/token counts/cost, nothing redactable.
+	redacted := session.Clone()
+	redacted.Title = agentcore.RedactSecrets(redacted.Title)
+	redacted.OutputJSON = agentcore.RedactSecrets(redacted.OutputJSON)
+	redacted.RunOutcomeDetail = agentcore.RedactSecrets(redacted.RunOutcomeDetail)
+	for i, msg := range redacted.Messages {
 		msgCopy := msg
 		msgCopy.Content = agentcore.RedactSecrets(msgCopy.Content)
 		msgCopy.Reasoning = agentcore.RedactSecrets(msgCopy.Reasoning)

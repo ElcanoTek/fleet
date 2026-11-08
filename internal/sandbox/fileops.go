@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // fileops.go is the sandboxed file-operation seam (#784). The model-callable
@@ -362,7 +364,13 @@ var fileOpsScript []byte
 // for semantic failures (missing file, directory, old_text absent).
 func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (res FileOpResult, err error) {
 	ctx, span := s.startExecSpan(ctx, "fileop."+string(req.Op), 0, len(req.Data))
-	defer func() { endFileOpSpan(span, res, err) }()
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		endFileOpSpan(span, res, err)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

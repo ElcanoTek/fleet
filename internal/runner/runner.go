@@ -900,6 +900,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// If our lease was recovered out from under us (another claim now owns the
 	// task), do not clobber its state.
 	if !p.stillOwns(task.ID, token) {
+		// The span records the lease loss: this stale run's outcome is not
+		// written, so it must not be exported as a success.
+		runSpanErr = errTaskLeaseLost
 		terminalFrame["status"] = "failed"
 		logging.From(runCtx).Warn("runner: task lease no longer held (recovered); skipping terminal write", "task_id", task.ID)
 		return
@@ -941,6 +944,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// that told us plainly it was done.
 	auditAborted := errors.Is(runErr, agentcore.ErrAuditAborted)
 	runSpanErr = runErr
+	if leaseLost {
+		runSpanErr = errTaskLeaseLost // the cause, whatever the driver returned
+	}
 	switch {
 	case wallExpired:
 		p.failWallTimeout(taskCtx, task, session, token, start)

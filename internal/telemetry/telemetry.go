@@ -58,6 +58,33 @@ func End(span trace.Span, err error) {
 	span.End()
 }
 
+// ErrPanicked is the error a span records when the code it covers panicked;
+// its class is "panic".
+var ErrPanicked = errors.New("panic")
+
+// EndPanicked records a panic on span and ends it. A deferred span end calls
+// it from its recover branch before re-panicking (see Finish).
+func EndPanicked(span trace.Span) {
+	RecordError(span, ErrPanicked)
+	span.End()
+}
+
+// Finish is the deferred end of a span on every path: `defer
+// telemetry.Finish(span, &err)` with err the function's named error. A
+// normal or early return ends the span with *err; a panic is recorded (class
+// "panic"), the span ended, and the panic re-raised unchanged.
+func Finish(span trace.Span, err *error) {
+	if r := recover(); r != nil {
+		EndPanicked(span)
+		panic(r)
+	}
+	var e error
+	if err != nil {
+		e = *err
+	}
+	End(span, e)
+}
+
 // RecordError marks span as failed with err's class. A nil err is a no-op.
 func RecordError(span trace.Span, err error) {
 	if err == nil || !span.IsRecording() {
@@ -75,6 +102,8 @@ func ErrorClass(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, ErrPanicked):
+		return "panic"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -93,15 +122,29 @@ func ErrorClass(err error) string {
 // span context — the detached copy ContextWithRemoteParent makes of a span
 // this process recorded, which a chat turn carries after its request ends.
 func TraceID(ctx context.Context) string {
-	span := trace.SpanFromContext(ctx)
-	sc := span.SpanContext()
-	if !sc.IsValid() || !sc.IsSampled() {
-		return ""
-	}
-	if span.IsRecording() || !sc.IsRemote() {
+	if sc, ok := PublishableSpanContext(ctx); ok {
 		return sc.TraceID().String()
 	}
 	return ""
+}
+
+// PublishableSpanContext returns ctx's span context when this process records
+// and exports that trace: the span is sampled and either recording here, or a
+// local (non-remote) span context — the detached copy ContextWithRemoteParent
+// makes of a span this process recorded. A caller's traceparent with tracing
+// off (valid but remote and non-recording) and a sampled-out span are not.
+// It is the one rule for every id fleet publishes or logs: TraceID, and the
+// trace_id/span_id attributes of a log line (internal/logging).
+func PublishableSpanContext(ctx context.Context) (trace.SpanContext, bool) {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if !sc.IsValid() || !sc.IsSampled() {
+		return trace.SpanContext{}, false
+	}
+	if span.IsRecording() || !sc.IsRemote() {
+		return sc, true
+	}
+	return trace.SpanContext{}, false
 }
 
 // ContextWithRemoteParent returns ctx carrying parent's span context, so a

@@ -33,6 +33,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/telemetry"
 )
 
 // BashWaitDelay is how long cmd.Wait may keep waiting on the
@@ -324,7 +326,13 @@ func (s *Sandbox) ModeName() string {
 // reused, so a stopped turn's stragglers can't overlap fresh work).
 func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (res BashResult, err error) {
 	ctx, span := s.startExecSpan(ctx, "bash", req.Timeout, len(req.Command))
-	defer func() { endBashSpan(span, res, err) }()
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		endBashSpan(span, res, err)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -366,7 +374,13 @@ func (s *Sandbox) ReapDetachedProcesses() bool {
 // not the caller's.
 func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (res PythonResult, err error) {
 	ctx, span := s.startExecSpan(ctx, "python", req.Timeout, len(req.Code))
-	defer func() { endPythonSpan(span, res, err) }()
+	defer func() {
+		if r := recover(); r != nil {
+			telemetry.EndPanicked(span)
+			panic(r)
+		}
+		endPythonSpan(span, res, err)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -381,6 +395,8 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (res PythonR
 		req.Timeout = s.pythonCellTimeout
 	}
 	s.mu.Unlock()
+	// The span records the timeout the cell runs under, after the clamp.
+	setExecTimeout(span, req.Timeout)
 	if s.impl.poisoned() {
 		return PythonResult{}, ErrPoisoned
 	}
