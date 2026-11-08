@@ -22,7 +22,7 @@ lowlight and their dependencies.
 | Was | Now | How | Licence |
 |-----|-----|-----|---------|
 | `github.com/robfig/cron/v3` v3.0.1 | `internal/cron` | parser + spec copied, trimmed (no runner); `SpecSchedule.Next` is fleet's DST-safe walk | MIT, `internal/cron/LICENSE` |
-| `github.com/golang-migrate/migrate/v4` v4.20.1 | `internal/sched/db/migrate.go` | re-implemented (Up, Force); a few lines adapted | MIT, `internal/sched/db/LICENSE.golang-migrate` |
+| `github.com/golang-migrate/migrate/v4` v4.20.1 | `internal/migrations/lock.go` | its lock-key formula; the runner it was re-implemented as was replaced by fleet's one runner (ADR-0107) | MIT, `internal/migrations/LICENSE.golang-migrate` |
 | `github.com/SherClockHolmes/webpush-go` v1.4.0 | `internal/webpush/protocol.go` | re-implemented on the standard library | — (own code) |
 | `github.com/JohannesKaufmann/html-to-markdown` v1.6.0 | `internal/tools/htmlmd` | CommonMark rules ported from goquery to `x/net/html` | MIT, `internal/tools/htmlmd/LICENSE` |
 | `gopkg.in/natefinch/lumberjack.v2` v2.2.1 | `internal/logging/rotate` | copied, trimmed | MIT, `internal/logging/rotate/LICENSE` |
@@ -50,28 +50,25 @@ version, upstream path, that it was modified, and its SPDX id.
   expression after it used to panic (`spec[eq+1:-1]`); it is now a parse
   error.
 
-### sched migrations (`internal/sched/db/migrate.go`)
+### golang-migrate's lock key (`internal/migrations/lock.go`)
 
-- **Kept, byte-compatible:** the `schema_migrations` table
-  (`version bigint primary key, dirty boolean`, one row, created if missing);
-  the advisory-lock key (`GenerateAdvisoryLockId`: CRC-32 of schema, table and
-  database joined by NUL, times 1486364155 — pinned against values the library
-  computed); the dirty → run → clean sequence with each `.up.sql` run as one
-  multi-statement `Exec` (one implicit transaction, as the pgx driver did); the
-  `Dirty database version N. Fix and force version.` text; refusing a
-  database whose version this build does not ship. A database migrated by the
-  library and one migrated from empty by the new runner dump to the same
-  schema, and the library's state continues cleanly (tested against a real
-  Postgres).
-- **Changed:** the lock is taken by polling `pg_try_advisory_lock` within the
-  same 15 s, so a cancelled wait cannot leave a granted lock on a pooled
-  connection; the dedicated connection is released after the run (the library
-  held it for the life of the process); a failure names the migration file and
-  the Postgres message instead of echoing the whole SQL.
-- **Operators:** the dirty-row repair was the external `migrate force` CLI. It
-  is now `fleet migrate force <version>` ([`MIGRATIONS.md`](MIGRATIONS.md)).
-  The status report's `runner` field still reads `golang-migrate`: it names the
-  tracking format, and consumers already key on it.
+The in-housed golang-migrate runner (`internal/sched/db/migrate.go`, a
+state-compatible re-implementation of Up and Force) was replaced by fleet's one
+migration runner, `internal/migrations` ([ADR-0107](adr/0107-one-migration-runner.md),
+docs/MIGRATIONS.md), which adopts golang-migrate's `sched.schema_migrations`
+row once and keeps it as a legacy ledger. What remains of upstream:
+
+- **Kept:** `GenerateAdvisoryLockId` (CRC-32 of schema, table and database
+  joined by NUL, times 1486364155 — pinned against values the library
+  computed, `TestGolangMigrateLockID`). The one runner holds that key, for
+  schema `sched`, whenever it has work, so a pre-M6 fleet (whose sched runner
+  takes it) waits instead of racing.
+- **Kept, as data:** the legacy sched files keep golang-migrate's
+  `NNN_name.up.sql` / `.down.sql` naming under `internal/migrations/sql/legacy/sched/`.
+- **Dropped:** everything else — the dirty → run → clean sequence (every
+  migration now runs in one explicit transaction with its ledger row), the
+  `Dirty database version N` text, Force over the single row (`fleet migrate
+  force` works on `core.schema_versions`).
 
 ### Web Push (`internal/webpush/protocol.go`)
 

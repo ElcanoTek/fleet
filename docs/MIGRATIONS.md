@@ -1,103 +1,204 @@
 # Database migrations
 
-Fleet runs its schema migrations automatically at startup (the *auto-migrate*
-pattern) across **two separate PostgreSQL databases**, each with its own runner:
+fleet has **one migration runner, one migration directory and one ledger**
+([ADR-0107](adr/0107-one-migration-runner.md), issue #2049 milestone M6). Every
+schema change of the one database ([ONE-DATABASE.md](ONE-DATABASE.md)) — the
+chat store in schema `chat`, the scheduler in `sched`, and what both read in
+`core` — is a version of one sequence, recorded in `core.schema_versions`.
 
-| Database | Package | Runner | Files | Down-migrations |
-|----------|---------|--------|-------|-----------------|
-| **chat** | `internal/store` | hand-rolled (`applyMigrations`) | `NNN_name.sql` | none, by design |
-| **sched** (orchestrator) | `internal/sched/db` | in-house, [`golang-migrate`](https://github.com/golang-migrate/migrate)-compatible (`migrate.go`) | `NNN_name.up.sql` + `NNN_name.down.sql` | yes |
+| | |
+|---|---|
+| Runner | `internal/migrations` (`migrations.Up`) |
+| Directory | `internal/migrations/sql/` |
+| Ledger | `core.schema_versions (version bigint PK, name, checksum, applied_at, dirty)` |
+| Lock | one session advisory lock (`migrations.LockKey`), plus both legacy runners' locks whenever there is work to do |
+| CLI | `fleet migrate status [--json]`, `fleet migrate down --to <v>`, `fleet migrate force <v>` |
+| HTTP | `GET /admin/migrations` on both servers (admin) |
 
-Both are designed for **single-box deployments**: the fleet process migrates its
-databases at boot, and a deploy is a brief restart, not a rolling multi-node
-rollout. That model shapes the guidance below — some "zero-downtime" rules are
-forward-looking (for a future multi-node world), while others prevent a failed or
-lock-heavy migration from stalling *this* box's restart.
+There is no `fleet migrate up`: **every store open migrates** (`store.Open`,
+`scheddb.Init`, and the admin verbs, MCP broker and eval runs that open one).
+When the database is current that is one read of the ledger. The scheduler's
+open then runs the identity merge (`identity.MergeLegacySchedUsers`, ADR-0105),
+the one post-migration step. `scripts/update.sh` and `scripts/bootstrap.sh`
+never migrate; the service does on start.
 
-> `scripts/update.sh` never runs application migrations itself — the services
-> self-migrate on restart.
+## Layout and numbering
 
-## Chat DB — hand-rolled runner (`internal/store/migrations.go`)
+| Files | Versions | Runs with `search_path` |
+|---|---|---|
+| `sql/legacy/chat/NNN_name.sql` — the chat store's migrations before M6 (forward only) | 1–99 (chat N is version N) | `chat` |
+| `sql/legacy/sched/NNN_name.up.sql` + `.down.sql` — the scheduler's migrations before M6 | 101–177 (sched N is version 100+N) | `sched` |
+| `sql/NNNN_name.up.sql` + `sql/NNNN_name.down.sql` — every migration since | 200 and up | `pg_catalog` |
 
-- Migration files are `migrations/NNN_name.sql`, run in ascending numeric order,
-  each inside its own transaction, exactly once per database.
-- The applied `(version, name, applied_at)` is recorded in `schema_migrations`.
-- A session advisory lock serializes concurrent boots so two processes can't
-  race the same `CREATE TABLE`. A boot polls `pg_try_advisory_lock`, logs
-  `waiting for chat migration lock` every 10 seconds while another process
-  holds it, and fails after 5 minutes rather than hanging silently; a failed
-  unlock is reported as a startup error.
-- The lock and every migration query/transaction share one dedicated database
-  connection. This preserves the serialization boundary and allows an operator
-  to configure a one-connection chat pool without deadlocking startup.
-- On failure the transaction rolls back, the DB stays at the last good version,
-  and startup fails loudly.
-- There are **no down-migrations**. This is a deliberate simplicity choice
-  (documented in `migrations.go`): to reverse a bad migration you write a *new*
-  forward migration that corrects the state, or restore from a backup. Never edit
-  or rename a shipped migration.
+The merged order — all of chat, then all of sched, then the new layout — is the
+order a fresh install has always run them in. It is load-bearing: sched 077
+reads `chat.chat_schedules`, and the identity merge needs `core` (chat 099).
 
-To add one:
+The legacy files are **frozen**: their bytes are what every installed database
+ran, and they run exactly as they did, each with its store's schema as the
+transaction's `search_path` (`SET LOCAL`). The linter refuses an added or
+edited file under `sql/legacy/`.
 
-1. Create `internal/store/migrations/NNN_description.sql` with the next
-   zero-padded integer.
-2. Write plain DDL. The runner guarantees exactly-once execution.
-3. Never touch a shipped migration — add a new one.
+## Adding a migration
 
-## Sched DB — golang-migrate-compatible runner (`internal/sched/db/migrate.go`)
+1. Take the next free four-digit version, from `0200`, and add **both halves**:
+   `internal/migrations/sql/0200_add_widget_flags.up.sql` and
+   `internal/migrations/sql/0200_add_widget_flags.down.sql`. The loader refuses
+   a build where either is missing (and the linter refuses the pull request).
+2. **Name every object with its schema**: `chat.conversations`,
+   `sched.tasks`, `core.users`. A new migration runs with `search_path`
+   `pg_catalog`, so an unqualified `CREATE TABLE widgets` fails to resolve — and
+   the linter flags it first.
+3. The runner wraps each migration (and its ledger row) in one transaction:
+   don't write `BEGIN`/`COMMIT`. A migration that fails records nothing and
+   leaves nothing behind.
+4. The `.down.sql` undoes exactly what the `.up.sql` did, so
+   `fleet migrate down` can step back one release.
+5. Never rename or edit a shipped migration — add a new one.
 
-- Migration files are paired `migrations/NNN_name.up.sql` /
-  `NNN_name.down.sql`.
-- The runner advances the schema **linearly** and tracks a single
-  `schema_migrations` row: `{version, dirty}`. It was golang-migrate until the
-  runner was in-housed ([`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md));
-  the table, the advisory-lock key and the dirty-row protocol are byte-for-byte
-  golang-migrate's, so a database migrated by an older release continues
-  cleanly and the external `migrate` CLI still reads it.
-- Each `.up.sql` runs as one multi-statement query on the locked connection,
-  which Postgres executes as a single implicit transaction.
-- If a migration fails mid-flight the row is marked **dirty** and the process
-  refuses to start until an operator inspects the DB, undoes whatever the
-  failed file left behind, and force-sets the last version that is actually
-  applied (`-1` for none):
+The `-- fleet:no-transaction` directive (for `CREATE INDEX CONCURRENTLY` and
+the like) is reserved: the loader refuses it today; see ADR-0107's future work.
 
-  ```sh
-  fleet migrate force <version>     # asks first; --no-confirm for scripts
-  ```
+## How a run goes
 
-  then restarts fleet. `force` runs no SQL beyond the tracking row, refuses a
-  version this build does not ship, and resolves the DSN like
-  `migrate status` (sched DB only).
+`migrations.Up(ctx, db)` takes any pool on the database (the runner names every
+schema itself, whatever the pool's `search_path`):
 
-Every new sched migration must ship both an `.up.sql` and a `.down.sql`.
+1. **Fast path.** One read of `core.schema_versions`; when it holds every
+   version this build ships, nothing dirty and nothing unknown, it returns.
+2. Otherwise, on one dedicated connection, it takes the migration lock and both
+   legacy locks (the old chat runner's key and golang-migrate's key for schema
+   `sched`), so a pre-M6 binary booting at the same time waits instead of
+   racing. Each wait is bounded (5 minutes) and logged.
+3. `dbschema.Ensure` creates the schemas `chat`, `core` and `sched` that are
+   missing, after the one readiness check (the same `fleet validate-config` and
+   bootstrap's shell gate run): it refuses a database of the removed
+   two-database layout, a role that cannot create a missing schema, or an
+   existing schema the role does not own.
+4. **Adoption** (below), the first time.
+5. It refuses a dirty row and a version this build does not ship (a newer fleet
+   migrated the database: no downgrades), then applies every version the ledger
+   lacks, ascending, each in its own transaction with its ledger row.
 
-## Checking migration status
+## Adoption
 
-Two read-only, admin-gated endpoints report applied vs pending migrations —
-each server reports **its own** database:
+The first start of an M6 release moves the database onto the one ledger, once,
+in one transaction under all three locks:
 
-- **chat server** — `GET /admin/migrations` → the chat DB status.
-- **orchestrator** — `GET /admin/migrations` (documented in `docs/openapi.yaml`)
-  → the sched DB status, including the current tracking-row version and the
-  `dirty` flag.
+1. If `core.schema_versions` exists, nothing happens.
+2. Both legacy ledgers are read — `chat.schema_migrations (version, name,
+   applied_at)` and golang-migrate's single row in `sched.schema_migrations
+   (version, dirty)` — and checked **before anything changes**. Adoption is
+   refused, with an operator message and nothing changed, when the sched row is
+   dirty, either ledger holds a version this build does not ship, or the sched
+   version is outside 0–77.
+3. The ledger is created; chat N is recorded as version N (keeping when it was
+   applied) and sched 1..v as 101..100+v.
 
-Both apply nothing and are safe to call any time. From the command line, one verb
-reports both databases at once:
+The legacy ledgers are **left in place**. A box behind the latest legacy release
+then applies its backlog as ordinary pending versions, in the merged order;
+while it does, the runner also records each legacy version it applies in that
+store's legacy ledger (when it exists), so the release before M6 remains a
+rollback target until a version ≥ 200 has run. A fresh database takes the same
+path: it adopts an empty ledger and grows no legacy ledgers.
 
-```sh
-fleet migrate status                 # human-readable, both DBs
-fleet migrate status --json          # machine-readable, for scripting
-fleet migrate status --database-url "$DSN"   # override the DSN for both DBs
+**Sentinels.** In the transaction of the first version ≥ 200 the runner writes
+`chat.schema_migrations` version 100 `moved_to_core_schema_versions` and sets
+`sched.schema_migrations` to 178 (creating either ledger in its old shape when
+missing). A pre-M6 binary then refuses the database at boot — its chat runner
+refuses a version newer than 99, its sched runner has no migration 178 —
+instead of migrating it under a ledger it does not know.
+
+`fleet migrate status`, `fleet status` and `fleet doctor` say whether a database
+has adopted; before it has, `status` shows what adoption will record.
+
+### Rolling back M6
+
+Before any version ≥ 200 has run, going back to the release before M6 is: stop
+fleet, run this against the one database (as its owner), start the previous
+binary. The legacy ledgers are intact (and kept up to date by the runner for a
+box that applied a backlog), so the previous release continues from them.
+`TestM6RollbackBlock` runs exactly this block.
+
+```sql
+-- m6-rollback-begin
+DROP TABLE core.schema_versions;
+-- m6-rollback-end
 ```
 
-DSNs resolve the same way as the rest of the CLI: `--database-url`, else
-`DATABASE_URL` (each store in its own schema of that one database; a
-`--database-url` reports both schemas of the database it names). A store
-whose DSN is unset is reported as skipped, not an error.
+After a version ≥ 200 has run, first `fleet migrate down --to 177` (which
+leaves the sentinels), then remove them and run the block:
 
-Both runners keep their bookkeeping in their own schema
-(`chat.schema_migrations`, `sched.schema_migrations`) and create that schema
-on first start ([ONE-DATABASE.md](ONE-DATABASE.md)).
+```sql
+DELETE FROM chat.schema_migrations WHERE version = 100;
+UPDATE sched.schema_migrations SET version = 77, dirty = false;
+```
+
+A database a fresh M6 release installed has no legacy ledgers, so there is no
+release before M6 to go back to.
+
+## Checking status
+
+```sh
+fleet migrate status          # human-readable: adopted?, current version, every applied/pending version
+fleet migrate status --json   # machine-readable
+```
+
+Both are **read-only** (they create nothing, apply nothing) and safe against any
+database: never migrated (everything pending), not adopted yet (what adoption
+will record, from the legacy ledgers), or ahead of the binary (its unknown
+versions are listed under `applied`, so a downgrade is visible).
+
+`--json` emits the one report — `db: "fleet"`, `runner: "fleet"`,
+`migration_table: "core.schema_versions"`, `layout: "unified"`, `adopted`,
+`current_version`, `dirty`, `applied`, `pending` (each `{version, name,
+applied_at}`) — plus, **for one release**, the pre-M6 per-store reports under
+`chat` and `sched`, derived from it (legacy numbers and names: `sched` keeps
+`current_version` 1–77 and `runner: "golang-migrate"`). Move consumers to the
+top-level fields: the next release removes the two keys. When the database
+cannot be read, every member carries `error`.
+
+`GET /admin/migrations` on either server (admin) returns the same one report
+(not the derived keys); its `db`, `runner`, `migration_table`,
+`current_version`, `dirty`, `applied` and `pending` keep their shapes and it adds
+`layout: "unified"` ([openapi.yaml](openapi.yaml)).
+
+`fleet status` reports the ledger in a `migrations` line (dirty fails; not
+adopted yet or pending is an advisory), `fleet doctor` does the same, and
+`fleet diagnose` writes it to `db.txt`.
+
+## A dirty ledger: `fleet migrate force`
+
+Every migration runs in a transaction with its row, so a failed one records
+nothing: fix the cause and restart. A `dirty` row only comes from an operator
+(or a future non-transactional migration). fleet then refuses to start. Inspect
+the database, repair or undo what the migration did, and record the last version
+that is really applied:
+
+```sh
+fleet migrate force <version>   # asks first; --no-confirm for scripts
+```
+
+`force` makes the ledger say "every version up to `<version>` is applied,
+cleanly, and nothing above it", running nothing (0: nothing applied). A dirty
+**legacy** sched row found at adoption is repaired with the previous release's
+`fleet migrate force`, or by hand (`UPDATE sched.schema_migrations SET version =
+<last good>, dirty = false`).
+
+## Going down: `fleet migrate down`
+
+```sh
+fleet backup --db=all                         # first, always
+fleet migrate down --to 177 --dry-run         # what would be undone
+fleet migrate down --to 177                   # asks first; --no-confirm for scripts
+```
+
+Stop fleet first, then start the release that ships the target version. `down`
+runs every applied version above `--to` newest first, each in a transaction
+that runs its `.down.sql` and deletes its ledger row, under the migration lock.
+It prints the `fleet backup --db=all` advice before anything else. It never goes
+below 177: the legacy sched `.down.sql` files stay in the tree as history, and
+the legacy chat files never had any.
 
 ## Zero-downtime / safe-DDL patterns
 
@@ -111,96 +212,87 @@ on first start ([ONE-DATABASE.md](ONE-DATABASE.md)).
 
 ### Caveat: `CREATE INDEX CONCURRENTLY` is not usable today
 
-The textbook zero-downtime pattern for indexing a large table is
-`CREATE INDEX CONCURRENTLY`, which avoids holding a write lock. **Neither runner
-supports it right now**, because both wrap each migration in a transaction and
-`CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. For a large
-table, add the index in a low-traffic window, or accept the brief lock (the
-tables here are small on a single-box deploy). A non-transactional migration path
-is a possible follow-on.
+`CREATE INDEX CONCURRENTLY` cannot run inside a transaction block, and every
+migration runs in one. For a large table, add the index in a low-traffic window,
+or accept the brief lock (the tables here are small on a single-box deploy).
+The reserved `-- fleet:no-transaction` directive is the planned way out
+(ADR-0107).
 
-## The migration DDL linter
+## The migration linter
 
-`scripts/check-migrations.sh` (wired into CI as the **Migration DDL lint** job
-and into `make lint` / `make lint-migrations`) rejects the genuinely dangerous
-patterns above in **new or changed** migration files:
+`scripts/check-migrations.sh` (the CI **Migration DDL lint** job, `make lint`,
+`make lint-migrations`) checks the files a branch **adds or changes** under
+`internal/migrations/sql/` (diffed against the merge-base with `origin/main`, or
+`MIGRATION_LINT_BASE`):
 
-1. `ADD COLUMN … NOT NULL` without a `DEFAULT`
-2. `DROP COLUMN`
-3. `ALTER TYPE … RENAME VALUE`
-
-It is **diff-scoped** — it only inspects migrations added or modified in your
-branch (diffed against the merge-base with `origin/main`), so the existing
-corpus, which includes several intentional historical `DROP COLUMN`s from this
-single-box project, is never re-flagged. `.down.sql` files are skipped (a
-rollback is expected to drop).
+- **Layout.** An added or edited file under `sql/legacy/` is refused. A pure
+  rename (100% similar) is not a change and is exempt — the M6 move itself was
+  one; a rename with edits is checked as a change. A new file must be
+  `NNNN_name.up.sql` / `NNNN_name.down.sql` (four digits from `0200`, lower-case
+  name) and its other half must exist.
+- **Qualified names.** In new files (up and down), an unqualified name after
+  `CREATE`/`ALTER`/`DROP TABLE|VIEW|SEQUENCE|TYPE|FUNCTION|INDEX`,
+  `CREATE INDEX … ON` / `CREATE TRIGGER … ON`, `EXECUTE FUNCTION`,
+  `INSERT INTO`, `UPDATE … SET`, `DELETE FROM`, `TRUNCATE` or `REFERENCES`.
+- **Dangerous DDL** in forward (`.up.sql`) files: `ADD COLUMN … NOT NULL`
+  without a `DEFAULT` (checked per comma-separated column clause),
+  `DROP [COLUMN]`, `ALTER TYPE … RENAME VALUE` — `.down.sql` files are expected
+  to drop.
 
 Before matching, SQL comments (`--` and `/* */`) are removed and single-quoted
-string literals are blanked, respecting quote state — so a `--` or a keyword
-inside a string literal neither hides following DDL nor causes a false hit.
-Statements are then checked whole (a pattern split across lines is still
-caught), and the `NOT NULL`-without-`DEFAULT` check runs **per comma-separated
-column clause**, so a `DEFAULT` on one column can't mask a dangerous sibling in
-the same `ALTER TABLE`. (It is a guardrail, not a full SQL parser: `$$`-quoted
-function bodies and string literals spanning multiple physical lines are not
-tokenized — migrations here use neither.)
+string literals are blanked, respecting quote state, so a `--` or a keyword
+inside a string literal neither hides following DDL nor causes a false hit. (It
+is a guardrail, not a full SQL parser: `$$`-quoted bodies and string literals
+spanning lines are not tokenized.)
 
-If a migration **must** use a flagged pattern — most often a deliberate,
-reviewed `DROP COLUMN` that permanently removes data — opt out explicitly by
-adding a dedicated comment **directive line** (its own line, matched by an exact
-`allow-dangerous` token, so a passing mention in prose or a string literal
-cannot silently disable the checks):
+A migration that **must** use a dangerous pattern — most often a deliberate,
+reviewed `DROP COLUMN` — opts out of the dangerous-DDL checks with a dedicated
+comment **directive line** (the layout and naming checks still apply):
 
 ```sql
 -- migration-lint: allow-dangerous  drops the never-populated legacy_flags column
 ```
 
-The justification is visible in review, so the escape hatch stays a conscious,
-auditable decision rather than a silent bypass.
-
-## Rolling back a sched release
-
-To return a box to the previous release after a release that added sched
-migrations, stop fleet, apply the new release's `.down.sql` files newest
-first with `psql` on the sched schema (`DATABASE_URL` with the sched search
-path), record the version the previous release ships with the NEW binary
-(`force` refuses a version its build does not ship — the old one does), then
-start the previous binary. For M5 (#2049, sched 076 + 077):
-
-```sh
-SCHED_DSN="$DATABASE_URL&options=-csearch_path%3Dsched"   # or ?options=... if the URL has no query
-psql "$SCHED_DSN" -v ON_ERROR_STOP=1 -1 -f internal/sched/db/migrations/077_move_chat_schedules.down.sql
-psql "$SCHED_DSN" -v ON_ERROR_STOP=1 -1 -f internal/sched/db/migrations/076_chat_schedules.down.sql
-fleet migrate force 75 --no-confirm
-```
-
-A release must not leave the chat schema at a version the previous release
-does not know (the chat runner has no down migrations, and an older binary
-refuses to boot on a newer chat schema). Chat-side objects that belong to a
-sched change are created by the sched migration and removed by its down:
-M5's conversation-delete trigger on `chat.conversations` (ADR-0104) is
-created by sched 077 and dropped by 077's down, so the rollback above is
-complete — no chat step.
-
 ## Backup before a risky migration
 
-Before applying a migration you're unsure about, take a dump with the existing
-CLI:
-
 ```sh
-fleet backup --db=all --out ./backups   # pg_dump -Fc, one file per DB
+fleet backup --db=all --out ./backups   # one pg_dump of chat, core and sched
 ```
 
-and restore with `fleet restore --db=all|chat|sched <dump-file>` if needed.
+Every dump includes `core`, so `core.schema_versions` travels with it. A
+one-store restore (`--db=chat|sched`) of a dump taken since M6 is refused unless
+the dump's ledger is at the live version; a dump from before M6 restores and
+drops the live ledger, so the next start adopts again. See
+[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
-## Not yet implemented (honest scope)
+## Squashing old migrations (documented, not done)
 
-- **Automated chat-DB rollback.** The chat runner ships no down-migrations by
-  design; a CLI that reverses a hand-rolled migration would reverse that design
-  decision and perform a destructive operation, so it is deferred to its own
-  reviewed change. Recover today by writing a corrective forward migration or by
-  restoring a backup. (The sched DB *does* carry `.down.sql` files; fleet never
-  runs them — reversing a sched migration is an operator applying the
-  `.down.sql` by hand, then `fleet migrate force` to the version below it.)
-- **A pre-migration `--backup-first` auto-dump** folded into the migrate path.
-  Use `fleet backup` explicitly for now.
+The legacy files (and, later, old new-layout ones) can be squashed into one
+baseline — but **only after every box has adopted** (`fleet migrate status`
+reports `adopted: true` everywhere, and the release that squashes refuses a
+database that has not). The procedure, for a later release:
+
+1. Pick the cut-off version `B` (e.g. 177, or the last version every box
+   has).
+2. On a fresh database migrated to `B`, `pg_dump --schema-only -n chat -n core
+   -n sched` (minus the ledger) gives the baseline. Review it like any
+   migration; it must name every object with its schema.
+3. Add it as `sql/baseline/NNNN_baseline_through_B.sql`, applied only to a
+   database whose ledger is empty, and recorded as every version ≤ `B` (with
+   the original names and checksums, kept in a generated manifest), so an
+   adopted box sees nothing pending and a fresh one gets the same schema in one
+   step.
+4. Delete the squashed files, and make `Up` refuse a database whose ledger
+   stops below `B` but is not empty (that box must first upgrade through a
+   release that still ships them).
+5. Prove it with the upgrade test: the schema after "fresh install with the
+   baseline" equals "fresh install with the files" (`schemaSnapshot`).
+
+Until then the legacy files stay, frozen.
+
+## Not yet implemented
+
+- **Non-transactional migrations** (`-- fleet:no-transaction`): refused by the
+  loader; ADR-0107 lists what they need (a dirty row while running, one
+  statement per file, no ledger row in the same transaction).
+- **A pre-migration `--backup-first` auto-dump.** Use `fleet backup --db=all`.

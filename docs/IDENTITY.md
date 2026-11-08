@@ -150,7 +150,9 @@ advises on each demoted split admin, unknown role and duplicate username in it.
 ## Rolling back
 
 The chat store has no down migrations, so going back to the release before
-this one is a hand step: stop fleet, run this SQL against the one database
+this one is a hand step. On a release with the one migration runner (#2049 M6),
+first go back to the release before it (docs/MIGRATIONS.md, "Rolling back M6"),
+then: stop fleet, run this SQL against the one database
 (as the database owner), then start the previous binary. It removes the
 accounts the merge created (Operations-Center-only people), restores the
 scheduler's users table as it was at the upgrade, strips the new columns and

@@ -54,8 +54,8 @@ func TestListFiltered_Labels(t *testing.T) {
 }
 
 // TestLabels_ArrayRoundTrip pins the text[] encoding contract that replaced
-// lib/pq's pq.Array (which was dropped along with the unmaintained driver — see
-// internal/sched/db/migrate.go). Binding relies on the pgx stdlib driver
+// lib/pq's pq.Array (which was dropped along with the unmaintained driver when
+// the sched migration runner was in-housed — docs/IN-HOUSED-DEPENDENCIES.md). Binding relies on the pgx stdlib driver
 // encoding a plain []string, and reading relies on textArray decoding the
 // text-format array literal database/sql hands back. Labels are user-supplied,
 // so the values that would break a naive literal parser are the interesting

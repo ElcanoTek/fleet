@@ -11,8 +11,8 @@ verbs are the operator CLI. (The `fleet-admin` shim was removed —
 Every verb is idempotent and exposed both as a shell script
 (`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
 the same state rather than double-applying. None of them ever run application
-migrations — each service self-migrates on start (chat's advisory-lock runner;
-sched's golang-migrate-compatible runner). `make install` puts the `fleet` binary on PATH.
+migrations — the service self-migrates on start (the one migration runner,
+[MIGRATIONS.md](MIGRATIONS.md)). `make install` puts the `fleet` binary on PATH.
 
 For a terminal chat with the agent, `fleet chat` opens a Bubble Tea TUI that
 streams replies from the running server's chat API (or `fleet chat --message

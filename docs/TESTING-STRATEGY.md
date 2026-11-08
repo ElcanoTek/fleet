@@ -197,12 +197,12 @@ migrated template and dropped when the test ends (`internal/testdb`, #2049 M2,
 store, no fixture that wipes tables, no advisory lock to take turns.
 
 - **Use `internal/testdb/fleetdb`** — `fleetdb.New(t)` is a one-database fleet
-  (schemas `chat` and `sched`, the production layout); `.Chat(t)`,
+  (schemas `chat`, `core` and `sched`, the production layout); `.Chat(t)`,
   `.SchedDB(t)`, `.ChatDSN()`, `.SchedDSN()` and `.DSN` (what `DATABASE_URL`
   holds) open or name its stores. `fleetdb.Chat(t)` / `fleetdb.SchedDB(t)` are
   the one-liners. Only `internal/store` and `internal/sched/db` — which
-  `fleetdb` imports — clone their own single-store templates with
-  `testdb.New`.
+  `fleetdb` imports — clone the same template with
+  `testdb.New(t, onedb.Spec)`.
 - **Scratch databases:** `testdb.Empty(t)` (a migration-runner or
   restore-target test), `testdb.LegacyPair(t)` (the legacy two-database layout,
   until it is removed), `testdb.Reserve(t)` (a name the code under test

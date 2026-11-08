@@ -340,9 +340,16 @@ same PR.
   the host-executor tag — see `scripts/go-test.sh`). The DB suites need only
   `FLEET_TEST_DATABASE_URL` (a server whose role can `CREATE DATABASE`): every
   DB test clones a database of its own from a migrated template
-  (`internal/testdb`; `internal/testdb/fleetdb` for the stores), so never
+  (`internal/testdb`: one template, `internal/testdb/onedb`, migrated by the
+  one runner; `internal/testdb/fleetdb` opens the stores on it), so never
   share one, and call `t.Parallel()` unless the test sets env or package
   globals — docs/TESTING-STRATEGY.md#database-tests.
+- **Schema changes go through the one migration runner** (`internal/migrations`,
+  ADR-0107, docs/MIGRATIONS.md): add `internal/migrations/sql/NNNN_name.up.sql`
+  and its `.down.sql` (from 0200), naming every object with its schema
+  (`chat.`, `core.`, `sched.` — new migrations run with `search_path`
+  `pg_catalog`). Files under `sql/legacy/` are frozen. Every store open
+  migrates; `scripts/check-migrations.sh` lints the files a branch adds.
 - **New task fields thread one way.** A new per-task column is one migration
   plus one row in `taskColumnRegistry`
   (`internal/sched/db/task_columns.go`, #1126) plus the `models.Task` field —
@@ -403,7 +410,7 @@ unused, adapt the upstream patch if it is used.
 | In-housed | Lives in | Upstream (version) | Licence |
 |-----------|----------|--------------------|---------|
 | cron parser + DST-safe `Next` | `internal/cron` | robfig/cron v3.0.1 | MIT |
-| sched migration runner | `internal/sched/db/migrate.go` | golang-migrate v4.20.1 (state-compatible re-implementation) | MIT |
+| golang-migrate's advisory-lock key (the legacy sched lock) | `internal/migrations/lock.go` | golang-migrate v4.20.1 | MIT |
 | Web Push (RFC 8291/8292) | `internal/webpush/protocol.go` | replaces webpush-go v1.4.0 (own code) | — |
 | HTML → Markdown | `internal/tools/htmlmd` | html-to-markdown v1.6.0 | MIT |
 | rotating log file | `internal/logging/rotate` | lumberjack v2.2.1 | MIT |

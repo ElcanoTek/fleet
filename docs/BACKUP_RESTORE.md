@@ -52,6 +52,25 @@ those tasks and datasets then show no creator. An older sched dump (from
 before the one identity table: its accounts in `sched.users`) restores while
 the database has not merged its accounts yet — the scheduler's next start
 merges them — and is refused once it has.
+**The migration ledger** (#2049 M6, [MIGRATIONS.md](MIGRATIONS.md)). `core`
+also holds `core.schema_versions`, the one record of which migrations the
+database has run, so every dump carries it and a restore keeps it true to the
+schemas it leaves behind:
+
+- `--db=all` restores the dump's ledger with its schemas; nothing else to check.
+- `--db=chat` / `--db=sched` of a dump taken since M6 puts back one store while
+  the other stays live, so it is **refused unless the dump's ledger is at the
+  live ledger's version** (the highest version each records). Across versions,
+  restore a `fleet-all` dump with `--db=all`, or restore with the release whose
+  database matches the dump.
+- A dump from **before M6** has no `core.schema_versions`. Restoring it (any
+  `--db`) drops the live ledger after the restore — for a one-store restore,
+  first writing the untouched store's legacy ledger (`chat.schema_migrations`
+  or `sched.schema_migrations`) from it — so the next start adopts again, from
+  the restored legacy ledger and the untouched one. Over a database that has
+  run a migration from version 200 on it is refused: restore it into a new,
+  empty database instead.
+
 `fleet restore` reads the dump's table of contents first and establishes its
 schemas from its SCHEMA and TABLE entries; it refuses a dump that does not
 contain the schema the target store uses (the other store's dump, or an old
@@ -185,8 +204,9 @@ fleet restart
 fleet status        # both DBs answer SELECT 1, unit healthy
 ```
 
-The databases self-migrate on connect, so a dump taken from an older schema is
-brought up to date when the service restarts.
+The database self-migrates on connect (one runner, every store open), so a dump
+taken from an older schema is brought up to date when the service restarts —
+or, for a dump from before M6, adopted again first.
 
 ## Verifying a backup
 
