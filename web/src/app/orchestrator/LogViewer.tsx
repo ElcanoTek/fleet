@@ -79,6 +79,12 @@ export type LogViewerProps = {
   // canStop shows the Stop button on a live run. The server enforces the real
   // permission (admin or the task's creator); this only gates the affordance.
   canStop?: boolean;
+  // readOnly hides every control that writes: Resubmit / Run now, the wake
+  // event, and run feedback. A readonly Operations Center user is refused all
+  // of them with 403, so offering them only manufactures failures. Edit,
+  // Delete and Stop are gated by their own props (omit onEdit / onDelete,
+  // pass canStop={false}).
+  readOnly?: boolean;
   // Called after a successful Resubmit so the dashboard can refetch and show
   // the new run immediately.
   onResubmitted?: () => void;
@@ -97,7 +103,7 @@ export type LogViewerProps = {
   onRunEnded?: (taskId: string) => void;
 };
 
-export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask, onDelete, onRunEnded }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, readOnly, onResubmitted, onEdit, onSelectTask, onDelete, onRunEnded }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -120,6 +126,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
       task={task}
       onClose={onClose}
       canStop={!!canStop}
+      readOnly={!!readOnly}
       onResubmitted={onResubmitted}
       onEdit={onEdit}
       onSelectTask={onSelectTask}
@@ -925,6 +932,7 @@ function LogViewerBody({
   task,
   onClose,
   canStop,
+  readOnly,
   onResubmitted,
   onEdit,
   onSelectTask,
@@ -933,6 +941,7 @@ function LogViewerBody({
   task: Task;
   onClose: () => void;
   canStop: boolean;
+  readOnly: boolean;
   onResubmitted?: () => void;
   onEdit?: (task: Task) => void;
   onSelectTask?: (task: Task) => void;
@@ -1037,12 +1046,14 @@ function LogViewerBody({
     saveBlob(blob, `fleet-task-${task.id.slice(0, 8)}-logs.json`);
   };
 
-  const canResubmit = isRunnable(task.status);
+  const canResubmit = !readOnly && isRunnable(task.status);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [wakeNote, setWakeNote] = useState("");
   const [waking, setWaking] = useState(false);
   const canFireWake =
-    task.status === "paused_awaiting_wake" && Boolean(task.wake_event_key);
+    !readOnly &&
+    task.status === "paused_awaiting_wake" &&
+    Boolean(task.wake_event_key);
 
   const fireWake = async () => {
     if (waking || !task.wake_event_key) return;
@@ -1228,7 +1239,7 @@ function LogViewerBody({
           ) : null}
           {session ? <SessionMetrics session={session} /> : null}
           {session ? <RunCorrelation session={session} /> : null}
-          <SelfImprovePanel task={task} canManage={canStop} />
+          <SelfImprovePanel task={task} canManage={canStop} readOnly={readOnly} />
           <TaskRunIfBanner task={task} />
           {loading ? (
             <div className="loading">
@@ -1464,13 +1475,17 @@ function TaskRunIfBanner({ task }: { task: Task }) {
 // SelfImprovePanel (#516): thumbs up/down + critique on a finished task's
 // output, and the versioned learned instructions distilled from that feedback
 // — activate a version, or revert (deactivate). Operators (canManage) see the
-// activate/revert controls; anyone who can view can leave feedback.
+// activate/revert controls; anyone who can view can leave feedback — except a
+// readonly user (readOnly), whom the server refuses on every write: they keep
+// the read-only learned-instructions list and nothing else.
 function SelfImprovePanel({
   task,
   canManage,
+  readOnly,
 }: {
   task: Task;
   canManage: boolean;
+  readOnly: boolean;
 }) {
   const [instructions, setInstructions] = useState<TaskLearnedInstruction[]>(
     [],
@@ -1566,50 +1581,54 @@ function SelfImprovePanel({
           flexWrap: "wrap",
         }}
       >
-        <span
-          style={{
-            fontSize: "0.8125rem",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          Was this run useful?
-        </span>
-        <button
-          type="button"
-          className="btn btn-small"
-          aria-label="Mark run as helpful"
-          data-tip-top="Helpful"
-          disabled={busy}
-          onClick={() => void feedback("up")}
-        >
-          👍
-        </button>
-        <button
-          type="button"
-          className="btn btn-small"
-          aria-label="Mark run as not helpful"
-          data-tip-top="Not helpful"
-          disabled={busy}
-          onClick={() => void feedback("down")}
-        >
-          👎
-        </button>
-        <input
-          aria-label="Critique (optional)"
-          placeholder="what to improve (optional)"
-          value={critique}
-          onChange={(e) => setCritique(e.target.value)}
-          style={{
-            flex: "1 1 12rem",
-            minWidth: 0,
-            fontSize: "0.8rem",
-            padding: "0.25rem 0.5rem",
-            borderRadius: "0.5rem",
-            border: "1px solid var(--color-border-strong)",
-            background: "transparent",
-            color: "var(--color-text-primary)",
-          }}
-        />
+        {readOnly ? null : (
+          <>
+            <span
+              style={{
+                fontSize: "0.8125rem",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              Was this run useful?
+            </span>
+            <button
+              type="button"
+              className="btn btn-small"
+              aria-label="Mark run as helpful"
+              data-tip-top="Helpful"
+              disabled={busy}
+              onClick={() => void feedback("up")}
+            >
+              👍
+            </button>
+            <button
+              type="button"
+              className="btn btn-small"
+              aria-label="Mark run as not helpful"
+              data-tip-top="Not helpful"
+              disabled={busy}
+              onClick={() => void feedback("down")}
+            >
+              👎
+            </button>
+            <input
+              aria-label="Critique (optional)"
+              placeholder="what to improve (optional)"
+              value={critique}
+              onChange={(e) => setCritique(e.target.value)}
+              style={{
+                flex: "1 1 12rem",
+                minWidth: 0,
+                fontSize: "0.8rem",
+                padding: "0.25rem 0.5rem",
+                borderRadius: "0.5rem",
+                border: "1px solid var(--color-border-strong)",
+                background: "transparent",
+                color: "var(--color-text-primary)",
+              }}
+            />
+          </>
+        )}
         <button
           type="button"
           className="btn btn-small"
@@ -1672,7 +1691,7 @@ function SelfImprovePanel({
                   </RunStatusChip>
                   {li.content}
                 </span>
-                {canManage ? (
+                {canManage && !readOnly ? (
                   <span style={{ whiteSpace: "nowrap" }}>
                     {li.status !== "active" ? (
                       <button

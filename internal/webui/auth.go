@@ -60,7 +60,7 @@ func (g *Gateway) callCaptureLimit(h http.Handler, c call, limit int) (status in
 	if b == nil {
 		b = http.NoBody
 	}
-	req, err := http.NewRequestWithContext(context.Background(), c.method, "http://127.0.0.1"+c.target, b)
+	req, err := http.NewRequestWithContext(backendContext(context.Background(), c.who), c.method, "http://127.0.0.1"+c.target, b)
 	if err != nil {
 		return 0, nil, nil, false
 	}
@@ -122,7 +122,7 @@ func jsonReader(v any) (*bytes.Reader, int64) {
 // the caller must refuse the login: an epoch-less cookie is refused on the
 // very next request, so minting one would strand the user in a login loop.
 func (g *Gateway) fetchSessionEpoch(email string) string {
-	status, _, body, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/auth/session-epoch", header: g.chatHeaders(identity{Email: email})})
+	status, _, body, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/auth/session-epoch", header: http.Header{}, who: gatewayPrincipal(email)})
 	if !ok || status < 200 || status > 299 {
 		return ""
 	}
@@ -138,10 +138,10 @@ func (g *Gateway) fetchSessionEpoch(email string) string {
 // fetchExternalSessionEpoch is the central-identity counterpart: created or
 // read at login mint, keyed by issuer+subject.
 func (g *Gateway) fetchExternalSessionEpoch(email, issuer, subject string) string {
-	h := g.chatHeaders(identity{Email: email})
+	h, who := http.Header{}, gatewayPrincipal(email)
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(map[string]string{"issuer": issuer, "subject": subject})
-	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/external-session-epoch", header: h, body: body, contentLength: n})
+	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/external-session-epoch", header: h, who: who, body: body, contentLength: n})
 	if !ok || status < 200 || status > 299 {
 		return ""
 	}
@@ -233,10 +233,10 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h := g.chatHeaders(identity{Email: email})
+	h, who := http.Header{}, gatewayPrincipal(email)
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(map[string]string{"email": email, "password": password})
-	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/verify", header: h, body: body, contentLength: n})
+	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/verify", header: h, who: who, body: body, contentLength: n})
 	if !ok {
 		logging.From(r.Context()).Warn("webui: login: no chat backend")
 		back("server")
@@ -353,13 +353,13 @@ func (g *Gateway) handleMCPOAuthCallback(w http.ResponseWriter, r *http.Request)
 		settings("?error=missing_code_or_state")
 		return
 	}
-	h := g.chatHeaders(identityOf(s))
+	h, who := http.Header{}, sessionPrincipal(s)
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(struct {
 		Code  string `json:"code"`
 		State string `json:"state"`
 	}{code, state})
-	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/oauth/mcp/callback", header: h, body: body, contentLength: n})
+	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/oauth/mcp/callback", header: h, who: who, body: body, contentLength: n})
 	if !ok {
 		settings("?error=backend_unreachable")
 		return

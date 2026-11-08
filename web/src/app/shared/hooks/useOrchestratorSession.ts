@@ -79,15 +79,10 @@ export function useOrchestratorSession(): OrchestratorSession {
     };
   }, []);
 
+  // The Operations Center has no session of its own to end: its password
+  // bearer is retired (#2049 M4), and the cookie session is the gateway's,
+  // ended by the top-level /api/auth/logout.
   const logout = useCallback(async () => {
-    try {
-      await fetch("/api/orchestrator/auth/logout", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-    } catch {
-      /* best effort */
-    }
     purgeLegacyOrchestratorTokens();
     setSignedIn(false);
     setUsername(undefined);

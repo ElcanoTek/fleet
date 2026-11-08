@@ -23,8 +23,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
@@ -32,6 +36,13 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that the web tier (internal/webui) calls in-process.
 type Server struct {
+	// patrolDraftInFlight holds the users with a draft being synthesized. A
+	// draft is a model call of up to 45 seconds; one at a time per user is all
+	// the wizard needs, and anything more is spend nobody asked for. (The
+	// route's rateLimitMiddleware bounds the rate; this bounds concurrency.)
+	// Per-Server, not package-global, so parallel tests' servers don't share it.
+	patrolDraftInFlight sync.Map
+
 	// approvalRuns admits and counts claimed approvals still executing. An
 	// execution can outlive its POST (a call on a server with a declared
 	// approved-call budget answers "executing" early), so shutdown drains it
@@ -107,6 +118,9 @@ type Server struct {
 	// fixtures needn't provision every email; membership_test sets it back to
 	// nil to exercise the real GetUser gate.
 	isMember func(ctx context.Context, email string) (bool, error)
+	// dir overrides the account lookup membershipMiddleware resolves
+	// against (tests); nil uses the chat store's identity table.
+	dir principal.Directory
 
 	// inflight tracks the currently-running turn for each conversation.
 	// Lets the server keep generating after the SSE connection drops
@@ -256,17 +270,21 @@ type Server struct {
 	// feature is unconfigured (no task is created).
 	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
 
+	// chatSchedules is the scheduler that fires chat schedules (ADR-0104):
+	// Run now goes through it, and a schedule created or edited to fire soon
+	// asks it for an early pass. nil (tests, a scheduler-less embedding)
+	// answers Run now with 503 and leaves firing to whoever does run one.
+	chatSchedules ChatScheduleEngine
+
+	// publishHook, when set (tests only), sees every queue/patrol update and
+	// drain kick, so a test can count them.
+	publishHook func(kind string)
+
 	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
 	// approved chat manage_tasks call (#1152). Same seam discipline as
 	// scheduleTask: httpapi stays sched-agnostic and main.go supplies the
 	// adapter. nil = the capability is unconfigured and the tool reports so.
 	manageTasks func(context.Context, TaskMutationRequest) (*TaskMutationResult, error)
-
-	// opsAdmins grants/revokes/lists Operations-Center admin rows by email so
-	// the admin Users tab carries `fleet admin add`'s two-plane semantics.
-	// Injected (WithOpsAdmins) so httpapi stays sched-agnostic; nil → role
-	// writes touch the chat plane only and the list reports no annotation.
-	opsAdmins OpsAdmins
 }
 
 // TaskScheduleRequest is the sched-agnostic payload the chat approval path hands
@@ -565,6 +583,29 @@ func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskSched
 	return func(s *Server) { s.scheduleTask = fn }
 }
 
+// ChatScheduleEngine is the scheduler's chat schedule surface
+// (internal/sched/scheduler.Scheduler), injected so httpapi need not import
+// the sched packages.
+type ChatScheduleEngine interface {
+	// RunChatScheduleNow fires one schedule now, through the scheduler's
+	// claim → delivery → settle path.
+	RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error)
+	// WakeChatSchedulesAt asks for a firing pass at t (non-blocking).
+	WakeChatSchedulesAt(t time.Time)
+}
+
+// notePublish reports one queue/patrol update or drain kick to publishHook.
+func (s *Server) notePublish(kind string) {
+	if s.publishHook != nil {
+		s.publishHook(kind)
+	}
+}
+
+// WithChatScheduleEngine wires the scheduler that fires chat schedules.
+func WithChatScheduleEngine(e ChatScheduleEngine) Option {
+	return func(s *Server) { s.chatSchedules = e }
+}
+
 // WithTaskManager injects the orchestrator update/stop seam used to resolve an
 // approved manage_tasks call (#1152). Unset leaves the capability off: the tool
 // still stages a card, and approving it reports that the deployment has no
@@ -669,6 +710,12 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		s.rate = ratelimit.New(cfg.RatePerMinute, cfg.RatePerDay)
 		s.concurrent = ratelimit.NewConcurrencyLimiter(cfg.RateLimitConcurrent)
 	}
+	// The account lookup membershipMiddleware resolves against: the one
+	// identity table behind the concrete chat store (a test fake has none
+	// and uses the isMember seam or sets dir itself).
+	if cs, ok := st.(*store.Store); ok && cs != nil {
+		s.dir = cs.Identity()
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -684,7 +731,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 // scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
 // audits and large interactive workflows are bounded by the per-turn cost
 // and iteration ceilings rather than a 30-minute wall-clock cutoff.
-// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
 const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling
@@ -722,7 +769,7 @@ func envDuration(key string, def time.Duration) time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		slog.Warn("config: value is not a valid duration; using default", "key", key, "default", def)
+		slog.Warn("config: value is not a valid duration; using default", "key", safe.LogSafe(key), "default", def)
 	}
 	return def
 }
@@ -733,7 +780,7 @@ func envInt(key string, def int) int {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}
-		slog.Warn("config: value is not a valid integer; using default", "key", key, "default", def)
+		slog.Warn("config: value is not a valid integer; using default", "key", safe.LogSafe(key), "default", def)
 	}
 	return def
 }
@@ -1061,7 +1108,7 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	return entry, ok
 }
 
-func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Fleet-Active-Turns", strconv.Itoa(s.ActiveTurns()))
 	w.Header().Set("X-Fleet-Active-Approvals", strconv.Itoa(s.approvalRuns.activeCount()))
 	// Draining (#278): report 503 the moment graceful shutdown begins so a load
@@ -1069,7 +1116,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	// it drains in-flight work. Checked first — a draining box is unready
 	// regardless of provider health.
 	if s.IsDraining() {
-		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
+		writeJSONStatus(w, r, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
 	}
 	// Surface LLM provider degradation (#267): if any model's circuit is open
@@ -1078,7 +1125,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	if s.agent != nil {
 		for _, h := range s.agent.ProviderHealth() {
 			if h.State == agentcore.CircuitOpen.String() {
-				writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
+				writeJSONStatus(w, r, http.StatusServiceUnavailable, map[string]any{
 					"status": "degraded",
 					"reason": "llm provider circuit open",
 					"model":  h.Slug,
@@ -1148,11 +1195,22 @@ func setJSONContentType(w http.ResponseWriter) {
 // already committed by the time Encode runs, so a mid-body failure (typically
 // the client disconnecting) cannot change the response — log it for
 // diagnostics rather than swallowing it silently.
-func writeJSON(w http.ResponseWriter, v any) {
+// writeJSON writes v as the JSON body. r is the request being answered: an
+// encode failure is logged through its context logger, so the line carries
+// the request's correlation ids.
+func writeJSON(w http.ResponseWriter, r *http.Request, v any) {
 	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("write json failed", "err", err)
+		logging.From(requestContext(r)).Error("write json failed", "err", err)
 	}
+}
+
+// requestContext is r's context, or Background for a nil r.
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	return r.Context()
 }
 
 // keyedLocks is a set of mutexes by key, each dropped once nobody holds or

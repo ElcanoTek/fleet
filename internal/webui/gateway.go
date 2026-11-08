@@ -15,9 +15,9 @@
 //
 // It replaced a Next.js server whose route handlers verified the session and
 // proxied to the chat-server and orchestrator listeners over loopback; the
-// gateway calls those same handlers in-process (backend.go), so their
-// contracts — shared-secret channel, X-User-Email scoping, session epochs —
-// are unchanged.
+// gateway calls those same handlers in-process (backend.go), handing each
+// call the caller's identity as a typed principal in the request context
+// (internal/principal, ADR-0108) rather than as headers.
 package webui
 
 import (
@@ -45,7 +45,7 @@ const (
 var teamLinkID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // publicAPIPaths are reachable without a session: the login legs, SSO, the
-// back-channel, moc's bearer login, and the deployment-wide brand assets the
+// back-channel, and the deployment-wide brand assets the
 // pre-auth login page and anonymous unfurl scrapers need.
 var publicAPIPaths = map[string]bool{
 	"/api/auth/login":                     true,
@@ -54,8 +54,6 @@ var publicAPIPaths = map[string]bool{
 	"/api/auth/oidc/start":                true,
 	"/api/auth/oidc/callback":             true,
 	"/api/auth/backchannel-logout":        true,
-	"/api/orchestrator/auth/login":        true,
-	"/api/orchestrator/auth/logout":       true,
 	"/api/orchestrator/auth/elcano-login": true,
 	"/api/theme":                          true,
 	"/api/brand/logo":                     true,
@@ -143,8 +141,12 @@ func (g *Gateway) session(r *http.Request) *websession.Session {
 	return g.sessions.Resolve(cookieValue(r, websession.CookieName), cookieValue(r, g.sessions.ElcanoCookieName))
 }
 
-// bearerToken is the moc username/password Bearer token, when presented. It
-// is opaque to the gateway: the orchestrator owns and validates it.
+// bearerToken is an `Authorization: Bearer` credential, when presented. It is
+// opaque to the gateway: the orchestrator owns and validates it. The
+// orchestrator's own password bearer (moc's /auth/login) is retired (#2049 M4,
+// ADR-0105), so today the orchestrator accepts no bearer and answers 401; the
+// pass-through stays for the key bearers the one-HTTP-surface work (#2050)
+// resolves.
 func bearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if len(auth) < 7 || !strings.EqualFold(auth[:6], "bearer") {

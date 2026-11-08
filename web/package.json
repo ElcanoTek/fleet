@@ -5,6 +5,9 @@
   "engines": {
     "node": ">=26"
   },
+  "workspaces": [
+    "tools/openapi-typescript"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -17,7 +20,8 @@
     "test:e2e:canary": "E2E_CANARY=1 playwright test --project=canary",
     "test:e2e:screenshots": "E2E_SCREENSHOTS=1 playwright test --project=screenshots",
     "test:all": "npm run test && npm run test:e2e",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:api": "npm run --workspace tools/openapi-typescript generate"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.26",

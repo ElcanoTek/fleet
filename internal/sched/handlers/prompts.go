@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -23,47 +23,29 @@ func (h *Handlers) SetPromptCatalogProvider(p func() ([]clientconfig.Prompt, []s
 	h.promptCatalog = p
 }
 
-// ChatMemberRoleProvider resolves a chat-plane member's role ("admin",
-// "member", or "viewer") by email, returning ("", nil) when the email is not a
-// provisioned chat user. Because the Prompt Library is shared between Chat
-// (composer picker, "Save as workflow…", and Settings → Prompts) and the
-// Operations Center, header-trust requests to /prompts fall back to this seam
-// when the caller's independent Operations Center role (ops_role) is "none".
-type ChatMemberRoleProvider func(ctx context.Context, email string) (string, error)
-
-// SetChatMemberRoleProvider wires the chat-plane role lookup used to authorize
-// signed-in Chat users on /prompts when they have no sched.users row.
-func (h *Handlers) SetChatMemberRoleProvider(fn ChatMemberRoleProvider) {
-	h.chatMemberRole = fn
-}
-
 func isPromptLibraryPath(path string) bool {
 	return path == "/prompts" || strings.HasPrefix(path, "/prompts/")
 }
 
-func (h *Handlers) lookupChatMemberForPrompts(ctx context.Context, email string) (*models.User, error) {
-	if h.chatMemberRole == nil {
-		return nil, nil
-	}
-	role, err := h.chatMemberRole(ctx, email)
-	if err != nil {
-		return nil, err
+// promptLibraryUser is the account's Prompt Library access by its Fleet role
+// (admin → admin, member → client, viewer → readonly), for an enabled
+// account; nil otherwise.
+func promptLibraryUser(account *identity.User) *models.User {
+	if account == nil || !account.Enabled {
+		return nil
 	}
 	var mapped string
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "admin":
-		mapped = "admin"
-	case "member":
-		mapped = "client"
-	case "viewer":
-		mapped = "readonly"
+	switch account.Role {
+	case identity.RoleAdmin:
+		mapped = identity.LegacyOpsAdmin
+	case identity.RoleMember:
+		mapped = identity.LegacyOpsClient
+	case identity.RoleViewer:
+		mapped = identity.LegacyOpsReadonly
 	default:
-		return nil, nil
+		return nil
 	}
-	return &models.User{
-		Username: strings.ToLower(strings.TrimSpace(email)),
-		Role:     mapped,
-	}, nil
+	return &models.User{ID: account.ID, Username: account.Email, Role: mapped}
 }
 
 type PromptLibraryItem struct {
@@ -169,7 +151,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to list prompts")
 			return
 		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, r, http.StatusOK, items)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -197,7 +179,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
+	writeJSON(w, r, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
 }
 
 // PromptLibraryItem handles PUT/DELETE /prompts/{prompt_id}. Git IDs are never
@@ -236,7 +218,7 @@ func (h *Handlers) PromptLibraryItem(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		writeJSON(w, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
+		writeJSON(w, r, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
 	case http.MethodDelete:
 		if err := h.storage.DeletePromptLibrary(r.Context(), id, owner, admin); err != nil {
 			if errors.Is(err, storage.ErrPromptNotFound) {
@@ -263,7 +245,7 @@ func (h *Handlers) ExportPromptLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="fleet-prompts.json"`)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"format": "fleet-prompt-library", "version": 1,
 		"exported_at": time.Now().UTC(), "prompts": items,
 	})

@@ -208,7 +208,7 @@ const httpStatusBodyCap = 4 * 1024
 // those (method-not-found, invalid params), so a body that IS a JSON-RPC
 // response keeps its existing parse; anything else becomes an HTTPStatusError
 // carrying the status and the body's first line.
-func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (json.RawMessage, error) {
+func (t *HTTPTransport) httpStatusResponse(ctx context.Context, resp *http.Response, wantID int) (json.RawMessage, error) {
 	// Keep the first httpStatusBodyCap bytes for the error message while the
 	// decoder streams the whole body: the two must not share one bound. The
 	// first version of this path decoded only that head, so a JSON-RPC body
@@ -225,7 +225,7 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 		// which a Google-style REST error ({"error":{"code":403,…}}) also
 		// has and which must stay an HTTPStatusError with its own text.
 		if env, derr := decodeJSONRPCEnvelope(br); derr == nil && (env.JSONRPC != "" || env.ID.matchesInt(wantID)) {
-			t.noteStatusBodyMismatch(resp.StatusCode, env)
+			t.noteStatusBodyMismatch(ctx, resp.StatusCode, env)
 			result, ierr := interpretJSONRPC(env, wantID)
 			var rpcErr *RPCError
 			var unattributed *UnattributedResponseError
@@ -257,7 +257,7 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 // symptom of a project that has not enabled the *mcp.googleapis.com service
 // (or is not enrolled in the Developer Preview); the tool calls that follow
 // carry the real "the caller does not have permission".
-func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope) {
+func (t *HTTPTransport) noteStatusBodyMismatch(ctx context.Context, status int, env *jsonrpcEnvelope) {
 	if len(env.Result) == 0 || string(env.Result) == nullString {
 		return
 	}
@@ -268,7 +268,7 @@ func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope)
 	if logged {
 		return
 	}
-	slog.Warn("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
+	logging.From(ctx).Warn("MCP http: server answered a non-2xx HTTP status with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", "status", status, "status_text", http.StatusText(status))
 }
 
 // headCapture is an io.Writer that keeps only the first max bytes written
@@ -794,7 +794,7 @@ func (s *Server) restartLocked(ctx context.Context) error {
 	// Close the old transport (ignore errors — it's already broken).
 	_ = s.transport.Close()
 
-	transport, err := NewStdioTransportInDir(s.def.Command, s.def.Args, s.def.Env, s.def.Dir)
+	transport, err := newStdioTransport(s.def.Name, s.def.Command, s.def.Args, s.def.Env, s.def.Dir)
 	if err != nil {
 		return fmt.Errorf("failed to create new transport: %w", err)
 	}
@@ -933,6 +933,9 @@ type StdioTransport struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	reader *bufio.Reader
+	// stderr logs the subprocess's stderr line by line through slog;
+	// Close flushes its last partial line once the process is reaped.
+	stderr *logging.StderrLogger
 	mu     sync.Mutex
 	nextID int
 
@@ -950,6 +953,12 @@ type StdioTransport struct {
 // rather than the fleet process cwd (which under systemd is /opt/fleet, NOT the
 // /opt/fleet/client bundle checkout — see internal/clientconfig).
 func NewStdioTransportInDir(command string, args []string, env map[string]string, dir string) (*StdioTransport, error) {
+	return newStdioTransport("", command, args, env, dir)
+}
+
+// newStdioTransport is NewStdioTransportInDir with the connector name its
+// stderr lines are attributed to.
+func newStdioTransport(name, command string, args []string, env map[string]string, dir string) (*StdioTransport, error) {
 	cmd := exec.Command(command, args...) //nolint:noctx,gosec // MCP server command comes from trusted config and is intentionally long-running
 	cmd.Dir = dir                         // empty => inherit the caller's cwd (exec.Command's default)
 
@@ -975,9 +984,15 @@ func NewStdioTransportInDir(command string, args []string, env map[string]string
 	cmd.Env = append(cmd.Env, "LANG=C.UTF-8")
 	cmd.Env = append(cmd.Env, "LC_ALL=C.UTF-8")
 	cmd.Env = append(cmd.Env, "PYTHONIOENCODING=utf-8")
+	connectorEnv := make([]string, 0, len(env))
 	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		connectorEnv = append(connectorEnv, k+"="+v)
 	}
+	cmd.Env = append(cmd.Env, connectorEnv...)
+	// The connector's own secret-named variables (its API key, its token)
+	// are what it is likeliest to echo on stderr; make sure the log redactor
+	// knows them by value. Duplicates are free.
+	logging.RegisterEnvLiterals(connectorEnv)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -989,11 +1004,21 @@ func NewStdioTransportInDir(command string, args []string, env map[string]string
 		return nil, err
 	}
 
-	// Forward the subprocess's stderr to ours so import errors / Python
-	// tracebacks land in journalctl. Previously this was swallowed, which
-	// turned every "missing dep" failure into an opaque "initialize call
-	// failed: EOF" message that was nearly impossible to debug from prod.
-	cmd.Stderr = os.Stderr
+	// Log the subprocess's stderr so import errors / Python tracebacks land
+	// in journalctl. Previously this was swallowed, which turned every
+	// "missing dep" failure into an opaque "initialize call failed: EOF"
+	// message that was nearly impossible to debug from prod. Each line is a
+	// slog record attributed to the connector and scrubbed by the log
+	// redactor: a connector that echoes its token or an auth header to
+	// stderr must not have it copied verbatim into the log (in broker mode
+	// this process's stderr is forwarded into the parent's FLEET_LOG_FILE).
+	stderr := logging.NewStderrLogger(slog.String("connector", name))
+	cmd.Stderr = stderr
+	// stderr is a pipe drained by exec's copier goroutine, which Wait joins.
+	// A grandchild (uvx, npx) that inherited the pipe and outlives the
+	// server would hold it open and block Wait — and Close — forever;
+	// WaitDelay bounds that.
+	cmd.WaitDelay = stdioStderrWaitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -1004,8 +1029,13 @@ func NewStdioTransportInDir(command string, args []string, env map[string]string
 		stdin:  stdin,
 		stdout: stdout,
 		reader: bufio.NewReader(stdout),
+		stderr: stderr,
 	}, nil
 }
+
+// stdioStderrWaitDelay is cmd.WaitDelay for a stdio server: how long Wait
+// waits, after the process exits, for its stderr pipe to drain.
+const stdioStderrWaitDelay = 2 * time.Second
 
 // stdioResponseCaptureCap bounds how many bytes of a single stdout line from a
 // stdio MCP server are held in host memory. In broker mode the subprocess runs
@@ -1048,6 +1078,12 @@ func readCappedLine(r *bufio.Reader, limit int) (data []byte, discarded int64, e
 func (t *StdioTransport) Call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// The connector's stderr during this call is this call's: calls on one
+	// transport are serialised by t.mu, so one attribution at a time is
+	// exact. Cleared (after the logger's grace window) when the call ends.
+	t.stderr.Attribute(ctx)
+	defer t.stderr.ClearAttribution()
 
 	if t.broken {
 		return nil, errTransportDesynced
@@ -1121,7 +1157,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 			case <-stop:
 				stop = nil
 				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
-					logging.From(ctx).Warn("MCP stdio: could not send the stop for request", "request_id", id, "err", err)
+					logging.From(ctx).Warn("MCP stdio: could not send the stop for request", "mcp_request_id", id, "err", err)
 				}
 			case res = <-resultChan:
 				got = true
@@ -1310,13 +1346,19 @@ func (t *StdioTransport) Close() error {
 	// process is always reaped.
 	done := make(chan error, 1)
 	go func() { done <- t.cmd.Wait() }()
+	var err error
 	select {
-	case err := <-done:
-		return err
+	case err = <-done:
 	case <-time.After(stdioCloseGrace):
 		_ = t.cmd.Process.Kill()
-		return <-done
+		err = <-done
 	}
+	// Wait has joined the stderr copier: nothing more can arrive, so the
+	// last unterminated line (a crash mid-traceback) is logged now.
+	if t.stderr != nil {
+		_ = t.stderr.Close()
+	}
+	return err
 }
 
 // HTTPTransport implements Transport for HTTP-based MCP servers
@@ -1422,7 +1464,7 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 	// refused credential, a missing route, an outage — and must be reported
 	// as such, not fed to the JSON-RPC decoder as if it were a result.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return t.httpStatusResponse(resp, id)
+		return t.httpStatusResponse(ctx, resp, id)
 	}
 
 	// Handle SSE (Server-Sent Events) responses
@@ -1634,7 +1676,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 		if line == "" && foundData {
 			jsonData := dataBuffer.String()
 			if jsonData != "" {
-				result, err := t.tryParseJSONRPCFromSSE(jsonData, wantID)
+				result, err := t.tryParseJSONRPCFromSSE(ctx, jsonData, wantID)
 				if err == nil {
 					return result, nil
 				}
@@ -1670,7 +1712,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 
 	// Try parsing any remaining data
 	if foundData && dataBuffer.Len() > 0 {
-		return t.tryParseJSONRPCFromSSE(dataBuffer.String(), wantID)
+		return t.tryParseJSONRPCFromSSE(ctx, dataBuffer.String(), wantID)
 	}
 
 	return nil, fmt.Errorf("no valid JSON-RPC response found in SSE stream")
@@ -1681,7 +1723,7 @@ func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wa
 // differs from wantID returns a plain error so the SSE loop skips it and
 // keeps reading — the same treatment stdio gives a stale response line —
 // rather than attributing another request's result (or error) to this call.
-func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (json.RawMessage, error) {
+func (t *HTTPTransport) tryParseJSONRPCFromSSE(ctx context.Context, jsonData string, wantID int) (json.RawMessage, error) {
 	var response struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      JSONRPCID       `json:"id"`
@@ -1701,7 +1743,7 @@ func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (jso
 	// Never hand this caller a response for a different request — checked
 	// before the error branch so a stale error isn't returned as this call's.
 	if !response.ID.matchesInt(wantID) {
-		slog.Info("MCP http: discarding SSE response for another request id", "response_id", response.ID.String(), "want_id", wantID)
+		logging.From(ctx).Info("MCP http: discarding SSE response for another request id", "response_id", response.ID.String(), "want_id", wantID)
 		return nil, fmt.Errorf("JSON-RPC response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 

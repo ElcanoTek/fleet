@@ -412,10 +412,8 @@ each piece yourself):
    > rotates that epoch AND ends the account's Fleet password sessions); a
    > magic-link (`elcano_auth`) session carries no epoch,
    >   so revoke it at the
-   >   auth service that mints it; an Operations Center **bearer** login (the moc
-   >   username/password form) is a separate credential the chat password does not
-   >   govern — end it with `fleet sched user del <name>`, because a sched
-   >   password change alone does not rotate that bearer token; and a stream that is
+   >   auth service that mints it (the Operations Center has no separate login
+   >   any more: it uses the same session, ADR-0105); and a stream that is
    >   already open (a chat turn, a task run-log) finishes its turn, because the
    >   epoch is checked when a request connects, not per SSE event.
    > - **One account, permanently** — delete it. The user-list gate then 403s

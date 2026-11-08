@@ -70,7 +70,7 @@ func convSub(t *testing.T, srv *Server, method, user, convID, sub, body string) 
 	t.Helper()
 	r := httptest.NewRecorder()
 	req := httptest.NewRequest(method, "/conversations/"+convID+"/"+sub, strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	srv.conversationByID(r, req)
 	return r
 }
@@ -80,7 +80,7 @@ func projectSub(t *testing.T, srv *Server, method, user, path, body string) *htt
 	t.Helper()
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(method, "/projects/"+path, strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	srv.projectByID(w, req)
 	return w
 }
@@ -316,7 +316,7 @@ func TestPromoteAndAcceptIntoProject(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "/memories/"+prop.ID+"/accept",
 		strings.NewReader(`{"project_id":"`+f.project.ID+`"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "bob@x.com"))
+	req = req.WithContext(asUser(req.Context(), "bob@x.com"))
 	rec := httptest.NewRecorder()
 	f.srv.memoryByID(rec, req)
 	if rec.Code != 200 {
@@ -344,7 +344,7 @@ func TestPromoteAndAcceptIntoProject(t *testing.T) {
 	}
 	req = httptest.NewRequest("POST", "/memories/"+prop2.ID+"/accept",
 		strings.NewReader(`{"project_id":"`+other.ID+`"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "bob@x.com"))
+	req = req.WithContext(asUser(req.Context(), "bob@x.com"))
 	rec = httptest.NewRecorder()
 	f.srv.memoryByID(rec, req)
 	if rec.Code != 404 {
@@ -435,7 +435,7 @@ func TestMyTeamReportsLeaveImpact(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/me/team", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "bob@x.com"))
+	req = req.WithContext(asUser(req.Context(), "bob@x.com"))
 	w := httptest.NewRecorder()
 	f.srv.handleMyTeam(w, req)
 	if w.Code != 200 {
@@ -506,9 +506,7 @@ func TestProjectTransferByAdmin(t *testing.T) {
 	// other way the middleware supplies: the request's resolved role.
 	req := httptest.NewRequest("POST", "/projects/"+f.project.ID+"/transfer",
 		strings.NewReader(`{"to_email":"bob@x.com"}`))
-	ctx := context.WithValue(req.Context(), ctxKeyUser, "zoe@x.com")
-	ctx = context.WithValue(ctx, ctxKeyRole, store.RoleAdmin)
-	req = req.WithContext(ctx)
+	req = req.WithContext(asUserRole(req.Context(), "zoe@x.com", store.RoleAdmin))
 	w := httptest.NewRecorder()
 	f.srv.projectByID(w, req)
 	if w.Code != 200 {
@@ -557,9 +555,7 @@ func TestProjectMembersEndpoint(t *testing.T) {
 	// POST the handover, and could not ask who to hand it to.
 	w = httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/projects/"+f.project.ID+"/members", nil)
-	req = req.WithContext(context.WithValue(
-		context.WithValue(req.Context(), ctxKeyUser, "root@x.com"),
-		ctxKeyRole, store.RoleAdmin))
+	req = req.WithContext(asUserRole(req.Context(), "root@x.com", store.RoleAdmin))
 	f.srv.projectByID(w, req)
 	if w.Code != 200 {
 		t.Fatalf("admin members: status %d body %s", w.Code, w.Body.String())
@@ -588,7 +584,7 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("DELETE", "/admin/users/alice%40x.com", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "root@x.com"))
+	req = req.WithContext(asUser(req.Context(), "root@x.com"))
 	w := httptest.NewRecorder()
 	f.srv.handleAdminUserDelete(w, req, "alice@x.com")
 	if w.Code != 409 {

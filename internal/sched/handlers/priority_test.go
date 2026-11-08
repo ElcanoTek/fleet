@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,12 +45,13 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 		t.Fatalf("key manager: %v", err)
 	}
 
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)
 		r.Get("/admin/queue", h.QueueStats)
@@ -121,7 +123,7 @@ func TestCreateTask_KeyPriorityCeiling(t *testing.T) {
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
 	r, store, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -230,7 +232,7 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

@@ -49,15 +49,11 @@ func setupOwnershipEnv(t *testing.T) *ownershipEnv {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	env := &ownershipEnv{h: h, store: store, keyMgr: keyMgr}
 
 	addUser := func(username, role, token string) *models.User {
-		hash := models.HashToken(token)
-		u := &models.User{ID: uuid.New(), Username: username, Role: role, CreatedAt: time.Now(), SessionToken: &hash}
-		if _, err := store.AddUser(u); err != nil {
-			t.Fatalf("AddUser(%s): %v", username, err)
-		}
+		u := seedOpsUser(t, store, uuid.New(), username, role, token)
 		return u
 	}
 	env.owner = addUser("owner@example.com", "client", ownerToken)
@@ -82,6 +78,7 @@ func setupOwnershipEnv(t *testing.T) *ownershipEnv {
 	})
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/tasks", h.CreateTask)
 	r.Post("/tasks/batch", h.CreateTaskBatch)
 	r.Group(func(r chi.Router) {

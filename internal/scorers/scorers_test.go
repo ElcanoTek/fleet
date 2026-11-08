@@ -22,7 +22,7 @@ func TestRegex(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pass, label := Regex(tc.pattern, tc.text)
+			pass, label := Regex(t.Context(), tc.pattern, tc.text)
 			if pass != tc.pass || label != tc.label {
 				t.Fatalf("Regex(%q, %q) = (%v, %q); want (%v, %q)", tc.pattern, tc.text, pass, label, tc.pass, tc.label)
 			}

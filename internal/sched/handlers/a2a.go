@@ -35,7 +35,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -195,21 +194,21 @@ func (s *a2aStreamSlot) release() {
 // a2aReserveStream takes a stream slot for p. When either ceiling is
 // reached (or w cannot stream) it writes the refusal — an ordinary JSON-RPC
 // error, never a started SSE stream — and returns nil.
-func (h *Handlers) a2aReserveStream(w http.ResponseWriter, p principal, rpcID json.RawMessage) *a2aStreamSlot {
+func (h *Handlers) a2aReserveStream(w http.ResponseWriter, r *http.Request, p principal, rpcID json.RawMessage) *a2aStreamSlot {
 	if _, ok := w.(http.Flusher); !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return nil
 	}
 	if n := atomic.AddInt64(&h.a2aStreams, 1); n > a2aMaxConcurrentStreams {
 		atomic.AddInt64(&h.a2aStreams, -1)
-		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
 			fmt.Sprintf("this server is at its concurrent A2A stream ceiling (%d); retry shortly, or poll GetTask", a2aMaxConcurrentStreams), nil))
 		return nil
 	}
 	key := a2aStreamKey(p)
 	if !h.a2aStreamsBy.acquire(key) {
 		atomic.AddInt64(&h.a2aStreams, -1)
-		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
 			fmt.Sprintf("this credential already holds %d concurrent A2A streams; close one, or poll GetTask", a2aMaxConcurrentStreamsPerPrincipal), nil))
 		return nil
 	}
@@ -274,18 +273,18 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 
 	var req a2abridge.Request
 	if err := readJSON(r, &req); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(nil, wire.ErrParseError, "invalid JSON payload", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(nil, wire.ErrParseError, "invalid JSON payload", nil))
 		return
 	}
 	if req.JSONRPC != "2.0" || strings.TrimSpace(req.Method) == "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidRequest, "expected a JSON-RPC 2.0 request with a method", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidRequest, "expected a JSON-RPC 2.0 request with a method", nil))
 		return
 	}
 
 	// A2A-Version, spec-literally (§3.6.2): absent means 0.3, and this server
 	// implements 1.0 only. Checked before dispatch so every method agrees.
 	if err := a2abridge.CheckVersion(r.Header.Get("A2A-Version")); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrVersionNotSupported, err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrVersionNotSupported, err.Error(), nil))
 		return
 	}
 
@@ -293,6 +292,15 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 	// card's securityRequirements has no optional entry). Transport-layer
 	// (HTTP) statuses, not JSON-RPC errors, per the binding's auth model.
 	p, ok := h.a2aPrincipal(r)
+	if ok {
+		// Authenticated inline (no middleware): name the principal on the
+		// context so the dispatch's log lines carry user_id.
+		id := bootstrapAdminIdentity
+		if p.apiKey != nil {
+			id = apiKeyIdentity(p.apiKey.KeyID)
+		}
+		r = withAuthIdentity(r, id)
+	}
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "Unauthorized: send a fleet API key in X-API-Key (see /.well-known/agent-card.json securitySchemes)")
 		return
@@ -324,21 +332,21 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 		// which is the spec §13.3 MUST; the two error branches below follow
 		// §3.1.11's declared-but-unconfigured taxonomy.
 		if len(h.a2a.ExtendedCardJSON) == 0 {
-			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrExtendedCardNotConfigured,
+			a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrExtendedCardNotConfigured,
 				"this server declares an extended agent card but none is configured", nil))
 			return
 		}
-		a2aWrite(w, a2abridge.NewResponse(req.ID, json.RawMessage(h.a2a.ExtendedCardJSON)))
+		a2aWrite(w, r, a2abridge.NewResponse(req.ID, json.RawMessage(h.a2a.ExtendedCardJSON)))
 	default:
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrMethodNotFound,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrMethodNotFound,
 			fmt.Sprintf("unknown A2A method %q", req.Method), nil))
 	}
 }
 
 // a2aWrite emits a single (non-streaming) JSON-RPC response. JSON-RPC-layer
 // failures still ride HTTP 200 — the envelope's error member is the signal.
-func a2aWrite(w http.ResponseWriter, resp a2abridge.Response) {
-	writeJSON(w, http.StatusOK, resp)
+func a2aWrite(w http.ResponseWriter, r *http.Request, resp a2abridge.Response) {
+	writeJSON(w, r, http.StatusOK, resp)
 }
 
 // a2aPrincipal authenticates the JSON-RPC caller: the bootstrap admin key or
@@ -351,7 +359,7 @@ func (h *Handlers) a2aPrincipal(r *http.Request) (principal, bool) {
 		return principal{isAdmin: true}, true
 	}
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" && h.apiKeys != nil {
-		if valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil); valid && key != nil {
+		if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil); valid && key != nil {
 			return principal{apiKey: key}, true
 		}
 	}
@@ -459,11 +467,11 @@ func a2aPromptFromMessage(msg *wire.Message) (string, error) {
 func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, streaming bool) {
 	var params wire.SendMessageRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a SendMessageRequest: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a SendMessageRequest: "+err.Error(), nil))
 		return
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	if params.Config != nil && params.Config.PushConfig != nil {
@@ -473,17 +481,17 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		// who asked for notifications it cannot have must hear that, not
 		// silently miss every callback.
 		if !h.a2a.PushEnabled {
-			a2aWrite(w, a2aPushRefusal(req.ID))
+			a2aWrite(w, r, a2aPushRefusal(req.ID))
 			return
 		}
 		if err := a2aValidatePushURL(params.Config.PushConfig.URL); err != nil {
-			a2aWrite(w, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 			return
 		}
 	}
 	prompt, err := a2aPromptFromMessage(params.Message)
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
 
@@ -495,13 +503,13 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	// exactly when it matches the task's own (mismatches MUST error, §3.4.3);
 	// omitted, it is inferred from the task.
 	if params.Message.TaskID == "" && params.Message.ContextID != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
 			"this server generates contextId (one context per task) — omit contextId on a new message", nil))
 		return
 	}
 	if params.Message.TaskID != "" && params.Message.ContextID != "" &&
 		params.Message.ContextID != string(params.Message.TaskID) {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
 			"contextId does not match the task's context (this server's contexts are 1:1 with tasks)", nil))
 		return
 	}
@@ -524,7 +532,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	// Past the ceiling the chain is refused before a task exists.
 	depth, err := a2aDelegationDepth(r.Header.Get(a2abridge.DepthHeader), h.a2a.MaxDelegationDepth)
 	if err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidRequest, err.Error(),
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidRequest, err.Error(),
 			map[string]string{"maxDelegationDepth": strconv.Itoa(a2aMaxDelegationDepth(h.a2a.MaxDelegationDepth))}))
 		return
 	}
@@ -533,7 +541,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	// a caller at a stream ceiling is refused with nothing created.
 	var slot *a2aStreamSlot
 	if streaming {
-		if slot = h.a2aReserveStream(w, p, req.ID); slot == nil {
+		if slot = h.a2aReserveStream(w, r, p, req.ID); slot == nil {
 			return
 		}
 		defer slot.release()
@@ -551,7 +559,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	}
 	task, err := h.createTaskGoverned(r.Context(), creatorFromPrincipal(p), tc)
 	if err != nil {
-		a2aWrite(w, a2aCreateError(req.ID, err))
+		a2aWrite(w, r, a2aCreateError(r.Context(), req.ID, err))
 		return
 	}
 	logging.From(r.Context()).Info("Task created via A2A", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
@@ -560,7 +568,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	// URL was validated before the create, so a failure here is storage).
 	if params.Config != nil && params.Config.PushConfig != nil {
 		if err := h.a2aStorePushConfigInline(r, task.ID, params.Config.PushConfig); err != nil {
-			a2aWrite(w, a2aPushStoreError(req.ID, err))
+			a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 			return
 		}
 	}
@@ -578,7 +586,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	if params.Config == nil || !params.Config.ReturnImmediately {
 		final = h.a2aAwaitOutcome(r.Context(), task.ID, task)
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(final, h.a2a.PublicBaseURL, true)}))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(final, h.a2a.PublicBaseURL, true)}))
 }
 
 // a2aAwaitOutcome implements the unary SendMessage wait contract: poll the
@@ -635,7 +643,7 @@ func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest
 func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawID wire.TaskID, answer string, cfg *wire.SendMessageConfig, streaming bool) {
 	task, err := h.a2aVisibleTask(p, rawID)
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
 	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
@@ -644,7 +652,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		return
 	}
 	if task.Status != models.TaskStatusPausedAwaitingInput {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
 			fmt.Sprintf("task %s is not awaiting input (state %s): a follow-up message is only accepted while the task asks a question", task.ID, task.Status), nil))
 		return
 	}
@@ -653,18 +661,18 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 	// awaiting input.
 	var slot *a2aStreamSlot
 	if streaming {
-		if slot = h.a2aReserveStream(w, p, req.ID); slot == nil {
+		if slot = h.a2aReserveStream(w, r, p, req.ID); slot == nil {
 			return
 		}
 		defer slot.release()
 	}
 	resumed, err := h.storage.ResumeTask(r.Context(), task.ID, answer)
 	if err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to resume the task", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to resume the task", nil))
 		return
 	}
 	if !resumed {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation, "the task is no longer awaiting input", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation, "the task is no longer awaiting input", nil))
 		return
 	}
 	logging.From(r.Context()).Info("Task resumed via A2A", "task_id", task.ID)
@@ -675,11 +683,11 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 	// the way a caller subscribes to the outcome of the answer it just gave.
 	if cfg != nil && cfg.PushConfig != nil {
 		if err := a2aValidatePushURL(cfg.PushConfig.URL); err != nil {
-			a2aWrite(w, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 			return
 		}
 		if err := h.a2aStorePushConfigInline(r, task.ID, cfg.PushConfig); err != nil {
-			a2aWrite(w, a2aPushStoreError(req.ID, err))
+			a2aWrite(w, r, a2aPushStoreError(req.ID, err))
 			return
 		}
 	}
@@ -689,7 +697,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 	}
 	updated, err := h.storage.GetTask(task.ID)
 	if err != nil || updated == nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "the task was resumed but could not be re-read", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "the task was resumed but could not be re-read", nil))
 		return
 	}
 	// The same unary wait contract as a fresh send: the resumed task has to
@@ -697,7 +705,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 	if cfg == nil || !cfg.ReturnImmediately {
 		updated = h.a2aAwaitOutcome(r.Context(), task.ID, updated)
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(updated, h.a2a.PublicBaseURL, true)}))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(updated, h.a2a.PublicBaseURL, true)}))
 }
 
 // a2aCreateError maps the shared create pipeline's refusals onto the wire: a
@@ -710,7 +718,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 // Postgres error), and its text belongs in the server log, never on the wire
 // to an external caller — the REST path masks it the same way
 // (writeBudgetRefusal's fail-closed 500).
-func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
+func a2aCreateError(ctx context.Context, id json.RawMessage, err error) a2abridge.Response {
 	var refusal *createRefusalError
 	if errors.As(err, &refusal) {
 		if refusal.status == http.StatusBadRequest {
@@ -726,7 +734,7 @@ func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
 		}
 		return a2abridge.NewErrorResponse(id, wire.ErrServerError, exceeded.Error(), meta)
 	}
-	slog.Error("A2A: task create failed (infrastructure)", "err", err)
+	logging.From(ctx).Error("A2A: task create failed (infrastructure)", "err", err)
 	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "task creation failed on the server; try again", nil)
 }
 
@@ -746,26 +754,26 @@ func a2aErrorFrom(id json.RawMessage, err error) a2abridge.Response {
 
 // a2aGetTask implements GetTask: an ADR-0043-scoped read. The result is the
 // Task object itself (only SendMessage wraps its result in the oneof).
-func (h *Handlers) a2aGetTask(w http.ResponseWriter, _ *http.Request, p principal, req a2abridge.Request) {
+func (h *Handlers) a2aGetTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !p.hasPermission(models.PermissionViewTasks) {
 		writeError(w, http.StatusForbidden, "insufficient key scope: this key cannot read tasks")
 		return
 	}
 	var params wire.GetTaskRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a GetTaskRequest: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a GetTaskRequest: "+err.Error(), nil))
 		return
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)))
 }
 
 // a2aPageToken encodes the list cursor. Opaque to callers per spec §3.1.4;
@@ -789,7 +797,7 @@ func a2aParsePageToken(token string) (int, error) {
 // a2aListTasks implements ListTasks: the creator-scoped listing with
 // cursor-based pagination. nextPageToken is ALWAYS present — empty string
 // when there are no more pages (spec §3.1.4).
-func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p principal, req a2abridge.Request) {
+func (h *Handlers) a2aListTasks(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	if !p.hasPermission(models.PermissionViewTasks) {
 		writeError(w, http.StatusForbidden, "insufficient key scope: this key cannot read tasks")
 		return
@@ -797,7 +805,7 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 	var params wire.ListTasksRequest
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a ListTasksRequest: "+err.Error(), nil))
+			a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a ListTasksRequest: "+err.Error(), nil))
 			return
 		}
 		// wire.TaskState.UnmarshalJSON (a2a-go v2.7.0+) maps unknown strings
@@ -813,13 +821,13 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 		}
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	if params.StatusTimestampAfter != nil {
 		// Refused loudly rather than silently ignored: a dropped filter would
 		// hand the caller a result set that lies about what it is.
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "statusTimestampAfter is not supported by this server", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "statusTimestampAfter is not supported by this server", nil))
 		return
 	}
 	size := params.PageSize
@@ -827,14 +835,14 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 	case size == 0:
 		size = 50
 	case size < 1 || size > 100:
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "pageSize must be between 1 and 100", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "pageSize must be between 1 and 100", nil))
 		return
 	}
 	offset := 0
 	if params.PageToken != "" {
 		var err error
 		if offset, err = a2aParsePageToken(params.PageToken); err != nil {
-			a2aWrite(w, a2aErrorFrom(req.ID, err))
+			a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 			return
 		}
 	}
@@ -851,14 +859,14 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 	if params.Status != "" {
 		statuses, known := a2abridge.FleetStatusesFor(params.Status)
 		if !known {
-			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
+			a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
 				fmt.Sprintf("unknown status filter %q", string(params.Status)), nil))
 			return
 		}
 		if len(statuses) == 0 {
 			// A state no fleet task ever reports (REJECTED, AUTH_REQUIRED):
 			// legitimately matches nothing.
-			a2aWrite(w, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
+			a2aWrite(w, r, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
 				Tasks: []*wire.Task{}, TotalSize: 0, PageSize: size, NextPageToken: "",
 			}))
 			return
@@ -877,7 +885,7 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 				tasks = append(tasks, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, params.IncludeArtifacts))
 			}
 		}
-		a2aWrite(w, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
+		a2aWrite(w, r, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
 			Tasks: tasks, TotalSize: len(tasks), PageSize: size, NextPageToken: "",
 		}))
 		return
@@ -885,7 +893,7 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 
 	tasks, total, err := h.storage.GetTasksFiltered(filter, size, offset)
 	if err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to list tasks", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to list tasks", nil))
 		return
 	}
 	out := make([]*wire.Task, 0, len(tasks))
@@ -896,7 +904,7 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 	if offset+size < total {
 		next = a2aPageToken(offset + size)
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, &wire.ListTasksResponse{
 		Tasks:         out,
 		TotalSize:     total,
 		PageSize:      size,
@@ -910,19 +918,19 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 // created a task must be able to cancel it, or the protocol's cancel method
 // is unusable by exactly the credential the card tells callers to use.
 // Scoped to this surface; recorded in ADR-0051.
-func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p principal, req a2abridge.Request) {
+func (h *Handlers) a2aCancelTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request) {
 	var params wire.CancelTaskRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a CancelTaskRequest: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a CancelTaskRequest: "+err.Error(), nil))
 		return
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
 	if !taskCreatedByPrincipal(p, task) && !p.hasPermission(models.PermissionCancelTask) {
@@ -932,7 +940,7 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p princ
 	if task.Status == models.TaskStatusCancelled {
 		// Idempotent: a repeated cancel reports the already-cancelled task
 		// rather than an error the caller can do nothing about.
-		a2aWrite(w, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)))
+		a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)))
 		return
 	}
 
@@ -940,24 +948,24 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p princ
 	cancelled, err := h.storage.CancelTaskAtomic(task.ID, "stopped by "+who)
 	if err != nil {
 		if strings.Contains(err.Error(), "cannot cancel") {
-			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrTaskNotCancelable,
+			a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrTaskNotCancelable,
 				fmt.Sprintf("task %s is in state %s, which cannot be cancelled", task.ID, task.Status), nil))
 			return
 		}
 		if strings.Contains(err.Error(), "no rows") {
-			a2aWrite(w, a2aErrorFrom(req.ID, fmt.Errorf("%w: no task %q is visible to this credential", wire.ErrTaskNotFound, task.ID)))
+			a2aWrite(w, r, a2aErrorFrom(req.ID, fmt.Errorf("%w: no task %q is visible to this credential", wire.ErrTaskNotFound, task.ID)))
 			return
 		}
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to cancel the task", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to cancel the task", nil))
 		return
 	}
 	// Interrupt a live in-process run, exactly like DELETE /tasks/{id} (#508).
 	if h.taskStopper != nil && h.taskStopper(task.ID, who) {
-		slog.Info("Task cancelled via A2A (live run interrupted)", "task_id", task.ID, "stopped_by", safe.LogSafe(who))
+		logging.From(r.Context()).Info("Task cancelled via A2A (live run interrupted)", "task_id", task.ID, "stopped_by", safe.LogSafe(who))
 	} else {
-		slog.Info("Task cancelled via A2A", "task_id", task.ID, "stopped_by", safe.LogSafe(who))
+		logging.From(r.Context()).Info("Task cancelled via A2A", "task_id", task.ID, "stopped_by", safe.LogSafe(who))
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(cancelled, h.a2a.PublicBaseURL, true)))
+	a2aWrite(w, r, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(cancelled, h.a2a.PublicBaseURL, true)))
 }
 
 // a2aSubscribeToTask implements SubscribeToTask — the recovery path for a
@@ -971,24 +979,24 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 	}
 	var params wire.SubscribeToTaskRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a SubscribeToTaskRequest: "+err.Error(), nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a SubscribeToTaskRequest: "+err.Error(), nil))
 		return
 	}
 	if params.Tenant != "" {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
-		a2aWrite(w, a2aErrorFrom(req.ID, err))
+		a2aWrite(w, r, a2aErrorFrom(req.ID, err))
 		return
 	}
 	if task.Status.IsTerminal() {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
+		a2aWrite(w, r, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
 			fmt.Sprintf("task %s is already terminal (state %s); use GetTask for the result", task.ID, task.Status), nil))
 		return
 	}
-	slot := h.a2aReserveStream(w, p, req.ID)
+	slot := h.a2aReserveStream(w, r, p, req.ID)
 	if slot == nil {
 		return
 	}

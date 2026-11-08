@@ -126,7 +126,7 @@ func TestStableTaskWorkdirPerOccurrence(t *testing.T) {
 	occ := &models.Task{ID: uuid.New()}
 	next := &models.Task{ID: uuid.New(), PreviousOccurrenceID: &occ.ID}
 
-	first, err := r.stableTaskWorkdir(occ)
+	first, err := r.stableTaskWorkdir(t.Context(), occ)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestStableTaskWorkdirPerOccurrence(t *testing.T) {
 	}
 	occ.AttemptCount++ // user retry
 	occ.InfraRetryCount++
-	second, err := r.stableTaskWorkdir(occ)
+	second, err := r.stableTaskWorkdir(t.Context(), occ)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestStableTaskWorkdirPerOccurrence(t *testing.T) {
 	if b, err := os.ReadFile(ledger); err != nil || string(b) != "deal-1\n" {
 		t.Fatalf("ledger lost across attempts: %q, %v", b, err)
 	}
-	other, err := r.stableTaskWorkdir(next)
+	other, err := r.stableTaskWorkdir(t.Context(), next)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,11 +176,11 @@ func TestPrepareTaskMCPWorkspaceStableAcrossAttempts(t *testing.T) {
 	}
 	task := &models.Task{ID: uuid.New()}
 	sel := agentcore.MCPSelection{{Server: "ssp"}}
-	a, err := r.prepareTaskMCPWorkspace(task, sel)
+	a, err := r.prepareTaskMCPWorkspace(t.Context(), task, sel)
 	if err != nil || a == "" {
 		t.Fatalf("attempt 1: %q, %v", a, err)
 	}
-	b, err := r.prepareTaskMCPWorkspace(task, sel)
+	b, err := r.prepareTaskMCPWorkspace(t.Context(), task, sel)
 	if err != nil || a != b {
 		t.Fatalf("attempt 2: %q vs %q, %v", a, b, err)
 	}
@@ -209,7 +209,7 @@ func TestStableTaskWorkdirRefusesSymlinkedInputs(t *testing.T) {
 	r := &Runner{cfg: &config.Config{DataDir: dataDir}}
 	task := &models.Task{ID: uuid.New(), Files: []string{"d_1.csv"}, FileNames: []string{"d.csv"}}
 
-	workdir, err := r.stableTaskWorkdir(task)
+	workdir, err := r.stableTaskWorkdir(t.Context(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestStableTaskWorkdirRefusesSymlinkedInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	again, err := r.stableTaskWorkdir(task)
+	again, err := r.stableTaskWorkdir(t.Context(), task)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestStableTaskWorkdirRefusesSymlinkedRunDir(t *testing.T) {
 	r := &Runner{cfg: &config.Config{DataDir: dataDir}}
 	task := &models.Task{ID: uuid.New(), Files: []string{"d_1.csv"}, FileNames: []string{"d.csv"}}
 
-	workdir, err := r.stableTaskWorkdir(task)
+	workdir, err := r.stableTaskWorkdir(t.Context(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestStableTaskWorkdirRefusesSymlinkedRunDir(t *testing.T) {
 	if err := os.Symlink(victim, workdir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.stableTaskWorkdir(task); err == nil {
+	if _, err := r.stableTaskWorkdir(t.Context(), task); err == nil {
 		t.Fatal("a symlinked run dir must be refused")
 	}
 	if entries, _ := os.ReadDir(victim); len(entries) != 0 {
@@ -292,7 +292,7 @@ func TestStableTaskWorkdirRefusesSymlinkedRunDir(t *testing.T) {
 	if err := os.Symlink(victim, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.stableTaskWorkdir(task); err == nil {
+	if _, err := r.stableTaskWorkdir(t.Context(), task); err == nil {
 		t.Fatal("a symlinked mcp-runs base must be refused")
 	}
 	if entries, _ := os.ReadDir(victim); len(entries) != 0 {
@@ -312,7 +312,7 @@ func TestStableTaskWorkdirDropsRemovedAttachments(t *testing.T) {
 	r := &Runner{cfg: &config.Config{DataDir: dataDir}}
 	task := &models.Task{ID: uuid.New(), Files: []string{"a_1.csv", "b_1.csv"}, FileNames: []string{"a.csv", "b.csv"}}
 
-	workdir, err := r.stableTaskWorkdir(task)
+	workdir, err := r.stableTaskWorkdir(t.Context(), task)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestStableTaskWorkdirDropsRemovedAttachments(t *testing.T) {
 
 	// Operator edits the requeued task: drops b, renames a.
 	task.Files, task.FileNames = []string{"a_1.csv"}, []string{"renamed.csv"}
-	if _, err := r.stableTaskWorkdir(task); err != nil {
+	if _, err := r.stableTaskWorkdir(t.Context(), task); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if names := dirNames(t, inputs); len(names) != 1 || names[0] != "renamed.csv" {
@@ -336,7 +336,7 @@ func TestStableTaskWorkdirDropsRemovedAttachments(t *testing.T) {
 
 	// Operator removes every attachment.
 	task.Files, task.FileNames = nil, nil
-	if _, err := r.stableTaskWorkdir(task); err != nil {
+	if _, err := r.stableTaskWorkdir(t.Context(), task); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if _, err := os.Lstat(inputs); !os.IsNotExist(err) {

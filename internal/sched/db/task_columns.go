@@ -34,14 +34,15 @@ package db
 // targets / arguments", never per-row string building.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -50,6 +51,10 @@ import (
 // Each read-flagged registry row points its `dest` at one field and its
 // `assign` moves the converted value onto the models.Task.
 type taskScanBuf struct {
+	// ctx is the query's context: a value that fails to decode is logged
+	// with its correlation.
+	ctx context.Context
+
 	id                     uuid.UUID
 	name                   string
 	title                  string
@@ -297,7 +302,7 @@ var taskColumnRegistry = []taskColumn{
 		dest:  func(b *taskScanBuf) any { return &b.mcpSelection },
 		assign: func(b *taskScanBuf, t *models.Task) {
 			if b.mcpSelection.Valid {
-				t.MCPSelection = unmarshalMCPSelection(b.mcpSelection.String)
+				t.MCPSelection = unmarshalMCPSelection(b.ctx, b.mcpSelection.String)
 			} else {
 				t.MCPSelection = models.MCPSelection{}
 			}
@@ -430,7 +435,7 @@ var taskColumnRegistry = []taskColumn{
 		dest:  func(b *taskScanBuf) any { return &b.files },
 		assign: func(b *taskScanBuf, t *models.Task) {
 			if b.files.Valid {
-				t.Files = unmarshalStringSlice(b.files.String)
+				t.Files = unmarshalStringSlice(b.ctx, b.files.String)
 			}
 		},
 	},
@@ -530,7 +535,7 @@ var taskColumnRegistry = []taskColumn{
 		// NULL → nil (inherit global); "[]" → non-nil empty (deny all). The
 		// distinction is load-bearing for Gate-3, so do NOT coerce nil to empty.
 		assign: func(b *taskScanBuf, t *models.Task) {
-			t.CredentialAllowlist = unmarshalCredentialAllowlist(b.credentialAllowlist)
+			t.CredentialAllowlist = unmarshalCredentialAllowlist(b.ctx, b.credentialAllowlist)
 		},
 	},
 	{
@@ -538,14 +543,16 @@ var taskColumnRegistry = []taskColumn{
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
 		value:  func(t *models.Task) any { return marshalLoopConfig(t.LoopConfig) },
 		dest:   func(b *taskScanBuf) any { return &b.loopConfig },
-		assign: func(b *taskScanBuf, t *models.Task) { t.LoopConfig = unmarshalLoopConfig(b.loopConfig) },
+		assign: func(b *taskScanBuf, t *models.Task) { t.LoopConfig = unmarshalLoopConfig(b.ctx, b.loopConfig) },
 	},
 	{
 		name: "worktree_config",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
-		value:  func(t *models.Task) any { return marshalWorktreeConfig(t.WorktreeConfig) },
-		dest:   func(b *taskScanBuf) any { return &b.worktreeConfig },
-		assign: func(b *taskScanBuf, t *models.Task) { t.WorktreeConfig = unmarshalWorktreeConfig(b.worktreeConfig) },
+		value: func(t *models.Task) any { return marshalWorktreeConfig(t.WorktreeConfig) },
+		dest:  func(b *taskScanBuf) any { return &b.worktreeConfig },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			t.WorktreeConfig = unmarshalWorktreeConfig(b.ctx, b.worktreeConfig)
+		},
 	},
 	{
 		name: "description",
@@ -561,14 +568,14 @@ var taskColumnRegistry = []taskColumn{
 		dest:  func(b *taskScanBuf) any { return &b.tags },
 		// tags is NOT NULL DEFAULT '[]', so it's always present; assign
 		// unconditionally (unmarshalStringSlice maps ""/"null" → empty safely).
-		assign: func(b *taskScanBuf, t *models.Task) { t.Tags = unmarshalStringSlice(b.tags.String) },
+		assign: func(b *taskScanBuf, t *models.Task) { t.Tags = unmarshalStringSlice(b.ctx, b.tags.String) },
 	},
 	{
 		name: "retry_policy",
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
 		value:  func(t *models.Task) any { return marshalRetryPolicy(t.RetryPolicy) },
 		dest:   func(b *taskScanBuf) any { return &b.retryPolicy },
-		assign: func(b *taskScanBuf, t *models.Task) { t.RetryPolicy = unmarshalRetryPolicy(b.retryPolicy) },
+		assign: func(b *taskScanBuf, t *models.Task) { t.RetryPolicy = unmarshalRetryPolicy(b.ctx, b.retryPolicy) },
 	},
 	{
 		name: "lineage_id",
@@ -602,7 +609,7 @@ var taskColumnRegistry = []taskColumn{
 				if sid, perr := uuid.Parse(b.sourceTaskID.String); perr == nil {
 					t.SourceTaskID = &sid
 				} else {
-					slog.Warn("Warning: invalid source_task_id", "value", b.sourceTaskID.String, "err", perr)
+					logging.From(b.ctx).Warn("Warning: invalid source_task_id", "value", b.sourceTaskID.String, "err", perr)
 				}
 			}
 		},
@@ -651,7 +658,7 @@ var taskColumnRegistry = []taskColumn{
 				if cid, perr := uuid.Parse(b.createdByTaskID.String); perr == nil {
 					t.CreatedByTaskID = &cid
 				} else {
-					slog.Warn("Warning: invalid created_by_task_id", "value", b.createdByTaskID.String, "err", perr)
+					logging.From(b.ctx).Warn("Warning: invalid created_by_task_id", "value", b.createdByTaskID.String, "err", perr)
 				}
 			}
 		},
@@ -697,7 +704,7 @@ var taskColumnRegistry = []taskColumn{
 		read: true, insert: true, upsert: true, txUpdate: true, export: true,
 		value:  func(t *models.Task) any { return marshalRunIf(t.RunIf) },
 		dest:   func(b *taskScanBuf) any { return &b.runIf },
-		assign: func(b *taskScanBuf, t *models.Task) { t.RunIf = unmarshalRunIf(b.runIf) },
+		assign: func(b *taskScanBuf, t *models.Task) { t.RunIf = unmarshalRunIf(b.ctx, b.runIf) },
 	},
 	{
 		name: "skip_count",
@@ -805,7 +812,7 @@ var taskColumnRegistry = []taskColumn{
 		// sandbox_limits (#205) IS in the upsert — it has no out-of-band mutator.
 		value:  func(t *models.Task) any { return marshalSandboxLimits(t.SandboxLimits) },
 		dest:   func(b *taskScanBuf) any { return &b.sandboxLimits },
-		assign: func(b *taskScanBuf, t *models.Task) { t.SandboxLimits = unmarshalSandboxLimits(b.sandboxLimits) },
+		assign: func(b *taskScanBuf, t *models.Task) { t.SandboxLimits = unmarshalSandboxLimits(b.ctx, b.sandboxLimits) },
 	},
 	{
 		name: "allow_delegation",
@@ -917,7 +924,7 @@ var taskColumnRegistry = []taskColumn{
 		dest:  func(b *taskScanBuf) any { return &b.fileNames },
 		assign: func(b *taskScanBuf, t *models.Task) {
 			if b.fileNames.Valid {
-				t.FileNames = unmarshalStringSlice(b.fileNames.String)
+				t.FileNames = unmarshalStringSlice(b.ctx, b.fileNames.String)
 			}
 		},
 	},
@@ -1077,7 +1084,7 @@ var taskColumnRegistry = []taskColumn{
 				if pid, perr := uuid.Parse(b.previousOccurrenceID.String); perr == nil {
 					t.PreviousOccurrenceID = &pid
 				} else {
-					slog.Warn("Warning: invalid previous_occurrence_id", "value", b.previousOccurrenceID.String, "err", perr)
+					logging.From(b.ctx).Warn("Warning: invalid previous_occurrence_id", "value", b.previousOccurrenceID.String, "err", perr)
 				}
 			}
 		},

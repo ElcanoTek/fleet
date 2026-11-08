@@ -9,6 +9,9 @@
 #   kind      github   — a GitHub release asset, version + SHA-256 pinned
 #             pypi     — a PyPI package pinned by version (`pip install x==v`)
 #             cosign   — internal/release/cosign.lock (version + per-arch SHA-256)
+#             codeql   — .github/codeql-bundle.lock: the bundle the pinned
+#                        github/codeql-action commit names (version + per-
+#                        language SHA-256); asset's {lang} is the language
 #   source    owner/repo (github, cosign) or the PyPI project name
 #   asset     the release asset, {v} = version without the leading v
 #   checksums the release's checksums file, {v} likewise
@@ -19,7 +22,9 @@
 GITLEAKS	github	gitleaks/gitleaks	gitleaks_{v}_linux_x64.tar.gz	gitleaks_{v}_checksums.txt	-	-
 ACTIONLINT	github	rhysd/actionlint	actionlint_{v}_linux_amd64.tar.gz	actionlint_{v}_checksums.txt	-	-
 KUBECONFORM	github	yannh/kubeconform	kubeconform-linux-amd64.tar.gz	CHECKSUMS	-	-
+GOLANGCI_LINT	github	golangci/golangci-lint	golangci-lint-{v}-linux-amd64.tar.gz	golangci-lint-{v}-checksums.txt	-	-
 GRYPE	github	anchore/grype	grype_{v}_linux_amd64.tar.gz	grype_{v}_checksums.txt	https://github.com/anchore/grype/.github/workflows/release.yaml@refs/heads/main	https://token.actions.githubusercontent.com
 RUFF	pypi	ruff	-	-	-	-
 SEMGREP	pypi	semgrep	-	-	-	-
 COSIGN	cosign	sigstore/cosign	cosign-linux-{arch}	cosign_checksums.txt	keyless@projectsigstore.iam.gserviceaccount.com	https://accounts.google.com
+CODEQL_BUNDLE	codeql	github/codeql-action	codeql-bundle-{lang}-linux64.tar.zst	-	-	-

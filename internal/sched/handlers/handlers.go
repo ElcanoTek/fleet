@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/mail"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
@@ -66,7 +66,7 @@ type Config struct {
 	// (agentcore.CurrentTaskModel: the admin task_model setting, else
 	// FLEET_TASK_MODEL, else the advanced tier), the same slug the scheduled
 	// runner resolves at dispatch; see defaultTaskModel. MaxCostUSD is the
-	// per-turn cost ceiling (CUTLASS_MAX_COST_USD); 0 disables the
+	// per-turn cost ceiling (FLEET_MAX_COST_USD); 0 disables the
 	// would-hit-ceiling check.
 	// DefaultMaxIterations is the loop iteration cap applied when a task omits
 	// one (FLEET_MAX_ITERATIONS via config.MaxIterations).
@@ -95,30 +95,13 @@ type Config struct {
 	SchedRateLimitPerDay          int // default 500
 	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
-	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
-	// the orchestrator's channel authenticator. The web tier — the SOLE
-	// client of this backend — verifies the user's session cookie, then forwards
-	// the resolved identity as X-User-Email guarded by this token in
-	// X-Orchestrator-Server-Token. This is what lets a /chat-cookie user reach the
-	// Operations Center without a second (moc bearer) login (#157). Reused rather
-	// than a distinct secret because both backends run in ONE process and the
-	// trust boundary is identical; it is impersonation-load-bearing, so the
-	// orchestrator MUST stay bound to 127.0.0.1. Empty is impossible in
-	// production (config.Validate makes FLEET_SERVER_TOKEN fatal-if-empty).
+	// SharedToken is the legacy internal service token (FLEET_SERVER_TOKEN):
+	// a caller holding it may name a user by header on this listener's own
+	// port (edge.go). The browser gateway no longer uses it — it calls these
+	// handlers in-process with a typed principal (ADR-0108). It is
+	// impersonation-load-bearing, so the orchestrator MUST stay bound to
+	// 127.0.0.1 and Caddy strips the header (ADR-0053).
 	SharedToken string
-
-	// The shared Elcano cookie ElcanoLogout deletes (elcano.go). The browser
-	// tier verifies it; this server never reads it.
-	ElcanoCookieName   string // default "elcano_auth"
-	ElcanoCookieDomain string // AUTH_COOKIE_DOMAIN (e.g. "elcanotek.com"); "" = host-only. Needed to delete the shared cookie on logout.
-
-	// PasswordLoginDisabled mirrors config.Config.PasswordLoginDisabled: this
-	// Fleet signs people in through central Auth only. POST /auth/login then
-	// refuses, and the bearer it used to mint is no longer accepted anywhere
-	// (userFromPasswordToken), so a token issued before the switch stops
-	// working too. API keys, header trust and the elcano_auth cookie are
-	// unaffected.
-	PasswordLoginDisabled bool
 
 	// AccountsManagedByAuth mirrors config.Config.AccountsManagedByAuth:
 	// central Auth owns who is in this Fleet and with which roles, so the
@@ -142,10 +125,6 @@ type Handlers struct {
 	storage *storage.Storage
 	apiKeys *apikeys.Manager
 
-	// loginRL throttles POST /login per client IP (20/minute) with the shared
-	// sliding-window limiter (internal/ratelimit).
-	loginRL *ratelimit.Limiter
-
 	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
 	// POST /upload), shared implementation with the chat server
 	// (internal/ratelimit). taskKeyRL is per-API-key (or per-IP for cookie/bearer
@@ -157,11 +136,6 @@ type Handlers struct {
 
 	// Cache for dashboard stats
 	statsCache *statsCache
-
-	// memberLookup resolves an email to a user for the scoped-tier gate
-	// (elcano_auth cookie path). nil in production → falls back to
-	// storage.GetUserByUsername. Tests inject a fake to avoid a live database.
-	memberLookup func(ctx context.Context, email string) (*models.User, error)
 
 	// mcpCatalog returns the read-only Optional-MCP catalog the task-form picker
 	// + credential-account admin table render. Injected by cmd/fleet via
@@ -262,27 +236,18 @@ type Handlers struct {
 	taskStopper func(taskID uuid.UUID, who string) bool
 
 	// chatUsage aggregates the chat store's turn_metrics for the usage report
-	// (#601) — injected by cmd/fleet via SetChatUsageProvider because the chat
-	// store is a separate database. nil → the report covers tasks only and
-	// its sources list says so. See usage.go.
+	// (#601) — injected by cmd/fleet via SetChatUsageProvider. It is chat's own
+	// usage data read through the chat store's queries, an in-process data
+	// dependency rather than an identity seam (#2049 M4 kept it on purpose:
+	// this package does not read the chat schema). nil → the report covers
+	// tasks only and its sources list says so. See usage.go.
 	chatUsage ChatUsageProvider
 
-	// chatUserDayUsage / chatAccounts feed the adoption report
-	// (GET /admin/usage/adoption) — the chat side's per-user-per-day metering
-	// and the provisioned-account roster, injected by cmd/fleet like chatUsage.
-	// nil → the report covers tasks only / omits the seat denominator, and its
-	// sources list says so. See adoption.go.
+	// chatUserDayUsage feeds the adoption report (GET /admin/usage/adoption)
+	// with the chat side's per-user-per-day metering, injected like chatUsage.
+	// nil → the report covers tasks only, and its sources list says so. The
+	// seat roster is the identity table itself. See adoption.go.
 	chatUserDayUsage ChatUserDayUsageProvider
-	chatAccounts     ChatAccountsProvider
-
-	// chatSessionEpoch resolves an email's chat-plane session epoch so the
-	// header-trust path can refuse a session cookie a password reset has already
-	// evicted from chat. Injected by cmd/fleet like the seams above, because the
-	// epoch lives in the chat store's users table (ADR-0005). nil → the claim is
-	// not checked. See session_epoch.go.
-	chatSessionEpoch     ChatSessionEpochProvider
-	externalSessionEpoch ExternalSessionEpochProvider
-	chatMemberRole       ChatMemberRoleProvider
 
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
@@ -332,9 +297,6 @@ func (c *statsCache) Set(stats *models.DashboardStats, ttl time.Duration) {
 	c.until = time.Now().Add(ttl)
 }
 
-// loginRateLimitPerMinute bounds password logins per client IP.
-const loginRateLimitPerMinute = 20
-
 const (
 	taskPromptMinLength = 3
 	// taskPromptMaxLength bounds a task prompt in BYTES (len(), not runes).
@@ -367,7 +329,6 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		config:       cfg,
 		storage:      store,
 		apiKeys:      keyMgr,
-		loginRL:      ratelimit.New(loginRateLimitPerMinute, 0),
 		taskKeyRL:    ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL: ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		statsCache:   &statsCache{},
@@ -377,19 +338,38 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 
 // Helper functions
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+// writeJSON answers status with v as the JSON body. r is the request being
+// answered: an encode failure is logged through its context logger, so the
+// line carries the request's correlation ids.
+func writeJSON(w http.ResponseWriter, r *http.Request, status int, v interface{}) {
 	// The status line + headers are already committed, so a mid-body encode
 	// failure (typically the client disconnecting) can't change the response —
 	// log it for diagnostics rather than swallowing it silently.
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("writeJSON: failed to encode response body", "err", err)
+	if err := encodeJSONBody(w, status, v); err != nil {
+		logging.From(requestContext(r)).Error("writeJSON: failed to encode response body", "err", err)
 	}
 }
 
+func encodeJSONBody(w http.ResponseWriter, status int, v interface{}) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	return json.NewEncoder(w).Encode(v)
+}
+
+// requestContext is r's context, or Background for a nil r.
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	return r.Context()
+}
+
+// writeError answers status with the standard error body. Unlike writeJSON it
+// does not log an encode failure: the body is a one-field struct, so a failure
+// can only be the client having gone, and the caller has usually just logged
+// the error that produced this response through its own context.
 func writeError(w http.ResponseWriter, status int, detail string) {
-	writeJSON(w, status, models.ErrorResponse{Detail: detail})
+	_ = encodeJSONBody(w, status, models.ErrorResponse{Detail: detail})
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -460,7 +440,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// the batch path so the two cannot drift. It resolves the creator id, the
 	// authorizing key (for spend attribution), and the username the budget gate
 	// keys user-scope budgets on (#601 part 2).
-	creator, ok := h.authorizeTaskCreator(w, r)
+	creator, r, ok := h.authorizeTaskCreator(w, r)
 	if !ok {
 		return
 	}
@@ -493,7 +473,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 	logging.From(r.Context()).Info("Task created", "task_id", task.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(task.Prompt)))
 	localizeTask(task)
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // createRefusalError is a typed refusal from the shared create pipeline: the
@@ -507,6 +487,20 @@ type createRefusalError struct {
 }
 
 func (e *createRefusalError) Error() string { return e.detail }
+
+// taskNameUniqueIndex is the partial unique index on tasks.name (migration
+// 036): two tasks may not share a non-empty name.
+const taskNameUniqueIndex = "idx_tasks_name_unique"
+
+// isTaskNameConflict reports whether a task insert failed because the name is
+// already taken — a unique_violation (SQLSTATE 23505) on taskNameUniqueIndex.
+// That is the caller's mistake (409), not a server fault (500). Matched on the
+// typed pgconn error and the constraint name, so no other unique violation is
+// reported as a name clash.
+func isTaskNameConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == taskNameUniqueIndex
+}
 
 // createTaskGoverned is the ONE create pipeline behind POST /tasks and the A2A
 // SendMessage method: validate → run_if admin gate → per-principal budget gate
@@ -594,6 +588,9 @@ func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreat
 	}
 
 	if _, err := h.storage.AddTaskWithContext(ctx, task); err != nil {
+		if isTaskNameConflict(err) {
+			return nil, &createRefusalError{status: http.StatusConflict, detail: fmt.Sprintf("a task named %q already exists; choose another name, or permanently delete that task to reuse it", task.Name)}
+		}
 		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
 	}
 	// A create that lands claimable (pending, not scheduled-for-later or
@@ -651,7 +648,7 @@ func (h *Handlers) QueueStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, r, http.StatusOK, stats)
 }
 
 // requireAdminForCeilingsAboveDeployment is the privilege boundary of the
@@ -1302,7 +1299,7 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	localizeTasks(tasks)
 
-	writeJSON(w, http.StatusOK, models.PaginatedResponse{
+	writeJSON(w, r, http.StatusOK, models.PaginatedResponse{
 		Data:   tasks,
 		Total:  total,
 		Limit:  limit,
@@ -1353,14 +1350,14 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 		if ierr != nil {
 			logging.From(r.Context()).Warn("Warning: failed to load task iterations", "err", ierr)
 		}
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, r, http.StatusOK, struct {
 			*models.Task
 			Iterations []*models.TaskIteration `json:"iterations"`
 		}{Task: task, Iterations: iterations})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // GetTaskOutput handles GET /tasks/{task_id}/output (#244): the validated
@@ -1572,7 +1569,7 @@ func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.From(r.Context()).Info("Cleaned up old tasks", "deleted", deleted, "older_than_days", days)
-	writeJSON(w, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
+	writeJSON(w, r, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
 }
 
 // BulkSetTaskModel handles POST /tasks/model: re-assign the pinned model (and
@@ -1631,7 +1628,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: true, MatchedCount: len(matched), Tasks: matched})
+		writeJSON(w, r, http.StatusOK, models.BulkModelUpdateResult{DryRun: true, MatchedCount: len(matched), Tasks: matched})
 		return
 	}
 
@@ -1649,7 +1646,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	logging.From(ctx).Info("Bulk re-assigned the model on scheduled tasks", "model", safe.LogSafe(req.Model), "fallback", safe.LogSafe(fbLog), "from", safe.LogSafe(req.FromModel), "updated", updated)
-	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
+	writeJSON(w, r, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 
 // CancelTask handles DELETE /tasks/{task_id}
@@ -1714,7 +1711,7 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	} else {
 		logging.From(r.Context()).Info("Task cancelled", "task_id", taskID, "stopped_by", safe.LogSafe(who))
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, r, http.StatusOK, task)
 }
 
 // DeleteTask handles DELETE /tasks/{task_id}/permanent — remove the task row
@@ -1787,7 +1784,7 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logging.From(r.Context()).Info("Task deleted", "task_id", taskID, "by", safe.LogSafe(p.stopLabel()))
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
+	writeJSON(w, r, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
 }
 
 // stopLabel renders the cancelling principal for the who-stopped-it audit
@@ -2051,7 +2048,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	logging.From(r.Context()).Info("Task updated", "task_id", updated.ID, "prompt", fmt.Sprintf("%.50s", safe.LogSafe(updated.Prompt)))
 	localizeTask(updated)
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, r, http.StatusOK, updated)
 }
 
 // withAgentPool copies the (possibly cached) stats and stamps the LIVE
@@ -2096,7 +2093,7 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to load tag catalogue")
 		return
 	}
-	writeJSON(w, http.StatusOK, catalogue)
+	writeJSON(w, r, http.StatusOK, catalogue)
 }
 
 // recipientHistoryWindow and recipientHistoryLimit bound GET /tasks/recipients:
@@ -2143,7 +2140,7 @@ func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
 			out = append(out, ru)
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, r, http.StatusOK, out)
 }
 
 // GetSLAReport handles GET /sla-report (#274): the per-prompt SLA actuals
@@ -2153,7 +2150,7 @@ func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
 // Admin-only, but reachable from the web UI: it is registered behind
 // AdminOrUserAuthMiddleware (which resolves the caller into a principal) and
 // gated HERE on PermissionAdmin (#458). The admin API key OR an admin-role user
-// (the role the web tier's header-trust/bearer path conveys) passes; a
+// (the role the gateway session's principal resolves to) passes; a
 // non-admin member gets 403. This is the only gate that lets a web-authenticated
 // admin reach the report — the proxy can never send the admin X-API-Key that the
 // bare AdminAuthMiddleware demanded, so the report was previously unreachable
@@ -2180,7 +2177,7 @@ func (h *Handlers) GetSLAReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to load SLA report")
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, r, http.StatusOK, report)
 }
 
 // tagMutation is the POST /tasks/{task_id}/tags body: tags to add and/or remove.
@@ -2240,7 +2237,7 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	localizeTask(updated)
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, r, http.StatusOK, updated)
 }
 
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
@@ -2320,7 +2317,7 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	// One box, one task table: every principal that clears the permission check
 	// above sees the same counts, so one cached value serves them all.
 	if cached, ok := h.statsCache.Get(); ok {
-		writeJSON(w, http.StatusOK, h.withAgentPool(cached))
+		writeJSON(w, r, http.StatusOK, h.withAgentPool(cached))
 		return
 	}
 
@@ -2336,7 +2333,7 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	// a minute — the web dashboard polls every 5s while work is in flight.
 	h.statsCache.Set(stats, 5*time.Second)
 
-	writeJSON(w, http.StatusOK, h.withAgentPool(stats))
+	writeJSON(w, r, http.StatusOK, h.withAgentPool(stats))
 }
 
 // GetCurrentUser handles GET /api/me. It sits behind AdminOrUserAuthMiddleware,
@@ -2348,10 +2345,10 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	user := GetUserFromContext(r.Context())
 	if user == nil {
 		// Authenticated via an API key (no user record); still signed in.
-		writeJSON(w, http.StatusOK, map[string]interface{}{"authenticated": true})
+		writeJSON(w, r, http.StatusOK, map[string]interface{}{"authenticated": true})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, r, http.StatusOK, map[string]interface{}{
 		"authenticated": true,
 		"username":      user.Username,
 		"role":          user.Role,
@@ -2367,7 +2364,7 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 // deployment may be configured with a zone the browser's ICU data does not
 // know, in which case the embedded offset is still enough to render the time.
 // A client computes its skew once from this and ticks locally.
-func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
+func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
 	loc := h.storage.Location()
 	if loc == nil {
 		loc = time.UTC
@@ -2382,14 +2379,14 @@ func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
 		"default_task_timezone": h.defaultTaskTimezone(),
 	}
 
-	writeJSON(w, http.StatusOK, config)
+	writeJSON(w, r, http.StatusOK, config)
 }
 
 // Health Check
 
 // HealthCheck handles GET /health
-func (h *Handlers) HealthCheck(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, models.HealthResponse{
+func (h *Handlers) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, http.StatusOK, models.HealthResponse{
 		Status:    "healthy",
 		Version:   h.config.Version,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -2528,7 +2525,7 @@ func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to read session logs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"aggregate": acc.Result(),
 		"runs":      recent.Items(),
 	})

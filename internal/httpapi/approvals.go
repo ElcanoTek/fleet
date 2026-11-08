@@ -554,7 +554,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	if toolName != tools.ScheduleTaskToolName {
 		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
-			logging.From(a.ctx).Error("supersede approvals failed", "tool", toolName, "conv_id", a.conversationID, "err", err)
+			logging.From(a.ctx).Error("supersede approvals failed", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(a.conversationID), "err", err)
 		} else if n > 0 {
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
@@ -582,14 +582,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
 	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
 		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
-			logging.From(a.ctx).Error("approval narrowing: freeze the argument failed", "approval_id", approval.ID, "ok", ok, "err", err)
+			logging.From(a.ctx).Error("approval narrowing: freeze the argument failed", "approval_id", safe.LogSafe(approval.ID), "ok", ok, "err", err)
 		} else {
 			approval.NarrowableArg = arg
 		}
 	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
-			logging.From(a.ctx).Error("approval card: store card failed", "approval_id", approval.ID, "ok", ok, "err", err)
+			logging.From(a.ctx).Error("approval card: store card failed", "approval_id", safe.LogSafe(approval.ID), "ok", ok, "err", err)
 			cardFallback = cardFallbackStore
 		} else {
 			approval.CardJSON = cardJSON
@@ -624,7 +624,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 	send := func() {
 		// Independent of the turn context on purpose: the staged card outlives
 		// the turn, so the notification should too.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx(a.userEmail, a.conversationID, ""), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
 			logging.From(ctx).Error("push: approval notification failed", "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
@@ -835,7 +835,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	// Supersede any older pending cards for this same tool so the UI
 	// stays clean if a rare race writes two in quick succession.
 	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
-		logging.From(a.ctx).Error("supersede suggestions failed", "conv_id", a.conversationID, "err", err)
+		logging.From(a.ctx).Error("supersede suggestions failed", "conv_id", safe.LogSafe(a.conversationID), "err", err)
 	} else if n > 0 {
 		a.emitUserScoped("tool.approval_superseded", map[string]any{
 			"tool":  tools.SuggestAdvancedModelToolName,
@@ -896,7 +896,7 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 	// could not. Prevalidation is best-effort, so it is skipped like an
 	// unreachable validator and the card is staged unvalidated.
 	if full := agentcore.MCPToolName(server, "validate_email_content"); agentcore.InteractiveHiddenTool(full) {
-		logging.From(ctx).Info("prevalidateEmail: tool is hidden from interactive chat (interactive_hidden_tools); not called", "tool", full)
+		logging.From(ctx).Info("prevalidateEmail: tool is hidden from interactive chat (interactive_hidden_tools); not called", "tool", safe.LogSafe(full))
 		return nil
 	}
 	text, isError, err := broker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
@@ -1207,7 +1207,7 @@ func (s *Server) maybeRegisterSessionPolicy(ctx context.Context, convID, user, t
 		pattern = strings.TrimSpace(req.Pattern)
 	}
 	s.sessionApprovals.RegisterForUser(convID, user, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
-	logging.From(ctx).Info("audit: session approval pre-granted", "user", user, "mode", mode, "tool", toolName, "conv_id", convID, "scope", scope, "pattern", pattern)
+	logging.From(ctx).Info("audit: session approval pre-granted", "user", safe.LogSafe(user), "mode", safe.LogSafe(mode), "tool", safe.LogSafe(toolName), "conv_id", safe.LogSafe(convID), "scope", safe.LogSafe(scope), "pattern", safe.LogSafe(pattern))
 }
 
 // approvalHandler runs the staged tool when the user approves, or marks it
@@ -1237,7 +1237,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		s.handleSuggestAdvancedApproval(context.WithoutCancel(r.Context()), w, r, user, d.suggest, req)
 		return
 	}
-	d.write(w)
+	d.write(w, r)
 }
 
 // approvalDecision is the answer to one approval decision, before it is
@@ -1266,13 +1266,13 @@ func approvalBody(body map[string]any) approvalDecision {
 }
 
 // write sends the decision the way handleApproval always answered.
-func (d approvalDecision) write(w http.ResponseWriter) {
+func (d approvalDecision) write(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case d.gone:
 	case d.status != 0:
 		http.Error(w, d.errText, d.status)
 	default:
-		writeJSON(w, d.body)
+		writeJSON(w, r, d.body)
 	}
 }
 
@@ -1438,7 +1438,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		defer s.approvalRuns.leave()
 		defer s.disarmApprovalStop(approvalID)
 		defer s.executingApprovals.unregister(approvalID)
-		defer safe.Recover("httpapi.approval_execute", func(any) {
+		defer safe.RecoverContext(ctx, "httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
 			// never success or failure, and never a re-run.
@@ -1771,7 +1771,7 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 // (or arrived after resolution) with the current state of the approval,
 // mirroring the idempotent already-resolved response above.
 func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Request, user, approvalID string) {
-	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w, r)
 }
 
 // resolvedApprovalDecision is writeResolvedApprovalState before it is written.
@@ -1836,7 +1836,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 			"User dismissed the model-switch suggestion. Continue working with the current model.", approval.UserEmail)
 		// Not a resume tool, but a deferred resume may be waiting on it.
 		s.noteApprovalSettled(approval.ConversationID, approval)
-		writeJSON(w, map[string]any{
+		writeJSON(w, r, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
 		})
@@ -1877,7 +1877,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		resultText, approval.UserEmail)
 	s.noteApprovalSettled(approval.ConversationID, approval)
 
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"status":      "approved",
 		"action":      action,
 		"model":       advancedModel,
@@ -1966,7 +1966,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		resultText := timeoutResultTextFor(a.ToolName)
 		claimed, err := s.store.ClaimExpiredApproval(ctx, a.UserEmail, a.ID, "rejected", resultText)
 		if err != nil {
-			logging.From(ctx).Error("approval expiry sweep: claim failed", "approval_id", a.ID, "err", err)
+			logging.From(ctx).Error("approval expiry sweep: claim failed", "approval_id", safe.LogSafe(a.ID), "err", err)
 			continue
 		}
 		if !claimed {

@@ -53,7 +53,7 @@ func TestApplyExternalAccessIsOrderedAndNonDestructive(t *testing.T) {
 	}
 	var retainedEmail, retainedRole, retainedTeam string
 	var retainedCreatedAt int64
-	if err := s.db.QueryRowContext(ctx, `SELECT email, role, team_id, created_at FROM users WHERE email = $1`, email).
+	if err := s.db.QueryRowContext(ctx, `SELECT email, role, team_id, created_at FROM core.users WHERE email = $1`, email).
 		Scan(&retainedEmail, &retainedRole, &retainedTeam, &retainedCreatedAt); err != nil {
 		t.Fatalf("read disabled user: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestApplyExternalAccessSerializesFirstEvents(t *testing.T) {
 			t.Fatalf("round %d: stored state = v%d allowed=%v, want the revoke (v2, not allowed)", i, stored.Version, stored.Allowed)
 		}
 		var enabled bool
-		err = s.db.QueryRowContext(ctx, `SELECT enabled FROM users WHERE email = $1`, email).Scan(&enabled)
+		err = s.db.QueryRowContext(ctx, `SELECT enabled FROM core.users WHERE email = $1`, email).Scan(&enabled)
 		if err == nil && enabled {
 			t.Fatalf("round %d: a revoked identity's account is enabled", i)
 		}

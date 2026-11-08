@@ -182,8 +182,9 @@ fleet is built on open protocols:
   [`fleet-buzz-bridge`](https://github.com/ElcanoTek/fleet-buzz-bridge), a
   separate adapter that is not part of fleet ([`docs/ACP.md`](docs/ACP.md)).
 - **OpenAPI 3.1** — the orchestrator HTTP API
-  ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with its routes
-  by a CI drift test. The chat routes are documented in
+  ([`docs/openapi.yaml`](docs/openapi.yaml)), generated from the router and
+  a route catalog, with the web app's types generated from it; CI fails on
+  drift ([`docs/HTTP-CONTRACTS.md`](docs/HTTP-CONTRACTS.md)). The chat routes are documented in
   [`docs/INPUT-QUEUE.md`](docs/INPUT-QUEUE.md).
 
 ## The client-config bundle: your agent IP is portable

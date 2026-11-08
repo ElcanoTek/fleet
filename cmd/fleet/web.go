@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
@@ -35,9 +37,10 @@ func webAddr() (addr string, enabled bool) {
 	return v, true
 }
 
-// buildWebServer assembles the browser tier over the in-process chat and
+// buildWebServer assembles the public listener: the one chi tree
+// (buildPublicRouter) over the browser tier and the in-process chat and
 // orchestrator handlers. It returns nil when FLEET_WEB_ADDR=off.
-func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, error) {
+func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error) {
 	addr, enabled := webAddr()
 	if !enabled {
 		slog.Info("web: browser tier disabled (FLEET_WEB_ADDR=off)")
@@ -47,7 +50,7 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	if wc.SessionSecret == "" {
 		slog.Warn("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
 	}
-	g, err := webui.New(wc, webui.Options{Chat: chat, Orchestrator: orch})
+	g, err := webui.New(wc, webui.Options{Chat: b.chat, Orchestrator: b.orch})
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +60,7 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	slog.Info("web: bundle loaded", "build_id", g.BuildID())
 	return &http.Server{
 		Addr:              addr,
-		Handler:           g,
+		Handler:           buildPublicRouter(b.surface(g)),
 		ReadHeaderTimeout: 30 * time.Second,
 		// Idle keep-alive connections are closed after two minutes; an open
 		// SSE stream is never idle, so it is unaffected.
@@ -65,24 +68,55 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		// Deliberately no ReadTimeout or WriteTimeout: uploads (bounded by
 		// FLEET_UPLOAD_MAX_BYTES in the backend handlers) and SSE turns / large
 		// downloads stream for as long as they take, exactly as on the chat
-		// listener. Every body the gateway itself parses is capped where it
-		// is read (login: 64 KiB; back-channel logout: maxBackchannelBody);
-		// every forwarded body is capped by the backend handler that reads it.
+		// and orchestrator listeners, whose handlers this listener serves too.
+		// Every body the gateway itself parses is capped where it is read
+		// (login: 64 KiB; back-channel logout: maxBackchannelBody); every
+		// forwarded body is capped by the backend handler that reads it.
 	}, nil
+}
+
+// backendHandlers are the chat and orchestrator handlers, and what their own
+// listeners serve.
+type backendHandlers struct {
+	// chat is the chat server's routes (the gateway's in-process backend).
+	chat http.Handler
+	// orch is the orchestrator router.
+	orch http.Handler
+	// chatListener and orchListener are the handlers of the chat and
+	// orchestrator listeners; nil means chat and orch themselves.
+	chatListener, orchListener http.Handler
+}
+
+// surface is the public tree's input once the gateway exists.
+func (b backendHandlers) surface(gateway http.Handler) httpSurface {
+	s := httpSurface{gateway: gateway, orchListener: b.orchListener, chatListener: b.chatListener}
+	if s.orchListener == nil {
+		s.orchListener = b.orch
+	}
+	if s.chatListener == nil {
+		s.chatListener = b.chat
+	}
+	if s.orchListener == nil {
+		s.orchListener = http.NotFoundHandler()
+	}
+	if s.chatListener == nil {
+		s.chatListener = http.NotFoundHandler()
+	}
+	if routes, ok := b.orch.(chi.Routes); ok {
+		s.orch = routes
+	} else {
+		// A test double: nothing to walk.
+		s.orch = chi.NewRouter()
+	}
+	return s
 }
 
 // gatewayConfig is the gateway's environment configuration plus what the
 // server itself decided.
 func gatewayConfig(cfg *config.Config) webui.Config {
 	wc := webui.ConfigFromEnv()
-	// The in-process channel uses the server's own shared secret, which
-	// config.Validate guarantees is set — for BOTH backends, unconditionally:
-	// they verify the header-trust token against that same secret, so any
-	// other value (a leftover ORCHESTRATOR_SERVER_TOKEN from the retired Next
-	// tier's env, which an old bootstrap even set to ADMIN_API_KEY) would make
-	// every orchestrator call a 403.
-	wc.ChatToken = cfg.SharedToken
-	wc.OrchestratorToken = cfg.SharedToken
+	// The in-process calls carry their caller as a typed principal in the
+	// request context (#2050, ADR-0108): no shared secret is involved.
 	// Decided once by config.Load so the gateway and both backends agree.
 	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
 	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth
@@ -101,7 +135,7 @@ func serveInBackground(name string, srv *http.Server, errCh chan<- error) {
 	}
 	go func() {
 		defer safe.Recover("cmd."+name, func(any) { errCh <- errors.New(name + ": panicked") })
-		slog.Info("server listening", "name", name, "addr", srv.Addr)
+		slog.Info("server listening", "name", safe.LogSafe(name), "addr", safe.LogSafe(srv.Addr))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("%s: %w", name, err)
 		}

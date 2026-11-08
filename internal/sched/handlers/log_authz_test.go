@@ -11,6 +11,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -45,13 +46,14 @@ func setupLogAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) 
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		DefaultTaskModel: "test/model",
 		AdminAPIKey:      "admin-key",
 		DataDir:          tmpDir,
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/logs/{task_id}", h.GetLogs)
@@ -95,23 +97,7 @@ func addLoggedTask(t *testing.T, store *storage.Storage, createdBy *uuid.UUID, c
 
 func addLogUser(t *testing.T, store *storage.Storage, username, role, token string) *models.User {
 	t.Helper()
-	hash := models.HashToken(token)
-	user := &models.User{
-		ID:           uuid.New(),
-		Username:     username,
-		PasswordHash: "hashed",
-		Role:         role,
-		SessionToken: &hash,
-		CreatedAt:    time.Now().UTC(),
-	}
-	stored, err := store.AddUser(user)
-	if err != nil {
-		t.Fatalf("add user %s: %v", username, err)
-	}
-	if stored != nil {
-		return stored
-	}
-	return user
+	return seedOpsUser(t, store, uuid.New(), username, role, token)
 }
 
 // logRequest issues one transcript read with the given credential header.
@@ -132,15 +118,15 @@ func TestRunLogReadIsCreatorScoped(t *testing.T) {
 
 	store, keyMgr, r := setupLogAuthz(t)
 
-	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
+	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey(context.Background(), "owner", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create owner key: %v", err)
 	}
-	_, intruderRaw, err := keyMgr.CreateTypedKey("intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, intruderRaw, err := keyMgr.CreateTypedKey(context.Background(), "intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create intruder key: %v", err)
 	}
-	_, readonlyRaw, err := keyMgr.CreateTypedKey("watcher", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, readonlyRaw, err := keyMgr.CreateTypedKey(context.Background(), "watcher", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create readonly key: %v", err)
 	}
@@ -191,7 +177,7 @@ func TestRunLogFleetWideGrants(t *testing.T) {
 		t.Errorf("admin key must read any transcript: got %d", code)
 	}
 
-	_, auditorRaw, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
+	_, auditorRaw, err := keyMgr.CreateKey(context.Background(), "auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
 		nil, 0, nil, "fleet-wide log auditor")
 	if err != nil {
 		t.Fatalf("create auditor key: %v", err)
@@ -202,7 +188,7 @@ func TestRunLogFleetWideGrants(t *testing.T) {
 
 	// An unattributed task is readable only under a fleet-wide grant — a plain
 	// view_logs key owns nothing and therefore reads nothing.
-	_, plainRaw, err := keyMgr.CreateTypedKey("plain", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, plainRaw, err := keyMgr.CreateTypedKey(context.Background(), "plain", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create plain key: %v", err)
 	}

@@ -23,10 +23,10 @@
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet account-events export                       (every chat account's membership as JSON Lines, for an identity provider's import)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
-//	fleet config explain [KEY...] [--all] [--json] | migrate-env [--write]   (the configuration registry, #2053)
+//	fleet config explain [KEY...] [--all] [--json]   (the configuration registry, #2053)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
-//	fleet sched user add|update|set-role|rename|del|list
+//	fleet sched user add|update|set-role|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
 //	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
 //	fleet sched trigger create|list|delete|rotate
@@ -40,14 +40,14 @@
 //	fleet notes proposal publish|reject
 //	fleet worktree list|prune [--workspace DIR] [--older-than DUR]
 //	fleet backup  [--db=chat|sched|all] [--out DIR]
-//	fleet restore  --db=chat|sched <dump-file>
+//	fleet restore  --db=all|chat|sched <dump-file>
 //	fleet import <bundle.json> [--dry-run] [--live-only]
 //
 // The operator lifecycle is bootstrap → update → status/doctor: bootstrap
 // provisions a box, update rolls a new version in place, status reports health
 // (quick, read-only, in-process), and doctor diagnoses AND repairs box-level
 // drift (wraps scripts/doctor.sh; needs root except --check/--dry-run), and warns
-// about deprecated CHAT_/CUTLASS_ env spellings (ADR-0099).
+// about removed CHAT_/CUTLASS_ env spellings that are still set (ADR-0106).
 // bootstrap + update are thin wrappers over scripts/bootstrap.sh +
 // scripts/update.sh. restart/stop/logs are day-2 conveniences over the host
 // systemd unit (systemctl/journalctl).
@@ -178,10 +178,11 @@ Serve an ACP client (Agent Client Protocol over stdio — Zed, JetBrains, Neovim
   fleet acp [--email …] [--server …] [--model <slug>] [--timeout 4h]
 
 Preflight & diagnostics (in-binary; no server needed):
-  fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json]
+  fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json] [--retired-only]
                                                       (dry-run the boot: every env knob, the bundle manifest, MCP catalog,
                                                        personas; --skip-network-checks omits the DB/MCP/model-API probes;
-                                                       exit 0 = would boot, 1 = refused, 2 = usage)
+                                                       exit 0 = would boot, 1 = refused, 2 = usage. --retired-only: only the
+                                                       read-only scan for removed CHAT_/CUTLASS_ variables, exit 7 when found)
   fleet mcp test [--all | <server> ...] [--deep] [--bundle-path <dir>] [--timeout 30s] [--json]
                                                       (per-server smoke: spawn it host-side like the broker, handshake,
                                                        tools/list; --deep also calls its auth-status/probe tool — docs/MCP-TESTING.md)
@@ -225,6 +226,7 @@ Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
+  fleet admin merge-report [--json]                   (what the one-time identity merge recorded: demoted admins, unknown roles; read-only)
   fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
                                                        Auth's import-teams reads)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
@@ -240,8 +242,6 @@ Users, credentials, notes:
                                                        systemd unit's environment, your shell, the env file, aliases, defaults
                                                        incl. inherited ones — not the server's in-memory config; secrets redacted.
                                                        No KEY: every set/noted setting; --all: every one — docs/CONFIGURATION.md)
-  fleet config migrate-env [--write]                  (rewrite deprecated CHAT_/CUTLASS_ keys in the env file to their FLEET_ names;
-                                                       dry run by default, --write backs the file up first; never prints values)
   fleet env [show]                                    (print the server env file with secret values masked)
   fleet env edit [--editor CMD]                       (open the server env file in $EDITOR, or pick
                                                        nano/vim/helix interactively; offered via dnf install if missing.
@@ -254,7 +254,6 @@ Users, credentials, notes:
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly
-  fleet sched user rename <username> <new-username>
   fleet sched user del <username>
   fleet sched user list
   fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]
@@ -319,9 +318,9 @@ Database migrations (#256):
   fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending for the chat + sched DBs)
   fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (sched DB: clear a dirty row after a failed migration)
 
-Backup / restore (pg_dump -Fc / pg_restore; one dump file per store):
-  fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
-  fleet restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live store)
+Backup / restore (pg_dump -Fc / pg_restore; --db=all is one file, one snapshot):
+  fleet backup  [--db=chat|sched|all] [--out DIR]   (all = one snapshot of chat+core+sched; prints the path)
+  fleet restore  --db=all|chat|sched <dump-file>     (--clean --if-exists; overwrites the live store)
 
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)

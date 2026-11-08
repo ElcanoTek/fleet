@@ -28,9 +28,7 @@ func seedUsageFixture(t *testing.T, db *Database) (alice uuid.UUID) {
 	ctx := context.Background()
 
 	alice = uuid.New()
-	if err := db.AddUser(ctx, &models.User{ID: alice, Username: "alice@example.com", Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("AddUser: %v", err)
-	}
+	seedAccount(t, db, alice, "alice@example.com", "client")
 
 	modelA, modelB, key1 := "model-a", "model-b", "key-1"
 	task1 := &models.Task{ID: uuid.New(), Prompt: "t1", Status: models.TaskStatusSuccess, CreatedAt: time.Now().UTC(), CreatedBy: &alice, CreatedByKeyID: &key1, Model: &modelA}
@@ -108,13 +106,11 @@ func TestTaskUsageGroupByPrincipal(t *testing.T) {
 	})
 
 	t.Run("user falls back to UUID when the user row is gone", func(t *testing.T) {
-		if _, err := db.conn.ExecContext(ctx, "DELETE FROM users WHERE id = $1", alice); err != nil {
+		if _, err := db.conn.ExecContext(ctx, "DELETE FROM core.users WHERE id = $1", alice); err != nil {
 			t.Fatalf("delete user: %v", err)
 		}
 		t.Cleanup(func() {
-			if err := db.AddUser(ctx, &models.User{ID: alice, Username: "alice@example.com", Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-				t.Fatalf("re-add user: %v", err)
-			}
+			seedAccount(t, db, alice, "alice@example.com", "client")
 		})
 		rows, err := db.TaskUsage(ctx, from, to, "user")
 		if err != nil {

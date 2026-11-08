@@ -4,7 +4,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
 const formPromptYAML = `name: Campaign page
@@ -152,23 +152,20 @@ func TestPromptLibraryCollectionServesGitForms(t *testing.T) {
 func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
 	t.Parallel()
 
-	h, _ := setupTest(t)
+	h, store := setupTest(t)
 	h.config.SharedToken = "shared-secret"
-	h.SetChatMemberRoleProvider(func(_ context.Context, email string) (string, error) {
-		switch email {
-		case "chatmember@example.com":
-			return "member", nil
-		case "chatviewer@example.com":
-			return "viewer", nil
-		default:
-			return "", nil
+	// Chat-only accounts: no Operations Center access (ops_scope none), so
+	// /prompts authorizes them by their Fleet role, read from the same row.
+	for email, role := range map[string]identity.Role{"chatmember@example.com": identity.RoleMember, "chatviewer@example.com": identity.RoleViewer} {
+		if _, err := store.Identity().CreateAccount(t.Context(), identity.NewAccount{Email: email, Role: role}); err != nil {
+			t.Fatal(err)
 		}
-	})
+	}
 
 	promptsAuthed := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.PromptLibraryCollection))
 	meAuthed := h.AdminOrUserAuthMiddleware(http.HandlerFunc(h.GetCurrentUser))
 
-	// A Chat contributor with ops_role="none" (not in sched.users) can list and create prompts.
+	// A Chat contributor with ops_scope none can list and create prompts.
 	getReq := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	getReq.Header.Set("X-Orchestrator-Server-Token", "shared-secret")
 	getReq.Header.Set("X-User-Email", "chatmember@example.com")

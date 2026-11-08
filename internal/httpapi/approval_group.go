@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -260,7 +261,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			resume = true
 		}
 	}
-	logging.From(ctx).Info("audit: approval group decided", "user", user, "group_id", groupID, "conv_id", convID, "cards", len(decisions))
+	logging.From(ctx).Info("audit: approval group decided", "user", safe.LogSafe(user), "group_id", safe.LogSafe(groupID), "conv_id", safe.LogSafe(convID), "cards", len(decisions))
 	out := map[string]any{"group_id": groupID, "results": results}
 	if resume {
 		// At least one card's settlement may start the automatic continue
@@ -268,7 +269,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		// conversation for it, as after a single card.
 		out["resume"] = true
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 // checkGroupNarrowing checks a group decision's `narrow` map before any card

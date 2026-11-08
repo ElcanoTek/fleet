@@ -1,10 +1,11 @@
 # golangci-lint v2 configuration
 # https://golangci-lint.run/docs/configuration/
 #
-# CI pins golangci-lint to v2.14.0 (see .github/workflows/ci.yml:
-# golangci/golangci-lint-action `version: v2.14.0`). Keep these in sync so a
-# local `golangci-lint run` matches CI exactly — drifting the binary version
-# can surface or hide findings and make the full-gate flap.
+# CI pins the golangci-lint binary as GOLANGCI_LINT_VERSION in
+# .github/workflows/ci.yml (the go job's env; scripts/update-pins.sh moves it
+# and the docs that restate it, listed in scripts/lib/pin-docs.tsv). Run that
+# version locally so `golangci-lint run` matches CI exactly — drifting the
+# binary version can surface or hide findings and make the full-gate flap.
 #
 # That pin is coupled to go.mod's Go version and cannot lag it: golangci-lint
 # refuses to run when the Go release it was BUILT with is older than the
@@ -161,11 +162,11 @@ linters:
       #   - subprocess env plumbing: `fleet backup` (pg_dump) and `fleet
       #     update` (update.sh) hand their whole environment to the child;
       #   - secret redactors snapshot every VALUE as a literal to scrub
-      #     (agentcore, mcpbroker, the Browserbase live-view guard, `fleet
+      #     (agentcore, mcpbroker, the process log, the Browserbase live-view guard, `fleet
       #     diagnose`), and diagnose lists the set NAMES (never values);
       #   - the broker divests the connector env by scanning it, and creds
       #     discovers per-account suffix variants by scanning it.
-      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
+      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/logging/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
         text: os\.Environ
         linters:
           - forbidigo

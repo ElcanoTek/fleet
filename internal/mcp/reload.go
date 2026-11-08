@@ -75,7 +75,7 @@ func buildServer(ctx context.Context, def ServerDef, hc *http.Client) (*Server, 
 	var transport Transport
 	switch {
 	case def.Command != "":
-		t, err := NewStdioTransportInDir(def.Command, def.Args, def.Env, def.Dir)
+		t, err := newStdioTransport(def.Name, def.Command, def.Args, def.Env, def.Dir)
 		if err != nil {
 			return nil, &serverBuildError{err: err}
 		}

@@ -63,7 +63,12 @@ multi-step builders).
 SPA that Vite builds into `internal/webui/bundle/dist`, and the `fleet` binary
 embeds it (`go:embed`) and serves it, together with every browser `/api/*`
 route, on `FLEET_WEB_ADDR` (default `127.0.0.1:3000`)
-([ADR-0091](docs/adr/0091-go-serves-the-browser-tier.md)). Tier B because the
+([ADR-0091](docs/adr/0091-go-serves-the-browser-tier.md)). That listener is
+one chi tree (`cmd/fleet/router.go`, [ADR-0110](docs/adr/0110-one-http-surface.md))
+that also serves the public API (`/v1`, the unversioned-forever paths,
+`/webhooks/*`) with the same handlers as the loopback chat (`:8080`) and
+orchestrator (`:8000`) listeners, which stay for the box Caddyfile and the
+local CLIs. Tier B because the
 chat is a streaming, state-heavy app (SSE turns, approval cards, generative UI)
 that Tier A would mean re-implementing by hand.
 
@@ -71,7 +76,10 @@ that Tier A would mean re-implementing by hand.
   the HMAC `elcano_session` / Ed25519 `elcano_auth` cookies
   (`internal/websession`, shared with the orchestrator), OIDC, CSRF, CSP and
   the security headers, `X-App-Version`, theme/brand, SSE pass-through and
-  streamed uploads. It calls the chat and orchestrator handlers in-process.
+  streamed uploads. It calls the chat handlers in-process through its
+  `routes.go` rows; `/api/orchestrator/*` is the orchestrator router itself,
+  mounted behind the browser boundary (`orchestrator_mount.go`), so a new
+  Operations Center route needs no gateway change.
   It renders `index.html` per request (metadata + a JSON bootstrap), so the
   CSP needs no inline script. A browser API route belongs here.
 - **`web/`** owns the client only — see [`web/AGENTS.md`](web/AGENTS.md) for
@@ -81,6 +89,10 @@ that Tier A would mean re-implementing by hand.
 - **Runtime dependencies.** `dependencies` in `web/package.json` ship in the
   browser bundle; everything else is a devDependency (Vite, TypeScript,
   Vitest, Playwright, axe, type packages) and never reaches production.
+  `web/tools/openapi-typescript` is a build-time npm workspace of `web/` (same
+  lockfile, devDependencies only, declared in `stack.conf`): the
+  `openapi-typescript` generator needs the TypeScript 5 compiler API that
+  TypeScript 7 no longer ships ([ADR-0109](docs/adr/0109-generated-http-contracts.md)).
 
   | Runtime dependency | Why it is needed |
   |---|---|
@@ -153,6 +165,7 @@ make test-cover   # the same, with -coverprofile/-covermode=atomic (writes cover
 make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
                   #   + actionlint & shellcheck (workflows + shell) + stack-check — must pass clean
 make stack-check  # the Elcano frontend standard: AGENTS block, flag.lock, no CDNs, Tier B rules
+make api-contracts # regenerate docs/openapi.yaml (router + internal/apispec) and web/src/api/generated
 make govulncheck  # call-graph-aware CVE scan of the dependency tree
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
@@ -368,6 +381,12 @@ same PR.
   against each other, and that pattern is the reason to add a row rather than
   trust a reviewer to notice. [`docs/USER-GUIDES.md`](docs/USER-GUIDES.md) has
   the full contract.
+- **Orchestrator routes carry a contract.** `docs/openapi.yaml` and
+  `web/src/api/generated/` are generated, never edited: a route added to,
+  renamed in or removed from `buildOrchestratorMux` needs its entry in
+  `internal/apispec/orchestrator/operations.go`, then `make api-contracts`
+  (`TestOpenAPIGenerated` and the CI `contracts` job fail otherwise). See
+  [`docs/HTTP-CONTRACTS.md`](docs/HTTP-CONTRACTS.md).
 - **Ship features with honest scope.** Every feature lands with a design note
   recording what shipped, what deviated from the issue, and what was deliberately
   deferred — in a dedicated `docs/<FEATURE>.md` (plus an ADR when an invariant is

@@ -12,17 +12,13 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
-// sandboxEnv reads the canonical FLEET_SANDBOX_* variable, falling back
-// to the legacy CHAT_SANDBOX_* name for back-compat.
+// sandboxEnv reads the FLEET_SANDBOX_* test variable.
 func sandboxEnv(name string) string {
-	if v := os.Getenv("FLEET_SANDBOX_" + name); v != "" {
-		return v
-	}
-	return os.Getenv("CHAT_SANDBOX_" + name)
+	return os.Getenv("FLEET_SANDBOX_" + name)
 }
 
 // defaultHardenedTestImage is the sandbox image used when
-// FLEET_SANDBOX_TEST_IMAGE (or the legacy CHAT_SANDBOX_TEST_IMAGE) is unset.
+// FLEET_SANDBOX_TEST_IMAGE is unset.
 // It's the generic build-on-box artifact the default client bundle produces
 // (scripts/build-sandbox-image.sh → config/default/sandbox/Containerfile).
 // fleet's core ships no vendor-published image, so this is a local-only tag
@@ -69,7 +65,7 @@ func TestSandboxUnderSystemdHardening(t *testing.T) {
 		t.Skip("hardening test runs on linux only")
 	}
 	if sandboxEnv("HARDENED_TEST") != "1" {
-		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 (or legacy CHAT_SANDBOX_HARDENED_TEST=1) to run (mutates host: creates 'chat' user, pulls images)")
+		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 to run (mutates host: creates 'chat' user, pulls images)")
 	}
 	for _, tool := range []string{"systemd-run", "podman", "go"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -180,7 +176,7 @@ func TestSandboxSeccompBlocksPtrace(t *testing.T) {
 		t.Skip("seccomp filter runs on linux only")
 	}
 	if sandboxEnv("HARDENED_TEST") != "1" {
-		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 (or legacy CHAT_SANDBOX_HARDENED_TEST=1) to run (pulls/needs a real sandbox image)")
+		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 to run (pulls/needs a real sandbox image)")
 	}
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skip("podman not on PATH")
@@ -275,7 +271,7 @@ func TestSandboxUnderRestrictSUIDSGIDFails(t *testing.T) {
 		t.Skip("hardening test runs on linux only")
 	}
 	if sandboxEnv("HARDENED_TEST") != "1" {
-		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 (or legacy CHAT_SANDBOX_HARDENED_TEST=1) to run (mutates host: creates 'chat' user, pulls images)")
+		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 to run (mutates host: creates 'chat' user, pulls images)")
 	}
 	for _, tool := range []string{"systemd-run", "podman"} {
 		if _, err := exec.LookPath(tool); err != nil {

@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,8 +25,9 @@ func TestTaskStopFollowsTaskScope(t *testing.T) {
 
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
@@ -47,16 +49,16 @@ func TestTaskStopFollowsTaskScope(t *testing.T) {
 		return got.Status
 	}
 
-	_, operatorKey, err := keyMgr.CreateKey("operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	_, operatorKey, err := keyMgr.CreateKey(context.Background(), "operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create operator key: %v", err)
 	}
-	_, auditorOperatorKey, err := keyMgr.CreateKey("auditor-operator",
+	_, auditorOperatorKey, err := keyMgr.CreateKey(context.Background(), "auditor-operator",
 		[]models.Permission{models.PermissionCancelTask, models.PermissionViewTasks, models.PermissionViewAllLogs}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create auditor-operator key: %v", err)
 	}
-	taskKey, taskKeyRaw, err := keyMgr.CreateTypedKey("automation", apikeys.KeyTypeTask, nil, 0, nil, "")
+	taskKey, taskKeyRaw, err := keyMgr.CreateTypedKey(context.Background(), "automation", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create task key: %v", err)
 	}

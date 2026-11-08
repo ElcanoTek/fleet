@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // TestWriteJSONKeepsExplicitContentType pins the reason writeJSON/writeJSONStatus
@@ -18,7 +21,7 @@ func TestWriteJSONKeepsExplicitContentType(t *testing.T) {
 
 	t.Run("defaults when unset", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeJSON(rec, map[string]string{"ok": "yes"})
+		writeJSON(rec, nil, map[string]string{"ok": "yes"})
 		if got := rec.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("Content-Type: want application/json, got %q", got)
 		}
@@ -30,7 +33,7 @@ func TestWriteJSONKeepsExplicitContentType(t *testing.T) {
 	t.Run("preserves an explicit charset", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		rec.Header().Set("Content-Type", "application/json; charset=utf-8")
-		writeJSON(rec, map[string]string{"ok": "yes"})
+		writeJSON(rec, nil, map[string]string{"ok": "yes"})
 		if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 			t.Fatalf("helper clobbered the handler's Content-Type: %q", got)
 		}
@@ -39,7 +42,7 @@ func TestWriteJSONKeepsExplicitContentType(t *testing.T) {
 	t.Run("status sibling preserves it too", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		rec.Header().Set("Content-Type", "application/json; charset=utf-8")
-		writeJSONStatus(rec, http.StatusAccepted, map[string]string{"ok": "yes"})
+		writeJSONStatus(rec, nil, http.StatusAccepted, map[string]string{"ok": "yes"})
 		if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 			t.Fatalf("helper clobbered the handler's Content-Type: %q", got)
 		}
@@ -59,11 +62,35 @@ func TestWriteJSONLogsEncodeFailure(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	// A channel is not JSON-encodable; Encode fails before emitting bytes.
-	writeJSON(rec, map[string]any{"bad": make(chan int)})
+	writeJSON(rec, nil, map[string]any{"bad": make(chan int)})
 	if rec.Body.Len() != 0 {
 		t.Fatalf("expected an empty body on a marshal failure, got %q", rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type: want application/json, got %q", got)
+	}
+}
+
+// writeJSON takes the request it answers, so an encode failure is logged with
+// that request's correlation (request_id, user_id) rather than as a
+// context-free line (#2074 review). Not parallel: it swaps the default logger.
+func TestWriteJSONLogsEncodeFailureWithTheRequestContext(t *testing.T) {
+	var out lockedLogBuf
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logging.NewHandler("json", &out, slog.LevelDebug)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req = req.WithContext(logging.WithUser(logging.WithRequestID(req.Context(), "req-wj"), "a@b.co"))
+	writeJSON(httptest.NewRecorder(), req, map[string]any{"bad": make(chan int)})
+	writeJSONStatus(httptest.NewRecorder(), req, http.StatusOK, map[string]any{"bad": make(chan int)})
+	recs := out.records(t)
+	if len(recs) != 2 {
+		t.Fatalf("want 2 encode-failure records, got %v", recs)
+	}
+	for _, m := range recs {
+		if m["msg"] != "write json failed" || m["request_id"] != "req-wj" || m["user_id"] != "a@b.co" {
+			t.Fatalf("record lacks the request's correlation: %v", m)
+		}
 	}
 }

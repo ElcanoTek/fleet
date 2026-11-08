@@ -5,14 +5,12 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
-	"runtime/debug"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
-	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -24,10 +22,11 @@ func (s *Server) Routes() http.Handler {
 	// /v1/api-info via the apiversion.Router wrapper in cmd/fleet.
 	mux.HandleFunc("/api-info", apiversion.InfoHandler(version.Version()))
 
-	// auth = shared-secret + X-User-Email (identity). member adds the
-	// scoped-tier user-list gate. /auth/verify stays on auth alone so the
-	// password pre-login path can answer for not-yet-known emails without
-	// leaking the user-list (see membershipMiddleware).
+	// auth = a request principal naming a user (the gateway's, or one the
+	// listener edge resolved). member adds the scoped-tier user-list gate.
+	// The /auth/* sign-in legs stay off member so the password pre-login path
+	// can answer for not-yet-known emails without leaking the user-list (see
+	// membershipMiddleware), and are gateway-only (gatewayMiddleware).
 	auth := s.authMiddleware
 	member := s.membershipMiddleware
 	// mutate adds the read-only-role gate (#237): a "viewer" account may read
@@ -142,14 +141,14 @@ func (s *Server) Routes() http.Handler {
 	// mutate keeps a read-only viewer read-only here too.
 	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
-	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
-	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
+	mux.Handle("/auth/verify", s.gatewayUserMiddleware(http.HandlerFunc(s.handleAuthVerify)))
+	// /auth/session-epoch is off member for the same reason as /auth/verify:
 	// the web tier's mint paths call it before a session exists, and it must answer
 	// for a not-yet-provisioned email without leaking the user-list.
-	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
-	mux.Handle("/auth/external-session-epoch", auth(http.HandlerFunc(s.handleExternalSessionEpoch)))
-	mux.Handle("/auth/external-session-revoke", auth(http.HandlerFunc(s.handleExternalSessionRevoke)))
-	mux.Handle("/auth/external-access", auth(http.HandlerFunc(s.handleExternalAccess)))
+	mux.Handle("/auth/session-epoch", s.gatewayUserMiddleware(http.HandlerFunc(s.handleSessionEpoch)))
+	mux.Handle("/auth/external-session-epoch", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalSessionEpoch)))
+	mux.Handle("/auth/external-session-revoke", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalSessionRevoke)))
+	mux.Handle("/auth/external-access", s.gatewayUserMiddleware(http.HandlerFunc(s.handleExternalAccess)))
 	mux.Handle("/auth/external-team-rename", s.providerEventMiddleware(http.HandlerFunc(s.handleExternalTeamRename)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/decision-models", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminDecisionModels)))))
@@ -198,7 +197,13 @@ func (s *Server) Routes() http.Handler {
 	// matched route pattern; it sits inside bodyLimitMiddleware (after recover/IP
 	// filter/body cap) and is a no-op-cost non-recording span when tracing is off,
 	// while always setting the X-Request-Id response header.
-	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(mux))))
+	//
+	// recoverMiddleware is applied twice. The inner one sits just inside
+	// otelsetup.Middleware, so a handler panic is reported with the
+	// request's request_id, trace_id and span_id; the outer one is the last
+	// resort for a panic in the IP filter, the body cap or the tracing
+	// middleware itself.
+	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(recoverMiddleware(mux)))))
 }
 
 // maxJSONBodyBytes caps non-upload request bodies on the chat server, matching
@@ -247,21 +252,10 @@ func isApprovalDecisionPath(path string) bool {
 
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500
 // rather than letting it crash the single-host process. (The detached turn
-// goroutine has its own recovery; see runTurnAsync.) This mirrors the chi
-// httpmw.Recoverer the orchestrator router already uses.
-func recoverMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
-					panic(rec) // a deliberate abort is the server's to handle
-				}
-				// Same structured emission + counter + hooks every recovered panic
-				// gets (#241), labeled with the request method+path for correlation.
-				safe.EmitPanic("httpapi.handler "+r.Method+" "+r.URL.Path, rec, debug.Stack())
-				writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
+// goroutine has its own recovery; see runTurnAsync.) It is the same
+// httpmw.RecoverWith the orchestrator router's Recoverer is built from — one
+// structured safe event per panic (#241), labelled with the route, never the
+// value or stack — answering with the chat API's JSON error body.
+var recoverMiddleware = httpmw.RecoverWith("httpapi.handler", func(w http.ResponseWriter, r *http.Request) {
+	writeJSONStatus(w, r, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+})

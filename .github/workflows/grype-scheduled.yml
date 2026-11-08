@@ -35,6 +35,11 @@ jobs:
     timeout-minutes: 35
     env:
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+      # Pinned + checksum-verified, exactly like the per-PR gate in ci.yml
+      # (scripts/update-pins.sh moves every workflow's pin together).
+      # Job-level so the cache key can read it.
+      GRYPE_VERSION: '0.117.0'
+      GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
 
     steps:
       - name: Checkout
@@ -45,20 +50,23 @@ jobs:
           persist-credentials: false
           ref: main  # always scan the tip of main, not a PR branch
 
+      - name: Cache the verified Grype release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/grype
+          key: pinned-tool-grype-${{ runner.os }}-${{ runner.arch }}-${{ env.GRYPE_VERSION }}-${{ env.GRYPE_SHA256 }}
+
       - name: Install Grype
-        # Pinned + checksum-verified, exactly like the per-PR gate in ci.yml.
-        # Keep GRYPE_VERSION + GRYPE_SHA256 in sync with that job.
-        env:
-          GRYPE_VERSION: '0.117.0'
-          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
+        # Cache, then the release asset, then `go install` of the same version
+        # through the Go module proxy (scripts/install-pinned-tool.sh).
         run: |
           set -euo pipefail
-          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
-            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
-          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "$tarball" grype
-          sudo install -m 0755 grype /usr/local/bin/grype
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz" \
+            --sha256 "${GRYPE_SHA256}" --member grype \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/grype" \
+            --go-install "github.com/anchore/grype/cmd/grype@v${GRYPE_VERSION}" \
+            grype
           grype version
 
       - name: Ensure podman

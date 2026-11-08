@@ -32,8 +32,9 @@ func TestHandleWebhookTrigger_WebhookKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key mgr: %v", err)
 	}
-	h := New(Config{DefaultTaskModel: "test/model", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/triggers/{slug}", h.HandleWebhookTrigger)
 
 	template := models.NewTask(models.TaskCreate{Prompt: "base prompt", TriggerType: models.TriggerTypeWebhook})

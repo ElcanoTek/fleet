@@ -37,20 +37,20 @@ salt, and not a credential `/auth/verify` would accept.
 | Step | Where | Behaviour |
 |---|---|---|
 | mint | `POST /api/auth/login`, `GET /api/auth/oidc/callback` | password login reads `/auth/session-epoch`; OIDC reads `/auth/external-session-epoch` and stamps issuer+subject+source with its independent claim; either failed read refuses login |
-| serve | `internal/httpapi` `/auth/session-epoch` | on `authMiddleware` alone (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
-| forward | `chatServerHeaders`, `orchestratorHeaders` | `X-User-Session-Epoch` beside `X-User-Email`; OIDC also forwards source, issuer, and subject over the same shared-token channel |
-| check (chat) | `membershipMiddleware` | compared inside the `GetUser` it already performs — no extra query |
-| check (ops center) | `headerTrustUser` → `checkSessionEpoch` | resolved through a chat-store lookup seam `cmd/fleet` injects; the two planes keep separate stores ([ADR-0098](adr/0098-one-database-two-schemas.md)), so this is a lookup, never a join — and it costs one chat-DB query per header-trust request |
+| serve | `internal/httpapi` `/auth/session-epoch` | gateway-only and outside the membership gate (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
+| hand over | `internal/webui` `sessionPrincipal` | the claim rides the in-process call's typed `principal.Principal` (`Session.Epoch`; OIDC also `Source`, `Issuer`, `Subject`), never a header ([ADR-0108](adr/0108-typed-principal.md)) |
+| check (both planes) | `principal.Resolve`, from chat's `membershipMiddleware` and the Operations Center's `userPrincipal` | one read of the account's `core.users` row admits it and carries the live epoch (`identity.SessionEpochSQL`); an OIDC claim reads `core.external_auth_epochs` (#2049 M4, [ADR-0105](adr/0105-one-identity-table.md)) — no seam, and the same code on both planes |
 | verdict | both backends | `401 {"error":"session_revoked"}` + `X-Session-Revoked: 1`; both Next proxies then delete the cookie (`sessionRevocation.ts`), or the still-valid signature would bounce every visit to `/login` back into a 401 |
 
 Three rules keep the gate honest in the other direction:
 
 - **A request with no claim is admitted.** The Ed25519 `elcano_auth` cookie is
-  minted by the auth service, which chat cannot add a claim to, and a moc bearer
-  is its own credential. Rejecting claimless requests would lock both out.
+  minted by the auth service, which chat cannot add a claim to. Rejecting
+  claimless requests would lock it out. (The Operations Center's own password
+  bearer, which also carried no claim, is retired: ADR-0105.)
 - **The Next tier refuses a chat-minted cookie with no claim**
   (`verifySessionToken`), which is what makes "no claim is admitted" safe: the
-  only claimless requests that reach a backend are the two above.
+  only claimless requests that reach a backend are the one above.
 - **A failed lookup is a 500, not a revocation.** An unreachable or slow chat
   store says nothing about the session; answering the revoked verdict would
   delete a valid cookie and sign the whole Operations Center out over a database
@@ -73,15 +73,11 @@ Three rules keep the gate honest in the other direction:
   outright (ADR-0095).
 - **Per account, not per device.** Two devices signed into one account share one
   epoch: a reset ends both (the point), and neither can be ended alone.
-- **The Operations Center bearer login is untouched.** `fleet sched user
-  passwd` re-upserts through `AddUser`, whose `ON CONFLICT` writes
-  `session_token` back unchanged, so an issued bearer token survives a sched
-  password change. A bearer ends when it is presented to the orchestrator's
-  `POST /auth/logout` (which clears that session server-side), when a later
-  login replaces it, at its expiry, or when the sched user is deleted or
-  disabled.
-  A chat password reset never governed that credential. On a Fleet that signs
-  in through central Auth no such bearer is accepted at all (ADR-0095).
+- **There is no separate Operations Center credential.** Its password login
+  (`POST /auth/login`, `POST /auth/logout`) and the bearer token it minted are
+  retired (#2049 M4, [ADR-0105](adr/0105-one-identity-table.md)): people reach
+  the Operations Center with the same session cookie, so the same epoch ends
+  both, and programs use API keys, which epochs do not govern.
 - **Magic-link (`elcano_auth`) sessions carry no epoch** and stay revocable only
   at the auth service that mints them.
 - **Next-only routes are not gated.** The epoch is enforced by the two

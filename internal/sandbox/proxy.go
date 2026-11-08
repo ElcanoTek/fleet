@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
@@ -281,14 +282,14 @@ func (p *EgressProxy) handle(w http.ResponseWriter, r *http.Request) {
 		_, err := io.Copy(upstream, drain.reader(client))
 		closeWrite(upstream)
 		drain.arm()
-		drain.logReap("client→upstream", host, port, err)
+		drain.logReap(r.Context(), "client→upstream", host, port, err)
 	}()
 	go func() {
 		defer wg.Done()
 		_, err := io.Copy(client, drain.reader(upstream))
 		closeWrite(client)
 		drain.arm()
-		drain.logReap("upstream→client", host, port, err)
+		drain.logReap(r.Context(), "upstream→client", host, port, err)
 	}()
 	wg.Wait()
 }
@@ -349,13 +350,13 @@ func (r *drainProgressReader) Read(b []byte) (int, error) {
 // peer, or a transfer that stalled) rather than a clean close, and the one the
 // old code discarded. Every other copy error is the ordinary teardown shape
 // (peer reset, closed conn) and stays quiet.
-func (d *tunnelDrain) logReap(direction, host, port string, err error) {
+func (d *tunnelDrain) logReap(ctx context.Context, direction, host, port string, err error) {
 	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
 		// domainAllowed against this turn's allowlist (domain patterns, no CR/LF),
 		// port is the fixed requirePort when one is set, and net/http rejects
 		// CR/LF in the request line before either is parsed. direction is one of
 		// two package literals.
-		slog.Info("sandbox: egress tunnel reaped while idle during drain", "target", net.JoinHostPort(host, port), "direction", direction, "idle", d.timeout)
+		logging.From(ctx).Info("sandbox: egress tunnel reaped while idle during drain", "target", net.JoinHostPort(host, port), "direction", direction, "idle", d.timeout)
 	}
 }
 

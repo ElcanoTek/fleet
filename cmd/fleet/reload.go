@@ -60,7 +60,7 @@ func onSignal(ctx context.Context, sig os.Signal, label string, fn func()) func(
 			case <-ch:
 				// Recover PER iteration (not once around the loop).
 				func() {
-					defer safe.Recover(label, nil)
+					defer safe.RecoverContext(ctx, label, nil)
 					fn()
 				}()
 			}

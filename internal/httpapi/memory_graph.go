@@ -7,6 +7,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -53,7 +54,7 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 	// goroutine here could still be mid-write after shutdown returned or after a
 	// test closed its store.
 	s.background.Go("httpapi.memory_graph_extract", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), memoryGraphExtractBudget)
+		ctx, cancel := context.WithTimeout(detachedCtx(m.UserEmail, "", ""), memoryGraphExtractBudget)
 		defer cancel()
 		g, err := s.memoryGraphExtractor(ctx, content)
 		if err != nil {
@@ -192,7 +193,7 @@ func (s *Server) memoryGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		relations = append(relations, rj)
 	}
-	writeJSON(w, map[string]any{"entities": entities, "relations": relations})
+	writeJSON(w, r, map[string]any{"entities": entities, "relations": relations})
 }
 
 // handleMemoryExtractGraph serves POST /memories/{id}/extract-graph (#523):
@@ -219,7 +220,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	g, err := s.memoryGraphExtractor(ctx, m.Content)
 	if err != nil {
-		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory_id", id, "err", err)
+		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory_id", safe.LogSafe(id), "err", err)
 		http.Error(w, "graph extraction failed", http.StatusBadGateway)
 		return
 	}
@@ -228,7 +229,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"memory_id": id, "relations": n})
+	writeJSON(w, r, map[string]any{"memory_id": id, "relations": n})
 }
 
 // snippet returns the first n runes of s (the graph API's per-relation echo

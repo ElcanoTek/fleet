@@ -168,7 +168,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 			resp.ThirdParty = append(resp.ThirdParty, thirdPartyCatalogEntry(e))
 		}
 	}
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // alwaysOnDirectoryRows lists the enabled always-on connectors for the

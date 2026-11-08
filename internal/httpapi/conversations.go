@@ -33,7 +33,7 @@ type createConversationRequest struct {
 	Model           string `json:"model"`
 	// Lockdown, when true, marks this conversation as locked-down: the
 	// agent loop forces a per-turn container sandbox and the model slug
-	// is restricted to CHAT_LOCKDOWN_ALLOWED_MODELS. Frontend exposes
+	// is restricted to FLEET_LOCKDOWN_ALLOWED_MODELS. Frontend exposes
 	// this as a "New lockdown chat" affordance. Server rejects when
 	// CHAT_LOCKDOWN_ENABLED is false.
 	Lockdown bool `json:"lockdown,omitempty"`
@@ -76,7 +76,7 @@ func (s *Server) rollbackCreatedConversation(user, convID string) {
 	if convID == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx(user, convID, ""), 5*time.Second)
 	defer cancel()
 	if err := s.store.Delete(ctx, user, convID); err != nil {
 		logging.From(ctx).Error("rollback created conversation failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
@@ -103,7 +103,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"conversations": list})
+		writeJSON(w, r, map[string]any{"conversations": list})
 		return
 	}
 	// ?scope=shared returns all conversations shared with the caller via
@@ -115,7 +115,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"conversations": list})
+		writeJSON(w, r, map[string]any{"conversations": list})
 		return
 	}
 	list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
@@ -131,7 +131,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 			list[i].OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, &list[i])
 		}
 	}
-	writeJSON(w, map[string]any{"conversations": list})
+	writeJSON(w, r, map[string]any{"conversations": list})
 }
 
 func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +188,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			}
 			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
 			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
-			writeJSON(w, map[string]any{"deleted": n})
+			writeJSON(w, r, map[string]any{"deleted": n})
 		case len(req.ConversationIDs) > 0:
 			// Targeted bulk delete by explicit ID list.
 			if len(req.ConversationIDs) > 100 {
@@ -214,7 +214,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				s.releasePersistentSandbox(cid)
 				s.sessionApprovals.Forget(cid)
 			}
-			writeJSON(w, map[string]any{"deleted": n})
+			writeJSON(w, r, map[string]any{"deleted": n})
 		default:
 			// Legacy bare DELETE /conversations → DeleteAllUnpinned.
 			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
@@ -225,7 +225,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			}
 			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
 			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
-			writeJSON(w, map[string]any{"deleted": n})
+			writeJSON(w, r, map[string]any{"deleted": n})
 		}
 	case http.MethodPost:
 		s.createConversation(w, r, user)
@@ -261,7 +261,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		} else if existing != nil {
-			writeJSON(w, existing)
+			writeJSON(w, r, existing)
 			return
 		}
 		r = r.WithContext(store.WithNewConversationID(r.Context(), id))
@@ -319,7 +319,7 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 		}
 	}
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
-	writeJSON(w, conv)
+	writeJSON(w, r, conv)
 }
 
 // bulkPatchConversations handles PATCH /conversations/bulk (#279): applies the
@@ -364,7 +364,7 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"updated": n})
+	writeJSON(w, r, map[string]any{"updated": n})
 }
 
 // conversationOrder handles GET and PUT /conversations/order: the orders the
@@ -381,7 +381,7 @@ func (s *Server) conversationOrder(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not read your chat order", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"orders": orders})
+		writeJSON(w, r, map[string]any{"orders": orders})
 	case http.MethodPut:
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		var req struct {
@@ -404,7 +404,7 @@ func (s *Server) conversationOrder(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not save your chat order", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"scope": req.Scope, "conversation_ids": kept})
+		writeJSON(w, r, map[string]any{"scope": req.Scope, "conversation_ids": kept})
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

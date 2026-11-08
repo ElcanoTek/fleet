@@ -24,6 +24,11 @@ const (
 	ChatSchema   = "chat"
 	SchedSchema  = "sched"
 	PublicSchema = "public"
+	// IdentitySchema holds the one identity table, core.users, and its side
+	// tables (#2049 M4, ADR-0105). The chat store's migrations create it; both
+	// stores read it with schema-qualified names, so it is never on a
+	// search_path.
+	IdentitySchema = "core"
 )
 
 // RetiredDSNKeys are the per-store DSN keys of the two-database layout that

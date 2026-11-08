@@ -176,27 +176,37 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Pinned release + checksum (job-level so the cache key below can read
+      # them; scripts/update-pins.sh moves both together).
+      GITLEAKS_VERSION: '8.30.1'
+      GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache the verified gitleaks release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/gitleaks
+          key: pinned-tool-gitleaks-${{ runner.os }}-${{ runner.arch }}-${{ env.GITLEAKS_VERSION }}-${{ env.GITLEAKS_SHA256 }}
 
       - name: Install gitleaks
         # Pin a specific gitleaks release and verify its checksum so the gate is
         # reproducible and can't be silently changed by an upstream re-tag. The
         # scan reads .gitleaks.toml (full default ruleset + path allowlist) and
         # .gitleaksignore (fingerprints of confirmed FAKE test fixtures) from the
-        # repo root automatically.
-        env:
-          GITLEAKS_VERSION: '8.30.1'
-          GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        # repo root automatically. Cache, then the release asset, then `go
+        # install` of the same version through the Go module proxy when GitHub
+        # release downloads are down (scripts/install-pinned-tool.sh).
         run: |
           set -euo pipefail
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
-          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "$tarball" gitleaks
-          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --sha256 "${GITLEAKS_SHA256}" --member gitleaks \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/gitleaks" \
+            --go-install "github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION}" \
+            gitleaks
           gitleaks version
 
       - name: Run gitleaks
@@ -248,26 +258,35 @@ jobs:
     name: Workflow + shell lint (actionlint, shellcheck)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Job-level so the cache key below can read them.
+      ACTIONLINT_VERSION: '1.7.7'
+      ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache the verified actionlint release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/actionlint
+          key: pinned-tool-actionlint-${{ runner.os }}-${{ runner.arch }}-${{ env.ACTIONLINT_VERSION }}-${{ env.ACTIONLINT_SHA256 }}
 
       - name: Install actionlint
         # Pinned release + checksum, the same contract as the gitleaks step
         # above: an upstream re-tag cannot silently change what this gate
         # enforces. Checksum verified against the release's own
-        # actionlint_1.7.7_checksums.txt.
-        env:
-          ACTIONLINT_VERSION: '1.7.7'
-          ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757'
+        # actionlint_1.7.7_checksums.txt. Cache, then the release asset, then
+        # `go install` of the same version through the Go module proxy
+        # (scripts/install-pinned-tool.sh).
         run: |
           set -euo pipefail
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "$tarball" actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --sha256 "${ACTIONLINT_SHA256}" --member actionlint \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/actionlint" \
+            --go-install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}" \
+            actionlint
           actionlint --version
 
       - name: Run actionlint
@@ -318,6 +337,10 @@ jobs:
     name: Helm chart lint (#989)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Job-level so the cache key below can read them.
+      KUBECONFORM_VERSION: '0.6.7'
+      KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -331,19 +354,25 @@ jobs:
             --set image.repository=registry.invalid/fleet --set image.tag=ci \
             --set sandbox.image=registry.invalid/fleet-sandbox:ci
 
+      - name: Cache the verified kubeconform release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/kubeconform
+          key: pinned-tool-kubeconform-${{ runner.os }}-${{ runner.arch }}-${{ env.KUBECONFORM_VERSION }}-${{ env.KUBECONFORM_SHA256 }}
+
       - name: Install kubeconform
         # Pinned + checksum-verified, same discipline as the gitleaks gate.
-        env:
-          KUBECONFORM_VERSION: '0.6.7'
-          KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+        # Cache, then the release asset, then `go install` of the same version
+        # through the Go module proxy: a GitHub release-asset outage (HTTP 504
+        # on every retry) used to fail this job before it validated anything.
         run: |
           set -euo pipefail
-          tarball="kubeconform-linux-amd64.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
-            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${tarball}"
-          echo "${KUBECONFORM_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "$tarball" kubeconform
-          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            --sha256 "${KUBECONFORM_SHA256}" --member kubeconform \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/kubeconform" \
+            --go-install "github.com/yannh/kubeconform/cmd/kubeconform@v${KUBECONFORM_VERSION}" \
+            kubeconform
           kubeconform -v
 
       - name: Render and schema-validate every shape
@@ -480,6 +509,15 @@ jobs:
       # The clientconfig tests self-resolve config/default, but point the binaries at
       # the in-repo bundle explicitly for any code path that reads it.
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
+      # The golangci-lint binary: pinned release + checksum (scripts/lib/pins.tsv,
+      # moved by scripts/update-pins.sh); job-level so the cache key can read
+      # it. Repo .golangci.yml is the v2 schema and no longer pins run.go
+      # (golangci-lint defaults to go.mod's version), so only the BINARY is
+      # pinned, here, so CI and a local `golangci-lint run` agree and the full
+      # gate never flaps on a release. ONBOARDING.md and docs/TESTING.md restate
+      # it; scripts/check_versions_test.go keeps them in step.
+      GOLANGCI_LINT_VERSION: '2.14.0'
+      GOLANGCI_LINT_SHA256: 'ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab'
 
     steps:
       - name: Checkout
@@ -695,16 +733,36 @@ jobs:
         # + the host fixtures only compile with the tag.
         run: go vet -tags fleet_host_executor ./...
 
+      - name: Cache the verified golangci-lint release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/golangci-lint
+          key: pinned-tool-golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ env.GOLANGCI_LINT_SHA256 }}
+
+      - name: Install golangci-lint
+        # The action below used to download the binary itself, from GitHub
+        # release assets with no checksum and no fallback, and a release-asset
+        # outage (HTTP 504 on every retry) failed the whole Go job. Now: cache,
+        # then the checksum-verified release asset, then `go install` of the
+        # same version through the Go module proxy, built with go.mod's Go
+        # (setup-go above), which golangci-lint needs to lint this module.
+        run: |
+          set -euo pipefail
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz" \
+            --sha256 "${GOLANGCI_LINT_SHA256}" \
+            --member "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint" \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/golangci-lint" \
+            --go-install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${GOLANGCI_LINT_VERSION}" \
+            golangci-lint
+          golangci-lint version
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          # Repo .golangci.yml is the v2 schema (version: "2"). It no longer
-          # pins run.go: golangci-lint's documented default is "use Go version
-          # from the go.mod file", so go.mod is the single declaration and the
-          # linter follows it automatically. The BINARY version still needs a
-          # pin so CI and a local `golangci-lint run` agree and the full gate
-          # never flaps on a release.
-          version: v2.14.0
+          # Run the binary installed above (GOLANGCI_LINT_VERSION); the action
+          # downloads nothing.
+          install-mode: none
           # FULL GATE: the lint backlog has been burned down to zero, so this
           # fails on ANY finding (not just new-vs-merge-base). only-new-issues is
           # intentionally removed/false. To keep it clean: fix the finding, or
@@ -1213,6 +1271,61 @@ jobs:
           ./fleet version --web
           test "$(./fleet version --web)" = "web bundle: $(cat internal/webui/bundle/dist/build-id.txt)"
 
+  contracts:
+    # The generated HTTP contracts (ADR-0109, docs/HTTP-CONTRACTS.md).
+    # Regenerates docs/openapi.yaml from the REAL orchestrator router plus its
+    # route catalog (internal/apispec/orchestrator), and web/src/api/generated/
+    # from that spec with the pinned openapi-typescript devDependency, then
+    # fails on any difference from the commit. Generation itself fails when
+    # the router registers a route the catalog does not describe, or the
+    # catalog describes a route the router does not register, so this job is
+    # also the route <-> spec gate. It fetches nothing the go and web jobs do
+    # not already fetch: Go modules through the module proxy and the npm
+    # registry behind setup-node's npm cache.
+    name: HTTP contracts (OpenAPI + web types)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    # docs/openapi.yaml is not docs-only (the classifier's allow-list is
+    # prose), so a hand edit to the generated spec always reaches this job.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
+
+      - name: Regenerate the spec and the web types
+        run: make api-contracts
+
+      - name: Fail on drift
+        run: |
+          set -euo pipefail
+          paths=(docs/openapi.yaml web/src/api/generated)
+          if ! git diff --exit-code -- "${paths[@]}" || [ -n "$(git status --porcelain --untracked-files=all -- "${paths[@]}")" ]; then
+            git status --short -- "${paths[@]}"
+            echo "::error::The committed HTTP contracts differ from what the router and internal/apispec generate. Run make api-contracts and commit the result (docs/HTTP-CONTRACTS.md)."
+            exit 1
+          fi
+          echo "docs/openapi.yaml and web/src/api/generated/ match the router."
+
   playwright:
     name: Web e2e (Playwright, mocked)
     runs-on: ubuntu-latest
@@ -1526,6 +1639,10 @@ jobs:
       security-events: write
     env:
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+      # The pinned Grype (see "Install Grype"). Job-level so the cache key can
+      # read it; scripts/update-pins.sh moves it in every workflow together.
+      GRYPE_VERSION: '0.117.0'
+      GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
 
     steps:
       - name: Checkout
@@ -1535,6 +1652,12 @@ jobs:
           # authenticated fetch, so do not leave the token in .git/config while
           # a PR-controlled Containerfile goes through `podman build`.
           persist-credentials: false
+
+      - name: Cache the verified Grype release asset
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fleet-pinned-tools/grype
+          key: pinned-tool-grype-${{ runner.os }}-${{ runner.arch }}-${{ env.GRYPE_VERSION }}-${{ env.GRYPE_SHA256 }}
 
       - name: Install Grype
         # Pin a specific Grype release and verify its checksum, exactly as the
@@ -1550,17 +1673,19 @@ jobs:
         # RPMs ("WARN Unsupported os family=fedora"), which would be a false-green
         # gate. Grype matches the image's RPM AND Python packages against NVD/GHSA,
         # so it actually covers this image. See docs/TESTING.md for the rationale.
-        env:
-          GRYPE_VERSION: '0.117.0'
-          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
+        #
+        # Cache, then the release asset, then `go install` of the same version
+        # through the Go module proxy (scripts/install-pinned-tool.sh): a GitHub
+        # release-asset outage used to fail this gate before it scanned
+        # anything. The source build takes ~3 minutes and only runs then.
         run: |
           set -euo pipefail
-          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
-            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
-          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "$tarball" grype
-          sudo install -m 0755 grype /usr/local/bin/grype
+          scripts/install-pinned-tool.sh \
+            --url "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz" \
+            --sha256 "${GRYPE_SHA256}" --member grype \
+            --cache-dir "${HOME}/.cache/fleet-pinned-tools/grype" \
+            --go-install "github.com/anchore/grype/cmd/grype@v${GRYPE_VERSION}" \
+            grype
           grype version
 
       - name: Ensure podman
@@ -1693,7 +1818,7 @@ jobs:
     # (cancelled upstream jobs, none failed) concludes neutral (#1302).
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, contracts, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

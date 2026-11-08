@@ -120,7 +120,7 @@ independently against its declared `type`'s closed field set; a failure skips
   secrets in them, and fleet applies no `${ENV}` interpolation to them.
 
 **`PLUGIN_DATA`** is `<state>/plugin-data/<plugin-name>` under the fleet data
-dir (`FLEET_DATA_DIR`, then `CHAT_DATA_DIR`, then the user cache — the same
+dir (`FLEET_DATA_DIR`, then the user cache — the same
 trusted base as the merged skills tree, never a shared `/tmp` path). It is
 created before any stdio server launches, is writable by the process the
 broker runs servers as, and lives outside the plugin root so it survives a

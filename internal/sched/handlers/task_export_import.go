@@ -293,7 +293,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	if resp.Errors > 0 {
 		status = http.StatusMultiStatus
 	}
-	writeJSON(w, status, resp)
+	writeJSON(w, r, status, resp)
 }
 
 // createTaskFromRecord mints a fresh task from a portable record (the import

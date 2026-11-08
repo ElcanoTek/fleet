@@ -116,7 +116,7 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 		resp.ReclaimableConversations = stats.ReclaimableAtCutoff
 	}
 
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 type storageCleanupRequest struct {
@@ -205,7 +205,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	}
 
 	logging.From(ctx).Info("admin storage cleanup: done", "deleted_conversations", resp.DeletedConversations, "removed_workspaces", resp.RemovedWorkspaces, "removed_upload_files", resp.RemovedUploadFiles, "removed_temp_files", resp.RemovedTempFiles, "bytes_freed", resp.BytesFreed)
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // workspaceUsage sizes the per-conversation workspace tree in ONE pass and

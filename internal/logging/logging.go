@@ -36,8 +36,10 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ElcanoTek/fleet/internal/logging/rotate"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Config holds the process-log knobs. The zero value (File == "") means the file
@@ -89,12 +91,20 @@ func (c Config) Enabled() bool { return c.File != "" }
 // It returns an io.Closer for the rotating file (nil when the file sink is off)
 // for the caller to defer-close, and any error opening the file.
 //
-// internal/safe keeps its OWN slog handler bound to stderr by design (a recovered
-// panic must still reach stderr/journald even if a misconfigured file sink is
-// failing), so panic events are unaffected by the choices here.
+// Recovered panics (internal/safe) go through a handler of the same format,
+// destination and redactor, installed with safe.SetPanicHandler; safe falls
+// back to its own direct-stderr JSON logger only if that handler fails, so a
+// panic always reaches stderr/journald even with a broken file sink.
 func Configure(cfg Config) (io.Closer, error) {
+	// The redactor knows the process's secret-named env values by literal
+	// before the first configured line is written — and before Configure
+	// replays the startup buffer below. Every later secret source used to
+	// register lazily (the tool-output or broker redactor's first use), so a
+	// line logged before then — a connector's boot-time HTTP 401 echoing its
+	// opaque API key — was scrubbed by shape patterns alone.
+	seedEnvLiterals()
 	// Destination: stderr, plus the rotating file when configured.
-	var dest io.Writer = os.Stderr
+	dest := lockedStderr
 	var closer io.Closer
 	if cfg.Enabled() {
 		rotor := &rotate.Logger{
@@ -110,7 +120,9 @@ func Configure(cfg Config) (io.Closer, error) {
 		if _, err := rotor.Write([]byte{}); err != nil {
 			return nil, err
 		}
-		dest = io.MultiWriter(os.Stderr, rotor)
+		// Each sink independently: a full disk or a failed rotation must not
+		// fail a write (a subprocess-stderr forwarder would stop draining).
+		dest = newTee(teeSink{name: "stderr", w: stderrFile{}}, teeSink{name: "file", w: rotor})
 		closer = rotor
 	}
 
@@ -118,16 +130,76 @@ func Configure(cfg Config) (io.Closer, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
 		newHandler = newTextHandler
 	}
+	format := "json"
+	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
+		format = "text"
+	}
+	configured.Store(true)
 	levelVar.Set(ParseLevel(cfg.Level))
 	setOutput(dest)
-	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
+	// The bridge first: slog.SetDefault points the stdlib log package at the
+	// new default handler at once, and until log.SetOutput below a stdlib
+	// line takes that path — the router sends it to this ungated bridge, not
+	// the level-gated handler.
+	bridgeLogger = slog.New(newBridgeHandler(format, dest))
+	setDefaultRouted(newHandler(dest, levelVar), bridgeLogger.Handler())
 	// Lines logged before Configure (BufferStartup) go out now, through the
 	// configured format, level and file sink.
-	replayStartup(slog.Default().Handler())
-	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
+	// replayStartup seals the buffer as it reads it for the last time: a
+	// stdlib line still arriving through the startup bridge (before the
+	// log.SetOutput below), or a record through a captured buffering logger,
+	// is forwarded to these handlers after the replayed lines, not lost.
+	replayStartup(slog.Default().Handler(), bridgeLogger.Handler())
+	// contextAttrHandler: a panic recovered under a request or a run carries
+	// that context's correlation (safe.EmitPanicWithMetadataContext).
+	safe.SetPanicHandler(contextAttrHandler{inner: newHandler(dest, slog.LevelError)})
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
+}
+
+// stdlibLogLevel is the level slog's own stdlib-log adapter stamps on a
+// log.Printf line while slog.Default is installed but log.SetOutput has not
+// yet pointed the log package at logBridge (slog.SetDefault rewires it to the
+// default handler at once). No call site logs at it: a record carrying it is a
+// stdlib line, and the routed default handler (stdlibRouter) sends it to the
+// ungated bridge at info instead of gating it. slog.SetLogLoggerLevel sets it
+// in setDefaultRouted, before any slog.SetDefault of this package.
+const stdlibLogLevel = slog.Level(1 << 20)
+
+// setDefaultRouted installs h as the default handler, with stdlib-log lines
+// routed to bridge (stdlibRouter).
+func setDefaultRouted(h, bridge slog.Handler) {
+	slog.SetLogLoggerLevel(stdlibLogLevel)
+	slog.SetDefault(slog.New(stdlibRouter{inner: h, bridge: bridge}))
+}
+
+// stdlibRouter is a default handler that hands a stdlib-log line (a record
+// at stdlibLogLevel, from slog's adapter) to the ungated bridge, at info, and
+// every other record to inner.
+type stdlibRouter struct{ inner, bridge slog.Handler }
+
+func (h stdlibRouter) Enabled(ctx context.Context, l slog.Level) bool {
+	if l == stdlibLogLevel {
+		return true
+	}
+	return h.inner.Enabled(ctx, l)
+}
+
+func (h stdlibRouter) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == stdlibLogLevel {
+		r.Level = slog.LevelInfo
+		return h.bridge.Handle(ctx, r)
+	}
+	return h.inner.Handle(ctx, r)
+}
+
+func (h stdlibRouter) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return stdlibRouter{inner: h.inner.WithAttrs(attrs), bridge: h.bridge}
+}
+
+func (h stdlibRouter) WithGroup(name string) slog.Handler {
+	return stdlibRouter{inner: h.inner.WithGroup(name), bridge: h.bridge}
 }
 
 // bridgeLogger emits bridged standard-library log lines. Fleet's own code no
@@ -138,18 +210,75 @@ func Configure(cfg Config) (io.Closer, error) {
 // silently erase a library's report of a failure it could only express as a
 // plain print. Reassigned once in Configure (before any concurrent logging);
 // defaults to stderr pre-Configure.
-var bridgeLogger = slog.New(newJSONHandler(os.Stderr, slog.LevelInfo))
+var bridgeLogger = slog.New(newBridgeHandler("json", lockedStderr))
+
+// StdlibLogKey marks a record the ungated bridge wrote (stdlib_log=true): a
+// stdlib log line, a subprocess's stderr line (StderrLogger: a connector's,
+// the sandbox bridge's), a sink-failure report — every record of unknown
+// severity that FLEET_LOG_LEVEL must not erase.
+// It travels with the record across a process boundary: the MCP broker child
+// writes its bridged lines with it, and the parent (ChildStderr) re-logs a
+// child record carrying it through its own ungated bridge, not its gated
+// default handler. Only the bridge handler can write it — every other
+// handler renames a call site's attribute of that name (userReplaceAttr), so
+// a log call cannot pose as an ungated stdlib line.
+const StdlibLogKey = "stdlib_log"
+
+// newBridgeHandler is the bridge's handler: format at dest, at info (not
+// FLEET_LOG_LEVEL), every record tagged StdlibLogKey=true.
+func newBridgeHandler(format string, dest io.Writer) slog.Handler {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: replaceAttr}
+	var h slog.Handler = slog.NewJSONHandler(scrubbed(dest, true), opts)
+	if strings.EqualFold(strings.TrimSpace(format), "text") {
+		h = slog.NewTextHandler(scrubbed(dest, false), opts)
+	}
+	return guardValuers(h.WithAttrs([]slog.Attr{slog.Bool(StdlibLogKey, true)}))
+}
+
+// userReplaceAttr is replaceAttr for every handler but the bridge's: a
+// top-level attribute named StdlibLogKey is renamed (stdlib_log#2), so only
+// the bridge can mark a record as a stdlib line.
+//
+// The one exception is ungatedAttr, a value of a type only this package can
+// make: it is written as StdlibLogKey=true.
+func userReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == StdlibLogKey {
+		if isUngatedAttr(a) {
+			return slog.Bool(StdlibLogKey, true)
+		}
+		a.Key = StdlibLogKey + "#2"
+	}
+	return replaceAttr(groups, a)
+}
+
+// ungatedMark is the value of ungatedAttr. It is unexported, so no call site
+// outside this package can mark a record ungated.
+type ungatedMark struct{}
+
+// ungatedAttr marks a record of unknown severity that FLEET_LOG_LEVEL must
+// not erase (a subprocess's stderr line) and that a parent re-logging it
+// must keep ungated: this package's handlers write it as StdlibLogKey=true,
+// like the bridge's own records.
+func ungatedAttr() slog.Attr { return slog.Any(StdlibLogKey, ungatedMark{}) }
+
+func isUngatedAttr(a slog.Attr) bool {
+	if a.Key != StdlibLogKey || a.Value.Kind() != slog.KindAny {
+		return false
+	}
+	_, ok := a.Value.Any().(ungatedMark)
+	return ok
+}
 
 // newJSONHandler builds the structured-JSON handler: an slog JSON handler at
 // dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted
 // so tests can exercise it over a buffer without touching process-global state.
 func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewJSONHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
+	return guardValuers(slog.NewJSONHandler(scrubbed(dest, true), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr}))
 }
 
 // newTextHandler is newJSONHandler's logfmt sibling (FLEET_LOG_FORMAT=text).
 func newTextHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
+	return guardValuers(slog.NewTextHandler(scrubbed(dest, false), &slog.HandlerOptions{Level: level, ReplaceAttr: userReplaceAttr}))
 }
 
 // NewHandler returns a redacting handler of the named format ("json" or
@@ -184,8 +313,25 @@ func (logBridge) Write(p []byte) (int, error) {
 // replacement for log.Fatalf. Like log.Fatal it does not run deferred calls,
 // so use it only where the process has nothing left to unwind (main, a CLI
 // verb's top level).
+//
+// Before Configure there is no redacting handler yet: Go's default slog
+// handler, or the startup buffer. Fatal then logs through the emergency
+// handler (redacting JSON on stderr, as FlushStartup uses) after seeding the
+// redactor with the process's secret-named env values, so a config or bundle
+// error quoting an interpolated secret does not reach stderr as written.
 func Fatal(msg string, args ...any) {
+	seedEnvLiterals()
 	FlushStartup() // a fatal error before Configure must not lose the startup lines
-	slog.Error(msg, args...)
-	os.Exit(1)
+	logger := slog.Default()
+	if !configured.Load() {
+		logger = slog.New(emergencyHandler())
+	}
+	logger.Error(msg, args...)
+	exitFunc(1)
 }
+
+// exitFunc is os.Exit; tests replace it.
+var exitFunc = os.Exit
+
+// configured records that Configure installed the process handler.
+var configured atomic.Bool

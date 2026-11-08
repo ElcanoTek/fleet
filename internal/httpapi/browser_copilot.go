@@ -27,7 +27,7 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, userEmail, viewToken)
 	if err != nil {
-		writeJSONStatus(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		writeJSONStatus(w, r, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -64,7 +64,7 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = playwrightrunner.DefaultSessionManager().CloseSession(sessionID, userEmail, viewToken)
-		writeJSON(w, map[string]any{"ok": true, "session_id": sessionID})
+		writeJSON(w, r, map[string]any{"ok": true, "session_id": sessionID})
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -73,15 +73,15 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowserSessionInput(w http.ResponseWriter, r *http.Request, sess *playwrightrunner.LiveSession) {
 	var ev playwrightrunner.InputEvent
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&ev); err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "invalid input payload"})
+		writeJSONStatus(w, r, http.StatusBadRequest, map[string]string{"error": "invalid input payload"})
 		return
 	}
 	if err := sess.SendInput(r.Context(), ev); err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSONStatus(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	info := sess.Info(nil)
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"ok":          true,
 		"current_url": info.CurrentURL,
 		"title":       info.Title,
@@ -96,7 +96,7 @@ func (s *Server) serveBrowserSessionStream(w http.ResponseWriter, r *http.Reques
 	}
 	frames, unsub, err := sess.SubscribeFrames()
 	if err != nil {
-		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSONStatus(w, r, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	defer unsub()

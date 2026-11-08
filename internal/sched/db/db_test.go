@@ -12,24 +12,54 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-// schedTemplate is the scheduler alone, migrated in schema sched — the
-// production layout (ADR-0098). This package cannot use
+// schedTemplate is the scheduler migrated in schema sched — the production
+// layout (ADR-0098) — with the chat store migrated first in schema chat: the
+// scheduler reads its accounts from the identity table, core.users, which the
+// chat migrations create (#2049 M4). This package cannot use
 // internal/testdb/fleetdb (it imports this package), so its tests clone a
-// template of their own.
+// template of their own; internal/store imports nothing of this package.
 var schedTemplate = testdb.Spec{
 	Name:        "sched",
-	Fingerprint: MigrationFingerprint,
+	Fingerprint: func() string { return "chat:" + store.MigrationFingerprint() + " sched:" + MigrationFingerprint() },
 	Migrate: func(_ context.Context, dsn string) error {
+		chat, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second})
+		if err != nil {
+			return err
+		}
+		if err := chat.Close(); err != nil {
+			return err
+		}
 		db := New()
 		if err := db.Init(config.WithSchema(dsn, config.SchedSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
 			return err
 		}
 		return db.Close()
 	},
+}
+
+// seedAccount creates an account in the identity table with the legacy
+// Operations Center role (admin → Fleet admin; client/readonly → a viewer with
+// ops_scope run/view).
+func seedAccount(t testing.TB, db *Database, id uuid.UUID, email, legacyRole string) {
+	t.Helper()
+	acct := identity.NewAccount{ID: id, Email: email, Role: identity.RoleViewer}
+	switch legacyRole {
+	case "admin":
+		acct.Role = identity.RoleAdmin
+	case "client":
+		acct.OpsScope = identity.OpsRun
+	case "readonly":
+		acct.OpsScope = identity.OpsView
+	}
+	if _, err := db.Identity().CreateAccount(context.Background(), acct); err != nil {
+		t.Fatalf("seed account %s: %v", email, err)
+	}
 }
 
 // setupTestDB opens the scheduler on a fresh, migrated database of the test's
@@ -284,6 +314,10 @@ func TestTaskCreatedByKeyIDRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUserOperations pins the scheduler's view of the one identity table
+// (#2049 M4): an Operations Center user is an account that is enabled and is
+// an admin or has a scope; everything else answers sql.ErrNoRows, as the old
+// "enabled row" lookup did. Role is the legacy name the row grants.
 func TestUserOperations(t *testing.T) {
 	t.Parallel()
 
@@ -291,112 +325,66 @@ func TestUserOperations(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 
-	user := &models.User{ID: uuid.New(), Username: "testuser", PasswordHash: "hash", Role: "admin", CreatedAt: time.Now().UTC()}
-	if err := db.AddUser(ctx, user); err != nil {
-		t.Fatalf("Failed to add user: %v", err)
+	admin, client, viewer, none := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	seedAccount(t, db, admin, "admin@x.test", "admin")
+	seedAccount(t, db, client, "client@x.test", "client")
+	seedAccount(t, db, viewer, "viewer@x.test", "readonly")
+	seedAccount(t, db, none, "chatonly@x.test", "")
+
+	for _, c := range []struct {
+		id    uuid.UUID
+		email string
+		role  string
+	}{{admin, "admin@x.test", "admin"}, {client, "client@x.test", "client"}, {viewer, "viewer@x.test", "readonly"}} {
+		byID, err := db.GetUser(ctx, c.id)
+		if err != nil || byID.Username != c.email || byID.Role != c.role {
+			t.Errorf("GetUser(%s) = %+v, %v; want %s/%s", c.id, byID, err, c.email, c.role)
+		}
+		byName, err := db.GetUserByUsername(ctx, "  "+strings.ToUpper(c.email)+" ")
+		if err != nil || byName.ID != c.id || byName.Role != c.role {
+			t.Errorf("GetUserByUsername(%s) = %+v, %v", c.email, byName, err)
+		}
 	}
-	retrieved, err := db.GetUser(ctx, user.ID)
+	// A chat-only account (scope none) is not an Operations Center user.
+	if _, err := db.GetUserByUsername(ctx, "chatonly@x.test"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("chat-only lookup err = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := db.GetUserByUsername(ctx, "nobody@x.test"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("unknown lookup err = %v, want sql.ErrNoRows", err)
+	}
+	// A disabled account (central Auth revoked it) has no access, but keeps
+	// its UUID, role and scope for a re-grant.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'client@x.test'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetUserByUsername(ctx, "client@x.test"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("disabled lookup err = %v, want sql.ErrNoRows", err)
+	}
+	if acct, err := db.GetIdentity(ctx, "client@x.test"); err != nil || acct.ID != client || acct.OpsScope != identity.OpsRun {
+		t.Errorf("disabled row not retained: %+v %v", acct, err)
+	}
+
+	// ListUsers / CountUsers: the accounts holding access in their stored
+	// role and scope, the disabled one included (with its stored role).
+	list, err := db.ListUsers(ctx)
 	if err != nil {
-		t.Fatalf("Failed to get user: %v", err)
+		t.Fatal(err)
 	}
-	if retrieved.Username != user.Username {
-		t.Errorf("Expected username %s, got %s", user.Username, retrieved.Username)
+	got := map[string]string{}
+	for _, u := range list {
+		got[u.Username] = u.Role
 	}
-
-	retrieved, err = db.GetUserByUsername(ctx, user.Username)
-	if err != nil {
-		t.Fatalf("Failed to get user by username: %v", err)
+	want := map[string]string{"admin@x.test": "admin", "client@x.test": "client", "viewer@x.test": "readonly"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("ListUsers = %v, want %v", got, want)
 	}
-	if retrieved.ID != user.ID {
-		t.Errorf("Expected ID %s, got %s", user.ID, retrieved.ID)
+	if n, err := db.CountUsers(ctx); err != nil || n != 3 {
+		t.Errorf("CountUsers = %d, %v; want 3", n, err)
 	}
-
-	token := "session_token_123"
-	tokenHash := models.HashToken(token)
-	user.SessionToken = &tokenHash
-	if err := db.AddUser(ctx, user); err != nil {
-		t.Fatalf("Failed to update user: %v", err)
-	}
-	retrieved, err = db.GetUserByToken(ctx, token)
-	if err != nil {
-		t.Fatalf("Failed to get user by token: %v", err)
-	}
-	if retrieved.ID != user.ID {
-		t.Errorf("Expected ID %s, got %s", user.ID, retrieved.ID)
-	}
-	if err := db.SetUserEnabled(ctx, user.ID, false); err != nil {
-		t.Fatalf("Failed to disable user: %v", err)
-	}
-	if _, err := db.GetUserByUsername(ctx, user.Username); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("disabled username lookup err = %v, want sql.ErrNoRows", err)
-	}
-	if _, err := db.GetUserByToken(ctx, token); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("disabled session token lookup err = %v, want sql.ErrNoRows", err)
-	}
-	if retained, err := db.GetAnyUserByUsername(ctx, user.Username); err != nil || retained.ID != user.ID {
-		t.Fatalf("disabled row not retained: user=%+v err=%v", retained, err)
-	}
-	if err := db.SetUserEnabled(ctx, user.ID, true); err != nil {
-		t.Fatalf("Failed to re-enable user: %v", err)
-	}
-	if _, err := db.GetUserByToken(ctx, token); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("pre-revocation token revived after re-enable: %v", err)
-	}
-
-	if err := db.UpdateUserRole(ctx, user.ID, "client"); err != nil {
-		t.Fatalf("Failed to update user role: %v", err)
-	}
-	retrieved, err = db.GetUser(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user after role update: %v", err)
-	}
-	if retrieved.Role != "client" {
-		t.Errorf("Expected role client, got %s", retrieved.Role)
-	}
-
-	if err := db.UpdateUserRole(ctx, uuid.New(), "admin"); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected sql.ErrNoRows updating unknown user, got %v", err)
-	}
-
-	if err := db.RenameUser(ctx, user.ID, "renameduser"); err != nil {
-		t.Fatalf("Failed to rename user: %v", err)
-	}
-	retrieved, err = db.GetUser(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user after rename: %v", err)
-	}
-	if retrieved.Username != "renameduser" {
-		t.Errorf("Expected username renameduser, got %s", retrieved.Username)
-	}
-	if _, err := db.GetUserByUsername(ctx, "testuser"); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected sql.ErrNoRows fetching old username, got %v", err)
-	}
-	if byName, err := db.GetUserByUsername(ctx, "renameduser"); err != nil || byName.ID != user.ID {
-		t.Errorf("Expected new username to resolve to user %s, got %v (err %v)", user.ID, byName, err)
-	}
-	if err := db.RenameUser(ctx, uuid.New(), "ghost"); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected sql.ErrNoRows renaming unknown user, got %v", err)
-	}
-
-	other := &models.User{ID: uuid.New(), Username: "otheruser", PasswordHash: "hash", Role: "client", CreatedAt: time.Now().UTC()}
-	if err := db.AddUser(ctx, other); err != nil {
-		t.Fatalf("Failed to add second user: %v", err)
-	}
-	if err := db.RenameUser(ctx, other.ID, "renameduser"); err == nil {
-		t.Error("Expected error renaming onto a taken username, got nil")
-	}
-	if err := db.DeleteUser(ctx, other.ID); err != nil {
-		t.Fatalf("Failed to delete second user: %v", err)
-	}
-
-	if err := db.DeleteUser(ctx, user.ID); err != nil {
-		t.Fatalf("Failed to delete user: %v", err)
-	}
-	if _, err := db.GetUser(ctx, user.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected sql.ErrNoRows fetching deleted user, got %v", err)
-	}
-	if err := db.DeleteUser(ctx, user.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected sql.ErrNoRows deleting unknown user, got %v", err)
+	// Created By resolves any account, access or not.
+	names, err := db.GetUsersByIDs(ctx, []uuid.UUID{none, client, uuid.New()})
+	if err != nil || len(names) != 2 || names[none] != "chatonly@x.test" || names[client] != "client@x.test" {
+		t.Errorf("GetUsersByIDs = %v, %v", names, err)
 	}
 }
 
@@ -954,7 +942,7 @@ func TestClaimNextPendingTask(t *testing.T) {
 	}
 	defer tx1.Rollback()
 	row := tx1.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE status = $1 ORDER BY effective_priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED", string(models.TaskStatusPending))
-	locked, err := db.scanTask(row)
+	locked, err := db.scanTask(t.Context(), row)
 	if err != nil {
 		t.Fatalf("tx1 lock claim failed: %v", err)
 	}

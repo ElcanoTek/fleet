@@ -16,6 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ElcanoTek/fleet/internal/identity"
 )
 
 // User is a provisioned operator-added account. Passwords live here as
@@ -39,13 +41,30 @@ type User struct {
 	SessionEpoch string
 	CreatedAt    int64
 	UpdatedAt    int64
+	// ID is the account's stable UUID in core.users (#2049 M4): what the
+	// Operations Center records as a task's creator.
+	ID string
+	// OpsScope is the account's Operations Center scope for a non-admin:
+	// "none" | "view" | "run" (identity.OpsScope). An admin has full
+	// Operations Center access whatever it says.
+	OpsScope string
+	// Enabled is false for an account central Auth revoked. GetUser never
+	// returns one; ListUsers does.
+	Enabled bool
+}
+
+// LegacyOpsRole is the account's Operations Center role in the Operations
+// Center's legacy names: "admin" | "client" | "readonly", or "" for none.
+// It reads the stored role and scope, not whether the account is enabled.
+func (u User) LegacyOpsRole() string {
+	return identity.LegacyOpsRole(identity.Role(u.Role), identity.OpsScope(u.OpsScope))
 }
 
 // sessionEpochBytes is how much of the digest below makes up the epoch. The
 // value is only ever compared against the same account's current epoch, so
 // 64 bits is ample — a collision would have to land between two hashes of one
 // account — and a short claim keeps the session cookie small.
-const sessionEpochBytes = 8
+const sessionEpochBytes = identity.SessionEpochBytes
 
 // sessionEpochFor derives an account's session epoch from its stored bcrypt
 // hash. bcrypt salts every hash, so any password write moves this value
@@ -80,13 +99,11 @@ func sessionEpochFor(bcryptDigest, sessionSalt string) string {
 // without a password change: a central sign-out delivered over the back-channel
 // must end the account's Fleet password sessions too. It defaults to ”, which
 // leaves the historical sha256(password_hash) value untouched.
-var sessionEpochExpr = fmt.Sprintf(
-	`encode(substring(sha256(convert_to(password_hash || session_salt, 'UTF8')) FROM 1 FOR %d), 'hex')`,
-	sessionEpochBytes)
+var sessionEpochExpr = identity.SessionEpochSQL
 
 // userColumns is the read projection behind every *User: the row's own columns
 // plus the derived epoch, never password_hash.
-var userColumns = "email, role, team_id, " + sessionEpochExpr + ", created_at, updated_at"
+var userColumns = "email, role, team_id, " + sessionEpochExpr + ", created_at, updated_at, id::text, ops_scope, enabled"
 
 // Role constants (#237). Kept in sync with the CHECK constraint in
 // migrations/024_rbac.sql.
@@ -148,10 +165,11 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 	now := time.Now().Unix()
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO users (email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4)`,
+	var id string
+	err = s.db.QueryRowContext(ctx,
+		`INSERT INTO core.users (email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4) RETURNING id::text`,
 		email, string(hash), now, now,
-	)
+	).Scan(&id)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("user %s %w", email, ErrUserExists)
@@ -165,6 +183,9 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 		SessionEpoch: sessionEpochFor(string(hash), ""),
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		ID:           id,
+		OpsScope:     string(identity.OpsNone),
+		Enabled:      true,
 	}, nil
 }
 
@@ -179,8 +200,8 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	var u User
 	var teamID sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE email = $1 AND enabled = TRUE`, email).
-		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT `+userColumns+` FROM core.users WHERE email = $1 AND enabled = TRUE`, email).
+		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt, &u.ID, &u.OpsScope, &u.Enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
@@ -203,7 +224,7 @@ func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) 
 	email = normalizeEmail(email)
 	var epoch string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT `+sessionEpochExpr+` FROM users WHERE email = $1`, email).Scan(&epoch)
+		`SELECT `+sessionEpochExpr+` FROM core.users WHERE email = $1`, email).Scan(&epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sessionEpochFor("", ""), nil
 	}
@@ -238,7 +259,7 @@ func (s *Store) ExternalSessionEpoch(ctx context.Context, issuer, subject, email
 	}
 	now := time.Now().Unix()
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
+		INSERT INTO core.external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
 		VALUES($1, $2, $3, $4, $5, $5)
 		ON CONFLICT(issuer, subject) DO UPDATE SET
 			email = EXCLUDED.email, updated_at = EXCLUDED.updated_at
@@ -258,7 +279,7 @@ func (s *Store) LookupExternalSessionEpoch(ctx context.Context, issuer, subject 
 	}
 	var epoch string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT epoch FROM external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).Scan(&epoch)
+		`SELECT epoch FROM core.external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).Scan(&epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -295,12 +316,12 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 		return "", false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM external_logout_events WHERE received_at < $1`,
+	if _, err := tx.ExecContext(ctx, `DELETE FROM core.external_logout_events WHERE received_at < $1`,
 		now-int64(externalLogoutEventRetention.Seconds())); err != nil {
 		return "", false, err
 	}
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO external_logout_events(event_id, issuer, subject, received_at)
+		INSERT INTO core.external_logout_events(event_id, issuer, subject, received_at)
 		VALUES($1, $2, $3, $4) ON CONFLICT(event_id) DO NOTHING`, eventID, issuer, subject, now)
 	if err != nil {
 		return "", false, err
@@ -308,21 +329,21 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 	applied, _ := result.RowsAffected()
 	if applied == 0 {
 		var storedIssuer, storedSubject string
-		if err := tx.QueryRowContext(ctx, `SELECT issuer, subject FROM external_logout_events WHERE event_id = $1`, eventID).
+		if err := tx.QueryRowContext(ctx, `SELECT issuer, subject FROM core.external_logout_events WHERE event_id = $1`, eventID).
 			Scan(&storedIssuer, &storedSubject); err != nil {
 			return "", false, err
 		}
 		if storedIssuer != issuer || storedSubject != subject {
 			return "", false, errors.New("logout event identity mismatch")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT epoch FROM external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).
+		if err := tx.QueryRowContext(ctx, `SELECT epoch FROM core.external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).
 			Scan(&epoch); err != nil {
 			return "", false, err
 		}
 		return epoch, false, tx.Commit()
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
+		INSERT INTO core.external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
 		VALUES($1, $2, $3, $4, $5, $5)
 		ON CONFLICT(issuer, subject) DO UPDATE SET
 			email = EXCLUDED.email, epoch = EXCLUDED.epoch, updated_at = EXCLUDED.updated_at`,
@@ -335,7 +356,7 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 		return "", false, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE users SET session_salt = $2, updated_at = $3 WHERE email = $1`, email, salt, now); err != nil {
+		`UPDATE core.users SET session_salt = $2, updated_at = $3 WHERE email = $1`, email, salt, now); err != nil {
 		return "", false, err
 	}
 	return epoch, true, tx.Commit()
@@ -426,7 +447,7 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 		var taken bool
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS (
-				SELECT 1 FROM users    WHERE lower(team_id) = lower($1) AND email <> $2
+				SELECT 1 FROM core.users    WHERE lower(team_id) = lower($1) AND email <> $2
 				UNION ALL
 				SELECT 1 FROM projects WHERE lower(team_id) = lower($1)
 			)`, team, email).Scan(&taken); err != nil {
@@ -443,7 +464,7 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 		return nil, err
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE users SET team_id = $2, updated_at = $3 WHERE email = $1`,
+		`UPDATE core.users SET team_id = $2, updated_at = $3 WHERE email = $1`,
 		email, team, time.Now().Unix())
 	if err != nil {
 		return nil, err
@@ -483,7 +504,7 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 		return err
 	}
 	var cur sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM core.users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // nothing to unshare; the caller's write will report it
 		}
@@ -562,7 +583,7 @@ func lockTeamNamesTx(ctx context.Context, tx *sql.Tx, names ...string) error {
 // deadlock detector aborting one of the two transactions.
 func lockUserTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
 	var cur sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, email).Scan(&cur); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM core.users WHERE email = $1`, email).Scan(&cur); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	return lockTeamNamesTx(ctx, tx, cur.String, newTeam)
@@ -645,7 +666,7 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 	err := tx.QueryRowContext(ctx, `
 		SELECT t.id FROM teams t
 		 WHERE t.name = $1
-		   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.team_id = $1)
+		   AND NOT EXISTS (SELECT 1 FROM core.users u WHERE u.team_id = $1)
 		   AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.team_id = $1)
 		 FOR UPDATE`, name).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -671,9 +692,42 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 // A team change also takes the leaver's shares with it, in the SAME transaction
 // as the write (see unshareOnTeamChangeTx).
 func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*User, error) {
+	return s.SetUserAccess(ctx, email, role, teamID, nil)
+}
+
+// SetUserAccess is SetUserRoleTeam plus the account's Operations Center grant,
+// all in ONE transaction on the one identity row (#2049 M4, ADR-0105): the two
+// planes can no longer disagree half-way through an edit.
+//
+// opsGrant (nil = unchanged) takes either vocabulary (identity.ParseOpsRole):
+// none | view | run, or the legacy none | readonly | client | admin. The role
+// decides first:
+//
+//   - role "admin" (requested, or already held when role is nil) is full
+//     Operations Center access; a narrower opsGrant in the same write is
+//     ignored (the precedence {role:admin, ops_role:readonly} always had);
+//   - opsGrant "admin" is the Fleet admin role: it is refused next to an
+//     explicit non-admin role, and refused for a non-admin when role is nil
+//     (set role admin instead) — Operations Center admin without Fleet admin
+//     is the split state ADR-0074 fails closed on;
+//   - demoting an admin (role set to member/viewer) with no opsGrant clears
+//     the scope to none, as removing the Operations Center admin row did.
+func (s *Store) SetUserAccess(ctx context.Context, email string, role, teamID, opsGrant *string) (*User, error) {
 	email = normalizeEmail(email)
 	if role != nil && !ValidRole(*role) {
 		return nil, errInputf("invalid role %q (want member|viewer|admin)", *role)
+	}
+	var scope identity.OpsScope
+	var grantAdmin bool
+	if opsGrant != nil {
+		var ok bool
+		scope, grantAdmin, ok = identity.ParseOpsRole(*opsGrant)
+		if !ok {
+			return nil, errInputf("invalid ops_role %q (want none|view|run, or none|readonly|client|admin)", *opsGrant)
+		}
+		if grantAdmin && role != nil && *role != RoleAdmin {
+			return nil, errInputf("ops_role admin is the Fleet admin role; it cannot go with role %q", *role)
+		}
 	}
 	if teamID != nil {
 		if err := ValidateTeamName(*teamID); err != nil {
@@ -700,19 +754,42 @@ func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID 
 			teamArg = strings.TrimSpace(*teamID)
 		}
 	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE users
-		SET role     = COALESCE($2, role),
-		    team_id  = CASE WHEN $4::bool THEN $3 ELSE team_id END,
-		    updated_at = $5
-		WHERE email = $1`,
-		email, role, teamArg, teamID != nil, time.Now().Unix(),
-	)
-	if err != nil {
+	var curRole string
+	switch err := tx.QueryRowContext(ctx, `SELECT role FROM core.users WHERE email = $1 FOR UPDATE`, email).Scan(&curRole); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, ErrUserNotFound
+	case err != nil:
 		return nil, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrUserNotFound
+	newRole := curRole
+	if role != nil {
+		newRole = *role
+	}
+	if grantAdmin && role == nil && curRole != RoleAdmin {
+		return nil, errInputf("ops_role admin is the Fleet admin role; set role admin instead")
+	}
+	// The scope to write: nil leaves the column alone.
+	var scopeArg any
+	switch {
+	case newRole == RoleAdmin:
+		// An admin's Operations Center access is not a scope.
+		scopeArg = string(identity.OpsNone)
+	case opsGrant != nil:
+		scopeArg = string(scope)
+	case curRole == RoleAdmin:
+		// Demotion with no explicit grant ends Operations Center admin.
+		scopeArg = string(identity.OpsNone)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE core.users
+		SET role     = $2,
+		    team_id  = CASE WHEN $4::bool THEN $3 ELSE team_id END,
+		    ops_scope = COALESCE($6, ops_scope),
+		    updated_at = $5
+		WHERE email = $1`,
+		email, newRole, teamArg, teamID != nil, time.Now().Unix(), scopeArg,
+	); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -763,7 +840,7 @@ func SetPasswordHashCostForTests(cost int) {
 func (s *Store) VerifyUser(ctx context.Context, email, plainPassword string) error {
 	email = normalizeEmail(email)
 	row := s.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = $1 AND enabled = TRUE`, email)
+		`SELECT password_hash FROM core.users WHERE email = $1 AND enabled = TRUE`, email)
 	var hash string
 	if err := row.Scan(&hash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -792,7 +869,7 @@ func (s *Store) IsUser(ctx context.Context, email string) (bool, error) {
 	}
 	var one int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM users WHERE email = $1 AND enabled = TRUE`, email).Scan(&one)
+		`SELECT 1 FROM core.users WHERE email = $1 AND enabled = TRUE`, email).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -816,7 +893,7 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = $1, updated_at = $2 WHERE email = $3`,
+		`UPDATE core.users SET password_hash = $1, updated_at = $2 WHERE email = $3`,
 		string(hash), time.Now().Unix(), email,
 	)
 	if err != nil {
@@ -882,7 +959,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// Without it a transfer could commit between this guard and the deletes
 	// below, which would then take the just-transferred project with them.
 	if _, err := tx.ExecContext(ctx,
-		`SELECT 1 FROM users WHERE email = $1 FOR UPDATE`, email); err != nil {
+		`SELECT 1 FROM core.users WHERE email = $1 FOR UPDATE`, email); err != nil {
 		return fmt.Errorf("lock account: %w", err)
 	}
 	shared, err := teamSharedProjectsOwnedByTx(ctx, tx, email)
@@ -942,8 +1019,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM approvals WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete approvals: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM chat_schedules WHERE user_email = $1`, email); err != nil {
+	if err := deleteUserChatSchedulesTx(ctx, tx, email); err != nil {
 		return fmt.Errorf("delete chat schedules: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -1012,7 +1088,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM projects WHERE owner_email = $1`, email); err != nil {
 		return fmt.Errorf("delete projects: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE email = $1`, email)
+	res, err := tx.ExecContext(ctx, `DELETE FROM core.users WHERE email = $1`, email)
 	if err != nil {
 		return err
 	}
@@ -1028,7 +1104,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	// G202 is a false positive: userColumns is a package-level projection built
 	// from constants, with no caller-supplied value on any path into it.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users ORDER BY email ASC`) //nolint:gosec // G202: see above
+		`SELECT `+userColumns+` FROM core.users ORDER BY email ASC`) //nolint:gosec // G202: see above
 	if err != nil {
 		return nil, err
 	}
@@ -1037,7 +1113,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var teamID sql.NullString
-		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt, &u.ID, &u.OpsScope, &u.Enabled); err != nil {
 			return nil, err
 		}
 		u.TeamID = teamID.String
@@ -1051,7 +1127,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 // and should therefore reject every login attempt with a dedicated
 // error telling the operator to run `chat user add`.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE enabled = TRUE`)
+	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM core.users WHERE enabled = TRUE`)
 	var n int
 	if err := row.Scan(&n); err != nil {
 		return 0, err
@@ -1121,7 +1197,7 @@ func renameTeamTx(ctx context.Context, tx *sql.Tx, from, to string, now int64) (
 		return 0, 0, err
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE users SET team_id = $2, updated_at = $3 WHERE team_id = $1`, from, to, now)
+		`UPDATE core.users SET team_id = $2, updated_at = $3 WHERE team_id = $1`, from, to, now)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1140,3 +1216,28 @@ func renameTeamTx(ctx context.Context, tx *sql.Tx, from, to string, now int64) (
 	}
 	return usersUpdated, projectsUpdated, nil
 }
+
+// RecordLogin stamps the account's last sign-in (core.users.last_login) when
+// a human session is minted: a password verified for the web login, or an
+// OIDC login's session epoch handed out. A missing account is not an error.
+func (s *Store) RecordLogin(ctx context.Context, email string, at time.Time) error {
+	return identity.New(s.db).RecordLogin(ctx, email, at)
+}
+
+// LastLogin is the account's last recorded sign-in (nil: never, or before
+// this was recorded). ErrUserNotFound when there is no such account.
+func (s *Store) LastLogin(ctx context.Context, email string) (*time.Time, error) {
+	u, err := identity.New(s.db).GetByEmail(ctx, email)
+	if errors.Is(err, identity.ErrNotFound) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u.LastLogin, nil
+}
+
+// Identity is the identity-table store over the same connection: the account
+// lookup the request principal resolves against (principal.Resolve), shared
+// with the Operations Center so both planes read one row the same way.
+func (s *Store) Identity() *identity.Store { return identity.New(s.db) }

@@ -40,6 +40,7 @@ func serverFixture(t *testing.T) *Server {
 	srv := &Server{
 		cfg:         cfg,
 		store:       st,
+		dir:         st.Identity(),
 		sharedToken: cfg.SharedToken,
 		inflight:    make(map[string]inflightEntry),
 		// Handler tests aren't about the scoped-tier gate — admit every
@@ -89,11 +90,7 @@ func do(t *testing.T, h http.Handler, method, path string, body any, user string
 	if body != nil {
 		_ = json.NewEncoder(&buf).Encode(body)
 	}
-	req := httptest.NewRequestWithContext(context.Background(), method, path, &buf)
-	req.Header.Set("X-Chat-Server-Token", "tok")
-	if user != "" {
-		req.Header.Set("X-User-Email", user)
-	}
+	req := httptest.NewRequestWithContext(gatewayContext(path, user), method, path, &buf)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

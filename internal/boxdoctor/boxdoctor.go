@@ -87,7 +87,7 @@ type Options struct {
 	// the process actually uses rather than a DSN re-derived here (#2018).
 	SchedPing func(context.Context) error
 	// SandboxImage is the resolved sandbox image ref (config/bundle); empty
-	// falls back to the FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE env vars.
+	// falls back to the FLEET_SANDBOX_IMAGE env var.
 	SandboxImage string
 	// ServiceName is the systemd unit basename (default FLEET_SERVICE_NAME
 	// or "fleet").
@@ -201,7 +201,7 @@ func checkSchedDB(ctx context.Context, ping func(context.Context) error) Check {
 // unless mock mode is on. Presence only — the value is never echoed.
 func checkModelKey() Check {
 	c := Check{Name: "model API key"}
-	mock := truthy(envreg.Get("FLEET_MOCK_MODE")) || truthy(envreg.Get("CHAT_MOCK_MODE")) // LEGACY-ENV-ALIAS: remove after migrate-env
+	mock := truthy(envreg.Get("FLEET_MOCK_MODE"))
 	switch {
 	case strings.TrimSpace(envreg.Get("OPENROUTER_API_KEY")) != "":
 		c.Status, c.Detail = StatusOK, "OPENROUTER_API_KEY set"
@@ -580,10 +580,7 @@ func resolveImageRef(ref string) string {
 	if ref = strings.TrimSpace(ref); ref != "" {
 		return ref
 	}
-	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_IMAGE")); v != "" {
-		return v
-	}
-	return strings.TrimSpace(envreg.Get("CHAT_SANDBOX_IMAGE")) // LEGACY-ENV-ALIAS: remove after migrate-env
+	return strings.TrimSpace(envreg.Get("FLEET_SANDBOX_IMAGE"))
 }
 
 func dataDir(v string) string {

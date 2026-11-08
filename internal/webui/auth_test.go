@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/httpmw"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -60,7 +61,7 @@ func TestLoginMintsAnEpochBoundSession(t *testing.T) {
 			verify = c
 		}
 	}
-	if verify.Body != `{"email":"bob@x.com","password":"hunter2"}` || verify.Header.Get("X-User-Email") != "bob@x.com" || verify.Header.Get("X-Chat-Server-Token") != testChatToken {
+	if verify.Body != `{"email":"bob@x.com","password":"hunter2"}` || !verify.isGateway("bob@x.com") || !verify.noIdentityHeaders() {
 		t.Fatalf("verify call %q %v", verify.Body, verify.Header)
 	}
 	c := setCookies(res)
@@ -107,7 +108,7 @@ func TestLoginErrorCodes(t *testing.T) {
 		t.Fatalf("login CSRF: %d", res.StatusCode)
 	}
 	// No secret configured: fail closed, no cookie.
-	g, _ := New(Config{ChatToken: testChatToken}, Options{Chat: http.HandlerFunc(loginBackend(200, true, "e")), Bundle: testBundle()})
+	g, _ := New(Config{}, Options{Chat: http.HandlerFunc(loginBackend(200, true, "e")), Bundle: testBundle()})
 	rec := newRecorder()
 	g.ServeHTTP(rec, loginReq("email=a@x.com&password=p"))
 	if !strings.HasSuffix(rec.Header().Get("Location"), "/login?e=server") || strings.Contains(strings.Join(rec.Header().Values("Set-Cookie"), ""), "elcano_session=e") {
@@ -305,7 +306,7 @@ func TestLoginIsLimitedPerClientAddress(t *testing.T) {
 				w.WriteHeader(http.StatusTooManyRequests)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": r.Header.Get("X-User-Email") == "bob@x.com"})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": principal.Email(r.Context()) == "bob@x.com"})
 			return
 		}
 		ok(w, r)
@@ -352,7 +353,7 @@ func TestLoginClientKeyGroupsIPv6ByPrefix(t *testing.T) {
 func loginAttemptsFrom(e *testEnv, n int, remote, xffWrong, xffValid string) []string {
 	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/verify" {
-			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": r.Header.Get("X-User-Email") == "bob@x.com"})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": principal.Email(r.Context()) == "bob@x.com"})
 			return
 		}
 		loginBackend(200, true, "epoch-1")(w, r)

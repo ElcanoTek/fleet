@@ -60,7 +60,7 @@ type uploadedAttachment struct {
 // An empty identity hashes to its own bucket rather than to the uploads root,
 // so a caller with no email still cannot reach anyone else's subtree. That is
 // a test-only shape: every route reaching here sits behind the auth + member
-// middleware, which refuses a request with no X-User-Email.
+// middleware, which refuses a request whose principal names no user.
 func userUploadsRoot(baseDir, userEmail string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
 	return filepath.Join(baseDir, "uploads", hex.EncodeToString(sum[:])[:32])
@@ -141,7 +141,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		out = append(out, att)
 	}
 
-	writeJSON(w, map[string]any{"attachments": out})
+	writeJSON(w, r, map[string]any{"attachments": out})
 }
 
 // saveUpload copies one multipart file into its own random subdirectory
@@ -366,14 +366,14 @@ func (s *Server) validateAttachments(ctx context.Context, userEmail string, atts
 			// %q, not %s: a.Path here is the RAW client-supplied string on the
 			// branch where containment just FAILED, so it is hostile by
 			// construction. %q escapes CR/LF and cannot forge a log entry.
-			logging.From(ctx).Warn("attachment rejected (outside the caller's own uploads root)", "path", a.Path)
+			logging.From(ctx).Warn("attachment rejected (outside the caller's own uploads root)", "path", safe.LogSafe(a.Path))
 			continue
 		}
 		abs = filepath.Join(root, rel)
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
 			// %q for the same reason as above: still the pre-validation client string.
-			logging.From(ctx).Error("attachment rejected (stat failed)", "path", a.Path, "err", err)
+			logging.From(ctx).Error("attachment rejected (stat failed)", "path", safe.LogSafe(a.Path), "err", err)
 			continue
 		}
 		a.Path = filepath.ToSlash(abs)
@@ -484,7 +484,7 @@ func stageAttachmentsIntoWorkspace(ctx context.Context, uploadsRoot, convID stri
 	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
 	if err := workspace.MkdirAll(dir, 0o755); err != nil {
-		logging.From(ctx).Warn("attachment staging: mkdir failed (attachments keep uploads paths)", "dir", dir, "err", err)
+		logging.From(ctx).Warn("attachment staging: mkdir failed (attachments keep uploads paths)", "dir", safe.LogSafe(dir), "err", err)
 		return atts
 	}
 	out := make([]chatAttachment, 0, len(atts))

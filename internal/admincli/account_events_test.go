@@ -34,9 +34,8 @@ func TestCLIExport(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := sched.EnsureAdminUser(ctx, "a@acctev.test"); err != nil {
-		t.Fatal(err)
-	}
+	// One identity table (#2049 M4): role admin IS Operations Center admin.
+	_ = sched
 	admin, team := "admin", "Reklaim Internal"
 	if _, err := chat.SetUserRoleTeam(ctx, "a@acctev.test", &admin, &team); err != nil {
 		t.Fatal(err)
@@ -47,7 +46,7 @@ func TestCLIExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.ExecContext(ctx, `UPDATE users SET enabled = FALSE WHERE email = 'c@acctev.test'`); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'c@acctev.test'`); err != nil {
 		t.Fatal(err)
 	}
 

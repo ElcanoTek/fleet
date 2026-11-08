@@ -226,7 +226,7 @@ func TestExportImportRoundTrip_DB(t *testing.T) {
 	if _, err := exportTasks(ctx, st, &buf); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	fleetdb.DeleteRows(t, database, "logs", "tasks", "users") // wipe, then import the export back
+	fleetdb.DeleteRows(t, database, "logs", "tasks", "core.users") // wipe, then import the export back
 	if n, err := importTasks(ctx, st, &buf, taskImportOpts{}); err != nil || n != 1 {
 		t.Fatalf("import n=%d err=%v", n, err)
 	}

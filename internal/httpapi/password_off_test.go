@@ -50,7 +50,6 @@ func testAccountWritesRefused(t *testing.T, breakGlass bool) {
 	s := memberFixture(t, "boss@x.com", "carol@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	setRole(t, s, "carol@x.com", "member", "blue")
-	WithOpsAdmins(&fakeOpsAdmins{})(s)
 	h := s.Routes()
 	st := s.concreteStore(t)
 	s.cfg.AccountsManagedByAuth = true

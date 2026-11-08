@@ -64,7 +64,7 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 		t.Fatalf("key mgr: %v", err)
 	}
 
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		DefaultTaskModel: "test/model",
 		AdminAPIKey:      "admin-key",
 		DataDir:          tmpDir,
@@ -103,6 +103,7 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 // newA2ATestMux mounts the two A2A routes the way buildOrchestratorMux does.
 func newA2ATestMux(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Get("/.well-known/agent-card.json", h.A2AAgentCard)
 	r.Post("/a2a", h.A2ARPC)
 	return r
@@ -171,7 +172,7 @@ func userMessage(text string, taskID string) map[string]any {
 
 func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, string) {
 	t.Helper()
-	key, raw, err := keyMgr.CreateTypedKey(name, apikeys.KeyTypeTask, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateTypedKey(context.Background(), name, apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, st
 func TestA2ADisabledAnswers501(t *testing.T) {
 	t.Parallel()
 
-	h := New(Config{}, nil, nil)
+	h := New(Config{SharedToken: testSharedToken}, nil, nil)
 	for _, route := range []struct{ method, path string }{
 		{"GET", "/.well-known/agent-card.json"},
 		{"POST", "/a2a"},
@@ -352,7 +353,7 @@ func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
 	wantRPCError(t, env, -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED")
 
 	// A readonly key cannot create: definitive transport-layer 403.
-	_, roRaw, err := keyMgr.CreateTypedKey("ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, roRaw, err := keyMgr.CreateTypedKey(context.Background(), "ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +542,7 @@ func TestA2AReadsAreCreatorScoped(t *testing.T) {
 	// route cannot pass the suite. (Scoping still applies: the readonly key is
 	// not the creator, so the task is invisible to it — the point is the 200 +
 	// JSON-RPC answer, not a transport 403/405.)
-	_, roRaw, err := keyMgr.CreateTypedKey("reader", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, roRaw, err := keyMgr.CreateTypedKey(context.Background(), "reader", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

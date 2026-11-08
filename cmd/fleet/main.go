@@ -1,10 +1,15 @@
 // Command fleet is THE single fleet process. It boots, in ONE process:
 //
-//   - the chat HTTP/SSE server (httpapi) on :8080, driven by the concrete
-//     interactive turnEngine (agent.Manager over agentcore.Run);
-//   - the orchestrator HTTP server (sched/handlers) on :8000;
-//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending +
-//     recovers expired leases every 30s;
+//   - the public listener on :3000 (FLEET_WEB_ADDR): one chi tree serving
+//     the web UI, every /api/* route, the /v1 API and the chat webhooks
+//     (router.go, ADR-0110);
+//   - the chat HTTP/SSE server (httpapi) on loopback :8080, driven by the
+//     concrete interactive turnEngine (agent.Manager over agentcore.Run);
+//   - the orchestrator HTTP server (sched/handlers) on loopback :8000. Both
+//     serve the same handlers the public tree mounts, for the local CLIs and
+//     for a front proxy that routes the API paths to them;
+//   - the scheduler ticker (sched/scheduler) — promotes scheduled→pending,
+//     recovers expired leases and fires in-chat patrols/timers (ADR-0104);
 //   - the capped in-process worker pool (internal/runner) whose TaskRunner is
 //     the scheduled agent.Agent.Execute over the SAME shared sandbox pool.
 //
@@ -668,10 +673,6 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-		// Admin Users tab two-plane writes (grant/revoke Operations Center
-		// admin alongside chat-role changes) — same composition `fleet admin
-		// add` does, triggered over HTTP.
-		httpapi.WithOpsAdmins(opsAdminsService{st: schedStorage}),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -739,6 +740,13 @@ func run() error {
 	// config already in taskNotifier keeps serving.
 	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
+	// The scheduler is the box's one tick loop (ADR-0104): it fires scheduled
+	// tasks and in-chat patrols/timers alike. Chat's Run now and early wake-ups
+	// go through it; it is configured and started below, once the
+	// orchestrator side is up.
+	sch := scheduler.New(schedStorage, timezone())
+	chatOpts = append(chatOpts, httpapi.WithChatScheduleEngine(sch))
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
@@ -777,7 +785,6 @@ func run() error {
 		SchedRateLimitPerMinute:       rl.perMinute,
 		SchedRateLimitPerDay:          rl.perDay,
 		SchedGlobalRateLimitPerMinute: rl.globalPerMinute,
-		ElcanoCookieName:              "elcano_auth",
 		// Reuse the chat shared token so the Next proxy's X-User-Email path is
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
 		// non-empty by config.Validate.
@@ -794,12 +801,9 @@ func run() error {
 		DefaultMaxRetries:    cfg.TaskDefaultMaxRetries,
 		// Per-task sandbox-limit ceilings (#205): validateSandboxLimits rejects an
 		// override above these. 0 = no ceiling.
-		SandboxMemoryMaxMB: cfg.SandboxMemoryMaxMB,
-		SandboxCPUsMax:     cfg.SandboxCPUsMax,
-		SandboxPidsMax:     cfg.SandboxPidsMax,
-		// Central Auth only: the Operations Center refuses its own password
-		// login and the bearer it minted, like the other two planes.
-		PasswordLoginDisabled: cfg.PasswordLoginDisabled,
+		SandboxMemoryMaxMB:    cfg.SandboxMemoryMaxMB,
+		SandboxCPUsMax:        cfg.SandboxCPUsMax,
+		SandboxPidsMax:        cfg.SandboxPidsMax,
 		AccountsManagedByAuth: cfg.AccountsManagedByAuth,
 	}
 	warnIfNoAdminKey(hcfg.AdminAPIKey)
@@ -827,27 +831,17 @@ func run() error {
 	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
 	// read-only) and merges it with sched-DB private/workspace entries.
 	h.SetPromptCatalogProvider(bundle.Prompts)
-	// Signed-in Chat users whose independent Operations Center role (ops_role) is
-	// "none" still use the shared Prompt Library in Chat and Settings → Prompts.
-	h.SetChatMemberRoleProvider(chatMemberRoleProvider(chatStore))
+	// Identity — membership, roles, the Prompt Library fallback, session
+	// epochs and the adoption roster — needs no wiring: the Operations Center
+	// reads the one identity table, core.users, directly (#2049 M4, ADR-0105).
+	//
+	// Chat's usage data stays a seam (#2049 M4 step 9, kept on purpose): the
+	// usage and adoption reports read chat.turn_metrics through the chat
+	// store's own queries rather than this plane reading the chat schema.
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
-	// Wire the chat side of the adoption report (the exec Adoption view):
-	// per-user-per-day chat metering + the provisioned-account roster, both
-	// read-only aggregations over what the chat store already records.
+	// Per-user-per-day chat metering for the adoption report.
 	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
-	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
-	// Both planes are reached with the SAME session cookie, so the Operations
-	// Center checks the same revocation claim chat does. The epoch lives in the
-	// chat users table, which this plane does not read (separate stores, ADR-0098) — hand it the
-	// lookup, not the schema. Wired unconditionally: the chat store is open by
-	// the time these handlers exist, and a nil seam would silently stop checking.
-	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
-	// Read-only on the request path; rows are created by the web tier's mint via
-	// httpapi's /auth/external-session-epoch.
-	h.SetExternalSessionEpochProvider(func(ctx context.Context, issuer, subject, _ string) (string, error) {
-		return chatStore.LookupExternalSessionEpoch(ctx, issuer, subject)
-	})
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
@@ -855,8 +849,7 @@ func run() error {
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
-	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
-	sch := scheduler.New(schedStorage, timezone())
+	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
 	// Automatic run-history retention (#252): a daily sweep prunes old terminal
 	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
@@ -875,8 +868,7 @@ func run() error {
 	// Paused-task expiry (#510): fail tasks stuck awaiting input past the
 	// window. Off (wait forever) when TaskPausedExpiryMinutes<=0.
 	sch.SetPausedExpiry(cfg.TaskPausedExpiryMinutes)
-	sch.Start()
-	defer sch.Stop()
+	// Started below, after the last boot step that can fail.
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
 	taskRunner := scheduledrun.New(scheduledrun.Options{
@@ -1053,17 +1045,34 @@ func run() error {
 	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
 	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
 	// /healthz stays unversioned + untagged. Route registration is untouched.
-	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatSrv.Routes()), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
+	chatRoutes := chatSrv.Routes()
+	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatRoutes), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
 	orchHandlerWithProbes := withHealthProbes(apiversion.Router(orchHandler), startTime, chatSrv.IsDraining, readinessChecks)
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
-	// The browser tier (ADR-0091): the SPA and every /api/* route, calling the
-	// two backends in-process. nil when FLEET_WEB_ADDR=off.
-	webServer, err := buildWebServer(cfg, chatSrv.Routes(), orchHandler)
+	// The public listener (ADR-0091, ADR-0110): one chi tree serving the SPA,
+	// every /api/* route, the /v1 API and the chat webhooks — the browser
+	// paths calling the two backends in-process, the API paths answered by
+	// exactly the handlers the two listeners above serve. nil when
+	// FLEET_WEB_ADDR=off.
+	webServer, err := buildWebServer(cfg, backendHandlers{
+		chat: chatRoutes, orch: orchHandler,
+		chatListener: chatHandler, orchListener: orchHandlerWithProbes,
+	})
 	if err != nil {
 		return err
 	}
+
+	// Every boot step that can fail has succeeded: only now does the
+	// scheduler start firing — promoting due tasks and delivering chat
+	// patrols and timers (the chat server is their deliverer). Started any
+	// earlier, a failed boot could leave a chat turn running, with its side
+	// effects, while fleet reports the failure and closes the stores under
+	// it. TestRunStartsTheSchedulerAfterTheLastFallibleStep pins this.
+	sch.SetChatScheduleDeliverer(chatSrv)
+	sch.Start()
+	defer sch.Stop()
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
@@ -1074,6 +1083,13 @@ func run() error {
 	// design) does NOT touch detached chat turns or in-flight tasks — those drain
 	// through their own decoupled contexts so the grace period is meaningful.
 	ctx, cancel := context.WithCancel(context.Background())
+	// Both stores are migrated: make sure a deleted conversation takes its
+	// chat schedules with it (ADR-0104). Sched migration 077 installs the
+	// cascade when the chat schema already exists; on a database the
+	// scheduler initialised first this installs it and removes any schedule
+	// orphaned in between — retried with backoff for the life of the process
+	// if it fails, so a boot-time error cannot leave it missing.
+	go keepChatScheduleCascade(ctx, schedStorage)
 	defer cancel()
 
 	// SLA monitor (#274): a 60s sweep that warns/fails in-flight tasks running
@@ -1132,7 +1148,7 @@ func run() error {
 	// ticker closes that gap. Bound to ctx so it stops on shutdown; a panic is
 	// contained so the sweep can't crash the process.
 	go func() {
-		defer safe.Recover("cmd.approval-expiry-sweep", nil)
+		defer safe.RecoverContext(ctx, "cmd.approval-expiry-sweep", nil)
 		ticker := time.NewTicker(approvalExpirySweepInterval)
 		defer ticker.Stop()
 		for {
@@ -1150,9 +1166,6 @@ func run() error {
 			}
 		}
 	}()
-	// In-chat patrol and timer sweep (migration 086): claims due chat_schedules
-	// rows every 10 seconds and enqueues their turns into chat_input_queue.
-	startChatScheduleSweeper(ctx, chatSrv)
 	// One maintenance loop drives every periodic reclaimer on the box (chat
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
@@ -1175,24 +1188,20 @@ func run() error {
 	return nil
 }
 
-func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
-	go func() {
-		defer safe.Recover("cmd.chat-schedule-sweep", nil)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if _, err := chatSrv.SweepDueChatSchedules(sweepCtx); err != nil {
-					logging.From(ctx).Error("chat schedule sweep: failed", "err", err)
-				}
-				cancel()
+// keepChatScheduleCascade runs db.KeepChatScheduleCascade (5s doubling to a
+// 5m cap) until the cascade is in place or the process stops, logging each
+// failure and the install.
+func keepChatScheduleCascade(ctx context.Context, st *storage.Storage) {
+	defer safe.RecoverContext(ctx, "cmd.chat-schedule-cascade", nil)
+	scheddb.KeepChatScheduleCascade(ctx, st.DB().EnsureChatScheduleCascade, 5*time.Second, 5*time.Minute,
+		func(installed bool, orphans int, err error, retryIn time.Duration) {
+			switch {
+			case err != nil:
+				logging.From(ctx).Warn("chat schedules: could not install the conversation-delete cascade", "err", err, "retry_in", retryIn)
+			case installed:
+				logging.From(ctx).Info("chat schedules: installed the conversation-delete cascade", "orphans_removed", orphans)
 			}
-		}
-	}()
+		})
 }
 
 // initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant
@@ -1230,7 +1239,7 @@ func startA2APush(ctx context.Context, d *push.Dispatcher) {
 		return
 	}
 	go func() {
-		defer safe.Recover("cmd.a2a-push", nil)
+		defer safe.RecoverContext(ctx, "cmd.a2a-push", nil)
 		d.Run(ctx)
 	}()
 }
@@ -1388,14 +1397,15 @@ func defaultTaskTimezone() string {
 	return "UTC"
 }
 
-// seedBootstrapAdmins provisions (or promotes) the configured emails as
-// orchestrator admins at boot (#458). The list
-// (FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS, comma-separated emails) is authoritative
-// on every boot and idempotent; empty = no bootstrap. This is the ONLY automatic
-// orchestrator grant: a non-bootstrap chat user is still NOT a member (they get a
-// clear "ask an admin" page, never silent admin), preserving the deliberate
-// chat/orchestrator membership separation (separate stores, ADR-0098). Extracted from run() to
-// keep it within the cyclomatic budget.
+// seedBootstrapAdmins makes the configured emails Fleet admins at boot (#458):
+// role admin on their one identity row, created (with no usable password: they
+// sign in with a session cookie) when missing, re-enabled when disabled. The
+// list (FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS, comma-separated emails) is
+// authoritative on every boot and idempotent; empty = no bootstrap. Since the
+// one identity table (#2049 M4) Operations Center admin IS Fleet admin, so a
+// bootstrap admin is a chat admin too. Every other account's Operations Center
+// access is its ops_scope — none unless granted. Extracted from run() to keep
+// it within the cyclomatic budget.
 func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) error {
 	admins := bootstrapAdmins()
 	if len(admins) == 0 {
@@ -1410,7 +1420,7 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, email := range admins {
-		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
+		if err := schedStorage.Identity().EnsureAdmin(ctx, email); err != nil {
 			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
 		}
 	}
@@ -2158,42 +2168,6 @@ func chatUserDayUsageProvider(chatStore *store.Store) handlers.ChatUserDayUsageP
 				CompletionTokens: r.CompletionTokens,
 				CachedTokens:     r.CachedTokens,
 				Units:            r.Turns,
-			})
-		}
-		return out, nil
-	}
-}
-
-// chatMemberRoleProvider resolves a chat-plane user's RBAC role ("admin",
-// "member", or "viewer") by email for /prompts authorization when the caller's
-// independent Operations Center role (ops_role) is "none".
-func chatMemberRoleProvider(chatStore *store.Store) handlers.ChatMemberRoleProvider {
-	return func(ctx context.Context, email string) (string, error) {
-		u, err := chatStore.GetUser(ctx, email)
-		if errors.Is(err, store.ErrUserNotFound) || u == nil {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return u.Role, nil
-	}
-}
-
-// chatAccountsProvider adapts the chat store's provisioned-user roster into
-// the adoption report's seat list — the denominator for the adoption rate and
-// the "not yet active" roster. Read-only; emails only, never credentials.
-func chatAccountsProvider(chatStore *store.Store) handlers.ChatAccountsProvider {
-	return func(ctx context.Context) ([]schedmodels.AdoptionSeat, error) {
-		users, err := chatStore.ListUsers(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]schedmodels.AdoptionSeat, 0, len(users))
-		for _, u := range users {
-			out = append(out, schedmodels.AdoptionSeat{
-				Email:     u.Email,
-				CreatedAt: time.Unix(u.CreatedAt, 0).UTC(),
 			})
 		}
 		return out, nil

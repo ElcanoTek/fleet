@@ -150,7 +150,7 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		logging.From(ctx).Warn("Warning: failed to populate created_by username for task", "task_id", taskID, "err", err)
 	}
 	localizeTask(task)
-	writeJSON(w, http.StatusOK, taskOwnerResponse{Task: task, UpdatedTaskIDs: updated})
+	writeJSON(w, r, http.StatusOK, taskOwnerResponse{Task: task, UpdatedTaskIDs: updated})
 }
 
 // lookupTaskOwner resolves an enabled user by username: as given, then

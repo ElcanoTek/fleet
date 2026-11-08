@@ -197,7 +197,7 @@ func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.RowCounts = map[string]int{}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, r, http.StatusOK, d)
 }
 
 // ListDatasets handles GET /datasets.
@@ -215,7 +215,7 @@ func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []*models.Dataset{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"datasets": out})
+	writeJSON(w, r, http.StatusOK, map[string]any{"datasets": out})
 }
 
 // datasetFromPath loads the {datasetID} path dataset after checking perm,
@@ -266,7 +266,7 @@ func (h *Handlers) GetDataset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, r, http.StatusOK, d)
 }
 
 // DeleteDataset handles DELETE /datasets/{datasetID}.
@@ -309,7 +309,7 @@ func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []*models.DatasetRow{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "row_counts": d.RowCounts})
+	writeJSON(w, r, http.StatusOK, map[string]any{"rows": rows, "row_counts": d.RowCounts})
 }
 
 // ImportDatasetRows handles POST /datasets/{datasetID}/rows — JSON
@@ -379,7 +379,7 @@ func (h *Handlers) ImportDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to import rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"imported": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"imported": n})
 }
 
 // parseCSVRows maps a CSV (header = input column names) onto typed cells.
@@ -471,7 +471,7 @@ func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": models.DatasetStatusRunning})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": models.DatasetStatusRunning})
 }
 
 // PauseDataset handles POST /datasets/{datasetID}/pause.
@@ -488,7 +488,7 @@ func (h *Handlers) PauseDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "dataset is not running")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": models.DatasetStatusPaused})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": models.DatasetStatusPaused})
 }
 
 type datasetRowActionRequest struct {
@@ -513,7 +513,7 @@ func (h *Handlers) ApproveDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to approve rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"approved": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"approved": n})
 }
 
 // RerunDatasetRows handles POST /datasets/{datasetID}/rerun — reset the given
@@ -536,7 +536,7 @@ func (h *Handlers) RerunDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to reset rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"reset": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"reset": n})
 }
 
 // ExportDataset handles GET /datasets/{datasetID}/export — a CSV of every

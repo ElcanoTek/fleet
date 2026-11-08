@@ -29,7 +29,6 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/sched"
@@ -315,7 +314,7 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 
 	typed := map[apikeys.KeyType]probeKey{}
 	for _, kt := range []apikeys.KeyType{apikeys.KeyTypeAdmin, apikeys.KeyTypeTask, apikeys.KeyTypeReadonly, apikeys.KeyTypeWebhook} {
-		key, raw, err := keyMgr.CreateTypedKey("probe-"+string(kt), kt, []string{"probe"}, 0, nil, "")
+		key, raw, err := keyMgr.CreateTypedKey(context.Background(), "probe-"+string(kt), kt, []string{"probe"}, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create %s key: %v", kt, err)
 		}
@@ -323,7 +322,7 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 		typed[kt] = probeKey{name: "typed " + string(kt) + " key", raw: raw, keyID: &id}
 	}
 	legacy := func(perms ...models.Permission) probeKey {
-		key, raw, err := keyMgr.CreateKey("probe-legacy-"+uuid.NewString(), perms, nil, 0, nil, "")
+		key, raw, err := keyMgr.CreateKey(context.Background(), "probe-legacy-"+uuid.NewString(), perms, nil, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create legacy key %v: %v", perms, err)
 		}
@@ -444,6 +443,9 @@ type probeEnv struct {
 	keyMgr   *apikeys.Manager
 	router   http.Handler
 	adminKey string
+	// sharedToken is the web tier's X-Orchestrator-Server-Token, so a probe
+	// can drive the header-trust (session) user path.
+	sharedToken string
 }
 
 func newProbeEnv(t *testing.T) probeEnv {
@@ -458,8 +460,10 @@ func newProbeEnv(t *testing.T) probeEnv {
 		t.Fatalf("key manager: %v", err)
 	}
 	const adminKey = "openapi-permissions-admin-key"
+	const sharedToken = "openapi-permissions-shared-token"
 	h := handlers.New(handlers.Config{
 		AdminAPIKey:      adminKey,
+		SharedToken:      sharedToken,
 		DefaultTaskModel: "test/model",
 		Version:          "0.0.0-test",
 		DataDir:          tmp,
@@ -467,10 +471,11 @@ func newProbeEnv(t *testing.T) probeEnv {
 	notes := handlers.NewNotesHandlers(sched.NewStore(database), h)
 	noop := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	return probeEnv{
-		store:    store,
-		keyMgr:   keyMgr,
-		router:   apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
-		adminKey: adminKey,
+		store:       store,
+		keyMgr:      keyMgr,
+		router:      apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
+		adminKey:    adminKey,
+		sharedToken: sharedToken,
 	}
 }
 
@@ -493,24 +498,9 @@ func specSchemeHeader(t *testing.T, scheme string) string {
 // key, no bearer, no cookie, no signature) without a 401 or 403. A mutating
 // request carries a same-origin Origin header, as a browser sends it: that is
 // the CSRF check every cookie-capable POST passes, not a credential.
-//
-// POST /auth/login is the one `none` operation that authenticates anything: it
-// checks the username/password in its BODY and issues a token. It is probed
-// with a real user's credentials (admitted) and a wrong password (401), so
-// "none" there means "no credential is presented to it", nothing more.
 func TestOpenAPINoneOperationsTakeNoCredential(t *testing.T) {
 	env := newProbeEnv(t)
 	prefix := specServerPrefix(t)
-
-	const username, password = "openapi-probe-user", "openapi-probe-password"
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	if _, err := env.store.AddUser(&models.User{ID: uuid.New(), Username: username, PasswordHash: string(hash),
-		Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("add user: %v", err)
-	}
 
 	send := func(op specOp, body string) int {
 		req := httptest.NewRequest(op.method, prefix+fillPath(op.path, uuid.NewString()), strings.NewReader(body))
@@ -532,17 +522,6 @@ func TestOpenAPINoneOperationsTakeNoCredential(t *testing.T) {
 		body := ""
 		if op.method == http.MethodPost || op.method == http.MethodPut {
 			body = "{}"
-		}
-		if op.String() == "POST /auth/login" {
-			good, _ := json.Marshal(models.UserLogin{Username: username, Password: password})
-			bad, _ := json.Marshal(models.UserLogin{Username: username, Password: "wrong-password"})
-			if code := send(op, string(good)); code != http.StatusOK {
-				t.Errorf("%s with the right username/password in the body: %d, want 200", op, code)
-			}
-			if code := send(op, string(bad)); code != http.StatusUnauthorized {
-				t.Errorf("%s with a wrong password: %d, want 401", op, code)
-			}
-			continue
 		}
 		if code := send(op, body); code == http.StatusUnauthorized || code == http.StatusForbidden {
 			t.Errorf("%s declares x-fleet-permission none but answered %d with no credential", op, code)
@@ -597,7 +576,7 @@ func TestOpenAPITriggerAuthEnforcement(t *testing.T) {
 	}
 	webhookKey := func(slugs ...string) string {
 		t.Helper()
-		_, raw, err := env.keyMgr.CreateTypedKey("probe-webhook-"+uuid.NewString(), apikeys.KeyTypeWebhook, slugs, 0, nil, "")
+		_, raw, err := env.keyMgr.CreateTypedKey(context.Background(), "probe-webhook-"+uuid.NewString(), apikeys.KeyTypeWebhook, slugs, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create webhook key: %v", err)
 		}
@@ -605,7 +584,7 @@ func TestOpenAPITriggerAuthEnforcement(t *testing.T) {
 	}
 	otherTyped := func(kt apikeys.KeyType) string {
 		t.Helper()
-		_, raw, err := env.keyMgr.CreateTypedKey("probe-"+string(kt)+"-"+uuid.NewString(), kt, nil, 0, nil, "")
+		_, raw, err := env.keyMgr.CreateTypedKey(context.Background(), "probe-"+string(kt)+"-"+uuid.NewString(), kt, nil, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create %s key: %v", kt, err)
 		}

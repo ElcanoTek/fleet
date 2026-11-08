@@ -5,21 +5,20 @@
 
 import { createSSEParser } from "@/app/lib/sse";
 import type { PillField } from "@/app/chat/ui/protocolPills";
+import type { components } from "@/api/generated/orchestrator";
 
-// MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
-// credential account backs it. Account === "" means the default/shared seat.
-export type MCPChoice = { server: string; account?: string };
+// Wire types generated from docs/openapi.yaml (`npm run gen:api`; ADR-0109,
+// docs/HTTP-CONTRACTS.md). A type below that aliases Schemas[...] is the
+// server's contract; the hand-written ones are not covered by the spec yet.
+type Schemas = components["schemas"];
 
-// RetryPolicy mirrors models.RetryPolicy (#201): per-task retry backoff + which
-// failure classes retry. Set via API/CLI; the orchestrator form does not expose
-// it yet.
-export type RetryPolicy = {
-  backoff?: "exponential" | "fixed";
-  initial_delay_seconds?: number;
-  max_delay_seconds?: number;
-  retry_on?: string[];
-  no_retry_on?: string[];
-};
+// MCPChoice: which optional server is on + which credential account backs
+// it. Account === "" means the default/shared seat.
+export type MCPChoice = Schemas["MCPChoice"];
+
+// RetryPolicy (#201): per-task retry backoff + which failure classes retry.
+// Set via API/CLI; the orchestrator form does not expose it yet.
+export type RetryPolicy = NonNullable<Schemas["TaskCreate"]["retry_policy"]>;
 
 export type RunIf = {
   command: string;
@@ -28,20 +27,10 @@ export type RunIf = {
   on_error?: "run" | "skip";
 };
 
-// TaskStatus mirrors internal/sched/models.TaskStatus — the ten lifecycle
-// statuses a task row can carry. The classifications over it live in
+// TaskStatus: the ten lifecycle statuses a task row can carry
+// (models.AllTaskStatuses). The classifications over it live in
 // orchestrator/taskDisplay.tsx.
-export type TaskStatus =
-  | "pending"
-  | "scheduled"
-  | "leased"
-  | "running"
-  | "success"
-  | "error"
-  | "cancelled"
-  | "dead_lettered"
-  | "paused_awaiting_input"
-  | "paused_awaiting_wake";
+export type TaskStatus = Schemas["Task"]["status"];
 
 export type Task = {
   id: string;
@@ -176,176 +165,51 @@ export type TaskSandboxLimits = {
   pids?: number;
 };
 
-// SLAReport / SLAReportTask mirror models.SLAReport (#274): the
-// GET /admin/sla-report response. task_name is the task's title when it has
-// one — so a titled job's occurrences collapse into a single row — and the
-// prompt's first line otherwise.
-export type SLAReportTask = {
-  task_name: string;
-  expected_minutes: number;
-  p50_actual_minutes: number;
-  p95_actual_minutes: number;
-  breach_rate_pct: number;
-  sample_count: number;
-};
+// SLAReport / SLAReportTask: the GET /admin/sla-report response (#274).
+// task_name is the task's title when it has one — so a titled job's
+// occurrences collapse into a single row — and the prompt's first line
+// otherwise.
+export type SLAReportTask = Schemas["SLAReportTask"];
+export type SLAReport = Schemas["SLAReport"];
 
-export type SLAReport = {
-  period: string;
-  window_days: number;
-  tasks: SLAReportTask[];
-};
+// UsageReport / UsageBucket: the GET /admin/usage response (#601 part 1).
+// key is the grouping value (user email/username, API key id, project id,
+// model slug, or the YYYY-MM-DD bucket start for day/week); the empty key
+// collects rows without that dimension. Per-source splits (task_* / chat_*)
+// ride alongside the combined totals; cached_tokens is chat-only. note
+// carries the honest-scope pricing caveat (#289).
+export type UsageBucket = Schemas["UsageBucket"];
+export type UsageGroupBy = Schemas["UsageReport"]["group_by"];
+export type UsageReport = Schemas["UsageReport"];
 
-// UsageReport / UsageBucket mirror models.UsageReport (#601 part 1): the
-// GET /admin/usage response. key is the grouping value (user email/username,
-// API key id, project id, model slug, or the YYYY-MM-DD bucket start for
-// day/week); the empty key collects rows without that dimension. Per-source
-// splits (task_* / chat_*) ride alongside the combined totals; cached_tokens
-// is chat-only. note carries the honest-scope pricing caveat (#289).
-export type UsageBucket = {
-  key: string;
-  label?: string;
-  cost_usd: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  chat_prompt_tokens?: number;
-  uncached_tokens?: number;
-  cache_hit_rate_pct?: number;
-  task_cost_usd: number;
-  chat_cost_usd: number;
-  task_iterations: number;
-  chat_turns: number;
-};
+// AdoptionReport and friends: the GET /admin/usage/adoption response behind
+// the exec Adoption view. days is the full UTC day axis of [from, to); every
+// user's daily_tokens series is index-aligned to it. prev_* fields compare
+// against the equal-length window starting at prev_from. The empty user
+// collects unattributed spend (deleted-user task rows) and never counts as
+// an active user.
+export type AdoptionUser = Schemas["AdoptionUser"];
+export type AdoptionSeat = Schemas["AdoptionSeat"];
+export type AdoptionDay = Schemas["AdoptionDay"];
+export type AdoptionTotals = Schemas["AdoptionTotals"];
+export type AdoptionReport = Schemas["AdoptionReport"];
 
-export type UsageGroupBy = "user" | "key" | "project" | "model" | "day" | "week";
-
-export type UsageReport = {
-  group_by: UsageGroupBy;
-  from: string;
-  to: string;
-  buckets: UsageBucket[];
-  totals: UsageBucket;
-  sources: string[];
-  note: string;
-};
-
-// AdoptionReport and friends mirror models.AdoptionReport: the
-// GET /admin/usage/adoption response behind the exec Adoption view. days is
-// the full UTC day axis of [from, to); every user's daily_tokens series is
-// index-aligned to it. prev_* fields compare against the equal-length window
-// starting at prev_from. The empty user collects unattributed spend
-// (deleted-user task rows) and never counts as an active user.
-export type AdoptionUser = {
-  user: string;
-  cost_usd: number;
-  task_cost_usd: number;
-  chat_cost_usd: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  task_iterations: number;
-  chat_turns: number;
-  active_days: number;
-  last_active?: string;
-  prev_cost_usd: number;
-  prev_tokens: number;
-  daily_tokens: number[];
-};
-
-export type AdoptionSeat = {
-  email: string;
-  created_at: string;
-};
-
-export type AdoptionDay = {
-  day: string;
-  cost_usd: number;
-  tokens: number;
-  actions: number;
-  active_users: number;
-};
-
-export type AdoptionTotals = {
-  active_users: number;
-  prev_active_users: number;
-  new_active_users: number;
-  registered_users: number;
-  cost_usd: number;
-  prev_cost_usd: number;
-  tokens: number;
-  prev_tokens: number;
-  cached_tokens: number;
-  chat_turns: number;
-  task_iterations: number;
-};
-
-export type AdoptionReport = {
-  from: string;
-  to: string;
-  prev_from: string;
-  days: string[];
-  users: AdoptionUser[];
-  inactive_users: AdoptionSeat[];
-  daily: AdoptionDay[];
-  totals: AdoptionTotals;
-  sources: string[];
-  note: string;
-};
-
-// BudgetStatus mirrors models.BudgetStatus (#601 part 2): one configured
-// per-principal rolling budget plus its live evaluation — current window
-// [start, end), spend recomputed from the persisted metering, the effective
-// hard bounds after the fail-safe clamp against the live global ceilings, and
-// whether this window's one soft alert has fired.
-export type BudgetStatus = {
-  id: string;
-  scope: "user" | "key" | "project";
-  principal_id: string;
-  window: "day" | "week" | "month";
-  soft_usd?: number;
-  hard_usd?: number;
-  soft_tokens?: number;
-  hard_tokens?: number;
-  window_start: string;
-  window_end: string;
-  spend_usd: number;
-  spend_tokens: number;
-  effective_hard_usd?: number;
-  effective_hard_tokens?: number;
-  soft_alerted: boolean;
-};
+// BudgetStatus (#601 part 2): one configured per-principal rolling budget
+// plus its live evaluation — current window [start, end), spend recomputed
+// from the persisted metering, the effective hard bounds after the fail-safe
+// clamp against the live global ceilings, and whether this window's one soft
+// alert has fired.
+export type BudgetStatus = Schemas["BudgetStatus"];
 
 // BudgetCreate is the POST /admin/budgets body. Only user|key scopes exist;
 // anything else (including the legacy project scope) is rejected server-side.
-export type BudgetCreate = {
-  scope: "user" | "key";
-  principal_id: string;
-  window: "day" | "week" | "month";
-  soft_usd?: number;
-  hard_usd?: number;
-  soft_tokens?: number;
-  hard_tokens?: number;
-};
+export type BudgetCreate = Schemas["BudgetCreate"];
 
-// CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
-// cost forecast returned by POST /tasks/estimate. Cost fields are null when the
-// model's pricing is unknown; the token estimates are always present.
-export type CostRange = { min: number; max: number };
-export type CostForecast = {
-  model: string;
-  estimated_prompt_tokens: number;
-  system_prompt_tokens: number;
-  tool_definitions_tokens: number;
-  avg_output_tokens: number;
-  max_iterations: number;
-  pricing_known: boolean;
-  per_iteration_cost_usd: number | null;
-  estimated_total_cost_usd: number | null;
-  estimated_total_cost_range: CostRange | null;
-  max_cost_ceiling_usd: number;
-  would_hit_ceiling: boolean;
-  note: string;
-};
+// CostForecast (#233): the pre-submission token + cost forecast returned by
+// POST /tasks/estimate. Cost fields are null when the model's pricing is
+// unknown; the token estimates are always present.
+export type CostRange = Schemas["CostRange"];
+export type CostForecast = Schemas["CostForecast"];
 
 // TaskTemplateTask is the partial TaskCreate a template carries — the subset of
 // editable fields the create form pre-fills (#262). Mirrors

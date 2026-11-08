@@ -359,7 +359,9 @@ Administrators manage account access under **Settings → Admin → Users**. Cha
 defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
 Chat and Background tasks permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
-with no Background tasks access. Accounts created and granted Fleet in central Auth are added
+with no Background tasks access. A person has one Fleet account: Chat and
+Background tasks share its email, password, and Fleet Admin role, and its
+Background tasks access is part of the same account. Accounts created and granted Fleet in central Auth are added
 here automatically with the roles selected there. When your deployment signs
 people in through central Auth, central Auth manages everyone by default: the
 sign-in page offers single sign-on only, and this page lists people and their

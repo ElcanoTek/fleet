@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -34,12 +35,13 @@ import (
 func taskAuthzRouter(t *testing.T) (*chi.Mux, *Handlers, func()) {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
-	h := New(Config{
+	h := New(Config{SharedToken: testSharedToken,
 		DefaultTaskModel: "test/model",
 		AdminAPIKey:      "test-admin-key",
 		Version:          "0.1.0",
 	}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/tasks/paused", h.ListPausedTasks)
@@ -193,18 +195,15 @@ func resumeWakeRouter(t *testing.T) (*chi.Mux, *Handlers, *models.User) {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
 		r.Post("/tasks/{task_id}/wake", h.WakeTask)
 	})
-	hash := models.HashToken("resume-owner-token")
-	owner := &models.User{ID: uuid.New(), Username: "resume-owner", Role: "client", CreatedAt: time.Now(), SessionToken: &hash}
-	if _, err := store.AddUser(owner); err != nil {
-		t.Fatalf("AddUser: %v", err)
-	}
+	owner := seedOpsUser(t, store, uuid.New(), "resume-owner", "client", "resume-owner-token")
 	return r, h, owner
 }
 
@@ -242,7 +241,7 @@ func TestResumeAndWakeAreScopedPerTask(t *testing.T) {
 	asOwner := func(req *http.Request) { req.Header.Set("Authorization", "Bearer resume-owner-token") }
 
 	// An operator key: cancel_task + view_tasks, but no fleet-wide grant.
-	opKey, opRaw, err := h.apiKeys.CreateKey("operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	opKey, opRaw, err := h.apiKeys.CreateKey(context.Background(), "operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

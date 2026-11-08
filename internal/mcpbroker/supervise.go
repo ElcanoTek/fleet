@@ -87,6 +87,17 @@ func SpawnClient(cmd *exec.Cmd) (*Client, func() error, error) {
 	var stopErr error
 	stop := func() error {
 		once.Do(func() {
+			defer func() {
+				// Wait has joined exec's stderr copier, so nothing more can
+				// arrive: a line-buffering stderr sink (logging.ChildStderr)
+				// flushes the child's last unterminated line now.
+				// An *os.File (os.Stderr itself) is not ours to close.
+				if _, isFile := cmd.Stderr.(*os.File); !isFile {
+					if c, ok := cmd.Stderr.(io.Closer); ok {
+						_ = c.Close()
+					}
+				}
+			}()
 			// Close the connection first: the child's Serve loop sees EOF and
 			// returns, and any outstanding calls fail rather than hang.
 			_ = client.Close()

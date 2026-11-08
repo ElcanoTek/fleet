@@ -59,7 +59,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		s.writeUserLookupError(w, err)
 		return
 	}
-	writeJSON(w, s.meResponseFor(u))
+	writeJSON(w, r, s.meResponseFor(u))
 }
 
 // teamResponse is meResponse plus what LEAVING would cost — the two counts the
@@ -90,7 +90,7 @@ func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
 	if impact, ierr := s.store.LeaveTeamImpact(r.Context(), u.Email, u.TeamID); ierr == nil {
 		out.LeaveTeamImpact = impact
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }
 
 // handleMyTeam serves PUT /me/team — set the caller's own team.
@@ -138,7 +138,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	// %q escapes CR/LF, so the request-supplied team cannot forge a log line.
 	logging.From(r.Context()).Info("teams: user set own team", "user", u.Email, "team_id", u.TeamID)
-	writeJSON(w, s.meResponseFor(u))
+	writeJSON(w, r, s.meResponseFor(u))
 }
 
 // writeUserLookupError maps the store's user errors onto the two statuses this

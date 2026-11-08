@@ -39,7 +39,17 @@ npm run typecheck                   # tsc --noEmit — the ONLY type check (vite
 npm run test                        # vitest
 npm run build                       # vite build → ../internal/webui/bundle/dist
 npm run test:e2e:mocked             # Playwright, mocked: builds the bundle + cmd/web-e2e-server, then drives them
+npm run gen:api                     # src/api/generated/ from ../docs/openapi.yaml (openapi-typescript)
 ```
+
+**Generated API types.** `src/api/generated/` is generated from
+`docs/openapi.yaml` (itself generated from the Go router; ADR-0109,
+[`docs/HTTP-CONTRACTS.md`](../docs/HTTP-CONTRACTS.md)); never edit it. A wire
+type the spec covers is an alias of `components["schemas"][...]` (see
+`src/app/shared/lib/orchestratorApi.ts`), not a hand-written mirror. The
+generator lives in the `tools/openapi-typescript` workspace because it needs
+TypeScript 5's compiler API; `make api-contracts` from the root regenerates
+the spec and these types together, and the CI `contracts` job fails on drift.
 
 From the repo root: `make ci-web` (the CI job verbatim, ending with a binary
 that must embed the bundle), `make ci-e2e-mocked`, and `make dev` — `fleet

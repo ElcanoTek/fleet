@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func mustCreateTypedKey(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyTyp
 // exercises the ownership check rather than whatever the test meant to assert.
 func mustCreateTypedKeyWithID(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) (string, string) {
 	t.Helper()
-	key, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, 0, nil, "")
+	key, raw, err := keyMgr.CreateTypedKey(context.Background(), "test-"+string(kt), kt, slugs, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed key: %v", err)
 	}
@@ -122,8 +123,9 @@ func TestTypedKeyCannotCreateTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key mgr: %v", err)
 	}
-	h := New(Config{DefaultTaskModel: "test/model", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Post("/tasks", h.CreateTask)
 
 	readonlyKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeReadonly, nil)

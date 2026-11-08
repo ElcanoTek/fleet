@@ -164,7 +164,7 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	case strings.HasPrefix(cond, "shell:"):
 		return r.evalShellExit(ctx, sb, strings.TrimSpace(strings.TrimPrefix(cond, "shell:")))
 	case strings.HasPrefix(cond, "regex:"):
-		return evalRegexExit(strings.TrimPrefix(cond, "regex:"), scorers.LastAssistantMessage(session))
+		return evalRegexExit(ctx, strings.TrimPrefix(cond, "regex:"), scorers.LastAssistantMessage(session))
 	case cond == "llm":
 		return r.evalLLMExit(ctx, lc, session, fallback)
 	default:
@@ -185,8 +185,8 @@ func (r *Runner) evalShellExit(ctx context.Context, sb *sandbox.Sandbox, cmd str
 	return scorers.Shell(ctx, sb, cmd, shellExitTimeout)
 }
 
-func evalRegexExit(pattern, text string) (bool, string) {
-	return scorers.Regex(pattern, text)
+func evalRegexExit(ctx context.Context, pattern, text string) (bool, string) {
+	return scorers.Regex(ctx, pattern, text)
 }
 
 func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session *models.LogSession, fallback fantasy.LanguageModel) (bool, string) {

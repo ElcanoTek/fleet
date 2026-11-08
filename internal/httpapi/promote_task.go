@@ -124,7 +124,7 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"approval":  sink.approval,
 		"rationale": proposal.Rationale,
 	})

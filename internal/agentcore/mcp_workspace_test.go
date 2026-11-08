@@ -75,11 +75,11 @@ func TestWorkspaceDirs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 
-	shared := SharedMCPWorkspaceDir()
+	shared := SharedMCPWorkspaceDir(t.Context())
 	if want := filepath.Join(root, "mcp-shared"); shared != want {
 		t.Errorf("SharedMCPWorkspaceDir = %q, want %q", shared, want)
 	}
-	if again := SharedMCPWorkspaceDir(); again != shared {
+	if again := SharedMCPWorkspaceDir(t.Context()); again != shared {
 		t.Errorf("shared dir must be stable across calls: %q vs %q", again, shared)
 	}
 
@@ -100,7 +100,7 @@ func TestWorkspaceDirs(t *testing.T) {
 // openStable opens a stable run dir and closes its root at test end.
 func openStable(t *testing.T, key string) string {
 	t.Helper()
-	dir, run, err := OpenStableMCPWorkspace(key)
+	dir, run, err := OpenStableMCPWorkspace(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestStableMCPWorkspaceDir(t *testing.T) {
 		t.Fatalf("dir mode = %v, %v; want 0700", fi.Mode().Perm(), err)
 	}
 	for _, bad := range []string{"", ".", "..", "../x", "a/b", "a b", "task-é"} {
-		if _, run, err := OpenStableMCPWorkspace(bad); err == nil {
+		if _, run, err := OpenStableMCPWorkspace(t.Context(), bad); err == nil {
 			_ = run.Close()
 			t.Errorf("key %q must be rejected", bad)
 		}
@@ -152,7 +152,7 @@ func TestOpenStableMCPWorkspaceRefusesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, run, err := OpenStableMCPWorkspace("task-abc")
+	dir, run, err := OpenStableMCPWorkspace(t.Context(), "task-abc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestOpenStableMCPWorkspaceRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(victim, dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, run, err := OpenStableMCPWorkspace("task-abc"); err == nil {
+	if _, run, err := OpenStableMCPWorkspace(t.Context(), "task-abc"); err == nil {
 		_ = run.Close()
 		t.Fatal("symlinked run dir must be refused")
 	}
@@ -208,7 +208,7 @@ func TestOpenStableMCPWorkspaceRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(victim, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, run, err := OpenStableMCPWorkspace("task-new"); err == nil {
+	if _, run, err := OpenStableMCPWorkspace(t.Context(), "task-new"); err == nil {
 		_ = run.Close()
 		t.Fatal("symlinked mcp-runs base must be refused")
 	}
@@ -225,7 +225,7 @@ func TestStableMCPWorkspaceDirFailsLoud(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "mcp-runs"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if dir, run, err := OpenStableMCPWorkspace("task-abc"); err == nil {
+	if dir, run, err := OpenStableMCPWorkspace(t.Context(), "task-abc"); err == nil {
 		_ = run.Close()
 		t.Fatalf("expected error, got dir %q", dir)
 	}

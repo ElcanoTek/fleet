@@ -518,6 +518,39 @@ describe("LogViewer task-detail modal", () => {
     await screen.findByTestId("wake-summary");
     expect(screen.queryByTestId("fire-event-button")).toBeNull();
   });
+
+  // A readonly user is refused every write with 403, so the record offers
+  // none: no wake event, no Resubmit, no feedback. The reads stay.
+  it("offers a readonly viewer no wake, resubmit or feedback", async () => {
+    mockSession(RICH_SESSION);
+    render(
+      <LogViewer
+        task={{
+          ...DONE_TASK,
+          status: "paused_awaiting_wake",
+          wake_event_key: "deploy-finished",
+          wake_at: "2026-08-15T12:00:00Z",
+        }}
+        onClose={() => {}}
+        readOnly
+      />,
+    );
+    expect(await screen.findByTestId("wake-summary")).toHaveTextContent("deploy-finished");
+    expect(screen.queryByTestId("fire-event-button")).toBeNull();
+    expect(screen.queryByLabelText("Wake note")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mark run as helpful" })).toBeNull();
+    expect(screen.queryByLabelText("Critique (optional)")).toBeNull();
+    expect(screen.getByTestId("history-button")).toBeTruthy();
+  });
+
+  it("offers a readonly viewer no Resubmit on a finished run", async () => {
+    mockSession(RICH_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} readOnly />);
+    await screen.findByTestId("task-summary");
+    await waitFor(() => expect(taskLogs).toHaveBeenCalled());
+    expect(screen.queryByTestId("resubmit-task-button")).toBeNull();
+    expect(screen.getByTestId("download-logs-button")).toBeTruthy();
+  });
 });
 
 // ── run history ───────────────────────────────────────────────────────────────

@@ -223,8 +223,8 @@ func TestLifecycleSchedulerCallerPins(t *testing.T) {
 	}
 	text := source.String()
 
-	// db.SettleGatedTask: last argument is the target status.
-	settleRe := regexp.MustCompile(`SettleGatedTask\([^)]*models\.(TaskStatus\w+)\s*\)`)
+	// db.SettleGatedTask (the scheduler calls the storage Ctx variant): last argument is the target status.
+	settleRe := regexp.MustCompile(`SettleGatedTask(?:Ctx)?\([^)]*models\.(TaskStatus\w+)\s*\)`)
 	gotSettle := map[models.TaskStatus]bool{}
 	for _, m := range settleRe.FindAllStringSubmatch(text, -1) {
 		status, ok := taskStatusIdentifiers[m[1]]
@@ -252,7 +252,7 @@ func TestLifecycleSchedulerCallerPins(t *testing.T) {
 	}
 
 	// db.UpdateTasksStatusBatch: (from, to) argument pairs.
-	batchRe := regexp.MustCompile(`UpdateTasksStatusBatch\([^)]*models\.(TaskStatus\w+),\s*models\.(TaskStatus\w+)\s*\)`)
+	batchRe := regexp.MustCompile(`UpdateTasksStatusBatch(?:Ctx)?\([^)]*models\.(TaskStatus\w+),\s*models\.(TaskStatus\w+)\s*\)`)
 	matches := batchRe.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		t.Fatal("no UpdateTasksStatusBatch call sites found in the scheduler — pin scan rotted?")

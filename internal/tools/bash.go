@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -495,18 +494,18 @@ type bashResult struct {
 // which fold the failure into the tool result) rather than being silenced
 // after the first occurrence. We still emit a once-per-process log line as
 // a server-side breadcrumb, but the returned error is the per-turn signal.
-// Log dir resolution: $FLEET_AUDIT_DIR (or legacy $CHAT_AUDIT_DIR), else
-// $FLEET_DATA_DIR/audit (or legacy $CHAT_DATA_DIR/audit), else ./data/audit.
-func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
+// Log dir resolution: $FLEET_AUDIT_DIR, else
+// $FLEET_DATA_DIR/audit, else ./data/audit.
+func auditBashInvocation(ctx context.Context, command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
 	dir := AuditDir()
 	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
-		auditWarnOnce("mkdir audit dir failed: " + err.Error())
+		auditWarnOnce(ctx, "mkdir audit dir failed: "+err.Error())
 		return fmt.Errorf("create audit dir: %w", err)
 	}
 	path := filepath.Join(dir, "bash.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // audit log readable by the chat group
 	if err != nil {
-		auditWarnOnce("open audit log failed: " + err.Error())
+		auditWarnOnce(ctx, "open audit log failed: "+err.Error())
 		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
@@ -523,11 +522,11 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
-		auditWarnOnce("marshal audit entry failed: " + err.Error())
+		auditWarnOnce(ctx, "marshal audit entry failed: "+err.Error())
 		return fmt.Errorf("marshal audit entry: %w", err)
 	}
 	if _, err := f.Write(append(line, '\n')); err != nil {
-		auditWarnOnce("write audit log failed: " + err.Error())
+		auditWarnOnce(ctx, "write audit log failed: "+err.Error())
 		return fmt.Errorf("write audit log: %w", err)
 	}
 	return nil
@@ -538,11 +537,11 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 // use sync.Map.
 var auditWarnedAbout sync.Map
 
-func auditWarnOnce(msg string) {
+func auditWarnOnce(ctx context.Context, msg string) {
 	if _, loaded := auditWarnedAbout.LoadOrStore(msg, true); loaded {
 		return
 	}
-	slog.Info("bash audit", "detail", msg) // msg comes from our own audit code, not user input
+	logging.From(ctx).Info("bash audit", "detail", msg) // msg comes from our own audit code, not user input
 }
 
 // runBashWithSandbox is the production dispatch path. The caller MUST
@@ -570,7 +569,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 		// A blocked command is still an auditable event. If the audit write also
 		// fails, surface it on the returned error so the dropped trail is visible
 		// for THIS turn rather than only as a once-per-process log line.
-		if auditErr := auditBashInvocation(command, workingDir, -1, 0, err.Error()); auditErr != nil {
+		if auditErr := auditBashInvocation(ctx, command, workingDir, -1, 0, err.Error()); auditErr != nil {
 			return "", fmt.Errorf("%w (audit_failed: %w)", err, auditErr)
 		}
 		return "", err
@@ -634,7 +633,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	// result's Error — the same channel as the capNote above — so the model and
 	// the operator see that this invocation's audit row is missing, instead of it
 	// being silently dropped after the first per-process warning.
-	if auditErr := auditBashInvocation(command, workingDir, result.ExitCode, result.ExecutionTimeMs, ""); auditErr != nil {
+	if auditErr := auditBashInvocation(ctx, command, workingDir, result.ExitCode, result.ExecutionTimeMs, ""); auditErr != nil {
 		auditNote := "audit_failed: " + auditErr.Error()
 		if result.Error != "" {
 			result.Error += " | " + auditNote
@@ -711,9 +710,8 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 	return wd, nil
 }
 
-// AuditDir resolves the bash audit log directory: $FLEET_AUDIT_DIR (or the
-// legacy $CHAT_AUDIT_DIR), else <$FLEET_DATA_DIR>/audit (or the legacy
-// $CHAT_DATA_DIR), else ./data/audit. Exported so the configuration
+// AuditDir resolves the bash audit log directory: $FLEET_AUDIT_DIR, else
+// <$FLEET_DATA_DIR>/audit, else ./data/audit. Exported so the configuration
 // registry's inherited default for FLEET_AUDIT_DIR is checked against it.
 func AuditDir() string {
 	dir := fleetEnv("AUDIT_DIR")

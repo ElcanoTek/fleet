@@ -1,14 +1,15 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -234,7 +235,7 @@ func marshalCredentialAllowlist(al models.CredentialAllowlist) any {
 // unmarshalCredentialAllowlist reads the nullable JSONB column back. A NULL/empty
 // column is nil ("inherit global"); "[]" decodes to a non-nil empty slice
 // ("deny all"), so the distinction round-trips.
-func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist {
+func unmarshalCredentialAllowlist(ctx context.Context, ns sql.NullString) models.CredentialAllowlist {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
@@ -246,7 +247,7 @@ func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist 
 		// possible grant. An empty, non-nil list is "deny all"; the task then
 		// fails loudly on its first credentialed call instead of running with
 		// seats nobody granted it.
-		slog.Error("ERROR: credential_allowlist unreadable — treating as deny-all", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Error("ERROR: credential_allowlist unreadable — treating as deny-all", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return models.CredentialAllowlist{}
 	}
 	return result
@@ -262,13 +263,13 @@ func marshalLoopConfig(lc *models.LoopConfig) any {
 }
 
 // unmarshalLoopConfig reads the nullable loop_config column back. NULL/empty → nil.
-func unmarshalLoopConfig(ns sql.NullString) *models.LoopConfig {
+func unmarshalLoopConfig(ctx context.Context, ns sql.NullString) *models.LoopConfig {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var lc models.LoopConfig
 	if err := json.Unmarshal([]byte(ns.String), &lc); err != nil {
-		slog.Warn("Warning: failed to unmarshal loop_config", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Warn("Warning: failed to unmarshal loop_config", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &lc
@@ -284,13 +285,13 @@ func marshalWorktreeConfig(wc *models.WorktreeConfig) any {
 }
 
 // unmarshalWorktreeConfig reads the nullable worktree_config column back. NULL/empty → nil.
-func unmarshalWorktreeConfig(ns sql.NullString) *models.WorktreeConfig {
+func unmarshalWorktreeConfig(ctx context.Context, ns sql.NullString) *models.WorktreeConfig {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var wc models.WorktreeConfig
 	if err := json.Unmarshal([]byte(ns.String), &wc); err != nil {
-		slog.Warn("Warning: failed to unmarshal worktree_config", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Warn("Warning: failed to unmarshal worktree_config", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &wc
@@ -307,13 +308,13 @@ func marshalSandboxLimits(l *models.TaskSandboxLimits) any {
 }
 
 // unmarshalSandboxLimits reads the nullable sandbox_limits column back. NULL/empty → nil.
-func unmarshalSandboxLimits(ns sql.NullString) *models.TaskSandboxLimits {
+func unmarshalSandboxLimits(ctx context.Context, ns sql.NullString) *models.TaskSandboxLimits {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var l models.TaskSandboxLimits
 	if err := json.Unmarshal([]byte(ns.String), &l); err != nil {
-		slog.Warn("Warning: failed to unmarshal sandbox_limits", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Warn("Warning: failed to unmarshal sandbox_limits", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &l
@@ -348,13 +349,13 @@ func marshalRetryPolicy(rp *models.RetryPolicy) any {
 }
 
 // unmarshalRetryPolicy reads the nullable retry_policy column back. NULL/empty → nil.
-func unmarshalRetryPolicy(ns sql.NullString) *models.RetryPolicy {
+func unmarshalRetryPolicy(ctx context.Context, ns sql.NullString) *models.RetryPolicy {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var rp models.RetryPolicy
 	if err := json.Unmarshal([]byte(ns.String), &rp); err != nil {
-		slog.Warn("Warning: failed to unmarshal retry_policy", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Warn("Warning: failed to unmarshal retry_policy", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &rp
@@ -371,13 +372,13 @@ func marshalRunIf(r *models.RunIf) any {
 }
 
 // unmarshalRunIf reads the nullable run_if column back. NULL/empty → nil.
-func unmarshalRunIf(ns sql.NullString) *models.RunIf {
+func unmarshalRunIf(ctx context.Context, ns sql.NullString) *models.RunIf {
 	if !ns.Valid || ns.String == "" {
 		return nil
 	}
 	var r models.RunIf
 	if err := json.Unmarshal([]byte(ns.String), &r); err != nil {
-		slog.Warn("Warning: failed to unmarshal run_if", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
+		logging.From(ctx).Warn("Warning: failed to unmarshal run_if", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &r

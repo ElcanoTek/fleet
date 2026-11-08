@@ -18,7 +18,10 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/dbtrace"
+	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -36,6 +39,9 @@ type Database struct {
 	// once via SetA2APushCipher before serving; nil fails those stores closed
 	// (see a2a_push.go). Held in memory only, never logged.
 	pushCipher *secretbox.Cipher
+
+	// merge is the identity merge's outcome at Init (IdentityMerge).
+	merge identity.MergeResult
 }
 
 // SetLogArchiveKey configures the host-side AES-256-GCM key used to encrypt
@@ -118,9 +124,44 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 	if err := RunMigrations(db.conn); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
+	if err := db.mergeIdentities(context.Background()); err != nil {
+		return err
+	}
 
 	return nil
 }
+
+// mergeIdentities folds the scheduler's legacy users table into the one
+// identity table once both stores are migrated (identity.MergeLegacySchedUsers,
+// #2049 M4). Every open tries; after the first success it is one read. When the
+// chat store has not created core.users yet (a scheduler-only verb on a fresh
+// database) it does nothing and a later open merges. A failed merge fails the
+// open: the Operations Center must not run on half an identity table.
+func (db *Database) mergeIdentities(ctx context.Context) error {
+	schema, err := dbschema.Configured(ctx, db.conn)
+	if err != nil {
+		return err
+	}
+	if schema == "" {
+		// A DSN naming no store schema (the removed two-database layout is
+		// refused before any store opens): nothing to merge into here.
+		return nil
+	}
+	res, err := identity.MergeLegacySchedUsers(ctx, db.conn, schema)
+	if err != nil {
+		return fmt.Errorf("merge Operations Center accounts into the identity table: %w", err)
+	}
+	db.merge = res
+	if res.Ran {
+		for _, line := range res.Report.Lines() {
+			logging.From(ctx).Info("identity merge: " + line)
+		}
+	}
+	return nil
+}
+
+// IdentityMerge is what this open's identity merge found or did.
+func (db *Database) IdentityMerge() identity.MergeResult { return db.merge }
 
 // Close closes the database connection.
 func (db *Database) Close() error {
@@ -144,13 +185,13 @@ func marshalJSON(v interface{}) string {
 	return string(b)
 }
 
-func unmarshalStringSlice(s string) []string {
+func unmarshalStringSlice(ctx context.Context, s string) []string {
 	if s == "" {
 		return []string{}
 	}
 	var result []string
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
+		logging.From(ctx).Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return []string{}
 	}
 	if result == nil {
@@ -159,13 +200,13 @@ func unmarshalStringSlice(s string) []string {
 	return result
 }
 
-func unmarshalMCPSelection(s string) models.MCPSelection {
+func unmarshalMCPSelection(ctx context.Context, s string) models.MCPSelection {
 	if s == "" {
 		return models.MCPSelection{}
 	}
 	var result models.MCPSelection
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
+		logging.From(ctx).Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return models.MCPSelection{}
 	}
 	if result == nil {

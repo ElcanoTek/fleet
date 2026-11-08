@@ -12,8 +12,11 @@ import (
 
 // UpdateTasksStatusBatch transitions tasks from fromStatus to toStatus, skipping
 // any that have left fromStatus. Scheduled-to-pending promotion additionally
-// rechecks that the current definition is due, cron-triggered, and ungated.
-// Returns the number transitioned.
+// rechecks that the current definition is due, cron-triggered, and ungated,
+// and SKIPS rows another transaction holds locked (FOR UPDATE SKIP LOCKED in
+// the same statement): a row an edit, a cancel or a stuck session is holding
+// is left for a later tick instead of making the whole batch — and every due
+// task behind it — wait. Returns the number transitioned.
 func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.UUID, fromStatus, toStatus models.TaskStatus) (int, error) {
 	if len(taskIDs) == 0 {
 		return 0, nil
@@ -24,8 +27,16 @@ func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.U
 		// Selection and promotion are separate statements. A concurrent edit
 		// can postpone a task, add a gate, or turn it into an inert template
 		// without changing its status. Recheck dispatch eligibility under the
-		// UPDATE's row lock so the stale selection cannot bypass that edit.
-		query += ` AND scheduled_for <= now() AND trigger_type = 'cron' AND run_if IS NULL`
+		// row lock so the stale selection cannot bypass that edit — taking
+		// the locks with SKIP LOCKED, so a locked row is passed over, not
+		// waited on.
+		query = `UPDATE tasks SET status = $1
+		WHERE id IN (
+			SELECT id FROM tasks
+			 WHERE id = ANY($2::uuid[]) AND status = $3
+			   AND scheduled_for <= now() AND trigger_type = 'cron' AND run_if IS NULL
+			 FOR UPDATE SKIP LOCKED
+		)`
 	}
 	res, err := db.conn.ExecContext(ctx, query,
 		string(toStatus),
@@ -115,7 +126,7 @@ func (db *Database) GetUnspawnedRecurringTasks(ctx context.Context, olderThan ti
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it

@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -136,6 +135,9 @@ func (t turnStruggle) strongest() (signal, reason string) {
 
 // struggleCheck is one classifier call running alongside the turn.
 type struggleCheck struct {
+	// logCtx carries the conversation's correlation for the classifier's
+	// log lines, which run after the turn's request has gone.
+	logCtx    context.Context
 	mode      string
 	threshold float64
 	done      chan struct{}
@@ -180,7 +182,7 @@ func (s *Server) startStruggleCheck(conv *store.Conversation, history []agent.Hi
 		return nil
 	}
 	conversation := prior + "\n\nUser: " + strings.TrimSpace(userInput)
-	c := &struggleCheck{mode: mode, threshold: float64(pct) / 100, done: make(chan struct{})}
+	c := &struggleCheck{logCtx: detachedCtx("", conv.ID, ""), mode: mode, threshold: float64(pct) / 100, done: make(chan struct{})}
 	apiKey := s.cfg.OpenRouterAPIKey
 	go func() {
 		defer close(c.done)
@@ -221,7 +223,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 		ok, err := stager.StageHostSuggestion(source, reason)
 		if err != nil {
-			logging.From(ctx).Error("escalation: stage suggestion failed", "suggestion_source", source, "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("escalation: stage suggestion failed", "suggestion_source", safe.LogSafe(source), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 		staged = ok
 		return ok
@@ -283,7 +285,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 	}
 	s.background.Go("escalation.classifier_late", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), agentcore.StruggleCheckTimeout+5*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentcore.StruggleCheckTimeout+5*time.Second)
 		defer cancel()
 		recordCtx = ctx
 		s.classifierOutcome(checks, nil, record)
@@ -353,7 +355,7 @@ func countClassifierCheck(c *struggleCheck) (agentcore.StruggleVerdict, bool) {
 	switch {
 	case err != nil:
 		metrics.RecordEscalationClassifierCheck(c.mode, "error")
-		slog.Error("escalation: classifier failed", "err", safe.LogSafe(err.Error()))
+		logging.From(c.logCtx).Error("escalation: classifier failed", "err", safe.LogSafe(err.Error()))
 		return v, false
 	case v.Probability >= c.threshold:
 		metrics.RecordEscalationClassifierCheck(c.mode, "pushback")

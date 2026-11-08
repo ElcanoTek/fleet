@@ -43,9 +43,8 @@
 #                        the script creates chat + sched DBs on it.
 #                        (default: local instance at 127.0.0.1:5432 as the
 #                        current user, or a throwaway cluster if none is up)
-#   E2E_TEST_EMAIL       chat test user  (default e2e@example.com)
+#   E2E_TEST_EMAIL       test user, a Fleet admin (default e2e@example.com)
 #   E2E_TEST_PASSWORD    test password   (default e2e-test-password)
-#   E2E_SCHED_USERNAME   orchestrator user (default e2e)
 #   FLEET_SERVER_TOKEN   chat shared secret (default e2e-shared-secret)
 #   ADMIN_API_KEY        orchestrator admin key (default e2e-admin-key)
 #   APP_SESSION_SECRET   web HMAC session secret
@@ -68,7 +67,6 @@ FAKE_LLM_ADDR="${FAKE_LLM_ADDR:-127.0.0.1:18090}"
 FLEET_SANDBOX_IMAGE="${FLEET_SANDBOX_IMAGE:-localhost/fleet-sandbox:latest}"
 E2E_TEST_EMAIL="${E2E_TEST_EMAIL:-e2e@example.com}"
 E2E_TEST_PASSWORD="${E2E_TEST_PASSWORD:-e2e-test-password}"
-E2E_SCHED_USERNAME="${E2E_SCHED_USERNAME:-e2e}"
 FLEET_SERVER_TOKEN="${FLEET_SERVER_TOKEN:-e2e-shared-secret}"
 ADMIN_API_KEY="${ADMIN_API_KEY:-e2e-admin-key}"
 APP_SESSION_SECRET="${APP_SESSION_SECRET:-e2e-session-secret-0123456789abcdef}"
@@ -423,21 +421,17 @@ start_fleet() {
   wait_http "http://127.0.0.1:$ORCH_PORT/health" 90 "fleet orchestrator"
 }
 
-# ── seed test users (chat + sched) ──
+# ── seed the test user ──
+# One identity table (#2049 M4, ADR-0105): a person is one account, and
+# Operations Center admin IS the Fleet admin role. `fleet admin add` makes the
+# test email that account — password login for chat, and the Operations
+# Center through the same session cookie (header trust: lookupMember reads
+# core.users). Idempotent, so E2E_REUSE_DB=1 re-runs are fine.
 seed_users() {
-  log "seed: chat user $E2E_TEST_EMAIL + sched admin $E2E_TEST_EMAIL (and legacy $E2E_SCHED_USERNAME)"
+  log "seed: Fleet admin $E2E_TEST_EMAIL (chat + Operations Center)"
   DATABASE_URL="$DB_DSN" \
-    "$BIN_DIR/fleet" chat user add "$E2E_TEST_EMAIL" --password - <<<"$E2E_TEST_PASSWORD" \
-    >>"$LOG_DIR/seed.log" 2>&1 || log "seed: chat user may already exist (continuing)"
-  # Cookie/OIDC is the Operations Center path: lookupMember matches X-User-Email
-  # to sched users.username, so the chat email MUST be a sched admin or /me
-  # returns 403 not_a_member and the live suite cannot create tasks.
-  DATABASE_URL="$DB_DSN" \
-    "$BIN_DIR/fleet" sched user add "$E2E_TEST_EMAIL" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
-    >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched email user may already exist (continuing)"
-  DATABASE_URL="$DB_DSN" \
-    "$BIN_DIR/fleet" sched user add "$E2E_SCHED_USERNAME" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
-    >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched user may already exist (continuing)"
+    "$BIN_DIR/fleet" admin add "$E2E_TEST_EMAIL" --password - <<<"$E2E_TEST_PASSWORD" \
+    >>"$LOG_DIR/seed.log" 2>&1 || die "seed: fleet admin add $E2E_TEST_EMAIL failed (see $LOG_DIR/seed.log)"
 }
 
 # ── 6. web: the fleet binary's own browser tier ──
@@ -458,13 +452,12 @@ ORCH_PORT=$ORCH_PORT
 FAKE_LLM_ADDR=$FAKE_LLM_ADDR
 CHAT_SERVER_URL=http://127.0.0.1:$CHAT_PORT
 ORCHESTRATOR_SERVER_URL=http://127.0.0.1:$ORCH_PORT
-CHAT_SERVER_TOKEN=$FLEET_SERVER_TOKEN
+FLEET_SERVER_TOKEN=$FLEET_SERVER_TOKEN
 ADMIN_API_KEY=$ADMIN_API_KEY
 APP_SESSION_SECRET=$APP_SESSION_SECRET
 AUTH_SIGNING_PUBKEY=$AUTH_SIGNING_PUBKEY
 E2E_TEST_EMAIL=$E2E_TEST_EMAIL
 E2E_TEST_PASSWORD=$E2E_TEST_PASSWORD
-E2E_SCHED_USERNAME=$E2E_SCHED_USERNAME
 FLEET_SANDBOX_IMAGE=$FLEET_SANDBOX_IMAGE
 EOF
   log "env: wrote $E2E_ENV_FILE"

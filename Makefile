@@ -1,4 +1,4 @@
-.PHONY: all build compile bins web check-web-bundle dev stack-check fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions lint-catalog-links fmt tidy sync-guides config-docs clean help \
+.PHONY: all build compile bins web check-web-bundle dev stack-check fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions lint-catalog-links fmt tidy sync-guides config-docs api-contracts clean help \
 	version helm-package govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -50,6 +50,7 @@ help:
 	@echo "  make tidy        go mod tidy"
 	@echo "  make sync-guides copy the user guides into web/ after editing the skill copy"
 	@echo "  make config-docs regenerate docs/CONFIGURATION.md + the Helm schema's config.env from the config registry"
+	@echo "  make api-contracts regenerate docs/openapi.yaml (router + internal/apispec) and web/src/api/generated (needs web/node_modules)"
 	@echo ""
 	@echo "CI-mirroring convenience targets (run the SAME commands CI runs — see docs/TESTING.md):"
 	@echo "  make govulncheck   dependency-CVE scan (CI 'go' job)"
@@ -282,7 +283,18 @@ sync-guides:
 # fails on drift.
 config-docs:
 	go test ./internal/config/envreg -run TestGeneratedFilesAreUpToDate -count=1 -update
-	@echo "generated: docs/CONFIGURATION.md, deploy/helm/fleet/values.schema.json (config.env)"
+	@echo "generated: docs/CONFIGURATION.md, deploy/helm/fleet/values.schema.json (config.env), scripts/lib/retired-env.sh"
+
+# The HTTP contracts (ADR-0109, docs/HTTP-CONTRACTS.md): docs/openapi.yaml is
+# generated from the orchestrator router plus its route catalog
+# (internal/apispec/orchestrator), and web/src/api/generated/ from
+# docs/openapi.yaml by openapi-typescript. TestOpenAPIGenerated (make test)
+# and the CI `contracts` job fail on drift. The web half needs `npm ci` in
+# web/ first.
+api-contracts:
+	go test -tags fleet_host_executor ./cmd/fleet -run TestOpenAPIGenerated -count=1 -update
+	cd web && npm run gen:api
+	@echo "generated: docs/openapi.yaml, web/src/api/generated/orchestrator.ts"
 
 clean:
 	go clean ./...

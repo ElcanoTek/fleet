@@ -139,9 +139,17 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 		a.completionBlocked = newCompletionBlockedRule(testBlockedRule)
 	}
 	rec := &eventRecorder{}
-	err := a.Execute(agentcore.WithStreamObserver(context.Background(), rec), "Refresh the page; when the source has no new coverage, record a refresh check instead of publishing.")
+	base := context.Background()
+	if scriptedRunContext != nil {
+		base = scriptedRunContext
+	}
+	err := a.Execute(agentcore.WithStreamObserver(base, rec), "Refresh the page; when the source has no new coverage, record a refresh check instead of publishing.")
 	return a, rec, calls, err
 }
+
+// scriptedRunContext, when set, is the context scriptedRun executes under
+// (nil, the default, is context.Background()).
+var scriptedRunContext context.Context
 
 // scriptedRunFallback, when set, is the fallback model scriptedRun installs
 // (nil, the default, installs none).

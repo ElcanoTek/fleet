@@ -16,10 +16,12 @@ import (
 // recorded in ADR-0091's inventory). An unregistered /api path is a JSON 404,
 // never index.html; a registered path with the wrong method is a 405.
 //
-// Most routes are table rows: chatRoute for chat-server, orchRoute for the
-// orchestrator. The ones with logic of their own (login, SSO, streams, file
-// downloads, the model catalogs, the brand assets) are handlers in the
-// neighbouring files.
+// The chat routes are table rows (chatRoute): each translates a browser path
+// to a chat-server path with its own body rule and response shape. The
+// Operations Center has no rows: /api/orchestrator/* is the orchestrator
+// router itself, mounted (orchestrator_mount.go, ADR-0110). The ones with
+// logic of their own (login, SSO, streams, file downloads, the model
+// catalogs, the brand assets) are handlers in the neighbouring files.
 
 // bodyRule is how a chat route forwards the browser's request body.
 type bodyRule int
@@ -113,8 +115,8 @@ func (g *Gateway) handleChatRoute(rt chatRoute) http.HandlerFunc {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
-		c := call{method: r.Method, target: rt.target(r), header: h, detach: true}
+		h, who := http.Header{}, sessionPrincipal(s)
+		c := call{method: r.Method, target: rt.target(r), header: h, who: who, detach: true}
 		switch rt.body {
 		case noBody:
 		case jsonBodyIfAny:
@@ -127,12 +129,6 @@ func (g *Gateway) handleChatRoute(rt chatRoute) http.HandlerFunc {
 	}
 }
 
-// orchRoute is one proxyToOrchestrator row.
-type orchRoute struct {
-	pattern string
-	target  func(r *http.Request) string
-}
-
 // resolveOrchAuth is the orchestrator credential: an explicit bearer wins,
 // else the cookie session.
 func (g *Gateway) resolveOrchAuth(r *http.Request) (orchAuth, bool) {
@@ -140,37 +136,9 @@ func (g *Gateway) resolveOrchAuth(r *http.Request) (orchAuth, bool) {
 		return orchAuth{bearer: tok}, true
 	}
 	if s := g.session(r); s != nil {
-		return orchAuth{id: identityOf(s)}, true
+		return orchAuth{who: sessionPrincipal(s)}, true
 	}
 	return orchAuth{}, false
-}
-
-// handleOrchRoute is proxyToOrchestrator: CSRF on a mutating verb (bearer
-// clients included — they must send an Origin), the credential, then the
-// body and its Content-Type on a mutating verb, the forwarded-header response.
-func (g *Gateway) handleOrchRoute(rt orchRoute) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		mutating := isMutating(r.Method)
-		if mutating && !g.verifyOrigin(w, r) {
-			return
-		}
-		auth, ok := g.resolveOrchAuth(r)
-		if !ok {
-			unauthorized(w)
-			return
-		}
-		h := g.orchHeaders(auth)
-		c := call{method: r.Method, target: rt.target(r), header: h}
-		if mutating {
-			if r.Body != nil && r.Body != http.NoBody {
-				c.body, c.contentLength = r.Body, r.ContentLength
-			}
-			if ct := r.Header.Get("Content-Type"); ct != "" {
-				h.Set("Content-Type", ct)
-			}
-		}
-		g.dispatch(w, r, g.orch, "orchestrator", c, passthroughJSON)
-	}
 }
 
 // notFoundAPI answers an /api path no route claimed: 405 (with Allow) when the
@@ -453,7 +421,7 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			}
 			target += "?focus=" + encodeURIComponent(focus)
 		}
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: g.chatHeaders(identityOf(s)), detach: true}, passthroughJSON)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: http.Header{}, who: sessionPrincipal(s), detach: true}, passthroughJSON)
 	})
 
 	// GET /api/conversations/{id}/team-view forwards If-None-Match so a
@@ -464,11 +432,11 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			unauthorized(w)
 			return
 		}
-		h := g.chatHeaders(identityOf(s))
+		h, who := http.Header{}, sessionPrincipal(s)
 		if v := r.Header.Get("If-None-Match"); v != "" {
 			h.Set("If-None-Match", v)
 		}
-		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: conv(r) + "/team-view", header: h, detach: true}, passthroughJSON)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: conv(r) + "/team-view", header: h, who: who, detach: true}, passthroughJSON)
 	})
 
 	g.registerStreams(mux)
@@ -477,94 +445,4 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 	g.registerBrand(mux)
 	g.registerModels(mux)
 	g.registerOrchestrator(mux)
-}
-
-// orchRoutes is the orchestrator passthrough table. Every target must name a
-// route the orchestrator's chi mux registers for that method;
-// TestGatewayRowsResolveOnBackends (cmd/fleet) walks this table against the
-// real mux, so a row that points at nothing fails CI instead of answering the
-// browser a 404 at run time.
-func orchRoutes() []orchRoute {
-	task := func(r *http.Request) string { return "/tasks/" + p(r, "taskId") }
-	ds := func(r *http.Request) string { return "/datasets/" + p(r, "datasetId") }
-	return []orchRoute{
-		{"GET /api/orchestrator/admin/budgets", fixed("/admin/budgets")},
-		{"POST /api/orchestrator/admin/budgets", fixed("/admin/budgets")},
-		{"DELETE /api/orchestrator/admin/budgets/{budgetId}", func(r *http.Request) string { return "/admin/budgets/" + p(r, "budgetId") }},
-		{"GET /api/orchestrator/admin/usage", func(r *http.Request) string {
-			return "/admin/usage" + passThroughQuery(r, "group_by", "from", "to", "format")
-		}},
-		{"GET /api/orchestrator/admin/usage/adoption", func(r *http.Request) string {
-			return "/admin/usage/adoption" + passThroughQuery(r, "from", "to", "format")
-		}},
-		{"GET /api/orchestrator/config", fixed("/api/config")},
-		{"GET /api/orchestrator/datasets", fixed("/datasets")},
-		{"POST /api/orchestrator/datasets", fixed("/datasets")},
-		{"GET /api/orchestrator/datasets/{datasetId}", ds},
-		{"DELETE /api/orchestrator/datasets/{datasetId}", ds},
-		{"POST /api/orchestrator/datasets/{datasetId}/approve", func(r *http.Request) string { return ds(r) + "/approve" }},
-		{"GET /api/orchestrator/datasets/{datasetId}/export", func(r *http.Request) string { return ds(r) + "/export" }},
-		{"POST /api/orchestrator/datasets/{datasetId}/pause", func(r *http.Request) string { return ds(r) + "/pause" }},
-		{"POST /api/orchestrator/datasets/{datasetId}/rerun", func(r *http.Request) string { return ds(r) + "/rerun" }},
-		{"GET /api/orchestrator/datasets/{datasetId}/rows", func(r *http.Request) string {
-			return ds(r) + "/rows" + passThroughQuery(r, "status", "limit", "offset")
-		}},
-		{"POST /api/orchestrator/datasets/{datasetId}/rows", func(r *http.Request) string { return ds(r) + "/rows" }},
-		{"POST /api/orchestrator/datasets/{datasetId}/run", func(r *http.Request) string { return ds(r) + "/run" }},
-		{"GET /api/orchestrator/logs/{taskId}", func(r *http.Request) string { return "/logs/" + p(r, "taskId") }},
-		{"GET /api/orchestrator/logs/{taskId}/subagents/{childId}", func(r *http.Request) string {
-			return "/logs/" + p(r, "taskId") + "/subagents/" + p(r, "childId")
-		}},
-		// Read-only: the catalog lists each server's credential-account
-		// NAMES. There is no browser write path for accounts — their secrets
-		// live in the server env file and are provisioned with
-		// `fleet mcp account set` (docs/OPERATORS.md); the
-		// /mcp-servers/{server}/accounts rows the Next.js tier carried pointed
-		// at a moc-only backend route fleet never served.
-		{"GET /api/orchestrator/mcp-servers", fixed("/mcp-servers")},
-		{"GET /api/orchestrator/me", fixed("/api/me")},
-		{"GET /api/orchestrator/prompts", fixed("/prompts")},
-		{"POST /api/orchestrator/prompts", fixed("/prompts")},
-		{"PUT /api/orchestrator/prompts/{promptId}", func(r *http.Request) string { return "/prompts/" + p(r, "promptId") }},
-		{"DELETE /api/orchestrator/prompts/{promptId}", func(r *http.Request) string { return "/prompts/" + p(r, "promptId") }},
-		{"GET /api/orchestrator/sla-report", func(r *http.Request) string { return "/sla-report" + passThroughQuery(r, "days") }},
-		{"GET /api/orchestrator/stats", fixed("/stats")},
-		{"GET /api/orchestrator/task-templates", fixed("/task-templates")},
-		{"GET /api/orchestrator/tasks", func(r *http.Request) string {
-			return "/tasks" + passThroughQuery(r, "limit", "offset", "status", "q", "scheduled_only",
-				"completed_today", "completed_status", "created_by", "tag")
-		}},
-		{"POST /api/orchestrator/tasks", fixed("/tasks")},
-		{"POST /api/orchestrator/tasks/estimate", fixed("/tasks/estimate")},
-		{"GET /api/orchestrator/tasks/recipients", fixed("/tasks/recipients")},
-		{"GET /api/orchestrator/tasks/tags", fixed("/tasks/tags")},
-		{"GET /api/orchestrator/tasks/upcoming", func(r *http.Request) string { return "/tasks/upcoming" + passThroughQuery(r, "limit") }},
-		{"GET /api/orchestrator/tasks/{taskId}", task},
-		{"PUT /api/orchestrator/tasks/{taskId}", task},
-		{"DELETE /api/orchestrator/tasks/{taskId}", task},
-		{"POST /api/orchestrator/tasks/{taskId}/feedback", func(r *http.Request) string { return task(r) + "/feedback" }},
-		{"GET /api/orchestrator/tasks/{taskId}/learned-instructions", func(r *http.Request) string { return task(r) + "/learned-instructions" }},
-		{"DELETE /api/orchestrator/tasks/{taskId}/learned-instructions/active", func(r *http.Request) string {
-			return task(r) + "/learned-instructions/active"
-		}},
-		{"POST /api/orchestrator/tasks/{taskId}/learned-instructions/{version}/activate", func(r *http.Request) string {
-			return task(r) + "/learned-instructions/" + p(r, "version") + "/activate"
-		}},
-		{"DELETE /api/orchestrator/tasks/{taskId}/permanent", func(r *http.Request) string { return task(r) + "/permanent" }},
-		{"POST /api/orchestrator/tasks/{taskId}/rerun", func(r *http.Request) string { return task(r) + "/rerun" }},
-		{"POST /api/orchestrator/tasks/{taskId}/wake", func(r *http.Request) string { return task(r) + "/wake" }},
-		{"POST /api/orchestrator/upload", fixed("/upload")},
-	}
-}
-
-func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
-	for _, rt := range orchRoutes() {
-		mux.HandleFunc(rt.pattern, g.handleOrchRoute(rt))
-	}
-	mux.HandleFunc("POST /api/orchestrator/tasks/{taskId}/discuss", g.handleDiscuss)
-	mux.HandleFunc("POST /api/orchestrator/auth/login", g.handleOrchLogin)
-	mux.HandleFunc("POST /api/orchestrator/auth/logout", g.handleOrchLogout)
-	mux.HandleFunc("GET /api/orchestrator/auth/elcano-login", func(w http.ResponseWriter, r *http.Request) {
-		g.elcanoLoginRedirect(w, r, "/orchestrator")
-	})
 }

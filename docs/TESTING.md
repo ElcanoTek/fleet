@@ -56,6 +56,7 @@ test has to meet to be able to fail are in
 | Semgrep | `semgrep` (called workflow) | `p/github-actions` + `p/golang` + `p/javascript` + `p/python`; fails on **any** unsuppressed finding | `semgrep scan --config …` (see [`SCANNING.md`](SCANNING.md)) |
 | npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` — fails on any severity | `cd web && npm audit --audit-level=low` |
 | Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `vite build` + a `fleet` binary that must embed that bundle | `make ci-web` |
+| HTTP contracts | `contracts` | `docs/openapi.yaml` and `web/src/api/generated/` regenerate from the router + route catalog with no diff; no route without a catalog entry or the reverse ([`HTTP-CONTRACTS.md`](HTTP-CONTRACTS.md)) | `make api-contracts && git diff --exit-code` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
 | Playwright (canary) | `canary` (nightly) | Fleet default OpenRouter model, drift detection | `npm run test:e2e:canary` |
@@ -304,6 +305,9 @@ the server and the role and prints the export line.
   gone is garbage), or by hand with `scripts/test-db-setup.sh --gc`
   (`--templates` drops the templates too). Neither ever touches a database
   that does not start with `fleet_t_` / `fleet_tmpl_`, or one a live run owns.
+- **The identity table** (`core.users`, #2049 M4) is created by the chat
+  migrations, so it is in the `fleet` and `chat` templates. The scheduler's
+  own `sched` template migrates the chat store first, for the same reason.
 - **The legacy two-database layout** is gone (#2049 phase 2); what is tested
   is its refusal — a retired per-store DSN key fails resolution, bootstrap
   and doctor, and `fleet restore` refuses an old `public`-schema dump.

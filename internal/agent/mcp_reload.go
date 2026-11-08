@@ -103,7 +103,7 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 			// The same helper, arguments and order as BuildMCPClient's shared
 			// spawn: no task identity and no signed-in user (their keys are
 			// dropped), the shared dir for ${FLEET_WORKSPACE}.
-			shared := agentcore.SharedMCPWorkspaceDir()
+			shared := agentcore.SharedMCPWorkspaceDir(context.Background())
 			env := agentcore.SpawnEnv(spec.Env, shared, "", agentcore.MCPUserIdentity{})
 			// Dir must be the SAME value BuildMCPClient's spawn used, or
 			// serverDefEqual sees a changed def and restarts every server on

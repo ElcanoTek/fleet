@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
@@ -185,6 +187,12 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 				manifestPath, expr, name, name)
 		}
 	}
+	// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed reads as
+	// UNSET (lookupNonEmpty never reads its value), so it behaves exactly
+	// like any unset variable: ${X:-d} yields d, ${X:?m} fails the load and a
+	// bare ${X} where a value is required fails it too — with the rename
+	// spelled out (retiredRefError). `fleet update` refuses such a bundle
+	// before installing (validate-config --retired-only).
 	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
 	// name itself never contains ':', so the first ':' (if any) starts the op.
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
@@ -200,6 +208,9 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		case '?': // ${VAR:?message}
 			if v, ok := lookupNonEmpty(name); ok {
 				return expandResult{text: v, fromEnv: true}, nil
+			}
+			if err := retiredRefError(manifestPath, name); err != nil {
+				return expandResult{}, err
 			}
 			msg := strings.TrimSpace(body)
 			if msg == "" {
@@ -224,6 +235,25 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 	return expandResult{deferred: true}, nil
 }
 
+// retiredRefMessage is the load error for a required reference to a spelling
+// ADR-0106 removed, or "" when name is not one.
+func retiredRefMessage(name string) string {
+	canonical, ok := envreg.RetiredAlias(strings.TrimSpace(name))
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("manifest references removed variable %s; rename it to %s (ADR-0106)", strings.TrimSpace(name), canonical)
+}
+
+// retiredRefError wraps retiredRefMessage as a load error naming the
+// manifest, or nil when name is not a removed spelling.
+func retiredRefError(manifestPath, name string) error {
+	if msg := retiredRefMessage(name); msg != "" {
+		return fmt.Errorf("client config manifest %s: %s", manifestPath, msg)
+	}
+	return nil
+}
+
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
 // set AND non-empty (empty env counts as unset, matching POSIX ${VAR:-default}
 // and the legacy getEnvOrDefault, which treated an empty value as "use default").
@@ -237,8 +267,16 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // manifest shows only ${OWNER_ID}) and then be filled with whoever is at the
 // keyboard — in an identity_env key, a seat or money would follow the user.
 // The token is honoured only where the bundle itself writes it.
+//
+// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed counts as
+// UNSET too, whatever the environment holds: fleet reads none of them, and
+// the manifest load warns about the reference (warnRetiredManifestRefs), so a
+// stale value can never quietly feed a connector.
 func lookupNonEmpty(name string) (string, bool) {
 	name = strings.TrimSpace(name)
+	if _, retired := envreg.RetiredAlias(name); retired {
+		return "", false
+	}
 	v := strings.TrimSpace(envreg.Unregistered(name))
 	if v == "" {
 		return "", false
@@ -336,7 +374,43 @@ func interpolate(v string) (out string, assembled bool) {
 	if usertoken.AssembledFrom(out, fromEnv) {
 		return "", true
 	}
+	registerHostValues(out, fromEnv)
 	return out, false
+}
+
+// registerHostValues hands every fragment of a connector env or header value
+// that came from the host process env — a ${VAR} the manifest interpolates,
+// whatever VAR is called — to every redactor as a secret literal
+// (logging.RegisterSecretLiterals, the one registration point: the log and
+// the tool-output redactor alike), before
+// any connector is spawned with it. The secret-NAME heuristic misses
+// credentials under names like AUTH or SESSION or a vendor's own; provenance
+// does not: a value the bundle writes literally (REGION: us-east-1) lives in
+// the bundle repo and is not a secret, while one interpolated from the host
+// is the operator's to protect. The redactor's minimum literal length keeps
+// "1" or "true" out.
+func registerHostValues(out string, fromEnv [][2]int) {
+	if len(fromEnv) == 0 {
+		return
+	}
+	// A filesystem path or a path list (CUTLASS_ALLOWED_DIRS assembled from
+	// ${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}) is host configuration,
+	// not a credential: as a literal it would blank every log line naming a
+	// file under it (#2074 review). Same exclusion as the broker's connector
+	// env scrub (redact.IsPathListValue).
+	values := make([]string, 0, len(fromEnv)+1)
+	for _, r := range fromEnv {
+		if v := out[r[0]:r[1]]; !redact.IsPathListValue(v) {
+			values = append(values, v)
+		}
+	}
+	// The assembled value too: ${AUTH_A}${AUTH_B} built from fragments each
+	// below the redactor's minimum literal length registers nothing piece by
+	// piece, yet the whole is the credential the connector is sent.
+	if !redact.IsPathListValue(out) {
+		values = append(values, out)
+	}
+	logging.RegisterSecretLiterals("", false, values...)
 }
 
 // warnUserTokenAssembled logs, once per env key, that a value assembling a

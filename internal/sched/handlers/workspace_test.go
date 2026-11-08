@@ -6,6 +6,7 @@ package handlers
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,7 @@ func seedWorkspaceTask(t *testing.T, store *storage.Storage, status models.TaskS
 
 func workspaceRouter(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/tasks/{task_id}/workspace", h.TaskWorkspace)
@@ -188,14 +190,14 @@ func TestWorkspaceOwnership(t *testing.T) {
 	// Use the authz harness's key manager via setupTest's handler: create two
 	// keys, attribute the task to one of them.
 	ownerRole := "client"
-	_, ownerRaw, err := h.apiKeys.CreateKey("owner", nil, &ownerRole, 0, nil, "")
+	_, ownerRaw, err := h.apiKeys.CreateKey(context.Background(), "owner", nil, &ownerRole, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create owner key: %v", err)
 	}
 	otherRaw := mustCreateRoleKey(t, h.apiKeys, "client")
 
 	// Find the owner key's KeyID to attribute the task.
-	valid, ownerKey, _ := h.apiKeys.ValidateKey(ownerRaw, nil, nil, nil)
+	valid, ownerKey, _ := h.apiKeys.ValidateKey(context.Background(), ownerRaw, nil, nil, nil)
 	if !valid || ownerKey == nil {
 		t.Fatalf("owner key did not validate")
 	}

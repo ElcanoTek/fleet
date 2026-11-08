@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
@@ -46,24 +47,31 @@ func TestPrintWebBundleReportsTheEmbeddedBundle(t *testing.T) {
 	}
 }
 
-// A leftover ORCHESTRATOR_SERVER_TOKEN (the retired Next tier's env; an old
-// bootstrap even wrote ADMIN_API_KEY there) must not override the shared
-// secret the in-process orchestrator verifies, or every call would 403.
-func TestWebServerUsesTheSharedTokenForBothBackends(t *testing.T) {
+// The gateway's in-process calls carry their caller as a typed principal in
+// the request context and no shared secret or identity header (ADR-0108): a
+// leftover ORCHESTRATOR_SERVER_TOKEN (the retired Next tier's env; an old
+// bootstrap even wrote ADMIN_API_KEY there) cannot reach a backend at all.
+func TestWebServerCallsBothBackendsWithThePrincipal(t *testing.T) {
 	const secret = "web-test-session-secret-0123456789"
 	t.Setenv("APP_SESSION_SECRET", secret)
 	t.Setenv("ORCHESTRATOR_SERVER_TOKEN", "stale-admin-key")
 	t.Setenv("FLEET_WEB_ADDR", "")
-	var gotOrch, gotChat string
+	type seen struct {
+		who     principal.Principal
+		headers http.Header
+	}
+	var gotOrch, gotChat seen
 	orch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotOrch = r.Header.Get("X-Orchestrator-Server-Token")
+		gotOrch.who, _ = principal.From(r.Context())
+		gotOrch.headers = r.Header.Clone()
 		_, _ = io.WriteString(w, `{}`)
 	})
 	chat := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotChat = r.Header.Get("X-Chat-Server-Token")
+		gotChat.who, _ = principal.From(r.Context())
+		gotChat.headers = r.Header.Clone()
 		_, _ = io.WriteString(w, `{"epoch":"e1"}`)
 	})
-	srv, err := buildWebServer(&config.Config{SharedToken: "the-shared-token"}, chat, orch)
+	srv, err := buildWebServer(&config.Config{SharedToken: "the-shared-token"}, backendHandlers{chat: chat, orch: orch})
 	if err != nil || srv == nil {
 		t.Fatalf("buildWebServer: %v", err)
 	}
@@ -82,8 +90,15 @@ func TestWebServerUsesTheSharedTokenForBothBackends(t *testing.T) {
 		r.AddCookie(&http.Cookie{Name: websession.CookieName, Value: tok})
 		srv.Handler.ServeHTTP(httptest.NewRecorder(), r)
 	}
-	if gotOrch != "the-shared-token" || gotChat != "the-shared-token" {
-		t.Fatalf("orchestrator token %q, chat token %q; want the shared token for both", gotOrch, gotChat)
+	for name, got := range map[string]seen{"orchestrator": gotOrch, "chat": gotChat} {
+		if got.who.Email != "alice@example.com" || got.who.AuthMethod != principal.MethodSession || got.who.Session.Epoch != "e1" {
+			t.Errorf("%s principal %+v", name, got.who)
+		}
+		for _, h := range []string{"X-Chat-Server-Token", "X-Orchestrator-Server-Token", "X-User-Email"} {
+			if got.headers.Get(h) != "" {
+				t.Errorf("%s got %s", name, h)
+			}
+		}
 	}
 }
 
@@ -122,7 +137,7 @@ func TestWebServerTakesThePasswordSwitchFromConfig(t *testing.T) {
 			verified = verified || r.URL.Path == "/auth/verify"
 			_, _ = io.WriteString(w, `{"ok":false}`)
 		})
-		srv, err := buildWebServer(&config.Config{SharedToken: "tok", PasswordLoginDisabled: off}, chat, http.NotFoundHandler())
+		srv, err := buildWebServer(&config.Config{SharedToken: "tok", PasswordLoginDisabled: off}, backendHandlers{chat: chat, orch: http.NotFoundHandler()})
 		if err != nil || srv == nil {
 			t.Fatalf("buildWebServer: %v", err)
 		}
@@ -140,9 +155,10 @@ func TestWebServerTakesThePasswordSwitchFromConfig(t *testing.T) {
 
 // serve builds the Operations Center's handlers.Config inline, so no test can
 // call it. This pins, from the source, that the literal hands the scheduler
-// both decisions config.Load made: without them /v1/auth/login and the
-// bearers it minted would keep working, and /v1/users would still create Ops
-// identities, on a Fleet whose other planes leave both to Auth.
+// the accounts decision config.Load made: without it /v1/users would still
+// create Ops identities on a Fleet whose other planes leave that to Auth. (The
+// Operations Center has no password login of its own since #2049 M4, so there
+// is no password switch to hand it.)
 func TestServeHandsTheSchedulerThePasswordSwitch(t *testing.T) {
 	t.Parallel()
 
@@ -151,7 +167,7 @@ func TestServeHandsTheSchedulerThePasswordSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"PasswordLoginDisabled", "AccountsManagedByAuth"} {
+	for _, field := range []string{"AccountsManagedByAuth"} {
 		literals, wired := countConfigWiring(t, f, field)
 		if literals == 0 || wired != literals {
 			t.Fatalf("main.go builds %d handlers.Config literal(s), %d set %s: cfg.%s", literals, wired, field, field)

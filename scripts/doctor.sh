@@ -63,6 +63,8 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
@@ -682,9 +684,8 @@ else
   # model key from ✗ to an advisory on a production box. Same token set the
   # Go side accepts (config truthy()).
   mock_on=0
-  for _mv in "$(env_get FLEET_MOCK_MODE)" "${CHAT_MOCK_MODE:-}" "$(env_get CHAT_MOCK_MODE)"; do # LEGACY-ENV-ALIAS: remove after migrate-env
-    case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
-  done
+  _mv="$(env_get FLEET_MOCK_MODE)"
+  case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
   if [[ -n "$(env_get OPENROUTER_API_KEY)" ]]; then
     pass "OPENROUTER_API_KEY set"
   elif [[ "$mock_on" == "1" ]]; then
@@ -996,6 +997,46 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVIC
       done < <(jq -r '.issues[] | [.status, .server, .tool, (.detail | gsub("[\t\n]"; " "))] | @tsv' <<<"$schema_json")
       info "details: fleet mcp schema-issues (record since ${schema_since})"
     fi
+  fi
+fi
+
+# ── Identity merge report (#2049 M4, ADR-0105) ───────────────────────────────
+# The scheduler's first start on this release folded its accounts into the one
+# identity table and recorded what needs an operator: Operations Center admins
+# demoted because their chat role was not admin (split admin states fail
+# closed), sched rows with an unknown role (no access now), and usernames that
+# differed only in case (the later ones' tasks no longer resolve). Advisories:
+# the box is healthy; a person may need a grant back.
+id_cli="$INSTALL_DIR/fleet"
+[[ -x "$id_cli" ]] || id_cli="$(command -v fleet 2>/dev/null || true)"
+if [[ -z "$id_cli" ]] || ! command -v jq >/dev/null 2>&1; then
+  advise "identity merge report skipped (needs the fleet binary and jq)"
+elif ! merge_json="$(FLEET_ENV_FILE="$ENV_FILE" "$id_cli" admin merge-report --json 2>/dev/null)" || ! jq -e 'has("ran")' >/dev/null 2>&1 <<<"$merge_json"; then
+  advise "could not read the identity merge report — run: fleet admin merge-report"
+elif [[ "$(jq -r '.ran' <<<"$merge_json")" != "true" ]]; then
+  pass "identity merge: not run on this database yet (the scheduler merges on its first start)"
+else
+  merge_notes=0
+  while IFS=$'\t' read -r m_kind m_email m_detail; do
+    merge_notes=$((merge_notes+1))
+    case "$m_kind" in
+      demoted) advise "identity merge: $m_email was an Operations Center admin but not a chat admin, so it is NOT an admin any more (chat role $m_detail, ops_scope run) — re-grant with: fleet admin add $m_email" ;;
+      unknown) advise "identity merge: $m_email had unknown Operations Center role \"$m_detail\" and has no Operations Center access now — grant it in Settings → Admin → Users if intended" ;;
+      duplicate) advise "identity merge: Operations Center username $m_detail is a duplicate of $m_email (case or spaces) and did not become the account: its tasks no longer resolve, and its private prompts and budgets stay quarantined under the old username" ;;
+      prompt) advise "identity merge: a prompt of $m_email was renamed $m_detail (the account already had one of that name)" ;;
+      budget) advise "identity merge: two $m_detail budgets of $m_email were merged into one (the stricter bound of each kind kept) — review it (GET /admin/budgets)" ;;
+    esac
+  done < <(jq -r '
+      (.report.demoted_split_admins // [] | .[] | ["demoted", .email, (.chat_role // "")]),
+      (.report.unknown_roles // [] | .[] | ["unknown", .email, (.sched_role // "")]),
+      (.report.duplicate_usernames // [] | .[] | ["duplicate", .email, ("\"" + (.sched_username // "") + "\" (" + ((.quarantined_prompts // 0)|tostring) + " prompt(s), " + ((.quarantined_budgets // 0)|tostring) + " budget(s))")]),
+      (.report.renamed_prompts // [] | .[] | ["prompt", .owner, ("\"" + .from + "\" -> \"" + .to + "\"")]),
+      (.report.merged_budgets // [] | .[] | ["budget", .principal, .window])
+      | @tsv' <<<"$merge_json")
+  if (( merge_notes == 0 )); then
+    pass "identity merge: no demoted admins, unknown roles or duplicate usernames"
+  else
+    info "details: fleet admin merge-report"
   fi
 fi
 
@@ -1407,36 +1448,34 @@ fi
 # fail this check forever: doctor said "build it: sudo fleet update", and
 # update correctly skipped the build because the manifest names an image.
 sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
-[[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)" # LEGACY-ENV-ALIAS: remove after migrate-env
 sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
   [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
   [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
   # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
-  # only shapes the default bundle uses; mirrors bootstrap's
-  # resolve_sandbox_image — keep them in sync).
+  # ${...} reference interpolated against the service's env file, as the
+  # service resolves it (fleet_sandbox_resolve_scalar, shared with
+  # bootstrap.sh and update.sh; a spelling ADR-0106 removed reads as unset).
+  # A reference the service would refuse (unset ${X}, or ${X:?m}) is a doctor
+  # failure with the loader's reason, not an abort.
+  doctor_env_value() { env_get "$1"; }
+  # manifest_sandbox_scalar KEY — sets $sandbox_scalar (fail()s, leaving it
+  # empty, when the service would refuse the reference).
   manifest_sandbox_scalar() {
-    local key="$1" raw
-    raw="$(awk -v key="$key" '
-      /^sandbox:[[:space:]]*$/ { b=1; next }
-      /^[^[:space:]]/          { b=0 }
-      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-      printf '%s' "${!var:-$def}"
-    else
-      printf '%s' "$raw"
+    local m="$bundle_dir/manifest.yaml"
+    if ! sandbox_scalar="$(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>/dev/null)"; then
+      sandbox_scalar=""
+      fail "client bundle $(fleet_sandbox_resolve_scalar "$1" "$m" doctor_env_value 2>&1 >/dev/null) — fleet refuses this bundle at startup; set the variable in $ENV_FILE or fix the manifest"
     fi
   }
-  sandbox_img="$(manifest_sandbox_scalar image)"
+  manifest_sandbox_scalar image
+  sandbox_img="$sandbox_scalar"
   if [[ -n "$sandbox_img" ]]; then
     sandbox_img_prebuilt=1
   else
-    sandbox_img="$(manifest_sandbox_scalar tag)"
-    sandbox_img="${sandbox_img:-localhost/fleet-sandbox:latest}"
+    manifest_sandbox_scalar tag
+    sandbox_img="${sandbox_scalar:-localhost/fleet-sandbox:latest}"
   fi
 fi
 

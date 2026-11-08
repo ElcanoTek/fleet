@@ -56,7 +56,7 @@ func TestUsageValidateConfigFlags(t *testing.T) {
 	t.Parallel()
 
 	got := usageLineFlags(UsageText(), "fleet validate-config")
-	want := map[string]bool{"bundle-path": true, "skip-network-checks": true, "json": true}
+	want := map[string]bool{"bundle-path": true, "skip-network-checks": true, "json": true, "retired-only": true}
 	if len(got) != len(want) {
 		t.Fatalf("validate-config usage flags = %v, want exactly %v", got, want)
 	}

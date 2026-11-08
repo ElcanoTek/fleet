@@ -112,7 +112,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if trig.UsesSlack() {
 		if t, _ := payload["type"].(string); t == "url_verification" {
 			challenge, _ := payload["challenge"].(string)
-			writeJSON(w, map[string]any{"challenge": challenge})
+			writeJSON(w, r, map[string]any{"challenge": challenge})
 			return
 		}
 	}
@@ -143,11 +143,11 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			// durable yet. 409 rather than 200: if that request fails, the
 			// sender's next retry should be processed, not swallowed.
 			metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+			writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
 			return
 		}
 		metrics.RecordWebhookTrigger(trig.Slug, "duplicate")
-		writeJSONStatus(w, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
+		writeJSONStatus(w, r, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
 		return
 	}
 	var (
@@ -196,7 +196,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// POST /conversations (server.go). A webhook is an external caller and cannot
 	// opt a conversation OUT of the global seal, so lockdown is simply
 	// s.cfg.LockdownOnly (no per-request override). This matters precisely on the
-	// untrusted-payload path: on a CHAT_LOCKDOWN_ONLY box the triggered turn must
+	// untrusted-payload path: on a FLEET_LOCKDOWN_ONLY box the triggered turn must
 	// run in the same --network=none sandbox as every human turn. Fail closed
 	// (never create an unenforceable lockdown conversation) on misconfiguration.
 	lockdown := s.cfg.LockdownOnly
@@ -215,7 +215,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Concurrency admission keyed by the trigger owner, so a burst of webhooks
 	// can't hold every worker slot. admitConcurrentTurn writes its own 429.
-	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
+	releaseSlot, admitted := s.admitConcurrentTurn(w, r, user)
 	if !admitted {
 		metrics.RecordWebhookTrigger(trig.Slug, "throttled")
 		return
@@ -251,7 +251,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		// This request outlived its claim and a repeat now owns the delivery.
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+		writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
 		return
 	}
 	if err != nil {
@@ -285,9 +285,15 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
-		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "conversation is busy"})
+		writeJSONStatus(w, r, http.StatusConflict, map[string]any{"error": "conversation is busy"})
 		return
 	}
+
+	// Correlation (#2052), as on the chat path: the turn's context carries
+	// conv_id and turn_id, plus the request's ids, for every line of the turn
+	// — the start failure below included.
+	turnCtx = logging.WithTurn(turnCtx, conv.ID, turnID)
+	turnCtx = logging.WithAttrs(turnCtx, logging.Attrs(r.Context())...)
 
 	// Background-rooted for the same reason as startTurn: the turn outlives
 	// the webhook POST, and its ledger must exist whether or not the sender
@@ -296,14 +302,14 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Unlike a chat turn, a failure here is fatal: without the turn row,
 	// startup recovery could not account for a turn whose input later
 	// committed.
-	persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	err = buf.attachPersister(persistCtx, s.store)
 	persistCancel()
 	if err != nil {
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseTurn()
-		logging.From(turnCtx).Error("webhook trigger: start turn failed", "conv_id", conv.ID, "err", err)
+		logging.From(turnCtx).Error("webhook trigger: start turn failed", "conv_id", safe.LogSafe(conv.ID), "err", err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "could not start the turn", http.StatusInternalServerError)
 		return
@@ -375,7 +381,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		completed, err := s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, turnID)
 		if !completed || err != nil {
-			logging.From(turnCtx).Error("webhook trigger: turn input not saved", "conv_id", conv.ID, "err", commitErr)
+			logging.From(turnCtx).Error("webhook trigger: turn input not saved", "conv_id", safe.LogSafe(conv.ID), "err", commitErr)
 			metrics.RecordWebhookTrigger(trig.Slug, "error")
 			http.Error(w, "could not start the turn", http.StatusInternalServerError)
 			return
@@ -383,7 +389,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
+	writeJSONStatus(w, r, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
 }
 
 // webhookInputCommitTimeout bounds how long the webhook handler waits for the
@@ -439,7 +445,7 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 // sender's retry is processed afresh. completed reports that the input commit
 // won the race and the delivery is accepted after all.
 func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, ownTurnID string) (completed bool, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", "", ownTurnID), 5*time.Second)
 	defer cancel()
 	completed, err = s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, ownTurnID)
 	if err != nil {

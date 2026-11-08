@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -360,6 +360,7 @@ func (r *toolRoster) noteRemoved(name, gate string) {
 // It also returns the roster summary the run loop appends to the system prompt
 // after the tools exist.
 func buildFantasyTools(
+	ctx context.Context,
 	nativeTools []fantasy.AgentTool,
 	mcpServerTools []mcp.ServerTool,
 	broker MCPBroker,
@@ -482,7 +483,7 @@ func buildFantasyTools(
 		// invalid, goes to the runtime record that `fleet mcp schema-issues`
 		// and `fleet doctor` read; each new finding is logged once.
 		issue, hasIssue := checkMCPToolSchemaWithBudget(mt, catalogBudget)
-		noteToolSchemaIssue(st.ServerName, st.Tool.Name, issue, hasIssue)
+		noteToolSchemaIssue(ctx, st.ServerName, st.Tool.Name, issue, hasIssue)
 		if hasIssue && issue.Status == ToolSchemaInvalid {
 			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
 			mcpSkippedSchema++
@@ -567,7 +568,7 @@ func buildFantasyTools(
 			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
-		slog.Info("Fantasy tools registered; MCP tools DEFERRED behind tool_search/describe/call (#506)", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "bridges", len(bridges), "mcp_deferred", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
+		logging.From(ctx).Info("Fantasy tools registered; MCP tools DEFERRED behind tool_search/describe/call (#506)", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "bridges", len(bridges), "mcp_deferred", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
 		if len(allTools) > maxToolsPerRequest {
 			return nil, toolRoster{}, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
@@ -584,7 +585,7 @@ func buildFantasyTools(
 	allTools = append(allTools, mcpTools...)
 	allTools = append(allTools, confirmAudit...)
 
-	slog.Info("Fantasy tools registered", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "mcp", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
+	logging.From(ctx).Info("Fantasy tools registered", "total", len(allTools), "native", len(nativeTools), "loader", len(cfg.loaderTools), "mcp", len(mcpTools), "mcp_skipped_optional", mcpSkippedOptional, "mcp_skipped_allowlist", mcpSkippedAllowlist, "mcp_skipped_persona", mcpSkippedPersona, "mcp_skipped_schema", mcpSkippedSchema, "mcp_skipped_hidden", mcpSkippedHidden)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
@@ -894,7 +895,7 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// into provider context and logs. The model receives only an opaque handle;
 	// download_url redeems it inside this process.
 	if !isErr && m.serverName == mcpServerFastIO && m.tool.Name == "download" {
-		resultText = tools.ProtectFastIODownloadURLs(resultText)
+		resultText = tools.ProtectFastIODownloadURLs(ctx, resultText)
 	}
 	// Scrub/screen/cap MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.

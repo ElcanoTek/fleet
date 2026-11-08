@@ -19,6 +19,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -44,6 +45,9 @@ type fakeEngine struct {
 	lastMCPUser     agentcore.MCPUserIdentity
 	turns           int
 	providerHealth  []agentcore.ModelHealth
+	// lastCorrelation is the turn context's conv_id/turn_id, as logging
+	// sees them.
+	lastCorrelation [2]string
 }
 
 func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -53,6 +57,7 @@ func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.Event
 	f.lastUserEmail = in.UserEmail
 	f.lastSenderEmail = in.SenderEmail
 	f.lastMCPUser = in.MCPUser
+	f.lastCorrelation = [2]string{logging.Value(ctx, logging.KeyConvID), logging.Value(ctx, logging.KeyTurnID)}
 	f.turns++
 	f.mu.Unlock()
 

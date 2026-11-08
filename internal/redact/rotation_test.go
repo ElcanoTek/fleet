@@ -144,10 +144,13 @@ func TestRedactor_RetirementIsScopedAndSparesPermanentLiterals(t *testing.T) {
 	}
 }
 
-// TestRedactor_FastRotationHitsGenerationCap covers the backstop: when a scope
-// rotates far faster than the grace window (a refresh storm), the generation
-// cap keeps the scan set bounded, and the live pair is never what gets dropped.
-func TestRedactor_FastRotationHitsGenerationCap(t *testing.T) {
+// TestRedactor_FastRotationKeepsEveryGenerationForTheGrace covers a refresh
+// storm: a scope rotating far faster than the grace window keeps EVERY
+// superseded generation scanned until that generation's own window ends — an
+// in-flight request still carrying an old token can echo it at any point in
+// the window (#2074 review: a count cap of 4 used to sweep the oldest at the
+// fifth rotation) — and the set shrinks to the live pair once they expire.
+func TestRedactor_FastRotationKeepsEveryGenerationForTheGrace(t *testing.T) {
 	clock := newFakeClock()
 	r := NewRedactor(nil)
 	r.now = clock.now
@@ -160,12 +163,30 @@ func TestRedactor_FastRotationHitsGenerationCap(t *testing.T) {
 		r.RegisterSecrets(scope, true, access, refresh)
 		clock.advance(time.Second) // 900x faster than literalRetireGrace
 	}
-	if n := r.LiteralCount(); n > 2*maxScopeGenerations {
-		t.Errorf("literal count = %d after %d fast rotations, want <= %d (generation cap)", n, rotations, 2*maxScopeGenerations)
+	for gen := 1; gen <= rotations; gen++ {
+		a, f := rotationFixtures(gen)
+		for _, v := range []string{a, f} {
+			if got := r.Redact("upstream quoted " + v); strings.Contains(got, v) {
+				t.Fatalf("generation %d retired inside its grace window: %q", gen, got)
+			}
+		}
+	}
+	// Generation g was superseded at t0+g s, so its window ends at
+	// t0+g s+grace. At t0+grace+1.5s generation 1 is out, generation 2 in.
+	clock.advance(literalRetireGrace - time.Duration(rotations)*time.Second + 1500*time.Millisecond)
+	if a1, _ := rotationFixtures(1); !strings.Contains(r.Redact(a1), a1) {
+		t.Fatalf("generation 1 outlived its own grace window")
+	}
+	if a2, _ := rotationFixtures(2); strings.Contains(r.Redact(a2), a2) {
+		t.Fatalf("generation 2 retired before its own grace window ended")
+	}
+	clock.advance(literalRetireGrace)
+	if n := r.LiteralCount(); n != 2 {
+		t.Errorf("literal count = %d once every superseded window ended, want the live pair (2)", n)
 	}
 	for _, live := range []string{access, refresh} {
 		if got := r.Redact("upstream quoted " + live); strings.Contains(got, live) {
-			t.Errorf("the generation cap dropped a LIVE secret: %q", got)
+			t.Errorf("a LIVE secret was dropped: %q", got)
 		}
 	}
 }

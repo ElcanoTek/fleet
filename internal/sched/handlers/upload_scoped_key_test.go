@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ func setupUploadTest(t *testing.T) (*Handlers, *apikeys.Manager) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "admin-key", DataDir: tmpDir}, store, keyMgr)
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model", AdminAPIKey: "admin-key", DataDir: tmpDir}, store, keyMgr)
 	return h, keyMgr
 }
 
@@ -63,7 +64,7 @@ func TestUpload_ScopedCreateTaskKey(t *testing.T) {
 
 	h, keyMgr := setupUploadTest(t)
 
-	_, raw, err := keyMgr.CreateKey("intake", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	_, raw, err := keyMgr.CreateKey(context.Background(), "intake", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestUpload_UnderScopedTypedKey(t *testing.T) {
 
 	h, keyMgr := setupUploadTest(t)
 
-	_, raw, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, raw, err := keyMgr.CreateTypedKey(context.Background(), "viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}

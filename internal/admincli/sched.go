@@ -3,18 +3,15 @@ package admincli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
-
+	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
-	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
@@ -53,6 +50,32 @@ func openSchedStorage(dbURL string) (*storage.Storage, int) {
 	return st, 0
 }
 
+// errIdentityNotReady is what an identity-dependent sched verb says when the
+// one identity table does not exist yet: the chat store creates core.users
+// (chat migration 099) and the scheduler's open merges its legacy accounts
+// into it (#2049 M4). A sched-only verb on a fresh database, or mid-upgrade
+// before the chat store migrated, gets here. The CLI does not migrate the
+// chat store itself: a newer chat schema under a still-running older server
+// is the operator's call, not a side effect of `fleet sched user`.
+const errIdentityNotReady = "the identity table (core.users) does not exist yet: the chat store creates it. " +
+	"Start `fleet serve` once against this database (or run a chat verb such as `fleet chat user list`), then retry"
+
+// openSchedIdentityStorage is openSchedStorage for the verbs that read or
+// write accounts (`fleet sched user …`, a bundle import with Operations
+// Center users): it refuses up front, with what to do, when the identity
+// table is not there yet, instead of failing later on a missing relation.
+func openSchedIdentityStorage(dbURL string) (*storage.Storage, int) {
+	st, code := openSchedStorage(dbURL)
+	if st == nil {
+		return nil, code
+	}
+	if !st.DB().IdentityMerge().Ready {
+		_ = st.Close()
+		return nil, errf(1, "%s", errIdentityNotReady)
+	}
+	return st, 0
+}
+
 const validRolesMsg = "role must be one of: admin, client, readonly"
 
 func validRole(role string) bool {
@@ -63,12 +86,19 @@ func validRole(role string) bool {
 	return false
 }
 
+// schedUserNotice is printed by every `fleet sched user` verb. Operations
+// Center access is part of the one account (#2049 M4, ADR-0105): these verbs
+// are aliases over the identity table, kept so scripts keep working.
+const schedUserNotice = "note: `fleet sched user` is deprecated. Operations Center access is part of the one Fleet account: " +
+	"manage it in Settings → Admin → Users, or with `fleet chat user` / `fleet admin` (docs/IDENTITY.md)."
+
 func cmdSchedUser(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet sched user add|update|set-role|rename|del|list")
+		return errf(1, "usage: fleet sched user add|update|set-role|del|list")
 	}
 	sub := argv[0]
 	rest := argv[1:]
+	fmt.Fprintln(os.Stderr, schedUserNotice)
 	switch sub {
 	case "add":
 		return schedUserAdd(rest)
@@ -77,7 +107,9 @@ func cmdSchedUser(argv []string) int {
 	case "set-role":
 		return schedUserSetRole(rest)
 	case "rename":
-		return schedUserRename(rest)
+		// The account key is the email, which about 30 chat tables carry as a
+		// plain column: renaming it is not a one-row write any more.
+		return errf(1, "sched user rename is no longer supported: an account is keyed by its email. Add the new address as an account instead")
 	case "del", "delete", "rm":
 		return schedUserDel(rest)
 	case "list", "ls":
@@ -87,6 +119,9 @@ func cmdSchedUser(argv []string) int {
 	}
 }
 
+// schedUserAdd creates an account with Operations Center access: role viewer
+// (read-only chat) plus the scope the legacy role maps to; --role admin makes
+// a Fleet admin. The username is the account key (lowercased).
 func schedUserAdd(argv []string) int {
 	fs := flag.NewFlagSet("sched user add", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -96,7 +131,7 @@ func schedUserAdd(argv []string) int {
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
-	username = strings.TrimSpace(username)
+	username = identity.NormalizeEmail(username)
 	if len(username) < 3 || len(username) > 64 {
 		return errf(1, "username must be 3-64 characters")
 	}
@@ -115,33 +150,45 @@ func schedUserAdd(argv []string) int {
 		return errf(1, "password must be at least 8 characters (use --password -)")
 	}
 
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
 	defer st.Close()
 
-	if existing, _ := st.GetUserByUsername(username); existing != nil {
-		return errf(3, "username %q already exists", username)
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := identity.HashPassword(password, 0)
 	if err != nil {
 		return errf(5, "hash password: %v", err)
 	}
-	user := &models.User{
-		ID:           uuid.New(),
-		Username:     username,
-		PasswordHash: string(hash),
-		Role:         *role,
-		CreatedAt:    time.Now().UTC(),
+	scope, admin, _ := identity.ParseOpsRole(*role)
+	acct := identity.NewAccount{Email: username, PasswordHash: hash, Role: identity.RoleViewer, OpsScope: scope}
+	if admin {
+		acct.Role, acct.OpsScope = identity.RoleAdmin, identity.OpsNone
 	}
-	if _, err := st.AddUser(user); err != nil {
-		return errf(5, "%v", err)
+	ctx := context.Background()
+	if _, err := st.Identity().CreateAccount(ctx, acct); err != nil {
+		if !errors.Is(err, identity.ErrExists) {
+			return errf(5, "%v", err)
+		}
+		// The email is already an account (a chat user): before the one
+		// identity table this added a separate Operations Center user, so
+		// grant that account the access instead. Its password is not changed.
+		u, err := st.Identity().AddOpsAccess(ctx, username, *role)
+		if errors.Is(err, identity.ErrExists) {
+			return errf(3, "username %q already has Operations Center access, or is disabled (change its access with: fleet sched user set-role %s --role <role>)", username, username)
+		}
+		if err != nil {
+			return errf(5, "%v", err)
+		}
+		fmt.Printf("granted existing account %s Operations Center role %s (chat role %s; its password is unchanged)\n", username, *role, u.Role)
+		return 0
 	}
-	fmt.Printf("created sched user %s (role=%s)\n", username, *role)
+	fmt.Printf("created user %s (role=%s; chat role %s)\n", username, *role, acct.Role)
 	return 0
 }
 
+// schedUserUpdatePassword sets the account's one Fleet password (chat and the
+// Operations Center share it). The account's password sessions end.
 func schedUserUpdatePassword(argv []string) int {
 	fs := flag.NewFlagSet("sched user update", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -161,27 +208,27 @@ func schedUserUpdatePassword(argv []string) int {
 	if len(password) < 8 {
 		return errf(1, "password must be at least 8 characters (use --password -)")
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
 	defer st.Close()
-	user, err := st.GetUserByUsername(username)
-	if err != nil || user == nil {
-		return errf(2, "user %q not found", username)
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := identity.HashPassword(password, 0)
 	if err != nil {
 		return errf(5, "hash password: %v", err)
 	}
-	user.PasswordHash = string(hash)
-	if _, err := st.AddUser(user); err != nil {
+	if err := st.Identity().SetPassword(context.Background(), username, hash); err != nil {
+		if errors.Is(err, identity.ErrNotFound) {
+			return errf(2, "user %q not found", username)
+		}
 		return errf(5, "%v", err)
 	}
-	fmt.Printf("updated password for sched user %s\n", username)
+	fmt.Printf("updated the Fleet password of %s (chat and the Operations Center share it)\n", identity.NormalizeEmail(username))
 	return 0
 }
 
+// schedUserSetRole sets the account's Operations Center access: admin makes
+// it a Fleet admin; client/readonly set the scope of a non-admin.
 func schedUserSetRole(argv []string) int {
 	fs := flag.NewFlagSet("sched user set-role", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -193,48 +240,28 @@ func schedUserSetRole(argv []string) int {
 	if !validRole(*role) {
 		return errf(1, validRolesMsg)
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
 	defer st.Close()
-	user, err := st.GetUserByUsername(username)
-	if err != nil || user == nil {
-		return errf(2, "user %q not found", username)
-	}
-	if err := st.UpdateUserRole(user.ID, *role); err != nil {
+	if _, err := st.Identity().SetOpsAccess(context.Background(), username, *role); err != nil {
+		switch {
+		case errors.Is(err, identity.ErrNotFound):
+			return errf(2, "user %q not found", username)
+		case identity.IsInputError(err):
+			return errf(1, "%v", err)
+		}
 		return errf(5, "%v", err)
 	}
-	fmt.Printf("set role of sched user %s to %s\n", username, *role)
+	fmt.Printf("set Operations Center role of %s to %s\n", identity.NormalizeEmail(username), *role)
 	return 0
 }
 
-func schedUserRename(argv []string) int {
-	fs := flag.NewFlagSet("sched user rename", flag.ContinueOnError)
-	dbURL := fs.String("database-url", "", "sched Postgres DSN")
-	positional, flagArgs := splitTwoPositional(argv)
-	if err := fs.Parse(flagArgs); err != nil {
-		return 1
-	}
-	if len(positional) < 2 {
-		return errf(1, "usage: sched user rename <username> <new-username>")
-	}
-	st, code := openSchedStorage(*dbURL)
-	if st == nil {
-		return code
-	}
-	defer st.Close()
-	user, err := st.GetUserByUsername(positional[0])
-	if err != nil || user == nil {
-		return errf(2, "user %q not found", positional[0])
-	}
-	if err := st.RenameUser(user.ID, positional[1]); err != nil {
-		return errf(5, "%v", err)
-	}
-	fmt.Printf("renamed sched user %s -> %s\n", positional[0], positional[1])
-	return 0
-}
-
+// schedUserDel ends the account's Operations Center access (scope none). The
+// account itself — its chat login and data — stays: removing a person is
+// `fleet chat user del` / `fleet admin rm`. An admin is refused: their access
+// is the admin role.
 func schedUserDel(argv []string) int {
 	fs := flag.NewFlagSet("sched user del", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -242,19 +269,23 @@ func schedUserDel(argv []string) int {
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
 	defer st.Close()
-	user, err := st.GetUserByUsername(username)
-	if err != nil || user == nil {
+	ctx := context.Background()
+	u, err := st.GetIdentity(ctx, username)
+	if err != nil || identity.LegacyOpsRole(u.Role, u.OpsScope) == "" {
 		return errf(2, "user %q not found", username)
 	}
-	if err := st.DeleteUser(user.ID); err != nil {
+	if _, err := st.Identity().SetOpsAccess(ctx, username, identity.LegacyOpsNone); err != nil {
+		if identity.IsInputError(err) {
+			return errf(1, "%v (remove an admin with: fleet admin rm %s)", err, u.Email)
+		}
 		return errf(5, "%v", err)
 	}
-	fmt.Printf("deleted sched user %s\n", username)
+	fmt.Printf("removed Operations Center access of %s (the account itself stays; remove it with: fleet chat user del %s)\n", u.Email, u.Email)
 	return 0
 }
 
@@ -270,7 +301,7 @@ func schedUserList(argv []string) int {
 	if fs.NArg() > 0 {
 		return errf(1, "sched user list takes no arguments (got %q)", fs.Args())
 	}
-	st, code := openSchedStorage(*dbURL)
+	st, code := openSchedIdentityStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -291,7 +322,7 @@ func schedUserList(argv []string) int {
 		return printJSON(rows)
 	}
 	if len(users) == 0 {
-		fmt.Fprintln(os.Stderr, "no sched users yet — add one with: fleet sched user add <username> --role admin --password -")
+		fmt.Fprintln(os.Stderr, "no Operations Center users yet — add one with: fleet admin add <email>")
 		return 0
 	}
 	rows := make([][]string, 0, len(users))
@@ -434,7 +465,7 @@ func schedAPIKeyCreate(argv []string) int {
 				}
 			}
 		}
-		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, *rateLimit, nil, "created via the fleet CLI")
+		key, raw, err := mgr.CreateTypedKey(context.Background(), name, kt, slugs, *rateLimit, nil, "created via the fleet CLI")
 		if err != nil {
 			return errf(5, "%v", err)
 		}
@@ -450,7 +481,7 @@ func schedAPIKeyCreate(argv []string) int {
 
 	// Legacy role-based path: mints an untyped sk- key, unchanged.
 	roleVal := *role
-	key, raw, err := mgr.CreateKey(name, nil, &roleVal, *rateLimit, nil, "created via the fleet CLI")
+	key, raw, err := mgr.CreateKey(context.Background(), name, nil, &roleVal, *rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -523,7 +554,7 @@ func schedAPIKeyRevoke(argv []string) int {
 	if mgr == nil {
 		return code
 	}
-	if err := mgr.RevokeKey(keyID); err != nil {
+	if err := mgr.RevokeKey(context.Background(), keyID); err != nil {
 		return errf(5, "%v", err)
 	}
 	ks.fixOwnership()
@@ -547,7 +578,7 @@ func schedAPIKeyRotate(argv []string) int {
 	}
 	// RotateKey preserves the key's type (#190); a typed key rotates to a fresh
 	// token of the same type, so its scope is unchanged.
-	key, raw, err := mgr.RotateKey(keyID, *graceHours)
+	key, raw, err := mgr.RotateKey(context.Background(), keyID, *graceHours)
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -573,7 +604,7 @@ func schedAPIKeyDelete(argv []string) int {
 	if mgr == nil {
 		return code
 	}
-	if err := mgr.DeleteKey(keyID); err != nil {
+	if err := mgr.DeleteKey(context.Background(), keyID); err != nil {
 		return errf(5, "%v", err)
 	}
 	ks.fixOwnership()

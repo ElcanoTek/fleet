@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 func restoreLogging(t *testing.T) {
@@ -14,15 +16,19 @@ func restoreLogging(t *testing.T) {
 	prevSlog := slog.Default()
 	prevBridge := bridgeLogger
 	prevOut := currentOutput()
+	prevConfigured := configured.Load()
 	t.Cleanup(func() {
+		configured.Store(prevConfigured)
 		startupMu.Lock()
 		startup = nil
 		startupMu.Unlock()
 		slog.SetDefault(prevSlog)
 		bridgeLogger = prevBridge
 		setOutput(prevOut)
+		safe.SetPanicHandler(nil)
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
+		slog.SetLogLoggerLevel(slog.LevelInfo)
 	})
 }
 
@@ -82,5 +88,26 @@ func TestFlushStartupWithoutConfigure(t *testing.T) {
 	n, _ := r.Read(buf)
 	if got := string(buf[:n]); !strings.Contains(got, `"msg":"load config"`) {
 		t.Fatalf("FlushStartup wrote %q, want the buffered line as JSON", got)
+	}
+}
+
+// The overflow warning is a warn record like any other: a handler gated
+// above warn does not get it (#2074 review), one at warn or below does.
+func TestStartupOverflowWarningHonoursTheLevel(t *testing.T) {
+	for _, tc := range []struct {
+		level slog.Level
+		want  bool
+	}{{slog.LevelError, false}, {slog.LevelWarn, true}} {
+		restoreLogging(t)
+		BufferStartup()
+		for range maxStartupRecords + 3 {
+			slog.Error("boot noise")
+		}
+		var buf strings.Builder
+		h := NewHandler("json", &buf, tc.level)
+		replayStartup(h, h)
+		if got := strings.Contains(buf.String(), "startup log buffer overflowed"); got != tc.want {
+			t.Fatalf("level %v: overflow warning written = %v, want %v", tc.level, got, tc.want)
+		}
 	}
 }

@@ -21,7 +21,7 @@ type secretValuer struct{ v string }
 func (s secretValuer) LogValue() slog.Value { return slog.AnyValue([]string{"x", s.v}) }
 
 // unwalkable cannot be marshalled (a channel field); the redactor must fall
-// back to its redacted fmt text, never the raw value.
+// back to a fixed placeholder, never the value's text.
 type unwalkable struct {
 	Note string
 	Ch   chan int
@@ -81,5 +81,55 @@ func TestCompositeRedactionKeepsStructure(t *testing.T) {
 	obj, ok := m["obj"].(map[string]any)
 	if !ok || obj["title"] != "t" || obj["count"] != float64(7) {
 		t.Fatalf("obj = %#v, want title=t count=7", m["obj"])
+	}
+}
+
+// credentialHolder cannot be walked (its chan field defeats json.Marshal) and
+// holds a credential under a secret-named FIELD whose value matches no
+// pattern — only the key check the walk applies would catch it.
+type credentialHolder struct {
+	Name       string
+	Credential string
+	Done       chan struct{}
+}
+
+// cyclic refers to itself, which json.Marshal also refuses.
+type cyclic struct {
+	Token string
+	Next  *cyclic
+}
+
+// An unwalkable composite fails closed: it logs as a placeholder naming its
+// type, never as fmt text that skips the secret-key check (#2074 review).
+func TestUnwalkableCompositeFailsClosed(t *testing.T) {
+	const cred = "plain-looking-credential-value"
+	loop := &cyclic{Token: cred}
+	loop.Next = loop
+	cases := []struct {
+		name string
+		v    any
+		typ  string
+	}{
+		{"chan field", credentialHolder{Name: "acme", Credential: cred, Done: make(chan struct{})}, "logging.credentialHolder"},
+		{"cycle", loop, "*logging.cyclic"},
+		{"func field", struct {
+			Credential string
+			F          func()
+		}{Credential: cred, F: func() {}}, "struct"},
+	}
+	for _, format := range []string{"json", "text"} {
+		for _, tc := range cases {
+			t.Run(format+"/"+tc.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				slog.New(NewHandler(format, &buf, slog.LevelDebug)).Info("x", "v", tc.v)
+				out := buf.String()
+				if strings.Contains(out, cred) {
+					t.Fatalf("credential leaked: %s", out)
+				}
+				if !strings.Contains(out, "[unloggable value: ") || !strings.Contains(out, tc.typ) {
+					t.Fatalf("want the unloggable placeholder naming %s, got: %s", tc.typ, out)
+				}
+			})
+		}
 	}
 }

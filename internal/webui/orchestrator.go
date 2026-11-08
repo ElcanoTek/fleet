@@ -11,47 +11,6 @@ import (
 	"unicode/utf16"
 )
 
-// handleOrchLogin is POST /api/orchestrator/auth/login: moc's
-// username/password login for API/CLI clients, which still obtain a bearer
-// this way (the web UI itself uses the session cookie, #1115). Public.
-func (g *Gateway) handleOrchLogin(w http.ResponseWriter, r *http.Request) {
-	if !g.verifyOrigin(w, r) {
-		return
-	}
-	if g.orch == nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"detail": "orchestrator unreachable: no backend"})
-		return
-	}
-	h := http.Header{}
-	h.Set("Content-Type", "application/json")
-	c := call{method: http.MethodPost, target: "/auth/login", header: h, detach: true}
-	c.body, c.contentLength = bodyOrNil(r)
-	g.dispatch(w, r, g.orch, "orchestrator", c, textJSON)
-}
-
-// handleOrchLogout is POST /api/orchestrator/auth/logout: the orchestrator's
-// part of sign-out (best effort, called by every surface's sign-out before the
-// top-level /api/auth/logout form). It forwards a presented Authorization
-// header — the orchestrator ends that bearer's password-login session
-// server-side (ElcanoLogout) — and any cookie deletion the orchestrator
-// answers with. Without a bearer there is no orchestrator-side session to end:
-// cookie sessions are the gateway's, ended by /api/auth/logout.
-func (g *Gateway) handleOrchLogout(w http.ResponseWriter, r *http.Request) {
-	if !g.verifyOrigin(w, r) {
-		return
-	}
-	if g.orch == nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"detail": "orchestrator unreachable: no backend"})
-		return
-	}
-	h := http.Header{}
-	if a := r.Header.Get("Authorization"); a != "" {
-		h.Set("Authorization", a)
-	}
-	g.dispatch(w, r, g.orch, "orchestrator", call{method: http.MethodPost, target: "/auth/logout", header: h, detach: true},
-		out{headers: []string{"Content-Type", "Set-Cookie"}, ctFallback: "application/json"})
-}
-
 // Discuss-a-run digest bounds.
 const (
 	digestTotalChars      = 24_000
@@ -199,8 +158,8 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enc := p(r, "taskId")
-	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
-	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
+	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
+	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth), who: auth.who}, maxBackendDocumentSize)
 	if !ok1 || !ok2 {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "orchestrator unreachable: no backend"})
 		return
@@ -234,13 +193,13 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	if u := utf16.Encode([]rune(preview)); len(u) > 60 {
 		preview = string(utf16.Decode(u[:60]))
 	}
-	h := g.chatHeaders(identityOf(s))
+	h, who := http.Header{}, sessionPrincipal(s)
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(struct {
 		Title string `json:"title"`
 		Seed  string `json:"seed"`
 	}{"Discuss run: " + preview, formatDigest(task, log)})
-	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/conversations", header: h, body: body, contentLength: n})
+	status, hdr, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/conversations", header: h, who: who, body: body, contentLength: n})
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "chat-server unreachable: no backend"})
 		return

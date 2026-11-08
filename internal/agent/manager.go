@@ -384,6 +384,7 @@ type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
 // case no inline HTTP tools are registered and behavior is unchanged.
 func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig, a2aPeers []config.A2APeerConfig) *mcp.Client {
 	client := mcp.NewClient()
+	RegisterConnectorSecrets(specs, httpTools, a2aPeers)
 	for name, spec := range specs {
 		if !spec.Enabled {
 			continue
@@ -405,7 +406,7 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			// because a server that never mentions the token still writes its
 			// relative output paths somewhere — and "somewhere" must not be
 			// the operator's bundle checkout.
-			shared := agentcore.SharedMCPWorkspaceDir()
+			shared := agentcore.SharedMCPWorkspaceDir(context.Background())
 			// The one token helper, in its one order (MCPServerDefs, the
 			// reload diff, calls it identically). Shared spawn ⇒ no task
 			// identity and no signed-in user: ${FLEET_TASK_ID}- and
@@ -1341,7 +1342,7 @@ func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.
 	}
 	if scope == nil || scope.Broker == nil || scope.Close == nil {
 		if scope != nil && scope.Close != nil {
-			closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpScopeCloseTimeout)
 			defer cancel()
 			_ = scope.Close(closeCtx)
 		}
@@ -1561,7 +1562,7 @@ func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPS
 		return nil, nil, func() {}, errors.New("open MCP turn scope: opener returned an incomplete scope")
 	}
 	cleanup := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpScopeCloseTimeout)
 		defer cancel()
 		if closeErr := scope.Close(closeCtx); closeErr != nil {
 			logging.From(ctx).Error("RunTurn: close MCP turn scope failed", "err", closeErr)

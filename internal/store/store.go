@@ -130,7 +130,7 @@ type Conversation struct {
 	// Lockdown is set at conversation creation and never changes. When
 	// true: the per-turn sandbox is cold-started fresh with
 	// --network=none and the model slug must be in
-	// CHAT_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
+	// FLEET_LOCKDOWN_ALLOWED_MODELS. Non-lockdown chats also run in
 	// containers (default mode), but reuse the warm pool and inherit
 	// rootless slirp4netns. Drives the "Lockdown chat" badge on the
 	// frontend.
@@ -738,7 +738,7 @@ func (s *Store) userIsProjectMember(ctx context.Context, email, projectID string
 			SELECT 1 FROM projects p
 			WHERE p.id = $1
 			  AND (p.owner_email = $2
-			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM users WHERE email = $2)))
+			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM core.users WHERE email = $2)))
 		)`, projectID, normalizeEmail(email)).Scan(&member)
 	if err != nil {
 		return false, err
@@ -1692,7 +1692,7 @@ func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, owner
 	}
 	var ownerTeam sql.NullString
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, ownerEmail).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT team_id FROM core.users WHERE email = $1`, ownerEmail).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
 	team := strings.TrimSpace(ownerTeam.String)
@@ -2397,7 +2397,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	// 1. TTL sweep. Conversations with an active or paused patrol/timer schedule
 	//    are exempt just like pinned/project conversations so a scheduled patrol
 	//    is never reaped between runs.
-	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM chat_schedules cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
+	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM ` + chatSchedulesTable + ` cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
 	const notSharedOrMultiplayerClause = `COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE`
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day

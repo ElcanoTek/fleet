@@ -13,6 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -301,11 +302,11 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return shared()
 	}
 	release := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), approvalScopeCloseTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalScopeCloseTimeout)
 		defer cancel()
 		if err := scope.Close(closeCtx); err != nil {
 			// our own row, and it is rendered with %q so any CR/LF would be escaped.
-			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", approval.ID, "err", err)
+			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", safe.LogSafe(approval.ID), "err", err)
 		}
 	}
 	return scope.Broker, scope.Catalog, release, nil
@@ -549,7 +550,7 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 
 // stagedBashLockdown resolves whether an approved bash command must run
 // network-sealed: the conversation's own Lockdown flag (set at creation,
-// immutable) OR'd with the server-wide CHAT_LOCKDOWN_ONLY switch — the same
+// immutable) OR'd with the server-wide FLEET_LOCKDOWN_ONLY switch — the same
 // disjunction postChat and POST /conversations apply (server.go). The OR with
 // cfg.LockdownOnly matters for conversations created before an operator
 // flipped the global switch on. It FAILS CLOSED: if the conversation can't be

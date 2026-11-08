@@ -208,7 +208,7 @@ func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusOK {
@@ -285,12 +285,11 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 	t.Parallel()
 
 	const user = "busy@x.com"
-	patrolDraftInFlight.Store(user, struct{}{})
-	defer patrolDraftInFlight.Delete(user)
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p"}}
 	s := &Server{agent: fake}
+	s.patrolDraftInFlight.Store(user, struct{}{})
 	req := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	req = req.WithContext(asUser(req.Context(), user))
 	rec := httptest.NewRecorder()
 	s.handlePatrolDraft(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -300,14 +299,14 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 		t.Error("a refused draft must not reach the model")
 	}
 	// Once the first finishes, the next is accepted.
-	patrolDraftInFlight.Delete(user)
+	s.patrolDraftInFlight.Delete(user)
 	rec = httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
-	s.handlePatrolDraft(rec, req2.WithContext(context.WithValue(req2.Context(), ctxKeyUser, user)))
+	s.handlePatrolDraft(rec, req2.WithContext(asUser(req2.Context(), user)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("after the first finished, status = %d, want 200", rec.Code)
 	}
-	if _, still := patrolDraftInFlight.Load(user); still {
+	if _, still := s.patrolDraftInFlight.Load(user); still {
 		t.Error("the in-flight mark must be released when the draft returns")
 	}
 }
@@ -346,7 +345,7 @@ func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	var body struct {
@@ -392,7 +391,7 @@ func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
 	}
 	s.store = failingMultiplayerStore{s.store}
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusInternalServerError {
@@ -437,7 +436,7 @@ func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
 	calls := 0
 	s.store = countingMultiplayerStore{chatStore: s.store, calls: &calls}
 	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	req = req.WithContext(asUser(req.Context(), me))
 	rec := httptest.NewRecorder()
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusOK {

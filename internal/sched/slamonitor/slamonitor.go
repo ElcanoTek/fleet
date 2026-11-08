@@ -93,7 +93,7 @@ func (m *SLAMonitor) SetNow(fn nowFunc) {
 }
 
 func (m *SLAMonitor) run(ctx context.Context) {
-	defer safe.Recover("slamonitor.run", nil)
+	defer safe.RecoverContext(ctx, "slamonitor.run", nil)
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -104,7 +104,7 @@ func (m *SLAMonitor) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			func() {
-				defer safe.Recover("slamonitor.tick", nil)
+				defer safe.RecoverContext(ctx, "slamonitor.tick", nil)
 				m.Check(ctx)
 			}()
 		}

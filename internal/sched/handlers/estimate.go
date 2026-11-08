@@ -42,14 +42,15 @@ func (h *Handlers) SetPersonaCatalog(p func() []string) {
 // write (issue #233). Same auth + rate limiter as CreateTask.
 func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	// Authorization is the SHARED authorizeTaskCreator (batch.go) — admin key,
-	// web-tier header trust with its session-epoch gate, scoped key with
-	// create permission, user bearer token, Elcano cookie member — so the
-	// creation-shaped endpoints cannot drift. This handler used to enforce a
-	// hand-rolled copy that predated the header-trust path (#157), which made
+	// the gateway session's principal with its session-epoch gate, scoped key
+	// with create permission — so the creation-shaped endpoints cannot drift.
+	// This handler used to enforce a hand-rolled copy that predated the
+	// web tier's session path (#157), which made
 	// the forecast silently dead ("Unauthorized") for every cookie-path
 	// Operations Center user. The resolved creator is discarded: the forecast
 	// creates nothing, so this cannot become a weaker path to task creation.
-	if _, ok := h.authorizeTaskCreator(w, r); !ok {
+	_, r, ok := h.authorizeTaskCreator(w, r)
+	if !ok {
 		return
 	}
 
@@ -72,7 +73,7 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	if !forecast.PricingKnown {
 		status = http.StatusAccepted
 	}
-	writeJSON(w, status, forecast)
+	writeJSON(w, r, status, forecast)
 }
 
 // forecastTask resolves the model, system prompt, MCP tool count, iteration cap,

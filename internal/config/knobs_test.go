@@ -41,10 +41,6 @@ func TestLoad_MalformedKnobFailsLoud(t *testing.T) {
 		// The generic-provider mark, likewise: a typo must not hand a Fleet's
 		// accounts to a provider that never provisions them.
 		{"FLEET_OIDC_GENERIC", "okta", []string{"FLEET_OIDC_GENERIC", `"okta"`, "boolean"}},
-		// A legacy alias spelling is parsed just as strictly; the error names
-		// the canonical spelling (matching what the reload path reports).
-		{"CUTLASS_MAX_COST_USD", "free", []string{"FLEET_MAX_COST_USD", `"free"`}},
-		{"CHAT_MAX_ITERATIONS", "many", []string{"FLEET_MAX_ITERATIONS", `"many"`}},
 		// Out-of-range values on the bounded knobs (the same bounds the
 		// hot-reload path has always enforced).
 		{"FLEET_MAX_ITERATIONS", "20000", []string{"FLEET_MAX_ITERATIONS", "between 1 and 10000"}},
@@ -406,13 +402,14 @@ func TestExternalKnobsRefuseBoot(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy alias spelling of a fleet-chain knob refuses", func(t *testing.T) {
+	t.Run("removed alias spelling is not parsed", func(t *testing.T) {
 		isolateEnv(t)
-		// agentcore reads this through fleetEnv, which honors CUTLASS_ too,
-		// so the registry must reject the alias spelling as well.
+		// ADR-0106: nothing reads CUTLASS_RETRY_MAX_ATTEMPTS any more, so a
+		// malformed value there is not a boot error (Load warns instead).
 		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "many")
-		if _, err := Load(""); err == nil {
-			t.Fatal("Load accepted a malformed CUTLASS_RETRY_MAX_ATTEMPTS")
+		t.Setenv("CHAT_MAX_ITERATIONS", "many")
+		if _, err := Load(""); err != nil {
+			t.Fatalf("Load refused over a removed alias nothing reads: %v", err)
 		}
 	})
 

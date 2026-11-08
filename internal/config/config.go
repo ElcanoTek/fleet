@@ -5,10 +5,10 @@
 // is the UNION of chat's and cutlass's config loaders: one Config struct, one
 // Load, and one env-file loader that covers both env families.
 //
-// Env prefix: the canonical prefix is FLEET_, with CHAT_/CUTLASS_ back-compat
-// fallbacks so deployments that still set the legacy names keep working and so
-// the lifted parity tests (which set the legacy names) stay green. Per-knob
-// helpers (getenvFleet*) try FLEET_<SUFFIX> first, then CHAT_/CUTLASS_<SUFFIX>.
+// Env prefix: the canonical prefix is FLEET_. The per-knob helpers
+// (getenvFleet*) take the suffix after it. The old CHAT_/CUTLASS_ fallbacks
+// were removed (ADR-0106): nothing reads those spellings, and Load warns when
+// one is set (warnRetiredEnvAliases).
 //
 // Credential-account suffixing reuses internal/creds.ApplyClientSuffix — it is
 // NOT re-implemented here.
@@ -35,15 +35,9 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
-// Canonical + legacy env prefixes, owned by the configuration registry
-// (internal/config/envreg). FLEET_ wins; the legacy prefixes are tried in order
-// for back-compat until they are removed (ADR-0099).
+// The canonical env prefix, owned by the configuration registry
+// (internal/config/envreg).
 const canonicalPrefix = envreg.CanonicalPrefix
-
-// legacyPrefixes is the registry's deprecated prefix list.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env
-var legacyPrefixes = envreg.LegacyPrefixes
 
 // Escalation classifier modes and default (docs/CHAT-ESCALATION.md).
 const (
@@ -56,7 +50,7 @@ const (
 	DefaultEscalationClassifierModel = "~typesafe/jev-latest"
 )
 
-// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL:
+// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL:
 // the everyday tier itself, so a default-model swap moves titles and the
 // auxiliary jobs below with it (docs/MODEL-DEFAULTS.md).
 const DefaultTitleModel = agentcore.DefaultCoreModel
@@ -85,7 +79,8 @@ const (
 //
 // It is DERIVED from the configuration registry (#2053): every registry entry
 // that is not ProcessOnly, plus every alias spelling marked EnvFile
-// (envreg.EnvFileNames). Before the registry this was a hand-maintained map,
+// (envreg.EnvFileNames). A removed CHAT_/CUTLASS_ spelling is not admitted;
+// Load warns about one found in the file or the process env (ADR-0106). Before the registry this was a hand-maintained map,
 // and a key the loader read but the map omitted was silently dropped when set
 // only in FLEET_ENV_FILE — a bug class that recurred three times (the
 // per-store DSNs, the boot-read operator keys, ~20 loader knobs in #1107).
@@ -131,10 +126,17 @@ var (
 // process environment. Call once at startup, before Load. Names are matched
 // exactly AND participate in the per-account "<BASE>_<SUFFIX>" rule, so an
 // account variant of a registered base var is admitted too.
+//
+// A removed CHAT_/CUTLASS_ (or bare DATA_DIR) spelling is never admitted, even
+// when a bundle references it (ADR-0106): the bundle loader warns about the
+// reference instead, and the boot warning names the FLEET_ key.
 func RegisterAllowedEnvVars(names ...string) {
 	registerMu.Lock()
 	defer registerMu.Unlock()
 	for _, n := range names {
+		if _, retired := envreg.RetiredAlias(strings.TrimSpace(n)); retired {
+			continue
+		}
 		if n = strings.TrimSpace(n); n != "" {
 			registeredEnvVars[n] = true
 		}
@@ -398,10 +400,8 @@ type Config struct {
 	DefaultThinkingBudgetTokens int
 	TurnTimeoutSeconds          int
 	// Temperature is the sampling temperature for BOTH interactive turns and
-	// scheduled-task runs. It resolves through the standard FLEET_ → CHAT_ →
-	// CUTLASS_ chain, so the legacy CUTLASS_TEMPERATURE spelling still works as
-	// the last-resort alias (#1079 collapsed the separate scheduled-only knob
-	// that read CUTLASS_TEMPERATURE exclusively).
+	// scheduled-task runs: FLEET_TEMPERATURE (#1079 collapsed the separate
+	// scheduled-only knob).
 	Temperature  float64
 	LLMMaxTokens int
 	TitleModel   string
@@ -952,7 +952,7 @@ type Config struct {
 	// and tag pill. Presentation only — see config.PinnedModel.
 	PinnedModels []PinnedModel
 
-	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE / CHAT_MOCK_MODE.
+	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE.
 	MockMode bool
 
 	// PasswordLoginDisabled is true when central Auth SSO is configured
@@ -1361,12 +1361,10 @@ func Load(envFile string) (*Config, error) {
 		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),
 
 		// ── scheduled task (cutlass) ──
-		// getenvFleet, not a bare os.Getenv: these resolve FLEET_TASK_MODEL →
-		// CHAT_TASK_MODEL → CUTLASS_TASK_MODEL like every other knob here, and
-		// like EnvAliases already advertises for them. Reading only the legacy
-		// spelling silently dropped FLEET_TASK_MODEL on deployments that follow
-		// the documented convention, leaving every scheduled task to dead-letter
-		// with "no model configured" (#1015).
+		// FLEET_TASK_MODEL, like every other knob here. Reading only the
+		// legacy CUTLASS_ spelling once silently dropped FLEET_TASK_MODEL,
+		// leaving every scheduled task to dead-letter with "no model
+		// configured" (#1015).
 		TaskModel:         getenvFleet("TASK_MODEL"),
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
 		VerifierModel:     getenvFleet("VERIFIER_MODEL"),
@@ -1576,7 +1574,7 @@ func Load(envFile string) (*Config, error) {
 
 	// Lockdown is a no-op without an image. Surface the misconfiguration loudly.
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
-		fmt.Fprintln(os.Stderr, "warn: FLEET_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
+		slog.Warn("FLEET_LOCKDOWN_ONLY=true but the sandbox image is unset; lockdown cannot be enforced and is treated as disabled")
 		cfg.LockdownOnly = false
 	}
 
@@ -1617,6 +1615,11 @@ func Load(envFile string) (*Config, error) {
 	// copies are actually written (pinned by a taskrun test; config cannot
 	// import tools).
 	agentcore.PinOutboundAttachmentDir(outboundAttachmentStagingDir(cfg.EmailAttachmentDir))
+
+	// Removed CHAT_/CUTLASS_ spellings (ADR-0106): nothing reads them, so say
+	// so once at boot instead of letting the setting silently fall back to
+	// its default.
+	warnRetiredEnvAliases(envFile)
 
 	// Capture the boot environment last, once the process env is in its final
 	// (file-loaded, winners-restored) state, so a later hot-reload (#286) can
@@ -1970,21 +1973,16 @@ func getenvDefault(key, def string) string {
 	return def
 }
 
-// ── FLEET_-prefixed env helpers with CHAT_/CUTLASS_ back-compat ──
+// ── FLEET_-prefixed env helpers ──
 //
-// These try FLEET_<suffix> first, then each legacy prefix in order. The first
-// non-empty value wins. They power the canonical-prefix-with-back-compat
-// behavior for shared knobs (timeouts, ceilings, sandbox image). The
-// spellings come from the configuration registry (envreg.ChainSpellings):
-// FLEET_<suffix> must be a registered Chain entry, so a new read through these
-// helpers is declared — and documented — before it can ship.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env (lookupFleet then reads the
-// canonical FLEET_<suffix> alone).
+// These read FLEET_<suffix>; an empty value counts as unset. FLEET_<suffix>
+// must be registered (envreg.Lookup panics in tests on an undeclared name), so
+// a new read through these helpers is declared — and documented — before it
+// can ship. The CHAT_/CUTLASS_ fallbacks they used to try were removed
+// (ADR-0106).
 func lookupFleet(suffix string) (string, bool) {
-	suffix = strings.TrimLeft(suffix, "_")
-	v, _, ok := resolveSpellings(envreg.ChainSpellings(canonicalPrefix+suffix), os.LookupEnv)
-	return v, ok
+	v, _ := envreg.Lookup(canonicalPrefix + strings.TrimLeft(suffix, "_"))
+	return v, v != ""
 }
 
 // getenvFleet is getenvFleetDefault with an empty default.
@@ -1998,8 +1996,8 @@ func getenvFleetDefault(suffix, def string) string {
 }
 
 // getenvFleetOrBare resolves a knob whose historical spelling is UNPREFIXED
-// (PERSONA, PERSONA_DEFAULT): the prefixed spellings first in lookupFleet's
-// order, then the bare name, then def. The bare fallback keeps existing
+// (PERSONA, PERSONA_DEFAULT): FLEET_<suffix> first, then the bare name, then
+// def. The bare fallback keeps existing
 // deployments reading; the prefixed lookup is what makes the documented FLEET_
 // convention work at all — without it FLEET_PERSONA was silently ignored and the
 // built-in default applied (#956). Quotes are stripped from whichever spelling
@@ -2009,39 +2007,6 @@ func getenvFleetOrBare(suffix, def string) string {
 		return creds.StripEnvQuotes(v)
 	}
 	return getenvDefault(suffix, def)
-}
-
-// EnvAliases returns every spelling the prefix alias machinery resolves for
-// the same knob as name: when name carries the canonical FLEET_ prefix or a
-// legacy prefix, the canonical spelling plus one spelling per legacy prefix,
-// in lookup order (see lookupFleet). A name without a recognized prefix has
-// no aliases and is returned alone. Callers that must reason about a knob's
-// whole alias family (e.g. the MCP broker's connector/parent env-separation
-// gate) derive it here rather than hand-enumerating legacy spellings.
-//
-// It is deliberately generic (any name, registered or not): the broker also
-// protects bundle-declared names this way.
-//
-// LEGACY-ENV-ALIAS: remove after migrate-env (EnvAliases then returns name
-// alone; its callers keep working unchanged).
-func EnvAliases(name string) []string {
-	suffix, ok := strings.CutPrefix(name, canonicalPrefix)
-	if !ok {
-		for _, p := range legacyPrefixes {
-			if suffix, ok = strings.CutPrefix(name, p); ok {
-				break
-			}
-		}
-	}
-	if !ok || suffix == "" {
-		return []string{name}
-	}
-	names := make([]string, 0, len(legacyPrefixes)+1)
-	names = append(names, canonicalPrefix+suffix)
-	for _, p := range legacyPrefixes {
-		names = append(names, p+suffix)
-	}
-	return names
 }
 
 // logArchiveEncryptionKey decodes the optional base64 AES-256-GCM key for log
@@ -2131,8 +2096,8 @@ func normalizeBudgetFraction(f float64) float64 {
 	return f
 }
 
-// TaskDefaultMaxRetriesFromEnv resolves FLEET_TASK_DEFAULT_MAX_RETRIES (and its
-// CHAT_/CUTLASS_ aliases) without a full Load, clamped to the per-task 0–10
+// TaskDefaultMaxRetriesFromEnv resolves FLEET_TASK_DEFAULT_MAX_RETRIES
+// without a full Load, clamped to the per-task 0–10
 // bounds. The admin CLI constructs tasks (import, batch) in a process that
 // never calls Load, and it must apply the same deployment default the server
 // does (#1538).

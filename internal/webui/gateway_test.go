@@ -72,11 +72,6 @@ func TestGateServesLoginAndPublicRoutesWithoutSession(t *testing.T) {
 			t.Errorf("%s was gated: %d %q", p, res.StatusCode, res.Header.Get("Location"))
 		}
 	}
-	// The moc orchestrator login must be reachable to obtain a bearer at all.
-	res := e.do(req("POST", "/api/orchestrator/auth/login", `{"username":"u"}`, "Origin", "http://fleet.example.com"))
-	if res.StatusCode == http.StatusUnauthorized {
-		t.Fatal("orchestrator login gated")
-	}
 }
 
 func TestGateAdmitsBearerOnly(t *testing.T) {
@@ -90,7 +85,7 @@ func TestGateAdmitsBearerOnly(t *testing.T) {
 		t.Fatalf("api: %d", res.StatusCode)
 	}
 	got := e.orch.last(t)
-	if got.Header.Get("Authorization") != "Bearer moc-token-123" || got.Header.Get("X-User-Email") != "" || got.Header.Get("X-Orchestrator-Server-Token") != "" {
+	if got.Header.Get("Authorization") != "Bearer moc-token-123" || got.HasWho || !got.noIdentityHeaders() {
 		t.Fatalf("bearer not forwarded verbatim/alone: %v", got.Header)
 	}
 	// "Bearer" with nothing after it is not a credential.

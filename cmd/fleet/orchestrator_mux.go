@@ -36,8 +36,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// proxy it walks the chain right-to-left past trusted hops, so a
 	// prepended spoof never wins either (GHSA-3fxj-6jh8-hvhx et al.).
 	r.Use(httpmw.NewTrustedProxies(trustedProxies).Middleware())
+	r.Use(httpmw.Recoverer)     // last resort: a panic in the middleware below
+	r.Use(otelsetup.Middleware) // #186: server span + X-Request-Id (no-op when tracing disabled)
+	// Inside the span and request id: a handler panic is reported with the
+	// request's request_id, trace_id and span_id.
 	r.Use(httpmw.Recoverer)
-	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)
@@ -286,8 +289,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// limit as the webhook trigger; the email-kind security controls (approved
 	// senders, DKIM/SPF, attachments, dedup) run inside the handler.
 	r.With(h.SchedRateLimitMiddleware).Post("/triggers/email/{slug}", h.HandleEmailTrigger)
-	r.Post("/auth/login", h.Login)
-	r.Post("/auth/logout", h.ElcanoLogout)
+	// No /auth/login or /auth/logout: the Operations Center's password bearer
+	// is retired (#2049 M4, ADR-0105). People sign in and out at the web
+	// gateway (/api/auth/*); programs use API keys.
 
 	return r
 }

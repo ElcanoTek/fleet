@@ -12,6 +12,7 @@ package apikeys
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,12 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -330,32 +331,32 @@ func (m *Manager) save() error {
 	return os.Rename(tmp, m.storagePath)
 }
 
-func (m *Manager) logAudit(entry AuditLogEntry) {
+func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
 	dir := filepath.Dir(m.auditLogPath)
 	// 0700: the audit log can reveal key IDs and operations; keep it owner-only.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		slog.Error("apikeys: failed to create audit log dir", "dir", dir, "err", err)
+		logging.From(ctx).Error("apikeys: failed to create audit log dir", "dir", dir, "err", err)
 		return
 	}
 	entry.Timestamp = time.Now().UTC()
 	data, err := json.Marshal(entry)
 	if err != nil {
-		slog.Error("apikeys: failed to marshal audit entry", "err", err)
+		logging.From(ctx).Error("apikeys: failed to marshal audit entry", "err", err)
 		return
 	}
 	f, err := os.OpenFile(m.auditLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		slog.Error("apikeys: failed to open audit log", "path", m.auditLogPath, "err", err)
+		logging.From(ctx).Error("apikeys: failed to open audit log", "path", m.auditLogPath, "err", err)
 		return
 	}
 	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		slog.Error("apikeys: failed to append audit entry", "err", err)
+		logging.From(ctx).Error("apikeys: failed to append audit entry", "err", err)
 	}
 }
 
 // CreateKey creates a new API key.
-func (m *Manager) CreateKey(name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateKey(ctx context.Context, name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -417,7 +418,7 @@ func (m *Manager) CreateKey(name string, permissions []models.Permission, role *
 	for i, p := range perms {
 		permStrings[i] = string(p)
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "create_key",
 		ResourceType: "api_key",
@@ -437,7 +438,7 @@ func (m *Manager) CreateKey(name string, permissions []models.Permission, role *
 // (KeyType.Permissions). allowedTriggerSlugs scopes a webhook key to specific
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
-func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -493,7 +494,7 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 	for i, p := range perms {
 		permStrings[i] = string(p)
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "create_key",
 		ResourceType: "api_key",
@@ -511,7 +512,7 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 }
 
 // RotateKey rotates an API key, keeping the old key valid for a grace period.
-func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string, error) {
+func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours int) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -557,7 +558,7 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 	if err := m.save(); err != nil {
 		return nil, "", err
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "rotate_key",
 		ResourceType: "api_key",
@@ -569,7 +570,7 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 }
 
 // RevokeKey revokes (disables) an API key.
-func (m *Manager) RevokeKey(keyID string) error {
+func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key, ok := m.keys[keyID]
@@ -580,12 +581,12 @@ func (m *Manager) RevokeKey(keyID string) error {
 	if err := m.save(); err != nil {
 		return err
 	}
-	m.logAudit(AuditLogEntry{KeyID: keyID, Action: "revoke_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
+	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "revoke_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
 	return nil
 }
 
 // DeleteKey permanently deletes an API key.
-func (m *Manager) DeleteKey(keyID string) error {
+func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key, ok := m.keys[keyID]
@@ -600,12 +601,12 @@ func (m *Manager) DeleteKey(keyID string) error {
 	if err := m.save(); err != nil {
 		return err
 	}
-	m.logAudit(AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
+	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
 	return nil
 }
 
 // ValidateKey validates an API key and checks permissions.
-func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+func (m *Manager) ValidateKey(ctx context.Context, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
 	keyHash := m.hashKey(rawKey)
 
 	m.mu.Lock()
@@ -633,7 +634,7 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 			// rejected this process), but the change must survive a restart, so
 			// surface the failure rather than dropping it silently.
 			if err := m.save(); err != nil {
-				slog.Error("apikeys: failed to persist expiry of rotated key", "key_id", key.KeyID, "err", err)
+				logging.From(ctx).Error("apikeys: failed to persist expiry of rotated key", "key_id", key.KeyID, "err", err)
 			}
 			return false, nil, "API key has been rotated"
 		}
@@ -646,7 +647,7 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 		} else {
 			errMsg = "API key has expired"
 		}
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "validate_key", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "validate_key", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 
@@ -659,7 +660,7 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 		state.ResetIfNeeded(1)
 		if state.RequestCount >= key.RateLimit {
 			errMsg := fmt.Sprintf("Rate limit exceeded: %d/hour", key.RateLimit)
-			m.logAudit(AuditLogEntry{KeyID: keyID, Action: "rate_limit_exceeded", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+			m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "rate_limit_exceeded", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 			return false, nil, fmt.Sprintf("Rate limit exceeded (%d requests/hour)", key.RateLimit)
 		}
 		state.Increment()
@@ -667,7 +668,7 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 
 	if requiredPermission != nil && !key.HasPermission(*requiredPermission) {
 		errMsg := fmt.Sprintf("Missing permission: %s", *requiredPermission)
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 

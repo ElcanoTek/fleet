@@ -749,7 +749,7 @@ func TestProjectMemberEmails(t *testing.T) {
 	}
 
 	// A disabled teammate is not offered: the transfer would refuse them.
-	if _, err := f.s.db.ExecContext(f.ctx, `UPDATE users SET enabled = FALSE WHERE email = 'bob@x.com'`); err != nil {
+	if _, err := f.s.db.ExecContext(f.ctx, `UPDATE core.users SET enabled = FALSE WHERE email = 'bob@x.com'`); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := f.s.ProjectMemberEmails(f.ctx, f.project.ID); len(got) != 1 || got[0] != "alice@x.com" {
@@ -1461,7 +1461,7 @@ func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
 	// The pre-fix leave-team: unshared, still filed, and its owner no longer in
 	// the team that made the project visible to them.
 	if _, err := f.s.db.ExecContext(f.ctx,
-		`UPDATE users SET team_id = NULL WHERE email = 'bob@x.com'`); err != nil {
+		`UPDATE core.users SET team_id = NULL WHERE email = 'bob@x.com'`); err != nil {
 		t.Fatal(err)
 	}
 	if pid, _ := filingState(t, f, stranded.ID); pid != f.project.ID {
@@ -1475,6 +1475,11 @@ func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
 	defer func() { _ = tx.Rollback() }()
 
 	sqlText := embeddedMigrationSQL(t, 55)
+	// Written before users moved to schema core (migration 099): replayed now,
+	// it finds the table there.
+	if _, err := tx.ExecContext(f.ctx, `SET LOCAL search_path = chat, core`); err != nil {
+		t.Fatal(err)
+	}
 	res, err := tx.ExecContext(f.ctx, sqlText)
 	if err != nil {
 		t.Fatalf("apply migration 055: %v", err)
@@ -1616,7 +1621,7 @@ func TestSummaryBecomesAContentFreeBoundaryForReaders(t *testing.T) {
 func TestTransferProjectOwnershipRechecksInTransaction(t *testing.T) {
 	for name, race := range map[string]string{
 		"project made personal": `UPDATE projects SET team_id = '' WHERE id = $1`,
-		"target left the team":  `UPDATE users SET team_id = 'other' WHERE email = 'bob@x.com' AND $1 <> ''`,
+		"target left the team":  `UPDATE core.users SET team_id = 'other' WHERE email = 'bob@x.com' AND $1 <> ''`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newTeamFixture(t)

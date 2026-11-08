@@ -100,7 +100,7 @@ value and its source. It draws from the sources it can see:
   (`--no-unit` leaves it out);
 - your shell's environment;
 - the env file;
-- alias spellings;
+- alias spellings (the bare `PERSONA` / `PERSONA_DEFAULT`);
 - defaults, including one inherited from another setting.
 
 It is not the running server's in-memory configuration: admin overrides made
@@ -108,14 +108,16 @@ in the app and values not yet reloaded are not shown. Secrets are always
 redacted. With no KEY it lists every setting that is set or carries a note,
 and `--all` lists every one, with its default.
 
-**The legacy `CHAT_`/`CUTLASS_` spellings are deprecated**
-([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)). They still
-work, but `fleet doctor` warns about each one it finds, and
-`fleet config migrate-env` rewrites the env file to the canonical `FLEET_`
-names: it prints the plan by default, and with `--write` it backs the file up
-to `<file>.bak-<UTC timestamp>` first, changes only the key on each line
-(comments, order and values stay as they are), refuses when two spellings of
-one setting disagree, and never prints a value.
+**The legacy `CHAT_<X>`/`CUTLASS_<X>` spellings of `FLEET_<X>` settings were
+removed** ([ADR-0106](adr/0106-remove-the-chat-cutlass-env-aliases.md)):
+nothing reads them, so a setting spelled only that way falls back to its
+default. When one is still set, `fleet serve` logs a warning at boot and
+`fleet doctor` warns, each naming the `FLEET_` key to rename it to (with
+`fleet env edit`, or `fleet config set-env` then `fleet config unset-env`);
+`fleet config explain` notes it, and `fleet config set-env` refuses to write
+one. The `CHAT_`/`CUTLASS_` names listed in [CONFIGURATION.md](CONFIGURATION.md)
+(the chat rate limits, connector wire keys, script inputs) are settings of
+their own and keep working.
 
 A single **0600** env file (`FLEET_ENV_FILE`, default `.env.local`; on a box
 typically `/etc/fleet/fleet.env`) carries every secret and connection string.
@@ -174,7 +176,8 @@ breakpoints are only ever emitted for `anthropic/`- and `google/`-prefixed model
 slugs — other providers are unaffected by the setting. Cache efficiency is
 visible per user in `/admin/stats` (`total_cached_tokens`,
 `total_cache_creation_tokens`, `cache_hit_rate_pct`). The legacy
-`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work (deprecated, ADR-0099).
+`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` spellings were
+removed (ADR-0106) and are not read.
 
 **Value parsing rules.** Env-file values follow standard dotenv semantics: an
 `export ` prefix is tolerated; an **unquoted** value ends at the first ` #`
@@ -737,31 +740,115 @@ Operator notes:
   still shows them. Lines a third-party library writes through Go's standard
   `log` package are bridged at info and are not gated, since their true
   severity is unknown.
-- The `fleet mcp-broker` child logs in the same format and level, and its lines
-  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
+- The `fleet mcp-broker` child logs at the parent's level, as JSON on its
+  stderr. The parent re-logs each child record through its own handler (your
+  `FLEET_LOG_FORMAT`, `FLEET_LOG_LEVEL`, redactor and sinks), adding
+  `child=mcp-broker`. Any other child line (a panic trace, a library's raw
+  print, JSON without a valid slog `level`) is logged as `msg="child stderr"`
+  with the redacted text in `line`, labelled `warn` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. A PEM private-key block in subprocess output is replaced by one
+  `[REDACTED PEM block]` line.
+- A number under a secret-named key (`password`, `api_token`, …) is redacted
+  like a string. Only count-like keys keep their numbers: keys ending in
+  `tokens`, `count`, `ms`, `bytes`, `seconds`, `size`, `len`, `limit`, `total`
+  and similar (`prompt_tokens=1200`).
+- A failing log sink (a full disk under `FLEET_LOG_FILE`, a failed rotation)
+  is reported once with a `logging: a log sink write failed` warning on the
+  sinks that still work; its lines are dropped until it recovers. It never
+  blocks logging or the broker.
+- Recovered panics (`msg="panic recovered"`) use the same format, redactor and
+  sinks as every other line, so they reach `FLEET_LOG_FILE` too. If that
+  handler itself fails, the panic is still written to stderr as a JSON line.
+- Every record reaches stderr in a single write under one process-wide lock,
+  so a long line forwarded from the broker never interleaves with a parent
+  line in the journald pipe.
+- A subprocess stderr line longer than 64 KiB is cut. The kept part ends
+  early by a safety margin, so a secret that straddles the cut is not shown
+  at all, and the line ends with `…[truncated: line was N bytes]`.
+- A stdio MCP connector's stderr (a Python traceback, a startup banner), and
+  the sandbox bridge's (`subprocess=sandbox-bridge`), is logged one line per
+  record — `msg="subprocess stderr"`, the text in `line`, the server in
+  `connector` — after secret redaction, labelled `info` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. It is never copied to
+  the log verbatim. Lines longer than 64 KiB are cut and marked `truncated`.
+- Lines a library writes through Go's standard `log` package carry
+  `stdlib_log=true`, in fleet serve and in the MCP broker alike; the parent
+  keeps a broker's such lines ungated too.
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.
 
+### what the process log never contains
+
+Every line passes through two layers of redaction before it reaches stderr
+or `FLEET_LOG_FILE`. The first works on each attribute: secret-named keys,
+structured values, and objects that describe themselves. The second scrubs
+the finished, encoded line. As a result, the log never contains:
+
+- **A registered secret, in any position**: a value, a key, a group name, a
+  message, an error's text, or a self-marshalled field, whether written raw or
+  JSON- or Go-escaped. Before the first line goes out (and before a fatal
+  startup error is logged), fleet registers the value of every variable in
+  its environment and env file whose name contains `KEY`, `TOKEN`, `SECRET`,
+  `PASSWORD`, `PASSWD` or `CREDENTIAL`, and of every setting the
+  configuration registry marks *secret* (under any of its spellings)
+  whatever its name. For a DSN or URL value, such as `DATABASE_URL`, that
+  includes its userinfo, its password and its `password`/`sslpassword`
+  parameters, as written and percent-decoded, even when the DSN does not
+  parse. Afterwards it registers connector and header values taken from the
+  host (whatever their names), brokered account values, and OAuth and
+  API-key secrets as they are acquired or rotated. A rotated secret stays
+  registered for 15 minutes after its last holder replaces it. Values shorter
+  than 8 bytes are not registered.
+- **A recognised vendor credential shape**: PEM private-key blocks (also when a
+  subprocess prints one line by line), `sk-…`, `github_pat_…`/`gh?_…`,
+  `glpat-…`, `xox?-…`, Stripe `sk_/rk_` keys, `AIza…`, `AKIA…`, and the value
+  of an `Authorization: Bearer|Basic` header.
+- **The value of a secret-named field** (`token`, `password`, `secret`,
+  `api_key`, `authorization`, `credential`, `cookie`, …) in a plain struct, a
+  map, or a group, at any depth. A number under such a key is redacted too,
+  unless the key is one of the token metrics fleet itself logs, named exactly
+  (`prompt_tokens`, `token_count`, `max_total_tokens`, …); a count-like
+  suffix alone (`api_key_num`, `password_length`) does not keep it.
+- **The output of a self-describing type that carries a secret-named field.**
+  This covers a `String()`, `Error()`, `LogValue()`, `MarshalJSON` or `MarshalText` on a
+  type with such a field, exported or not, nested or wrapped, in a map key
+  (by the key's type or its name), or anywhere below it at run time (a
+  struct held in an `any` field or a map). Such a value is walked field by
+  field, or logged as `[unloggable value: <type>]`.
+- **A request's path or query.** A panic recovered while serving a request
+  (log line and Sentry tag) names the matched route pattern
+  (`/shared/{token}`, `/shared/`), never the path itself: a share, invite or
+  reset token in a path segment, or an OAuth `code`/`state` or `?token=` in
+  the query, is a live credential. Before routing, only the path's first
+  segment is kept (`/shared/{…}`).
+
+The limit: an unregistered value with no secret-like name and no recognisable
+shape cannot be told apart from ordinary text. That is why fleet registers
+every credential it loads.
+
 ## backup · restore — disaster recovery
 
-fleet keeps every conversation in the **chat** DB and every scheduled task in the
-**sched** DB. Both are backed up and restored per-database with `pg_dump -Fc` /
-`pg_restore` (one custom-format dump file each — the two DBs have independent
-DSNs, so a single cluster-wide dump would not fit the credential model):
+fleet keeps every conversation in schema **chat**, every scheduled task in schema
+**sched**, and the accounts both name in schema **core** — all three in the one
+database (`DATABASE_URL`). `fleet backup` takes them with `pg_dump -Fc` /
+`pg_restore`:
 
 ```
-fleet backup                          # dump BOTH DBs into the cwd (fleet-<db>-<UTC>.dump)
-fleet backup --db=chat --out /backups # dump just chat into /backups
-fleet restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
+fleet backup                          # ONE dump of chat, core and sched (one snapshot): fleet-all-<UTC>.dump
+fleet backup --db=chat --out /backups # dump just chat (+ core) into /backups
+fleet restore --db=all FILE.dump      # restore the whole fleet from a fleet-all dump (one transaction)
+fleet restore --db=chat FILE.dump     # restore one store (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout. `restore`
-is deliberately single-DB — it overwrites a live database, so the target is named
-explicitly (no `--db=all`). Connection params, including the password, are passed
-to the child processes through the environment, never argv.
+`backup` prints each dump path on stdout. `restore` has no default `--db`: it
+overwrites a live database, so the target is named explicitly. Only `--db=all`
+is self-contained; a sched-only restore needs the accounts already in the
+database (restore chat first) — see BACKUP_RESTORE.md. Connection params,
+including the password, are passed to the child processes through the
+environment, never argv.
 
-A **daily timer** (`deploy/fleet-backup.timer`, dumping both DBs to
+A **daily timer** (`deploy/fleet-backup.timer`, one whole-fleet dump to
 `/var/backups/fleet` with a 30-day prune) is installed and enabled by
 `bootstrap --enable-service` unless you pass `--no-backup-timer`, `fleet
 doctor` advises when no timer is present, and `sudo fleet timers install

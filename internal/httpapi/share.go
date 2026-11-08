@@ -81,7 +81,7 @@ func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, map[string]any{
+	writeJSONStatus(w, r, http.StatusCreated, map[string]any{
 		"url":   "/shared/" + token,
 		"token": token,
 	})
@@ -233,7 +233,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	}
 	// The STORED state, never the requested one: a client that is told
 	// team_visible:true must be able to believe it.
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"team_visible": stored,
 		"shared_files": sharedFiles,
 		"total_files":  len(outs),
@@ -339,7 +339,7 @@ func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"multiplayer":  conv.Multiplayer,
 		"team_visible": conv.TeamVisible,
 		"owner_email":  conv.UserEmail,
@@ -439,7 +439,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{
+	writeJSON(w, r, map[string]any{
 		"multiplayer":  updated.Multiplayer,
 		"team_visible": updated.TeamVisible,
 		"owner_email":  updated.UserEmail,
@@ -789,7 +789,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 			resp.ViewerBranch.ConversationID, resp.ViewerBranch.BranchedAt, resp.ViewerBranch.ChangedSince
 	}
 	w.Header().Set("ETag", `W/"tv-`+served.Fingerprint()+`"`)
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // teamViewAfterVersion is a test seam: it runs between the team view's
@@ -847,5 +847,5 @@ func (s *Server) handleSharedConversation(w http.ResponseWriter, r *http.Request
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
-	writeJSON(w, conv)
+	writeJSON(w, r, conv)
 }

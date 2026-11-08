@@ -14,9 +14,7 @@ export { expect, request };
 
 const TEST_EMAIL = process.env.E2E_TEST_EMAIL ?? "e2e@example.com";
 const TEST_PASSWORD = process.env.E2E_TEST_PASSWORD ?? "e2e-test-password";
-const SCHED_USERNAME = process.env.E2E_SCHED_USERNAME ?? "e2e";
-
-export const creds = { email: TEST_EMAIL, password: TEST_PASSWORD, schedUsername: SCHED_USERNAME };
+export const creds = { email: TEST_EMAIL, password: TEST_PASSWORD };
 
 type AuthCookies = Parameters<BrowserContext["addCookies"]>[0];
 

@@ -27,7 +27,7 @@ import (
 // from the spend report. Day/week bucket on the iteration's started_at in UTC
 // and key the bucket by its start date (ISO weeks for 'week').
 var taskUsageGroupExpr = map[string]string{
-	"user":    "COALESCE(u.username, COALESCE(t.created_by::text, ''))",
+	"user":    "COALESCE(u.email, COALESCE(t.created_by::text, ''))",
 	"key":     "COALESCE(t.created_by_key_id, '')",
 	"project": "''",
 	"model":   "COALESCE(t.model, '')",
@@ -58,7 +58,7 @@ func (db *Database) TaskUsageByUserDay(ctx context.Context, from, to time.Time) 
 			COUNT(*)
 		FROM task_iterations ti
 		JOIN tasks t ON t.id = ti.task_id
-		LEFT JOIN users u ON u.id = t.created_by
+		LEFT JOIN core.users u ON u.id = t.created_by
 		WHERE ti.started_at >= $1 AND ti.started_at < $2
 		GROUP BY 1, 2
 		ORDER BY 1, 2`,
@@ -93,7 +93,7 @@ func (db *Database) TaskUsage(ctx context.Context, from, to time.Time, groupBy s
 			COUNT(*)
 		FROM task_iterations ti
 		JOIN tasks t ON t.id = ti.task_id
-		LEFT JOIN users u ON u.id = t.created_by
+		LEFT JOIN core.users u ON u.id = t.created_by
 		WHERE ti.started_at >= $1 AND ti.started_at < $2
 		GROUP BY 1
 		ORDER BY 1`,

@@ -43,20 +43,21 @@ const (
 // parent's agent loop then holds no connector secrets: it delegates every MCP call
 // here, so "in-process" means only where the loop runs, not where secrets live.
 //
-// Frames ride stdin/stdout; all logging goes to stderr so it never corrupts the
-// frame stream the parent decodes. The parent pipes that stderr into its own
-// log destination (logging.ChildStderr), so the child's lines reach
-// FLEET_LOG_FILE under the one rotator the parent owns. The child exports its
+// Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
+// so it never corrupts the frame stream the parent decodes. The child exports its
 // spans to the parent's collector as service "<FLEET_SERVICE_NAME>" with
 // fleet.process=mcp-broker, so a delegated call's span lands in the trace of
 // the turn or run that made it (#2052, internal/mcpbroker/telemetry.go).
 //
-// mcpBrokerLogConfig is the broker child's logging: the parent's format and
-// level (FLEET_LOG_FORMAT, FLEET_LOG_LEVEL — canonical names), and NO file of
-// its own.
+// mcpBrokerLogConfig is the broker child's logging: always JSON, at the
+// parent's level (FLEET_LOG_LEVEL), and NO file of its own. JSON is the wire
+// format between the two processes, not the operator's choice: the parent
+// (logging.ChildStderr) parses each child record and re-logs it through its
+// own configured handler — the operator's FLEET_LOG_FORMAT, its redactor,
+// its sinks, FLEET_LOG_FILE under the one rotator the parent owns.
 func mcpBrokerLogConfig() logging.Config {
 	return logging.Config{
-		Format: envreg.Get("FLEET_LOG_FORMAT"),
+		Format: "json",
 		Level:  envreg.Get("FLEET_LOG_LEVEL"),
 	}
 }
@@ -69,8 +70,8 @@ func mcpBrokerServeContext() (context.Context, context.CancelFunc) {
 }
 
 func runMCPBroker() error {
-	// Same handler, redactor, format and level as the parent, so the
-	// broker's lines are not Go's default plaintext mixed into JSON.
+	// Same handler and redactor as the parent, in JSON: the parent parses each
+	// line and re-logs it in the operator's format (mcpBrokerLogConfig).
 	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
 		return fmt.Errorf("configure broker logging: %w", err)
 	}
@@ -138,12 +139,7 @@ func runMCPBroker() error {
 
 func mcpBrokerRemoteConfigured() bool {
 	configured := func(name string) bool {
-		for _, alias := range config.EnvAliases(name) {
-			if strings.TrimSpace(envreg.Get(alias)) != "" {
-				return true
-			}
-		}
-		return false
+		return strings.TrimSpace(envreg.Get(name)) != ""
 	}
 	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
 }
@@ -504,6 +500,9 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 		return nil, err
 	}
 	specs := agent.BuildMCPSpecs(cfg)
+	// A reloaded catalog may carry new header credentials: the redactors
+	// learn them before Reload contacts any server.
+	agent.RegisterConnectorSecrets(specs, cfg.HTTPTools, cfg.A2APeers)
 	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(specs))
 	if err != nil {
 		return nil, err

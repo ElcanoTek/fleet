@@ -18,7 +18,6 @@ package scorers
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -41,10 +40,10 @@ type BashRunner interface {
 // Regex reports whether pattern matches text. An invalid pattern is a fail
 // (never a pass), labelled "regex:invalid" and logged — matching the loop's
 // historical behavior for a malformed exit_condition.
-func Regex(pattern, text string) (bool, string) {
+func Regex(ctx context.Context, pattern, text string) (bool, string) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		slog.Error("scorers: invalid regex", "pattern", pattern, "err", err)
+		logging.From(ctx).Error("scorers: invalid regex", "pattern", pattern, "err", err)
 		return false, "regex:invalid"
 	}
 	if re.MatchString(text) {

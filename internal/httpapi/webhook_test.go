@@ -251,6 +251,11 @@ func TestWebhookValidHMACCreatesConversationAndRunsTurn(t *testing.T) {
 	// The rendered prompt (from the payload) reached the engine as the user turn.
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
+	// The turn's context carries its correlation, as a chat turn's does
+	// (#2074 review: webhook turns logged without conv_id/turn_id).
+	if engine.lastCorrelation[0] != resp.ConversationID || engine.lastCorrelation[1] == "" {
+		t.Errorf("webhook turn correlation conv_id/turn_id = %q, want the conversation and a turn id", engine.lastCorrelation)
+	}
 	if len(engine.lastHistory) != 0 {
 		t.Errorf("first turn history = %d entries, want 0 (fresh conversation)", len(engine.lastHistory))
 	}
@@ -428,7 +433,7 @@ func TestWebhookMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestWebhookHonorsLockdownOnly asserts that on a CHAT_LOCKDOWN_ONLY server the
+// TestWebhookHonorsLockdownOnly asserts that on a FLEET_LOCKDOWN_ONLY server the
 // webhook-triggered conversation is created network-sealed (lockdown=true), the
 // same as every human chat turn — the webhook path must not silently drop the
 // operator's global seal on the untrusted-payload path.
@@ -476,7 +481,7 @@ func TestWebhookHonorsLockdownOnly(t *testing.T) {
 	conv := st.convs[resp.ConversationID]
 	st.mu.Unlock()
 	if conv == nil || !conv.Lockdown {
-		t.Fatalf("conversation lockdown = %+v, want lockdown=true (CHAT_LOCKDOWN_ONLY must apply to webhooks)", conv)
+		t.Fatalf("conversation lockdown = %+v, want lockdown=true (FLEET_LOCKDOWN_ONLY must apply to webhooks)", conv)
 	}
 }
 

@@ -12,5 +12,5 @@ func (h *Handlers) MigrationStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to read migration status")
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, r, http.StatusOK, report)
 }

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -133,4 +135,59 @@ func TestSpawnClient_StopTearsDownChild(t *testing.T) {
 		t.Fatal("a call after stop should fail (connection closed), not hang")
 	}
 	_ = stop() // idempotent
+}
+
+// recordingStderr is a line-buffering stderr sink stand-in: it records the
+// bytes it was given and whether Close (the EOF flush) ran after them.
+type recordingStderr struct {
+	mu          sync.Mutex
+	data        strings.Builder
+	closedAfter string
+	closes      int
+}
+
+func (r *recordingStderr) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.data.Write(p)
+}
+
+func (r *recordingStderr) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closes++
+	r.closedAfter = r.data.String()
+	return nil
+}
+
+// stop closes a closable cmd.Stderr after the child is reaped, so a
+// logging.ChildStderr forwards the broker's last unterminated line instead of
+// dropping it (#2074 review).
+func TestSpawnClient_StopClosesStderrAfterWait(t *testing.T) {
+	cmd := exec.Command("sh", "-c", `printf 'panic: last words' >&2; cat >/dev/null`)
+	sink := &recordingStderr{}
+	cmd.Stderr = sink
+	_, stop, err := SpawnClient(cmd)
+	if err != nil {
+		t.Fatalf("SpawnClient: %v", err)
+	}
+	// Let the child's write reach the sink before tearing it down; a SIGTERM
+	// that beats sh to its printf would test nothing.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		sink.mu.Lock()
+		got := sink.data.String()
+		sink.mu.Unlock()
+		if got != "" || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = stop()
+	_ = stop()
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.closes != 1 || sink.closedAfter != "panic: last words" {
+		t.Fatalf("closes=%d, closed after %q; want one Close after the child's whole stderr", sink.closes, sink.closedAfter)
+	}
 }

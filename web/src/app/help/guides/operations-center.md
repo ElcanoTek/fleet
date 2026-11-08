@@ -104,7 +104,10 @@ Auth when your deployment signs in through it. Background tasks
 offers **None**, **Viewer** (read-only), and **Contributor** (can create and run
 tasks). **Fleet Admin** grants full Chat and Background tasks permissions;
 selecting it again turns it off and defaults to Chat Contributor plus Background
-tasks None. Central Auth account
+tasks None. These choices belong to one Fleet account: Background tasks has no
+sign-in, users, or password of its own, so people reach it signed in to Fleet
+(programs use an API key). Someone who had Background tasks access but no Chat
+account before their Fleet was upgraded is a Chat **Viewer** now. Central Auth account
 grants apply these selected roles to Fleet automatically.
 
 ### Anatomy of a task row
@@ -122,6 +125,12 @@ On the right of every row sit four actions:
 | **Edit task** | Open the task for changes. See [Everyday actions](#5-everyday-actions) for what editing means on a finished task. |
 | **Stop** | A one-time task that has not started yet is cancelled and never runs; one that is already running stops at its next checkpoint and keeps what it has done so far. On a repeating task, Stop ends the schedule for good: the confirmation reads **Stop this schedule for good?** and the task will not run again, so create a new task to bring it back. Either way its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
 | **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
+
+A **Viewer** (read-only) sees no row actions at all: viewers can open and read
+the tasks visible to them (as for any non-admin, the tasks they created unless
+their role grants viewing all logs) and those tasks' history, but cannot
+create, run, edit, stop or delete tasks, so the board also hides **New task**
+for them.
 
 Two kinds of row show fewer than four. While a run is **live** it can only be
 stopped: run-now, edit and delete are withheld until it finishes, so a second
@@ -284,7 +293,9 @@ cover reading it, so it says "available" rather than claiming none was ever
 written. The
 record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
-here without returning to the board.
+here without returning to the board. A Viewer sees only the read-only actions
+(**History**, **Discuss in chat**, **Download logs**); edit, resubmit, delete,
+stop, wake and run feedback are hidden.
 
 Under the token and cost figures, a run recorded since this release shows its
 **Run ID**, and its **Trace ID** when your deployment has tracing turned on,

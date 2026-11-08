@@ -39,11 +39,14 @@ import (
 // process having installed one.
 var tracePropagator = propagation.TraceContext{}
 
-// logCorrelationKeys are the request.Log keys the child honors.
+// logCorrelationKeys are the request.Log keys the child honors. The child
+// drops any other key, and any value past maxCorrelationValue bytes.
 var logCorrelationKeys = []string{
 	logging.KeyConvID, logging.KeyTurnID, logging.KeyTaskID,
 	logging.KeyRunID, logging.KeyUserID, logging.KeyRequestID,
 }
+
+const maxCorrelationValue = 256
 
 const (
 	attrBrokerMethod = attribute.Key("fleet.broker.method")
@@ -63,7 +66,7 @@ func stampCorrelation(ctx context.Context, req *request) {
 		req.Trace = carrier
 	}
 	for _, key := range logCorrelationKeys {
-		if v := logging.Value(ctx, key); v != "" {
+		if v := logging.Value(ctx, key); v != "" && len(v) <= maxCorrelationValue {
 			if req.Log == nil {
 				req.Log = make(map[string]string, len(logCorrelationKeys))
 			}
@@ -81,7 +84,7 @@ func adoptCorrelation(ctx context.Context, req request) context.Context {
 	if len(req.Log) > 0 {
 		attrs := make([]slog.Attr, 0, len(logCorrelationKeys))
 		for _, key := range logCorrelationKeys {
-			if v, ok := req.Log[key]; ok {
+			if v, ok := req.Log[key]; ok && v != "" && len(v) <= maxCorrelationValue {
 				attrs = append(attrs, slog.String(key, v))
 			}
 		}

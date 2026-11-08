@@ -1,11 +1,13 @@
 package agentcore
 
 import (
-	"log/slog"
+	"context"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Default model identifiers + context-window resolution (reconciled from chat
@@ -263,8 +265,7 @@ const (
 	defaultInteractiveContextCompactionMaxTokens   = 350_000
 )
 
-// contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD
-// (with the CHAT_/CUTLASS_ aliases fleetEnv already honors),
+// contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD,
 // clamped to (0,1]. An unset, unparseable, or out-of-range value falls back to
 // the default.
 func contextPressureWarnThreshold() float64 {
@@ -309,8 +310,8 @@ func budgetWindDownFraction() float64 {
 // ~100 calls at an 11% cache-hit rate. 0 disables the trigger.
 const defaultContextResendBudgetTokens = 80_000
 
-// contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS (with
-// the CHAT_/CUTLASS_ aliases): 0 disables, a negative or unparseable value
+// contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS: 0
+// disables, a negative or unparseable value
 // falls back to the default.
 func contextResendBudgetTokens() int {
 	v := fleetEnv.lookupFloatDefault("CONTEXT_RESEND_BUDGET_TOKENS", float64(defaultContextResendBudgetTokens))
@@ -377,11 +378,11 @@ func observedContextWindow(key observedContextKey) int {
 
 // recordContextMaxForModel writes an observed context_max back into the cache,
 // keyed by the model's provider identity and slug (observedContextKeyForModel).
-func recordContextMaxForModel(model fantasy.LanguageModel, tokens int) {
-	recordObservedContextWindow(observedContextKeyForModel(model), tokens)
+func recordContextMaxForModel(ctx context.Context, model fantasy.LanguageModel, tokens int) {
+	recordObservedContextWindow(ctx, observedContextKeyForModel(model), tokens)
 }
 
-func recordObservedContextWindow(key observedContextKey, tokens int) {
+func recordObservedContextWindow(ctx context.Context, key observedContextKey, tokens int) {
 	if tokens <= 0 || key.slug == "" {
 		return
 	}
@@ -392,5 +393,5 @@ func recordObservedContextWindow(key observedContextKey, tokens int) {
 		return
 	}
 	observedContextWindows.m[key] = tokens
-	slog.Info("📏 Recorded ContextMaxTokens", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "previous", existing)
+	logging.From(ctx).Info("📏 Recorded ContextMaxTokens", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "previous", existing)
 }

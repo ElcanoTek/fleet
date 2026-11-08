@@ -281,7 +281,7 @@ func postApproval(t *testing.T, s *Server) map[string]any {
 // which must not call t.Fatal.
 func postApprovalRaw(s *Server) (map[string]any, error) {
 	req := httptest.NewRequest("POST", "/conversations/c1/approvals/ap1", strings.NewReader(`{"approved":true,"scope":"once"}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 	if rec.Code != 200 {
@@ -510,7 +510,7 @@ func TestDrainApprovalRunsWaitsAndRefusesNewApprovals(t *testing.T) {
 	st.approval = *dealsApproval(`{}`)
 	st.mu.Unlock()
 	req := httptest.NewRequest("POST", "/conversations/c1/approvals/ap1", strings.NewReader(`{"approved":true}`))
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	req = req.WithContext(asUser(req.Context(), "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleApproval(rec, req, "c1", "ap1")
 	if rec.Code != 503 {

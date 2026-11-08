@@ -50,7 +50,7 @@ func productionMCPBrokerCommand() (*exec.Cmd, error) {
 	// The child logs to its stderr in the parent's format and level
 	// (mcpBrokerLogConfig); its lines join the parent's log destination,
 	// FLEET_LOG_FILE included.
-	cmd.Stderr = logging.ChildStderr()
+	cmd.Stderr = logging.ChildStderr("mcp-broker")
 	return cmd, nil
 }
 
@@ -202,6 +202,7 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		Catalog:         brokerToolCatalog(tools),
 		Servers:         servers,
 		CloseScope:      scope.Close,
+		OpenCtx:         ctx,
 		Skipped:         scope.Skipped(),
 		SkipReasons:     scope.SkipReasons(),
 		SkippedSeats:    scope.SkippedSeats(),
@@ -495,14 +496,13 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_ACCOUNT_EVENTS_URL", "FLEET_ACCOUNT_EVENTS_SECRET",
 		"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
-		// Scheduled-task inputs the boot loader reads verbatim under their
-		// legacy names (exact os.Getenv, outside the alias machinery).
-		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", // LEGACY-ENV-ALIAS: remove after migrate-env
+		// Scheduled-task inputs the boot loader reads, and the canonical
+		// CUTLASS_ image keys.
+		"FLEET_TASK_MODEL", "FLEET_TASK_FALLBACK_MODEL",
 		"CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
-		// Knobs the parent still resolves after broker boot through the
-		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or
-		// re-applies the first group (internal/config/reload.go); the second
-		// group is read lazily per run (config.lookupFleet,
+		// Knobs the parent still resolves after broker boot: config reload
+		// watches or re-applies the first group (internal/config/reload.go);
+		// the second group is read lazily per run (config.lookupFleet,
 		// agentcore.fleetEnv).
 		"FLEET_SERVER_ADDR", "FLEET_MAX_CONCURRENT_AGENTS",
 		"FLEET_TEMPERATURE", "FLEET_MAX_COST_USD", "FLEET_MAX_TOTAL_TOKENS", "FLEET_MAX_ITERATIONS",
@@ -517,10 +517,9 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR",
 		"LLM_MAX_TOKENS", "SYSTEM_PROMPT",
-		// The default-persona knobs resolve through the alias machinery AND their
-		// bare historical spelling (config.getenvFleetOrBare), so both forms are
-		// enumerated: the canonical one carries its legacy prefixes via EnvAliases,
-		// the bare one has no alias family of its own.
+		// The default-persona knobs resolve through FLEET_ AND their bare
+		// historical spelling (config.getenvFleetOrBare), so both forms are
+		// enumerated.
 		"FLEET_PERSONA", "PERSONA", "FLEET_PERSONA_DEFAULT", "PERSONA_DEFAULT",
 		"MAX_ITERATIONS", "LOG_LEVEL", "DEBUG", "VERBOSE",
 	}
@@ -530,14 +529,16 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 			names = append(names, provider.APIKeyEnv)
 		}
 	}
-	// Every name is protected in ALL the spellings config's prefix alias
-	// machinery resolves for it. The CUTLASS_ prefix as a whole must stay
+	// Every name is protected in its removed CHAT_/CUTLASS_ spellings too
+	// (ADR-0106): fleet no longer reads them, but a box that still carries
+	// one holds the same value (a server token, a DSN), which must not reach
+	// a connector that claims it. The CUTLASS_ prefix as a whole must stay
 	// claimable by bundles (the connector wire contract — see the isParent
-	// comment above), so the legacy spellings of parent-owned knobs are
-	// derived from config's own prefix list, never hand-enumerated.
+	// comment above), so those spellings are derived per name from the
+	// registry's prefix list, never hand-enumerated.
 	out := make([]string, 0, len(names))
 	for _, name := range names {
-		out = append(out, config.EnvAliases(name)...)
+		out = append(out, envreg.RetiredSpellings(name)...)
 	}
 	return out
 }

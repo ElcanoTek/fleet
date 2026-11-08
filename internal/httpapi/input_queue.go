@@ -73,8 +73,8 @@ func (m *steerMailbox) Poll() (agentcore.SteerMessage, bool) {
 // flip, on a fresh context (the turn ctx may be near its deadline). A lost
 // race with remove/cancel refuses injection — the message is gone, not
 // silently injected after the user deleted it.
-func (m *steerMailbox) Acknowledge(_ context.Context, id string) error {
-	actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (m *steerMailbox) Acknowledge(ctx context.Context, id string) error {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	ok, err := m.store.MarkInputInjected(actx, id, m.turnID)
 	if err != nil {
@@ -165,6 +165,7 @@ func queueItemsPayloadForBuffer(items []store.InputQueueRow) []map[string]any {
 // buffer, when one is running (nil-safe otherwise — the GET endpoint is the
 // authoritative snapshot for idle conversations).
 func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
+	s.notePublish("queue.updated")
 	entry, ok := s.getInflight(convID)
 	if !ok || entry.buf == nil {
 		return
@@ -201,7 +202,8 @@ const maxPendingInputs = 20
 // count leaves it out too: the input is already durably accepted, so the ack
 // is not withheld over its rank, and a client then names no place at all
 // rather than a wrong one.
-func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
+func (s *Server) writeQueueAck(w http.ResponseWriter, r *http.Request, status int, convID string, row store.InputQueueRow) {
+	ctx := r.Context()
 	input := map[string]any{
 		"id": row.ID, "client_input_id": externalClientInputID(row.ClientInputID),
 		"mode": row.Mode, "state": row.State, "position": row.Position,
@@ -212,13 +214,13 @@ func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, statu
 		n, inLine, err := s.store.InputsAhead(ctx, row.ID)
 		switch {
 		case err != nil:
-			logging.From(ctx).Error("queue ack: count inputs ahead failed", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("queue ack: count inputs ahead failed", "conv_id", safe.LogSafe(convID), "err", err)
 		case inLine:
 			input["ahead"] = n
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writeJSONStatus(w, status, map[string]any{
+	writeJSONStatus(w, r, status, map[string]any{
 		"queued":          true,
 		"input":           input,
 		"conversation_id": convID,
@@ -286,7 +288,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 			return false
 		}
 		if existing != nil {
-			s.writeQueueAck(r.Context(), w, http.StatusOK, conv.ID, *existing)
+			s.writeQueueAck(w, r, http.StatusOK, conv.ID, *existing)
 			return true
 		}
 		http.Error(w, fmt.Sprintf("input queue is full (%d pending); wait for the queue to drain or remove queued inputs", maxPendingInputs), http.StatusTooManyRequests)
@@ -309,7 +311,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// set its mark before looking the row up, so either that lookup saw the
 	// row or this check sees the mark.
 	if created && s.inputKeyStopped(conv.ID, clientID) {
-		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		wctx, wcancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer wcancel()
 		ok, rerr := s.store.RemoveQueuedInput(wctx, user, conv.ID, row.ID)
 		if rerr == nil && !ok {
@@ -342,7 +344,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if !created {
 		status = http.StatusOK
 	}
-	s.writeQueueAck(r.Context(), w, status, conv.ID, row)
+	s.writeQueueAck(w, r, status, conv.ID, row)
 	return true
 }
 
@@ -469,6 +471,7 @@ func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, s
 // stopGateForRow / registerTurnGated, and each launched turn tail-calls back
 // here on completion.
 func (s *Server) maybeDrainQueue(convID string) {
+	s.notePublish("drain")
 	if s.IsDraining() {
 		if !s.shuttingDown.Load() && UpdateDrainActive() {
 			s.rekickDrainAfter(convID, 3*time.Second)
@@ -481,7 +484,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
 		return // its completion tail-call re-kicks
 	}
-	dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 10*time.Second)
 	defer cancel()
 	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
@@ -496,7 +499,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 		// A direct submission won the registerTurn race; put the row back.
 		// The winner's completion re-drains it, and the bounded re-kick
 		// covers a winner whose tail already ran before our un-claim landed.
-		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rctx, rcancel := context.WithTimeout(detachedCtx("", convID, ""), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
 			logging.From(rctx).Error("input queue unclaim failed", "conv_id", safe.LogSafe(convID), "input_id", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
 		}
@@ -544,7 +547,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
-	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	lctx, cancel := context.WithTimeout(detachedCtx("", convID, ""), 15*time.Second)
 	defer cancel()
 	conv, err := s.getOwnedOrMultiplayerConversation(lctx, user, convID)
 	if err != nil {
@@ -645,7 +648,7 @@ func (s *Server) terminalizeQueueRow(convID, id, claimTurnID, state string) {
 }
 
 func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state string, retriesLeft int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(detachedCtx("", convID, claimTurnID), 5*time.Second)
 	defer cancel()
 	err := s.store.MarkClaimedInputTerminal(ctx, id, claimTurnID, state)
 	if err == nil {
@@ -654,7 +657,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 		}
 		return
 	}
-	logging.From(ctx).Error("input queue state transition failed", "input_id", id, "state", state, "retries_left", retriesLeft, "err", err)
+	logging.From(ctx).Error("input queue state transition failed", "input_id", safe.LogSafe(id), "state", safe.LogSafe(state), "retries_left", retriesLeft, "err", err)
 	if retriesLeft <= 0 {
 		return
 	}
@@ -678,7 +681,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		writeJSON(w, map[string]any{"items": queueItemsPayload(items)})
+		writeJSON(w, r, map[string]any{"items": queueItemsPayload(items)})
 	case subArg != "" && !strings.Contains(subArg, "/") && r.Method == http.MethodDelete:
 		ok, err := s.store.RemoveQueuedInput(r.Context(), user, convID, subArg)
 		if err != nil {
@@ -745,12 +748,12 @@ func steerSourceOrNil(m *steerMailbox) agentcore.SteerSource {
 func (s *Server) settleUnqueuedInput(user, convID, key string) {
 	id := uuid.NewString()
 	try := func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(detachedCtx(user, convID, ""), 5*time.Second)
 		defer cancel()
 		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
 			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
 		}); err != nil {
-			logging.From(ctx).Error("settle unqueued input failed", "conv_id", convID, "err", err)
+			logging.From(ctx).Error("settle unqueued input failed", "conv_id", safe.LogSafe(convID), "err", err)
 			return false
 		}
 		return true
@@ -758,6 +761,6 @@ func (s *Server) settleUnqueuedInput(user, convID, key string) {
 	if !try() {
 		// Retried in the background like the other claim settlements: an
 		// acknowledged key must not be left with no row.
-		s.retryDirectInput("settle_unqueued", id, 1, directReleaseBackoff, try)
+		s.retryDirectInput(detachedCtx(user, convID, ""), "settle_unqueued", id, 1, directReleaseBackoff, try)
 	}
 }

@@ -76,10 +76,8 @@ func finalizeCacheRow(r *CacheStatsRow) {
 }
 
 func promptCacheDisabledEnvVar() string {
-	for _, k := range []string{"FLEET_DISABLE_PROMPT_CACHE", "CHAT_DISABLE_PROMPT_CACHE", "CUTLASS_DISABLE_PROMPT_CACHE"} { // LEGACY-ENV-ALIAS: remove after migrate-env
-		if truthy(envOrFile(k)) {
-			return k
-		}
+	if truthy(envOrFile("FLEET_DISABLE_PROMPT_CACHE")) {
+		return "FLEET_DISABLE_PROMPT_CACHE"
 	}
 	return ""
 }

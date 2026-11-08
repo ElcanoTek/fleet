@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,6 +45,13 @@ type turnBuffer struct {
 	convID    string
 	turnID    string
 	inputKind string
+
+	// logCtx carries the turn's correlation (conv_id, turn_id, and — once
+	// attachPersister has run — the starting request's attributes) for the
+	// lines the buffer logs from its own goroutines and detached contexts.
+	// Written by newTurnBuffer and, under mu, by attachPersister before the
+	// persister goroutine starts; read via logger.
+	logCtx context.Context
 
 	// userCommitStore, when set before the turn starts, is the store the turn
 	// commits its history through instead of the server's (a webhook turn's
@@ -129,6 +135,7 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 	return &turnBuffer{
 		convID:      convID,
 		turnID:      turnID,
+		logCtx:      logging.WithTurn(context.Background(), convID, turnID),
 		subscribers: make(map[uint64]chan bufferedEvent),
 		evictedSubs: make(map[uint64]bool),
 		revokedSubs: make(map[uint64]bool),
@@ -169,6 +176,9 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 	b.mu.Lock()
 	b.persister = p
 	b.persistCh = make(chan bufferedEvent, persistChanDepth)
+	// The caller's context carries the starting request's attributes; keep
+	// them (not its deadline) for the turn's own log lines.
+	b.logCtx = logging.WithTurn(context.WithoutCancel(ctx), b.convID, b.turnID)
 	b.mu.Unlock()
 	b.persistWG.Add(1)
 	go b.runPersister()
@@ -192,7 +202,8 @@ const (
 // persistCh is closed.
 func (b *turnBuffer) runPersister() {
 	defer b.persistWG.Done()
-	defer safe.Recover("httpapi.turn_buffer.persister", nil)
+	logCtx := b.logContext()
+	defer safe.RecoverContext(logCtx, "httpapi.turn_buffer.persister", nil)
 
 	pending := make([]bufferedEvent, 0, flushBatchSize)
 	tick := time.NewTicker(flushInterval)
@@ -216,9 +227,9 @@ func (b *turnBuffer) runPersister() {
 		// 5s budget — Postgres + indexes; plenty. A timeout here
 		// means something's wrong with the DB; we log and drop so
 		// the turn can still finish.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(logCtx, 5*time.Second)
 		if err := b.persister.InsertTurnEvents(ctx, toStore); err != nil {
-			logging.From(ctx).Error("persist turn_events failed", "turn_id", b.turnID, "events", len(toStore), "err", err)
+			logging.From(ctx).Error("persist turn_events failed", "events", len(toStore), "err", err)
 			// These rows are unconfirmed; flag the turn for a full backfill on
 			// Finish rather than leaving a permanent gap.
 			b.markNeedsBackfill()
@@ -315,7 +326,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		default:
 			b.needsBackfill = true // already under b.mu
 			b.droppedOnFull++
-			slog.Warn("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "event_id", ev.ID)
+			logging.From(b.logCtx).Warn("persister channel full; event deferred to Finish backfill", "event_id", ev.ID) // b.mu held
 		}
 	}
 }
@@ -445,6 +456,7 @@ func (b *turnBuffer) Finish() {
 	// on `<-nil` forever (only the tick case would fire, flushing
 	// empty batches until the test timeout).
 	persistCh := b.persistCh
+	logCtx := b.logCtx
 	b.mu.Unlock()
 
 	if persistCh != nil {
@@ -470,17 +482,24 @@ func (b *turnBuffer) Finish() {
 		b.mu.Unlock()
 		if needsBackfill {
 			if err := b.backfill(snapshot); err != nil {
-				slog.Error("persist backfill failed", "turn_id", b.turnID, "events", len(snapshot), "err", err)
+				logging.From(logCtx).Error("persist backfill failed", "events", len(snapshot), "err", err)
 				lossy = true
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(logCtx, 5*time.Second)
 		if err := b.persister.FinishTurn(ctx, b.turnID, status, b.finishedAt.Unix(), lossy); err != nil {
-			logging.From(ctx).Error("persist FinishTurn failed", "turn_id", b.turnID, "err", err)
+			logging.From(ctx).Error("persist FinishTurn failed", "err", err)
 		}
 		cancel()
 	}
+}
+
+// logContext reads logCtx under mu.
+func (b *turnBuffer) logContext() context.Context {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.logCtx
 }
 
 // backfill re-sends the full event snapshot to the persister in bounded chunks,

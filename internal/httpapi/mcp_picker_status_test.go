@@ -74,7 +74,7 @@ mcp_servers:
 func TestMCPServerCatalogCarriesCategoryAndStatus(t *testing.T) {
 	srv := pickerStatusServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.listMCPServerCatalog(w, req)
 	servers := decodeServerCatalog(t, w)
@@ -194,7 +194,7 @@ func TestPickerPrefersReloadedConnectorMeta(t *testing.T) {
 		{Name: "bq", Category: "data-storage", Configured: true, Optional: true},
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.listMCPServerCatalog(w, req)
 	servers := decodeServerCatalog(t, w)
@@ -244,7 +244,7 @@ func TestNeedsSetupSkipsListedConnectors(t *testing.T) {
 		{Name: "bq", Category: "data-storage", Optional: true},
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	req = req.WithContext(asUser(req.Context(), "u@x.com"))
 	w := httptest.NewRecorder()
 	srv.listMCPServerCatalog(w, req)
 	count := map[string]int{}

@@ -74,8 +74,7 @@ const modelsCacheTTLEnvSuffix = "MODEL_CACHE_TTL_MINUTES"
 const modelsFetchTimeout = 5 * time.Second
 
 // modelsCacheDisableEnvSuffix short-circuits all network fetches when set
-// truthy (read via fleetEnv so FLEET_/CHAT_/CUTLASS_ all work; the legacy
-// CUTLASS_DISABLE_OPENROUTER_MODELS resolves through the back-compat aliases).
+// truthy (FLEET_DISABLE_OPENROUTER_MODELS, read via fleetEnv).
 const modelsCacheDisableEnvSuffix = "DISABLE_OPENROUTER_MODELS"
 
 // orModelEntry mirrors the relevant shape of one /api/v1/models entry. The
@@ -181,8 +180,8 @@ func modelsCacheDisabled() bool {
 	return fleetEnv.lookupBool(modelsCacheDisableEnvSuffix)
 }
 
-// modelsCacheTTL resolves the catalog TTL from FLEET_MODEL_CACHE_TTL_MINUTES
-// (with the CHAT_/CUTLASS_ aliases fleetEnv honors), falling back
+// modelsCacheTTL resolves the catalog TTL from FLEET_MODEL_CACHE_TTL_MINUTES,
+// falling back
 // to defaultModelsCacheTTLMinutes when unset, unparseable, or non-positive.
 func modelsCacheTTL() time.Duration {
 	raw := strings.TrimSpace(fleetEnv.lookup(modelsCacheTTLEnvSuffix))

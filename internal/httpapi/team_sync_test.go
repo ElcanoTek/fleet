@@ -23,7 +23,6 @@ func teamSyncFixture(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
-	WithOpsAdmins(&fakeOpsAdmins{})(s)
 	return s, s.concreteStore(t)
 }
 

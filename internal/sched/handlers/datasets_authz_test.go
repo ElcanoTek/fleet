@@ -34,11 +34,12 @@ func setupDatasetAuthzHandlers(t *testing.T) (*chi.Mux, *storage.Storage, *apike
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
-	h := New(Config{DefaultTaskModel: "test/model",
+	h := New(Config{SharedToken: testSharedToken, DefaultTaskModel: "test/model",
 		AdminAPIKey: "test-admin-key",
 		Version:     "0.1.0",
 	}, store, keyMgr)
 	r := chi.NewRouter()
+	r.Use(asSeededSession)
 	r.Use(h.BodySizeLimitMiddleware)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
@@ -109,7 +110,7 @@ func TestDatasetsRequirePermissions(t *testing.T) {
 	t.Parallel()
 
 	r, store, keyMgr := setupDatasetAuthz(t)
-	readonly, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	readonly, readonlyKey, err := keyMgr.CreateTypedKey(context.Background(), "viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}
@@ -254,12 +255,12 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 	r, store, keyMgr, h := setupDatasetAuthzHandlers(t)
 	h.SetDatasetRunner(stubDatasetRunner{})
 
-	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "alice-token")
-	addLogUser(t, store, "bob-"+uuid.NewString()[:8], "client", "bob-token")
-	addLogUser(t, store, "root-"+uuid.NewString()[:8], "admin", "root-token")
+	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "ds-alice-token")
+	addLogUser(t, store, "bob-"+uuid.NewString()[:8], "client", "ds-bob-token")
+	addLogUser(t, store, "root-"+uuid.NewString()[:8], "admin", "ds-root-token")
 	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	_, otherKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
-	_, auditorKey, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewAllLogs},
+	_, auditorKey, err := keyMgr.CreateKey(context.Background(), "auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewAllLogs},
 		nil, 0, nil, "fleet-wide auditor")
 	if err != nil {
 		t.Fatalf("create auditor key: %v", err)
@@ -297,7 +298,7 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 
 	t.Run("another user gets 404 on every route", func(t *testing.T) {
 		for _, rt := range routes(aliceDS.ID.String()) {
-			if code := do(bearer(rt.method, rt.path, "bob-token", rt.ct, rt.body)); code != http.StatusNotFound {
+			if code := do(bearer(rt.method, rt.path, "ds-bob-token", rt.ct, rt.body)); code != http.StatusNotFound {
 				t.Errorf("bob %s %s = %d, want 404", rt.method, rt.path, code)
 			}
 		}
@@ -315,7 +316,7 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 	})
 
 	t.Run("a dataset with no recorded creator is fleet-wide only", func(t *testing.T) {
-		if code := do(bearer(http.MethodGet, "/datasets/"+legacyDS.ID.String(), "alice-token", "", "")); code != http.StatusNotFound {
+		if code := do(bearer(http.MethodGet, "/datasets/"+legacyDS.ID.String(), "ds-alice-token", "", "")); code != http.StatusNotFound {
 			t.Errorf("client user GET of an ownerless dataset = %d, want 404", code)
 		}
 		if code := do(datasetRequest(http.MethodGet, "/datasets/"+legacyDS.ID.String(), key, "", "")); code != http.StatusNotFound {
@@ -328,7 +329,7 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 			if rt.method == http.MethodDelete || strings.HasSuffix(rt.path, "/pause") {
 				continue
 			}
-			if code := do(bearer(rt.method, rt.path, "alice-token", rt.ct, rt.body)); code != http.StatusOK {
+			if code := do(bearer(rt.method, rt.path, "ds-alice-token", rt.ct, rt.body)); code != http.StatusOK {
 				t.Errorf("alice %s %s = %d, want 200", rt.method, rt.path, code)
 			}
 		}
@@ -341,19 +342,19 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 	})
 
 	t.Run("list is filtered to own datasets", func(t *testing.T) {
-		req := bearer(http.MethodGet, "/datasets", "alice-token", "", "")
+		req := bearer(http.MethodGet, "/datasets", "ds-alice-token", "", "")
 		ids := listDatasetIDs(t, r, req)
 		if len(ids) != 1 || !ids[aliceDS.ID.String()] {
 			t.Errorf("alice lists %v, want only %s", ids, aliceDS.ID)
 		}
-		if ids := listDatasetIDs(t, r, bearer(http.MethodGet, "/datasets", "bob-token", "", "")); len(ids) != 0 {
+		if ids := listDatasetIDs(t, r, bearer(http.MethodGet, "/datasets", "ds-bob-token", "", "")); len(ids) != 0 {
 			t.Errorf("bob lists %v, want none", ids)
 		}
 	})
 
 	t.Run("admin and view_all_logs reach every dataset", func(t *testing.T) {
 		for _, req := range []*http.Request{
-			bearer(http.MethodGet, "/datasets", "root-token", "", ""),
+			bearer(http.MethodGet, "/datasets", "ds-root-token", "", ""),
 			datasetRequest(http.MethodGet, "/datasets", "test-admin-key", "", ""),
 			datasetRequest(http.MethodGet, "/datasets", auditorKey, "", ""),
 		} {
@@ -365,7 +366,7 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 		if code := do(datasetRequest(http.MethodGet, "/datasets/"+aliceDS.ID.String()+"/export", auditorKey, "", "")); code != http.StatusOK {
 			t.Errorf("view_all_logs export = %d, want 200", code)
 		}
-		if code := do(bearer(http.MethodPost, "/datasets/"+legacyDS.ID.String()+"/run", "root-token", "", "")); code != http.StatusOK {
+		if code := do(bearer(http.MethodPost, "/datasets/"+legacyDS.ID.String()+"/run", "ds-root-token", "", "")); code != http.StatusOK {
 			t.Errorf("admin user run of an ownerless dataset = %d, want 200", code)
 		}
 	})
@@ -378,7 +379,7 @@ func TestDatasetCreateRecordsCreator(t *testing.T) {
 
 	r, store, keyMgr := setupDatasetAuthz(t)
 	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
-	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "alice-token")
+	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "dsc-alice-token")
 	body := `{"name":"n","goal":"g","model":"test/model","columns":[{"name":"in","type":"text"},{"name":"out","type":"text","output":true}]}`
 
 	create := func(req *http.Request) *models.Dataset {
@@ -406,7 +407,7 @@ func TestDatasetCreateRecordsCreator(t *testing.T) {
 
 	req := datasetRequest(http.MethodPost, "/datasets", "", "application/json", body)
 	req.Header.Del("X-API-Key")
-	req.Header.Set("Authorization", "Bearer alice-token")
+	req.Header.Set("Authorization", "Bearer dsc-alice-token")
 	byUser := create(req)
 	if byUser.CreatedByUserID == nil || *byUser.CreatedByUserID != alice.ID || byUser.CreatedByKeyID != nil {
 		t.Errorf("user-created dataset creator = (%v, %v), want user %s", byUser.CreatedByUserID, byUser.CreatedByKeyID, alice.ID)

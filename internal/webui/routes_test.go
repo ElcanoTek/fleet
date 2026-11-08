@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -101,8 +102,8 @@ func TestRetiredNextRoutesAreNotForwarded(t *testing.T) {
 		m, p, _ := strings.Cut(rest, " ")
 		retired = append(retired, nextRoute{m, p})
 	}
-	if len(retired) != 4 {
-		t.Fatalf("found %d retired rows; want the 4 credential-account routes", len(retired))
+	if len(retired) != 6 {
+		t.Fatalf("found %d retired rows; want the 4 credential-account routes and the 2 orchestrator password-login routes", len(retired))
 	}
 	e := newTestEnv(t)
 	for _, rt := range retired {
@@ -187,9 +188,9 @@ func TestChatPassthroughCarriesIdentityAndNothingFromTheBrowser(t *testing.T) {
 		t.Fatalf("upstream %s %q path %q", got.Method, got.URI, got.Path)
 	}
 	h := got.Header
-	if h.Get("X-Chat-Server-Token") != testChatToken || h.Get("X-User-Email") != "dave@x.com" || h.Get("X-User-Session-Epoch") != "ext-epoch" ||
-		h.Get("X-User-Session-Source") != "oidc" || h.Get("X-External-Issuer") != "https://auth.example.com" || h.Get("X-External-Subject") != "sub-1" {
-		t.Fatalf("identity headers %v", h)
+	want := principal.Session{Epoch: "ext-epoch", Source: principal.SourceOIDC, Issuer: "https://auth.example.com", Subject: "sub-1"}
+	if !got.isSession("dave@x.com") || got.Who.Session != want || !got.noIdentityHeaders() {
+		t.Fatalf("principal %+v headers %v", got.Who, h)
 	}
 	if h.Get("X-Forwarded-For") != "" || h.Get("Origin") != "" || h.Get("Cookie") != "" || got.RemoteAddr != backendRemoteAddr {
 		t.Fatalf("browser headers leaked upstream: %v remote %q", h, got.RemoteAddr)
@@ -202,15 +203,15 @@ func TestChatPassthroughCarriesIdentityAndNothingFromTheBrowser(t *testing.T) {
 func TestPasswordSessionCarriesNoOIDCHeaders(t *testing.T) {
 	e := newTestEnv(t)
 	e.do(signedIn(t, req("GET", "/api/personas", "")))
-	h := e.chat.last(t).Header
-	if h.Get("X-User-Session-Epoch") != "epoch-1" || h.Get("X-User-Session-Source") != "" || h.Get("X-External-Issuer") != "" {
-		t.Fatalf("%v", h)
+	got := e.chat.last(t)
+	if got.Who.Session != (principal.Session{Epoch: "epoch-1"}) || !got.noIdentityHeaders() {
+		t.Fatalf("%+v", got.Who)
 	}
 	// An elcano_auth session has no epoch to forward.
 	e.do(withCookie(req("GET", "/api/personas", ""), "elcano_auth", e.mintElcano(t, "Carol@x.com")))
-	h = e.chat.last(t).Header
-	if h.Get("X-User-Email") != "carol@x.com" || h.Get("X-User-Session-Epoch") != "" {
-		t.Fatalf("%v", h)
+	got = e.chat.last(t)
+	if !got.isSession("carol@x.com") || got.Who.Session != (principal.Session{}) {
+		t.Fatalf("%+v", got.Who)
 	}
 }
 
@@ -352,7 +353,7 @@ func TestOrchestratorCookieIdentityAndCSRFForBearer(t *testing.T) {
 	e := newTestEnv(t)
 	e.do(signedIn(t, req("GET", "/api/orchestrator/me", "")))
 	got := e.orch.last(t)
-	if got.URI != "/api/me" || got.Header.Get("X-Orchestrator-Server-Token") != testOrchToken || got.Header.Get("X-User-Email") != "alice@example.com" || got.Header.Get("X-User-Session-Epoch") != "epoch-1" {
+	if got.URI != "/api/me" || !got.isSession("alice@example.com") || got.Who.Session.Epoch != "epoch-1" || !got.noIdentityHeaders() {
 		t.Fatalf("%q %v", got.URI, got.Header)
 	}
 	// A bearer client's mutating call still needs an Origin.
