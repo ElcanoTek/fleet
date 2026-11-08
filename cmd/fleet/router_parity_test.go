@@ -38,6 +38,8 @@ type recorder struct {
 	ct      string
 	pattern string
 	called  bool
+	// silent answers with no body (the method matrix was captured that way).
+	silent bool
 }
 
 func (c *recorder) reset() {
@@ -65,7 +67,9 @@ func (c *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Secret", "1")
 	w.Header().Set("Cache-Control", "max-age=5")
 	w.WriteHeader(http.StatusCreated)
-	_, _ = io.WriteString(w, "{}")
+	if !c.silent {
+		_, _ = io.WriteString(w, "{}")
+	}
 }
 
 // realOrchestratorRoutes walks the real orchestrator router.
@@ -94,16 +98,21 @@ func mirrorRouter(routes []apispec.Route, rec http.Handler) *chi.Mux {
 }
 
 type paritySurface struct {
-	root       *chi.Mux
+	root       publicRouter
 	chat, orch *recorder
 	orchRouter *chi.Mux
 }
 
 func newParitySurface(t *testing.T) paritySurface {
 	t.Helper()
+	return newParitySurfaceWith(t, false)
+}
+
+func newParitySurfaceWith(t *testing.T, silent bool) paritySurface {
+	t.Helper()
 	t.Setenv("APP_SESSION_SECRET", paritySecret)
 	t.Setenv("FLEET_WEB_ADDR", "")
-	chat, orch := &recorder{}, &recorder{}
+	chat, orch := &recorder{silent: silent}, &recorder{silent: silent}
 	orchRouter := mirrorRouter(realOrchestratorRoutes(t), orch)
 	srv, err := buildWebServer(&config.Config{}, backendHandlers{
 		chat: chat, orch: orchRouter,
@@ -112,7 +121,7 @@ func newParitySurface(t *testing.T) paritySurface {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, ok := srv.Handler.(*chi.Mux)
+	root, ok := srv.Handler.(publicRouter)
 	if !ok {
 		t.Fatalf("the public listener's handler is %T, not the one chi tree", srv.Handler)
 	}
@@ -249,5 +258,98 @@ func TestOneSurfaceParity(t *testing.T) {
 	v1After = slices.Compact(v1After)
 	if !slices.Equal(v1Before, v1After) {
 		t.Errorf("/v1 route set changed:\n before %v\n after  %v", v1Before, v1After)
+	}
+}
+
+// parityMethods is every method the matrix tests try on every path: the
+// standard ones and one chi does not know.
+var parityMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND"}
+
+// TestOneSurfaceMethodParity is the method matrix. Method handling on the
+// tree is path-first and family-first, so no method on any path may reach
+// another family's 404, 405 or redirect:
+//
+//   - every browser path the gateway answered (the rows of
+//     http-surface-before.txt plus the gateway's own Operations Center paths
+//     and a few unknown ones), tried with every method, with and without a
+//     session, answers the status, Allow and Location it answered before the
+//     change (testdata/http-surface-methods-before.txt, captured from the
+//     pre-change tree);
+//   - every /v1 and unversioned-forever path, tried with every method,
+//     answers the status and Allow the orchestrator listener answers.
+//
+// The one deliberate difference is newAliasPaths: router paths the browser
+// had no row for. They answered the gateway's 404 and now answer as the
+// router's alias (ADR-0110); they are checked against that instead.
+var newAliasPaths = map[string]bool{"/api/orchestrator/api/config": true, "/api/orchestrator/keys": true}
+
+func TestOneSurfaceMethodParity(t *testing.T) {
+	s := newParitySurfaceWith(t, true)
+	tok, err := websession.NewHMAC(paritySecret).Mint("alice@example.com", "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/http-surface-methods-before.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		n++
+		fields := strings.Fields(line)
+		pattern, m := fields[0], fields[1]
+		sample := samplePath(pattern)
+		u := httptest.NewRequest(m, sample, nil)
+		u.Header.Set("Origin", "http://example.com")
+		ur := httptest.NewRecorder()
+		s.root.ServeHTTP(ur, u)
+		sr := httptest.NewRequest(m, sample, strings.NewReader("{}"))
+		sr.Header.Set("Origin", "http://example.com")
+		sr.Header.Set("Content-Type", "application/json")
+		sr.AddCookie(&http.Cookie{Name: websession.CookieName, Value: tok})
+		srec := httptest.NewRecorder()
+		s.root.ServeHTTP(srec, sr)
+		got := fmt.Sprintf("%s %s unauth=%d allow=%q loc=%q signed=%d allow=%q loc=%q", pattern, m,
+			ur.Code, ur.Header().Get("Allow"), ur.Header().Get("Location"), srec.Code, srec.Header().Get("Allow"), srec.Header().Get("Location"))
+		if newAliasPaths[pattern] {
+			// Now a router path: never the gateway's 404, the gate still first,
+			// a registered method served, any other a 405 naming the router's.
+			if ur.Code != http.StatusUnauthorized || srec.Code == http.StatusNotFound ||
+				(srec.Code == http.StatusMethodNotAllowed) == (srec.Code == http.StatusCreated) {
+				t.Errorf("new alias path: %s", got)
+			}
+			continue
+		}
+		if got != line {
+			t.Errorf("method row changed:\n before %s\n after  %s", line, got)
+		}
+	}
+	if n < 1000 {
+		t.Fatalf("replayed %d method rows; the frozen matrix looks truncated", n)
+	}
+
+	// /v1 and the unversioned-forever paths against the orchestrator
+	// listener, with the real router behind both.
+	orch := realOrchestratorRouter(t)
+	listener := apiversion.Router(orch)
+	root := buildPublicRouter(httpSurface{gateway: http.NotFoundHandler(), orch: orch, orchListener: listener, chatListener: http.NotFoundHandler()})
+	paths := map[string]bool{"/api-info": true, "/.well-known/agent-card.json": true, "/a2a": true, "/a2a/": true, "/triggers/s1": true, "/triggers/email/s1": true, "/v1": true, "/v1/": true, "/v1/no-such-route": true}
+	for _, r := range realOrchestratorRoutes(t) {
+		paths["/v1"+samplePath(strings.ReplaceAll(r.Pattern, "*", "x1"))] = true
+	}
+	for p := range paths {
+		for _, m := range parityMethods {
+			a, b := httptest.NewRecorder(), httptest.NewRecorder()
+			root.ServeHTTP(a, httptest.NewRequest(m, p, nil))
+			listener.ServeHTTP(b, httptest.NewRequest(m, p, nil))
+			// chi sends one Allow header per method, in map order.
+			aa, ba := slices.Sorted(slices.Values(a.Header().Values("Allow"))), slices.Sorted(slices.Values(b.Header().Values("Allow")))
+			if a.Code != b.Code || !slices.Equal(aa, ba) {
+				t.Errorf("%s %s: public tree %d Allow=%q, orchestrator listener %d Allow=%q", m, p, a.Code, aa, b.Code, ba)
+			}
+		}
 	}
 }

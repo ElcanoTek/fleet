@@ -43,7 +43,19 @@ add, and a row could point at a route that did not exist.
    probes, `apiversion.Router`, the router and its chain). External clients
    keep `/v1` with `X-API-Key`; nothing under it changes shape.
 
-2. **A family keeps its whole chain; the tree adds none.** The tree has no
+2. **Path first, then family, for every method.** Every route on the tree
+   is registered for all methods, and the tree routes by path alone (it
+   routes every request as GET; the family sees the real method). chi on its
+   own decides by method before path, so a method it does not know
+   (`PROPFIND /v1/tasks`) would have been answered by whatever the root's
+   405 handler was, not by the family that owns the path. The family answers
+   every method on its paths itself: its 404, its 405 and `Allow`, its
+   redirect. Under `/api/orchestrator` the gateway's own paths (the renames,
+   discuss, the live stream, the workspace download, elcano-login) count as
+   that family's routes too, so a wrong method there is a 405 naming the
+   methods it answers, as before.
+
+3. **A family keeps its whole chain; the tree adds none.** The tree has no
    middleware of its own. A mounted family routes the request afresh on its
    own path (the parent's chi routing state is hidden), so its middleware
    chain, its metric labels (`RoutePattern`), its path-based exemptions (the
@@ -51,7 +63,7 @@ add, and a row could point at a route that did not exist.
    see exactly what they see on their own listener. No read or write timeout
    is added: SSE streams and long polls behave as on every listener.
 
-3. **`/api/orchestrator/*` is the orchestrator router, not a table.** The
+4. **`/api/orchestrator/*` is the orchestrator router, not a table.** The
    gateway serves every route the router registers under the prefix
    (`internal/webui/orchestrator_mount.go`), after the browser boundary the
    rows had, in the same order: the session gate, the route (a path the
@@ -66,7 +78,7 @@ add, and a row could point at a route that did not exist.
    never had a row for forwards its query verbatim, as on `/v1`. The orchestrator rows of
    `routes.go` are deleted.
 
-4. **The loopback listeners stay, serving the same handlers.** The box
+5. **The loopback listeners stay, serving the same handlers.** The box
    Caddyfile routes the API paths to `:8000` and `:8080`; `fleet chat`,
    `fleet acp`, fleet-bench, the admin CLI and the release health probe dial
    them; Helm exposes all three ports. Retiring them is a front-proxy and
@@ -89,12 +101,22 @@ Enforced by:
   from the pre-change tree) gives the same upstream request, status, headers
   and auth requirement through the new tree; the `/v1` route set is
   unchanged.
+- `TestOneSurfaceMethodParity` (`cmd/fleet`): every browser path the gateway
+  answered, tried with GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS and
+  PROPFIND with and without a session, gives the status, `Allow` and
+  `Location` it gave before (`testdata/http-surface-methods-before.txt`,
+  captured from the pre-change tree); every `/v1` and unversioned-forever
+  path, tried with the same methods, gives the status and `Allow` the
+  orchestrator listener gives. The two router paths the browser had no row
+  for (`/api/orchestrator/api/config`, `/api/orchestrator/keys`) are the
+  listed exception: they now answer as the alias.
 - `TestBrowserAliasMountsTheV1RouteSet`: `/api/orchestrator` registers
   exactly the `/v1` route set, which is the router's own.
 - `TestPublicRouterAnswersV1LikeTheOrchestratorListener`,
   `TestPublicRouterFamilies`, `TestPublicRouterStreamsUnbuffered`,
   `TestOrchestratorMiddlewareChainOrder`, and in `internal/webui`
-  `TestOrchestratorMountBoundaryOrder`.
+  `TestOrchestratorMountBoundaryOrder` and
+  `TestOrchestratorMountWrongMethodOnGatewayPaths`.
 - `TestOpenAPIGenerated` walks the public tree with `Family.Prefix = "/v1"`.
 
 ## Consequences

@@ -33,7 +33,7 @@ func realOrchestratorRouter(t *testing.T) *chi.Mux {
 
 // contractRouter is the public tree the contract is generated from: the real
 // orchestrator router at its mounts, the other families stubbed.
-func contractRouter(t *testing.T) *chi.Mux {
+func contractRouter(t *testing.T) publicRouter {
 	t.Helper()
 	orch := realOrchestratorRouter(t)
 	return buildPublicRouter(httpSurface{
@@ -78,9 +78,8 @@ func TestBrowserAliasMountsTheV1RouteSet(t *testing.T) {
 	}
 }
 
-// TestPublicRouterFamilies: each path reaches the family that owns it, the
-// prefixes match whole segments, and a method chi does not know is the
-// gateway's, as it was when the gateway was the listener's handler.
+// TestPublicRouterFamilies: each path reaches the family that owns it, for
+// every method, and the prefixes match whole segments.
 func TestPublicRouterFamilies(t *testing.T) {
 	t.Parallel()
 	marker := func(name string) http.Handler {
@@ -117,8 +116,17 @@ func TestPublicRouterFamilies(t *testing.T) {
 		{"GET", "/api/personas", "webui"},
 		{"GET", "/webhooks", "webui"},
 		{"GET", "/healthz", "webui"},
+		// Path first, for every method: the family that owns the path
+		// answers it, whatever the method (chi alone would answer a method
+		// it does not know with the root's 405 before looking at the path).
 		{"PROPFIND", "/", "webui"},
-		{"PROPFIND", "/v1/tasks", "webui"},
+		{"PROPFIND", "/v1/tasks", "orchestrator"},
+		{"PROPFIND", "/a2a", "orchestrator"},
+		{"PROPFIND", "/webhooks/x", "chat"},
+		{"PROPFIND", "/api/orchestrator/tasks", "webui"},
+		{"OPTIONS", "/v1/tasks", "orchestrator"},
+		{"TRACE", "/triggers/s1", "orchestrator"},
+		{"BREW", "/webhooks/x", "chat"},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()

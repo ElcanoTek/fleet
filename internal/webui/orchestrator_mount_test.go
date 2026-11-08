@@ -74,3 +74,28 @@ func TestOrchestratorMountServesTheWholeRouter(t *testing.T) {
 		}
 	}
 }
+
+// TestOrchestratorMountWrongMethodOnGatewayPaths: a wrong method on a path
+// the gateway itself owns under the prefix (a rename, discuss, the live
+// stream) is a 405 naming the methods it does answer, as notFoundAPI gave,
+// never a 404 because the router does not register that path.
+func TestOrchestratorMountWrongMethodOnGatewayPaths(t *testing.T) {
+	e := newTestEnv(t)
+	good := []string{"Origin", testOrigin}
+	cases := []struct{ method, path, allow string }{
+		{"POST", "/api/orchestrator/config", "GET, HEAD"},
+		{"DELETE", "/api/orchestrator/me", "GET, HEAD"},
+		{"GET", "/api/orchestrator/tasks/t1/discuss", "POST"},
+		{"POST", "/api/orchestrator/tasks/t1/stream", "GET, HEAD"},
+		{"PROPFIND", "/api/orchestrator/config", "GET, HEAD"},
+	}
+	for _, c := range cases {
+		res := e.do(signedIn(t, req(c.method, c.path, "", good...)))
+		if res.StatusCode != http.StatusMethodNotAllowed || res.Header.Get("Allow") != c.allow {
+			t.Errorf("%s %s: %d Allow=%q, want 405 Allow=%q", c.method, c.path, res.StatusCode, res.Header.Get("Allow"), c.allow)
+		}
+	}
+	if n := e.orch.count(); n != 0 {
+		t.Fatalf("%d wrong-method requests reached the orchestrator", n)
+	}
+}

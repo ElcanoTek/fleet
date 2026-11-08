@@ -65,8 +65,10 @@ var chatPublicPaths = []string{"/webhooks/*"}
 // orchestratorV1Prefix is the public API's mount point (Family.Prefix).
 const orchestratorV1Prefix = "/v1"
 
-// buildPublicRouter assembles the one tree.
-func buildPublicRouter(s httpSurface) *chi.Mux {
+// buildPublicRouter assembles the one tree. Every route on it is
+// method-agnostic (Handle / Mount): the tree picks the family by path alone
+// and the family answers every method itself (publicRouter).
+func buildPublicRouter(s httpSurface) publicRouter {
 	r := chi.NewRouter()
 	gateway := freshRouting(s.gateway)
 
@@ -81,11 +83,25 @@ func buildPublicRouter(s httpSurface) *chi.Mux {
 	// contract) and serves it from the same router.
 	r.Mount(webui.OrchestratorPrefix, familyMount{routes: s.orch, h: s.gateway})
 	r.Handle("/*", gateway)
-	// A method chi does not know is the gateway's to answer, as it was when
-	// the gateway was the listener's handler.
-	r.MethodNotAllowed(gateway.ServeHTTP)
 	r.NotFound(gateway.ServeHTTP)
-	return r
+	return publicRouter{r}
+}
+
+// publicRouter serves the tree path-first. chi decides by method before
+// path: a method it does not know (PROPFIND, a typo) is answered by the root
+// router's 405 before any route is looked at, so it would reach whichever
+// family owns that handler rather than the family that owns the path. Here
+// the tree routes every request as GET — sound because every route on it is
+// registered for all methods — and the family then sees the real method and
+// answers it exactly as on its own listener (its 404, 405 and Allow, its
+// redirects). The request itself is not changed.
+type publicRouter struct{ *chi.Mux }
+
+func (p publicRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rctx := chi.NewRouteContext()
+	rctx.Routes = p.Mux
+	rctx.RouteMethod = http.MethodGet
+	p.Mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx)))
 }
 
 // familyMount mounts a family: it lists the family's routes to chi.Walk (so

@@ -153,7 +153,7 @@ func (g *Gateway) serveOrchestrator(w http.ResponseWriter, r *http.Request, sub 
 	}
 	pattern, found := g.findOrchestratorRoute(r.Method, escaped)
 	if !found {
-		g.orchestratorNotFound(w, r.Method, escaped)
+		g.orchestratorNotFound(w, r, escaped)
 		return
 	}
 	mutating := isMutating(r.Method)
@@ -229,19 +229,24 @@ func (g *Gateway) findOrchestratorRoute(method, sub string) (string, bool) {
 }
 
 // orchestratorNotFound is notFoundAPI for the mount: 405 with Allow when the
-// router registers sub under another method, else the JSON 404.
-func (g *Gateway) orchestratorNotFound(w http.ResponseWriter, method, sub string) {
+// browser path answers another method, else the JSON 404. A browser path
+// under the prefix answers a method when either the router registers sub
+// for it or one of the gateway's own patterns under the prefix does (the
+// renames, discuss, the live stream, the workspace download, elcano-login).
+// Asking only the router would turn a wrong method on a gateway-owned path
+// into a 404; asking only the gateway would do the same to every router path.
+func (g *Gateway) orchestratorNotFound(w http.ResponseWriter, r *http.Request, sub string) {
 	f, _ := g.orch.(routeFinder)
 	var allow []string
 	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		if m == method || f == nil {
+		if m == r.Method {
 			continue
 		}
 		probe := m
 		if m == http.MethodHead {
 			probe = http.MethodGet
 		}
-		if f.Find(chi.NewRouteContext(), probe, sub) != "" {
+		if (f != nil && f.Find(chi.NewRouteContext(), probe, sub) != "") || g.gatewayOwnsUnderPrefix(r, m) {
 			allow = append(allow, m)
 		}
 	}
@@ -251,6 +256,19 @@ func (g *Gateway) orchestratorNotFound(w http.ResponseWriter, method, sub string
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// gatewayOwnsUnderPrefix reports whether one of the gateway's own patterns
+// under the prefix (not the mount itself) serves r's path for method.
+func (g *Gateway) gatewayOwnsUnderPrefix(r *http.Request, method string) bool {
+	probe := r.Clone(r.Context())
+	probe.Method = method
+	_, pat := g.api.Handler(probe)
+	switch pat {
+	case "", "/api/", OrchestratorPrefix, OrchestratorPrefix + "/":
+		return false
+	}
+	return true
 }
 
 // withoutRouteContext hides a parent chi router's routing state, so a chi
