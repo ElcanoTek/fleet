@@ -223,7 +223,31 @@ type Redactor struct {
 	// now is the clock. nil means time.Now; tests substitute it to drive the
 	// grace window deterministically.
 	now func() time.Time
+
+	// reserved are values never registered as literals (SetReserved): the
+	// field names of the log lines this redactor scrubs, which a literal
+	// equal to one would rewrite. reservedRefused counts refusals since the
+	// last TakeReservedRefusals.
+	reserved        map[string]bool
+	reservedRefused atomic.Int64
 }
+
+// SetReserved names values that are never registered as literals: the field
+// names a log encoding writes itself (time, level, msg, the correlation keys),
+// which a literal equal to one would rewrite in every line (ScrubLine works
+// on the encoded line, keys included). Call it before any registration.
+func (r *Redactor) SetReserved(values ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reserved = make(map[string]bool, len(values))
+	for _, v := range values {
+		r.reserved[v] = true
+	}
+}
+
+// TakeReservedRefusals reports how many registrations SetReserved refused
+// since the last call, and resets the count.
+func (r *Redactor) TakeReservedRefusals() int64 { return r.reservedRefused.Swap(0) }
 
 // canonicalPatterns are ordered most-specific-first so a vendor-prefixed key is
 // replaced whole before the generic marker rule could capture only its value.
@@ -580,6 +604,10 @@ func (r *Redactor) retireOlderGenerationsLocked(scope string, gen uint64, nowNan
 //
 // Over-retention is acceptable here; under-redaction is not.
 func (r *Redactor) upsertLocked(value, scope string, gen uint64) {
+	if r.reserved[value] {
+		r.reservedRefused.Add(1)
+		return
+	}
 	l, ok := r.index[value]
 	if !ok {
 		l = newLiteral(value)

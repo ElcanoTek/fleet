@@ -136,9 +136,12 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	// so a methodCancel for it always finds it) and released when fn ends.
 	// A non-cancellable request runs on Serve's ctx and ignores methodCancel.
 	spawn := func(req request, location string, cancellable bool, fn func(context.Context) response) {
-		runCtx, cancel := ctx, context.CancelFunc(func() {})
+		// The parent's correlation (request.Correlation): the call's log
+		// lines carry its conv_id, turn_id, run_id, request_id …
+		reqCtx := withCorrelation(ctx, req.Correlation)
+		runCtx, cancel := reqCtx, context.CancelFunc(func() {})
 		if cancellable {
-			runCtx, cancel = context.WithCancel(ctx)
+			runCtx, cancel = context.WithCancel(reqCtx)
 			mu.Lock()
 			inflight[req.ID] = cancel
 			mu.Unlock()

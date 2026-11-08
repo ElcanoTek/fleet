@@ -285,6 +285,12 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Correlation (#2052), as on the chat path: the turn's context carries
+	// conv_id and turn_id, plus the request's ids, for every line of the turn
+	// — the start failure below included.
+	turnCtx = logging.WithTurn(turnCtx, conv.ID, turnID)
+	turnCtx = logging.WithAttrs(turnCtx, logging.Attrs(r.Context())...)
+
 	// Background-rooted for the same reason as startTurn: the turn outlives
 	// the webhook POST, and its ledger must exist whether or not the sender
 	// waits for the response.

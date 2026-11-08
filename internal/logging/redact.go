@@ -35,8 +35,35 @@ var (
 )
 
 func redactor() *redact.Redactor {
-	redactorOnce.Do(func() { logRedactor = redact.NewRedactor(nil) })
+	redactorOnce.Do(func() {
+		logRedactor = redact.NewRedactor(nil)
+		logRedactor.SetReserved(ReservedKeys...)
+	})
 	return logRedactor
+}
+
+// ReservedKeys are the field names this package's handlers write themselves:
+// slog's built-ins, the correlation keys, and the keys the package adds to
+// re-logged or bridged records. A registered secret equal to one is refused
+// (the line backstop would otherwise rewrite that key in every record); a
+// warning says so once. A secret-carrying key a call site supplies is still
+// redacted like any other.
+var ReservedKeys = []string{
+	slog.TimeKey, slog.LevelKey, slog.MessageKey, slog.SourceKey,
+	KeyConvID, KeyTurnID, KeyTaskID, KeyRunID, KeyUserID, KeyRequestID, KeyTraceID, KeySpanID,
+	StdlibLogKey, childKey, lineKey, truncatedKey,
+}
+
+var reservedWarnOnce sync.Once
+
+// warnReservedRefusals logs once when a registration was refused because the
+// value is a reserved field name. The value itself is not logged.
+func warnReservedRefusals() {
+	if redactor().TakeReservedRefusals() > 0 {
+		reservedWarnOnce.Do(func() {
+			slog.Warn("logging: a registered secret equals a log field name; it is not scrubbed as a literal (it would rewrite that field in every line)")
+		})
+	}
 }
 
 // RegisterSecretLiterals adds secret VALUES to the log redactor, with the
@@ -46,6 +73,7 @@ func redactor() *redact.Redactor {
 // only as scrub targets and are never emitted.
 func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	redactor().RegisterSecrets(scope, rotated, values...)
+	warnReservedRefusals()
 }
 
 // RegisterEnvLiterals adds the values of secret-named variables in environ
@@ -53,6 +81,7 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 // the same name rule the tool-output and broker redactors seed themselves with.
 func RegisterEnvLiterals(environ []string) {
 	redactor().RegisterEnvLiterals(environ)
+	warnReservedRefusals()
 }
 
 // seedEnvLiterals registers this process's own secret-named env values
