@@ -37,7 +37,7 @@ func TestGatewayRowsResolveOnBackends(t *testing.T) {
 	t.Parallel()
 
 	h := handlers.New(handlers.Config{}, nil, nil)
-	orch, ok := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
+	orch, ok := buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
 	if !ok {
 		t.Fatal("orchestrator router is not chi.Routes")
 	}
@@ -85,7 +85,7 @@ func TestOrchestratorQueryPolicyNamesRealRoutes(t *testing.T) {
 		registered[r.Key()] = true
 	}
 	keys := webui.OrchestratorQueryPolicyRoutes()
-	if len(keys) < 40 {
+	if len(keys) < 25 {
 		t.Fatalf("the query policy lists %d routes; it looks truncated", len(keys))
 	}
 	for _, k := range keys {

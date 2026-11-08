@@ -17,7 +17,6 @@ func TestListVerbsRefuseStrayPositionals(t *testing.T) {
 		run  func([]string) int
 	}{
 		{"chat user list", chatUserList},
-		{"notes list", notesList},
 		{"sched user list", schedUserList},
 		{"admin list", adminList},
 		{"sched dlq list", schedDLQList},

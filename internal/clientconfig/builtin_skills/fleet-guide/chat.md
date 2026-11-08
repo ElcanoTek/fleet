@@ -37,7 +37,7 @@ unavailable name is refused before anything is sent. `--connector` does not
 change an existing thread: use the web Tools picker (or ask the assistant in chat
 to enable a bundled optional MCP connector for that conversation).
 
-Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a chat turn, approved action, dataset run, or scheduled task is in flight, and quiesce new work admission while draining when `--wait` is used (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check). If the server restarts during an approved action, its outcome is shown as unknown;
+Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a chat turn, approved action, or scheduled task is in flight, and quiesce new work admission while draining when `--wait` is used (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check). If the server restarts during an approved action, its outcome is shown as unknown;
 verify the external result before trying another action.
 
 The terminal shows staged actions and a pending count. `/approvals` displays
@@ -1069,8 +1069,7 @@ footer of any reply to keep what the assistant just said, without composing a
 after a turn, marked **Proposed** in the manager until you accept them. Nothing
 enters memory without your say-so except what you typed yourself.
 
-Open **Memories** from **More options** (`•••`) in the composer or under **Settings → Memories**. In chat, the manager has two tabs, **My memory** and
-**Team learnings**, and a **Graph** view for how entries connect. Each memory
+Open **Memories** from **More options** (`•••`) in the composer or under **Settings → Memories**. Inside a project chat, the manager has two tabs, **My memory** and **Team learnings**. Each memory
 shows where it came from (**Manual**, **Saved from chat**, or **Auto-extracted
 from chat**) and offers these actions:
 

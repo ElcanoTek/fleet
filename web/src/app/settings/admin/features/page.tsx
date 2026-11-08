@@ -133,11 +133,6 @@ const META: Record<string, SettingMeta> = {
       "How long an action waiting for approval (sending an email, a risky command, changing a scheduled task) waits before it is declined automatically. The assistant is told the action did not happen. Some chats and tools set their own timeout, which wins. Email previews never expire.",
     unitHint: "seconds — 60 to 604800 (7d); default 86400 (24h)",
   },
-  phone_a_friend_enabled: {
-    label: "Phone-a-friend review",
-    description:
-      "A second model checks each scheduled task's final answer once before it is accepted. Adds one extra model call per run.",
-  },
   subagents_enabled: {
     label: "Sub-agent delegation",
     description:
@@ -230,7 +225,6 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "approval_timeout_seconds",
       "max_cost_usd",
       "max_total_tokens",
-      "phone_a_friend_enabled",
       "subagents_enabled",
     ],
   },

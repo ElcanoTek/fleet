@@ -84,8 +84,8 @@ type Explanation struct {
 	// name or an alias); empty for a default.
 	Spelling string `json:"spelling,omitempty"`
 	// InheritedFrom is the chain of settings an inherited default came
-	// through, nearest first (FLEET_MEMORY_GRAPH_MODEL ← FLEET_MEMORY_MODEL ←
-	// FLEET_METADATA_MODEL ← FLEET_TITLE_MODEL).
+	// through, nearest first (FLEET_MEMORY_MODEL ← FLEET_METADATA_MODEL ←
+	// FLEET_TITLE_MODEL).
 	InheritedFrom []string `json:"inherited_from,omitempty"`
 	// InheritedSource says where the inherited value was set ("" when it is
 	// the root setting's own default).

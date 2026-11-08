@@ -163,7 +163,7 @@ describe("Operations Center for a readonly user", () => {
     );
   });
 
-  it("shows a finished record with no Edit, Resubmit, Delete or feedback", async () => {
+  it("shows a finished record with no Edit, Resubmit, or Delete", async () => {
     task.mockResolvedValue(FINISHED);
     renderPage(TASK_ID);
     const record = await screen.findByRole("dialog", { name: "Task Logs" });
@@ -174,8 +174,6 @@ describe("Operations Center for a readonly user", () => {
     expect(within(record).queryByTestId("edit-task-button")).toBeNull();
     expect(within(record).queryByTestId("resubmit-task-button")).toBeNull();
     expect(within(record).queryByTestId("delete-task-button")).toBeNull();
-    expect(within(record).queryByRole("button", { name: "Mark run as helpful" })).toBeNull();
-    expect(within(record).queryByRole("button", { name: "Mark run as not helpful" })).toBeNull();
   });
 
   it("shows the same record with its actions for a client", async () => {
@@ -185,7 +183,6 @@ describe("Operations Center for a readonly user", () => {
     const record = await screen.findByRole("dialog", { name: "Task Logs" });
     expect(await within(record).findByTestId("resubmit-task-button")).toBeTruthy();
     expect(within(record).getByTestId("delete-task-button")).toBeTruthy();
-    expect(within(record).getByRole("button", { name: "Mark run as helpful" })).toBeTruthy();
   });
 
   it("offers no Stop on its own live run", async () => {

@@ -618,3 +618,16 @@ func (db *Database) GetTagCatalogue(ctx context.Context, scope TagCatalogueScope
 	}
 	return out, rows.Err()
 }
+
+// pqStringArray renders a Postgres text[] literal for ANY($n) parameters
+// without importing lib/pq (the driver is pgx stdlib).
+func pqStringArray(vals []string) string {
+	out := "{"
+	for i, v := range vals {
+		if i > 0 {
+			out += ","
+		}
+		out += `"` + v + `"`
+	}
+	return out + "}"
+}

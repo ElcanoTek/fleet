@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/cron"
-	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -62,10 +61,9 @@ func seedUnclaimedDeadLettered(t *testing.T, store *Storage, task *models.Task) 
 func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
 	t.Parallel()
 
-	store, database := newTestStore(t)
+	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
-	mem := sched.NewStore(database)
 
 	orig := &models.Task{
 		ID:                     uuid.New(),
@@ -79,9 +77,6 @@ func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
 	}
 	if _, err := store.AddTask(orig); err != nil {
 		t.Fatalf("AddTask: %v", err)
-	}
-	if err := mem.UpsertTaskMemory(ctx, orig.ID, "last_price", "42.17", 100, 4096); err != nil {
-		t.Fatalf("UpsertTaskMemory: %v", err)
 	}
 	owner := uuid.New()
 	if _, err := store.leaseTaskToOwner(orig.ID, owner); err != nil {
@@ -126,15 +121,6 @@ func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
 	}
 	if !next.InstructionSelfImprove {
 		t.Error("successor must keep instruction_self_improve (the spawn clones the full definition)")
-	}
-	// Task memory is carried to the successor — a recurring occurrence must not
-	// start cold (#285 parity with the success/error spawn).
-	got, err := mem.GetTaskMemory(ctx, next.ID, "last_price")
-	if err != nil {
-		t.Fatalf("memory not carried to the successor: %v", err)
-	}
-	if got != "42.17" {
-		t.Errorf("carried-forward value = %q, want 42.17", got)
 	}
 
 	// The dead-lettered row's spawn credit is settled, so the reconciliation

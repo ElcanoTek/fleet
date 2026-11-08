@@ -1011,25 +1011,8 @@ func (p *Pool) buildTaskRunContext(taskCtx context.Context, task *models.Task, t
 	// transition clears the lease.
 	artifactColl := scheduledrun.NewArtifactCollector()
 	runCtx = scheduledrun.WithArtifactCollector(runCtx, artifactColl)
-	// ask/notify (#510): the ask handler records the question + cancels THIS
-	// task's run so it ends and releases the sandbox/lease; executeTask then
-	// parks the task in paused_awaiting_input. notify fires an out-of-band
-	// progress update and returns immediately (the run continues).
-	runCtx = tools.WithAskHandler(runCtx, func(question string) error {
-		p.mu.Lock()
-		p.pauseRequested[task.ID] = question
-		cancel := p.activeCancel(task.ID)
-		p.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		return nil
-	})
-	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
-		p.notifyProgress(task, message, notify.KindProgressNote)
-	})
-	// self-wake (docs/SELF-WAKE.md): the wake handler mirrors ask — record the
-	// spec + cancel THIS run so it ends and releases the sandbox/lease;
+	// self-wake (docs/SELF-WAKE.md): the wake handler records the
+	// spec + cancels THIS run so it ends and releases the sandbox/lease;
 	// executeTask then parks the task in paused_awaiting_wake.
 	runCtx = tools.WithWakeHandler(runCtx, p.wakeHandlerFor(task))
 	// Recurring context carry (#504): for a carry_context recurring task, install

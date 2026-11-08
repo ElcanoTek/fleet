@@ -23,13 +23,6 @@ describe("memoryModalSubtitle", () => {
     expect(copy).not.toContain("future chats");
   });
 
-  it("describes derived entities and relations on Graph, not records", () => {
-    const copy = memoryModalSubtitle("graph", ctx);
-    expect(copy).toMatch(/entities and relations/i);
-    expect(copy).toMatch(/derived/i);
-    expect(copy).not.toContain("future chats");
-  });
-
   it("falls back to the personal sentence when the team tab has no project", () => {
     // The team tab only exists inside a project; when the project is gone the
     // personal list is what renders, so the personal sentence is what is true.

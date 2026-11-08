@@ -325,7 +325,6 @@ func chatRoutes() []chatRoute {
 		// ── memories ──
 		{"GET /api/memories", fixed("/memories"), noBody, textJSON},
 		{"POST /api/memories", fixed("/memories"), jsonBodyIfAny, textJSON},
-		{"GET /api/memories/graph", func(r *http.Request) string { return withRawQuery("/memories/graph", r) }, noBody, textJSON},
 		{"PATCH /api/memories/{memoryId}", func(r *http.Request) string { return "/memories/" + p(r, "memoryId") }, jsonBodyIfAny, textJSON},
 		{"DELETE /api/memories/{memoryId}", func(r *http.Request) string { return "/memories/" + p(r, "memoryId") }, noBody, textPlainFallback},
 		{"POST /api/memories/{memoryId}/accept", func(r *http.Request) string { return "/memories/" + p(r, "memoryId") + "/accept" }, jsonBodyIfAny, textJSON},

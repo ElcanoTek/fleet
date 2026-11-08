@@ -249,7 +249,6 @@ function taskToFormValues(task: Task | null) {
     maxIterations:
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
-    captainsLog: Boolean(task?.instruction_self_improve),
     allowNetwork: Boolean(task?.allow_network),
     // Sub-agent delegation (#1043) defaults ON: a fresh form starts true, and an
     // edited/cloned task only starts false when it explicitly opted out (the
@@ -464,7 +463,6 @@ export function TaskCreateModal({
   }, [liveModelTiers, editTask]);
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
   const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
-  const [captainsLog, setCaptainsLog] = useState(init.captainsLog);
   const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
   const [allowDelegation, setAllowDelegation] = useState(init.allowDelegation);
   const [carryContext, setCarryContext] = useState(init.carryContext);
@@ -596,7 +594,6 @@ export function TaskCreateModal({
     sandboxMemory.trim() !== "" ||
     sandboxCpus.trim() !== "" ||
     sandboxPids.trim() !== "" ||
-    captainsLog ||
     allowNetwork ||
     !allowDelegation ||
     carryContext ||
@@ -630,7 +627,6 @@ export function TaskCreateModal({
     fallbackModel,
     maxIterations,
     maxCostUSD,
-    captainsLog,
     allowNetwork,
     allowDelegation,
     carryContext,
@@ -664,7 +660,6 @@ export function TaskCreateModal({
     init.fallbackModel,
     init.maxIterations,
     init.maxCostUSD,
-    init.captainsLog,
     init.allowNetwork,
     init.allowDelegation,
     init.carryContext,
@@ -714,7 +709,6 @@ export function TaskCreateModal({
     fallbackTouched.current = false;
     setMaxIterations("");
     setMaxCostUSD("");
-    setCaptainsLog(false);
     setAllowNetwork(false);
     setAllowDelegation(true);
     setCarryContext(false);
@@ -816,7 +810,6 @@ export function TaskCreateModal({
     setAllowNetwork(Boolean(t.allow_network));
     setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
-    setCaptainsLog(Boolean(t.instruction_self_improve));
     setExpectedDuration(
       typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
         ? String(t.expected_duration_minutes)
@@ -848,7 +841,6 @@ export function TaskCreateModal({
       t.allow_network ||
       t.allow_delegation === false ||
       t.carry_context ||
-      t.instruction_self_improve ||
       t.sandbox_limits
     ) {
       setAdvancedOpen(true);
@@ -971,7 +963,6 @@ export function TaskCreateModal({
     sandboxMemory.trim() !== "",
     sandboxCpus.trim() !== "",
     sandboxPids.trim() !== "",
-    captainsLog,
     allowNetwork,
     // Delegation is ON by default (#1043): the opt-OUT is the non-default state
     // worth surfacing in the Advanced badge.
@@ -1077,7 +1068,6 @@ export function TaskCreateModal({
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations.trim()) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (maxCostUSD.trim()) taskData.max_cost_usd = Number.parseFloat(maxCostUSD);
-    if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
     // Delegation defaults ON server-side (#1043): omit when on, send the
     // explicit false only for an opt-out — the tri-state server field treats a
@@ -1306,7 +1296,6 @@ export function TaskCreateModal({
             sandbox_limits: taskData.sandbox_limits ?? null,
             run_if: taskData.run_if ?? null,
             carry_context: Boolean(taskData.carry_context),
-            instruction_self_improve: Boolean(taskData.instruction_self_improve),
           });
           showToast(
             `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
@@ -2349,26 +2338,6 @@ export function TaskCreateModal({
                         learning what the switch is called. htmlFor/id makes the
                         association explicit rather than relying on the wrapper. */}
                     <div className="task-switch-list">
-                      <label className="switch-row" htmlFor="taskCaptainsLog">
-                        <input
-                          id="taskCaptainsLog"
-                          type="checkbox"
-                          className="ui-switch"
-                          aria-labelledby="taskCaptainsLog-title"
-                          aria-describedby="taskCaptainsLog-desc"
-                          checked={captainsLog}
-                          onChange={(e) => setCaptainsLog(e.target.checked)}
-                        />
-                        <span className="switch-row-text">
-                          <span className="switch-row-title" id="taskCaptainsLog-title">
-                            Persistent memory · Captain&apos;s Log
-                          </span>
-                          <span className="switch-row-desc" id="taskCaptainsLog-desc">
-                            Saves facts with <code>remember</code> and reloads them at the start of
-                            every run. Scoped to this task.
-                          </span>
-                        </span>
-                      </label>
                       <label className="switch-row" htmlFor="taskAllowNetwork">
                         <input
                           id="taskAllowNetwork"

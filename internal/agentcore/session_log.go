@@ -158,9 +158,6 @@ const (
 	// AuxUsageEndOfRunVerifier is the scheduled end-of-run completeness check
 	// (internal/agent/verifier.go).
 	AuxUsageEndOfRunVerifier = "end_of_run_verifier"
-	// AuxUsagePhoneAFriend is the optional super-LLM quality review
-	// (internal/agent/reviewer.go).
-	AuxUsagePhoneAFriend = "phone_a_friend_review"
 	// AuxUsageLoopExitVerifier is the scheduled loop's llm exit-condition
 	// YES/NO verifier (internal/scheduledrun/loop.go).
 	AuxUsageLoopExitVerifier = "loop_exit_verifier"

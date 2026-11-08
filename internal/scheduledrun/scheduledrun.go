@@ -67,20 +67,6 @@ type Options struct {
 	// builds it once from the bundle and hands the SAME map to both drivers.
 	PersonaPolicies map[string]agentcore.PersonaToolPermissions
 
-	// ── agent self-improvement (#285), gated per-task by instruction_self_improve
-	// ("Captain's Log"). These seams are wired ONCE here and handed to a run only
-	// when its task opted in (runWorker), so non-opted-in tasks behave exactly as
-	// before. nil disables the respective capability entirely. ──
-	//
-	// TaskMemory backs the remember/recall tools + run-start memory injection
-	// (#198); TaskMemoryConfig caps how much a single task may accumulate.
-	TaskMemory       tools.TaskMemoryStore
-	TaskMemoryConfig tools.TaskMemoryConfig
-
-	// LearnedInstructions resolves a task's active distilled instruction (#516)
-	// for run-start injection. nil = feature off (unchanged behavior).
-	LearnedInstructions LearnedInstructionProvider
-
 	// RemoteMCP resolves a task owner's OAuth-connected remote (hosted) MCP servers
 	// and mints their bearer tokens, so a scheduled (headless) run can use the same
 	// per-user servers a chat turn would (#443). nil = feature off. OwnerEmail maps
@@ -178,12 +164,6 @@ type Runner struct {
 	// persona basename. nil/empty = no narrowing. Resolved per task at dispatch.
 	personaPolicies map[string]agentcore.PersonaToolPermissions
 
-	// Captain's Log persistent task memory (#285), handed to a run only when the
-	// task opted in (instruction_self_improve). nil = capability disabled.
-	taskMemory          tools.TaskMemoryStore
-	taskMemoryConfig    tools.TaskMemoryConfig
-	learnedInstructions LearnedInstructionProvider
-
 	// remoteMCP + ownerEmail wire a task owner's OAuth-connected remote (hosted)
 	// MCP servers into a headless run (#443). nil = feature off.
 	remoteMCP            agent.RemoteMCPResolver
@@ -224,13 +204,6 @@ type IterationStore interface {
 	AddTaskIteration(ctx context.Context, it *models.TaskIteration) error
 }
 
-// LearnedInstructionProvider is the narrow subset of sched storage the runner
-// needs to inject a task's active learned instruction (#516). *storage.Storage
-// satisfies it. nil = feature off.
-type LearnedInstructionProvider interface {
-	ActiveLearnedInstruction(ctx context.Context, taskID uuid.UUID) (*models.TaskLearnedInstruction, error)
-}
-
 // New builds a Runner. The base system prompt + persona are read once at
 // construction (operators editing them in place take effect on the next process
 // restart, matching the scheduled path's prior behaviour).
@@ -244,11 +217,8 @@ func New(opts Options) *Runner {
 		systemPromptsDir:     opts.SystemPromptsDir,
 		protocolsDir:         opts.ProtocolsDir,
 		iterationStore:       opts.IterationStore,
-		learnedInstructions:  opts.LearnedInstructions,
 		taskEnqueuer:         opts.TaskEnqueuer,
 		personaPolicies:      opts.PersonaPolicies,
-		taskMemory:           opts.TaskMemory,
-		taskMemoryConfig:     opts.TaskMemoryConfig,
 		remoteMCP:            opts.RemoteMCP,
 		ownerEmail:           opts.OwnerEmail,
 		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
@@ -347,34 +317,6 @@ func (r *Runner) taskPromptAndPersona(ctx context.Context, task *models.Task) (s
 // recurrence grant) are enforced INSIDE the tool as defence in depth; this gate
 // only decides whether the tool exists for the run. The per-run spawn counter is
 // allocated here so it is scoped to exactly one task run.
-// activeLearnedInstruction resolves the task's active distilled instruction
-// (#516) for run-start injection. Best-effort: any error (or no provider)
-// yields "" so a run never fails on the self-improvement layer.
-func (r *Runner) activeLearnedInstruction(ctx context.Context, taskID uuid.UUID) string {
-	if r.learnedInstructions == nil {
-		return ""
-	}
-	li, err := r.learnedInstructions.ActiveLearnedInstruction(ctx, taskID)
-	if err != nil || li == nil {
-		return ""
-	}
-	return li.Content
-}
-
-// selfImproveTaskMemory is the per-task Captain's Log (#285) opt-in gate: it
-// returns the persistent task-memory store for a task ONLY when the task set
-// instruction_self_improve, and nil otherwise. Centralizing the gate here keeps
-// runWorker readable and makes the opt-in boundary unit-testable. A nil return
-// (a runner built without the seam, or a task that did not opt in) cleanly
-// disables the capability — the agent registers remember/recall only when the
-// seam is non-nil, so non-opted-in tasks behave exactly as before.
-func (r *Runner) selfImproveTaskMemory(task *models.Task) tools.TaskMemoryStore {
-	if task == nil || !task.InstructionSelfImprove {
-		return nil
-	}
-	return r.taskMemory
-}
-
 func (r *Runner) maybeAppendCreateTaskTool(ctx context.Context, base []fantasy.AgentTool, task *models.Task) []fantasy.AgentTool {
 	if r.taskEnqueuer == nil || !task.AllowTaskCreation {
 		return base
@@ -890,29 +832,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		providerFallbacks = nil
 	}
 
-	// "Phone a friend" super-LLM reviewer (#175). Resolved only when the feature
-	// is enabled; the reviewer slug comes from FLEET_PHONE_A_FRIEND_MODEL and
-	// falls back to the run's fallback model when unset. A resolution failure
-	// leaves the reviewer nil, which the agent treats as "skip the review" — the
-	// feature degrades gracefully rather than failing the run.
-	//
-	// Read the live toggle ONCE for this run's whole setup: it also feeds
-	// AgentOptions.PhoneAFriendEnabled below, and two separate reads could tear
-	// around a concurrent admin toggle (enabled-but-reviewerless, or a resolved
-	// reviewer the options then ignore). One read = one consistent run.
-	phoneAFriend := r.cfg.LivePhoneAFriendEnabled()
-	var reviewer fantasy.LanguageModel
-	if phoneAFriend {
-		reviewer = fallback
-		if slug := strings.TrimSpace(r.cfg.PhoneAFriendModel); slug != "" {
-			if rv, rerr := r.mgr.Resolve(ctx, slug); rerr == nil {
-				reviewer = rv
-			} else {
-				logging.From(ctx).Warn("scheduled task: phone_a_friend reviewer unresolved; falling back to the run's fallback model", "task_id", task.ID, "slug", slug, "err", rerr)
-			}
-		}
-	}
-
 	verifier := r.resolveVerifierModel(ctx, task, model)
 
 	// Acquire the execution sandbox for this task. Scheduled runs are
@@ -988,18 +907,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// MetadataModel defaults to the title model in config.Load; an empty slug
 	// (only reachable via a test double) makes the tool return a clear error.
 	nativeTools = append(nativeTools, tools.MetadataTools(r.mgr, r.cfg.MetadataModel)...)
-
-	// ask / notify (#510): human-in-the-loop message types, SCHEDULED-only (a
-	// human is present in interactive chat). notify is registered whenever a
-	// notify handler is installed; ask ONLY when an ask handler is (the runner
-	// installs both on the run context). Absent handlers → the tools aren't
-	// registered, so the model never sees a capability it can't use.
-	if tools.NotifyHandlerInstalled(ctx) {
-		nativeTools = append(nativeTools, tools.NewNotifyTool())
-	}
-	if tools.AskHandlerInstalled(ctx) {
-		nativeTools = append(nativeTools, tools.NewAskTool())
-	}
 
 	// self-wake (docs/SELF-WAKE.md): sleep / wake_on_event park the task and
 	// let the scheduler re-queue it on a deadline or a named event. Same
@@ -1129,49 +1036,27 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		taskSystemPrompt += agent.DelegationPromptSection()
 	}
 
-	// Captain's Log (#285): instruction_self_improve is the per-task opt-in gate
-	// that finally gives the flag runtime effect (#322). Only when it is set does
-	// the run get persistent task memory — the remember/recall tools + run-start
-	// injection (#198). OFF (the default) reproduces pre-#285 behaviour exactly.
-	// The seam is nil-checked here so a runner built without it (or a non-opted-in
-	// task) wires nothing. Agent-authored client-bundle skills are intentionally
-	// out of scope (#255 closed): skills stay operator-authored so the bundle
-	// remains a reproducible git artifact — fleet never writes the bundle.
-	//
-	// NOTE: propose_note is deliberately NOT gated by this flag — it stays
-	// unconditionally available in scheduled mode (it is wired separately, above,
-	// via NoteProposer) so opting OUT of Captain's Log does not regress the
-	// pre-existing note-proposal behaviour, and it remains fleet's DB-backed path
-	// for agents to improve the shared knowledge base. The flag gates only the NEW
-	// capability — persistent task memory. "Off = today's behaviour" is the rule.
-	taskMemory := r.selfImproveTaskMemory(task)
-	learnedInstruction := r.activeLearnedInstruction(ctx, task.ID)
-
 	a := agent.NewAgent(agent.Options{
-		AuditProtocolRef: agent.AuditProtocolRef(r.protocolsDir),
-		Config:           r.cfg,
-		Model:            model,
-		FallbackModel:    fallback,
-		FallbackModels:   providerFallbacks,
-		MCPClient:        mcpBinding.client,
-		MCPBroker:        mcpBinding.broker,
-		MCPCatalog:       mcpBinding.catalog,
-		MCPToolAllowlist: mcpToolAllowlist,
-		NativeTools:      nativeTools,
-		SystemPrompt:     taskSystemPrompt,
-		Persona:          taskPersona,
-		MaxIterations:    maxIter,
-		MaxCostUSD:       derefFloat(task.MaxCostUSD),
-		MaxTotalTokens:   derefInt(task.MaxTotalTokens),
-		Sandbox:          sb,
-		NotesProvider:    r.notesProvider,
-		NoteProposer:     r.noteProposer,
-		SkillProposer:    r.taskSkillProposer(ownerSkillEmail),
-		// Captain's Log persistent memory (#285): nil unless the task opted in (above).
-		TaskMemory:          taskMemory,
+		AuditProtocolRef:    agent.AuditProtocolRef(r.protocolsDir),
+		Config:              r.cfg,
+		Model:               model,
+		FallbackModel:       fallback,
+		FallbackModels:      providerFallbacks,
+		MCPClient:           mcpBinding.client,
+		MCPBroker:           mcpBinding.broker,
+		MCPCatalog:          mcpBinding.catalog,
+		MCPToolAllowlist:    mcpToolAllowlist,
+		NativeTools:         nativeTools,
+		SystemPrompt:        taskSystemPrompt,
+		Persona:             taskPersona,
+		MaxIterations:       maxIter,
+		MaxCostUSD:          derefFloat(task.MaxCostUSD),
+		MaxTotalTokens:      derefInt(task.MaxTotalTokens),
+		Sandbox:             sb,
+		NotesProvider:       r.notesProvider,
+		NoteProposer:        r.noteProposer,
+		SkillProposer:       r.taskSkillProposer(ownerSkillEmail),
 		TaskID:              task.ID,
-		TaskMemoryConfig:    r.taskMemoryConfig,
-		LearnedInstruction:  learnedInstruction,
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		// Every email dispatch in this run (and its sub-agents) sends checked
 		// private copies of its attachments from the run's own working
@@ -1182,8 +1067,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		PersonaPolicy:           r.personaPolicy(taskPersona),
 		OutputSchema:            task.OutputSchema,
 		Overlay:                 remoteOverlay,
-		PhoneAFriendEnabled:     phoneAFriend,
-		ReviewerModel:           reviewer,
 		VerifierModel:           verifier,
 		// Deterministic completion predicate (#1602): the producer-declared
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this

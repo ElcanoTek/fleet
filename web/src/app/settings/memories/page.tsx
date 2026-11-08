@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { MemoryGraphView } from "@/app/chat/ui/MemoryGraphView";
 import {
   btnClass,
   ConnBadge,
@@ -46,7 +45,6 @@ export default function MemoriesPage() {
   const [memories, setMemories] = useState<UserMemory[] | null>(null);
   const [teamProjects, setTeamProjects] = useState<ProjectSummary[]>([]);
   const [readOnlyViewer, setReadOnlyViewer] = useState(false);
-  const [view, setView] = useState<"list" | "graph">("list");
   const [filter, setFilter] = useState<"active" | "all" | "retired">("active");
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
@@ -198,45 +196,24 @@ export default function MemoriesPage() {
         </p>
       ) : null}
 
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
         <Segmented
-          label="Memory view"
-          value={view}
+          label="Memory status filter"
+          value={filter}
           options={[
-            { value: "list", label: "My memory" },
-            { value: "graph", label: "Knowledge graph" },
+            { value: "active", label: `Active (${activeCount})` },
+            { value: "retired", label: `Retired (${retiredCount})` },
+            { value: "all", label: `All (${allMemories.length})` },
           ]}
-          onChange={setView}
+          onChange={setFilter}
         />
-        {view === "list" ? (
-          <Segmented
-            label="Memory status filter"
-            value={filter}
-            options={[
-              { value: "active", label: `Active (${activeCount})` },
-              { value: "retired", label: `Retired (${retiredCount})` },
-              { value: "all", label: `All (${allMemories.length})` },
-            ]}
-            onChange={setFilter}
-          />
-        ) : null}
       </div>
 
-      {view === "graph" ? (
+      {!readOnlyViewer ? (
         <ConnPanel>
-          <ConnPanelHead title="Knowledge graph" />
-          <ConnPanelSub>
-            Derived entity relationships across your saved memories, with valid-time and learned-time filters.
-          </ConnPanelSub>
-          <MemoryGraphView />
-        </ConnPanel>
-      ) : (
-        <>
-          {!readOnlyViewer ? (
-            <ConnPanel>
-              <ConnPanelHead
-                title={editingId ? "Edit memory" : "Add a memory"}
-              />
+          <ConnPanelHead
+            title={editingId ? "Edit memory" : "Add a memory"}
+          />
               <ConnPanelSub>
                 Good memories are standing rules and preferences (for example, “Deal names may contain intentional typos; never correct them”), not temporary numbers.
               </ConnPanelSub>
@@ -481,8 +458,6 @@ export default function MemoriesPage() {
               </ConnRows>
             )}
           </ConnPanel>
-        </>
-      )}
     </SetSection>
   );
 }

@@ -8,7 +8,18 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"charm.land/fantasy"
 )
+
+func runToolCtx(ctx context.Context, t *testing.T, tool fantasy.AgentTool, input string) fantasy.ToolResponse {
+	t.Helper()
+	resp, err := tool.Run(ctx, fantasy.ToolCall{ID: "tc_1", Name: tool.Info().Name, Input: input})
+	if err != nil {
+		t.Fatalf("unexpected Go error from tool %s: %v", tool.Info().Name, err)
+	}
+	return resp
+}
 
 // fixedNow pins the wake tools' clock so deadline assertions are exact.
 var fixedNow = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)

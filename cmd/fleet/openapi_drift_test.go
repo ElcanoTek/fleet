@@ -58,8 +58,7 @@ func TestOpenAPIRouteParity(t *testing.T) {
 func liveRoutes(t *testing.T) map[string]bool {
 	t.Helper()
 	h := handlers.New(handlers.Config{}, nil, nil)
-	notes := handlers.NewNotesHandlers(nil, h)
-	router, ok := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
+	router, ok := buildOrchestratorMux(h, reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
 	if !ok {
 		t.Fatal("orchestrator router is not chi.Routes")
 	}
@@ -247,14 +246,6 @@ var schemaModelRegistry = map[string]any{
 	// schemas verbatim via writeJSON, backed by exported reflectable models.
 	"SLAReport":     models.SLAReport{},
 	"SLAReportTask": models.SLAReportTask{},
-	// Dataset / table agent (#514): the dataset handlers return these models
-	// verbatim via writeJSON.
-	"Dataset":       models.Dataset{},
-	"DatasetColumn": models.DatasetColumn{},
-	"DatasetRow":    models.DatasetRow{},
-	// Self-improving memory (#516).
-	"TaskFeedback":           models.TaskFeedback{},
-	"TaskLearnedInstruction": models.TaskLearnedInstruction{},
 	// Usage analytics (#601 part 1): GET /admin/usage returns these two
 	// reusable schemas verbatim via writeJSON.
 	"UsageReport": models.UsageReport{},

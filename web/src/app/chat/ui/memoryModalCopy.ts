@@ -11,7 +11,7 @@
 // Extracted as a pure function so each tab's claim is asserted directly
 // against what that tab holds.
 
-export type MemoryModalTab = "list" | "graph" | "team";
+export type MemoryModalTab = "list" | "team";
 
 export function memoryModalSubtitle(
   tab: MemoryModalTab,
@@ -26,9 +26,6 @@ export function memoryModalSubtitle(
 ): string {
   if (tab === "team" && projectName) {
     return `Team learnings are shared with everyone in ${projectName} and added to every chat in it.`;
-  }
-  if (tab === "graph") {
-    return "Entities and relations derived from your own saved memories, each linked to the memory it came from.";
   }
   return `Saved memories are scoped to ${userEmail || "this user"} and are added to future chats.`;
 }

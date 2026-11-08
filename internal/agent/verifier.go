@@ -413,3 +413,22 @@ func parseVerifierResult(raw string) (verifierResult, error) {
 	result.Missing = cleaned
 	return result, nil
 }
+
+// latestAssistantText returns the most recent non-empty assistant message text
+// in the session. Reads the log via SnapshotMessages so it never touches the
+// session's unexported mutex.
+func latestAssistantText(session *LogSession) string {
+	if session == nil {
+		return ""
+	}
+	messages := session.SnapshotMessages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != roleAssistant {
+			continue
+		}
+		if text := strings.TrimSpace(messages[i].Content); text != "" {
+			return text
+		}
+	}
+	return ""
+}

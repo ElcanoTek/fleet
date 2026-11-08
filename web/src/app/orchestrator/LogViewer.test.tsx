@@ -538,8 +538,6 @@ describe("LogViewer task-detail modal", () => {
     expect(await screen.findByTestId("wake-summary")).toHaveTextContent("deploy-finished");
     expect(screen.queryByTestId("fire-event-button")).toBeNull();
     expect(screen.queryByLabelText("Wake note")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Mark run as helpful" })).toBeNull();
-    expect(screen.queryByLabelText("Critique (optional)")).toBeNull();
     expect(screen.getByTestId("history-button")).toBeTruthy();
   });
 

@@ -53,7 +53,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
-	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
@@ -62,12 +61,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
-	"github.com/ElcanoTek/fleet/internal/ownerdigest"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
-	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
@@ -154,10 +151,6 @@ func main() {
 		// Per-server MCP smoke: handshake + tools/list against the bundle
 		// catalog, spawned exactly as the broker would. Boots nothing else.
 		os.Exit(runMCPTest(argv[2:]))
-	case invokeEval:
-		// Eval & regression harness (#502): replay bundle goldens through the
-		// governed loop and gate on the set threshold; exits 0/1 (2 = usage).
-		os.Exit(runEvalCmd(argv[1:]))
 	case invokeGenerateVAPIDKeys:
 		// Browser Web Push setup (#292): print a fresh VAPID key pair as env
 		// lines for the operator's env-file. Boots nothing. Errors go to
@@ -198,7 +191,6 @@ const (
 	invokeMCPBroker
 	invokeValidateConfig
 	invokeMCPTest
-	invokeEval
 	invokeGenerateVAPIDKeys
 	invokeTaskRun
 	invokeAdmin // every operator/admin verb → internal/admincli
@@ -223,8 +215,6 @@ func classifyInvocation(argv []string) invocation {
 		return invokeMCPBroker
 	case "validate-config":
 		return invokeValidateConfig
-	case "eval":
-		return invokeEval
 	case "generate-vapid-keys":
 		return invokeGenerateVAPIDKeys
 	case "task":
@@ -595,16 +585,6 @@ func run() error {
 		"sched": func() metrics.DBPoolStats { return toDBPoolStats(schedStorage.DB().Stats()) },
 	})
 
-	// Notes store + the live provider/proposer wired into BOTH drivers.
-	notesStore := sched.NewStore(schedStorage.DB())
-	notesProvider := &notesAdapter{store: notesStore}
-
-	// Self-improvement (#285): the task-memory store over the SAME sched store,
-	// handed only to the scheduled runner — interactive chat has no task to scope
-	// memory to. Prompt/knowledge self-improvement stays on the existing,
-	// DB-backed propose_note path (notesProvider, wired into both drivers below).
-	taskMemoryStore := &taskMemoryAdapter{store: notesStore}
-
 	// The store secret cipher (FLEET_MCP_OAUTH_ENCRYPTION_KEY) protects ALL
 	// at-rest secrets — remote-MCP OAuth tokens, LLM provider keys, and now
 	// notification secrets — so it installs whenever the key is set, not only
@@ -631,8 +611,6 @@ func run() error {
 		SystemPromptsDir:     systemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		Limiter:              agentLimiter, // shared box-wide cap; interactive turns admitted through it
-		NotesProvider:        notesProvider,
-		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
 		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
 		// The overlay opener above still owns per-turn MCP binding in its
@@ -673,9 +651,6 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-		// Knowledge-graph extraction (#523): the seam is always wired; whether
-		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
-		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
 	}
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))
@@ -847,8 +822,7 @@ func run() error {
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
-	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
-	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
+	orchHandler := buildOrchestratorMux(h, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
 	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
@@ -875,24 +849,10 @@ func run() error {
 	taskRunner := scheduledrun.New(scheduledrun.Options{
 		Config:           cfg,
 		Manager:          mgr,
-		NotesProvider:    notesProvider,
-		NoteProposer:     notesProvider,
 		PersonasDir:      personasDir,
 		SystemPromptsDir: systemPromptsDir,
 		ProtocolsDir:     protocolsDir,
 		PersonaPolicies:  personaPolicies,
-		// Self-improving memory (#516): the active distilled learned instruction
-		// is injected at run-start. Gated on FLEET_SELF_IMPROVE_ENABLED — nil
-		// provider leaves scheduled runs byte-for-byte unchanged.
-		LearnedInstructions: learnedInstructionProvider(cfg, schedStorage),
-		// Captain's Log persistent memory (#198, #285): handed to a run only when its
-		// task set instruction_self_improve. Caps bound per-task memory growth
-		// (FLEET_TASK_MEMORY_MAX_*).
-		TaskMemory: taskMemoryStore,
-		TaskMemoryConfig: tools.TaskMemoryConfig{
-			MaxKeys:       cfg.TaskMemoryMaxKeys,
-			MaxValueBytes: cfg.TaskMemoryMaxValueBytes,
-		},
 		// Record per-iteration telemetry for looped tasks (#179).
 		IterationStore: schedStorage,
 		// Back the built-in create_task tool (#277) so a scheduled task that opted
@@ -1007,10 +967,6 @@ func run() error {
 	// Dashboard agent cards: live pool occupancy (active scheduled agents /
 	// schedulable slots), stamped onto GET /stats at response time.
 	h.SetAgentPoolStats(pool.ActiveTasks, pool.Cap)
-	// Self-improving memory (#516): the feedback→learned-instruction distiller,
-	// gated on FLEET_SELF_IMPROVE_ENABLED (default off; nil leaves feedback
-	// recorded but never auto-distilled).
-	h.SetLearnedInstructionDistiller(selfImproveDistiller(cfg, mgr))
 
 	// A2A protocol server (#1279): opt-in, fail-closed. Unwired, the routes
 	// answer 501; wired, the card is rendered ONCE (it is static per boot) and
@@ -1019,12 +975,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-
-	// Dataset / table agent (#514): rows run through the SAME governed
-	// interactive entrypoint (Manager.RunTurn → agentcore.Run). Extracted
-	// wiring: boot sweep + runner construction + handler seam.
-	datasetRunner := setupDatasetRunner(schedStorage, mgr, h)
-	defer datasetRunner.Shutdown()
 
 	// Metrics gauges (#176): live in-flight turn counts + warm sandbox depth,
 	// evaluated at each /metrics scrape. Extracted to keep run() within the
@@ -1171,10 +1121,6 @@ func run() error {
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
 	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
-	// The daily owner digest (docs/OWNER-DIGEST.md): off until an admin turns
-	// it on in Settings → Admin → Notifications; the loop reads that switch
-	// live from the shared notifier.
-	ownerdigest.New(schedStorage, chatStore, taskNotifier).Start(ctx)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1363,21 +1309,6 @@ func toDBPoolStats(s sql.DBStats) metrics.DBPoolStats {
 		MaxIdleClosed:       s.MaxIdleClosed,
 		MaxLifetimeClosed:   s.MaxLifetimeClosed,
 	}
-}
-
-// setupDatasetRunner wires the dataset / table agent (#514): the boot sweep
-// resets crash-orphaned running datasets/rows so work is resumable, the
-// runner drives each row through Manager.RunTurn, and the handler seam keeps
-// sched handlers decoupled from the agent graph. Drain (the caller's defer)
-// cancels active runs; in-flight rows persist their outcome best-effort.
-func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *handlers.Handlers) *datasets.Runner {
-	if err := schedStorage.ResetStaleRunningDatasets(context.Background()); err != nil {
-		slog.Error("dataset boot sweep: failed", "err", err)
-	}
-	datasetRunner := datasets.New(schedStorage, mgr)
-	datasetRunner.SetDrainCheck(httpapi.UpdateDrainActive)
-	h.SetDatasetRunner(datasetRunner)
-	return datasetRunner
 }
 
 func timezone() string {
@@ -1886,25 +1817,6 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 // unattributed (CreatedBy nil) — like create_task-spawned tasks — so they run
 // against the shared global MCP catalog, NOT the requesting user's personal
 // remote-MCP connections (#443/#449). That is the safe (less-access) direction.
-// selfImproveDistiller returns the feedback→learned-instruction distiller
-// (#516), or nil when self-improvement is disabled.
-func selfImproveDistiller(cfg *config.Config, mgr *agent.Manager) handlers.LearnedInstructionDistiller {
-	if !cfg.SelfImproveEnabled {
-		return nil
-	}
-	return mgr
-}
-
-// learnedInstructionProvider returns the run-start learned-instruction source
-// (#516), or nil when self-improvement is disabled — in which case scheduled
-// runs never inject a learned instruction (byte-for-byte unchanged).
-func learnedInstructionProvider(cfg *config.Config, st *storage.Storage) scheduledrun.LearnedInstructionProvider {
-	if !cfg.SelfImproveEnabled {
-		return nil
-	}
-	return st
-}
-
 // configurePIIRedaction installs the process-wide PII redactor (#450) from the
 // env config, before the store is up. The env→mode semantics live in ONE
 // place — the piiRedactorState in the workspace-settings wiring — so what
@@ -2210,66 +2122,6 @@ func (p scheduledSkillProposer) Propose(name, description, body, _ string) (stri
 		return "", err
 	}
 	return sk.ID, nil
-}
-
-// ── notes adapter: the sched-backed NotesProvider + NoteProposer ──
-
-// notesAdapter implements agentcore.NotesProvider + agentcore.NoteProposer over
-// the sched notes store. Wired into BOTH the interactive engine and the
-// scheduled runner so both modes inject the SAME admin-curated knowledge base
-// and stage propose_note edits into the same pending queue.
-type notesAdapter struct {
-	store *sched.Store
-}
-
-func (a *notesAdapter) PublishedNotes(ctx context.Context) ([]agentcore.Note, error) {
-	notes, err := a.store.ListPublishedNotes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]agentcore.Note, len(notes))
-	for i, n := range notes {
-		out[i] = agentcore.Note{Slug: n.Slug, Title: n.Title, Body: n.Body}
-	}
-	return out, nil
-}
-
-func (a *notesAdapter) Propose(slug, title, body, reason string) (string, error) {
-	p, err := a.store.CreateProposal(context.Background(), slug, title, body, reason, "agent")
-	if err != nil {
-		return "", err
-	}
-	return p.ID.String(), nil
-}
-
-// ── self-improvement adapter (#285): the sched-backed task-memory store, handed
-// to the scheduled runner and used only by tasks that opted into Captain's Log. ──
-
-// taskMemoryAdapter implements tools.TaskMemoryStore over the sched store,
-// converting the sched row type to the tools-layer type so the tools package
-// needs no dependency on sched.
-type taskMemoryAdapter struct {
-	store *sched.Store
-}
-
-func (a *taskMemoryAdapter) UpsertTaskMemory(ctx context.Context, taskID uuid.UUID, key, value string, maxKeys, maxValueBytes int) error {
-	return a.store.UpsertTaskMemory(ctx, taskID, key, value, maxKeys, maxValueBytes)
-}
-
-func (a *taskMemoryAdapter) GetTaskMemory(ctx context.Context, taskID uuid.UUID, key string) (string, error) {
-	return a.store.GetTaskMemory(ctx, taskID, key)
-}
-
-func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UUID) ([]tools.TaskMemory, error) {
-	mems, err := a.store.ListTaskMemories(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]tools.TaskMemory, len(mems))
-	for i, m := range mems {
-		out[i] = tools.TaskMemory{Key: m.Key, Value: m.Value}
-	}
-	return out, nil
 }
 
 // recoverStrandedTurns projects turns left 'running' by a crash into canonical

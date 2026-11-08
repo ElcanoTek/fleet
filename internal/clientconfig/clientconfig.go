@@ -272,7 +272,6 @@ func Load(dir string) (*Bundle, error) {
 		PromptsDir:                     filepath.Join(abs, "prompts"),
 		SkillsDir:                      filepath.Join(abs, "skills"),
 		MCPDir:                         filepath.Join(abs, "mcp"),
-		EvalsDir:                       filepath.Join(abs, "evals"),
 	}
 	if err := b.resolveBranding(); err != nil {
 		return nil, err

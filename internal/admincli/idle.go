@@ -622,38 +622,6 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, f
 		return out, err
 	}
 
-	var hasDatasets bool
-	if err := db.QueryRowContext(qctx, "SELECT to_regclass('datasets') IS NOT NULL").Scan(&hasDatasets); err != nil {
-		return out, err
-	}
-	if hasDatasets {
-		drows, err := db.QueryContext(qctx, `
-			SELECT id::text,
-			       GREATEST(0, $1 - EXTRACT(EPOCH FROM COALESCE(updated_at, created_at))::bigint)
-			  FROM datasets
-			 WHERE status = 'running'
-			   AND ($2 <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp($2))
-			 ORDER BY COALESCE(updated_at, created_at) ASC
-			 LIMIT 5`, nowUnix, svcStartUnix)
-		if err != nil {
-			return out, err
-		}
-		for drows.Next() {
-			var id string
-			var ageSec int64
-			if err := drows.Scan(&id, &ageSec); err != nil {
-				_ = drows.Close()
-				return out, err
-			}
-			out = append(out, fmt.Sprintf("dataset %s (running, %ds)", sanitizeSummaryText(id), ageSec))
-		}
-		if err := drows.Err(); err != nil {
-			_ = drows.Close()
-			return out, err
-		}
-		_ = drows.Close()
-	}
-
 	return out, nil
 }
 

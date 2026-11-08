@@ -98,7 +98,7 @@ const cleanAudit = `{"success":true,"critical_actions":[],"reasoning":"Checked t
 
 // scriptedRun drives a scheduled Execute through the given tool steps, then a
 // closing answer on every later call.
-func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, reviewer fantasy.LanguageModel, broker *pagesBroker, predicate []string) (*Agent, *eventRecorder, int, error) {
+func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, _ fantasy.LanguageModel, broker *pagesBroker, predicate []string) (*Agent, *eventRecorder, int, error) {
 	t.Helper()
 	calls := 0
 	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
@@ -120,10 +120,6 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 	}
 	if scriptedRunFallback != nil {
 		a.fallbackModel = scriptedRunFallback
-	}
-	if reviewer != nil {
-		a.phoneAFriendEnabled = true
-		a.reviewerModel = reviewer
 	}
 	a.mcpBroker = broker
 	a.mcpCatalog = []mcp.ServerTool{

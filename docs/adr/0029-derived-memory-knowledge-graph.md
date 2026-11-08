@@ -1,6 +1,6 @@
 # ADR-0029: Derived memory knowledge graph (no time columns on relations)
 
-- **Status:** Accepted (extends ADR-0019 — stage 3 of its staged plan)
+- **Status:** Superseded by ADR-0111 (extends ADR-0019 — stage 3 of its staged plan)
 - **Date:** 2026-07-02
 - **Deciders:** fleet maintainers
 

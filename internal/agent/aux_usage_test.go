@@ -147,7 +147,7 @@ func TestWriteLogFile_PersistsAuxUsage(t *testing.T) {
 func TestTruncateLogSession_PreservesAuxUsage(t *testing.T) {
 	session := NewLogSession()
 	session.AddAuxUsage(agentcore.AuxUsageRecord{
-		Label: agentcore.AuxUsagePhoneAFriend, Model: "mock-model", PromptTokens: 10, CompletionTokens: 5,
+		Label: agentcore.AuxUsageEndOfRunVerifier, Model: "mock-model", PromptTokens: 10, CompletionTokens: 5,
 	})
 	for i := 0; i < 40; i++ {
 		session.AddMessage(roleUser, strings.Repeat("bulk transcript line ", 40), nil, nil)
@@ -165,33 +165,7 @@ func TestTruncateLogSession_PreservesAuxUsage(t *testing.T) {
 	if len(truncated.Messages) >= 40 {
 		t.Fatalf("truncation did not drop messages (got %d) — test would not exercise the clone", len(truncated.Messages))
 	}
-	if len(truncated.AuxUsage) != 1 || truncated.AuxUsage[0].Label != agentcore.AuxUsagePhoneAFriend {
+	if len(truncated.AuxUsage) != 1 || truncated.AuxUsage[0].Label != agentcore.AuxUsageEndOfRunVerifier {
 		t.Fatalf("aux_usage lost in truncation: %+v", truncated.AuxUsage)
-	}
-}
-
-// TestRunPhoneAFriendReview_RecordsAuxUsage is the reviewer-side twin of the
-// verifier test above.
-func TestRunPhoneAFriendReview_RecordsAuxUsage(t *testing.T) {
-	reviewer := &itMockModel{generateText: `{"needs_revision": false, "issues": [], "reasoning": "ship it"}`}
-	a := &Agent{logSession: NewLogSession()}
-
-	issues, err := a.runPhoneAFriendReview(context.Background(), reviewer, "write the summary", "the summary", nil)
-	if err != nil {
-		t.Fatalf("runPhoneAFriendReview: %v", err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("unexpected issues: %v", issues)
-	}
-	recs := a.logSession.SnapshotAuxUsage()
-	if len(recs) != 1 {
-		t.Fatalf("aux usage records = %d, want 1", len(recs))
-	}
-	rec := recs[0]
-	if rec.Label != agentcore.AuxUsagePhoneAFriend {
-		t.Errorf("label = %q, want %q", rec.Label, agentcore.AuxUsagePhoneAFriend)
-	}
-	if rec.Model != "mock-model" || rec.PromptTokens != 10 || rec.CompletionTokens != 5 {
-		t.Errorf("record = %+v, want model=mock-model prompt=10 completion=5", rec)
 	}
 }

@@ -83,7 +83,7 @@ func TestConvertLogSession_CarriesAuxUsage(t *testing.T) {
 		PromptTokens: 12, CompletionTokens: 4, CostUSD: 0.002,
 	})
 	ls.AddAuxUsage(agentcore.AuxUsageRecord{
-		Label: agentcore.AuxUsagePhoneAFriend, Model: "reviewer-model",
+		Label: agentcore.AuxUsageLoopExitVerifier, Model: "loop-model",
 		PromptTokens: 30, CompletionTokens: 9, CostUSD: 0.01,
 	})
 
@@ -96,7 +96,7 @@ func TestConvertLogSession_CarriesAuxUsage(t *testing.T) {
 	}
 	want := []models.AuxUsageRecord{
 		{Label: agentcore.AuxUsageEndOfRunVerifier, Model: "mock-model", PromptTokens: 12, CompletionTokens: 4, CostUSD: 0.002},
-		{Label: agentcore.AuxUsagePhoneAFriend, Model: "reviewer-model", PromptTokens: 30, CompletionTokens: 9, CostUSD: 0.01},
+		{Label: agentcore.AuxUsageLoopExitVerifier, Model: "loop-model", PromptTokens: 30, CompletionTokens: 9, CostUSD: 0.01},
 	}
 	for i, w := range want {
 		if out.AuxUsage[i] != w {

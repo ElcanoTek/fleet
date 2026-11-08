@@ -227,7 +227,6 @@ func TestQueryForwardingIsPerRoute(t *testing.T) {
 		{"/api/admin/doctor?deep=2", "/admin/doctor"},
 		{"/api/conversations/c1/approvals/a%201", "/conversations/c1?approval_id=a%201"},
 		{"/api/conversations/c1/export?format=html&include=full&x=1", "/conversations/c1/export?format=html&include=full"},
-		{"/api/memories/graph?project=p1", "/memories/graph?project=p1"},
 		{"/api/orchestrator/tasks?tag=ops&tag=&tag=urgent&secret=x&status=running", ""},
 	}
 	for _, c := range cases {

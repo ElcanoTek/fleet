@@ -45,7 +45,6 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"approval_timeout_seconds":  strconv.Itoa(cfg.ApprovalTimeoutSeconds),
 		"max_cost_usd":              strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
 		"max_total_tokens":          strconv.Itoa(cfg.MaxTotalTokens),
-		"phone_a_friend_enabled":    strconv.FormatBool(cfg.PhoneAFriendEnabled),
 		"subagents_enabled":         strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":             defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
 		"advanced_model":            defaultModelTier(cfg.AdvancedModel, agentcore.DefaultMaxModel),
@@ -102,7 +101,6 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// (override=false) clears it and the env/reload value serves again.
 		"max_cost_usd":                      applyFloatOverride(cfg.SetMaxCostUSDOverride),
 		"max_total_tokens":                  applyIntOverride(cfg.SetMaxTotalTokensOverride),
-		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
 		"error_analysis_enabled":            applyBoolSetting(cfg.SetErrorAnalysisEnabled),

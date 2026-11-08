@@ -200,7 +200,7 @@ naming its `FLEET_` key.
 `config.go` and the readers for derived defaults:
 - the model chain: `FLEET_METADATA_MODEL` ← `FLEET_TITLE_MODEL`, then the
   error-analysis, memory, recurring-task and library-prompt models ←
-  metadata, and the memory graph ← memory;
+  metadata;
 - the drain sentinel: `FLEET_UPDATE_DRAIN_FILE` ← `FLEET_DRAIN_FILE` ←
   `<FLEET_ENV_FILE>.update.drain`;
 - `FLEET_AUDIT_DIR` ← `<FLEET_DATA_DIR>/audit`;

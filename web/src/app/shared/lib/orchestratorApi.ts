@@ -56,7 +56,6 @@ export type Task = {
   priority?: number;
   effective_priority?: number;
   mcp_selection?: MCPChoice[];
-  instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
   // Sub-agent delegation gate (#1043). Defaults TRUE server-side (opt-out);
@@ -129,7 +128,6 @@ export type TaskCreate = {
   max_total_tokens?: number | null;
   priority?: number;
   mcp_selection?: MCPChoice[];
-  instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
   // Sub-agent delegation gate (#1043): omit for the server default (TRUE);
@@ -232,7 +230,6 @@ export type TaskTemplateTask = {
   // Omitted = the form default (true, #1043); an explicit false opts out.
   allow_delegation?: boolean;
   carry_context?: boolean;
-  instruction_self_improve?: boolean;
   persona?: string;
   description?: string;
   tags?: string[];
@@ -302,52 +299,6 @@ export type DashboardStats = {
 };
 
 export type Paginated<T> = { data: T[]; total: number; limit: number; offset: number };
-
-// Dataset / table agent (#514).
-export type DatasetColumn = {
-  name: string;
-  type: "text" | "number" | "boolean";
-  output?: boolean;
-  description?: string;
-};
-
-export type Dataset = {
-  id: string;
-  name: string;
-  goal: string;
-  columns: DatasetColumn[];
-  model?: string;
-  persona?: string;
-  status: "idle" | "running" | "paused";
-  concurrency: number;
-  created_at: string;
-  updated_at: string;
-  row_counts?: Record<string, number>;
-};
-
-export type DatasetRow = {
-  id: string;
-  dataset_id: string;
-  row_index: number;
-  cells: Record<string, unknown>;
-  status: "pending" | "running" | "proposed" | "approved" | "failed";
-  proposed?: Record<string, unknown>;
-  result_note?: string;
-  error?: string;
-  attempts: number;
-  cost_usd: number;
-  updated_at: string;
-};
-
-export type DatasetCreate = {
-  name: string;
-  goal: string;
-  columns: DatasetColumn[];
-  model: string;
-  persona?: string;
-  concurrency?: number;
-};
-
 
 // The MCP server catalog row. Mirrors chat's /mcp-servers row + the per-server
 // credential-account names (never secret values).
@@ -492,20 +443,6 @@ export function createTaskFrameParser(onFrame: (frame: TaskStreamFrame) => void)
 }
 
 
-// #516 self-improving memory.
-export type TaskLearnedInstruction = {
-  id: string;
-  task_id: string;
-  version: number;
-  content: string;
-  status: "proposed" | "active" | "archived";
-  signal_count: number;
-  created_at: number;
-  activated_at?: number;
-  activated_by?: string;
-};
-
-
 // Scheduler UX 2.0 (#504): a projected upcoming run.
 export type UpcomingRun = {
   task_id: string;
@@ -639,26 +576,6 @@ export const orchestratorApi = {
       `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,
       withSignal(signal),
     ),
-  // #516 self-improving memory: feedback + versioned learned instructions.
-  submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
-    request<unknown>(`/tasks/${encodeURIComponent(taskId)}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ rating, critique: critique ?? "" }),
-    }),
-  learnedInstructions: (taskId: string) =>
-    request<{ learned_instructions: TaskLearnedInstruction[] }>(
-      `/tasks/${encodeURIComponent(taskId)}/learned-instructions`,
-    ),
-  activateLearnedInstruction: (taskId: string, version: number) =>
-    request<TaskLearnedInstruction>(
-      `/tasks/${encodeURIComponent(taskId)}/learned-instructions/${version}/activate`,
-      { method: "POST" },
-    ),
-  deactivateLearnedInstruction: (taskId: string) =>
-    request<{ deactivated: boolean }>(
-      `/tasks/${encodeURIComponent(taskId)}/learned-instructions/active`,
-      { method: "DELETE" },
-    ),
   // Cancel/stop a task (#508): flips the row to cancelled with who-stopped-it
   // attribution and interrupts a live run at the governed loop's next
   // checkpoint. Server-side authorization permits admins/scoped cancel keys
@@ -773,40 +690,6 @@ export const orchestratorApi = {
   // provisioned on the server with `fleet mcp account set`, never from here).
   mcpServers: (signal?: AbortSignal) =>
     request<{ servers: McpServer[] }>("/mcp-servers", withSignal(signal)),
-
-  // Dataset / table agent (#514).
-  datasets: (signal?: AbortSignal) => request<{ datasets: Dataset[] }>("/datasets", withSignal(signal)),
-  dataset: (id: string, signal?: AbortSignal) =>
-    request<Dataset>(`/datasets/${encodeURIComponent(id)}`, withSignal(signal)),
-  createDataset: (body: DatasetCreate) =>
-    request<Dataset>("/datasets", { method: "POST", body: JSON.stringify(body) }),
-  deleteDataset: (id: string) =>
-    request<void>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  datasetRows: (id: string, qs = "", signal?: AbortSignal) =>
-    request<{ rows: DatasetRow[]; row_counts: Record<string, number> }>(
-      `/datasets/${encodeURIComponent(id)}/rows${qs}`,
-      withSignal(signal),
-    ),
-  importDatasetRowsCSV: (id: string, csv: string) =>
-    request<{ imported: number }>(`/datasets/${encodeURIComponent(id)}/rows`, {
-      method: "POST",
-      headers: { "Content-Type": "text/csv" },
-      body: csv,
-    }),
-  runDataset: (id: string) =>
-    request<{ status: string }>(`/datasets/${encodeURIComponent(id)}/run`, { method: "POST" }),
-  pauseDataset: (id: string) =>
-    request<{ status: string }>(`/datasets/${encodeURIComponent(id)}/pause`, { method: "POST" }),
-  approveDatasetRows: (id: string, rowIds?: string[]) =>
-    request<{ approved: number }>(`/datasets/${encodeURIComponent(id)}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ row_ids: rowIds ?? [] }),
-    }),
-  rerunDatasetRows: (id: string, rowIds?: string[]) =>
-    request<{ reset: number }>(`/datasets/${encodeURIComponent(id)}/rerun`, {
-      method: "POST",
-      body: JSON.stringify({ row_ids: rowIds ?? [] }),
-    }),
 
   uploadFile: async (file: File): Promise<{ filename: string }> => {
     const form = new FormData();

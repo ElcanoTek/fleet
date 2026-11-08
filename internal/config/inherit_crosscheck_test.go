@@ -42,7 +42,6 @@ var inheritReaders = map[string]inheritReader{
 	"FLEET_METADATA_MODEL":        {loadField(func(c *config.Config) string { return c.MetadataModel }), "vendor/metadata-model"},
 	"FLEET_ERROR_ANALYSIS_MODEL":  {loadField(func(c *config.Config) string { return c.ErrorAnalysisModel }), "vendor/error-model"},
 	"FLEET_MEMORY_MODEL":          {loadField(func(c *config.Config) string { return c.MemoryModel }), "vendor/memory-model"},
-	"FLEET_MEMORY_GRAPH_MODEL":    {loadField(func(c *config.Config) string { return c.MemoryGraphModel }), "vendor/graph-model"},
 	"FLEET_RECURRING_TASK_MODEL":  {loadField(func(c *config.Config) string { return c.RecurringTaskModel }), "vendor/recurring-model"},
 	"FLEET_LIBRARY_PROMPT_MODEL":  {loadField(func(c *config.Config) string { return c.LibraryPromptModel }), "vendor/library-model"},
 	"FLEET_SANDBOX_WARM_SIZE":     {loadField(func(c *config.Config) string { return strconv.Itoa(agent.WarmPoolSize(c)) }), "3"},

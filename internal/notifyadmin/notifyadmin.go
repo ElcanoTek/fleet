@@ -130,10 +130,6 @@ func (s *Service) envView() View {
 			WebhookMethod:       s.env.WebhookMethod,
 			WebhookBodyTemplate: s.env.WebhookBodyTemplate,
 			HasWebhookSecret:    s.env.WebhookSecret != "",
-			// The owner digest has no env var: under the env config it is off,
-			// at the default hour, until an admin saves the panel.
-			OwnerDigestEnabled: false,
-			OwnerDigestHourUTC: store.DefaultOwnerDigestHourUTC,
 		},
 		EmailEnabled:   s.env.EmailConfigured(),
 		WebhookEnabled: s.env.WebhookConfigured(),
@@ -241,8 +237,6 @@ func (s *Service) rowConfig(row *store.NotifySettingsConfig) notify.Config {
 	cfg.WebhookMethod = row.WebhookMethod
 	cfg.WebhookBodyTemplate = row.WebhookBodyTemplate
 	cfg.WebhookSecret = row.WebhookSecret
-	cfg.OwnerDigestEnabled = row.OwnerDigestEnabled
-	cfg.OwnerDigestHourUTC = row.OwnerDigestHourUTC
 	return cfg
 }
 

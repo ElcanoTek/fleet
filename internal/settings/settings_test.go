@@ -58,7 +58,6 @@ func testDefaults() map[string]string {
 		"approval_timeout_seconds":          "86400",
 		"max_cost_usd":                      "50",
 		"max_total_tokens":                  "10000000",
-		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
 		"default_model":                     "openai/gpt-5.6-luna-pro",
 		"advanced_model":                    "anthropic/claude-opus-5",
@@ -67,7 +66,7 @@ func testDefaults() map[string]string {
 		"escalation_classifier_mode":        "suggest",
 		"escalation_classifier_model":       "~typesafe/jev-latest",
 		"escalation_classifier_threshold":   "80",
-		"memory_autoindex_enabled":          "false",
+		"memory_autoindex_enabled":          "true",
 		"error_analysis_enabled":            "true",
 		"auto_title_enabled":                "true",
 		"connector_recommendations_enabled": "false",
@@ -157,8 +156,8 @@ func TestValidate(t *testing.T) {
 		{"pii_redaction_mode", "redact", "redact", false},
 		{"pii_redaction_mode", " Block ", "block", false},
 		{"pii_redaction_mode", "shred", "", true},
-		{"phone_a_friend_enabled", "TRUE", "true", false},
-		{"phone_a_friend_enabled", "yes", "", true},
+		{"subagents_enabled", "TRUE", "true", false},
+		{"subagents_enabled", "yes", "", true},
 		{"tool_disclosure_threshold", "42", "42", false},
 		{"tool_disclosure_threshold", "0", "", true}, // no MinZeroOK: 0 is out of range
 		{"tool_disclosure_threshold", "100001", "", true},
@@ -329,18 +328,18 @@ func TestResetRevertsToDefault(t *testing.T) {
 	svc := newTestService(t, st, applied)
 	ctx := context.Background()
 
-	if _, err := svc.Set(ctx, "memory_autoindex_enabled", "true", "admin@x"); err != nil {
+	if _, err := svc.Set(ctx, "memory_autoindex_enabled", "false", "admin@x"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	r, err := svc.Reset(ctx, "memory_autoindex_enabled", "admin@x")
 	if err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if r.Value != "false" || r.Source != SourceDefault {
-		t.Errorf("after reset = %+v, want default false", r)
+	if r.Value != "true" || r.Source != SourceDefault {
+		t.Errorf("after reset = %+v, want default true", r)
 	}
-	if applied["memory_autoindex_enabled"] != "false" {
-		t.Errorf("hook saw %q after reset, want false", applied["memory_autoindex_enabled"])
+	if applied["memory_autoindex_enabled"] != "true" {
+		t.Errorf("hook saw %q after reset, want true", applied["memory_autoindex_enabled"])
 	}
 	if applied["memory_autoindex_enabled/override"] != "false" {
 		t.Error("reset must apply as a DEFAULT (override=false) so env-shadowing hooks clear")
