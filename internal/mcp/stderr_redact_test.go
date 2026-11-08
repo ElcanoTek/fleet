@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
 )
@@ -72,5 +73,44 @@ func TestStdioConnectorStderrIsLoggedRedacted(t *testing.T) {
 	}
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "starting with token ") || lines[2] != "last words, no newline" {
 		t.Fatalf("stderr lines = %q", lines)
+	}
+}
+
+// A connector's stderr line written during a call carries that call's
+// correlation — conv_id, turn_id, task_id, run_id — not a background
+// context's (#2074 review: only the sandbox bridge attributed its stderr).
+func TestStdioConnectorStderrDuringACallCarriesItsIDs(t *testing.T) {
+	var out lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logging.NewHandler("json", &out, slog.LevelDebug)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	script := `read req; echo "Traceback: boom-mcp" >&2; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; sleep 1`
+	tr, err := newStdioTransport("acme", "sh", []string{"-c", script}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+	ctx := logging.WithTask(logging.WithTurn(t.Context(), "conv-1", "turn-2"), "task-3", "run-4")
+	if _, err := tr.Call(ctx, "tools/list", nil); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, raw := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			var m map[string]any
+			if json.Unmarshal([]byte(raw), &m) != nil || m["line"] != "Traceback: boom-mcp" {
+				continue
+			}
+			if m[logging.KeyConvID] != "conv-1" || m[logging.KeyTurnID] != "turn-2" ||
+				m[logging.KeyTaskID] != "task-3" || m[logging.KeyRunID] != "run-4" {
+				t.Fatalf("connector stderr not attributed to the call: %v", m)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no connector stderr record:\n%s", out.String())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

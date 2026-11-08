@@ -1079,6 +1079,12 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// The connector's stderr during this call is this call's: calls on one
+	// transport are serialised by t.mu, so one attribution at a time is
+	// exact. Cleared (after the logger's grace window) when the call ends.
+	t.stderr.Attribute(ctx)
+	defer t.stderr.ClearAttribution()
+
 	if t.broken {
 		return nil, errTransportDesynced
 	}
