@@ -957,16 +957,8 @@ mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"
 mcp_reqs_now="$(hash_file "$mcp_reqs")"
 mcp_reqs_prev="absent"
 [[ -f "$MCP_REQS_STAMP" ]] && mcp_reqs_prev="$(tr -d '[:space:]' < "$MCP_REQS_STAMP")"
-# A context that cannot be hashed COMPLETELY (an unreadable file, a
-# root-squashed NFS bundle — the hash names the path on stderr) is "unknown":
-# step 3 rebuilds (or takes the build's own failure path) and records no stamp,
-# since a hash of part of the tree must never vouch for the image. It never
-# aborts the update by itself.
-cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")" || cf_now="unknown"
-[[ -n "$cf_now" ]] || cf_now="unknown"
-cf_prev="absent"
-[[ -f "$STAMP_FILE" ]] && cf_prev="$(tr -d '[:space:]' < "$STAMP_FILE")"
-[[ -n "$cf_prev" ]] || cf_prev="absent"
+# (cf_now / cf_prev — the build-context hash and its stamp — are computed
+# below, once sandbox.image is resolved: a prebuilt image needs neither.)
 # Keep the resolver's stderr instead of discarding it. --print-tag ALWAYS
 # prints a name:tag when it runs at all (it falls back to
 # localhost/fleet-sandbox:latest when the manifest names no sandbox.tag), so an
@@ -1009,6 +1001,25 @@ resolve_sandbox_image() {
   fleet_sandbox_resolve_scalar image "$1" service_env_value || die "client bundle $1: fleet would refuse this sandbox.image at startup (see above) — nothing was installed"
 }
 sandbox_image_ref="$(resolve_sandbox_image "$CLIENT_DIR/manifest.yaml")"
+
+# The build-context hash, only when something will read it: with a prebuilt
+# sandbox.image step 3 neither builds nor compares, so hashing a context
+# (possibly a whole bundle root) would be wasted work — and a context that
+# cannot be read would print errors about a build that never happens.
+# A context that cannot be hashed COMPLETELY (an unreadable file, a
+# root-squashed NFS bundle — the hash names the path on stderr) is "unknown":
+# step 3 rebuilds (or takes the build's own failure path) and records no stamp,
+# since a hash of part of the tree must never vouch for the image. It never
+# aborts the update by itself.
+if [[ -n "$sandbox_image_ref" ]]; then
+  cf_now="prebuilt"   # never compared, never recorded
+else
+  cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")" || cf_now="unknown"
+  [[ -n "$cf_now" ]] || cf_now="unknown"
+fi
+cf_prev="absent"
+[[ -f "$STAMP_FILE" ]] && cf_prev="$(tr -d '[:space:]' < "$STAMP_FILE")"
+[[ -n "$cf_prev" ]] || cf_prev="absent"
 
 # sandbox_podman CMD… — podman against the image store the service actually
 # reads: as the unit's User= when running as root and that user exists, else
@@ -1155,7 +1166,9 @@ step "3/5  Sandbox image (the release's signed image, or an on-box build for a c
 # own Containerfile is still built here — layered on the verified image when it
 # declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md).
 sandbox_published=0
-if fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
+# (Not asked with a prebuilt sandbox.image: it wins, and the check would hash
+# both contexts for nothing.)
+if [[ -z "$sandbox_image_ref" ]] && fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
   sandbox_published=1
 fi
 sandbox_base=""   # the verified release image a custom Containerfile layers on
@@ -1170,6 +1183,25 @@ if [[ -n "$sandbox_image_ref" ]]; then
   # here would burn one pointless multi-GB build the first update after a
   # client switches to registry images. Same skip bootstrap.sh applies.
   info "manifest resolves sandbox.image=${sandbox_image_ref} — using a prebuilt/registry image; skipping the on-box build."
+  # A box that ran the release image until now leaves it behind (its digest
+  # name, and the sandbox.tag it was tagged as): nothing on this path pulls or
+  # prunes, so queue both for the reclaim retry after the restart — not
+  # removed here, while the old service may still be running on them — and
+  # clear the digest file so they are queued once. The usual rules apply
+  # there: the prebuilt image (and its ID) is protected, nothing is forced,
+  # a refusal stays listed.
+  sandbox_prev_digest=""
+  [[ -f "$SANDBOX_DIGEST_FILE" ]] && sandbox_prev_digest="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
+  if [[ -n "$sandbox_prev_digest" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would queue the release image this box ran until now (${sandbox_prev_digest}${ref_prev:+, tag ${ref_prev}}) for removal after the restart"
+    elif fleet_sandbox_reclaim_enqueue "$SANDBOX_RECLAIM_FILE" "$sandbox_prev_digest" ${ref_prev:+"tag:${ref_prev}"}; then
+      rm -f "$SANDBOX_DIGEST_FILE"
+      info "queued the release image this box ran until now (${sandbox_prev_digest##*@}${ref_prev:+, tag ${ref_prev}}) for removal after the restart"
+    else
+      warn "could not queue ${sandbox_prev_digest} for removal (${SANDBOX_RECLAIM_FILE}) — the next update tries again"
+    fi
+  fi
 elif [[ "$sandbox_published" == "1" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would verify the release's signed sandbox image (fleet release sandbox: its digest from the verified release.json, its cosign signature), pull it BY DIGEST into ${service_user:-the invoking user}'s store and tag it ${ref_now:-<sandbox.tag>}"

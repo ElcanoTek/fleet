@@ -274,7 +274,7 @@ func TestSandboxUsesReleaseImageComparesTheWholeContext(t *testing.T) {
 // verbatim by TestUpdateSandboxStampGate.
 func updateStampSnippet(t *testing.T, update string) string {
 	t.Helper()
-	const from, to = `cf_now="$(fleet_sandbox_context_hash "$sandbox_cf")"`, `[[ -n "$cf_prev" ]] || cf_prev="absent"`
+	const from, to = "if [[ -n \"$sandbox_image_ref\" ]]; then\n  cf_now=\"prebuilt\"", `[[ -n "$cf_prev" ]] || cf_prev="absent"`
 	i := strings.Index(update, from)
 	j := strings.Index(update, to)
 	if i < 0 || j < i {
@@ -307,7 +307,7 @@ func TestUpdateSandboxStampGate(t *testing.T) {
 	stamp := filepath.Join(t.TempDir(), "sandbox-containerfile.sha256")
 	gate := func() (now, prev string) {
 		t.Helper()
-		out := libBash(t, `sandbox_cf="$CF"; STAMP_FILE="$ST"; `+snippet+` printf '%s %s' "$cf_now" "$cf_prev"`, "CF="+cf, "ST="+stamp)
+		out := libBash(t, `sandbox_cf="$CF"; STAMP_FILE="$ST"; sandbox_image_ref=""; `+snippet+` printf '%s %s' "$cf_now" "$cf_prev"`, "CF="+cf, "ST="+stamp)
 		f := strings.Fields(out)
 		if len(f) != 2 {
 			t.Fatalf("gate output %q", out)

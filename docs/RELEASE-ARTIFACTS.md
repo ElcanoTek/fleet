@@ -335,7 +335,9 @@ Containerfile or any file beside it (a `requirements.txt`, a script it
 copies), compared by one hash of the whole directory: relative paths (the
 Containerfile's own name included), file contents, directories (an empty one
 too) and permission bits (`mode & 0755`, so a
-`chmod +x` counts but a umask-dependent group/other write bit does not). It
+`chmod +x` counts but a umask-dependent group/other write bit does not). A
+Containerfile that is a symlink also counts by the bytes it resolves to,
+inside the context or not. It
 excludes nothing: `.git`, `.containerignore` / `.dockerignore` and the paths
 they name all count, even though the build never sends the ignored ones.
 Erring that way costs at most an extra rebuild, never a stale image. The
@@ -347,13 +349,17 @@ context differently (only the Containerfile, or an earlier context format)
 rebuilds once. A context that cannot be hashed completely (an unreadable
 file, a root-squashed NFS bundle) fails closed: `update` names the path,
 rebuilds, and records no hash, and such a context never counts as the
-release image.
+release image. With a prebuilt `sandbox.image` nothing is built or compared,
+so the context is not hashed at all.
 
 After pulling a new release image by digest, `update` removes the previous
 one (it keeps its `@sha256` name, so `podman image prune` never would),
 without `--force`. The same goes for a custom build's previous
 `FLEET_SANDBOX_BASE` digest once a rebuild has moved to a new one, and for
-the image left under the old `sandbox.tag` when the bundle renames it. When a
+the image left under the old `sandbox.tag` when the bundle renames it. A box
+that switches from the release image to a prebuilt `sandbox.image` queues the
+release image it ran (its digest and its old tag) for removal after the
+restart. When a
 container still uses it, the removal is refused and the ref is kept in
 `sandbox-image.reclaim` under the state directory; `update`
 retries every listed ref after the service restart and on each later run, and

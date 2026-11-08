@@ -145,7 +145,7 @@ fleet_sandbox_containerfile_named() {
 fleet_sandbox_build_containerfile() {
   local cf
   cf="$(fleet_sandbox_containerfile "$1")"
-  if [[ ! -f "$cf" ]] && ! fleet_sandbox_containerfile_named "$1"; then
+  if [[ ! -f "$cf" && ! -L "$cf" ]] && ! fleet_sandbox_containerfile_named "$1"; then
     cf="$(fleet_sandbox_containerfile "$2")"
   fi
   printf '%s' "$cf"
@@ -163,7 +163,7 @@ fleet_sandbox_build_containerfile() {
 fleet_sandbox_uses_release_image() {
   local cf generic h g
   cf="$(fleet_sandbox_containerfile "$1")"
-  if [[ ! -f "$cf" ]]; then
+  if [[ ! -f "$cf" && ! -L "$cf" ]]; then
     fleet_sandbox_containerfile_named "$1" && return 1
     return 0
   fi
@@ -194,7 +194,8 @@ fleet__mode() {
 # Deterministic: EVERY entry under the context directory, sorted bytewise by
 # relative path, each hashed as its kind, its path, its permission bits
 # (fleet__mode — COPY preserves them, so a chmod +x makes a new image) and,
-# for a file, its contents (a symlink: its target). Directories count on their
+# for a file, its contents (a symlink: its target text — and, for a symlinked
+# Containerfile, also the bytes it resolves to). Directories count on their
 # own, so an added empty directory or a directory mode change is a change.
 # The Containerfile is an entry like any other, at its real relative path
 # (a `COPY .` puts its name in the image), and the records also name which
@@ -223,7 +224,8 @@ fleet__mode() {
 # that would swallow one); callers treat a failure as "unknown".
 fleet_sandbox_context_hash() {
   local cf="$1" ctx cf_rel tmp sum="" rc=0
-  if [[ ! -f "$cf" ]]; then
+  # (A dangling Containerfile symlink is not "absent": it fails below.)
+  if [[ ! -f "$cf" && ! -L "$cf" ]]; then
     printf 'absent'
     return 0
   fi
@@ -271,6 +273,20 @@ fleet__context_records() {
     fleet__hash_error "$tmp/records" "cannot write"
     return 1
   fi
+  # A Containerfile that is a symlink: the entry below hashes only the link
+  # text, but the build reads the bytes it resolves to (inside the context or
+  # not), so those count too. Unresolvable or unreadable: fail closed.
+  if [[ -L "$cf" ]]; then
+    if ! target="$(readlink -f -- "$cf")" || [[ ! -f "$target" ]]; then
+      fleet__hash_error "$cf" "the Containerfile symlink does not resolve to a file"
+      return 1
+    fi
+    if ! sum="$(fleet__sha "$target")"; then fleet__hash_error "$target" "cannot read"; return 1; fi
+    if ! printf 'containerfile-target\0%s\0' "$sum" >> "$tmp/records"; then
+      fleet__hash_error "$tmp/records" "cannot write"
+      return 1
+    fi
+  fi
   if ! find "$ctx" -mindepth 1 -print0 > "$tmp/found"; then
     fleet__hash_error "$ctx" "find could not list every entry"
     return 1
@@ -297,6 +313,18 @@ fleet__context_records() {
     fi
   done < "$tmp/sorted" >> "$tmp/records" || return 1
   return 0
+}
+
+# fleet_sandbox_reclaim_enqueue LIST_FILE ENTRY… — append reclaim entries
+# (digest refs, or `tag:NAME`) to LIST_FILE without trying them now; the next
+# fleet_sandbox_reclaim_release_images call over that list applies its usual
+# rules (and drops duplicates). Status 1 when the list cannot be written.
+fleet_sandbox_reclaim_enqueue() {
+  local list="$1"
+  shift
+  (( $# > 0 )) || return 0
+  mkdir -p "$(dirname "$list")" 2>/dev/null || return 1
+  printf '%s\n' "$@" >> "$list" 2>/dev/null
 }
 
 # fleet_sandbox_reclaim_release_images LIST_FILE NEW_REFS PROTECTED_REF… —
