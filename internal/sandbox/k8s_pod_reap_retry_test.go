@@ -73,7 +73,7 @@ func TestReapQueueIsBoundedAndSelfTerminating(t *testing.T) {
 	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
 
 	for i := 0; i < podReapMaxPending+10; i++ {
-		backend.scheduleReap(podNameForTest(i))
+		backend.scheduleReap(t.Context(), podNameForTest(i))
 	}
 	backend.reapMu.Lock()
 	pending := len(backend.reapPending)

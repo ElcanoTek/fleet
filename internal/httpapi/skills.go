@@ -57,11 +57,11 @@ type skillsResponse struct {
 // server booted without a bundle). Bundle.Skills re-reads from disk, matching
 // the persona/protocol live-reload contract — an operator editing a skill in
 // place is picked up without a restart.
-func (s *Server) bundleSkills() []clientconfig.Skill {
+func (s *Server) bundleSkills(ctx context.Context) []clientconfig.Skill {
 	if s.clientConfig == nil {
 		return nil
 	}
-	return s.clientConfig.Skills()
+	return s.clientConfig.Skills(ctx)
 }
 
 // listSkills serves GET /skills: the bundle's skill roster in `skills` (used
@@ -73,7 +73,7 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	skills := s.bundleSkills()
+	skills := s.bundleSkills(r.Context())
 	sharedByName := map[string]store.UserSkill{}
 	var sharedList []store.UserSkill
 	if s.store != nil {
@@ -172,7 +172,7 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	for _, sk := range s.bundleSkills() {
+	for _, sk := range s.bundleSkills(r.Context()) {
 		if sk.Name != name {
 			continue
 		}
@@ -253,7 +253,7 @@ func (s *Server) applySkillInvocation(ctx context.Context, user, userMessage, ra
 		}
 	}
 	if block == "" {
-		block, _ = matchSkillInvocation(rawMessage, s.bundleSkills())
+		block, _ = matchSkillInvocation(rawMessage, s.bundleSkills(ctx))
 	}
 	return userMessage + block
 }

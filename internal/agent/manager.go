@@ -406,7 +406,7 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			// because a server that never mentions the token still writes its
 			// relative output paths somewhere — and "somewhere" must not be
 			// the operator's bundle checkout.
-			shared := agentcore.SharedMCPWorkspaceDir()
+			shared := agentcore.SharedMCPWorkspaceDir(context.Background())
 			// The one token helper, in its one order (MCPServerDefs, the
 			// reload diff, calls it identically). Shared spawn ⇒ no task
 			// identity and no signed-in user: ${FLEET_TASK_ID}- and

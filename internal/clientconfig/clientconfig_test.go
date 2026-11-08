@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -459,7 +460,7 @@ func TestDefaultBundleSkillsValid(t *testing.T) {
 	if problems := b.ValidateSkills(); len(problems) != 0 {
 		t.Errorf("default bundle skills should be clean, got problems: %v", problems)
 	}
-	skills := b.Skills()
+	skills := b.Skills(context.Background())
 	if len(skills) == 0 {
 		t.Fatal("default bundle should ship at least the example skill")
 	}

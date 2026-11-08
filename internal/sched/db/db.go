@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
@@ -143,13 +144,13 @@ func marshalJSON(v interface{}) string {
 	return string(b)
 }
 
-func unmarshalStringSlice(s string) []string {
+func unmarshalStringSlice(ctx context.Context, s string) []string {
 	if s == "" {
 		return []string{}
 	}
 	var result []string
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
+		logging.From(ctx).Warn("Warning: failed to unmarshal string slice", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return []string{}
 	}
 	if result == nil {
@@ -158,13 +159,13 @@ func unmarshalStringSlice(s string) []string {
 	return result
 }
 
-func unmarshalMCPSelection(s string) models.MCPSelection {
+func unmarshalMCPSelection(ctx context.Context, s string) models.MCPSelection {
 	if s == "" {
 		return models.MCPSelection{}
 	}
 	var result models.MCPSelection
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		slog.Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
+		logging.From(ctx).Warn("Warning: failed to unmarshal mcp_selection", "err", err, "input", fmt.Sprintf("%.100s", s))
 		return models.MCPSelection{}
 	}
 	if result == nil {

@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -128,7 +129,7 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	// RateLimit=1 → this key may submit one task/minute, overriding the 100 default.
-	_, rawKey, err := mgr.CreateKey("ci", nil, nil, 1, nil, "")
+	_, rawKey, err := mgr.CreateKey(context.Background(), "ci", nil, nil, 1, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -191,7 +192,7 @@ func TestSchedRateLimitMiddleware_GlobalChargedAfterPerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	_, rawKey, err := mgr.CreateKey("ci", nil, nil, 0, nil, "")
+	_, rawKey, err := mgr.CreateKey(context.Background(), "ci", nil, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

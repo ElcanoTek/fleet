@@ -75,11 +75,11 @@ func TestWorkspaceDirs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 
-	shared := SharedMCPWorkspaceDir()
+	shared := SharedMCPWorkspaceDir(t.Context())
 	if want := filepath.Join(root, "mcp-shared"); shared != want {
 		t.Errorf("SharedMCPWorkspaceDir = %q, want %q", shared, want)
 	}
-	if again := SharedMCPWorkspaceDir(); again != shared {
+	if again := SharedMCPWorkspaceDir(t.Context()); again != shared {
 		t.Errorf("shared dir must be stable across calls: %q vs %q", again, shared)
 	}
 

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +40,11 @@ import (
 // every exec'd process inside.
 type containerImpl struct {
 	cfg ContainerConfig
+
+	// logCtx carries the session-level correlation (conversation, user,
+	// task) of the context the sandbox was started under, for lines logged
+	// where no request is in flight (teardown). Set once in start.
+	logCtx context.Context
 
 	// containerID is the random ULID-ish name we assigned at start.
 	// Using a name (not the SHA) keeps `podman ps` readable.
@@ -536,6 +540,7 @@ func networkArgs(noNetwork bool, proxyURL string) []string {
 const bridgeScriptTempPattern = "chat-sandbox-bridge-*.py"
 
 func (c *containerImpl) start(ctx context.Context) error {
+	c.logCtx = sessionContext(ctx)
 	// Write the bridge script to a host temp file so we can bind-mount
 	// it into the container. We bind-mount the file (not a directory)
 	// so the rest of /opt inside the container stays untouched.
@@ -1309,7 +1314,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// is nil until the child is Wait()ed — wedging every later
 		// run_python in the turn. Reap and reset so the next call starts
 		// fresh; the container is intact, so no poison.
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, c.bridgeStderrSuffix())
 	}
 
@@ -1359,14 +1364,14 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		// (mirrors hostImpl.readLocked): the orphaned reader goroutine above
 		// still owns c.bridgeStdout and the session's response stream can no
 		// longer be trusted.
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("python execution cancelled (%w); sandbox retired: %w", ctx.Err(), ErrPoisoned)
 	case <-timer.C:
 		// Same containment as the cancel arm: the timed-out cell is still
 		// running in the container until the PID namespace goes away.
 		c.execPoisoned.Store(true)
 		_ = c.killContainerNow(c.currentContainerID())
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(ctx)
 		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
@@ -1376,7 +1381,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 			// later run_python in the turn would write into the same corpse
 			// and fail — reap it and clear the state so the next call boots a
 			// fresh bridge. The container itself is intact: no poison.
-			c.terminateBridgeLocked()
+			c.terminateBridgeLocked(ctx)
 			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, c.bridgeStderrSuffix())
 		}
 		if r.discarded > 0 {
@@ -1407,7 +1412,9 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 // processes), and --init reaps the resulting zombie. A reset therefore
 // restarts the kernel and loses prior in-conversation state — surfaced in the
 // run_python tool description.
-func (c *containerImpl) terminateBridgeLocked() {
+// ctx is the request's when a run_python request tears the bridge down, else
+// the sandbox's session context (logContext): the reap warning carries it.
+func (c *containerImpl) terminateBridgeLocked(ctx context.Context) {
 	if cmd := c.bridgeCmd; cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
 		// Brief grace period; force-kill if still alive.
@@ -1436,7 +1443,7 @@ func (c *containerImpl) terminateBridgeLocked() {
 			select {
 			case <-done:
 			case <-time.After(bridgeReapTimeout):
-				slog.Warn("sandbox: bridge exec client did not reap in time after SIGKILL; abandoning the wait and clearing the bridge state", "timeout", bridgeReapTimeout)
+				logging.From(ctx).Warn("sandbox: bridge exec client did not reap in time after SIGKILL; abandoning the wait and clearing the bridge state", "timeout", bridgeReapTimeout)
 			}
 		}
 	}
@@ -1530,6 +1537,15 @@ func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	return nil
 }
 
+// logContext is the sandbox's session context (logCtx), for a line logged
+// with no request in flight.
+func (c *containerImpl) logContext() context.Context {
+	if c.logCtx == nil {
+		return context.Background()
+	}
+	return c.logCtx
+}
+
 func (c *containerImpl) close() {
 	c.mu.Lock()
 	// Tear the bridge down the same way a timeout/cancel does: signal the
@@ -1537,7 +1553,7 @@ func (c *containerImpl) close() {
 	// stdin and nil'ing bridgeCmd (the old behavior) never reaped the child —
 	// every sandbox that ever ran Python leaked a zombie, its pipe FDs, and
 	// the stderr-copier goroutine cmd.Start spawned for the MultiWriter.
-	c.terminateBridgeLocked()
+	c.terminateBridgeLocked(c.logContext())
 	c.bridgeStderr = nil
 	scriptPath := c.bridgeScriptPath
 	statsCancel := c.statsCancel
@@ -1571,7 +1587,7 @@ func (c *containerImpl) close() {
 		select {
 		case <-statsDone:
 		case <-time.After(statsDrainTimeout):
-			slog.Warn("sandbox: telemetry poller did not stop in time; abandoning its resource rollup and tearing the container down anyway", "timeout", statsDrainTimeout)
+			logging.From(c.logContext()).Warn("sandbox: telemetry poller did not stop in time; abandoning its resource rollup and tearing the container down anyway", "timeout", statsDrainTimeout)
 		}
 	}
 

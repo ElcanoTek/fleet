@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -78,7 +79,7 @@ func TestAdminAuth_TypedAdminKeyWorks(t *testing.T) {
 	keyMgr, r := setupAdminAuthz(t)
 
 	adminKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeAdmin, nil)
-	victim, _, err := keyMgr.CreateTypedKey("rotate-me", apikeys.KeyTypeTask, nil, 0, nil, "")
+	victim, _, err := keyMgr.CreateTypedKey(context.Background(), "rotate-me", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create rotate-target key: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestAdminAuth_NonAdminKeysAreDefinitive403(t *testing.T) {
 	keyMgr, r := setupAdminAuthz(t)
 
 	adminRole := "admin"
-	_, legacyAdminKey, err := keyMgr.CreateKey("legacy-admin", nil, &adminRole, 0, nil, "")
+	_, legacyAdminKey, err := keyMgr.CreateKey(context.Background(), "legacy-admin", nil, &adminRole, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create legacy admin-role key: %v", err)
 	}
@@ -153,11 +154,11 @@ func TestAdminAuth_InvalidOrAbsentKeysStay401(t *testing.T) {
 
 	keyMgr, r := setupAdminAuthz(t)
 
-	revoked, revokedRaw, err := keyMgr.CreateTypedKey("revoked-admin", apikeys.KeyTypeAdmin, nil, 0, nil, "")
+	revoked, revokedRaw, err := keyMgr.CreateTypedKey(context.Background(), "revoked-admin", apikeys.KeyTypeAdmin, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed admin key: %v", err)
 	}
-	if err := keyMgr.RevokeKey(revoked.KeyID); err != nil {
+	if err := keyMgr.RevokeKey(context.Background(), revoked.KeyID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 

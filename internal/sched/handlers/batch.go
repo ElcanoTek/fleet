@@ -183,7 +183,7 @@ func (h *Handlers) resolveTaskCreator(w http.ResponseWriter, r *http.Request) (t
 	apiKey := r.Header.Get("X-API-Key")
 	if apiKey != "" {
 		perm := models.PermissionCreateTask
-		valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil)
+		valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil)
 		if valid && key != nil {
 			creator.hasAdminPermission = key.HasPermission(models.PermissionAdmin)
 			keyID := key.KeyID

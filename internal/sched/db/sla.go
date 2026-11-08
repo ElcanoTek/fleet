@@ -30,7 +30,7 @@ func (db *Database) GetRunningTasksWithSLA(ctx context.Context) ([]*models.Task,
 		return nil, err
 	}
 	defer rows.Close()
-	return db.rowsToTasks(rows)
+	return db.rowsToTasks(ctx, rows)
 }
 
 // MarkSLABreached latches sla_breached=true on a task the SLA monitor flagged

@@ -73,7 +73,7 @@ func (db *Database) ExpireStrandedWakeTasks(ctx context.Context, grace time.Dura
 	defer func() { _ = rows.Close() }()
 	var expired []*models.Task
 	for rows.Next() {
-		t, serr := db.scanTask(rows)
+		t, serr := db.scanTask(ctx, rows)
 		if serr != nil {
 			return nil, serr
 		}

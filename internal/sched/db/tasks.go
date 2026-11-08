@@ -241,8 +241,8 @@ func liveTaskStatus(s models.TaskStatus) bool {
 // the positional scan agree by construction (no manual ordering to drift).
 // Hot path: per row it fills one destination slice and runs the assign
 // functions; all statement text was built once at package init.
-func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
-	var buf taskScanBuf
+func (db *Database) scanTask(ctx context.Context, scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
+	buf := taskScanBuf{ctx: ctx}
 	dests := make([]any, len(taskReadSet))
 	for i, c := range taskReadSet {
 		dests[i] = c.dest(&buf)
@@ -257,10 +257,10 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	return task, nil
 }
 
-func (db *Database) rowsToTasks(rows *sql.Rows) ([]*models.Task, error) {
+func (db *Database) rowsToTasks(ctx context.Context, rows *sql.Rows) ([]*models.Task, error) {
 	tasks := make([]*models.Task, 0)
 	for rows.Next() {
-		task, err := db.scanTask(rows)
+		task, err := db.scanTask(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
@@ -272,7 +272,7 @@ func (db *Database) rowsToTasks(rows *sql.Rows) ([]*models.Task, error) {
 // GetTask gets a task by ID.
 func (db *Database) GetTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	row := db.conn.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = $1", taskID)
-	return db.scanTask(row)
+	return db.scanTask(ctx, row)
 }
 
 // TaskExists reports whether a task row with the given id exists. Used by the
@@ -389,7 +389,7 @@ func (db *Database) DeleteTask(ctx context.Context, taskID uuid.UUID) (bool, err
 // GetTaskForUpdate gets a task by ID with a row-level lock. Must be in a tx.
 func (db *Database) GetTaskForUpdate(ctx context.Context, tx *sql.Tx, taskID uuid.UUID) (*models.Task, error) {
 	row := tx.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = $1 FOR UPDATE", taskID)
-	return db.scanTask(row)
+	return db.scanTask(ctx, row)
 }
 
 // UpdateTaskTx updates a task within a transaction, via the registry-derived

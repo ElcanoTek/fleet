@@ -52,7 +52,7 @@ func TestTerminateBridgeFlushesTheLastStderrLine(t *testing.T) {
 	if strings.Contains(out.String(), "last words") {
 		t.Fatal("a partial line was logged before the bridge ended")
 	}
-	c.terminateBridgeLocked()
+	c.terminateBridgeLocked(t.Context())
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(out.String(), "Traceback: last words") {
 		if time.Now().After(deadline) {

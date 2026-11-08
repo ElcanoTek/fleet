@@ -41,7 +41,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -944,7 +943,7 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		// ("could not be confirmed killed"); queue a retry so it also stops
 		// being true as soon as the apiserver answers again.
 		logging.From(delCtx).Warn("sandbox: cancelled-exec pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
-		k.backend.scheduleReap(podName)
+		k.backend.scheduleReap(delCtx, podName)
 		return false
 	}
 	return true
@@ -983,7 +982,7 @@ func (k *reapDurationKnob) set(d time.Duration) { k.ns.Store(int64(d)) }
 // scheduleReap queues a pod whose delete failed, and makes sure a drain
 // goroutine is running. The goroutine exits when the queue empties, so an
 // installation that never fails a delete never carries one.
-func (b *KubernetesBackend) scheduleReap(podName string) {
+func (b *KubernetesBackend) scheduleReap(ctx context.Context, podName string) {
 	if podName == "" {
 		return
 	}
@@ -995,13 +994,13 @@ func (b *KubernetesBackend) scheduleReap(podName string) {
 	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
 		// Refusing to grow without bound is the point of a bound; say so
 		// rather than dropping the pod silently.
-		slog.Warn("sandbox: pod-delete retry queue is full — the pod will be reclaimed by the boot-time orphan sweep instead", "max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
+		logging.From(ctx).Warn("sandbox: pod-delete retry queue is full — the pod will be reclaimed by the boot-time orphan sweep instead", "max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
 		return
 	}
 	b.reapPending[podName] = 0
 	if !b.reapRunning {
 		b.reapRunning = true
-		go b.reapLoop()
+		go b.reapLoop() //nolint:gosec // G118: the reaper outlives the call that queued the pod (it retries for minutes); that call's context would cancel it
 	}
 }
 
@@ -1466,7 +1465,7 @@ func (k *k8sImpl) close() {
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
 			logging.From(delCtx).Warn("sandbox: close-time pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
-			k.backend.scheduleReap(podName)
+			k.backend.scheduleReap(delCtx, podName)
 		}
 	}
 }

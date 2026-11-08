@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -121,7 +122,7 @@ func TestCreateTask_KeyPriorityCeiling(t *testing.T) {
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
 	r, store, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -230,7 +231,7 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

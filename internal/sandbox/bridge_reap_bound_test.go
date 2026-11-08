@@ -55,13 +55,16 @@ func TestTerminateBridge_BoundedWhenExecPipesHeld(t *testing.T) {
 		bridgeStdin:   stdin,
 		bridgeStarted: true,
 	}
+	out := captureBridgeLog(t)
 
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		c.terminateBridgeLocked()
+		// The run_python request whose timeout tore the bridge down: its
+		// ids are on the reap warning (#2074 review).
+		c.terminateBridgeLocked(bridgeRequestCtx())
 	}()
 	select {
 	case <-finished:
@@ -70,6 +73,9 @@ func TestTerminateBridge_BoundedWhenExecPipesHeld(t *testing.T) {
 	}
 	if c.bridgeCmd != nil || c.bridgeStdin != nil || c.bridgeStarted {
 		t.Error("bridge state must be cleared even when the reap wait is abandoned")
+	}
+	if log := out.String(); !strings.Contains(log, "did not reap in time") || !strings.Contains(log, `"request_id":"req-77"`) || !strings.Contains(log, `"conv_id":"conv-9"`) {
+		t.Errorf("the reap warning lacks the request's ids: %s", log)
 	}
 }
 
@@ -91,7 +97,7 @@ func TestEnsureBridgeSetsWaitDelay(t *testing.T) {
 	defer func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(t.Context())
 	}()
 	if c.bridgeCmd.WaitDelay != BashWaitDelay {
 		t.Errorf("bridge exec WaitDelay = %v, want BashWaitDelay (%v) — without it a held pipe blocks cmd.Wait() unboundedly", c.bridgeCmd.WaitDelay, BashWaitDelay)

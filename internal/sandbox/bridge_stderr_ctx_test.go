@@ -71,7 +71,7 @@ func TestContainerBridgeStderrCarriesTheRequestContext(t *testing.T) {
 	defer func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		c.terminateBridgeLocked()
+		c.terminateBridgeLocked(t.Context())
 	}()
 	if _, err := c.runPython(bridgeRequestCtx(), PythonRequest{Code: "1/0"}); err != nil {
 		t.Fatalf("runPython: %v", err)

@@ -77,7 +77,7 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	authorizedByKey := false
 	if rawKey := webhookKeyFromRequest(r); rawKey != "" {
 		if kt, _, perr := apikeys.ParseAPIKey(rawKey); perr == nil && kt == apikeys.KeyTypeWebhook {
-			if valid, key, _ := h.apiKeys.ValidateKey(rawKey, nil, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), rawKey, nil, nil, nil); valid && key != nil {
 				if !key.AllowsTriggerSlug(slug) {
 					writeError(w, http.StatusForbidden, "trigger slug not permitted for this key")
 					return

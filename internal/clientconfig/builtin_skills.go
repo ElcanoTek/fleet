@@ -1,18 +1,19 @@
 package clientconfig
 
 import (
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Fleet ships a small pack of generally-useful Agent Skills baked into the
@@ -80,7 +81,7 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 	}
 	sum := sha256.Sum256([]byte(bundleSkillsDir))
 	merged := filepath.Join(base, hex.EncodeToString(sum[:6]))
-	if err := syncMergedSkills(bundleSkillsDir, merged, builtinEnabled, hidden, overlays); err != nil {
+	if err := syncMergedSkills(context.Background(), bundleSkillsDir, merged, builtinEnabled, hidden, overlays); err != nil {
 		return bundleSkillsDir, err
 	}
 	return merged, nil
@@ -178,10 +179,10 @@ func (b *Bundle) StageSkillsAt(dir string) error {
 	if filepath.Clean(abs) == filepath.Clean(b.BundleSkillsDir) {
 		return fmt.Errorf("stage skills: %s is the bundle's own skills/ dir", abs)
 	}
-	if err := ensureStagedRoot(abs); err != nil {
+	if err := ensureStagedRoot(context.Background(), abs); err != nil {
 		return fmt.Errorf("stage skills: %w", err)
 	}
-	if err := syncMergedSkills(b.BundleSkillsDir, abs, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
+	if err := syncMergedSkills(context.Background(), b.BundleSkillsDir, abs, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
 		return fmt.Errorf("stage skills into %s: %w", abs, err)
 	}
 	b.SkillsDir = abs
@@ -195,13 +196,13 @@ func (b *Bundle) StageSkillsAt(dir string) error {
 // before the read-only mount existed, a stray file, a group/world-writable
 // dir — is REMOVED and the root rebuilt clean, loudly. os.RemoveAll on a
 // symlink removes the link, never what it points at.
-func ensureStagedRoot(dir string) error {
+func ensureStagedRoot(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil { //nolint:gosec // the workspace root is sandbox-readable by design
 		return err
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if verr := verifyExistingDir(dir); verr != nil {
-			slog.Warn("clientconfig: staged skills root is not a trusted directory; replacing it", "dir", dir, "err", verr)
+			logging.From(ctx).Warn("clientconfig: staged skills root is not a trusted directory; replacing it", "dir", dir, "err", verr)
 			if rerr := os.RemoveAll(dir); rerr != nil {
 				return fmt.Errorf("replace untrusted staged skills root: %w", rerr)
 			}
@@ -243,7 +244,7 @@ func verifyExistingDir(path string) error {
 // name wins a collision between plugins), then the bundle's own skills/
 // (the bundle author always wins). Files are written in place only when
 // their content changed; stale entries from a prior sync are removed.
-func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidden []string, overlays []skillOverlay) error {
+func syncMergedSkills(ctx context.Context, bundleSkillsDir, merged string, builtinEnabled bool, hidden []string, overlays []skillOverlay) error {
 	hiddenSet := map[string]bool{}
 	for _, h := range hidden {
 		hiddenSet[strings.TrimSpace(h)] = true
@@ -279,15 +280,15 @@ func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidde
 	for _, ov := range overlays {
 		for _, name := range ov.Names {
 			if prev, dup := pluginOwned[name]; dup {
-				slog.Info("clientconfig: plugin skill is shadowed by an earlier plugin's skill of the same name (first plugin wins)", "plugin", ov.Plugin, "name", name, "shadowed_by", prev)
+				logging.From(ctx).Info("clientconfig: plugin skill is shadowed by an earlier plugin's skill of the same name (first plugin wins)", "plugin", ov.Plugin, "name", name, "shadowed_by", prev)
 				continue
 			}
 			if want[name] {
-				slog.Info("clientconfig: plugin skill overrides the built-in skill of the same name", "plugin", ov.Plugin, "name", name)
+				logging.From(ctx).Info("clientconfig: plugin skill overrides the built-in skill of the same name", "plugin", ov.Plugin, "name", name)
 			}
 			pluginOwned[name] = ov.Plugin
 			want[name] = true
-			if err := copyDirSkill(filepath.Join(ov.SkillsDir, name), filepath.Join(merged, name), ov.Root); err != nil {
+			if err := copyDirSkill(ctx, filepath.Join(ov.SkillsDir, name), filepath.Join(merged, name), ov.Root); err != nil {
 				return err
 			}
 		}
@@ -300,12 +301,12 @@ func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidde
 				continue
 			}
 			if p, fromPlugin := pluginOwned[e.Name()]; fromPlugin {
-				slog.Info("clientconfig: bundle skill overrides a plugin's skill of the same name", "name", e.Name(), "plugin", p)
+				logging.From(ctx).Info("clientconfig: bundle skill overrides a plugin's skill of the same name", "name", e.Name(), "plugin", p)
 			} else if want[e.Name()] {
-				slog.Info("clientconfig: bundle skill overrides the built-in skill of the same name", "name", e.Name())
+				logging.From(ctx).Info("clientconfig: bundle skill overrides the built-in skill of the same name", "name", e.Name())
 			}
 			want[e.Name()] = true
-			if err := copyDirSkill(filepath.Join(bundleSkillsDir, e.Name()), filepath.Join(merged, e.Name()), ""); err != nil {
+			if err := copyDirSkill(ctx, filepath.Join(bundleSkillsDir, e.Name()), filepath.Join(merged, e.Name()), ""); err != nil {
 				return err
 			}
 		}
@@ -349,7 +350,7 @@ func copyEmbeddedSkill(name, dst string) error {
 // the Agent Plugins package-boundary rule (spec §4.1); a symlink to a
 // directory is likewise not followed. The bundle's own skills pass "" and
 // keep the historical trusted-supply-chain behavior.
-func copyDirSkill(src, dst, containRoot string) error {
+func copyDirSkill(ctx context.Context, src, dst, containRoot string) error {
 	//nolint:gosec // G122/G703: src is the operator-owned bundle skills dir (trusted supply chain per skills.go header); paths derive from its own listing, not request input.
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -366,7 +367,7 @@ func copyDirSkill(src, dst, containRoot string) error {
 		if containRoot != "" {
 			resolved, ok := containedRegularFile(p, containRoot)
 			if !ok {
-				slog.Warn("clientconfig: plugin skill file skipped: not a regular file inside the plugin root", "file", p, "plugin_root", containRoot)
+				logging.From(ctx).Warn("clientconfig: plugin skill file skipped: not a regular file inside the plugin root", "file", p, "plugin_root", containRoot)
 				return nil
 			}
 			p = resolved

@@ -80,7 +80,7 @@ func TestCreateTaskLogLineCarriesTheCaller(t *testing.T) {
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
 
-	key, raw, err := keyMgr.CreateKey("ci", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "ci", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

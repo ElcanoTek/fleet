@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +83,7 @@ func mustCreateRoleKey(t *testing.T, keyMgr *apikeys.Manager, role string) strin
 func mustCreateRoleKeyWithID(t *testing.T, keyMgr *apikeys.Manager, role string) (string, string) {
 	t.Helper()
 	r := role
-	key, raw, err := keyMgr.CreateKey("test-"+role+"-"+uuid.NewString(), nil, &r, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey(context.Background(), "test-"+role+"-"+uuid.NewString(), nil, &r, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}

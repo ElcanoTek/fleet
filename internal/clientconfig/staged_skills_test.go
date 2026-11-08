@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func TestStageSkillsAt_CarriesEverySourceAndFollowsTheDisk(t *testing.T) {
 			t.Errorf("%s missing from the staged tree: %v", name, err)
 		}
 	}
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	for _, name := range []string{"data-profiler", "from-plugin", "from-bundle"} {
 		if _, ok := roster[name]; !ok {
 			t.Errorf("%s missing from Skills() after staging: %v", name, roster)
@@ -73,7 +74,7 @@ func TestStageSkillsAt_CarriesEverySourceAndFollowsTheDisk(t *testing.T) {
 		"---\nname: later\ndescription: Plugin folder added after staging.\n---\n\nNew.\n")
 	mustWrite(t, filepath.Join(bundleDir, "skills", "also-later", "SKILL.md"),
 		"---\nname: also-later\ndescription: Bundle skill added after staging.\n---\n\nNew.\n")
-	roster = skillNames(b.Skills())
+	roster = skillNames(b.Skills(context.Background()))
 	if roster["from-bundle"].Description != "Edited in place." {
 		t.Errorf("edit not picked up: %+v", roster["from-bundle"])
 	}
@@ -135,7 +136,7 @@ func TestStageSkillsAt_RespectsManifestKnobs(t *testing.T) {
 	if pb.SkillsDir != pstaged {
 		t.Errorf("SkillsDir = %q, want %q", pb.SkillsDir, pstaged)
 	}
-	if _, ok := skillNames(pb.Skills())["only"]; !ok {
+	if _, ok := skillNames(pb.Skills(context.Background()))["only"]; !ok {
 		t.Error("bundle skill missing from the staged tree of an unmerged bundle")
 	}
 }

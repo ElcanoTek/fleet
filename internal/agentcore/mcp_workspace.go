@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,13 +308,16 @@ func PerRunMCPWorkspaceBase(workspaceRoot string) string {
 // best-effort. Creation failure is logged and the path still returned: the
 // subprocess env stays deterministic and the server surfaces its own I/O error
 // if it truly cannot write there.
-func SharedMCPWorkspaceDir() string {
+//
+// ctx is the caller's (a run's, or context.Background() at process scope): a
+// failure to create the directory is logged with its correlation.
+func SharedMCPWorkspaceDir(ctx context.Context) string {
 	dir := filepath.Join(mcpWorkspaceRoot(), sharedMCPWorkspaceSubdir)
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		slog.Error("mcp workspace: could not create shared dir", "dir", dir, "err", err)
+		logging.From(ctx).Error("mcp workspace: could not create shared dir", "dir", dir, "err", err)
 	}
 	return dir
 }

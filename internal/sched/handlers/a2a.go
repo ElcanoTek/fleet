@@ -359,7 +359,7 @@ func (h *Handlers) a2aPrincipal(r *http.Request) (principal, bool) {
 		return principal{isAdmin: true}, true
 	}
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" && h.apiKeys != nil {
-		if valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil); valid && key != nil {
+		if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, nil, nil, nil); valid && key != nil {
 			return principal{apiKey: key}, true
 		}
 	}

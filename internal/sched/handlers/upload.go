@@ -69,7 +69,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 			perm := models.PermissionCreateTask
-			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKey(r.Context(), apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
 				identity = apiKeyIdentity(key.KeyID)
 			}
