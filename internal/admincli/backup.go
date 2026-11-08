@@ -228,9 +228,6 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	case len(missing) > 0:
 		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): fleet restores only whole-database dumps (fleet backup --db=all writes fleet-all-<stamp>.dump)", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
 	}
-	if err := checkLedgerRestore(ctx, dsn, inPath); err != nil {
-		return err
-	}
 	return pgRestoreAll(ctx, dsn, inPath)
 }
 

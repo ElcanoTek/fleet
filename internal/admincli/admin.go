@@ -2,17 +2,12 @@ package admincli
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/ElcanoTek/fleet/internal/identity"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -24,11 +19,9 @@ import (
 // keep working.
 func cmdAdmin(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet admin add|list|rm <email> | fleet admin merge-report [--json]")
+		return errf(1, "usage: fleet admin add|list|rm <email>")
 	}
 	switch argv[0] {
-	case "merge-report":
-		return adminMergeReport(argv[1:], os.Stdout)
 	case "add":
 		return adminAdd(argv[1:])
 	case "list", "ls":
@@ -191,59 +184,5 @@ func adminRm(argv []string) int {
 		return errf(5, "remove %s: %v", email, err)
 	}
 	fmt.Printf("removed admin %s (login, Operations Center access and owned data)\n", email)
-	return 0
-}
-
-// adminMergeReport prints what the one-time identity merge (#2049 M4,
-// identity.MergeLegacySchedUsers) recorded in core.identity_merge: the
-// Operations Center admins it demoted (split admin states fail closed), the
-// sched rows with an unknown role, the case-duplicate usernames, and the
-// rest. Read-only: it opens the database without migrating anything.
-// `fleet doctor` reads --json and advises on what needs an operator.
-func adminMergeReport(argv []string, w io.Writer) int {
-	fs := flag.NewFlagSet("admin merge-report", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
-	asJSON := fs.Bool("json", false, "machine-readable output")
-	if err := fs.Parse(argv); err != nil {
-		return 1
-	}
-	if fs.NArg() > 0 {
-		return errf(1, "admin merge-report takes no arguments (got %q)", fs.Args())
-	}
-	dsn, err := chatDSN(*chatURL)
-	if err != nil {
-		return errf(1, "%v", err)
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return errf(1, "open database: %v", err)
-	}
-	defer db.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	rep, err := identity.LastMergeReport(ctx, db)
-	if err != nil {
-		return errf(5, "read the identity merge report: %v", err)
-	}
-	if *asJSON {
-		out := struct {
-			Ran    bool                  `json:"ran"`
-			Report *identity.MergeReport `json:"report,omitempty"`
-		}{Ran: rep != nil, Report: rep}
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(out); err != nil {
-			return errf(5, "%v", err)
-		}
-		return 0
-	}
-	if rep == nil {
-		fmt.Fprintln(w, "identity merge: not run on this database yet (the scheduler merges its accounts on its first start after the chat store migrated)")
-		return 0
-	}
-	fmt.Fprintf(w, "identity merge ran %s\n", rep.At.UTC().Format(time.RFC3339))
-	for _, line := range rep.Lines() {
-		fmt.Fprintln(w, line)
-	}
 	return 0
 }

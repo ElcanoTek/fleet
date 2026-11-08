@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver (UpDSN)
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/logging"
@@ -22,7 +23,7 @@ const Table = "core.schema_versions"
 // the migration it records, so a failed migration records nothing; dirty is
 // for a future migration that cannot run in one transaction (ADR-0107) and
 // for an operator who marks a row by hand.
-const createTableSQL = `CREATE TABLE core.schema_versions (
+const createTableSQL = `CREATE TABLE IF NOT EXISTS core.schema_versions (
 	version    bigint PRIMARY KEY,
 	name       text NOT NULL,
 	checksum   text NOT NULL,
@@ -40,9 +41,6 @@ const defaultLockTimeout = 5 * time.Minute
 type runner struct {
 	set         *Set
 	lockTimeout time.Duration
-	// beforeAdoptCommit, when set, runs inside the adoption transaction just
-	// before it commits (a test makes adoption fail there).
-	beforeAdoptCommit func(context.Context, *sql.Tx) error
 }
 
 func newRunner(set *Set) *runner { return &runner{set: set, lockTimeout: defaultLockTimeout} }
@@ -101,13 +99,8 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 		if err := dbschema.Ensure(ctx, conn); err != nil {
 			return err
 		}
-		if _, err := r.adopt(ctx, conn); err != nil {
-			return err
-		}
-		// Below the boundary the legacy ledgers are authoritative (a pre-M6
-		// release may have run since): bring the one ledger to them first.
-		if err := r.reconcileLegacy(ctx, conn); err != nil {
-			return err
+		if _, err := conn.ExecContext(ctx, createTableSQL); err != nil {
+			return fmt.Errorf("create %s: %w", Table, err)
 		}
 		ledger, err := readLedger(ctx, conn)
 		if err != nil {
@@ -129,51 +122,11 @@ func (r *runner) up(ctx context.Context, db *sql.DB) error {
 		if applied > 0 {
 			logging.From(ctx).Info("migrated the database", "applied", applied, "version", r.set.Latest())
 		}
-		// Whenever the ledger has crossed FirstNew the sentinels must be there
-		// (whoever wrote the ledger: a restore, an older force); idempotent.
-		return r.ensureSentinels(ctx, conn)
+		return nil
 	})
 }
 
-// ensureSentinels writes the legacy ledgers' sentinels when the ledger holds a
-// version at or past FirstNew. The caller holds both legacy locks.
-func (r *runner) ensureSentinels(ctx context.Context, conn *sql.Conn) (err error) {
-	var crossed bool
-	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM core.schema_versions WHERE version >= $1)`, FirstNew).Scan(&crossed); err != nil || !crossed {
-		return err
-	}
-	if ok, err := sentinelsPresent(ctx, conn); err != nil || ok {
-		return err
-	}
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-	if err = writeSentinels(ctx, tx); err != nil {
-		return fmt.Errorf("sentinels: %w", err)
-	}
-	return tx.Commit()
-}
-
-// sentinelsPresent reports whether both legacy ledgers carry their sentinel.
-func sentinelsPresent(ctx context.Context, q querier) (bool, error) {
-	var ok bool
-	err := q.QueryRowContext(ctx, `SELECT to_regclass('chat.schema_migrations') IS NOT NULL AND to_regclass('sched.schema_migrations') IS NOT NULL`).Scan(&ok)
-	if err != nil || !ok {
-		return false, err
-	}
-	err = q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM chat.schema_migrations WHERE version = $1)
-		AND coalesce((SELECT max(version) FROM sched.schema_migrations), -1) = $2`, ChatSentinel, SchedSentinel).Scan(&ok)
-	return ok, err
-}
-
-// current is the fast path: one read of the ledger and one of the legacy
-// ledgers (below the boundary) or the sentinels (past it), no lock. Any error (the
+// current is the fast path: one read of the ledger, no lock. Any error (the
 // ledger does not exist yet, a role that cannot read it) is not current, and
 // the locked path then does the work or reports the error properly.
 func (r *runner) current(ctx context.Context, db *sql.DB) bool {
@@ -182,8 +135,7 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	defer func() { _ = rows.Close() }()
-	seen, crossed := 0, false
-	legacy := map[int]bool{}
+	seen := 0
 	for rows.Next() {
 		var row ledgerRow
 		if err := rows.Scan(&row.Version, &row.Name, &row.Checksum, &row.Dirty); err != nil {
@@ -193,23 +145,9 @@ func (r *runner) current(ctx context.Context, db *sql.DB) bool {
 		if row.Dirty || !known || !matches(m, row) {
 			return false
 		}
-		crossed = crossed || row.Version >= FirstNew
-		if row.Version < FirstNew {
-			legacy[row.Version] = true
-		}
 		seen++
 	}
-	if rows.Err() != nil || seen != len(r.set.list) {
-		return false
-	}
-	if crossed {
-		// Past the boundary the sentinels must be in place (one more read).
-		ok, err := sentinelsPresent(ctx, db)
-		return err == nil && ok
-	}
-	// Below it the legacy ledgers are authoritative: one more read, which
-	// notices what a pre-M6 release applied or rolled back since.
-	return r.legacyCurrent(ctx, db, legacy)
+	return rows.Err() == nil && seen == len(r.set.list)
 }
 
 // matches reports whether a ledger row records exactly migration m: the same
@@ -344,9 +282,7 @@ func (r *runner) checkLedger(ledger map[int]ledgerRow) error {
 }
 
 // apply runs one migration in a transaction on conn together with its
-// ledger row (and, for a legacy one, its old ledger's bookkeeping; for the
-// first new one, the sentinels). On any error the transaction rolls back and
-// nothing is recorded.
+// ledger row. On any error the transaction rolls back and nothing is recorded.
 func (r *runner) apply(ctx context.Context, conn *sql.Conn, m Migration) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -366,14 +302,6 @@ func (r *runner) apply(ctx context.Context, conn *sql.Conn, m Migration) (err er
 			return migrationError(m, m.Up, err)
 		}
 	}
-	if err = mirrorLegacy(ctx, tx, m); err != nil {
-		return fmt.Errorf("migration %d (%s): legacy ledger: %w", m.Version, m.Name, err)
-	}
-	if m.Version >= FirstNew {
-		if err = writeSentinels(ctx, tx); err != nil {
-			return fmt.Errorf("migration %d (%s): sentinels: %w", m.Version, m.Name, err)
-		}
-	}
 	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO core.schema_versions (version, name, checksum, applied_at, dirty) VALUES ($1, $2, $3, now(), false)`,
 		m.Version, m.Name, m.Checksum); err != nil {
@@ -384,73 +312,6 @@ func (r *runner) apply(ctx context.Context, conn *sql.Conn, m Migration) (err er
 	}
 	logging.From(ctx).Debug("applied migration", "version", m.Version, "name", m.Name)
 	return nil
-}
-
-// mirrorLegacy keeps the old ledger of a legacy migration's store in step
-// when that ledger exists (a database adopted from a pre-M6 release), so the
-// box can still go back to that release with the rollback in
-// docs/MIGRATIONS.md until a migration >= FirstNew has run. A database that
-// never had the old ledgers (a fresh install) gets none.
-func mirrorLegacy(ctx context.Context, tx *sql.Tx, m Migration) error {
-	switch m.Stream {
-	case StreamChat:
-		var ok bool
-		if err := tx.QueryRowContext(ctx, `SELECT to_regclass('chat.schema_migrations') IS NOT NULL`).Scan(&ok); err != nil || !ok {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO chat.schema_migrations (version, name, applied_at)
-			VALUES ($1, $2, extract(epoch FROM now())::bigint) ON CONFLICT (version) DO NOTHING`, m.LegacyVersion(), m.LegacyName())
-		return err
-	case StreamSched:
-		var ok bool
-		if err := tx.QueryRowContext(ctx, `SELECT to_regclass('sched.schema_migrations') IS NOT NULL`).Scan(&ok); err != nil || !ok {
-			return err
-		}
-		var at sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT max(version) FROM sched.schema_migrations`).Scan(&at); err != nil {
-			return err
-		}
-		if at.Valid && at.Int64 == SchedSentinel {
-			return nil // never step back below the sentinel
-		}
-		if _, err := tx.ExecContext(ctx, `TRUNCATE sched.schema_migrations`); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO sched.schema_migrations (version, dirty) VALUES ($1, false)`, m.LegacyVersion())
-		return err
-	}
-	return nil
-}
-
-// writeSentinels marks both legacy ledgers so a pre-M6 binary refuses the
-// database once it holds a migration that binary cannot know about. The
-// ledgers are created (in their old shapes) when missing, so a database
-// installed fresh by an M6 release refuses an old binary too. Idempotent.
-func writeSentinels(ctx context.Context, tx *sql.Tx) error {
-	for _, q := range []string{
-		`CREATE TABLE IF NOT EXISTS chat.schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at BIGINT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS sched.schema_migrations (version bigint not null primary key, dirty boolean not null)`,
-	} {
-		if _, err := tx.ExecContext(ctx, q); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO chat.schema_migrations (version, name, applied_at)
-		VALUES ($1, $2, extract(epoch FROM now())::bigint) ON CONFLICT (version) DO NOTHING`, ChatSentinel, ChatSentinelName); err != nil {
-		return err
-	}
-	var at sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT max(version) FROM sched.schema_migrations`).Scan(&at); err != nil {
-		return err
-	}
-	if at.Valid && at.Int64 == SchedSentinel {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `TRUNCATE sched.schema_migrations`); err != nil {
-		return err
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO sched.schema_migrations (version, dirty) VALUES ($1, false)`, SchedSentinel)
-	return err
 }
 
 // migrationError names the failing migration and, for a Postgres error, its

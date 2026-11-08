@@ -8,11 +8,10 @@
 // planes and no lookup seam carrying an identity from one store to the other.
 //
 // The table lives in the neutral schema core of the one database (ADR-0098).
-// Chat migration 099 moved the chat users table there; the scheduler's old
-// users table is folded in once by MergeLegacySchedUsers and then renamed
-// away. Every statement in this package names its tables schema-qualified
-// (core.users), so a connection of either store — whose search_path names
-// only its own schema — reads the same rows.
+// Chat migration 099 moved the chat users table there. Every statement in this
+// package names its tables schema-qualified (core.users), so a connection of
+// either store — whose search_path names only its own schema — reads the same
+// rows.
 //
 // The model, and how it maps onto the Operations Center's old role names:
 //
@@ -228,3 +227,64 @@ func SessionEpochFor(bcryptDigest, sessionSalt string) string {
 
 // NoAccountEpoch is the epoch reported for an email with no row.
 func NoAccountEpoch() string { return SessionEpochFor("", "") }
+
+// LegacyChat is a chat account as it stood before the one identity table (nil: none).
+type LegacyChat struct {
+	Role    Role
+	Enabled bool
+}
+
+// LegacySched is an Operations Center account as it stood before the one identity table.
+type LegacySched struct {
+	Role    string // admin | client | readonly (the old column had no CHECK)
+	Enabled bool
+}
+
+// Merged is what MapLegacy decides for one account.
+type Merged struct {
+	Role     Role
+	OpsScope OpsScope
+	Enabled  bool
+	// Created: there was no chat account; the merge creates one.
+	Created bool
+	// SplitAdmin: an Operations Center admin without chat admin, failed
+	// closed to scope run (ADR-0074).
+	SplitAdmin bool
+	// UnknownRole: the sched role was none of admin, client, readonly.
+	UnknownRole bool
+}
+
+// MapLegacy is the one-identity-table mapping (docs/IDENTITY.md) for one
+// person: their chat account (nil when they had none) and their Operations
+// Center account. It is pure, so the authorization differential test runs
+// every state through the same decision.
+func MapLegacy(chat *LegacyChat, sched LegacySched) Merged {
+	role := sched.Role
+	scope, adminGrant, known := ParseOpsRole(role)
+	out := Merged{}
+	if !known || role == LegacyOpsNone || role == string(OpsView) || role == string(OpsRun) {
+		out.UnknownRole = true
+		scope, adminGrant = OpsNone, false
+	}
+	if !sched.Enabled {
+		scope, adminGrant = OpsNone, false
+	}
+	if chat == nil {
+		out.Created, out.Role, out.Enabled = true, RoleViewer, sched.Enabled
+		if adminGrant {
+			out.SplitAdmin, scope = true, OpsRun
+		}
+		out.OpsScope = scope
+		return out
+	}
+	out.Role, out.Enabled = chat.Role, chat.Enabled
+	switch {
+	case chat.Role == RoleAdmin:
+		out.OpsScope = OpsNone
+	case adminGrant:
+		out.SplitAdmin, out.OpsScope = true, OpsRun
+	default:
+		out.OpsScope = scope
+	}
+	return out
+}

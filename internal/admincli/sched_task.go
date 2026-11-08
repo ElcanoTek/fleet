@@ -442,7 +442,7 @@ func schedTaskSetOwner(argv []string) int {
 		return errf(1, "invalid task id %q: %v", rest[0], err)
 	}
 
-	st, code := openSchedIdentityStorage(*dbURL)
+	st, code := openSchedStorage(*dbURL)
 	if st == nil {
 		return code
 	}
@@ -780,7 +780,7 @@ func schedTaskImport(argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
-	st, code := openSchedIdentityStorage(*dbURL)
+	st, code := openSchedStorage(*dbURL)
 	if st == nil {
 		return code
 	}
