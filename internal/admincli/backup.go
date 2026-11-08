@@ -203,6 +203,12 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 	case !slices.Contains(got, want):
 		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
 	}
+	// The one migration ledger (#2049 M6) must stay true to the schemas the
+	// restore leaves: checked before anything is dropped.
+	ledger, err := planLedgerRestore(ctx, dsn, inPath, want)
+	if err != nil {
+		return err
+	}
 	// Other schemas in the archive (a whole-database dump) are left out by
 	// -n below: only the store's schema is restored — plus, for the chat
 	// store, the identity schema core its migrations own (#2049 M4).
@@ -235,7 +241,10 @@ func runPgRestoreWith(ctx context.Context, dsn, inPath string, opts restoreOpts)
 			}
 		}
 	}
-	return pgRestore(ctx, dsn, inPath, schemas, false)
+	if err := pgRestore(ctx, dsn, inPath, schemas, false); err != nil {
+		return err
+	}
+	return ledger.finish(ctx, dsn, opts)
 }
 
 // runPgRestoreAll restores a whole-fleet dump (--db=all: chat, core and
@@ -257,7 +266,14 @@ func runPgRestoreAll(ctx context.Context, dsn, inPath string) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("%s is not a whole-fleet dump (it lacks schema(s) %s; it holds %s): restore it with --db=chat or --db=sched", inPath, strings.Join(missing, ", "), strings.Join(got, ", "))
 	}
-	return pgRestore(ctx, dsn, inPath, allSchemas, true)
+	ledger, err := planLedgerRestore(ctx, dsn, inPath, "all")
+	if err != nil {
+		return err
+	}
+	if err := pgRestore(ctx, dsn, inPath, allSchemas, true); err != nil {
+		return err
+	}
+	return ledger.finish(ctx, dsn, restoreOpts{notes: os.Stderr})
 }
 
 // pgRestore runs one pg_restore of the given schemas, creating each first if
