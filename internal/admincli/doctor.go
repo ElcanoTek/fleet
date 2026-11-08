@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 )
 
@@ -22,6 +23,16 @@ import (
 // so the setting silently falls back to its default. It is read-only and
 // never prints a value.
 func warnRetiredEnvAliases(w io.Writer) {
+	// Bundle references (${CHAT_X} in the client manifest): they interpolate
+	// as empty and never stop a load, but the bundle owner must rename them.
+	if refs, err := clientconfig.RetiredManifestRefWarnings(""); err != nil {
+		fmt.Fprintf(w, "fleet doctor: could not check the client bundle for removed env aliases: %v\n", err)
+	} else if len(refs) > 0 {
+		fmt.Fprintf(w, "WARN the client bundle references removed CHAT_/CUTLASS_ env aliases (ADR-0106):\n")
+		for _, r := range refs {
+			fmt.Fprintf(w, "  - %s\n", r)
+		}
+	}
 	path := serverEnvFile("")
 	findings, err := config.RetiredAliasFindings(path, loadUnitEnv())
 	if err != nil {

@@ -249,7 +249,11 @@ leftover is reported rather than silently ignored:
   environment, the systemd unit's environment and the env file;
 - **`fleet config explain FLEET_<X>`** notes a removed spelling that is set,
   and `fleet config explain CHAT_<X>` is an error naming `FLEET_<X>`;
-- **`fleet config set-env CHAT_<X>`** refuses, naming `FLEET_<X>`.
+- **`fleet config set-env CHAT_<X>`** refuses, naming `FLEET_<X>`;
+- **a client bundle referencing `${CHAT_<X>}`** still loads: the reference
+  interpolates as empty (or its `:-` default, never failing even as `:?`),
+  the load warns, and `fleet doctor` / `fleet validate-config` report it as
+  a non-blocking advisory.
 
 None of them prints a value. The canonical `CHAT_`/`CUTLASS_` settings
 (`CHAT_RATE_PER_*`, the `CUTLASS_*` connector wire keys, the `CHAT_DB_*`

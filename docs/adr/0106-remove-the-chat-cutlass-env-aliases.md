@@ -46,8 +46,13 @@ compatibility window.
    - `fleet config explain FLEET_<X>` adds a note when a removed spelling of
      it is set; `fleet config explain CHAT_<X>` is an error naming `FLEET_<X>`.
    - `fleet config set-env CHAT_<X>` refuses, naming `FLEET_<X>`.
-   - Loading a client bundle whose manifest references `${CHAT_<X>}` logs a
-     warning naming `${FLEET_<X>}`; the bundle still loads.
+   - A client bundle whose manifest references `${CHAT_<X>}` still loads:
+     the reference is never read from the environment and interpolates as
+     empty (or its `:-` default), even in the `${CHAT_<X>:?…}` form and in
+     fields that otherwise require a value. The load logs a warning naming
+     `${FLEET_<X>}`, and `fleet doctor` and `fleet validate-config` report
+     it as a non-blocking advisory (as they do a removed spelling still set
+     in the environment).
    None of these prints a value.
 4. **`fleet config migrate-env` is removed**, with its tests and docs. The
    boxes are migrated; an operator who finds a leftover line renames it by

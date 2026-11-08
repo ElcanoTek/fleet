@@ -2093,3 +2093,40 @@ func TestCheckDatabaseProbesSched(t *testing.T) {
 		t.Fatalf("unreachable sched DB = %s: %s, want a sched DB failure", res.Status, res.Detail)
 	}
 }
+
+// ADR-0106: a removed CHAT_/CUTLASS_ spelling still set, in the env or as a
+// ${…} reference in the bundle, is a non-blocking advisory in
+// validate-config, never a failure, so it cannot block an upgrade.
+func TestValidateConfigRemovedAliasesAreAdvisory(t *testing.T) {
+	clearKnobEnv(t)
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("CHAT_MAX_COST_USD=5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	cfg := &config.Config{
+		SharedToken:     "placeholder-token",
+		MockMode:        true,
+		DatabaseURL:     "postgres://u:p@127.0.0.1:5432/chat?sslmode=disable",
+		ConversationTTL: 30,
+		UnpinnedCap:     100,
+		UploadMaxBytes:  1 << 20,
+	}
+	res := checkEnvVars(cfg, nil)
+	if res.Status != statusWarn || res.Blocking || !strings.Contains(res.Detail, "rename it to FLEET_MAX_COST_USD") {
+		t.Fatalf("env_vars = %q blocking=%v %q; want a non-blocking warn naming FLEET_MAX_COST_USD", res.Status, res.Blocking, res.Detail)
+	}
+
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: local
+    command: "python3${CHAT_TLS_MODE:?required}"
+    always: true
+`))
+	if err != nil {
+		t.Fatalf("a removed ${CHAT_TLS_MODE:?} reference failed the bundle load: %v", err)
+	}
+	mres := checkManifest(bundle, nil, &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"})
+	if mres.Status != statusWarn || mres.Blocking || !strings.Contains(mres.Detail, "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") {
+		t.Fatalf("manifest = %q blocking=%v %q; want a non-blocking warn naming FLEET_TLS_MODE", mres.Status, mres.Blocking, mres.Detail)
+	}
+}

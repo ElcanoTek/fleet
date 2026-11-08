@@ -144,3 +144,22 @@ func TestDoctorWarnsAboutRemovedAliases(t *testing.T) {
 		t.Errorf("a clean box must print nothing, got:\n%s", buf.String())
 	}
 }
+
+// ADR-0106: fleet doctor also reports a ${CHAT_X} reference in the client
+// bundle, naming the FLEET_ key, without loading the bundle.
+func TestDoctorWarnsAboutRemovedManifestRefs(t *testing.T) {
+	stubSystemd(t, t.TempDir(), "", false)
+	dir := t.TempDir()
+	manifest := "mcp_servers:\n  - name: x\n    command: \"python3${CHAT_TLS_MODE:?x}\"\n    env:\n      CUTLASS_ALLOWED_DIRS: \"${CUTLASS_ALLOWED_DIRS}\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	var buf bytes.Buffer
+	warnRetiredEnvAliases(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "${CHAT_TLS_MODE}, a removed alias of FLEET_TLS_MODE") || strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") {
+		t.Errorf("doctor output:\n%s", out)
+	}
+}

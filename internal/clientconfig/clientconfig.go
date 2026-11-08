@@ -46,7 +46,9 @@
 package clientconfig
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -971,8 +973,9 @@ func copyStringMap(in map[string]string) map[string]string {
 // longer sets or reads such a variable, so after the env file is migrated the
 // reference resolves to whatever is left in the environment (usually
 // nothing). Such a reference is not admitted from the env file
-// (config.RegisterAllowedEnvVars) and always interpolates as unset
-// (lookupNonEmpty), whatever the environment holds. The canonical CUTLASS_
+// (config.RegisterAllowedEnvVars) and interpolates as "" (or its :- default)
+// in every form, ${X:?msg} included (retiredExpr), whatever the environment
+// holds. The canonical CUTLASS_
 // wire keys (CUTLASS_ALLOWED_DIRS, …) are settings of their own and are never
 // reported. The load goes on: a warning, not a refusal, so a bundle cannot
 // take a box down at boot.
@@ -986,8 +989,31 @@ func retiredManifestRefWarnings(refNames []string) []string {
 	var out []string
 	for _, n := range refNames {
 		if canonical, ok := envreg.RetiredAlias(n); ok {
-			out = append(out, fmt.Sprintf("the manifest references ${%s}, a removed alias of %s (ADR-0106): fleet no longer reads or sets it, so it interpolates as unset — reference ${%s} instead", n, canonical, canonical))
+			out = append(out, fmt.Sprintf("the manifest references ${%s}, a removed alias of %s (ADR-0106): fleet never reads it, so the reference interpolates as empty (or its :- default) and the load goes on — reference ${%s} instead", n, canonical, canonical))
 		}
 	}
 	return out
+}
+
+// RetiredManifestRefWarnings reads the manifest of the bundle in dir and
+// returns one warning per ${VAR} it references that ADR-0106 removed (see
+// retiredManifestRefWarnings). It is the read-only check `fleet doctor` and
+// `fleet validate-config` print; it does not load the bundle. A missing
+// manifest yields no warnings.
+func RetiredManifestRefWarnings(dir string) ([]string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = Dir()
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.yaml")) // #nosec G304 — operator-supplied bundle path.
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_, refNames, err := scanManifestEnvRefs(raw)
+	if err != nil {
+		return nil, err
+	}
+	return retiredManifestRefWarnings(refNames), nil
 }

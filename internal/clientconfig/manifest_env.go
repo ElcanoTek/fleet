@@ -379,6 +379,9 @@ func unresolvedManifestRefs(sites []manifestRefSite) []string {
 		if site.lazy {
 			continue
 		}
+		if _, retired := envreg.RetiredAlias(site.ref.name); retired {
+			continue // ADR-0106: interpolates as "" and only warns (warnRetiredManifestRefs)
+		}
 		if _, ok := lookupNonEmpty(site.ref.name); !ok {
 			problems = append(problems, fmt.Sprintf(
 				"%s: ${%s} is unset or empty in the process environment and the FLEET_ENV_FILE env file; set the variable, use ${%s:-default} for an optional value, or write $${...} for a literal",

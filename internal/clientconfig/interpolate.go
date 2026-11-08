@@ -185,6 +185,15 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 				manifestPath, expr, name, name)
 		}
 	}
+	// A CHAT_/CUTLASS_ (or bare DATA_DIR) spelling ADR-0106 removed takes a
+	// NON-FATAL path in every form: its value is never read, ${X:-d} yields d,
+	// and ${X} / ${X:?msg} yield "" instead of deferring or failing the load,
+	// so a bundle written before the removal can never stop a box from
+	// starting. The load warns about each such reference
+	// (warnRetiredManifestRefs).
+	if text, ok := retiredExpr(expr); ok {
+		return expandResult{text: text}, nil
+	}
 	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
 	// name itself never contains ':', so the first ':' (if any) starts the op.
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
@@ -222,6 +231,27 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 	}
 	// Unset bare ${VAR}: defer to spawn-time resolution.
 	return expandResult{deferred: true}, nil
+}
+
+// retiredExpr resolves a ${...} body whose variable is a spelling ADR-0106
+// removed: the :- default when one is given, else "" (for the bare and :?
+// forms alike). ok is false for any other variable. It never reads the
+// environment.
+func retiredExpr(expr string) (text string, ok bool) {
+	name, op, body := expr, byte(0), ""
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
+		name = expr[:idx]
+		if idx+1 < len(expr) {
+			op, body = expr[idx+1], expr[idx+2:]
+		}
+	}
+	if _, retired := envreg.RetiredAlias(strings.TrimSpace(name)); !retired {
+		return "", false
+	}
+	if op == '-' {
+		return body, true
+	}
+	return "", true
 }
 
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
@@ -372,6 +402,9 @@ func resolveSpawnExpr(expr, token string) (text string, fromEnv bool) {
 	}
 	if reservedRuntimeVar(strings.TrimSpace(head)) {
 		return token, false
+	}
+	if text, ok := retiredExpr(expr); ok {
+		return text, false
 	}
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
 		name := expr[:idx]

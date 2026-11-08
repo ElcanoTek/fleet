@@ -272,6 +272,13 @@ func checkEnvVars(cfg *config.Config, cfgErr error) checkResult {
 	}
 	problems = append(problems, config.ValidateEnvKnobs()...)
 	advisories := config.ValidateLenientEnvKnobs()
+	// Removed CHAT_/CUTLASS_ spellings still set (ADR-0106): nothing reads
+	// them, so this is advisory — they never block an upgrade.
+	if findings, err := config.RetiredAliasFindings(config.ResolveEnvFile(""), nil); err == nil {
+		for _, f := range findings {
+			advisories = append(advisories, f.String())
+		}
+	}
 
 	if len(problems) > 0 {
 		res.Status = statusFail
@@ -333,6 +340,11 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 	// deployment runs — but the author should see what was dropped and why.
 	for _, p := range bundle.PluginProblems() {
 		advisories = append(advisories, "plugin: "+p)
+	}
+	// ${CHAT_X} references ADR-0106 removed: they interpolate as empty and
+	// never fail the load, so they are advisory.
+	if refs, err := clientconfig.RetiredManifestRefWarnings(bundle.Dir); err == nil {
+		advisories = append(advisories, refs...)
 	}
 
 	if len(problems) > 0 {

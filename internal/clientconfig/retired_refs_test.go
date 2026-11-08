@@ -74,3 +74,71 @@ mcp_servers:
 		t.Errorf("load log flagged a canonical key or printed a value:\n%s", out)
 	}
 }
+
+// Codex P2 on #2081: a removed spelling never fails the load, in any form —
+// ${X:?msg}, a bare ${X} in a non-lazy field, ${X:-d} — whether the variable
+// is absent, in the env file, in the process env or both; its value is never
+// used (bare and :? yield "", :- yields its default), and the load warns.
+func TestRetiredManifestRefNeverFailsTheLoad(t *testing.T) {
+	const manifest = `
+mcp_servers:
+  - name: remote
+    type: http
+    url: "https://mcp.example/${CHAT_TLS_DOMAIN}/x"
+    always: true
+  - name: local
+    command: "python3${CHAT_TLS_MODE:?set CHAT_TLS_MODE}"
+    args: ["${CUTLASS_TEMPERATURE:-d}", "${CUTLASS_ALLOWED_DIRS:-none}"]
+    always: true
+`
+	for _, where := range []string{"absent", "file", "process", "both"} {
+		t.Run(where, func(t *testing.T) {
+			names := []string{"CHAT_TLS_DOMAIN", "CHAT_TLS_MODE", "CUTLASS_TEMPERATURE", "CUTLASS_ALLOWED_DIRS"}
+			unsetTracked(t, names...)
+			body := "CUTLASS_ALLOWED_DIRS=/srv/drops\n"
+			if where == "file" || where == "both" {
+				body += "CHAT_TLS_DOMAIN=stale.example\nCHAT_TLS_MODE=stale\nCUTLASS_TEMPERATURE=stale\n"
+			}
+			armEnvFile(t, body)
+			if where == "process" || where == "both" {
+				t.Setenv("CHAT_TLS_DOMAIN", "stale.example")
+				t.Setenv("CHAT_TLS_MODE", "stale")
+				t.Setenv("CUTLASS_TEMPERATURE", "stale")
+			}
+			var buf bytes.Buffer
+			orig, flags := log.Writer(), log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			t.Cleanup(func() { log.SetOutput(orig); log.SetFlags(flags) })
+
+			b, err := Load(writeManifest(t, manifest))
+			if err != nil {
+				t.Fatalf("a removed spelling failed the load: %v", err)
+			}
+			cfgs := b.MCPServerConfigs()
+			if got := cfgs["remote"].URL; got != "https://mcp.example//x" {
+				t.Errorf("url = %q, want the bare removed reference as empty", got)
+			}
+			local := cfgs["local"]
+			if local.Command != "python3" {
+				t.Errorf("command = %q, want the :? removed reference as empty", local.Command)
+			}
+			if len(local.Args) != 2 || local.Args[0] != "d" || local.Args[1] != "/srv/drops" {
+				t.Errorf("args = %q, want [d /srv/drops]", local.Args)
+			}
+			out := buf.String()
+			for _, n := range []string{"CHAT_TLS_DOMAIN", "CHAT_TLS_MODE", "CUTLASS_TEMPERATURE"} {
+				if !strings.Contains(out, "${"+n+"}, a removed alias of FLEET_") {
+					t.Errorf("no warning for ${%s}:\n%s", n, out)
+				}
+			}
+			if strings.Contains(out, "stale") || strings.Contains(out, "${CUTLASS_ALLOWED_DIRS}") {
+				t.Errorf("log printed a value or flagged a canonical key:\n%s", out)
+			}
+			refs, err := RetiredManifestRefWarnings(b.Dir)
+			if err != nil || len(refs) != 3 {
+				t.Errorf("RetiredManifestRefWarnings = %q, %v; want 3 warnings", refs, err)
+			}
+		})
+	}
+}
