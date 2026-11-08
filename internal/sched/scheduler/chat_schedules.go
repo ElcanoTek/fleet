@@ -118,7 +118,7 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	}
 	fireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatScheduleFireTimeout)
 	defer cancel()
-	d, err := s.fireChatSchedule(fireCtx, fire, now)
+	d, err := s.fireChatSchedule(fireCtx, fire)
 	if err != nil {
 		return d, err
 	}
@@ -155,6 +155,14 @@ const chatScheduleWorkers = 4
 // never the fire's, which may have expired on a slow delivery — detached from
 // Stop so a result that came in is recorded rather than lost at shutdown.
 const chatScheduleWriteTimeout = 10 * time.Second
+
+// now is the scheduler's clock (a test may substitute one).
+func (s *Scheduler) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
+}
 
 // writeCtx is a fresh bounded context for recording a result.
 func (s *Scheduler) writeCtx() (context.Context, context.CancelFunc) {
@@ -290,7 +298,7 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
-		if _, err := s.fireChatSchedule(ctx, f, time.Now()); err != nil {
+		if _, err := s.fireChatSchedule(ctx, f); err != nil {
 			log.Printf("scheduler: chat schedule %s fire: %v", safe.LogSafe(f.ScheduleID), err)
 		}
 	}()
@@ -302,8 +310,15 @@ func (s *Scheduler) dispatchChatFire(f models.ChatScheduleFire) {
 // settle — or its failure and backoff — on record. A delivery error keeps the
 // fire in flight with its lease pushed out by a backoff (the recovery pass
 // retries it then, by the same idempotency key).
-func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatScheduleFire, now time.Time) (models.ChatScheduleDelivery, error) {
+//
+// The settle is timed when the delivery has finished (s.now() after it), not
+// when the fire was claimed: the next slot is computed from that time, so a
+// delivery that crosses a slot boundary moves the schedule to a future slot
+// rather than one already past (which would fire again at once), and the run
+// history's fired_at is when the turn was actually queued.
+func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
 	d, derr := s.deliverChatSchedule(ctx, fire)
+	now := s.now()
 	wctx, cancel := s.writeCtx()
 	defer cancel()
 	if derr != nil {
@@ -361,12 +376,26 @@ func (s *Scheduler) armNextChatScheduleWake(ctx context.Context) {
 		}
 		return
 	}
-	if !ok {
+	if ok {
+		if at := time.Unix(next, 0); time.Until(at) < s.tickInterval {
+			s.WakeChatSchedulesAt(at)
+		}
+	}
+	// Work already due that this pass could not claim — a row another
+	// transaction held locked (SKIP LOCKED passed over it), or a full worker
+	// pool — is not in the lookup above (it only sees future times). Retry
+	// it after chatScheduleErrorRetry rather than leave it to the next tick;
+	// the interval bounds it, so a row locked for long cannot spin the loop.
+	overdue, err := s.storage.DB().OverdueChatScheduleWork(ctx)
+	if err != nil {
+		if s.ctx.Err() == nil {
+			log.Printf("scheduler: chat schedules: overdue check: %v (retrying in %s)", err, chatScheduleErrorRetry)
+			s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
+		}
 		return
 	}
-	at := time.Unix(next, 0)
-	if time.Until(at) < s.tickInterval {
-		s.WakeChatSchedulesAt(at)
+	if overdue {
+		s.WakeChatSchedulesAt(time.Now().Add(chatScheduleErrorRetry))
 	}
 }
 

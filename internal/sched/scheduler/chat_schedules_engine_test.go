@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -808,5 +809,120 @@ func TestProcessScheduledTasks_CapWithoutProgressDoesNotContinue(t *testing.T) {
 	s.ProcessScheduledTasks()
 	if len(s.promoteAgain) != 0 {
 		t.Fatal("a capped pass with no progress asked for an immediate rerun")
+	}
+}
+
+// holdRowLock holds FOR UPDATE on one row of table in another transaction
+// until the returned release is called (or the test ends).
+func holdRowLock(t *testing.T, s *Scheduler, table, id string) (release func()) {
+	t.Helper()
+	tx, err := s.storage.DB().Conn().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := tx.QueryRow(`SELECT id::text FROM `+table+` WHERE id::text = $1 FOR UPDATE`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = tx.Rollback() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// TestChatSchedules_LockedDueRowIsRetriedSoon: a due schedule another
+// transaction holds locked is passed over (SKIP LOCKED); the pass arms a
+// bounded retry for the overdue work, so it fires within seconds of the lock
+// being released, not at the next tick (an hour away).
+func TestChatSchedules_LockedDueRowIsRetriedSoon(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	addChatSchedule(t, s, "locked", "active", time.Now().Add(-time.Minute).Unix())
+	release := holdRowLock(t, s, "chat_schedules", "locked")
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(time.Second) // the startup pass has passed over the locked row
+	if d.deliveredTo("locked") != 0 {
+		t.Fatal("a locked row was claimed")
+	}
+	release()
+	deadline := time.Now().Add(chatScheduleErrorRetry + 5*time.Second)
+	for d.deliveredTo("locked") == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d.deliveredTo("locked") != 1 {
+		t.Fatal("the schedule passed over under a row lock waited for the next tick")
+	}
+}
+
+// TestProcessScheduledTasks_LockedRowIsRetriedSoon: promotion that passed
+// over a due row held locked asks for one more pass after a short bounded
+// retry, so the row is promoted soon after the lock goes, not a tick later.
+func TestProcessScheduledTasks_LockedRowIsRetriedSoon(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.promoteSkipRetry = 300 * time.Millisecond
+	task := &models.Task{ID: uuid.New(), Prompt: "due", Status: models.TaskStatusScheduled, ScheduledFor: pastDue(), CreatedAt: time.Now().UTC()}
+	if _, err := s.storage.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	release := holdRowLock(t, s, "tasks", task.ID.String())
+	s.Start()
+	t.Cleanup(s.Stop)
+	s.ProcessScheduledTasks() // a tick's pass: the row is passed over
+	if got, _ := s.storage.GetTask(task.ID); got.Status != models.TaskStatusScheduled {
+		t.Fatalf("locked task is %s, want scheduled while locked", got.Status)
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := s.storage.GetTask(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == models.TaskStatusPending {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the task passed over under a row lock waited for the next tick")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestChatSchedules_SettleIsTimedAfterDelivery: an every-minute patrol whose
+// delivery straddles minute boundaries settles to the first minute after the
+// delivery finished — never one already past, which would fire again at once
+// — and its history row is stamped with that time.
+func TestChatSchedules_SettleIsTimedAfterDelivery(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	var offset atomic.Int64
+	s.clock = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	d.after = func() { offset.Store(int64(3 * time.Minute)) } // the delivery "took" 3 minutes
+	if _, err := s.storage.DB().Conn().Exec(`INSERT INTO chat_schedules
+		(id, conversation_id, user_email, title, prompt, cron_expr, timezone, status, next_run_at, created_at, updated_at)
+		VALUES ('every-minute', 'conv', 'u@x.com', 'T', 'P', '* * * * *', 'UTC', 'active', $1, $1, $1)`,
+		time.Now().Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	s.runChatSchedulesAndWait()
+	finished := s.now()
+	var next int64
+	if err := s.storage.DB().Conn().QueryRow(`SELECT next_run_at FROM chat_schedules WHERE id = 'every-minute'`).Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	if next <= finished.Add(-time.Second).Unix() {
+		t.Fatalf("next slot %s is not after the delivery finished (%s): it would fire again at once",
+			time.Unix(next, 0).UTC().Format(time.RFC3339), finished.UTC().Format(time.RFC3339))
+	}
+	if d.deliveredTo("every-minute") != 1 {
+		t.Fatalf("delivered %d times, want 1", d.deliveredTo("every-minute"))
+	}
+	runs, err := s.storage.DB().ListChatScheduleRuns(context.Background(), "every-minute", 5)
+	if err != nil || len(runs) != 1 || runs[0].FiredAt.Before(finished.Add(-5*time.Second)) {
+		t.Fatalf("run history = %+v, %v; want one row stamped when the delivery finished", runs, err)
 	}
 }
