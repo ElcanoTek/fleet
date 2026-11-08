@@ -45,7 +45,7 @@ func (s *Server) userSkillsCollection(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{"skills": skills})
+		writeJSON(w, r, map[string]any{"skills": skills})
 	case http.MethodPost:
 		var req userSkillRequest
 		if !decodeJSONBody(w, r, &req) {
@@ -64,7 +64,7 @@ func (s *Server) userSkillsCollection(w http.ResponseWriter, r *http.Request) {
 			s.userSkillError(w, err)
 			return
 		}
-		writeJSON(w, sk)
+		writeJSON(w, r, sk)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -100,7 +100,7 @@ func (s *Server) userSkillByID(w http.ResponseWriter, r *http.Request) {
 			s.userSkillError(w, err)
 			return
 		}
-		writeJSON(w, sk)
+		writeJSON(w, r, sk)
 	case http.MethodDelete:
 		if err := s.store.DeleteUserSkill(r.Context(), user, id); err != nil {
 			s.userSkillError(w, err)

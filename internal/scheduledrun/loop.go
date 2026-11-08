@@ -3,7 +3,6 @@ package scheduledrun
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scorers"
@@ -131,13 +131,13 @@ func runLoop(
 		if passed {
 			it.Status = models.IterationStatusPassed
 			record(it)
-			log.Printf("scheduled loop task %s: passed on iteration %d/%d (%s)", taskID, i, maxIter, result)
+			logging.From(ctx).Info("scheduled loop task: passed on iteration", "task_id", taskID, "iteration", i, "max_iter", maxIter, "result", result)
 			return session, nil
 		}
 		it.Status = models.IterationStatusFailed
 		record(it)
 		priorOutput = scorers.LastAssistantMessage(session)
-		log.Printf("scheduled loop task %s: iteration %d/%d did not pass (%s); retrying", taskID, i, maxIter, result)
+		logging.From(ctx).Warn("scheduled loop task: iteration did not pass; retrying", "task_id", taskID, "iteration", i, "max_iter", maxIter, "result", result)
 	}
 	return lastSession, fmt.Errorf("loop exhausted %d iteration(s) without passing exit condition %q", maxIter, lc.ExitCondition)
 }
@@ -150,7 +150,7 @@ func (r *Runner) recordIteration(ctx context.Context, it *models.TaskIteration) 
 		return
 	}
 	if err := r.iterationStore.AddTaskIteration(context.WithoutCancel(ctx), it); err != nil {
-		log.Printf("scheduled loop: failed to record iteration %d for task %s: %v", it.IterationNumber, it.TaskID, err)
+		logging.From(ctx).Error("scheduled loop: failed to record iteration", "iteration", it.IterationNumber, "task_id", it.TaskID, "err", err)
 	}
 }
 
@@ -164,11 +164,11 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	case strings.HasPrefix(cond, "shell:"):
 		return r.evalShellExit(ctx, sb, strings.TrimSpace(strings.TrimPrefix(cond, "shell:")))
 	case strings.HasPrefix(cond, "regex:"):
-		return evalRegexExit(strings.TrimPrefix(cond, "regex:"), scorers.LastAssistantMessage(session))
+		return evalRegexExit(ctx, strings.TrimPrefix(cond, "regex:"), scorers.LastAssistantMessage(session))
 	case cond == "llm":
 		return r.evalLLMExit(ctx, lc, session, fallback)
 	default:
-		log.Printf("scheduled loop: unknown exit_condition %q; treating as not-passed", cond)
+		logging.From(ctx).Warn("scheduled loop: unknown exit_condition; treating as not-passed", "condition", cond)
 		return false, "unknown_exit_condition"
 	}
 }
@@ -185,8 +185,8 @@ func (r *Runner) evalShellExit(ctx context.Context, sb *sandbox.Sandbox, cmd str
 	return scorers.Shell(ctx, sb, cmd, shellExitTimeout)
 }
 
-func evalRegexExit(pattern, text string) (bool, string) {
-	return scorers.Regex(pattern, text)
+func evalRegexExit(ctx context.Context, pattern, text string) (bool, string) {
+	return scorers.Regex(ctx, pattern, text)
 }
 
 func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session *models.LogSession, fallback fantasy.LanguageModel) (bool, string) {
@@ -195,7 +195,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		if m, err := r.mgr.Resolve(ctx, slug); err == nil {
 			verifier = m
 		} else {
-			log.Printf("scheduled loop: verifier model %q unresolved (%v); using fallback", slug, err)
+			logging.From(ctx).Warn("scheduled loop: verifier model unresolved; using fallback", "slug", slug, "err", err)
 		}
 	}
 	if verifier == nil {
@@ -228,10 +228,10 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		ProviderOptions: agentcore.RoutingProviderOptions(verifier.Model()),
 	})
 	if err != nil {
-		log.Printf("scheduled loop: llm verifier call failed: %v", err)
+		logging.From(ctx).Error("scheduled loop: llm verifier call failed", "err", err)
 		return false, "llm:error"
 	}
-	recordLoopVerifierUsage(session, verifier.Model(), out)
+	recordLoopVerifierUsage(ctx, session, verifier.Model(), out)
 	if scorers.FirstWordIsYes(out.Response.Content.Text()) {
 		return true, "llm:YES"
 	}
@@ -244,10 +244,9 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 // travels with the transcript; a nil session (defensive) still leaves the log
 // line. Pricing rides agentcore's shared policy so a per-model override (#297)
 // applies here too.
-func recordLoopVerifierUsage(session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
+func recordLoopVerifierUsage(ctx context.Context, session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageLoopExitVerifier, modelSlug, out)
-	log.Printf("aux model call: label=%s model=%s prompt=%d completion=%d cost=$%.4f",
-		rec.Label, rec.Model, rec.PromptTokens, rec.CompletionTokens, rec.CostUSD)
+	logging.From(ctx).Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
 	if session == nil {
 		return
 	}

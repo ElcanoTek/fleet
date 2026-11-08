@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/usertoken"
@@ -440,7 +440,7 @@ func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection M
 			}
 			continue
 		}
-		log.Printf("mcp: skipping best-effort server %q — failed to register: %v", plan.name, outcomes[i])
+		logging.From(ctx).Warn("mcp: skipping best-effort server — failed to register", "name", plan.name, "err", outcomes[i])
 		failed = append(failed, NewMCPConnectFailure(plan.name, outcomes[i]))
 	}
 	if requiredErr != nil {

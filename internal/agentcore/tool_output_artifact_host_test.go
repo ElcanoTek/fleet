@@ -31,7 +31,7 @@ func TestSandboxedCommandArtifactRecoveredThroughBoundedViewFile(t *testing.T) {
 	}
 	t.Cleanup(release)
 
-	registered, _, err := buildFantasyTools([]fantasy.AgentTool{
+	registered, _, err := buildFantasyTools(context.Background(), []fantasy.AgentTool{
 		fleettools.NewBashTool(sb),
 		fleettools.NewViewFileTool(sb),
 	}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})

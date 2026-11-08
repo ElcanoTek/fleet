@@ -58,7 +58,7 @@ func TestApplyUnattendedBuiltinPolicy_WebFetchFollowsEgress(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			task := &models.Task{ID: uuid.New(), AllowNetwork: tc.allowNetwork}
-			got := toolNames(applyUnattendedBuiltinPolicy(unattendedBase(), task, tc.mode, []string{"reports.example.com"}))
+			got := toolNames(applyUnattendedBuiltinPolicy(context.Background(), unattendedBase(), task, tc.mode, []string{"reports.example.com"}))
 			if _, ok := got["noop"]; !ok {
 				t.Fatal("unrelated tools must be kept")
 			}
@@ -92,7 +92,7 @@ func TestApplyUnattendedBuiltinPolicy_BundleCanDropBuiltins(t *testing.T) {
 		UnattendedDisabledTools: []string{"create_task", "web_fetch"},
 	})
 	task := &models.Task{ID: uuid.New(), AllowNetwork: true, AllowTaskCreation: true}
-	got := toolNames(applyUnattendedBuiltinPolicy(unattendedBase(), task, sandbox.NetworkModeOpen, nil))
+	got := toolNames(applyUnattendedBuiltinPolicy(context.Background(), unattendedBase(), task, sandbox.NetworkModeOpen, nil))
 	if _, ok := got[tools.CreateTaskToolName]; ok {
 		t.Error("create_task must be removed when the bundle disables it")
 	}

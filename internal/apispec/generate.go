@@ -33,9 +33,8 @@ type Family struct {
 	// Prefix is where the family is mounted in the router being walked. Only
 	// routes under it belong to the family, and it is stripped before the
 	// catalog lookup, so the document's paths stay relative to its servers
-	// URL. Empty today: the orchestrator router is walked on its own. Phase 3
-	// (one chi tree, #2050) walks the unified router once and gives each
-	// family its mount point here.
+	// URL. The one public router (#2050 phase 3, ADR-0110) is walked once and
+	// each family names its mount point here: the orchestrator's is /v1.
 	Prefix string
 	// Base is the document without its `paths` key: openapi, info, servers,
 	// the x-fleet-* extensions and components. The generated document is

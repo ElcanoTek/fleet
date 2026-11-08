@@ -232,7 +232,7 @@ they disagree, `orchestrationState` sets `LastServedUpstream`, latches
 `ServedFallback`, and logs one line:
 
 ```
-⚠️  Upstream fallback: model=<slug> pinned=<x> served=<y> (prompt cache cold; verify serving precision if output quality is off)
+msg="⚠️ Upstream fallback (prompt cache cold; verify serving precision if output quality is off)" model=<slug> pinned=<x> served=<y>
 ```
 
 Logged per *transition*, not per step — the signal is the switch, and a

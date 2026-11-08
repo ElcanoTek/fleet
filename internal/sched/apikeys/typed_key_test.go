@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func newTestManager(t *testing.T) *Manager {
 func TestCreateTypedKeyFormatAndPerms(t *testing.T) {
 	mgr := newTestManager(t)
 
-	key, raw, err := mgr.CreateTypedKey("ci", KeyTypeTask, nil, 0, nil, "")
+	key, raw, err := mgr.CreateTypedKey(context.Background(), "ci", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestCreateTypedKeyFormatAndPerms(t *testing.T) {
 	}
 
 	// The raw key validates and resolves back to the same stored key.
-	valid, got, _ := mgr.ValidateKey(raw, nil, nil, nil)
+	valid, got, _ := mgr.ValidateKey(context.Background(), raw, nil, nil, nil)
 	if !valid || got == nil || got.KeyID != key.KeyID {
 		t.Fatalf("ValidateKey did not resolve the typed key")
 	}
@@ -51,7 +52,7 @@ func TestCreateTypedKeyFormatAndPerms(t *testing.T) {
 func TestCreateTypedKeyWebhookSlugScope(t *testing.T) {
 	mgr := newTestManager(t)
 
-	key, _, err := mgr.CreateTypedKey("gh", KeyTypeWebhook, []string{"pr-review", "deploy-staging"}, 0, nil, "")
+	key, _, err := mgr.CreateTypedKey(context.Background(), "gh", KeyTypeWebhook, []string{"pr-review", "deploy-staging"}, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey webhook: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestCreateTypedKeyWebhookSlugScope(t *testing.T) {
 	}
 
 	// A non-webhook type must not retain trigger slugs even if supplied.
-	ro, _, err := mgr.CreateTypedKey("ro", KeyTypeReadonly, []string{"pr-review"}, 0, nil, "")
+	ro, _, err := mgr.CreateTypedKey(context.Background(), "ro", KeyTypeReadonly, []string{"pr-review"}, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey readonly: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestCreateTypedKeyWebhookSlugScope(t *testing.T) {
 
 func TestCreateTypedKeyRejectsBadType(t *testing.T) {
 	mgr := newTestManager(t)
-	if _, _, err := mgr.CreateTypedKey("x", KeyType("superuser"), nil, 0, nil, ""); err == nil {
+	if _, _, err := mgr.CreateTypedKey(context.Background(), "x", KeyType("superuser"), nil, 0, nil, ""); err == nil {
 		t.Fatal("CreateTypedKey should reject an invalid type")
 	}
 }
@@ -85,10 +86,10 @@ func TestCreateTypedKeyRejectsBadType(t *testing.T) {
 func TestLookupKeyType(t *testing.T) {
 	mgr := newTestManager(t)
 
-	_, taskRaw, _ := mgr.CreateTypedKey("t", KeyTypeTask, nil, 0, nil, "")
-	_, roRaw, _ := mgr.CreateTypedKey("r", KeyTypeReadonly, nil, 0, nil, "")
+	_, taskRaw, _ := mgr.CreateTypedKey(context.Background(), "t", KeyTypeTask, nil, 0, nil, "")
+	_, roRaw, _ := mgr.CreateTypedKey(context.Background(), "r", KeyTypeReadonly, nil, 0, nil, "")
 	// Legacy untyped key.
-	_, skRaw, _ := mgr.CreateKey("legacy", nil, nil, 0, nil, "")
+	_, skRaw, _ := mgr.CreateKey(context.Background(), "legacy", nil, nil, 0, nil, "")
 
 	if kt, hasCreate, ok := mgr.LookupKeyType(taskRaw); !ok || kt != KeyTypeTask || !hasCreate {
 		t.Errorf("LookupKeyType(task) = (%q,%v,%v)", kt, hasCreate, ok)
@@ -106,11 +107,11 @@ func TestLookupKeyType(t *testing.T) {
 
 func TestRotatePreservesType(t *testing.T) {
 	mgr := newTestManager(t)
-	key, _, err := mgr.CreateTypedKey("svc", KeyTypeReadonly, nil, 0, nil, "")
+	key, _, err := mgr.CreateTypedKey(context.Background(), "svc", KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}
-	rotated, newRaw, err := mgr.RotateKey(key.KeyID, 1)
+	rotated, newRaw, err := mgr.RotateKey(context.Background(), key.KeyID, 1)
 	if err != nil {
 		t.Fatalf("RotateKey: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestTypedKeyPersistsAcrossReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	key, _, err := mgr.CreateTypedKey("wh", KeyTypeWebhook, []string{"pr-review"}, 0, nil, "")
+	key, _, err := mgr.CreateTypedKey(context.Background(), "wh", KeyTypeWebhook, []string{"pr-review"}, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}

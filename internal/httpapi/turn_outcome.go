@@ -161,7 +161,7 @@ func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convI
 			// Registered but not yet in the turns table: postChat creates the
 			// row right after registering the buffer, and a probe landing in
 			// that window must not report the turn missing.
-			writeJSON(w, turnOutcomeResponse{TurnID: turnID, State: turnStateRunning})
+			writeJSON(w, r, turnOutcomeResponse{TurnID: turnID, State: turnStateRunning})
 			return
 		}
 		http.Error(w, "turn not found", http.StatusNotFound)
@@ -175,5 +175,5 @@ func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convI
 			out.Detail = nil
 		}
 	}
-	writeJSON(w, out)
+	writeJSON(w, r, out)
 }

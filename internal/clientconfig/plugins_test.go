@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,7 +182,7 @@ func TestPluginLoadsIdentityAndSkills(t *testing.T) {
 
 	// The skill made it into the merged roster with the standard handle, and
 	// its provenance is the plugin — even with the built-in pack disabled.
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	sk, ok := roster["deploy"]
 	if !ok {
 		t.Fatalf("plugin skill missing from roster: %v", roster)
@@ -287,7 +288,7 @@ func TestPluginManifestNonFatalDeviations(t *testing.T) {
 	if !containsProblem(probs, `"extensions" is not an object`) {
 		t.Errorf("non-object extensions must be reported and ignored: %v", probs)
 	}
-	if _, ok := skillNames(b.Skills())["one"]; !ok {
+	if _, ok := skillNames(b.Skills(context.Background()))["one"]; !ok {
 		t.Error("components must keep loading after the non-fatal deviations")
 	}
 }
@@ -324,7 +325,7 @@ func TestPluginManifestFatalViolations(t *testing.T) {
 			if !containsProblem(b.PluginProblems(), "plugin rejected") {
 				t.Errorf("rejection must be reported: %v", b.PluginProblems())
 			}
-			if _, ok := skillNames(b.Skills())["never"]; ok {
+			if _, ok := skillNames(b.Skills(context.Background()))["never"]; ok {
 				t.Error("a rejected plugin's components must not be discovered")
 			}
 		})
@@ -381,7 +382,7 @@ func TestPluginMCPTopLevelFailureDisablesMCPOnly(t *testing.T) {
 			if !containsProblem(b.PluginProblems(), "MCP disabled for this plugin") {
 				t.Errorf("must report: %v", b.PluginProblems())
 			}
-			if _, ok := skillNames(b.Skills())["still-here"]; !ok {
+			if _, ok := skillNames(b.Skills(context.Background()))["still-here"]; !ok {
 				t.Error("skills must keep loading when mcp.json is invalid")
 			}
 		})
@@ -613,7 +614,7 @@ func TestPluginSkillPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	if got := roster["shared-skill"].Description; got != "alpha's version" {
 		t.Errorf("between plugins the first by name wins; got %q", got)
 	}
@@ -638,7 +639,7 @@ func TestPluginSkillPrecedence(t *testing.T) {
 	// Live edit of a plugin skill body is picked up on the next Skills() read.
 	mustWrite(t, filepath.Join(dir, "plugins", "a-first", "skills", "shared-skill", "SKILL.md"),
 		"---\nname: shared-skill\ndescription: alpha's second revision\n---\n\nEdited.\n")
-	if got := skillNames(b.Skills())["shared-skill"].Description; got != "alpha's second revision" {
+	if got := skillNames(b.Skills(context.Background()))["shared-skill"].Description; got != "alpha's second revision" {
 		t.Errorf("plugin skill edit not picked up: %q", got)
 	}
 }
@@ -658,7 +659,7 @@ func TestPluginSkillFailureBoundaries(t *testing.T) {
 	if strings.Join(b.Plugins[0].Skills, ",") != "good" {
 		t.Errorf("Skills = %v", b.Plugins[0].Skills)
 	}
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	if _, ok := roster["good"]; !ok {
 		t.Error("good skill missing")
 	}
@@ -730,7 +731,7 @@ func TestPluginSymlinkEscapesAreRejected(t *testing.T) {
 	if strings.Join(b.Plugins[0].Skills, ",") != "inside" {
 		t.Errorf("Skills = %v (%v)", b.Plugins[0].Skills, b.PluginProblems())
 	}
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	if _, ok := roster["escapee"]; ok {
 		t.Error("escaping SKILL.md must be skipped")
 	}
@@ -778,7 +779,7 @@ func TestPluginRootsAndDuplicateNames(t *testing.T) {
 	if len(b.PluginRoots) != 3 || b.PluginRoots[1] != filepath.Join(dir, "vendor") {
 		t.Errorf("PluginRoots = %v", b.PluginRoots)
 	}
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	for _, want := range []string{"from-first", "from-third", "from-fourth"} {
 		if _, ok := roster[want]; !ok {
 			t.Errorf("%q missing from roster", want)
@@ -950,7 +951,7 @@ func TestPluginSkillFoldersFollowDiskOnRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if _, ok := skillNames(b.Skills())["first"]; !ok {
+	if _, ok := skillNames(b.Skills(context.Background()))["first"]; !ok {
 		t.Fatal("first missing at load")
 	}
 	// A folder added to an existing skills/ dir, and a whole skills/ dir added
@@ -959,7 +960,7 @@ func TestPluginSkillFoldersFollowDiskOnRead(t *testing.T) {
 		"---\nname: second\ndescription: added after load\n---\n\nNew.\n")
 	mustWrite(t, filepath.Join(dir, "plugins", "b", "skills", "third", "SKILL.md"),
 		"---\nname: third\ndescription: plugin grew a skills dir after load\n---\n\nNew.\n")
-	roster := skillNames(b.Skills())
+	roster := skillNames(b.Skills(context.Background()))
 	for _, want := range []string{"first", "second", "third"} {
 		if _, ok := roster[want]; !ok {
 			t.Errorf("%q missing after being added on disk: %v", want, roster)
@@ -972,7 +973,7 @@ func TestPluginSkillFoldersFollowDiskOnRead(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(dir, "plugins", "a", "skills", "first")); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := skillNames(b.Skills())["first"]; ok {
+	if _, ok := skillNames(b.Skills(context.Background()))["first"]; ok {
 		t.Error("removed plugin skill still in the roster")
 	}
 	if o := b.SkillOrigin("first"); o.Source == "plugin" {

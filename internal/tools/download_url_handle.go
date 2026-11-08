@@ -1,16 +1,18 @@
 package tools
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Fast.io download responses contain short-lived bearer URLs. Sending those
@@ -81,7 +83,7 @@ var downloadURLDriftOnce sync.Once
 // handle the model has to pass to download_url instead of a clickable link; the
 // cost of a false negative is a bearer in the model context, the SSE stream and
 // the turn log — so the fallback errs toward vaulting.
-func ProtectFastIODownloadURLs(text string) string {
+func ProtectFastIODownloadURLs(ctx context.Context, text string) string {
 	if text == "" {
 		return text
 	}
@@ -135,7 +137,7 @@ func ProtectFastIODownloadURLs(text string) string {
 		downloadURLDriftOnce.Do(func() {
 			// No URL, no handle: the message is about the shape, and the bearer
 			// is exactly what must not reach a log line.
-			log.Printf("download_url: a Fast.io response carried a credential-bearing URL outside a download_url/zip_url section; vaulted it anyway — the upstream response format may have changed, check the section headings ProtectFastIODownloadURLs expects")
+			logging.From(ctx).Warn("download_url: a Fast.io response carried a credential-bearing URL outside a download_url/zip_url section; vaulted it anyway — the upstream response format may have changed, check the section headings ProtectFastIODownloadURLs expects")
 		})
 	}
 	if !changed {

@@ -314,7 +314,7 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 
 	typed := map[apikeys.KeyType]probeKey{}
 	for _, kt := range []apikeys.KeyType{apikeys.KeyTypeAdmin, apikeys.KeyTypeTask, apikeys.KeyTypeReadonly, apikeys.KeyTypeWebhook} {
-		key, raw, err := keyMgr.CreateTypedKey("probe-"+string(kt), kt, []string{"probe"}, 0, nil, "")
+		key, raw, err := keyMgr.CreateTypedKey(context.Background(), "probe-"+string(kt), kt, []string{"probe"}, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create %s key: %v", kt, err)
 		}
@@ -322,7 +322,7 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 		typed[kt] = probeKey{name: "typed " + string(kt) + " key", raw: raw, keyID: &id}
 	}
 	legacy := func(perms ...models.Permission) probeKey {
-		key, raw, err := keyMgr.CreateKey("probe-legacy-"+uuid.NewString(), perms, nil, 0, nil, "")
+		key, raw, err := keyMgr.CreateKey(context.Background(), "probe-legacy-"+uuid.NewString(), perms, nil, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create legacy key %v: %v", perms, err)
 		}
@@ -570,7 +570,7 @@ func TestOpenAPITriggerAuthEnforcement(t *testing.T) {
 	}
 	webhookKey := func(slugs ...string) string {
 		t.Helper()
-		_, raw, err := env.keyMgr.CreateTypedKey("probe-webhook-"+uuid.NewString(), apikeys.KeyTypeWebhook, slugs, 0, nil, "")
+		_, raw, err := env.keyMgr.CreateTypedKey(context.Background(), "probe-webhook-"+uuid.NewString(), apikeys.KeyTypeWebhook, slugs, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create webhook key: %v", err)
 		}
@@ -578,7 +578,7 @@ func TestOpenAPITriggerAuthEnforcement(t *testing.T) {
 	}
 	otherTyped := func(kt apikeys.KeyType) string {
 		t.Helper()
-		_, raw, err := env.keyMgr.CreateTypedKey("probe-"+string(kt)+"-"+uuid.NewString(), kt, nil, 0, nil, "")
+		_, raw, err := env.keyMgr.CreateTypedKey(context.Background(), "probe-"+string(kt)+"-"+uuid.NewString(), kt, nil, 0, nil, "")
 		if err != nil {
 			t.Fatalf("create %s key: %v", kt, err)
 		}

@@ -1,9 +1,12 @@
 package notify
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // renderEmail builds the RFC 5322 message bytes for a completion email: a
@@ -184,7 +187,11 @@ func sanitizeHeader(s string) string {
 	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
 }
 
-// stdLogf is the default Notifier logger. It is a thin wrapper so the Notifier
-// can hold a swappable log seam (tests assert no secret is ever logged). It
-// deliberately mirrors log.Printf's signature.
-func stdLogf(format string, args ...any) { log.Printf(format, args...) }
+// stdLog is the default Notifier logger. It is a thin wrapper so the Notifier
+// can hold a swappable log seam (tests assert no secret is ever logged and that
+// failures are not logged below Warn). The level is the caller's: a channel
+// failure is the only report of a lost notification (runner.deliver discards
+// the returned error), so it must survive FLEET_LOG_LEVEL=warn.
+func stdLog(ctx context.Context, level slog.Level, msg string, args ...any) {
+	logging.From(ctx).Log(ctx, level, msg, args...)
+}

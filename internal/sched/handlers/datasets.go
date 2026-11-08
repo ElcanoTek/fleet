@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/datasets"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -197,7 +197,7 @@ func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.RowCounts = map[string]int{}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, r, http.StatusOK, d)
 }
 
 // ListDatasets handles GET /datasets.
@@ -215,7 +215,7 @@ func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []*models.Dataset{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"datasets": out})
+	writeJSON(w, r, http.StatusOK, map[string]any{"datasets": out})
 }
 
 // datasetFromPath loads the {datasetID} path dataset after checking perm,
@@ -242,10 +242,9 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request, perm 
 			writeError(w, http.StatusNotFound, "Dataset not found")
 			return nil, false
 		}
-		//nolint:gosec // G706 false positive: id is a uuid.UUID already parsed
 		// from the path (its String() is hex + dashes), and it is passed
 		// through safe.LogSafe as well — it cannot carry CR/LF to forge a log line.
-		log.Printf("dataset %s: load: %v", safe.LogSafe(id.String()), err)
+		logging.From(r.Context()).Error("dataset: load failed", "dataset", safe.LogSafe(id.String()), "err", err)
 		writeError(w, http.StatusInternalServerError, "Failed to load dataset")
 		return nil, false
 	}
@@ -267,7 +266,7 @@ func (h *Handlers) GetDataset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, r, http.StatusOK, d)
 }
 
 // DeleteDataset handles DELETE /datasets/{datasetID}.
@@ -310,7 +309,7 @@ func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []*models.DatasetRow{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "row_counts": d.RowCounts})
+	writeJSON(w, r, http.StatusOK, map[string]any{"rows": rows, "row_counts": d.RowCounts})
 }
 
 // ImportDatasetRows handles POST /datasets/{datasetID}/rows — JSON
@@ -380,7 +379,7 @@ func (h *Handlers) ImportDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to import rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"imported": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"imported": n})
 }
 
 // parseCSVRows maps a CSV (header = input column names) onto typed cells.
@@ -472,7 +471,7 @@ func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": models.DatasetStatusRunning})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": models.DatasetStatusRunning})
 }
 
 // PauseDataset handles POST /datasets/{datasetID}/pause.
@@ -489,7 +488,7 @@ func (h *Handlers) PauseDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "dataset is not running")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": models.DatasetStatusPaused})
+	writeJSON(w, r, http.StatusOK, map[string]any{"status": models.DatasetStatusPaused})
 }
 
 type datasetRowActionRequest struct {
@@ -514,7 +513,7 @@ func (h *Handlers) ApproveDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to approve rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"approved": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"approved": n})
 }
 
 // RerunDatasetRows handles POST /datasets/{datasetID}/rerun — reset the given
@@ -537,7 +536,7 @@ func (h *Handlers) RerunDatasetRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to reset rows")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"reset": n})
+	writeJSON(w, r, http.StatusOK, map[string]any{"reset": n})
 }
 
 // ExportDataset handles GET /datasets/{datasetID}/export — a CSV of every
@@ -567,7 +566,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 	for offset := 0; ; offset += page {
 		rows, err := h.storage.ListDatasetRows(r.Context(), d.ID, "", page, offset)
 		if err != nil {
-			log.Printf("dataset export %s: %v", safe.LogSafe(d.ID.String()), err)
+			logging.From(r.Context()).Error("dataset export failed", "dataset", safe.LogSafe(d.ID.String()), "err", err)
 			panic(http.ErrAbortHandler)
 		}
 		for _, row := range rows {
@@ -582,7 +581,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 		}
 		writer.Flush()
 		if err := writer.Error(); err != nil {
-			log.Printf("dataset export %s: write: %v", safe.LogSafe(d.ID.String()), err)
+			logging.From(r.Context()).Error("dataset export: write failed", "dataset", safe.LogSafe(d.ID.String()), "err", err)
 			panic(http.ErrAbortHandler)
 		}
 		if len(rows) < page {

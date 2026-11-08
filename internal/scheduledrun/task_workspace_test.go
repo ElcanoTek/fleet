@@ -22,7 +22,7 @@ func TestTaskWorkspaceDirIsPerJobLineage(t *testing.T) {
 	r := &Runner{cfg: &config.Config{WorkspaceRoot: root}}
 
 	job := models.NewTask(models.TaskCreate{Prompt: "daily scan", Recurrence: "0 9 * * *"})
-	dir := r.taskWorkspaceDir(job)
+	dir := r.taskWorkspaceDir(context.Background(), job)
 	want := filepath.Join(root, "tasks", job.ID.String())
 	if dir != want {
 		t.Fatalf("dir = %q, want %q", dir, want)
@@ -33,20 +33,20 @@ func TestTaskWorkspaceDirIsPerJobLineage(t *testing.T) {
 
 	// The next occurrence of the same job lands in the SAME directory …
 	next := models.NewTask(models.TaskToCreate(job))
-	if got := r.taskWorkspaceDir(next); got != want {
+	if got := r.taskWorkspaceDir(context.Background(), next); got != want {
 		t.Fatalf("occurrence dir = %q, want the job's %q", got, want)
 	}
 	// … and an unrelated job in its own.
 	other := models.NewTask(models.TaskCreate{Prompt: "weekly report"})
-	if got := r.taskWorkspaceDir(other); got == want || got != filepath.Join(root, "tasks", other.ID.String()) {
+	if got := r.taskWorkspaceDir(context.Background(), other); got == want || got != filepath.Join(root, "tasks", other.ID.String()) {
 		t.Fatalf("unrelated job dir = %q, must be its own", got)
 	}
 
 	shared := &Runner{cfg: &config.Config{WorkspaceRoot: root, ScheduledSharedWorkspace: true}}
-	if got := shared.taskWorkspaceDir(job); got != root {
+	if got := shared.taskWorkspaceDir(context.Background(), job); got != root {
 		t.Fatalf("kill switch must restore the shared root, got %q", got)
 	}
-	if got := r.taskWorkspaceDir(nil); got != root {
+	if got := r.taskWorkspaceDir(context.Background(), nil); got != root {
 		t.Fatalf("nil task must fall back to the root, got %q", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestRunSandboxScope(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	r := &Runner{cfg: &config.Config{WorkspaceRoot: root}}
 	job := models.NewTask(models.TaskCreate{Prompt: "daily scan"})
-	dir := r.taskWorkspaceDir(job)
+	dir := r.taskWorkspaceDir(context.Background(), job)
 	ctx := tools.WithForcedWorkingDir(context.Background(), dir)
 
 	scope, err := r.runSandboxScope(ctx, job, "")

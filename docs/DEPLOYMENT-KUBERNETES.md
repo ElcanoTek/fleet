@@ -421,7 +421,7 @@ What this means for a bundle:
 - **The control plane must be able to create `<workspace root>/skills`** —
   the same requirement the shared library already imposes (uid 1000, `fsGroup`
   honored). If staging fails, boot continues and the log says
-  `warning: stage skills for the kubernetes sandbox backend: …`; skills are
+  `warning: stage skills for the kubernetes sandbox backend — skills stay unreadable inside sandbox pods` (with the `err`); skills are
   then rostered but unreadable in pods (the pre-ADR-0055 posture), and the
   pool build logs the consequence by name.
 - **Bytes exist twice** (bundle in the control-plane image, staged copy in the
@@ -431,7 +431,7 @@ What this means for a bundle:
 A healthy boot logs one line:
 
 ```
-sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged at /var/lib/fleet/workspace/skills inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed
+{"level":"INFO","msg":"sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed","staged":"/var/lib/fleet/workspace/skills"}
 ```
 
 ## Provider notes

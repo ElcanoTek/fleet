@@ -36,9 +36,9 @@ const headerSessionRevoked = "X-Session-Revoked"
 // writeSessionRevoked answers a request whose session-epoch claim no longer
 // matches the account: 401, so the gateway drops the cookie and the client
 // goes to sign-in.
-func writeSessionRevoked(w http.ResponseWriter) {
+func writeSessionRevoked(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(headerSessionRevoked, "1")
-	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
+	writeJSON(w, r, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
 }
 
 // userPrincipal resolves the request's user principal: the one the gateway
@@ -75,10 +75,10 @@ func (h *Handlers) userPrincipal(w http.ResponseWriter, r *http.Request) (*model
 	})
 	switch {
 	case errors.Is(err, authn.ErrNotMember):
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
+		writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "not_a_member"})
 		return nil, r, true
 	case errors.Is(err, authn.ErrSessionRevoked):
-		writeSessionRevoked(w)
+		writeSessionRevoked(w, r)
 		return nil, r, true
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "Membership check failed")

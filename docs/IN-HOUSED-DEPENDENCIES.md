@@ -118,8 +118,11 @@ version, upstream path, that it was modified, and its SPDX id.
 - **Dropped:** upstream's `ClientIPFromHeader`, `ClientIPFromXFFTrustedProxies`
   and `ClientIPFromRemoteAddr`, and their tests (plus the halves of advisory
   tests that exercise them).
-- **Changed:** Recoverer prints `panic: <value>` and Go's stack, not chi's
-  coloured pretty-stack. `ClientIPFromXFF`'s per-request walk is lifted out of
+- **Changed:** Recoverer prints no panic value and no stack (upstream's
+  coloured pretty-stack went to stderr). It hands the panic to
+  `internal/safe` as one structured event (incident id, panic class, route)
+  through the configured log handler. It is built from `RecoverWith`, which
+  the chat router's recoverer uses too. `ClientIPFromXFF`'s per-request walk is lifted out of
   the handler into `xffClientIP` (same code, same semantics) so fleet's own
   `trusted_proxies.go` — the one client-IP resolver both the orchestrator API
   and the chat server's IP filter use — runs that exact walk.

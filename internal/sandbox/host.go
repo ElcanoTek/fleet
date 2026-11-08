@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/procgroup"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -55,6 +56,7 @@ type hostImpl struct {
 	// that a sandbox dedicated to bash work doesn't pay the python boot
 	// cost.
 	bridgeCmd        *exec.Cmd
+	bridgeStderrLog  *logging.StderrLogger // the bridge's stderr as log records; Closed after Wait
 	bridgeStdin      io.WriteCloser
 	bridgeStdout     *bufio.Reader
 	bridgeStarted    bool
@@ -214,7 +216,7 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 		timeout = 5 * time.Minute
 	}
 
-	if err := h.ensureBridge(); err != nil {
+	if err := h.ensureBridge(ctx); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge: %w", err)
 	}
 
@@ -233,14 +235,18 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if err := h.sendLocked(reqBytes); err != nil {
+	// The bridge's stderr during this request is this request's (a restart
+	// in sendLocked attributes the new bridge too); cleared at its end.
+	h.bridgeStderrLog.Attribute(ctx)
+	defer func() { h.bridgeStderrLog.ClearAttribution() }()
+	if err := h.sendLocked(ctx, reqBytes); err != nil {
 		return PythonResult{}, err
 	}
 	respBytes, err := h.readLocked(ctx, timeout)
 	if err != nil {
 		return PythonResult{}, err
 	}
-	return parseBridgeResponse(respBytes)
+	return parseBridgeResponse(ctx, respBytes)
 }
 
 func (h *hostImpl) close() {
@@ -256,7 +262,7 @@ func (h *hostImpl) close() {
 // ensureBridge spawns the python bridge subprocess if it hasn't been
 // started. Idempotent and lazy — the first runPython pays the boot
 // cost, subsequent calls reuse the running process.
-func (h *hostImpl) ensureBridge() error {
+func (h *hostImpl) ensureBridge(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -279,7 +285,10 @@ func (h *hostImpl) ensureBridge() error {
 
 	//nolint:gosec,noctx // long-running bridge process; lifetime tied to sandbox
 	cmd := exec.Command("python3", h.bridgeScriptPath)
-	cmd.Stderr = os.Stderr
+	// The bridge's stderr (a Python traceback) is logged line by line through
+	// slog, redacted — never copied to the process stderr as written.
+	stderrLog := bridgeStderrLogger(ctx)
+	cmd.Stderr = stderrLog
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -296,6 +305,7 @@ func (h *hostImpl) ensureBridge() error {
 	}
 
 	h.bridgeCmd = cmd
+	h.bridgeStderrLog = stderrLog
 	h.bridgeStdin = stdin
 	h.bridgeStdout = bufio.NewReader(stdout)
 	h.bridgeStarted = true
@@ -304,16 +314,19 @@ func (h *hostImpl) ensureBridge() error {
 	return nil
 }
 
-func (h *hostImpl) sendLocked(reqBytes []byte) error {
+func (h *hostImpl) sendLocked(ctx context.Context, reqBytes []byte) error {
 	if _, err := fmt.Fprintf(h.bridgeStdin, "%s\n", reqBytes); err != nil {
 		// Pipe may have closed — try a single restart.
 		h.terminateBridgeLocked()
 		h.mu.Unlock()
-		startErr := h.ensureBridge()
+		startErr := h.ensureBridge(ctx)
 		h.mu.Lock()
 		if startErr != nil {
 			return fmt.Errorf("send (after restart attempt): %w", err)
 		}
+		// The restarted bridge's stderr is this request's too (runPython
+		// clears it when the request ends).
+		h.bridgeStderrLog.Attribute(ctx)
 		if _, err := fmt.Fprintf(h.bridgeStdin, "%s\n", reqBytes); err != nil {
 			return fmt.Errorf("send (after restart): %w", err)
 		}
@@ -335,7 +348,7 @@ func (h *hostImpl) readLocked(ctx context.Context, timeout time.Duration) ([]byt
 	// panic (#583). Mirrors containerImpl.runPython.
 	stdout := h.bridgeStdout
 	go func() {
-		defer safe.Recover("sandbox.host.bridge_read", func(any) {
+		defer safe.RecoverContext(ctx, "sandbox.host.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
 		data, err := stdout.ReadBytes('\n')
@@ -363,8 +376,13 @@ func (h *hostImpl) terminateBridgeLocked() {
 		_ = h.bridgeCmd.Process.Signal(os.Interrupt)
 		// Brief grace period; force-kill if still alive.
 		done := make(chan struct{})
+		cmd, stderrLog := h.bridgeCmd, h.bridgeStderrLog
 		go func() {
-			_ = h.bridgeCmd.Wait()
+			_ = cmd.Wait()
+			// Wait joined the stderr copier: flush its last partial line.
+			if stderrLog != nil {
+				_ = stderrLog.Close()
+			}
 			close(done)
 		}()
 		select {
@@ -378,6 +396,7 @@ func (h *hostImpl) terminateBridgeLocked() {
 		_ = h.bridgeStdin.Close()
 	}
 	h.bridgeCmd = nil
+	h.bridgeStderrLog = nil
 	h.bridgeStdin = nil
 	h.bridgeStdout = nil
 	h.bridgeStarted = false

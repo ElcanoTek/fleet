@@ -72,7 +72,7 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, view)
+		writeJSON(w, r, view)
 	case http.MethodPut:
 		var body notifySettingsBody
 		if !decodeJSONBody(w, r, &body) {
@@ -91,14 +91,14 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 			httpErrorForNotifySettings(w, err)
 			return
 		}
-		writeJSON(w, view)
+		writeJSON(w, r, view)
 	case http.MethodDelete:
 		view, err := s.notifySettings.Revert(r.Context(), userFromCtx(r.Context()))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, view)
+		writeJSON(w, r, view)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -127,7 +127,7 @@ func (s *Server) handleAdminNotifySettingsTest(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, result)
+	writeJSON(w, r, result)
 }
 
 // httpErrorForNotifySettings maps validation failures (shape checks in

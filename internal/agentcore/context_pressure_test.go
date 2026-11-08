@@ -276,7 +276,7 @@ const testContextWindow = 100_000
 // test-controlled context window for its slug so the pressure ratios are
 // deterministic (the observed cache is consulted before any network path).
 func newStopModel(slug string) *namedMockModel {
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow)
 	return &namedMockModel{
 		mockModel: mockModel{
 			streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
@@ -414,7 +414,7 @@ func TestRun_ContextPressure_ScheduledCompactsWithFlag(t *testing.T) {
 // so this calls checkContextPressure directly with the counters preset.
 func TestCheckContextPressure_DrivenByLastStepNotCumulative(t *testing.T) {
 	slug := "ctx209-groundtruth"
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	obs := &captureObserver{}
@@ -446,7 +446,7 @@ func TestCheckContextPressure_DrivenByLastStepNotCumulative(t *testing.T) {
 // wires `messages = pressure.messages` forward.
 func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t *testing.T) {
 	slug := "ctx209-multiround-compact"
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow)
 	session := NewLogSession()
 	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 95_000}}
 	obs := &captureObserver{}
@@ -489,7 +489,7 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 // second) hold; without the reset the second warn would be suppressed.
 func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 	slug := "ctx209-multiround-warn"
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow)
 	session := NewLogSession()
 	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 77_000, 77_000}}
 	obs := &captureObserver{}
@@ -545,7 +545,7 @@ func TestRun_ContextPressure_UnsplittableHistoryStillWarns(t *testing.T) {
 
 func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testing.T) {
 	slug := "ctx209-replayable-compaction"
-	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, testContextWindow)
 	initialMsgs := fillerMessages(10, 38_000) // ~95K tokens -> triggers round-0 compaction
 	model := &capturingModel{slug: slug, inputByCall: []int{40_000}}
 	obs := &captureObserver{}
@@ -620,7 +620,7 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 
 func TestCheckContextPressure_LargeWindowInteractiveDefaultCapsAndOverrides(t *testing.T) {
 	const slug = "ctx-1m-interactive-defaults"
-	recordContextMaxForModel(&namedMockModel{name: slug}, 1_000_000)
+	recordContextMaxForModel(context.Background(), &namedMockModel{name: slug}, 1_000_000)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	msgs := fillerMessages(8, 200)

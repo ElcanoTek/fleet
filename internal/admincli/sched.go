@@ -472,7 +472,7 @@ func schedAPIKeyCreate(argv []string) int {
 				}
 			}
 		}
-		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, *rateLimit, nil, "created via the fleet CLI")
+		key, raw, err := mgr.CreateTypedKey(context.Background(), name, kt, slugs, *rateLimit, nil, "created via the fleet CLI")
 		if err != nil {
 			return errf(5, "%v", err)
 		}
@@ -488,7 +488,7 @@ func schedAPIKeyCreate(argv []string) int {
 
 	// Legacy role-based path: mints an untyped sk- key, unchanged.
 	roleVal := *role
-	key, raw, err := mgr.CreateKey(name, nil, &roleVal, *rateLimit, nil, "created via the fleet CLI")
+	key, raw, err := mgr.CreateKey(context.Background(), name, nil, &roleVal, *rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -510,7 +510,7 @@ func createUserKey(mgr *apikeys.Manager, ks keyStore, name, email string, rateLi
 	if rateLimit != 0 {
 		return errf(1, "--rate-limit-per-minute does not apply to a user key: its turns are limited by the chat's per-user limit, like its person's (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY)")
 	}
-	key, raw, err := mgr.CreateUserKey(name, email, rateLimit, nil, "created via the fleet CLI")
+	key, raw, err := mgr.CreateUserKey(context.Background(), name, email, rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -587,7 +587,7 @@ func schedAPIKeyRevoke(argv []string) int {
 	if mgr == nil {
 		return code
 	}
-	if err := mgr.RevokeKey(keyID); err != nil {
+	if err := mgr.RevokeKey(context.Background(), keyID); err != nil {
 		return errf(5, "%v", err)
 	}
 	ks.fixOwnership()
@@ -611,7 +611,7 @@ func schedAPIKeyRotate(argv []string) int {
 	}
 	// RotateKey preserves the key's type (#190); a typed key rotates to a fresh
 	// token of the same type, so its scope is unchanged.
-	key, raw, err := mgr.RotateKey(keyID, *graceHours)
+	key, raw, err := mgr.RotateKey(context.Background(), keyID, *graceHours)
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -637,7 +637,7 @@ func schedAPIKeyDelete(argv []string) int {
 	if mgr == nil {
 		return code
 	}
-	if err := mgr.DeleteKey(keyID); err != nil {
+	if err := mgr.DeleteKey(context.Background(), keyID); err != nil {
 		return errf(5, "%v", err)
 	}
 	ks.fixOwnership()

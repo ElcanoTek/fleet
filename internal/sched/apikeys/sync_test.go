@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,7 @@ func twoManagers(t *testing.T) (server, cli *Manager) {
 }
 
 func TestExternalRevokeTakesEffectAtOnce(t *testing.T) {
+	ctx := context.Background()
 	for _, kt := range []KeyType{KeyTypeUser, KeyTypeTask, KeyTypeAdmin} {
 		server, cli := twoManagers(t)
 		var (
@@ -34,20 +36,20 @@ func TestExternalRevokeTakesEffectAtOnce(t *testing.T) {
 			err error
 		)
 		if kt == KeyTypeUser {
-			key, raw, err = server.CreateUserKey("k", "u@x.com", 0, nil, "")
+			key, raw, err = server.CreateUserKey(ctx, "k", "u@x.com", 0, nil, "")
 		} else {
-			key, raw, err = server.CreateTypedKey("k", kt, nil, 0, nil, "")
+			key, raw, err = server.CreateTypedKey(ctx, "k", kt, nil, 0, nil, "")
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ok, _, _ := server.ValidateKey(raw, nil, nil, nil); !ok {
+		if ok, _, _ := server.ValidateKey(ctx, raw, nil, nil, nil); !ok {
 			t.Fatalf("%s: fresh key rejected", kt)
 		}
-		if err := cli.RevokeKey(key.KeyID); err != nil {
+		if err := cli.RevokeKey(ctx, key.KeyID); err != nil {
 			t.Fatal(err)
 		}
-		if ok, _, reason := server.ValidateKey(raw, nil, nil, nil); ok {
+		if ok, _, reason := server.ValidateKey(ctx, raw, nil, nil, nil); ok {
 			t.Fatalf("%s: a key revoked by another process still authenticates", kt)
 		} else if reason != "API key is disabled" {
 			t.Errorf("%s: reason %q", kt, reason)
@@ -62,31 +64,33 @@ func TestExternalRevokeTakesEffectAtOnce(t *testing.T) {
 }
 
 func TestExternalRotateTakesEffectAtOnce(t *testing.T) {
+	ctx := context.Background()
 	server, cli := twoManagers(t)
-	key, oldRaw, err := server.CreateUserKey("k", "u@x.com", 0, nil, "")
+	key, oldRaw, err := server.CreateUserKey(ctx, "k", "u@x.com", 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _, _ := server.ValidateKey(oldRaw, nil, nil, nil); !ok {
+	if ok, _, _ := server.ValidateKey(ctx, oldRaw, nil, nil, nil); !ok {
 		t.Fatal("fresh key rejected")
 	}
-	_, newRaw, err := cli.RotateKey(key.KeyID, 0) // no grace: the old key ends now
+	_, newRaw, err := cli.RotateKey(ctx, key.KeyID, 0) // no grace: the old key ends now
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond) // past the zero-hour grace instant
-	if ok, _, _ := server.ValidateKey(oldRaw, nil, nil, nil); ok {
+	if ok, _, _ := server.ValidateKey(ctx, oldRaw, nil, nil, nil); ok {
 		t.Error("the rotated-out key still authenticates")
 	}
-	ok, got, _ := server.ValidateKey(newRaw, nil, nil, nil)
+	ok, got, _ := server.ValidateKey(ctx, newRaw, nil, nil, nil)
 	if !ok || got.UserEmail != "u@x.com" {
 		t.Error("the rotated-in key is rejected")
 	}
 }
 
 func TestExternalDeleteAndEditTakeEffect(t *testing.T) {
+	ctx := context.Background()
 	server, cli := twoManagers(t)
-	key, raw, err := server.CreateTypedKey("k", KeyTypeTask, nil, 0, nil, "")
+	key, raw, err := server.CreateTypedKey(ctx, "k", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +101,10 @@ func TestExternalDeleteAndEditTakeEffect(t *testing.T) {
 	if got := server.GetKey(key.KeyID); got == nil || got.MaxPriority == nil || *got.MaxPriority != 3 {
 		t.Fatalf("an edit by another process was not seen: %+v", got)
 	}
-	if err := cli.DeleteKey(key.KeyID); err != nil {
+	if err := cli.DeleteKey(ctx, key.KeyID); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _, _ := server.ValidateKey(raw, nil, nil, nil); ok || server.GetKey(key.KeyID) != nil {
+	if ok, _, _ := server.ValidateKey(ctx, raw, nil, nil, nil); ok || server.GetKey(key.KeyID) != nil {
 		t.Fatal("a key deleted by another process still exists")
 	}
 }
@@ -108,12 +112,13 @@ func TestExternalDeleteAndEditTakeEffect(t *testing.T) {
 // A write of ours never drops a key another process added meanwhile: every
 // mutation syncs first.
 func TestOwnWritesKeepExternalKeys(t *testing.T) {
+	ctx := context.Background()
 	server, cli := twoManagers(t)
-	ext, extRaw, err := cli.CreateTypedKey("ext", KeyTypeTask, nil, 0, nil, "")
+	ext, extRaw, err := cli.CreateTypedKey(ctx, "ext", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := server.CreateTypedKey("own", KeyTypeTask, nil, 0, nil, ""); err != nil {
+	if _, _, err := server.CreateTypedKey(ctx, "own", KeyTypeTask, nil, 0, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := NewManager(server.storagePath, server.auditLogPath)
@@ -123,22 +128,23 @@ func TestOwnWritesKeepExternalKeys(t *testing.T) {
 	if fresh.GetKey(ext.KeyID) == nil {
 		t.Fatal("the server's write dropped a key the CLI had added")
 	}
-	if ok, _, _ := server.ValidateKey(extRaw, nil, nil, nil); !ok {
+	if ok, _, _ := server.ValidateKey(ctx, extRaw, nil, nil, nil); !ok {
 		t.Fatal("the CLI's key does not authenticate on the server")
 	}
 }
 
 // An unreadable or torn file leaves the known keys in place.
 func TestBrokenFileKeepsState(t *testing.T) {
+	ctx := context.Background()
 	server, _ := twoManagers(t)
-	_, raw, err := server.CreateTypedKey("k", KeyTypeTask, nil, 0, nil, "")
+	_, raw, err := server.CreateTypedKey(ctx, "k", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(server.storagePath, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _, _ := server.ValidateKey(raw, nil, nil, nil); !ok {
+	if ok, _, _ := server.ValidateKey(ctx, raw, nil, nil, nil); !ok {
 		t.Fatal("a torn file wiped the known keys")
 	}
 }
@@ -147,6 +153,7 @@ func TestBrokenFileKeepsState(t *testing.T) {
 // which surface; ValidateKeyOn and the Lookup*On helpers apply it before any
 // rate-limit token is charged.
 func TestKeyTypeSurfaces(t *testing.T) {
+	ctx := context.Background()
 	want := map[KeyType][]Surface{
 		KeyTypeAdmin:    {SurfaceOrchestrator, SurfaceA2A},
 		KeyTypeTask:     {SurfaceOrchestrator, SurfaceA2A},
@@ -161,12 +168,12 @@ func TestKeyTypeSurfaces(t *testing.T) {
 		var err error
 		switch kt {
 		case KeyTypeUser:
-			_, raw, err = server.CreateUserKey("k", "u@x.com", 0, nil, "")
+			_, raw, err = server.CreateUserKey(ctx, "k", "u@x.com", 0, nil, "")
 		case KeyTypeLegacy:
 			role := "client"
-			_, raw, err = server.CreateKey("k", nil, &role, 0, nil, "")
+			_, raw, err = server.CreateKey(ctx, "k", nil, &role, 0, nil, "")
 		default:
-			_, raw, err = server.CreateTypedKey("k", kt, []string{"s"}, 0, nil, "")
+			_, raw, err = server.CreateTypedKey(ctx, "k", kt, []string{"s"}, 0, nil, "")
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -179,7 +186,7 @@ func TestKeyTypeSurfaces(t *testing.T) {
 			if got := kt.AllowsSurface(s); got != exp {
 				t.Errorf("%q.AllowsSurface(%s) = %v, want %v", kt, s, got, exp)
 			}
-			ok, _, reason := server.ValidateKeyOn(s, raw, nil, nil, nil)
+			ok, _, reason := server.ValidateKeyOn(ctx, s, raw, nil, nil, nil)
 			if ok != exp || (!exp && reason != ReasonWrongSurface) {
 				t.Errorf("ValidateKeyOn(%s, %q key) = %v %q, want %v", s, kt, ok, reason, exp)
 			}
@@ -196,7 +203,7 @@ func TestKeyTypeSurfaces(t *testing.T) {
 // A user key takes no per-key rate limit (see CreateUserKey).
 func TestUserKeyRefusesARateLimit(t *testing.T) {
 	server, _ := twoManagers(t)
-	if _, _, err := server.CreateUserKey("k", "u@x.com", 1, nil, ""); err == nil {
+	if _, _, err := server.CreateUserKey(context.Background(), "k", "u@x.com", 1, nil, ""); err == nil {
 		t.Fatal("a user key accepted a per-key rate limit")
 	}
 }

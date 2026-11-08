@@ -11,12 +11,14 @@
 // (seal the turn buffer, error the task) via the onPanic callback so a panic
 // surfaces as a contained failure, not a silent swallow.
 //
-// Every recovered panic is emitted as a STRUCTURED JSON event (queryable by a
-// log aggregator) and fanned out to optional legacy and structured hooks. cmd/fleet registers the structured Sentry and
+// Every recovered panic is emitted as a STRUCTURED log event through the
+// process's configured handler (format, redactor, FLEET_LOG_FILE), with a
+// direct-to-stderr JSON fallback if that handler fails, and fanned out to optional legacy and structured hooks. cmd/fleet registers the structured Sentry and
 // panic-events adapters; internal/safe imports neither an SDK nor a database.
 package safe
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -29,8 +31,51 @@ import (
 	"time"
 )
 
-// panicLogger emits recovered panics as structured JSON to stderr.
+// panicLogger emits recovered panics as structured JSON straight to stderr.
+// It is the FAIL-SAFE path only: once logging.Configure has run, panic
+// records go through the configured handler (SetPanicHandler) — its format,
+// its redactor, its file sink — and panicLogger is used when that handler
+// is unset, panics, or returns an error, so a broken log sink can never
+// swallow a recovered panic.
 var panicLogger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+// panicHandler is the process's configured log handler, installed by
+// logging.Configure. internal/logging imports this package's setter rather
+// than this package importing logging, so there is no import cycle.
+var panicHandler atomic.Pointer[slog.Handler]
+
+// SetPanicHandler routes recovered-panic records through h (nil restores the
+// direct-stderr fallback).
+func SetPanicHandler(h slog.Handler) {
+	if h == nil {
+		panicHandler.Store(nil)
+		return
+	}
+	panicHandler.Store(&h)
+}
+
+// logPanic writes one error record through the configured handler, falling
+// back to panicLogger when there is none or it fails.
+func logPanic(ctx context.Context, msg string, args ...any) {
+	if hp := panicHandler.Load(); hp != nil && handleSafely(ctx, *hp, msg, args) {
+		return
+	}
+	panicLogger.Error(msg, args...)
+}
+
+func handleSafely(ctx context.Context, h slog.Handler, msg string, args []any) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	if !h.Enabled(ctx, slog.LevelError) {
+		return false
+	}
+	r := slog.NewRecord(time.Now(), slog.LevelError, msg, 0)
+	r.Add(args...)
+	return h.Handle(ctx, r) == nil
+}
 
 var (
 	// SentryHook, when set, is invoked for every recovered panic. The value passed
@@ -100,7 +145,15 @@ func EmitPanic(location string, v any, stack []byte) {
 // caller did not already provide one; returning it lets an in-band error carry
 // the same reference. stack is accepted for source compatibility but is
 // deliberately discarded together with the recovered value.
-func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
+func EmitPanicWithMetadata(meta PanicMetadata, v any, stack []byte) PanicEvent {
+	return EmitPanicWithMetadataContext(context.Background(), meta, v, stack)
+}
+
+// EmitPanicWithMetadataContext is EmitPanicWithMetadata for a panic recovered
+// while serving a request or a run: ctx is that request's or run's context,
+// and the configured handler (logging.Configure) adds its correlation —
+// request_id, trace_id, span_id, conv_id, run_id … — to the event.
+func EmitPanicWithMetadataContext(ctx context.Context, meta PanicMetadata, v any, _ []byte) PanicEvent {
 	if meta.Location == "" {
 		meta.Location = "unknown"
 	}
@@ -109,17 +162,33 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 	}
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
-	panicLogger.Error("panic recovered",
-		"incident_id", LogSafe(meta.IncidentID),
-		"goroutine", LogSafe(meta.Location),
-		"boundary", LogSafe(meta.Boundary),
-		"tool_name", LogSafe(meta.ToolName),
-		"tool_call_id", LogSafe(meta.ToolCallID),
-		"run_mode", LogSafe(meta.RunMode),
-		"task_id", LogSafe(meta.TaskID),
-		"conversation_id", LogSafe(meta.ConversationID),
-		"panic_class", class,
-	)
+	// Only the metadata the boundary knows: an empty attribute names nothing,
+	// and the handler's context correlation (task_id, run_id, conv_id …)
+	// fills in what the caller did not (#2074 review).
+	// Keys are literals and each value is sanitized at its own append: a
+	// table of {key, value} pairs would mix the two in one array, which taint
+	// analysis (CodeQL go/log-injection) reads as tainting the keys too.
+	args := []any{"incident_id", LogSafe(meta.IncidentID), "goroutine", LogSafe(meta.Location)}
+	if meta.Boundary != "" {
+		args = append(args, "boundary", LogSafe(meta.Boundary))
+	}
+	if meta.ToolName != "" {
+		args = append(args, "tool_name", LogSafe(meta.ToolName))
+	}
+	if meta.ToolCallID != "" {
+		args = append(args, "tool_call_id", LogSafe(meta.ToolCallID))
+	}
+	if meta.RunMode != "" {
+		args = append(args, "run_mode", LogSafe(meta.RunMode))
+	}
+	if meta.TaskID != "" {
+		args = append(args, "task_id", LogSafe(meta.TaskID))
+	}
+	if meta.ConversationID != "" {
+		args = append(args, "conversation_id", LogSafe(meta.ConversationID))
+	}
+	args = append(args, "panic_class", class)
+	logPanic(ctx, "panic recovered", args...)
 
 	if SentryHook != nil {
 		callReportingHook("SentryHook", func() { SentryHook(meta.Location, class, nil) })
@@ -167,7 +236,7 @@ func newIncidentID() string {
 func callReportingHook(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicLogger.Error("panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
+			logPanic(context.Background(), "panic reporting hook panicked", "hook", name, "panic_class", PanicClass(r))
 		}
 	}()
 	fn()
@@ -180,6 +249,24 @@ func callReportingHook(name string, fn func()) {
 func Recover(name string, onPanic func(v any)) {
 	if r := recover(); r != nil {
 		EmitPanic(name, r, nil)
+		if onPanic != nil {
+			onPanic(r)
+		}
+	}
+}
+
+// RecoverContext is Recover for a goroutine that serves one turn, run or
+// request: the panic record is emitted with ctx, so the configured handler adds
+// that context's correlation (conv_id/turn_id, task_id/run_id …) to it. Use
+// `defer safe.RecoverContext(ctx, "name", onPanic)`. recover() only stops a
+// panic when called directly by the deferred function, so this repeats
+// Recover's body rather than wrapping it.
+func RecoverContext(ctx context.Context, name string, onPanic func(v any)) {
+	if r := recover(); r != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		EmitPanicWithMetadataContext(ctx, PanicMetadata{Location: name}, r, nil)
 		if onPanic != nil {
 			onPanic(r)
 		}

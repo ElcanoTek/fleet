@@ -205,7 +205,7 @@ of the catalog.
 | One server entry invalid (unknown field, bad type, escaping command or cwd, reserved env key, non-loopback `http`, bad header) or transport `sse` | That entry skipped; siblings load. |
 | Two plugins declare the same `name` | The second (by root order, then directory name) is skipped; reported. |
 
-Every problem is logged at load as `clientconfig: warning: plugin: …` and
+Every problem is logged at load as a `clientconfig: warning: plugin problem` line (the problem in its `problem` attribute) and
 surfaced by `fleet validate-config` as a **non-blocking advisory** on the
 `manifest` check, whose OK detail also counts the plugins loaded.
 

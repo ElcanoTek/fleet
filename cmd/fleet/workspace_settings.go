@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -423,7 +423,7 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	seedModelTiersFromConfig(cfg)
 	svc, guard, err := buildWorkspaceSettings(cfg, st)
 	if err != nil {
-		log.Printf("workspace settings: DISABLED — service construction failed (this is a wiring bug): %v", err)
+		slog.Error("workspace settings: DISABLED — service construction failed (this is a wiring bug)", "err", err)
 		return opts
 	}
 	// The store just served migrations, so a load failure here is a transient
@@ -440,11 +440,11 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	if applyErr != nil && errors.Is(applyErr, settings.ErrLoadFailed) {
-		log.Printf("workspace settings: DISABLED — boot load failed, serving env-derived defaults (admin overrides NOT in effect): %v", applyErr)
+		slog.Error("workspace settings: DISABLED — boot load failed, serving env-derived defaults (admin overrides NOT in effect)", "err", applyErr)
 		return opts
 	}
 	if applyErr != nil {
-		log.Printf("workspace settings: some overrides NOT in effect (env-derived behavior serves for those keys; fix or Reset them from the admin panel): %v", applyErr)
+		slog.Error("workspace settings: some overrides NOT in effect (env-derived behavior serves for those keys; fix or Reset them from the admin panel)", "err", applyErr)
 	}
 	// The guardrail probe rides with the panel: it exercises the same state the
 	// hooks maintain, so it is only honest when the panel is live too.
@@ -487,7 +487,7 @@ func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyz
 func appendNotifySettingsOption(opts []httpapi.Option, st *store.Store, notifier *notify.Notifier) []httpapi.Option {
 	svc := notifyadmin.NewService(st, notify.Load(), notifier)
 	if err := svc.ApplyBoot(context.Background()); err != nil {
-		log.Printf("notify settings: DISABLED — boot apply failed, serving env-derived config (admin settings NOT in effect): %v", err)
+		slog.Error("notify settings: DISABLED — boot apply failed, serving env-derived config (admin settings NOT in effect)", "err", err)
 		return opts
 	}
 	return append(opts, httpapi.WithNotifySettings(svc))

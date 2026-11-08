@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -186,7 +186,7 @@ func warnRetiredManifestRefs(manifestPath string, raw []byte) {
 		return // the load reports the parse error itself
 	}
 	for _, r := range refs {
-		log.Printf("Warning: %s: %s — fleet never reads it, so it counts as unset", manifestPath, r)
+		slog.Warn("clientconfig: retired manifest reference — fleet never reads it, so it counts as unset", "manifest", manifestPath, "ref", r)
 	}
 }
 

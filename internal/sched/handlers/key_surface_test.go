@@ -47,7 +47,7 @@ func TestKeyTypesAcrossOrchestratorEdges(t *testing.T) {
 	for _, kt := range []apikeys.KeyType{apikeys.KeyTypeAdmin, apikeys.KeyTypeTask, apikeys.KeyTypeReadonly, apikeys.KeyTypeWebhook} {
 		keys[kt] = mustCreateTypedKey(t, keyMgr, kt, []string{"hook"})
 	}
-	_, keys[apikeys.KeyTypeUser], err = keyMgr.CreateUserKey("cli", "u@x.com", 0, nil, "")
+	_, keys[apikeys.KeyTypeUser], err = keyMgr.CreateUserKey(context.Background(), "cli", "u@x.com", 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

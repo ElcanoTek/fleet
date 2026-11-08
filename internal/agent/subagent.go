@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
@@ -520,9 +520,7 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput, toolCallID str
 			"SUBAGENT_WORKDIR_UNAVAILABLE: could not create the child's isolated working directory: %v", wdErr)), nil
 	}
 
-	log.Printf("spawn_subagent: depth %d→%d, role=%s, model=%s, cost_ceiling=%s, token_ceiling=%s, timeout=%s, workdir=%s, parent_task=%s",
-		a.subagent.depth, a.subagent.depth+1, role, modelDesc,
-		fmtCostCeiling(childCost), fmtTokenCeiling(childTokens), fmtTimeout(in.TimeoutMinutes), childWorkdir, a.subagent.parentTaskID)
+	logging.From(ctx).Info("spawn_subagent: spawning child", "depth", a.subagent.depth, "child_depth", a.subagent.depth+1, "role", role, "model", modelDesc, "cost_ceiling", fmtCostCeiling(childCost), "usage_ceiling", fmtTokenCeiling(childTokens), "timeout", fmtTimeout(in.TimeoutMinutes), "workdir", childWorkdir, "parent_task", a.subagent.parentTaskID)
 
 	// ── LIVE PROGRESS (#1043 follow-up) ─────────────────────────────────────
 	// Tee the child's own run events into this run's Observer, relabeled and
@@ -836,7 +834,7 @@ func (a *Agent) resolveChildModel(ctx context.Context, override string) (fantasy
 	}
 	m, err := a.subagent.resolver.Resolve(ctx, slug)
 	if err != nil {
-		log.Printf("spawn_subagent: child model %q unresolved (%v); inheriting parent model", slug, err)
+		logging.From(ctx).Warn("spawn_subagent: child model unresolved; inheriting parent model", "slug", slug, "err", err)
 		return a.model, "inherited(parent, resolve-failed)"
 	}
 	return m, slug

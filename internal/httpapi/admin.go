@@ -9,13 +9,13 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -165,7 +165,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, adminStats{Users: users, DailyCache: dailyCache})
+	writeJSON(w, r, adminStats{Users: users, DailyCache: dailyCache})
 }
 
 // listDecisionModels is the OpenRouter decision-model listing, a seam for tests.
@@ -183,11 +183,11 @@ func (s *Server) handleAdminDecisionModels(w http.ResponseWriter, r *http.Reques
 	}
 	models, err := listDecisionModels(r.Context())
 	if err != nil {
-		log.Printf("admin decision models: %s", safe.LogSafe(err.Error()))
-		writeJSON(w, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
+		logging.From(r.Context()).Error("admin decision models: failed", "err", safe.LogSafe(err.Error()))
+		writeJSON(w, r, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
 		return
 	}
-	writeJSON(w, map[string]any{"models": models})
+	writeJSON(w, r, map[string]any{"models": models})
 }
 
 // adminUser is the JSON shape of one row in the admin Users tab (#237).
@@ -247,7 +247,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		out = append(out, toAdminUser(u))
 	}
-	writeJSON(w, map[string]any{"users": out})
+	writeJSON(w, r, map[string]any{"users": out})
 }
 
 // handleAdminUserItem dispatches the /admin/users/{email}[/password] item
@@ -361,10 +361,9 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	}
 	if body.Role != nil || opsGrant != nil {
-		//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line; role and scope are store-validated.
-		log.Printf("admin users: set role of %q to %s (ops_scope %s) by %q", safe.LogSafe(u.Email), safe.LogSafe(u.Role), safe.LogSafe(u.OpsScope), safe.LogSafe(userFromCtx(r.Context())))
+		logging.From(r.Context()).Info("admin users: set role", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "ops_scope", safe.LogSafe(u.OpsScope), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	}
-	writeJSON(w, toAdminUser(*u))
+	writeJSON(w, r, toAdminUser(*u))
 }
 
 // opsGrantFromBody validates the request's Operations Center grant: ops_scope

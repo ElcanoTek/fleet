@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -30,7 +30,7 @@ func (s *Server) recordLogin(ctx context.Context, email string) {
 		return
 	}
 	if err := rec.RecordLogin(ctx, email, time.Now()); err != nil {
-		log.Printf("auth: record last login: %v", err)
+		logging.From(ctx).Warn("auth: record last login failed", "err", err)
 	}
 }
 
@@ -181,7 +181,7 @@ func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request
 	}
 	if applied {
 		// The version is recorded in external_team_renames, not logged.
-		log.Printf("central auth: renamed team %q -> %q (%d accounts)", safe.LogSafe(body.From), safe.LogSafe(body.To), users)
+		logging.From(r.Context()).Info("central auth: team renamed", "from", safe.LogSafe(body.From), "to", safe.LogSafe(body.To), "accounts", users)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -330,7 +330,7 @@ func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+	writeJSON(w, r, sessionEpochResponse{SessionEpoch: epoch})
 }
 
 type externalSessionRequest struct {
@@ -364,7 +364,7 @@ func (s *Server) handleExternalSessionEpoch(w http.ResponseWriter, r *http.Reque
 	// This is the OIDC login's mint step (the gateway asks for the epoch
 	// only when it is about to issue the session).
 	s.recordLogin(r.Context(), userFromCtx(r.Context()))
-	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+	writeJSON(w, r, sessionEpochResponse{SessionEpoch: epoch})
 }
 
 func (s *Server) handleExternalSessionRevoke(w http.ResponseWriter, r *http.Request) {

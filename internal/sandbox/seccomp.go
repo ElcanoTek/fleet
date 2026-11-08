@@ -1,13 +1,14 @@
 package sandbox
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // defaultSeccompProfile is the curated OCI seccomp profile applied to every
@@ -144,7 +145,7 @@ const seccompProfileTempPattern = "fleet-sandbox-seccomp-*.json"
 // os.TempDir(): production sets BridgeDir to escape systemd's PrivateTmp=
 // namespace, which can otherwise hide /tmp from the rootless-podman OCI helpers
 // that read the seccomp file at container-create time.
-func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error) {
+func resolveSeccompArg(ctx context.Context, bridgeDir string) (arg string, cleanup func(), err error) {
 	noop := func() {}
 	switch override := envreg.Get(seccompProfileEnv); override {
 	case "":
@@ -154,7 +155,7 @@ func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error)
 			// Log a fixed message (no operator-tainted value) — the only thing
 			// that varies is which of the two literal keywords matched, which
 			// the static text already covers.
-			log.Printf("sandbox seccomp: DISABLED via %s=none/unconfined — the syscall filter defense-in-depth layer is OFF; --cap-drop=ALL + no-new-privileges still apply, but dangerous syscalls (ptrace, perf_event_open, bpf, io_uring, …) are reachable. Use for debugging only.", seccompProfileEnv)
+			logging.From(ctx).Warn("sandbox seccomp: DISABLED (profile set to none/unconfined) — the syscall filter defense-in-depth layer is OFF; --cap-drop=ALL + no-new-privileges still apply, but dangerous syscalls (ptrace, perf_event_open, bpf, io_uring, …) are reachable. Use for debugging only.", "env", seccompProfileEnv)
 		})
 		return "unconfined", noop, nil
 	default:

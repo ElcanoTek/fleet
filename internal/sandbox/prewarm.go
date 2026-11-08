@@ -28,12 +28,13 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // prewarmTimeout bounds the one throwaway keep-id run. Generous on purpose:
@@ -57,7 +58,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 		return // this exact image was already warmed on this store
 	}
 
-	log.Printf("sandbox: preparing the keep-id id-remapped copy of image %s — the first start after a sandbox image update can take minutes on slow disks (#1358)", image)
+	logging.From(ctx).Info("sandbox: preparing the keep-id id-remapped copy of the image — the first start after a sandbox image update can take minutes on slow disks (#1358)", "image", image)
 	runCtx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
 	start := time.Now()
@@ -66,11 +67,10 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 	// name, or runtime flag needed — the copy is runtime-independent.
 	cmd := exec.CommandContext(runCtx, podmanBinary, "run", "--rm", keepIDUserns, image, "true") //nolint:gosec // podman binary + image are operator-configured, not user input
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("sandbox: keep-id pre-warm failed after %s (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead): %v\n%s",
-			time.Since(start).Round(time.Second), err, out)
+		logging.From(ctx).Warn("sandbox: keep-id pre-warm failed (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead)", "elapsed", time.Since(start).Round(time.Second), "err", err, "output", out)
 		return
 	}
-	log.Printf("sandbox: keep-id id-remapped image copy ready in %s", time.Since(start).Round(time.Second))
+	logging.From(ctx).Info("sandbox: keep-id id-remapped image copy ready", "elapsed", time.Since(start).Round(time.Second))
 
 	// The run may have pulled the image, so resolve the ID now if the inspect
 	// above failed. A marker write failure only costs a redundant warm next
@@ -81,7 +81,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 		}
 	}
 	if err := writePrewarmMarker(markerPath, imageID); err != nil {
-		log.Printf("sandbox: keep-id pre-warm marker write failed (the next boot re-warms): %v", err)
+		logging.From(ctx).Warn("sandbox: keep-id pre-warm marker write failed (the next boot re-warms)", "err", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -120,7 +122,7 @@ func newTestService(t *testing.T, st *fakeStore, relay *fakeRelay) *Service {
 		t.Fatal("New returned nil for an enabled config")
 	}
 	svc.client = relay
-	svc.logf = func(string, ...any) {}
+	svc.logger = slog.New(slog.DiscardHandler)
 	return svc
 }
 
@@ -479,7 +481,7 @@ func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
 			relay := &fakeRelay{status: map[string]int{refused.Endpoint: code}}
 			svc := newTestService(t, st, relay)
 			var logged []string
-			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+			svc.logger = captureLogger(&logged)
 
 			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 				t.Fatalf("sendToUser: %v", err)
@@ -490,7 +492,7 @@ func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
 			if len(logged) != 1 {
 				t.Fatalf("log = %q, want one line", logged)
 			}
-			for _, want := range []string{fmt.Sprintf("status %d", code), "earlier key", "renews", "FLEET_VAPID_PRIVATE_KEY"} {
+			for _, want := range []string{fmt.Sprintf("status=%d", code), "earlier key", "renews", "FLEET_VAPID_PRIVATE_KEY"} {
 				if !strings.Contains(logged[0], want) {
 					t.Errorf("log = %q, want it to mention %q", logged[0], want)
 				}
@@ -563,8 +565,8 @@ func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
 		name, body, want string
 		status           int
 	}{
-		{"apple 403", `{"reason":"BadJwtToken"}`, ` (reason "BadJwtToken")`, http.StatusForbidden},
-		{"other refusal", `{"reason":"TooManyRequests"}`, ` (reason "TooManyRequests")`, http.StatusTooManyRequests},
+		{"apple 403", `{"reason":"BadJwtToken"}`, ` reason=BadJwtToken`, http.StatusForbidden},
+		{"other refusal", `{"reason":"TooManyRequests"}`, ` reason=TooManyRequests`, http.StatusTooManyRequests},
 		{"no body", "", "", http.StatusForbidden},
 		{"not JSON", "<html>secret-token</html>", "", http.StatusForbidden},
 		{"JSON without a reason", `{"message":"secret-token"}`, "", http.StatusUnauthorized},
@@ -575,7 +577,7 @@ func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
 			relay := &fakeRelay{status: map[string]int{sub.Endpoint: tc.status}, reply: map[string]string{sub.Endpoint: tc.body}}
 			svc := newTestService(t, st, relay)
 			var logged []string
-			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+			svc.logger = captureLogger(&logged)
 
 			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 				t.Fatalf("sendToUser: %v", err)
@@ -583,8 +585,8 @@ func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
 			if len(logged) != 1 {
 				t.Fatalf("log = %q, want one line", logged)
 			}
-			head := fmt.Sprintf("returned status %d%s", tc.status, tc.want)
-			if !strings.Contains(logged[0], head) {
+			head := fmt.Sprintf("status=%d%s", tc.status, tc.want)
+			if !strings.Contains(logged[0], head) || (tc.want == "" && strings.Contains(logged[0], "reason=")) {
 				t.Errorf("log = %q, want it to contain %q", logged[0], head)
 			}
 			if strings.Contains(logged[0], "secret-token") {
@@ -597,14 +599,14 @@ func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
 func TestRelayReason_BoundsTheReason(t *testing.T) {
 	long := strings.Repeat("x", 500)
 	got := relayReason(strings.NewReader(`{"reason":"` + long + `"}`))
-	if want := fmt.Sprintf(" (reason %q)", strings.Repeat("x", maxReasonLen)); got != want {
+	if want := strings.Repeat("x", maxReasonLen); got != want {
 		t.Errorf("relayReason = %q, want the reason cut to %d bytes", got, maxReasonLen)
 	}
 	// A cut through a multi-byte character drops it rather than leaving half.
-	if got, want := relayReason(strings.NewReader(`{"reason":"`+strings.Repeat("x", maxReasonLen-1)+`é"}`)), fmt.Sprintf(" (reason %q)", strings.Repeat("x", maxReasonLen-1)); got != want {
+	if got, want := relayReason(strings.NewReader(`{"reason":"`+strings.Repeat("x", maxReasonLen-1)+`é"}`)), strings.Repeat("x", maxReasonLen-1); got != want {
 		t.Errorf("relayReason = %q, want %q", got, want)
 	}
-	if got, want := relayReason(strings.NewReader(`{"reason":"a\nb"}`)), ` (reason "a\nb")`; got != want {
+	if got, want := relayReason(strings.NewReader(`{"reason":"a\nb"}`)), "a\nb"; got != want {
 		t.Errorf("relayReason = %q, want %q: a newline is escaped, never raw in the log", got, want)
 	}
 }
@@ -718,7 +720,7 @@ func TestSendToUser_NeverSendsOffAPushServiceAndRetiresTheRow(t *testing.T) {
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 	var logged []string
-	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	svc.logger = captureLogger(&logged)
 
 	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("sendToUser: %v", err)
@@ -735,7 +737,7 @@ func TestSendToUser_NeverSendsOffAPushServiceAndRetiresTheRow(t *testing.T) {
 		t.Errorf("deleted %v, want exactly the three rows off a push service", st.deleted)
 	}
 	joined := strings.Join(logged, "\n")
-	for _, want := range []string{"u@x.com", `"127.0.0.1:8080"`, `"push.example.net"`} {
+	for _, want := range []string{"u@x.com", `127.0.0.1:8080`, `push.example.net`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("log = %q, want it to name %s", joined, want)
 		}
@@ -760,13 +762,38 @@ func TestSendOne_TransportErrorLogsNoEndpoint(t *testing.T) {
 	svc := newTestService(t, &fakeStore{subs: []store.PushSubscription{sub}}, nil)
 	svc.client = failingRelay{}
 	var logged []string
-	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	svc.logger = captureLogger(&logged)
 
 	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("sendToUser: %v", err)
 	}
 	if len(logged) != 1 || !strings.Contains(logged[0], "fcm.googleapis.com") || !strings.Contains(logged[0], "i/o timeout") || strings.Contains(logged[0], "secret-token") {
 		t.Errorf("log = %q, want the host and the cause without the endpoint", logged)
+	}
+}
+
+// Without the test seam, the service logs through the context logger: a
+// relay failure on a push sent for a turn or a task run carries that
+// context's correlation (#2074 review: it used to fall back to slog.Default).
+func TestSendOne_LogsWithTheContextCorrelation(t *testing.T) {
+	sub := testSubscription(t, "https://fcm.googleapis.com/fcm/send/secret-token")
+	svc := newTestService(t, &fakeStore{subs: []store.PushSubscription{sub}}, nil)
+	svc.client = failingRelay{}
+	svc.logger = nil
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx := logging.WithTask(logging.WithTurn(context.Background(), "conv-p", "turn-p"), "task-p", "run-p")
+	if err := svc.sendToUser(ctx, "u@x.com", "t", "", "", UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"msg":"webpush: send failed"`, `"turn_id":"turn-p"`, `"conv_id":"conv-p"`, `"task_id":"task-p"`, `"run_id":"run-p"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log %q lacks %s", out, want)
+		}
 	}
 }
 
@@ -890,9 +917,9 @@ func TestNew_WarnsOnceAboutAnUnusableContact(t *testing.T) {
 		name, contact, problem string
 		pasteKey               bool // the contact is the private key
 	}{
-		{name: "empty mailto", contact: "mailto:", problem: `it has no address after "mailto:"`},
-		{name: "http URL", contact: "http://ops.example.com/contact", problem: `it starts with "http:"`},
-		{name: "private key pasted as the contact", pasteKey: true, problem: `it has no "@"`},
+		{name: "empty mailto", contact: "mailto:", problem: `problem=has no address after "mailto:"`},
+		{name: "http URL", contact: "http://ops.example.com/contact", problem: `problem=starts with "http:"`},
+		{name: "private key pasted as the contact", pasteKey: true, problem: `problem=has no "@"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := testConfig(t)
@@ -901,11 +928,11 @@ func TestNew_WarnsOnceAboutAnUnusableContact(t *testing.T) {
 				cfg.Contact = cfg.VAPIDPrivateKey
 			}
 			var logged []string
-			logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+			logger := captureLogger(&logged)
 			st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
 
 			relay := &fakeRelay{}
-			svc := newService(cfg, st, relay, logf)
+			svc := newService(cfg, st, relay, logger)
 			if !svc.Enabled() {
 				t.Fatal("an unusable contact must warn, not turn push off")
 			}
@@ -937,11 +964,11 @@ func TestNew_WarnsOnceAboutAnUnusableContact(t *testing.T) {
 
 	// A usable contact, and push left off, log nothing.
 	var logged []string
-	logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
-	if svc := newService(testConfig(t), &fakeStore{}, nil, logf); svc == nil {
+	logger := captureLogger(&logged)
+	if svc := newService(testConfig(t), &fakeStore{}, nil, logger); svc == nil {
 		t.Fatal("newService returned nil for an enabled config")
 	}
-	if svc := newService(Config{}, &fakeStore{}, nil, logf); svc != nil {
+	if svc := newService(Config{}, &fakeStore{}, nil, logger); svc != nil {
 		t.Error("newService must return nil for a disabled config")
 	}
 	if len(logged) != 0 {
@@ -987,3 +1014,25 @@ func TestEventTitle_Blocked(t *testing.T) {
 		t.Fatalf("eventTitle(blocked) = %q, %v", title, ok)
 	}
 }
+
+// captureLogger returns a logger appending each record to *lines as
+// "LEVEL msg key=value …", values printed unquoted so a test can match them.
+func captureLogger(lines *[]string) *slog.Logger {
+	return slog.New(lineHandler{lines: lines})
+}
+
+type lineHandler struct{ lines *[]string }
+
+func (lineHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h lineHandler) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString(r.Level.String() + " " + r.Message)
+	r.Attrs(func(a slog.Attr) bool {
+		fmt.Fprintf(&b, " %s=%v", a.Key, a.Value.Any())
+		return true
+	})
+	*h.lines = append(*h.lines, b.String())
+	return nil
+}
+func (h lineHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h lineHandler) WithGroup(string) slog.Handler      { return h }

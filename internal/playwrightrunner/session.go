@@ -210,7 +210,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 		return nil, err
 	}
 
-	sessCtx, cancel := context.WithCancel(context.Background())
+	sessCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	proxyAddr, closeProxy, err := startSSRFGuardProxy(sessCtx, DialContext)
 	if err != nil {
 		cancel()

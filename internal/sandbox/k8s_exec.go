@@ -44,13 +44,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -150,7 +151,7 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 		return nil, fmt.Errorf("pod exec executor: %w", err)
 	}
 
-	sessCtx, cancel := context.WithCancel(context.Background())
+	sessCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &k8sExecSession{cancel: cancel, ctx: sessCtx, done: make(chan struct{}), exitCode: -1}
 
 	var stdin io.Reader
@@ -331,7 +332,7 @@ func (s *k8sExecSession) close() {
 	select {
 	case <-s.done:
 	case <-time.After(bridgeReapTimeout):
-		log.Printf("sandbox: exec stream did not exit within %s of cancel — abandoning the join to keep teardown bounded", bridgeReapTimeout)
+		logging.From(s.ctx).Warn("sandbox: exec stream did not exit in time after cancel — abandoning the join to keep teardown bounded", "timeout", bridgeReapTimeout)
 	}
 }
 

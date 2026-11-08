@@ -11,11 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -61,7 +61,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
 		metrics.RecordSSEReconnect("within_buffer")
 		if err := entry.buf.AttachForViewerChecked(r.Context(), lastEventID, w, caps, user, conv.UserEmail, allowCheck); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
+			logging.From(r.Context()).Error("stream Attach failed", "user", user, "conv_id", convID, "err", err)
 		}
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	}
 	metrics.RecordSSEReconnect(outcome)
 	if err := replayEventsFromDB(w, events, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("DB replay (user=%q conv=%q turn=%q): %v", user, convID, requestedTurnID, err) //nolint:gosec // identifiers are %q-quoted
+		logging.From(r.Context()).Error("DB replay failed", "user", user, "conv_id", convID, "turn_id", requestedTurnID, "err", err)
 		return
 	}
 	if outcome == "buffer_expired" {
@@ -183,7 +183,7 @@ func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID s
 
 	entry, ok := s.getInflight(convID)
 	if !ok || entry.buf == nil {
-		writeJSON(w, map[string]any{"inflight": false})
+		writeJSON(w, r, map[string]any{"inflight": false})
 		return
 	}
 
@@ -195,7 +195,7 @@ func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID s
 	if entry.submissionID != "" {
 		probe["submission_id"] = entry.submissionID
 	}
-	writeJSON(w, probe)
+	writeJSON(w, r, probe)
 }
 
 // parseLastEventID extracts the `Last-Event-ID` header, falling back

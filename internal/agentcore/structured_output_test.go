@@ -78,7 +78,7 @@ func terminalToolResponse(input string) *fantasy.Response {
 func testTerminalEngine(model fantasy.LanguageModel) (*engine, *orchestrationState) {
 	session := NewLogSession()
 	orch := newOrchestrationState(session)
-	return newRunEngine(RunConfig{}, Deps{Model: model}, session), orch
+	return newRunEngine(context.Background(), RunConfig{}, Deps{Model: model}, session), orch
 }
 
 func TestTerminalStructuredOutput_InvalidThenCorrected_NoOrdinaryTools(t *testing.T) {

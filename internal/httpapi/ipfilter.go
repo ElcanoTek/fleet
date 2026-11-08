@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -45,7 +45,7 @@ func logIPFilter(cfg ipFilterConfig) {
 	if len(cfg.allow) == 0 && len(cfg.deny) == 0 {
 		return
 	}
-	log.Printf("IP allowlist: %s. IP denylist: %s.", formatCIDRs(cfg.allow), formatCIDRs(cfg.deny))
+	slog.Info("IP filter configured", "allow", formatCIDRs(cfg.allow), "deny", formatCIDRs(cfg.deny))
 }
 
 // ipFilterConfig is the slice of *config.Config the filter needs. Reading it off

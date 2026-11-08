@@ -3,9 +3,13 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
+	"sync/atomic"
 	"testing"
 )
 
@@ -243,5 +247,199 @@ func TestConfigureTextPreservesLegacy(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("legacy line")) {
 		t.Errorf("text format should contain the raw line, got %q", data)
+	}
+}
+
+// A stdlib log line written before Configure (a library's log.Printf while
+// fleet serve is still loading its config) is buffered as a bridged line and
+// replayed through the ungated bridge, as it would be after Configure — not
+// as an info record that FLEET_LOG_LEVEL=error drops (#2074 review).
+func TestStdlibLogBeforeConfigureIsNotGated(t *testing.T) {
+	restoreLogging(t)
+	BufferStartup()
+	log.Printf("library says %s", "hello before configure")
+	slog.Info("an ordinary startup info line")
+
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"msg":"library says hello before configure"`)) {
+		t.Fatalf("the buffered stdlib log line was gated away:\n%s", data)
+	}
+	if bytes.Contains(data, []byte("an ordinary startup info line")) {
+		t.Fatalf("an ordinary info line passed level=error:\n%s", data)
+	}
+}
+
+// TestMain re-execs this test binary as a fleet-mcp-broker-like child when
+// FLEET_LOGGING_TEST_CHILD is set: it configures logging as the broker does
+// (JSON on stderr, the parent's level) and writes one stdlib log line, one
+// ordinary info record and a stdlib_log spoof attempt, then exits.
+func TestMain(m *testing.M) {
+	if os.Getenv("FLEET_LOGGING_TEST_CHILD") == "1" {
+		if _, err := Configure(Config{Format: "json", Level: os.Getenv("FLEET_LOGGING_TEST_LEVEL")}); err != nil {
+			os.Exit(2)
+		}
+		log.Printf("library diagnostic from the child")
+		// A connector's stderr, as the broker logs it (internal/mcp).
+		connector := NewStderrLogger(slog.String("connector", "acme"))
+		_, _ = connector.Write([]byte("connector traceback from the child\n"))
+		_ = connector.Close()
+		slog.Info("ordinary child info record")
+		slog.Info("spoofed stdlib line", StdlibLogKey, true)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// A stdlib log line inside a child (the broker's dependency printing a
+// failure) stays ungated across the process boundary: the child's bridge
+// tags it, and the parent re-logs it through its own ungated bridge, so it
+// reaches FLEET_LOG_FILE at FLEET_LOG_LEVEL=error, while an ordinary child
+// info record — and a call site trying to spoof the tag — are still gated
+// (#2074 review).
+func TestChildStdlibLogSurvivesTheParentsLevel(t *testing.T) {
+	restoreLogging(t)
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "FLEET_LOGGING_TEST_CHILD=1", "FLEET_LOGGING_TEST_LEVEL=info")
+	stderr := ChildStderr("mcp-broker")
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	_ = stderr.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found, connectorFound bool
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var m map[string]any
+		if json.Unmarshal(line, &m) != nil {
+			continue
+		}
+		switch m["msg"] {
+		case "library diagnostic from the child":
+			found = m["child"] == "mcp-broker" && m[StdlibLogKey] == true
+		case StderrLineMessage:
+			connectorFound = m["child"] == "mcp-broker" && m["connector"] == "acme" &&
+				m["line#2"] == "connector traceback from the child" && m[StdlibLogKey] == true
+		case "ordinary child info record", "spoofed stdlib line":
+			t.Fatalf("a gated child record passed level=error: %s", line)
+		}
+	}
+	if !found {
+		t.Fatalf("the child's stdlib log line did not reach the file at level=error:\n%s", data)
+	}
+	if !connectorFound {
+		t.Fatalf("a connector's stderr logged in the broker did not reach the file at level=error:\n%s", data)
+	}
+}
+
+// A stdlib log line written while Configure runs is never lost: one that
+// reaches the startup bridge after the replay's final read of the buffer is
+// forwarded (the buffer is sealed), not stranded in it (#2074 review).
+func TestConfigureLosesNoConcurrentStdlibLine(t *testing.T) {
+	restoreLogging(t)
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = devnull
+	defer func() { os.Stderr = prevStderr; _ = devnull.Close() }()
+
+	BufferStartup()
+	// A log.Printf that loaded the startup bridge just before Configure's
+	// log.SetOutput writes through it just after the replay: stand in for it
+	// deterministically by keeping that writer and writing through it after
+	// Configure returns. The goroutine adds a real concurrent writer.
+	inFlight := log.New(log.Writer(), "", 0)
+	const n = 1500 // under maxStartupRecords: nothing is dropped by the cap
+	var written atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < n; i++ {
+			log.Printf("concurrent line %d.", i)
+			written.Add(1)
+		}
+	}()
+	for written.Load() < 50 {
+		runtime.Gosched()
+	}
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "info"})
+	if err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	defer closer.Close()
+	inFlight.Printf("in-flight line.")
+	<-done
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if !bytes.Contains(data, []byte(fmt.Sprintf(`"concurrent line %d."`, i))) {
+			t.Fatalf("line %d was lost across Configure (wrote %d)", i, written.Load())
+		}
+	}
+	if !bytes.Contains(data, []byte(`"in-flight line."`)) {
+		t.Fatal("a line written through the startup bridge after the replay was lost")
+	}
+}
+
+// slog.SetDefault points the stdlib log package at the new default handler
+// at once; until Configure's log.SetOutput a log.Printf takes that path. It
+// must reach the ungated bridge, not the level-gated handler (#2074 review:
+// at FLEET_LOG_LEVEL=error such a line was filtered as info). The window is
+// held open here by re-running slog.SetDefault after Configure.
+func TestStdlibLineInTheSetDefaultWindowIsNotGated(t *testing.T) {
+	restoreLogging(t)
+	path := t.TempDir() + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = devnull
+	defer func() { os.Stderr = prevStderr; _ = devnull.Close() }()
+
+	slog.SetDefault(slog.Default()) // the state between slog.SetDefault and log.SetOutput
+	log.Printf("window line.")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var m map[string]any
+		if json.Unmarshal(line, &m) == nil && m["msg"] == "window line." {
+			found = m["level"] == "INFO" && m[StdlibLogKey] == true
+		}
+	}
+	if !found {
+		t.Fatalf("the stdlib line in the window was gated or mislabelled:\n%s", data)
 	}
 }

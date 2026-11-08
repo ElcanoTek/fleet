@@ -123,7 +123,7 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`,
 		append([]any{string(models.TaskStatusPending)}, taskActiveStatuses()...)...)
-	task, err := db.scanTask(row)
+	task, err := db.scanTask(ctx, row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

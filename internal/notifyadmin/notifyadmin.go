@@ -22,10 +22,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -152,7 +152,7 @@ func (s *Service) Save(ctx context.Context, in store.NotifySettingsInput, update
 	if err := s.applyLocked(ctx); err != nil {
 		return View{}, fmt.Errorf("saved, but applying the notifier config failed: %w", err)
 	}
-	log.Printf("notify settings: admin config saved (by %s)", updatedBy)
+	logging.From(ctx).Info("notify settings: admin config saved", "updated_by", updatedBy)
 	return s.View(ctx)
 }
 
@@ -164,7 +164,7 @@ func (s *Service) Revert(ctx context.Context, updatedBy string) (View, error) {
 		return View{}, err
 	}
 	s.notifier.SetConfig(s.env)
-	log.Printf("notify settings: reverted to env config (by %s)", updatedBy)
+	logging.From(ctx).Info("notify settings: reverted to env config", "updated_by", updatedBy)
 	return s.envView(), nil
 }
 
@@ -192,14 +192,14 @@ func (s *Service) ApplyBoot(ctx context.Context) error {
 		// A rotated/lost key must not take the panel down — that would strand
 		// the admin with no UI path to re-enter the secrets or revert. Env
 		// config keeps serving; View reports the degraded state.
-		log.Printf("notify settings: admin config NOT applied — %v; env config serving (re-enter secrets or revert from the admin panel)", err)
+		logging.From(ctx).Error("notify settings: admin config NOT applied; env config serving (re-enter secrets or revert from the admin panel)", "err", err)
 		return nil
 	}
 	if err != nil {
 		return err
 	}
 	s.notifier.SetConfig(s.rowConfig(row))
-	log.Printf("notify settings: admin config in effect (set by %s)", row.UpdatedBy)
+	logging.From(ctx).Info("notify settings: admin config in effect", "updated_by", row.UpdatedBy)
 	return nil
 }
 

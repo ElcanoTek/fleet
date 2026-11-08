@@ -44,7 +44,7 @@ func TestChatCLIAuthenticatesWithAUserKey(t *testing.T) {
 
 	// The account is resolved on every request: a key for an address with no
 	// enabled account is refused.
-	_, ghostKey, err := mgr.CreateUserKey("ghost", "ghost@x.com", 0, nil, "test")
+	_, ghostKey, err := mgr.CreateUserKey(context.Background(), "ghost", "ghost@x.com", 0, nil, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

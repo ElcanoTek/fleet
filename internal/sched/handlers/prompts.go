@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -122,7 +122,7 @@ func (h *Handlers) promptItems(r *http.Request) ([]PromptLibraryItem, error) {
 	if h.promptCatalog != nil {
 		gitPrompts, problems := h.promptCatalog()
 		for _, problem := range problems {
-			log.Printf("prompt library: %s", problem)
+			logging.From(r.Context()).Warn("prompt library: problem", "problem", problem)
 		}
 		for _, gp := range gitPrompts {
 			items = append(items, promptLibraryItemFromGit(gp))
@@ -151,7 +151,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to list prompts")
 			return
 		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, r, http.StatusOK, items)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -179,7 +179,7 @@ func (h *Handlers) PromptLibraryCollection(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
+	writeJSON(w, r, http.StatusCreated, promptLibraryItemFromModel(entry, p.promptIdentity(), p.hasPermission(models.PermissionAdmin)))
 }
 
 // PromptLibraryItem handles PUT/DELETE /prompts/{prompt_id}. Git IDs are never
@@ -218,7 +218,7 @@ func (h *Handlers) PromptLibraryItem(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		writeJSON(w, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
+		writeJSON(w, r, http.StatusOK, promptLibraryItemFromModel(entry, owner, admin))
 	case http.MethodDelete:
 		if err := h.storage.DeletePromptLibrary(r.Context(), id, owner, admin); err != nil {
 			if errors.Is(err, storage.ErrPromptNotFound) {
@@ -245,7 +245,7 @@ func (h *Handlers) ExportPromptLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="fleet-prompts.json"`)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, r, http.StatusOK, map[string]any{
 		"format": "fleet-prompt-library", "version": 1,
 		"exported_at": time.Now().UTC(), "prompts": items,
 	})

@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -79,7 +80,7 @@ func TestWithLiveRegistryJoinIsNormalized(t *testing.T) {
 func TestBuildFantasyToolsWithRosterSummary(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "20")
 
-	_, small, err := buildFantasyTools(discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	_, small, err := buildFantasyTools(context.Background(), discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("small: %v", err)
 	}
@@ -95,7 +96,7 @@ func TestBuildFantasyToolsWithRosterSummary(t *testing.T) {
 		t.Errorf("direct names should be the registered mcp_<server>_<tool> form, got %q", small.directMCP[0])
 	}
 
-	_, big, err := buildFantasyTools(discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	_, big, err := buildFantasyTools(context.Background(), discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("big: %v", err)
 	}

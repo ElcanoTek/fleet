@@ -12,6 +12,7 @@ package apikeys
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,13 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -397,32 +398,32 @@ func (m *Manager) save() error {
 	return nil
 }
 
-func (m *Manager) logAudit(entry AuditLogEntry) {
+func (m *Manager) logAudit(ctx context.Context, entry AuditLogEntry) {
 	dir := filepath.Dir(m.auditLogPath)
 	// 0700: the audit log can reveal key IDs and operations; keep it owner-only.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Printf("apikeys: failed to create audit log dir %s: %v", dir, err)
+		logging.From(ctx).Error("apikeys: failed to create audit log dir", "dir", dir, "err", err)
 		return
 	}
 	entry.Timestamp = time.Now().UTC()
 	data, err := json.Marshal(entry)
 	if err != nil {
-		log.Printf("apikeys: failed to marshal audit entry: %v", err)
+		logging.From(ctx).Error("apikeys: failed to marshal audit entry", "err", err)
 		return
 	}
 	f, err := os.OpenFile(m.auditLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		log.Printf("apikeys: failed to open audit log %s: %v", m.auditLogPath, err)
+		logging.From(ctx).Error("apikeys: failed to open audit log", "path", m.auditLogPath, "err", err)
 		return
 	}
 	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		log.Printf("apikeys: failed to append audit entry: %v", err)
+		logging.From(ctx).Error("apikeys: failed to append audit entry", "err", err)
 	}
 }
 
 // CreateKey creates a new API key.
-func (m *Manager) CreateKey(name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateKey(ctx context.Context, name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncLocked()
@@ -485,7 +486,7 @@ func (m *Manager) CreateKey(name string, permissions []models.Permission, role *
 	for i, p := range perms {
 		permStrings[i] = string(p)
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "create_key",
 		ResourceType: "api_key",
@@ -505,11 +506,11 @@ func (m *Manager) CreateKey(name string, permissions []models.Permission, role *
 // (KeyType.Permissions). allowedTriggerSlugs scopes a webhook key to specific
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
-func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if kt == KeyTypeUser {
 		return nil, "", errors.New("a user key names its user: use CreateUserKey")
 	}
-	return m.createTypedKey(name, kt, allowedTriggerSlugs, "", rateLimit, expiresInDays, description)
+	return m.createTypedKey(ctx, name, kt, allowedTriggerSlugs, "", rateLimit, expiresInDays, description)
 }
 
 // CreateUserKey mints a user-type key (KeyTypeUser) that acts as email on the
@@ -523,7 +524,7 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 // turns — a small value would leave `fleet chat` unable to post. A user key's
 // turns are limited as its person's are, by the chat's per-user limiter
 // (FLEET_CHAT_RATE_LIMIT_ENABLED, CHAT_RATE_PER_MIN, CHAT_RATE_PER_DAY).
-func (m *Manager) CreateUserKey(name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateUserKey(ctx context.Context, name, email string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, "", fmt.Errorf("a user key needs the email of the account it acts as")
@@ -531,10 +532,10 @@ func (m *Manager) CreateUserKey(name, email string, rateLimit int, expiresInDays
 	if rateLimit != 0 {
 		return nil, "", fmt.Errorf("a user key takes no per-key rate limit: its turns are limited by the chat's per-user limit, like its person's")
 	}
-	return m.createTypedKey(name, KeyTypeUser, nil, email, rateLimit, expiresInDays, description)
+	return m.createTypedKey(ctx, name, KeyTypeUser, nil, email, rateLimit, expiresInDays, description)
 }
 
-func (m *Manager) createTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, userEmail string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) createTypedKey(ctx context.Context, name string, kt KeyType, allowedTriggerSlugs []string, userEmail string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -592,7 +593,7 @@ func (m *Manager) createTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 	for i, p := range perms {
 		permStrings[i] = string(p)
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "create_key",
 		ResourceType: "api_key",
@@ -611,7 +612,7 @@ func (m *Manager) createTypedKey(name string, kt KeyType, allowedTriggerSlugs []
 }
 
 // RotateKey rotates an API key, keeping the old key valid for a grace period.
-func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string, error) {
+func (m *Manager) RotateKey(ctx context.Context, keyID string, gracePeriodHours int) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncLocked()
@@ -658,7 +659,7 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 	if err := m.save(); err != nil {
 		return nil, "", err
 	}
-	m.logAudit(AuditLogEntry{
+	m.logAudit(ctx, AuditLogEntry{
 		KeyID:        keyID,
 		Action:       "rotate_key",
 		ResourceType: "api_key",
@@ -670,7 +671,7 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 }
 
 // RevokeKey revokes (disables) an API key.
-func (m *Manager) RevokeKey(keyID string) error {
+func (m *Manager) RevokeKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncLocked()
@@ -682,12 +683,12 @@ func (m *Manager) RevokeKey(keyID string) error {
 	if err := m.save(); err != nil {
 		return err
 	}
-	m.logAudit(AuditLogEntry{KeyID: keyID, Action: "revoke_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
+	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "revoke_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
 	return nil
 }
 
 // DeleteKey permanently deletes an API key.
-func (m *Manager) DeleteKey(keyID string) error {
+func (m *Manager) DeleteKey(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.syncLocked()
@@ -703,7 +704,7 @@ func (m *Manager) DeleteKey(keyID string) error {
 	if err := m.save(); err != nil {
 		return err
 	}
-	m.logAudit(AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
+	m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "delete_key", ResourceType: "api_key", ResourceID: &keyID, Success: true})
 	return nil
 }
 
@@ -711,8 +712,8 @@ func (m *Manager) DeleteKey(keyID string) error {
 // surface. HTTP edges must not call it: they call ValidateKeyOn, which also
 // refuses a key type that does not authenticate on that surface
 // (KeyType.AllowsSurface; TestKeyEdgesNameTheirSurface pins this).
-func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
-	return m.validate(rawKey, "", requiredPermission, ipAddress, userAgent)
+func (m *Manager) ValidateKey(ctx context.Context, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+	return m.validate(ctx, rawKey, "", requiredPermission, ipAddress, userAgent)
 }
 
 // ReasonWrongSurface is ValidateKeyOn's reason for a key whose type does not
@@ -724,11 +725,11 @@ const ReasonWrongSurface = "this API key type does not authenticate here"
 // does not authenticate there is refused (ReasonWrongSurface) before any
 // rate-limit token is charged or a permission checked, so no edge has to
 // remember which key types to turn away.
-func (m *Manager) ValidateKeyOn(s Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
-	return m.validate(rawKey, s, requiredPermission, ipAddress, userAgent)
+func (m *Manager) ValidateKeyOn(ctx context.Context, s Surface, rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+	return m.validate(ctx, rawKey, s, requiredPermission, ipAddress, userAgent)
 }
 
-func (m *Manager) validate(rawKey string, surface Surface, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
+func (m *Manager) validate(ctx context.Context, rawKey string, surface Surface, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
 	keyHash := m.hashKey(rawKey)
 
 	m.mu.Lock()
@@ -756,7 +757,7 @@ func (m *Manager) validate(rawKey string, surface Surface, requiredPermission *m
 			// rejected this process), but the change must survive a restart, so
 			// surface the failure rather than dropping it silently.
 			if err := m.save(); err != nil {
-				log.Printf("apikeys: failed to persist expiry of rotated key %s: %v", key.KeyID, err)
+				logging.From(ctx).Error("apikeys: failed to persist expiry of rotated key", "key_id", key.KeyID, "err", err)
 			}
 			return false, nil, "API key has been rotated"
 		}
@@ -769,7 +770,7 @@ func (m *Manager) validate(rawKey string, surface Surface, requiredPermission *m
 		} else {
 			errMsg = "API key has expired"
 		}
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "validate_key", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "validate_key", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 
@@ -782,7 +783,7 @@ func (m *Manager) validate(rawKey string, surface Surface, requiredPermission *m
 		state.ResetIfNeeded(1)
 		if state.RequestCount >= key.RateLimit {
 			errMsg := fmt.Sprintf("Rate limit exceeded: %d/hour", key.RateLimit)
-			m.logAudit(AuditLogEntry{KeyID: keyID, Action: "rate_limit_exceeded", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+			m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "rate_limit_exceeded", ResourceType: "api_key", ResourceID: &keyID, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 			return false, nil, fmt.Sprintf("Rate limit exceeded (%d requests/hour)", key.RateLimit)
 		}
 		state.Increment()
@@ -790,7 +791,7 @@ func (m *Manager) validate(rawKey string, surface Surface, requiredPermission *m
 
 	if requiredPermission != nil && !key.HasPermission(*requiredPermission) {
 		errMsg := fmt.Sprintf("Missing permission: %s", *requiredPermission)
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
+		m.logAudit(ctx, AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 

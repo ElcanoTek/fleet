@@ -44,7 +44,7 @@ package envreg
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"regexp"
 	"sort"
@@ -571,6 +571,6 @@ func unregistered(name, why string) {
 		panic(msg)
 	}
 	if _, dup := warned.LoadOrStore(name, true); !dup {
-		log.Printf("BUG: %s; reading it anyway", msg)
+		slog.Warn("BUG: unregistered environment variable read; reading it anyway", "problem", msg)
 	}
 }

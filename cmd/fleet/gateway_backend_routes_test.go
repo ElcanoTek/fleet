@@ -14,7 +14,7 @@ import (
 )
 
 // TestGatewayRowsResolveOnBackends holds every table-driven browser gateway
-// row (internal/webui chatRoutes/orchRoutes) to a backend route that exists.
+// row (internal/webui chatRoutes) to a backend route that exists.
 //
 // The gateway forwards /api/orchestrator/* and /api/* to the in-process
 // orchestrator and chat handlers by path, and the web tests mock the API, so
@@ -24,8 +24,9 @@ import (
 // retired Next.js tier (ADR-0091), but the orchestrator never registered
 // /mcp-servers/{server}/accounts.
 //
-//   - Orchestrator rows are matched against the REAL chi mux with chi's own
-//     Match for the row's method, so a missing route or a wrong method fails.
+//   - The Operations Center has no rows any more: /api/orchestrator/* is the
+//     orchestrator router itself (ADR-0110). Its query policy is held to the
+//     real router by TestOrchestratorQueryPolicyNamesRealRoutes.
 //   - Chat rows are probed through the REAL chat-server handler without its
 //     shared token: a served path stops at the auth gate (403); an unserved
 //     one is the ServeMux's 404. The chat server registers prefix patterns
@@ -54,14 +55,9 @@ func TestGatewayRowsResolveOnBackends(t *testing.T) {
 	}
 
 	rows := webui.BackendRoutes()
-	var nOrch, nChat int
+	var nChat int
 	for _, rt := range rows {
 		switch rt.Backend {
-		case webui.BackendOrchestrator:
-			nOrch++
-			if !orch.Match(chi.NewRouteContext(), rt.Method, rt.Target) {
-				t.Errorf("gateway row %q forwards to orchestrator %s %s, which the orchestrator mux does not register", rt.Pattern, rt.Method, rt.Target)
-			}
 		case webui.BackendChat:
 			nChat++
 			w := httptest.NewRecorder()
@@ -74,7 +70,27 @@ func TestGatewayRowsResolveOnBackends(t *testing.T) {
 		}
 	}
 	// A table that silently empties would make this test vacuous.
-	if nOrch < 40 || nChat < 100 {
-		t.Fatalf("walked %d orchestrator + %d chat rows; the route tables look truncated", nOrch, nChat)
+	if nChat < 100 {
+		t.Fatalf("walked %d chat rows; the route table looks truncated", nChat)
+	}
+}
+
+// TestOrchestratorQueryPolicyNamesRealRoutes: every route the browser alias
+// filters the query of is a route the real orchestrator router registers, so
+// renaming one cannot silently start forwarding the browser's whole query.
+func TestOrchestratorQueryPolicyNamesRealRoutes(t *testing.T) {
+	t.Parallel()
+	registered := map[string]bool{}
+	for _, r := range realOrchestratorRoutes(t) {
+		registered[r.Key()] = true
+	}
+	keys := webui.OrchestratorQueryPolicyRoutes()
+	if len(keys) < 40 {
+		t.Fatalf("the query policy lists %d routes; it looks truncated", len(keys))
+	}
+	for _, k := range keys {
+		if !registered[k] {
+			t.Errorf("the browser alias's query policy names %q, which the orchestrator router does not register", k)
+		}
 	}
 }

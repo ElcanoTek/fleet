@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sharedfiles"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -74,7 +75,7 @@ func (s *Server) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
 		if files == nil {
 			files = []store.SharedFile{}
 		}
-		writeJSON(w, sharedFilesResponse{
+		writeJSON(w, r, sharedFilesResponse{
 			Files:         files,
 			TotalBytes:    sharedfiles.TotalBytes(files),
 			MaxTotalBytes: s.sharedFilesMaxTotalBytes(),
@@ -225,7 +226,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		size, sha, err := lib.SaveCanonical(id, src)
 		_ = src.Close()
 		if err != nil {
-			log.Printf("shared files: save canonical %q: %v", name, err)
+			logging.From(r.Context()).Error("shared files: save canonical failed", "name", safe.LogSafe(name), "err", err)
 			fail(http.StatusInternalServerError, "save upload: "+err.Error())
 			return
 		}
@@ -252,11 +253,11 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 			// The row exists and the canonical bytes are safe; the staged copy
 			// self-heals on the next Sync. Log and keep going rather than
 			// failing an upload that IS durably recorded.
-			log.Printf("shared files: stage %q: %v (will self-heal on the next maintenance pass)", name, err)
+			logging.From(r.Context()).Warn("shared files: stage failed (will self-heal on the next maintenance pass)", "name", safe.LogSafe(name), "err", err)
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, map[string]any{"files": out})
+	writeJSON(w, r, map[string]any{"files": out})
 }
 
 // rollbackSharedFileBatch undoes the rows one upload request created before
@@ -275,14 +276,14 @@ const sharedFileRollbackTimeout = 10 * time.Second
 func (s *Server) rollbackSharedFileBatch(ctx context.Context, lib sharedfiles.Library, created []store.SharedFile) {
 	for _, row := range created {
 		if _, err := s.store.DeleteSharedFile(ctx, row.ID); err != nil {
-			log.Printf("shared files: roll back row %q: %v", row.ID, err)
+			logging.From(ctx).Error("shared files: roll back row failed", "row_id", row.ID, "err", err)
 			continue
 		}
 		if err := lib.Unstage(row); err != nil {
-			log.Printf("shared files: roll back staged %q: %v (will self-heal on the next maintenance pass)", row.ID, err)
+			logging.From(ctx).Warn("shared files: roll back staged failed (will self-heal on the next maintenance pass)", "row_id", row.ID, "err", err)
 		}
 		if err := lib.RemoveCanonical(row.ID); err != nil {
-			log.Printf("shared files: roll back canonical %q: %v", row.ID, err)
+			logging.From(ctx).Error("shared files: roll back canonical failed", "row_id", row.ID, "err", err)
 		}
 	}
 }
@@ -389,13 +390,13 @@ func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id stri
 		// Re-materialize under the new path. Failures self-heal on Sync.
 		lib := s.sharedFilesLibrary()
 		if err := lib.Unstage(old); err != nil {
-			log.Printf("shared files: unstage old path for %q: %v", id, err) //nolint:gosec // G706: id is the URL path segment, %q-quoted so CR/LF cannot forge a log entry
+			logging.From(r.Context()).Error("shared files: unstage old path failed", "id", id, "err", err)
 		}
 		if err := lib.Stage(updated); err != nil {
-			log.Printf("shared files: restage %q: %v (will self-heal on the next maintenance pass)", id, err) //nolint:gosec // G706: id is the URL path segment, %q-quoted so CR/LF cannot forge a log entry
+			logging.From(r.Context()).Warn("shared files: restage failed (will self-heal on the next maintenance pass)", "id", safe.LogSafe(id), "err", err)
 		}
 	}
-	writeJSON(w, updated)
+	writeJSON(w, r, updated)
 }
 
 func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id string) {
@@ -408,10 +409,10 @@ func (s *Server) deleteSharedFile(w http.ResponseWriter, r *http.Request, id str
 	}
 	lib := s.sharedFilesLibrary()
 	if err := lib.Unstage(f); err != nil {
-		log.Printf("shared files: unstage %q: %v (will self-heal on the next maintenance pass)", id, err) //nolint:gosec // G706: id names a row the DELETE just removed, %q-quoted so CR/LF cannot forge a log entry
+		logging.From(r.Context()).Warn("shared files: unstage failed (will self-heal on the next maintenance pass)", "id", safe.LogSafe(id), "err", err)
 	}
 	if err := lib.RemoveCanonical(f.ID); err != nil {
-		log.Printf("shared files: remove canonical %q: %v", id, err) //nolint:gosec // G706: id names a row the DELETE just removed, %q-quoted so CR/LF cannot forge a log entry
+		logging.From(r.Context()).Error("shared files: remove canonical failed", "id", id, "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -454,7 +455,7 @@ func (s *Server) SyncSharedFiles(ctx context.Context) error {
 func (s *Server) appendSharedFilesBlock(ctx context.Context, message string) string {
 	files, err := s.store.ListSharedFiles(ctx)
 	if err != nil {
-		log.Printf("shared files: list for prompt block: %v", err)
+		logging.From(ctx).Error("shared files: list for prompt block failed", "err", err)
 		return message
 	}
 	block := sharedfiles.PromptBlock(files)

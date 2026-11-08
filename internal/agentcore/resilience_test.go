@@ -131,38 +131,38 @@ func TestClassifyStreamError(t *testing.T) {
 func TestLoadResilienceConfig(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "")
-		if got := loadResilienceConfig().maxAttempts; got != defaultRetryMaxAttempts {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("override", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "2")
-		if got := loadResilienceConfig().maxAttempts; got != 2 {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 2 {
 			t.Errorf("got %d, want 2", got)
 		}
 	})
 	t.Run("zero disables", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "0")
-		if got := loadResilienceConfig().maxAttempts; got != 0 {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 0 {
 			t.Errorf("got %d, want 0", got)
 		}
 	})
 	t.Run("negative falls back to default", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "-1")
-		if got := loadResilienceConfig().maxAttempts; got != defaultRetryMaxAttempts {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("non-numeric falls back to default", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "not-a-number")
-		if got := loadResilienceConfig().maxAttempts; got != defaultRetryMaxAttempts {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != defaultRetryMaxAttempts {
 			t.Errorf("got %d, want %d", got, defaultRetryMaxAttempts)
 		}
 	})
 	t.Run("canonical FLEET prefix", func(t *testing.T) {
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "")
 		t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "7")
-		if got := loadResilienceConfig().maxAttempts; got != 7 {
+		if got := loadResilienceConfig(context.Background()).maxAttempts; got != 7 {
 			t.Errorf("got %d, want 7 via FLEET_ prefix", got)
 		}
 	})
@@ -685,7 +685,7 @@ func TestStreamRoundCancelledContextShortCircuits(t *testing.T) {
 
 func TestRetryLoggerRecordsToSession(t *testing.T) {
 	session := NewLogSession()
-	logger := newRetryLogger(session)
+	logger := newRetryLogger(context.Background(), session)
 
 	logger(&fantasy.ProviderError{
 		StatusCode: http.StatusTooManyRequests,

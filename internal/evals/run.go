@@ -194,7 +194,7 @@ func applyScorer(ctx context.Context, tr TurnRunner, set *Set, c *Case, sp *Scor
 		pass, label := scorers.Contains(sp.Contains, actual)
 		return deterministicResult("contains", pass, label)
 	case "regex":
-		pass, label := scorers.Regex(sp.Regex, actual)
+		pass, label := scorers.Regex(ctx, sp.Regex, actual)
 		return deterministicResult("regex", pass, label)
 	case "equals":
 		pass, label := scorers.Equals(sp.Equals, actual)

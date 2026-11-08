@@ -142,7 +142,7 @@ func (h *Handlers) GetAdoptionReport(w http.ResponseWriter, r *http.Request) {
 
 	switch strings.TrimSpace(strings.ToLower(r.URL.Query().Get("format"))) {
 	case "", "json":
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, r, http.StatusOK, out)
 	case "csv":
 		writeAdoptionCSV(w, out)
 	default:

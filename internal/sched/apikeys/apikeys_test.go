@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestAPIKeyManager(t *testing.T) {
 	}
 
 	// 1. Create Key
-	key, rawKey, err := manager.CreateKey(
+	key, rawKey, err := manager.CreateKey(context.Background(),
 		"test-key",
 		[]models.Permission{models.PermissionViewTasks}, // Changed from PermissionReadTasks
 		nil,
@@ -44,7 +45,7 @@ func TestAPIKeyManager(t *testing.T) {
 	}
 
 	// 2. Validate Key
-	valid, validatedKey, msg := manager.ValidateKey(rawKey, nil, nil, nil)
+	valid, validatedKey, msg := manager.ValidateKey(context.Background(), rawKey, nil, nil, nil)
 	if !valid {
 		t.Errorf("Key validation failed: %s", msg)
 	}
@@ -54,20 +55,20 @@ func TestAPIKeyManager(t *testing.T) {
 
 	// Validate Permission
 	perm := models.PermissionViewTasks // Changed from PermissionReadTasks
-	valid, _, _ = manager.ValidateKey(rawKey, &perm, nil, nil)
+	valid, _, _ = manager.ValidateKey(context.Background(), rawKey, &perm, nil, nil)
 	if !valid {
 		t.Error("Permission check failed")
 	}
 
 	missingPerm := models.PermissionAdmin
-	valid, _, _ = manager.ValidateKey(rawKey, &missingPerm, nil, nil)
+	valid, _, _ = manager.ValidateKey(context.Background(), rawKey, &missingPerm, nil, nil)
 	if valid {
 		t.Error("Permission check should have failed")
 	}
 
 	// 3. Rotate Key
 	oldRawKey := rawKey
-	updatedKey, newRawKey, err := manager.RotateKey(key.KeyID, 1)
+	updatedKey, newRawKey, err := manager.RotateKey(context.Background(), key.KeyID, 1)
 	if err != nil {
 		t.Fatalf("Failed to rotate key: %v", err)
 	}
@@ -77,13 +78,13 @@ func TestAPIKeyManager(t *testing.T) {
 	}
 
 	// Old key should still be valid (grace period)
-	valid, _, _ = manager.ValidateKey(oldRawKey, nil, nil, nil)
+	valid, _, _ = manager.ValidateKey(context.Background(), oldRawKey, nil, nil, nil)
 	if !valid {
 		t.Error("Old key should be valid during grace period")
 	}
 
 	// New key should be valid
-	valid, _, _ = manager.ValidateKey(newRawKey, nil, nil, nil)
+	valid, _, _ = manager.ValidateKey(context.Background(), newRawKey, nil, nil, nil)
 	if !valid {
 		t.Error("New key should be valid")
 	}
@@ -92,33 +93,33 @@ func TestAPIKeyManager(t *testing.T) {
 	// Reset limits for test simplicity if needed, but we created a fresh key
 	// We set limit to 100, let's create a key with limit 2
 	// Assigned to _ to avoid unused variable error
-	_, rawKey2, _ := manager.CreateKey("limit-test", nil, nil, 2, nil, "")
+	_, rawKey2, _ := manager.CreateKey(context.Background(), "limit-test", nil, nil, 2, nil, "")
 
-	valid, _, _ = manager.ValidateKey(rawKey2, nil, nil, nil) // 1
+	valid, _, _ = manager.ValidateKey(context.Background(), rawKey2, nil, nil, nil) // 1
 	if !valid {
 		t.Error("Should be valid")
 	}
-	valid, _, _ = manager.ValidateKey(rawKey2, nil, nil, nil) // 2
+	valid, _, _ = manager.ValidateKey(context.Background(), rawKey2, nil, nil, nil) // 2
 	if !valid {
 		t.Error("Should be valid")
 	}
-	valid, _, _ = manager.ValidateKey(rawKey2, nil, nil, nil) // 3 (Exceeded)
+	valid, _, _ = manager.ValidateKey(context.Background(), rawKey2, nil, nil, nil) // 3 (Exceeded)
 	if valid {
 		t.Error("Should be rate limited")
 	}
 
 	// 5. Revoke Key
-	if err := manager.RevokeKey(updatedKey.KeyID); err != nil {
+	if err := manager.RevokeKey(context.Background(), updatedKey.KeyID); err != nil {
 		t.Fatalf("Failed to revoke key: %v", err)
 	}
 
-	valid, _, _ = manager.ValidateKey(newRawKey, nil, nil, nil)
+	valid, _, _ = manager.ValidateKey(context.Background(), newRawKey, nil, nil, nil)
 	if valid {
 		t.Error("Revoked key should not be valid")
 	}
 
 	// 6. Delete Key
-	if err := manager.DeleteKey(updatedKey.KeyID); err != nil {
+	if err := manager.DeleteKey(context.Background(), updatedKey.KeyID); err != nil {
 		t.Fatalf("Failed to delete key: %v", err)
 	}
 

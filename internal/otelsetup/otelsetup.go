@@ -14,12 +14,12 @@ package otelsetup
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"strconv"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -70,7 +70,7 @@ func Init(ctx context.Context, serviceVersion string) (shutdown func(context.Con
 		sdktrace.WithSampler(samplerFromEnv()),
 	)
 	otel.SetTracerProvider(tp)
-	log.Printf("otel: tracing enabled → %q", endpoint)
+	logging.From(ctx).Info("otel: tracing enabled", "endpoint", endpoint)
 	return tp.Shutdown, nil
 }
 

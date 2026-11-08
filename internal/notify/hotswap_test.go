@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -22,7 +23,7 @@ func TestSetConfigHotSwap(t *testing.T) {
 
 	// Boot config: nothing configured — Notify is a no-op.
 	n := New(Config{})
-	n.logf = func(string, ...any) {}
+	n.logEvent = func(context.Context, slog.Level, string, ...any) {}
 	if n.Enabled() {
 		t.Fatal("empty config must be disabled")
 	}
@@ -62,7 +63,7 @@ func TestSetConfigConcurrent(t *testing.T) {
 	defer srv.Close()
 
 	n := New(Config{WebhookURL: srv.URL, Retries: -1, Timeout: 2 * time.Second})
-	n.logf = func(string, ...any) {}
+	n.logEvent = func(context.Context, slog.Level, string, ...any) {}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(2)

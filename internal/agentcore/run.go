@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -408,6 +408,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		runMode:        mode.String(),
 		taskID:         cfg.TaskID,
 		conversationID: cfg.ConversationID,
+		ctx:            ctx,
 	}
 	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
 
@@ -430,6 +431,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if !ok {
 		return Result{}, fmt.Errorf("policy %T does not expose an orchestration state (embed InteractivePolicy/ScheduledPolicy or expose the inner policy via Unwrap)", deps.Policy)
 	}
+	// The orchestration state's enforcement lines carry this run's
+	// correlation ids, so a retry of the same task is told apart by run_id.
+	usageOrch.setLogger(logging.From(ctx))
 	// Fail before the first provider/tool side effect if a direct caller or a
 	// legacy database row bypassed the enqueue-time schema gate.
 	if err := validateDeclaredOutputSchema(cfg.OutputSchema); err != nil {
@@ -447,7 +451,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		logSession = NewLogSession()
 	}
 
-	eng := newRunEngine(cfg, deps, logSession)
+	eng := newRunEngine(ctx, cfg, deps, logSession)
+	eng.logger = logging.From(ctx)
 	defer func() {
 		result.Compactions = eng.compactionsSnapshot()
 	}()
@@ -537,7 +542,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		if catalog == nil {
 			catalog = mcpClient.GetAllTools()
 		}
-		tools, roster, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		tools, roster, err := buildFantasyTools(ctx, cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
 			return nil, toolRoster{}, err
 		}
@@ -555,7 +560,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// a zero-overhead passthrough (current behavior). Re-applied on every
 		// rebuild (the mcp_load_servers dirty path) via this closure.
 		if cfg.PersonaPolicy != nil {
-			tools = resolvePersonaRoster(cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
+			tools = resolvePersonaRoster(ctx, cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
 		}
 		// A narrowed run's audit gate reads the live roster (#1603).
 		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
@@ -656,7 +661,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if deps.ClearMCPDirty != nil {
 				deps.ClearMCPDirty()
 			}
-			log.Printf("🔌 MCP loaded-server set changed; fantasy agent rebuilt for round %d", round+1)
+			logging.From(ctx).Info("🔌 MCP loaded-server set changed; fantasy agent rebuilt", "round", round+1)
 		}
 
 		// Context-window pressure check (#209): warn — and, above the higher
@@ -1031,14 +1036,14 @@ func runMaxCompletionTokens(cfg RunConfig) int64 {
 	return int64(DefaultMaxCompletionTokens)
 }
 
-func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
+func newRunEngine(ctx context.Context, cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
 		model:                  deps.Model,
 		fallbackModels:         fallbackModels,
-		resilience:             loadResilienceConfig(),
+		resilience:             loadResilienceConfig(ctx),
 		logSession:             logSession,
-		onRetry:                newRetryLogger(logSession),
+		onRetry:                newRetryLogger(ctx, logSession),
 		temperature:            cfg.Temperature,
 		compactionSummarizer:   deps.CompactionSummarizer,
 		steerSource:            deps.SteerSource,

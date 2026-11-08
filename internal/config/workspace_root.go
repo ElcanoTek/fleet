@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +44,7 @@ func (c *Config) PinWorkspaceRoot() {
 	if err != nil {
 		// Only an unreadable cwd gets here; every reader would fail the same
 		// way, so keep the boot going on the unresolved value as before.
-		log.Printf("workspace root: could not resolve an absolute path: %v", err)
+		slog.Error("workspace root: could not resolve an absolute path", "err", err)
 		return
 	}
 	c.WorkspaceRoot = abs

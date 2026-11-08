@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -264,8 +264,9 @@ func TestHandleSkipLogLineIsJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	reason := "exit 3 (want 0): line one\nline two \"quoted\", {\"event\":\"forged\",\"task_id\":\"x\"}"
 	s.handleSkip(task, reason)

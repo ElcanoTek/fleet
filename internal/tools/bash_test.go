@@ -66,13 +66,13 @@ func unwritableAuditDir(t *testing.T) string {
 // happy path stays nil + actually writes the line.
 func TestAuditBashInvocation_ReportsWriteFailure(t *testing.T) {
 	t.Setenv("FLEET_AUDIT_DIR", unwritableAuditDir(t))
-	if err := auditBashInvocation("echo hi", "/tmp", 0, 1, ""); err == nil {
+	if err := auditBashInvocation(context.Background(), "echo hi", "/tmp", 0, 1, ""); err == nil {
 		t.Fatal("auditBashInvocation returned nil on an uncreatable audit dir; want an error")
 	}
 
 	good := t.TempDir()
 	t.Setenv("FLEET_AUDIT_DIR", good)
-	if err := auditBashInvocation("echo hi", "/tmp", 0, 1, ""); err != nil {
+	if err := auditBashInvocation(context.Background(), "echo hi", "/tmp", 0, 1, ""); err != nil {
 		t.Fatalf("auditBashInvocation on a writable dir = %v; want nil", err)
 	}
 	if _, err := os.Stat(filepath.Join(good, "bash.log")); err != nil {

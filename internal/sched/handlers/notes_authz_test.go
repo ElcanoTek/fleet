@@ -45,11 +45,11 @@ func TestNoteProposalReadsRequireAdmin(t *testing.T) {
 
 	addLogUser(t, store, "client-user", "client", "client-token")
 	addLogUser(t, store, "admin-user", "admin", "admin-token")
-	_, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, readonlyKey, err := keyMgr.CreateTypedKey(context.Background(), "viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey readonly: %v", err)
 	}
-	_, typedAdminKey, err := keyMgr.CreateTypedKey("root", apikeys.KeyTypeAdmin, nil, 0, nil, "")
+	_, typedAdminKey, err := keyMgr.CreateTypedKey(context.Background(), "root", apikeys.KeyTypeAdmin, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey admin: %v", err)
 	}

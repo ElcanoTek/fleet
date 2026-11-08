@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -239,7 +240,7 @@ func TestResumeAndWakeAreScopedPerTask(t *testing.T) {
 	asOwner := func(req *http.Request) { req.Header.Set("Authorization", "Bearer resume-owner-token") }
 
 	// An operator key: cancel_task + view_tasks, but no fleet-wide grant.
-	opKey, opRaw, err := h.apiKeys.CreateKey("operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	opKey, opRaw, err := h.apiKeys.CreateKey(context.Background(), "operator", []models.Permission{models.PermissionCancelTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

@@ -51,7 +51,7 @@ func (db *Database) OwnerDigestCandidates(ctx context.Context, since, overdueBef
 	if err != nil {
 		return nil, err
 	}
-	latest, err := db.rowsToTasks(rows)
+	latest, err := db.rowsToTasks(ctx, rows)
 	_ = rows.Close()
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (db *Database) OwnerDigestCandidates(ctx context.Context, since, overdueBef
 		return nil, err
 	}
 	defer rows.Close()
-	overdue, err := db.rowsToTasks(rows)
+	overdue, err := db.rowsToTasks(ctx, rows)
 	if err != nil {
 		return nil, err
 	}

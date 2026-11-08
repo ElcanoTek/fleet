@@ -8,12 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -238,7 +238,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	body, n := jsonReader(map[string]string{"email": email, "password": password})
 	status, _, resp, ok := g.callCapture(g.chat, call{method: http.MethodPost, target: "/auth/verify", header: h, who: who, body: body, contentLength: n})
 	if !ok {
-		log.Printf("webui: login: no chat backend")
+		logging.From(r.Context()).Warn("webui: login: no chat backend")
 		back("server")
 		return
 	}
@@ -269,7 +269,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := g.sessions.HMAC.Mint(email, epoch)
 	if err != nil {
-		log.Printf("webui: login: %v", err)
+		logging.From(r.Context()).Error("webui: login failed", "err", err)
 		back("server")
 		return
 	}
@@ -405,7 +405,7 @@ func (g *Gateway) loginClientFor(r *http.Request) (string, bool) {
 		return loginClientKey(client), true
 	}
 	g.loginRLWarn.Do(func() {
-		log.Printf("webui: password sign-in attempts arrive from a proxy or private address without a usable X-Forwarded-For, so they are not limited per client — only by the backend's process-wide guard. Set FLEET_TRUSTED_PROXIES to the address the reverse proxy connects from (docs/DEPLOYMENT.md).")
+		logging.From(r.Context()).Warn("webui: password sign-in attempts arrive from a proxy or private address without a usable X-Forwarded-For, so they are not limited per client — only by the backend's process-wide guard. Set FLEET_TRUSTED_PROXIES to the address the reverse proxy connects from (docs/DEPLOYMENT.md).")
 	})
 	return "", false
 }

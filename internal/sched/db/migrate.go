@@ -353,7 +353,7 @@ func withMigrationLock(ctx context.Context, db *sql.DB, fn func(*migrationRun) e
 	defer func() {
 		// A background context: the unlock must run even when ctx is done.
 		// Closing the connection would release the lock anyway.
-		if _, uerr := conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, lockID); uerr != nil {
+		if _, uerr := conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockID); uerr != nil {
 			err = errors.Join(err, fmt.Errorf("unlock: %w", uerr))
 		}
 	}()

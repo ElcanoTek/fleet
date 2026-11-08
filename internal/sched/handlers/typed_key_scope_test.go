@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func mustCreateTypedKey(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyTyp
 // exercises the ownership check rather than whatever the test meant to assert.
 func mustCreateTypedKeyWithID(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) (string, string) {
 	t.Helper()
-	key, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, 0, nil, "")
+	key, raw, err := keyMgr.CreateTypedKey(context.Background(), "test-"+string(kt), kt, slugs, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed key: %v", err)
 	}

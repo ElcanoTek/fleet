@@ -57,7 +57,7 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 			}
 			return 0
 		})
-		writeJSON(w, map[string]any{"prefs": out})
+		writeJSON(w, r, map[string]any{"prefs": out})
 	case http.MethodPut:
 		var p store.ConnectorPref
 		if !decodeJSONBody(w, r, &p) {

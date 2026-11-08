@@ -29,7 +29,7 @@ func TestEnsureMCPRunsDirMountedReadOnly(t *testing.T) {
 		t.Fatalf("mcp-runs must exist before any sandbox starts: %v, %v", fi, err)
 	}
 	// It is exactly the parent of the run dirs the spawn path hands out.
-	runDir, run, err := agentcore.OpenStableMCPWorkspace("task-abc")
+	runDir, run, err := agentcore.OpenStableMCPWorkspace(t.Context(), "task-abc")
 	if err != nil {
 		t.Fatal(err)
 	}

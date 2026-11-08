@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"context"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -9,18 +10,19 @@ import (
 // A user key (ADR-0108) names the account it acts as on the chat API, and
 // carries no Operations Center scope at all.
 func TestUserKey(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	m, err := NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.CreateUserKey("cli", "  ", 0, nil, ""); err == nil {
+	if _, _, err := m.CreateUserKey(ctx, "cli", "  ", 0, nil, ""); err == nil {
 		t.Fatal("a user key without an account was minted")
 	}
-	if _, _, err := m.CreateTypedKey("cli", KeyTypeUser, nil, 0, nil, ""); err == nil {
+	if _, _, err := m.CreateTypedKey(ctx, "cli", KeyTypeUser, nil, 0, nil, ""); err == nil {
 		t.Fatal("CreateTypedKey minted a user key with no account")
 	}
-	key, raw, err := m.CreateUserKey("cli", " Me@Example.com ", 0, nil, "")
+	key, raw, err := m.CreateUserKey(ctx, "cli", " Me@Example.com ", 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,7 @@ func TestUserKey(t *testing.T) {
 	if kt, _, err := ParseAPIKey(raw); err != nil || kt != KeyTypeUser {
 		t.Fatalf("ParseAPIKey = %q, %v", kt, err)
 	}
-	ok, got, _ := m.ValidateKey(raw, nil, nil, nil)
+	ok, got, _ := m.ValidateKey(ctx, raw, nil, nil, nil)
 	if !ok || got.UserEmail != "me@example.com" {
 		t.Fatalf("ValidateKey = %v %+v", ok, got)
 	}
@@ -43,7 +45,7 @@ func TestUserKey(t *testing.T) {
 		t.Errorf("response = %+v", resp)
 	}
 	// Rotation keeps the account.
-	rotated, _, err := m.RotateKey(key.KeyID, 1)
+	rotated, _, err := m.RotateKey(ctx, key.KeyID, 1)
 	if err != nil || rotated.UserEmail != "me@example.com" || rotated.Type != KeyTypeUser {
 		t.Fatalf("rotate = %+v, %v", rotated, err)
 	}

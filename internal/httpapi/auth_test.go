@@ -27,10 +27,10 @@ func edgeKeys(t *testing.T) (mgr *apikeys.Manager, userKey, taskKey string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, userKey, err = mgr.CreateUserKey("cli", "U@x.com", 0, nil, "test"); err != nil {
+	if _, userKey, err = mgr.CreateUserKey(context.Background(), "cli", "U@x.com", 0, nil, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, taskKey, err = mgr.CreateTypedKey("intake", apikeys.KeyTypeTask, nil, 0, nil, "test"); err != nil {
+	if _, taskKey, err = mgr.CreateTypedKey(context.Background(), "intake", apikeys.KeyTypeTask, nil, 0, nil, "test"); err != nil {
 		t.Fatal(err)
 	}
 	return mgr, userKey, taskKey

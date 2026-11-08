@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"charm.land/fantasy"
 	"golang.org/x/net/http2"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -253,13 +253,13 @@ type resilienceConfig struct {
 // (#1273), so a malformed value refuses the boot; the warn-and-default branch
 // below remains for the engine-construction paths that run without a
 // config.Load (tests, embedders) rather than as the operator-facing behavior.
-func loadResilienceConfig() resilienceConfig {
+func loadResilienceConfig(ctx context.Context) resilienceConfig {
 	attempts := defaultRetryMaxAttempts
 	if raw := strings.TrimSpace(fleetEnv.lookup("RETRY_MAX_ATTEMPTS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			attempts = n
 		} else {
-			log.Printf("Warning: ignoring invalid FLEET_RETRY_MAX_ATTEMPTS=%q (using default %d)", raw, defaultRetryMaxAttempts)
+			logging.From(ctx).Warn("Warning: ignoring invalid FLEET_RETRY_MAX_ATTEMPTS (using default)", "value", raw, "default", defaultRetryMaxAttempts)
 		}
 	}
 	return resilienceConfig{maxAttempts: attempts}
@@ -543,18 +543,18 @@ func parseSSEStatusCode(raw json.RawMessage) int {
 
 // recordContextFromError writes a provider-reported window size into the
 // observed-context cache (ground truth for this exact provider+slug pair).
-func recordContextFromError(model fantasy.LanguageModel, providerErr *fantasy.ProviderError) {
+func recordContextFromError(ctx context.Context, model fantasy.LanguageModel, providerErr *fantasy.ProviderError) {
 	if providerErr == nil || model == nil || strings.TrimSpace(model.Model()) == "" {
 		return
 	}
 	if providerErr.ContextMaxTokens > 0 {
-		recordContextMaxForModel(model, providerErr.ContextMaxTokens)
+		recordContextMaxForModel(ctx, model, providerErr.ContextMaxTokens)
 	}
 }
 
 // newRetryLogger returns a fantasy.OnRetryCallback that mirrors each retry into
 // the session log as a system_retry entry tagged with status + delay.
-func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
+func newRetryLogger(ctx context.Context, session *LogSession) fantasy.OnRetryCallback {
 	return func(err *fantasy.ProviderError, delay time.Duration) {
 		if err == nil {
 			return
@@ -565,8 +565,7 @@ func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
 			title = fantasy.ErrorTitleForStatusCode(status)
 		}
 		rounded := delay.Round(10 * time.Millisecond)
-		log.Printf("🔁 LLM retry: status=%d (%s) delay=%s msg=%q",
-			status, title, rounded, summarizeForConsole(err.Message))
+		logging.From(ctx).Warn("🔁 LLM retry", "status", status, "title", title, "delay", rounded, "provider_message", summarizeForConsole(err.Message))
 		if session == nil {
 			return
 		}
@@ -601,8 +600,7 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError, cause er
 // waitStreamBlipRetry logs a mid-stream retry and waits streamBlipRetryDelay
 // or returns a context-cancellation error.
 func (e *engine) waitStreamBlipRetry(ctx context.Context, providerErr *fantasy.ProviderError, cause error) error {
-	log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
-		providerErrStatus(providerErr), streamBlipRetryDelay)
+	logging.From(ctx).Warn("🔁 Mid-stream provider error; retrying same model once", "status", providerErrStatus(providerErr), "retry_in", streamBlipRetryDelay)
 	e.logStreamBlipRetry(providerErr, cause)
 	select {
 	case <-time.After(streamBlipRetryDelay):
@@ -624,8 +622,7 @@ func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.P
 		status = providerErr.StatusCode
 		body = summarizeForConsole(providerErr.Message)
 	}
-	log.Printf("⚠️  Primary model failed (%s, status=%d); swapping to fallback %s",
-		reason, status, e.fallbackModel.Model())
+	e.log().Warn("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "fallback_model", e.fallbackModel.Model())
 	if e.logSession == nil {
 		return
 	}
@@ -783,7 +780,7 @@ func (e *engine) streamRoundWithResilience(
 	// instead of burning this round's attempts on a known-bad model. Half-open is
 	// deliberately NOT skipped — that state exists to send exactly one probe.
 	if shouldFastFailoverOnOpenCircuit(e, activeModel, swappedToFallback) {
-		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
+		logging.From(ctx).Warn("⚡ circuit open; routing to fallback without a primary attempt", "model", activeModel.Model(), "fallback_model", e.fallbackModel.Model())
 		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
 		activeModel = e.takeFallback()
 		e.noteActiveModel(activeModel)
@@ -879,7 +876,7 @@ func (e *engine) streamRoundWithResilience(
 			swappedToFallback = true
 			rollbackAttempt()
 		}
-		e.recordProviderHealthFailure(activeModel, class, providerErr, err)
+		e.recordProviderHealthFailure(ctx, activeModel, class, providerErr, err)
 		switch class {
 		case streamErrorNone:
 			return streamRoundOutcome{}, fmt.Errorf("unexpected stream state (class=none): %w", err)
@@ -887,11 +884,10 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("context cancelled: %w", err)
 		case streamErrorContextTooLarge:
 			if activeModel != nil {
-				recordContextFromError(activeModel, providerErr)
+				recordContextFromError(ctx, activeModel, providerErr)
 			}
 			if !forceCompactedThisRound {
-				log.Printf("⚠️  Provider rejected prompt as too large (status=%d); forcing compaction and retrying",
-					providerErrStatus(providerErr))
+				logging.From(ctx).Warn("⚠️ Provider rejected prompt as too large; forcing compaction and retrying", "status", providerErrStatus(providerErr))
 				// Discard the failed attempt's partial output BEFORE compacting,
 				// so the re-driven round replaces — not duplicates — it in the
 				// sink and the message history (same contract as the blip/
@@ -1010,13 +1006,13 @@ func committedSideEffectsBlockRecovery(sink *streamSink, attemptMark sinkMark, c
 // per-model health signals, so they don't count (opening a model circuit on an
 // exhausted key would fast-route subsequent turns to a same-provider fallback
 // sharing the same exhausted key).
-func (e *engine) recordProviderHealthFailure(activeModel fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError, cause error) {
+func (e *engine) recordProviderHealthFailure(ctx context.Context, activeModel fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError, cause error) {
 	if e == nil || isCreditsExhausted(providerErr) || IsCreditsExhaustedError(cause) {
 		return
 	}
 	switch class {
 	case streamErrorRetryExhausted, streamErrorStreamBlip, streamErrorProviderRejected, streamErrorFatal:
-		e.healthRegistry.RecordError(activeModel.Model(), streamErrorDesc(providerErr))
+		e.healthRegistry.RecordError(ctx, activeModel.Model(), streamErrorDesc(providerErr))
 	default:
 	}
 }

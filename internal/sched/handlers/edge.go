@@ -23,7 +23,7 @@ func refuseRetiredServiceToken(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get(retiredServiceTokenHeader) == "" {
 		return false
 	}
-	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "service_token_retired", "message": serviceTokenRetiredMessage})
+	writeJSON(w, r, http.StatusUnauthorized, map[string]string{"error": "service_token_retired", "message": serviceTokenRetiredMessage})
 	return true
 }
 

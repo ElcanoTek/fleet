@@ -11,11 +11,11 @@ package httpapi
 
 import (
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/identity"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -112,9 +112,8 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// %q escapes CR/LF, so request-supplied values cannot forge a log line.
-	log.Printf("admin users: created %q (role=%s ops_scope=%s) by %q", u.Email, u.Role, u.OpsScope, userFromCtx(r.Context()))
-	writeJSONStatus(w, http.StatusCreated, toAdminUser(*u))
+	logging.From(r.Context()).Info("admin users: created", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "ops_scope", safe.LogSafe(u.OpsScope), "actor", safe.LogSafe(userFromCtx(r.Context())))
+	writeJSONStatus(w, r, http.StatusCreated, toAdminUser(*u))
 }
 
 // handleAdminUserDelete serves DELETE /admin/users/{email} — remove the account
@@ -148,7 +147,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 			// `error` keeps the exact prose an older client already renders;
 			// `owns_shared_projects` carries {id, name} so the refusal can link
 			// straight at each project's transfer control (QA #21).
-			writeJSONStatus(w, http.StatusConflict, map[string]any{
+			writeJSONStatus(w, r, http.StatusConflict, map[string]any{
 				"error": "this account still owns team-shared projects (" +
 					strings.Join(owns.ProjectNames(), ", ") +
 					") — transfer them to another member first, then delete the account",
@@ -162,8 +161,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 	s.sessionApprovals.ForgetUser(email)
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	s.purgeParticipantPrivateStashes(email)
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: deleted %q by %q", email, actor)
+	logging.From(r.Context()).Info("admin users: deleted", "email", safe.LogSafe(email), "actor", safe.LogSafe(actor))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -192,8 +190,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		}
 		return
 	}
-	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: password reset for %q by %q", safe.LogSafe(email), safe.LogSafe(userFromCtx(r.Context())))
+	logging.From(r.Context()).Info("admin users: password reset", "email", safe.LogSafe(email), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -230,7 +227,6 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
-	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
-		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
-	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
+	logging.From(r.Context()).Info("admin teams: team renamed", "from", body.From, "to", body.To, "users", usersN, "projects", projectsN, "actor", userFromCtx(r.Context()))
+	writeJSON(w, r, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -28,20 +29,20 @@ func TestPatrolDraftSchema(t *testing.T) {
 // TestParsePatrolDraft normalizes the model's output: trimmed fields, a
 // fallback title, and an empty prompt refused rather than launched.
 func TestParsePatrolDraft(t *testing.T) {
-	d, err := parsePatrolDraft(`{"title":"  ","prompt":"  Do the thing  ","summary":" s "}`)
+	d, err := parsePatrolDraft(context.Background(), `{"title":"  ","prompt":"  Do the thing  ","summary":" s "}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if d.Title != "My patrol" || d.Prompt != "Do the thing" || d.Summary != "s" {
 		t.Errorf("draft = %+v", d)
 	}
-	if _, err := parsePatrolDraft(`{"title":"t","prompt":"   ","summary":"s"}`); err == nil {
+	if _, err := parsePatrolDraft(context.Background(), `{"title":"t","prompt":"   ","summary":"s"}`); err == nil {
 		t.Error("an empty prompt should be refused")
 	}
-	if _, err := parsePatrolDraft(`not json`); err == nil {
+	if _, err := parsePatrolDraft(context.Background(), `not json`); err == nil {
 		t.Error("non-JSON output should be refused")
 	}
-	long, err := parsePatrolDraft(`{"title":"` + strings.Repeat("é", 100) + `","prompt":"p","summary":"s"}`)
+	long, err := parsePatrolDraft(context.Background(), `{"title":"`+strings.Repeat("é", 100)+`","prompt":"p","summary":"s"}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

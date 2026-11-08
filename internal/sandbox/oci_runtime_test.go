@@ -195,7 +195,7 @@ func TestApplyKataMemoryOverhead(t *testing.T) {
 	// Non-kata runtimes are untouched.
 	for _, rt := range []string{"", "runc", "crun", "runsc", "krun"} {
 		cfg := ContainerConfig{Runtime: rt, MemoryLimit: "512m"}
-		if err := applyKataMemoryOverhead(&cfg); err != nil {
+		if err := applyKataMemoryOverhead(context.Background(), &cfg); err != nil {
 			t.Fatalf("applyKataMemoryOverhead(runtime=%q) error: %v", rt, err)
 		}
 		if cfg.MemoryLimit != "512m" {
@@ -206,7 +206,7 @@ func TestApplyKataMemoryOverhead(t *testing.T) {
 	// Kata bumps the limit by the default overhead.
 	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "")
 	cfg := ContainerConfig{Runtime: "kata", MemoryLimit: "512m"}
-	if err := applyKataMemoryOverhead(&cfg); err != nil {
+	if err := applyKataMemoryOverhead(context.Background(), &cfg); err != nil {
 		t.Fatalf("applyKataMemoryOverhead(kata): %v", err)
 	}
 	if cfg.MemoryLimit != "1024m" {
@@ -216,7 +216,7 @@ func TestApplyKataMemoryOverhead(t *testing.T) {
 	// The env override is honored.
 	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "256")
 	cfg = ContainerConfig{Runtime: "kata", MemoryLimit: "2g"}
-	if err := applyKataMemoryOverhead(&cfg); err != nil {
+	if err := applyKataMemoryOverhead(context.Background(), &cfg); err != nil {
 		t.Fatalf("applyKataMemoryOverhead(kata, override): %v", err)
 	}
 	if cfg.MemoryLimit != "2304m" { // 2048 + 256
@@ -227,7 +227,7 @@ func TestApplyKataMemoryOverhead(t *testing.T) {
 	// overhead (the bypass the review flagged).
 	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "")
 	cfg = ContainerConfig{Runtime: "/usr/bin/kata-runtime", MemoryLimit: "512m"}
-	if err := applyKataMemoryOverhead(&cfg); err != nil {
+	if err := applyKataMemoryOverhead(context.Background(), &cfg); err != nil {
 		t.Fatalf("applyKataMemoryOverhead(path-form kata): %v", err)
 	}
 	if cfg.MemoryLimit != "1024m" {
@@ -236,25 +236,25 @@ func TestApplyKataMemoryOverhead(t *testing.T) {
 
 	// An unparseable limit fails closed for kata (not silently passed through).
 	cfg = ContainerConfig{Runtime: "kata", MemoryLimit: "garbage"}
-	if err := applyKataMemoryOverhead(&cfg); err == nil {
+	if err := applyKataMemoryOverhead(context.Background(), &cfg); err == nil {
 		t.Error("applyKataMemoryOverhead(kata, garbage) = nil, want fail-closed error")
 	}
 }
 
 func TestKataOverheadMB(t *testing.T) {
 	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "")
-	if got := kataOverheadMB(); got != DefaultKataOverheadMB {
-		t.Errorf("kataOverheadMB() default = %d, want %d", got, DefaultKataOverheadMB)
+	if got := kataOverheadMB(context.Background()); got != DefaultKataOverheadMB {
+		t.Errorf("kataOverheadMB(context.Background()) default = %d, want %d", got, DefaultKataOverheadMB)
 	}
 	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "768")
-	if got := kataOverheadMB(); got != 768 {
-		t.Errorf("kataOverheadMB() = %d, want 768", got)
+	if got := kataOverheadMB(context.Background()); got != 768 {
+		t.Errorf("kataOverheadMB(context.Background()) = %d, want 768", got)
 	}
 	// Invalid / non-positive values fall back to the default (lenient knob).
 	for _, v := range []string{"abc", "-1", "0"} {
 		t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", v)
-		if got := kataOverheadMB(); got != DefaultKataOverheadMB {
-			t.Errorf("kataOverheadMB() with %q = %d, want default %d", v, got, DefaultKataOverheadMB)
+		if got := kataOverheadMB(context.Background()); got != DefaultKataOverheadMB {
+			t.Errorf("kataOverheadMB(context.Background()) with %q = %d, want default %d", v, got, DefaultKataOverheadMB)
 		}
 	}
 }

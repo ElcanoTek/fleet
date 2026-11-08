@@ -11,6 +11,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,15 +117,15 @@ func TestRunLogReadIsCreatorScoped(t *testing.T) {
 
 	store, keyMgr, r := setupLogAuthz(t)
 
-	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
+	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey(context.Background(), "owner", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create owner key: %v", err)
 	}
-	_, intruderRaw, err := keyMgr.CreateTypedKey("intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, intruderRaw, err := keyMgr.CreateTypedKey(context.Background(), "intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create intruder key: %v", err)
 	}
-	_, readonlyRaw, err := keyMgr.CreateTypedKey("watcher", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	_, readonlyRaw, err := keyMgr.CreateTypedKey(context.Background(), "watcher", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create readonly key: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestRunLogFleetWideGrants(t *testing.T) {
 		t.Errorf("admin key must read any transcript: got %d", code)
 	}
 
-	_, auditorRaw, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
+	_, auditorRaw, err := keyMgr.CreateKey(context.Background(), "auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewLogs, models.PermissionViewAllLogs},
 		nil, 0, nil, "fleet-wide log auditor")
 	if err != nil {
 		t.Fatalf("create auditor key: %v", err)
@@ -186,7 +187,7 @@ func TestRunLogFleetWideGrants(t *testing.T) {
 
 	// An unattributed task is readable only under a fleet-wide grant — a plain
 	// view_logs key owns nothing and therefore reads nothing.
-	_, plainRaw, err := keyMgr.CreateTypedKey("plain", apikeys.KeyTypeTask, nil, 0, nil, "")
+	_, plainRaw, err := keyMgr.CreateTypedKey(context.Background(), "plain", apikeys.KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create plain key: %v", err)
 	}

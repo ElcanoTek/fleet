@@ -714,23 +714,112 @@ log aggregators (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index
 natively. This applies to both stderr and the rotating file above.
 
 ```
-FLEET_LOG_FORMAT=json                      # default; structured JSON. Use "text" for the legacy plaintext lines.
+FLEET_LOG_FORMAT=json                      # default; structured JSON. "text" is logfmt (key=value), for reading by eye.
 FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
 ```
 
-Two operator notes:
+Operator notes:
 
-- **`FLEET_LOG_FORMAT=text`** restores the exact prior plaintext behavior if you
-  prefer it (or have tooling that parses the old format).
-- **`FLEET_LOG_LEVEL`** currently sets the threshold for *native* structured
-  (`slog`) call sites. The bulk of today's lines are emitted through a
-  compatibility bridge (the standard-`log`→`slog` conversion is ongoing) and
-  **always emit at info regardless of the level** — so raising the level will not
-  silently suppress existing diagnostics/error lines. Its reach grows as call
-  sites are converted to native `slog` (#178).
+- **`FLEET_LOG_FORMAT=text`** emits slog's logfmt lines —
+  `time=… level=WARN msg="remote-mcp: skipping server — token unavailable" reg_name=github user=…` —
+  for an operator reading `journalctl` by eye. It is **not** the plaintext of
+  releases before #2052: every call site is now structured, so a value that was
+  part of the old message (an id, an error) is a `key=value` attribute, and the
+  message texts themselves changed in that release. Point log-parsing tooling
+  (alerts, grep pipelines, dashboards) at the **JSON** format and its stable
+  `msg` plus attribute keys, not at text-mode lines.
+- **`FLEET_LOG_LEVEL`** gates every fleet log line, in both formats. Warnings
+  about unsafe or degraded configuration (a disabled seccomp filter, a relaxed
+  SSRF guard, a fallback in effect) log at `warn`, so `FLEET_LOG_LEVEL=warn`
+  still shows them. Lines a third-party library writes through Go's standard
+  `log` package are bridged at info and are not gated, since their true
+  severity is unknown.
+- The `fleet mcp-broker` child logs at the parent's level, as JSON on its
+  stderr. The parent re-logs each child record through its own handler (your
+  `FLEET_LOG_FORMAT`, `FLEET_LOG_LEVEL`, redactor and sinks), adding
+  `child=mcp-broker`. Any other child line (a panic trace, a library's raw
+  print, JSON without a valid slog `level`) is logged as `msg="child stderr"`
+  with the redacted text in `line`, labelled `warn` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. A PEM private-key block in subprocess output is replaced by one
+  `[REDACTED PEM block]` line.
+- A number under a secret-named key (`password`, `api_token`, …) is redacted
+  like a string. Only count-like keys keep their numbers: keys ending in
+  `tokens`, `count`, `ms`, `bytes`, `seconds`, `size`, `len`, `limit`, `total`
+  and similar (`prompt_tokens=1200`).
+- A failing log sink (a full disk under `FLEET_LOG_FILE`, a failed rotation)
+  is reported once with a `logging: a log sink write failed` warning on the
+  sinks that still work; its lines are dropped until it recovers. It never
+  blocks logging or the broker.
+- Recovered panics (`msg="panic recovered"`) use the same format, redactor and
+  sinks as every other line, so they reach `FLEET_LOG_FILE` too. If that
+  handler itself fails, the panic is still written to stderr as a JSON line.
+- Every record reaches stderr in a single write under one process-wide lock,
+  so a long line forwarded from the broker never interleaves with a parent
+  line in the journald pipe.
+- A subprocess stderr line longer than 64 KiB is cut. The kept part ends
+  early by a safety margin, so a secret that straddles the cut is not shown
+  at all, and the line ends with `…[truncated: line was N bytes]`.
+- A stdio MCP connector's stderr (a Python traceback, a startup banner), and
+  the sandbox bridge's (`subprocess=sandbox-bridge`), is logged one line per
+  record — `msg="subprocess stderr"`, the text in `line`, the server in
+  `connector` — after secret redaction, labelled `info` but not gated by
+  `FLEET_LOG_LEVEL`, since its real severity is unknown. It is never copied to
+  the log verbatim. Lines longer than 64 KiB are cut and marked `truncated`.
+- Lines a library writes through Go's standard `log` package carry
+  `stdlib_log=true`, in fleet serve and in the MCP broker alike; the parent
+  keeps a broker's such lines ungated too.
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.
+
+### what the process log never contains
+
+Every line passes through two layers of redaction before it reaches stderr
+or `FLEET_LOG_FILE`. The first works on each attribute: secret-named keys,
+structured values, and objects that describe themselves. The second scrubs
+the finished, encoded line. As a result, the log never contains:
+
+- **A registered secret, in any position**: a value, a key, a group name, a
+  message, an error's text, or a self-marshalled field, whether written raw or
+  JSON- or Go-escaped. Before the first line goes out (and before a fatal
+  startup error is logged), fleet registers the value of every variable in
+  its environment and env file whose name contains `KEY`, `TOKEN`, `SECRET`,
+  `PASSWORD`, `PASSWD` or `CREDENTIAL`, and of every setting the
+  configuration registry marks *secret* (under any of its spellings)
+  whatever its name. For a DSN or URL value, such as `DATABASE_URL`, that
+  includes its userinfo, its password and its `password`/`sslpassword`
+  parameters, as written and percent-decoded, even when the DSN does not
+  parse. Afterwards it registers connector and header values taken from the
+  host (whatever their names), brokered account values, and OAuth and
+  API-key secrets as they are acquired or rotated. A rotated secret stays
+  registered for 15 minutes after its last holder replaces it. Values shorter
+  than 8 bytes are not registered.
+- **A recognised vendor credential shape**: PEM private-key blocks (also when a
+  subprocess prints one line by line), `sk-…`, `github_pat_…`/`gh?_…`,
+  `glpat-…`, `xox?-…`, Stripe `sk_/rk_` keys, `AIza…`, `AKIA…`, and the value
+  of an `Authorization: Bearer|Basic` header.
+- **The value of a secret-named field** (`token`, `password`, `secret`,
+  `api_key`, `authorization`, `credential`, `cookie`, …) in a plain struct, a
+  map, or a group, at any depth. A number under such a key is redacted too,
+  unless the key is one of the token metrics fleet itself logs, named exactly
+  (`prompt_tokens`, `token_count`, `max_total_tokens`, …); a count-like
+  suffix alone (`api_key_num`, `password_length`) does not keep it.
+- **The output of a self-describing type that carries a secret-named field.**
+  This covers a `String()`, `Error()`, `LogValue()`, `MarshalJSON` or `MarshalText` on a
+  type with such a field, exported or not, nested or wrapped, in a map key
+  (by the key's type or its name), or anywhere below it at run time (a
+  struct held in an `any` field or a map). Such a value is walked field by
+  field, or logged as `[unloggable value: <type>]`.
+- **A request's path or query.** A panic recovered while serving a request
+  (log line and Sentry tag) names the matched route pattern
+  (`/shared/{token}`, `/shared/`), never the path itself: a share, invite or
+  reset token in a path segment, or an OAuth `code`/`state` or `?token=` in
+  the query, is a live credential. Before routing, only the path's first
+  segment is kept (`/shared/{…}`).
+
+The limit: an unregistered value with no secret-like name and no recognisable
+shape cannot be told apart from ordinary text. That is why fleet registers
+every credential it loads.
 
 ## backup · restore — disaster recovery
 
