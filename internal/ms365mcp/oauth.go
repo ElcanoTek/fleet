@@ -190,10 +190,11 @@ func (h *Handler) clientIPFromRequest(r *http.Request) string {
 
 func (h *Handler) handleDynamicClientRegistration(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ClientName    string   `json:"client_name"`
-		RedirectURIs  []string `json:"redirect_uris"`
-		GrantTypes    []string `json:"grant_types"`
-		ResponseTypes []string `json:"response_types"`
+		ClientName              string   `json:"client_name"`
+		RedirectURIs            []string `json:"redirect_uris"`
+		GrantTypes              []string `json:"grant_types"`
+		ResponseTypes           []string `json:"response_types"`
+		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
@@ -213,6 +214,31 @@ func (h *Handler) handleDynamicClientRegistration(w http.ResponseWriter, r *http
 			})
 			return
 		}
+	}
+	for _, gt := range body.GrantTypes {
+		if gt != "authorization_code" && gt != "refresh_token" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_client_metadata",
+				"error_description": fmt.Sprintf("Unsupported grant_type %q (supported: authorization_code, refresh_token)", gt),
+			})
+			return
+		}
+	}
+	for _, rt := range body.ResponseTypes {
+		if rt != "code" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_client_metadata",
+				"error_description": fmt.Sprintf("Unsupported response_type %q (supported: code)", rt),
+			})
+			return
+		}
+	}
+	if authMethod := strings.TrimSpace(body.TokenEndpointAuthMethod); authMethod != "" && authMethod != "none" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":             "invalid_client_metadata",
+			"error_description": fmt.Sprintf("Unsupported token_endpoint_auth_method %q (supported: none)", authMethod),
+		})
+		return
 	}
 	if body.ClientName == "" {
 		body.ClientName = "MCP Client"

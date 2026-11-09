@@ -67,13 +67,15 @@ func NewHandler(cfg Config) *Handler {
 		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	catalogRaw := embeddedToolsCatalog
-	if len(bytes.TrimSpace(cfg.CatalogJSON)) > 0 {
-		catalogRaw = cfg.CatalogJSON
-	}
 	var specs []ToolSpec
-	if err := json.Unmarshal(catalogRaw, &specs); err != nil {
-		panic(fmt.Sprintf("ms365mcp: unmarshal tools catalog: %v", err))
+	if cfg.CatalogLoadError == nil {
+		catalogRaw := embeddedToolsCatalog
+		if len(bytes.TrimSpace(cfg.CatalogJSON)) > 0 {
+			catalogRaw = cfg.CatalogJSON
+		}
+		if err := json.Unmarshal(catalogRaw, &specs); err != nil {
+			panic(fmt.Sprintf("ms365mcp: unmarshal tools catalog: %v", err))
+		}
 	}
 	byName := make(map[string]ToolSpec, len(specs))
 	for i := range specs {

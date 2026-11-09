@@ -277,18 +277,9 @@
           "minimum": 0,
           "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
         },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
         },
         "orderby": {
           "anyOf": [
@@ -303,34 +294,6 @@
             }
           ],
           "description": "Sort expression, e.g. receivedDateTime desc"
-        },
-        "select": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
-        },
-        "expand": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
         },
         "chatId": {
           "type": "string",
@@ -371,12 +334,8 @@
     ],
     "queryParams": [
       "top",
-      "skip",
       "filter",
-      "count",
       "orderby",
-      "select",
-      "expand",
       "skiptoken"
     ],
     "headerParams": [],
@@ -828,23 +787,6 @@
           "minimum": 0,
           "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
         },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
-        "filter": {
-          "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
-        },
         "orderby": {
           "anyOf": [
             {
@@ -931,15 +873,11 @@
       "driveItem-id"
     ],
     "queryParams": [
-      "top",
-      "skip",
-      "search",
-      "filter",
-      "count",
-      "orderby",
-      "select",
       "expand",
-      "skiptoken"
+      "select",
+      "skiptoken",
+      "top",
+      "orderby"
     ],
     "headerParams": [],
     "bodyParams": [],
@@ -962,18 +900,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
-        "filter": {
-          "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
         },
         "select": {
           "anyOf": [
@@ -1063,9 +989,6 @@
     "queryParams": [
       "top",
       "skip",
-      "search",
-      "filter",
-      "count",
       "select",
       "orderby",
       "expand",
@@ -1092,10 +1015,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
         },
         "filter": {
           "type": "string",
@@ -1178,7 +1097,6 @@
     "queryParams": [
       "top",
       "skip",
-      "search",
       "filter",
       "count",
       "orderby",
@@ -1215,10 +1133,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
         },
         "filter": {
           "type": "string",
@@ -1315,7 +1229,6 @@
       "endDateTime",
       "top",
       "skip",
-      "search",
       "filter",
       "count",
       "orderby",
@@ -1349,22 +1262,9 @@
           ],
           "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
         },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
         },
         "orderby": {
           "anyOf": [
@@ -1379,20 +1279,6 @@
             }
           ],
           "description": "Sort expression, e.g. receivedDateTime desc"
-        },
-        "select": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
         },
         "expand": {
           "anyOf": [
@@ -1437,14 +1323,10 @@
     "method": "GET",
     "pathParams": [],
     "queryParams": [
-      "top",
-      "skip",
-      "search",
-      "filter",
-      "count",
-      "orderby",
-      "select",
       "expand",
+      "top",
+      "filter",
+      "orderby",
       "skiptoken"
     ],
     "headerParams": [],
@@ -2263,7 +2145,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "eventId"
       ]
     },
@@ -2329,7 +2210,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "eventId"
       ]
     },
@@ -2395,7 +2275,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "eventId"
       ]
     },
@@ -2475,10 +2354,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
         },
         "filter": {
           "type": "string",
@@ -2562,7 +2437,6 @@
       "includeHiddenFolders",
       "top",
       "skip",
-      "search",
       "filter",
       "count",
       "orderby",
@@ -3073,10 +2947,6 @@
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
         },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
@@ -3135,10 +3005,6 @@
           "type": "boolean",
           "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
-        "skiptoken": {
-          "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
-        },
         "includeHeaders": {
           "type": "boolean",
           "description": "Include response headers (including ETag) in the response metadata"
@@ -3167,13 +3033,11 @@
     "queryParams": [
       "top",
       "skip",
-      "search",
       "filter",
       "count",
       "orderby",
       "select",
-      "expand",
-      "skiptoken"
+      "expand"
     ],
     "headerParams": [],
     "bodyParams": [],
@@ -3278,7 +3142,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "messageId"
       ]
     },
@@ -3338,7 +3201,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "messageId"
       ]
     },
@@ -3398,7 +3260,6 @@
       },
       "additionalProperties": true,
       "required": [
-        "body",
         "messageId"
       ]
     },
@@ -4330,41 +4191,9 @@
     "inputSchema": {
       "type": "object",
       "properties": {
-        "top": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
-        },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
-        },
-        "orderby": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
         },
         "select": {
           "anyOf": [
@@ -4380,20 +4209,6 @@
           ],
           "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
         },
-        "expand": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
-        },
         "teamId": {
           "type": "string",
           "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
@@ -4401,10 +4216,6 @@
         "fetchAllPages": {
           "type": "boolean",
           "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
-        },
-        "skiptoken": {
-          "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4432,15 +4243,8 @@
       "team-id"
     ],
     "queryParams": [
-      "top",
-      "skip",
-      "search",
       "filter",
-      "count",
-      "orderby",
-      "select",
-      "expand",
-      "skiptoken"
+      "select"
     ],
     "headerParams": [],
     "bodyParams": [],
@@ -5048,64 +4852,9 @@
           "minimum": 0,
           "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
         },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
-        },
-        "orderby": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
-        },
-        "select": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
-        },
-        "expand": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
         },
         "teamId": {
           "type": "string",
@@ -5118,10 +4867,6 @@
         "name": {
           "type": "string",
           "description": "Case-insensitive text to match against each member's displayName and email. Applied after $select projection, so only fields you can see are matched. Without fetchAllPages only the fetched page is filtered, and @odata.count still reports the unfiltered total."
-        },
-        "skiptoken": {
-          "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -5150,14 +4895,7 @@
     ],
     "queryParams": [
       "top",
-      "skip",
-      "search",
-      "filter",
-      "count",
-      "orderby",
-      "select",
-      "expand",
-      "skiptoken"
+      "filter"
     ],
     "headerParams": [],
     "bodyParams": [],

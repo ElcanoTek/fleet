@@ -30,13 +30,13 @@ var (
 )
 
 func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, toolName string, args map[string]any) (any, bool, error) {
-	if res, isErr, handled, err := h.executeBuiltInUtilityTool(ctx, r, token, toolName, args); handled {
-		return res, isErr, err
-	}
-
 	spec, ok := h.toolsByName[toolName]
 	if !ok {
 		return map[string]any{"error": fmt.Sprintf("Unknown tool: %s", toolName)}, true, nil
+	}
+
+	if res, isErr, handled, err := h.executeBuiltInUtilityTool(ctx, r, token, toolName, args); handled {
+		return res, isErr, err
 	}
 
 	path, err := interpolateGraphPath(spec.PathPattern, args)
@@ -116,24 +116,6 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 			paramKey = "$" + qp
 		}
 		setQueryParamValue(query, paramKey, val)
-	}
-	for _, odataName := range []string{"top", "skip", "search", "filter", "count", "orderby", "select", "expand", "skiptoken", "startDateTime", "endDateTime"} {
-		if odataName == "search" && spec.Name == "list-chat-messages" {
-			continue
-		}
-		paramKey := "$" + odataName
-		if odataName == "startDateTime" || odataName == "endDateTime" {
-			paramKey = odataName
-			if spec.Name != "get-calendar-view" {
-				continue
-			}
-		}
-		if query.Get(paramKey) != "" {
-			continue
-		}
-		if val, exists := lookupQueryArg(args, odataName); exists {
-			setQueryParamValue(query, paramKey, val)
-		}
 	}
 
 	autoExpandedAttachments := false

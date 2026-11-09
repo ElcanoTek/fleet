@@ -4,6 +4,9 @@ package ms365mcp
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -90,6 +93,10 @@ type Config struct {
 	// <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json when present); falls back to
 	// the default Microsoft Graph v1.0 catalog when empty.
 	CatalogJSON []byte
+	// Non-nil when <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json exists (or stat
+	// fails with a non-ENOENT error) and cannot be read or parsed; causes
+	// Enabled() to fail closed.
+	CatalogLoadError error
 
 	// Test seams (defaulted automatically when empty/nil).
 	GraphBaseURL     string
@@ -170,11 +177,29 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		}
 	}
 
-	var catalogJSON []byte
+	var (
+		catalogJSON []byte
+		catalogErr  error
+	)
 	if clientDir := strings.TrimSpace(envreg.Get("FLEET_CLIENT_CONFIG_DIR")); clientDir != "" {
 		overridePath := filepath.Clean(filepath.Join(clientDir, "ms365_tools.json"))
-		if b, err := os.ReadFile(overridePath); err == nil && len(bytes.TrimSpace(b)) > 0 {
-			catalogJSON = b
+		if _, statErr := os.Stat(overridePath); statErr == nil {
+			b, readErr := os.ReadFile(overridePath)
+			switch {
+			case readErr != nil:
+				catalogErr = fmt.Errorf("read %s: %w", overridePath, readErr)
+			case len(bytes.TrimSpace(b)) == 0:
+				catalogErr = fmt.Errorf("read %s: empty catalog file", overridePath)
+			default:
+				var probe []ToolSpec
+				if unmarshalErr := json.Unmarshal(b, &probe); unmarshalErr != nil {
+					catalogErr = fmt.Errorf("parse %s: %w", overridePath, unmarshalErr)
+				} else {
+					catalogJSON = b
+				}
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			catalogErr = fmt.Errorf("stat %s: %w", overridePath, statErr)
 		}
 	}
 
@@ -198,6 +223,7 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		AttachmentURLTTLSeconds: ttlSeconds,
 		TrustedProxies:          httpmw.NewTrustedProxies(trustedIPs),
 		CatalogJSON:             catalogJSON,
+		CatalogLoadError:        catalogErr,
 		GraphBaseURL:            defaultGraphBaseURL,
 		AuthBaseURL:             defaultAuthBaseURL,
 		HTTPClient:              &http.Client{Timeout: 30 * time.Second},
@@ -215,7 +241,7 @@ func BrokerConfigFromEnv(fleetCfg *config.Config) Config {
 
 // Enabled reports whether the built-in Microsoft 365 MCP surface is active.
 func (c Config) Enabled() bool {
-	return strings.TrimSpace(c.ClientID) != ""
+	return strings.TrimSpace(c.ClientID) != "" && c.CatalogLoadError == nil
 }
 
 // IsMS365Path reports whether path is one of the HTTP paths served by the
