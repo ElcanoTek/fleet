@@ -25,13 +25,22 @@ type ParseTeamsURLResult struct {
 	Hint          string `json:"hint,omitempty"`
 }
 
+func isAllowedTeamsHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	switch h {
+	case "teams.microsoft.com", "teams.live.com", "gov.teams.microsoft.us", "dod.teams.microsoft.us":
+		return true
+	}
+	return strings.HasSuffix(h, ".teams.microsoft.com")
+}
+
 // ParseTeamsURL converts a Teams /meet/, /meetup-join/, or meetingrecap URL into
 // a joinWebUrl and extracted identifiers suitable for Microsoft Graph queries.
 func ParseTeamsURL(rawURL string) ParseTeamsURLResult {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || !isAllowedTeamsHost(parsed.Hostname()) {
 		return ParseTeamsURLResult{
-			Error: "Invalid URL provided",
+			Error: "Invalid Teams URL provided (must be an https://teams.microsoft.com URL)",
 			Hint:  "Provide a full Teams URL starting with https://teams.microsoft.com/...",
 		}
 	}

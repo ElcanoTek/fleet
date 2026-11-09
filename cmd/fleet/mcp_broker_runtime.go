@@ -553,7 +553,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_ACCOUNT_EVENTS_URL", "FLEET_ACCOUNT_EVENTS_SECRET",
 		"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
-		"MS365_MCP_CLIENT_ID", "MS365_MCP_TENANT_ID", "MS365_MCP_CLIENT_SECRET",
+		"MS365_MCP_CLIENT_ID", "MS365_MCP_TENANT_ID",
 		"MS365_MCP_PUBLIC_URL", "MS365_MCP_ALIASES", "MS365_MCP_ALLOWED_REDIRECT_URIS",
 		"MS365_MCP_ATTACHMENT_URL_TTL_S",
 		// Scheduled-task inputs the boot loader reads, and the canonical
@@ -608,10 +608,12 @@ func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, 
 	// this environment.
 	bundle.PinConnectorMetadata()
 	reloadExcluded := append(bundle.ConnectorEnvVarNames(), bundle.ConnectorAccountEnvVarNames()...)
+	reloadExcluded = append(reloadExcluded, "MS365_MCP_CLIENT_SECRET")
 	if err := cfg.ExcludeEnvVarsFromReload(reloadExcluded...); err != nil {
 		return fmt.Errorf("exclude connector environment from parent reload: %w", err)
 	}
 	keys := bundle.ConnectorEnvironmentKeys(os.Environ())
+	keys = append(keys, "MS365_MCP_CLIENT_SECRET")
 	var errs []error
 	for _, key := range keys {
 		// Hand the VALUE to the tool-output scrubber before it becomes

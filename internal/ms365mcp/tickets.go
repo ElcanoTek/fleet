@@ -304,29 +304,53 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// AttachmentOnlyHandler wraps h so only GET /attachment requests are served.
-// Used on the credential-owning mcp-broker child's private Unix domain socket.
+// AttachmentOnlyHandler wraps h so only /attachment, /authorize, and /token
+// requests are served on the credential-owning mcp-broker child's private Unix
+// domain socket.
 func AttachmentOnlyHandler(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL == nil || r.URL.Path != "/attachment" {
+		if r.URL == nil {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		switch r.URL.Path {
+		case "/attachment":
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+		case "/authorize":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if ip := strings.TrimSpace(r.Header.Get("X-Ms365-Client-IP")); ip != "" {
+				r = r.Clone(r.Context())
+				r.RemoteAddr = net.JoinHostPort(ip, "0")
+			}
+		case "/token":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+		default:
+			http.NotFound(w, r)
 			return
 		}
 		h.ServeHTTP(w, r)
 	})
 }
 
-// NewUnixSocketAttachmentProxy returns an http.Handler that forwards token-free
-// GET /attachment?t=<ticket> requests over a private Unix domain socket to the
-// credential-owning mcp-broker process and streams the response back.
+// NewUnixSocketAttachmentProxy returns an http.Handler that forwards
+// /attachment, /authorize, and /token requests over a private Unix domain
+// socket to the credential-owning mcp-broker process.
 func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return dialer.DialContext(ctx, "unix", socketPath)
@@ -336,22 +360,43 @@ func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ticketID := strings.TrimSpace(r.URL.Query().Get("t"))
-		if ticketID == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":             "invalid_ticket",
-				"error_description": "Missing attachment download ticket",
-			})
+		var targetURL string
+		switch r.URL.Path {
+		case "/attachment":
+			ticketID := strings.TrimSpace(r.URL.Query().Get("t"))
+			if ticketID == "" {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error":             "invalid_ticket",
+					"error_description": "Missing attachment download ticket",
+				})
+				return
+			}
+			targetURL = "http://unix/attachment?t=" + url.QueryEscape(ticketID)
+		case "/authorize", "/token":
+			targetURL = "http://unix" + r.URL.Path
+			if r.URL.RawQuery != "" {
+				targetURL += "?" + r.URL.RawQuery
+			}
+		default:
+			http.NotFound(w, r)
 			return
 		}
-		targetURL := "http://unix/attachment?t=" + url.QueryEscape(ticketID)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil) //nolint:gosec // targetURL dials the fixed broker Unix domain socket.
+		var body io.Reader
+		if r.Method == http.MethodPost && r.Body != nil {
+			body = io.LimitReader(r.Body, 1<<20)
+		}
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body) //nolint:gosec // targetURL dials the fixed broker Unix domain socket.
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"error":             "upstream_fetch_failed",
 				"error_description": err.Error(),
 			})
 			return
+		}
+		for _, hdr := range []string{"Content-Type", "Origin", "X-Ms365-Client-IP"} {
+			if val := r.Header.Get(hdr); val != "" {
+				req.Header.Set(hdr, val)
+			}
 		}
 		resp, err := client.Do(req) //nolint:gosec // targetURL dials the fixed broker Unix domain socket.
 		if err != nil {
@@ -363,7 +408,7 @@ func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 		}
 		defer resp.Body.Close()
 
-		for _, hdr := range []string{"Content-Type", "Content-Disposition", "Content-Length", "Cache-Control", "X-Content-Type-Options"} {
+		for _, hdr := range []string{"Location", "Content-Type", "Content-Disposition", "Content-Length", "Cache-Control", "X-Content-Type-Options"} {
 			if val := resp.Header.Get(hdr); val != "" {
 				w.Header().Set(hdr, val)
 			}

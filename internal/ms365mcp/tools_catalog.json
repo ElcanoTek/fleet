@@ -187,15 +187,10 @@
   },
   {
     "name": "list-chat-members",
-    "description": "List all conversation members in a chat or channel.\n\n\ud83d\udca1 TIP: Lists members of a chat. Each member has displayName, email, roles (owner/guest), and visibleHistoryStartDateTime. For meeting chats, use the chatInfo.threadId from get-calendar-event as the chat-id to see who participated in the meeting chat. Pass name to keep only members whose displayName or email contains that text (case-insensitive); use the returned userId in an @mention.",
+    "description": "List members of a Microsoft Teams chat. Optionally filter client-side by display name or email via the name parameter.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "top": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
-        },
         "skip": {
           "type": "integer",
           "minimum": 0,
@@ -204,10 +199,6 @@
         "search": {
           "type": "string",
           "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
-        "filter": {
-          "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
         },
         "count": {
           "type": "boolean",
@@ -226,34 +217,6 @@
             }
           ],
           "description": "Sort expression, e.g. receivedDateTime desc"
-        },
-        "select": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
-        },
-        "expand": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
         },
         "chatId": {
           "type": "string",
@@ -296,17 +259,7 @@
     "pathParams": [
       "chat-id"
     ],
-    "queryParams": [
-      "top",
-      "skip",
-      "search",
-      "filter",
-      "count",
-      "orderby",
-      "select",
-      "expand",
-      "skiptoken"
-    ],
+    "queryParams": [],
     "headerParams": [],
     "bodyParams": [],
     "contentType": "",

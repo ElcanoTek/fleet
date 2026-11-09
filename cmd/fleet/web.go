@@ -150,7 +150,12 @@ func wireMS365MCP(cfg *config.Config) (http.Handler, ms365mcp.Config) {
 }
 
 func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (http.Handler, ms365mcp.Config) {
-	ms365Cfg := ms365mcp.ConfigFromEnv(cfg)
+	var ms365Cfg ms365mcp.Config
+	if brokerAttachmentSocket != "" {
+		ms365Cfg = ms365mcp.ConfigFromEnv(cfg)
+	} else {
+		ms365Cfg = ms365mcp.BrokerConfigFromEnv(cfg)
+	}
 	if !ms365Cfg.Enabled() {
 		netguard.RegisterInProcessHandler("ms365mcp", nil, nil)
 		return nil, ms365Cfg

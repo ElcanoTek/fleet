@@ -239,6 +239,14 @@ func (h *Handler) handleDynamicClientRegistration(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AttachmentProxy != nil {
+		cloned := r.Clone(r.Context())
+		if ip := h.clientIPFromRequest(r); ip != "" {
+			cloned.Header.Set("X-Ms365-Client-IP", ip)
+		}
+		h.cfg.AttachmentProxy.ServeHTTP(w, cloned)
+		return
+	}
 	q := r.URL.Query()
 	responseType := q.Get("response_type")
 	redirectURI := q.Get("redirect_uri")
@@ -333,6 +341,10 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AttachmentProxy != nil {
+		h.cfg.AttachmentProxy.ServeHTTP(w, r)
+		return
+	}
 	vals, err := parseTokenRequestParams(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{

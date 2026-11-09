@@ -102,6 +102,9 @@ func (h *Handler) executeBuiltInUtilityTool(ctx context.Context, r *http.Request
 }
 
 func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) (url.Values, bool) {
+	if toolName == "list-chat-members" {
+		return url.Values{}, false
+	}
 	query := url.Values{}
 	for _, qp := range spec.QueryParams {
 		val, exists := lookupQueryArg(args, qp)

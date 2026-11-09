@@ -119,15 +119,14 @@ func newDefaultStreamHTTPClient() *http.Client {
 	}
 }
 
-// ConfigFromEnv builds Config from registered environment variables and the
-// loaded Fleet config.
+// ConfigFromEnv builds the parent-safe Config from registered environment
+// variables and the loaded Fleet config without reading MS365_MCP_CLIENT_SECRET.
 func ConfigFromEnv(fleetCfg *config.Config) Config {
 	clientID := strings.TrimSpace(envreg.Get("MS365_MCP_CLIENT_ID"))
 	tenantID := strings.TrimSpace(envreg.Get("MS365_MCP_TENANT_ID"))
 	if tenantID == "" {
 		tenantID = defaultTenantID
 	}
-	clientSecret := strings.TrimSpace(envreg.Get("MS365_MCP_CLIENT_SECRET"))
 
 	var fleetPublicURL string
 	if fleetCfg != nil {
@@ -193,7 +192,6 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 	return Config{
 		ClientID:                clientID,
 		TenantID:                tenantID,
-		ClientSecret:            clientSecret,
 		PublicURL:               publicURL,
 		Aliases:                 aliases,
 		AllowedRedirectURIs:     redirectURIs,
@@ -205,6 +203,14 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		HTTPClient:              &http.Client{Timeout: 30 * time.Second},
 		StreamHTTPClient:        newDefaultStreamHTTPClient(),
 	}
+}
+
+// BrokerConfigFromEnv builds the credential-owning broker's Config, including
+// the optional MS365_MCP_CLIENT_SECRET.
+func BrokerConfigFromEnv(fleetCfg *config.Config) Config {
+	cfg := ConfigFromEnv(fleetCfg)
+	cfg.ClientSecret = strings.TrimSpace(envreg.Get("MS365_MCP_CLIENT_SECRET"))
+	return cfg
 }
 
 // Enabled reports whether the built-in Microsoft 365 MCP surface is active.
