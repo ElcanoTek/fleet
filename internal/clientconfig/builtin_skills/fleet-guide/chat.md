@@ -115,10 +115,9 @@ Launchpad**; once you have some, it lists them (name, its chat, cadence, and
 **Paused** when paused) — click one to open its chat — with **New patrol** at
 the bottom to open the Launchpad. The Launchpad is a guided wizard that takes
 you from nothing set up to a running patrol.
-It starts with **Why patrol?**, a short "expanding mind" ladder — small brain
-to galaxy brain — from chatting, to scheduled reports, to patrols that analyze
-and decide, to letting the assistant act on your behalf, with a note on
-Dr. Ethan Mollick's "capability overhang" and the suggested path:
+It starts with **Why patrol?**, a four-step Expanding Brain ladder from
+chatting, to scheduled reports, to patrols that analyze and decide, to letting
+the assistant act on your behalf, plus the trust path:
 start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
 you trust its calls. **Show me the plan** then lists the five steps before you
 take them:
