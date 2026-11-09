@@ -263,7 +263,15 @@ func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) 
 	var reqBody any
 	if len(spec.BodyParams) == 1 && spec.BodyParams[0] == "body" {
 		if b, ok := args["body"]; ok {
-			reqBody = b
+			if bMap, isMap := b.(map[string]any); isMap {
+				normalized := make(map[string]any, len(bMap))
+				for k, v := range bMap {
+					normalized[normalizeActionFieldKey(k)] = v
+				}
+				reqBody = normalized
+			} else {
+				reqBody = b
+			}
 		} else if spec.Method == "POST" {
 			reqBody = map[string]any{}
 		}
@@ -298,6 +306,7 @@ var actionFieldAliases = map[string]string{
 	"ToRecipients":    "toRecipients",
 	"DestinationId":   "destinationId",
 	"ProposedNewTime": "proposedNewTime",
+	"SaveToSentItems": "saveToSentItems",
 }
 
 func normalizeActionFieldKey(k string) string {
@@ -902,7 +911,10 @@ func isMailMessageTool(toolName string) bool {
 }
 
 func isMailEndpoint(pathPattern string) bool {
-	return strings.Contains(pathPattern, "/messages") || strings.Contains(pathPattern, "/mailFolders")
+	if strings.Contains(pathPattern, "/chats") || strings.Contains(pathPattern, "/teams") {
+		return false
+	}
+	return strings.Contains(pathPattern, "/messages") || strings.Contains(pathPattern, "/mailFolders") || strings.Contains(pathPattern, "/sendMail")
 }
 
 func normalizeMailSearchQuery(raw string) string {

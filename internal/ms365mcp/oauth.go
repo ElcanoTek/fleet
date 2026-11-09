@@ -600,8 +600,10 @@ func addToolScopes(needed map[string]bool, t ToolSpec) {
 	isWrite := t.Method != "" && !strings.EqualFold(t.Method, http.MethodGet)
 	p := t.PathPattern
 	switch {
-	case t.Name == "get-mail-attachment-content":
+	case t.Name == "get-mail-attachment-content" || t.Name == "read-mail-text":
 		needed["Mail.Read"] = true
+	case t.Name == "search-query" || strings.HasPrefix(p, "/search/"):
+		addSearchToolScopes(needed)
 	case isMailEndpoint(p):
 		addMailToolScopes(needed, p, isWrite)
 	case strings.HasPrefix(p, "/me/events") || strings.HasPrefix(p, "/me/calendar") || strings.HasPrefix(p, "/me/calendars"):
@@ -645,6 +647,17 @@ func addMailToolScopes(needed map[string]bool, p string, isWrite bool) {
 	} else if isWrite {
 		needed["Mail.ReadWrite"] = true
 	}
+}
+
+func addSearchToolScopes(needed map[string]bool) {
+	needed["Mail.Read"] = true
+	needed["Calendars.Read"] = true
+	needed["Files.Read"] = true
+	needed["Files.Read.All"] = true
+	needed["Sites.Read.All"] = true
+	needed["Chat.Read"] = true
+	needed["ChannelMessage.Read.All"] = true
+	needed["People.Read"] = true
 }
 
 func addChatToolScopes(needed map[string]bool, name string, isWrite bool) {

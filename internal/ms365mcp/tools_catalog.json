@@ -3599,7 +3599,7 @@
         "body": {
           "type": "object",
           "properties": {
-            "SaveToSentItems": {
+            "saveToSentItems": {
               "type": [
                 "boolean",
                 "null"
