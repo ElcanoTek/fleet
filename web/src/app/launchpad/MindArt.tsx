@@ -21,11 +21,11 @@ export function MindArt({ level, className = "" }: { level: MindLevel; className
       src={MIND_IMAGES[level]}
       alt=""
       width={160}
-      height={112}
+      height={160}
       loading="eager"
       decoding="async"
       draggable={false}
-      className={`select-none rounded-[var(--radius-md)] object-cover ${className}`}
+      className={`aspect-square select-none rounded-[var(--radius-md)] border border-white/10 bg-[#080b1a] object-contain ${className}`}
       data-testid="launchpad-mind-art"
       data-level={level}
     />

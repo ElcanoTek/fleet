@@ -980,14 +980,14 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           return (
             <li
               key={r.title}
-              className={`grid grid-cols-[5.75rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
+              className={`grid grid-cols-[4.75rem_1fr] items-center gap-3.5 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
                 top
                   ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_18%,transparent),transparent_70%)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
               }`}
             >
               <span aria-hidden="true" className="flex justify-center">
-                <MindArt level={(i + 1) as MindLevel} className="h-[4.25rem] w-[5.75rem]" />
+                <MindArt level={(i + 1) as MindLevel} className="size-[4.75rem]" />
               </span>
               <span className="min-w-0">
                 <span className="block text-[0.9rem] font-semibold text-[var(--color-text-primary)]">{r.title}</span>
