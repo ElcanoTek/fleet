@@ -17,7 +17,7 @@ import (
 const (
 	defaultTenantID                = "common"
 	defaultAttachmentURLTTLSeconds = 300
-	minAttachmentURLTTLSeconds     = 30
+	minAttachmentURLTTLSeconds     = 1
 	maxAttachmentURLTTLSeconds     = 3600
 	defaultGraphBaseURL            = "https://graph.microsoft.com/v1.0"
 	defaultAuthBaseURL             = "https://login.microsoftonline.com"
@@ -68,6 +68,18 @@ type Config struct {
 	Aliases                 []string
 	AllowedRedirectURIs     []string
 	AttachmentURLTTLSeconds int
+
+	// When true (set on the parent web server when the credential-owning
+	// mcp-broker child process is active), unauthenticated POST /mcp probes
+	// still return 401 + WWW-Authenticate for RFC 9728 discovery, while
+	// bearer-authenticated POST /mcp requests are refused so Graph tokens never
+	// execute in the parent process.
+	DisableAuthenticatedMCP bool
+
+	// Optional token-free proxy for GET /attachment?t=<ticket> that forwards
+	// ticket redemption to the credential-owning mcp-broker child process over a
+	// private Unix domain socket.
+	AttachmentProxy http.Handler
 
 	// Test seams (defaulted automatically when empty/nil).
 	GraphBaseURL     string

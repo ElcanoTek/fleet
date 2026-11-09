@@ -1,11 +1,13 @@
 package ms365mcp
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -214,6 +216,10 @@ func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if h.cfg.AttachmentProxy != nil {
+		h.cfg.AttachmentProxy.ServeHTTP(w, r)
+		return
+	}
 	ticket, ok := h.tickets.Redeem(ticketID)
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{
@@ -296,4 +302,73 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// AttachmentOnlyHandler wraps h so only GET /attachment requests are served.
+// Used on the credential-owning mcp-broker child's private Unix domain socket.
+func AttachmentOnlyHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL == nil || r.URL.Path != "/attachment" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// NewUnixSocketAttachmentProxy returns an http.Handler that forwards token-free
+// GET /attachment?t=<ticket> requests over a private Unix domain socket to the
+// credential-owning mcp-broker process and streams the response back.
+func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "unix", socketPath)
+			},
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ticketID := strings.TrimSpace(r.URL.Query().Get("t"))
+		if ticketID == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":             "invalid_ticket",
+				"error_description": "Missing attachment download ticket",
+			})
+			return
+		}
+		targetURL := "http://unix/attachment?t=" + url.QueryEscape(ticketID)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":             "upstream_fetch_failed",
+				"error_description": err.Error(),
+			})
+			return
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":             "upstream_fetch_failed",
+				"error_description": err.Error(),
+			})
+			return
+		}
+		defer resp.Body.Close()
+
+		for _, hdr := range []string{"Content-Type", "Content-Disposition", "Content-Length", "Cache-Control", "X-Content-Type-Options"} {
+			if val := resp.Header.Get(hdr); val != "" {
+				w.Header().Set(hdr, val)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
 }

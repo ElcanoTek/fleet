@@ -26,9 +26,10 @@ OAuth and MCP routes on the public HTTP tree (`buildPublicRouter`):
 
 ## Security and architectural boundaries
 
-1. **Credentials and capability URLs stay host-side**:
-   - Per-user Microsoft Graph OAuth tokens stay sealed in `chat.remote_mcp_servers` and are used only by the host-side MCP client and `/attachment` ticket broker.
-   - Pre-authenticated Microsoft Graph `@microsoft.graph.downloadUrl` capability URLs are stripped from tool results (`cleanODataMetadata`) and are never returned by `get-download-url`. All file and attachment downloads go through short-lived, single-use host-side `/attachment?t=<ticket>` URLs (`MS365_MCP_ATTACHMENT_URL_TTL_S`, default 300s).
+1. **Credentials and capability URLs stay in the credential-owning broker (`fleet mcp-broker`)**:
+   - Per-user Microsoft Graph OAuth tokens stay sealed in `chat.remote_mcp_servers` and are unsealed inside `fleet mcp-broker`, which registers its own in-process `ms365mcp.Handler` (`cmd/fleet/mcp_broker.go`) so `initialize`, `tools/list`, `tools/call`, and `refresh_token` exchanges run inside the credential-owning child without dialing loopback or sending Bearer tokens into the parent `fleet` process.
+   - When `mcp-broker` is active, the parent web server sets `DisableAuthenticatedMCP: true` (returning `401 + WWW-Authenticate` on unauthenticated `POST /mcp` discovery probes while refusing bearer-authenticated `POST /mcp` calls) and proxies token-free `GET /attachment?t=<ticket>` requests over a private Unix domain socket (`cmd/fleet/mcp_broker_runtime.go`, `NewUnixSocketAttachmentProxy`) to `fleet mcp-broker`.
+   - Pre-authenticated Microsoft Graph `@microsoft.graph.downloadUrl` capability URLs are stripped from tool results (`cleanODataMetadata`) and are never returned by `get-download-url`. All file and attachment downloads go through short-lived, single-use host-side `/attachment?t=<ticket>` URLs (`MS365_MCP_ATTACHMENT_URL_TTL_S`, default 300s, range 1..3600s).
 2. **Mandatory S256 PKCE on authorization code flows**:
    - `/authorize` requires `code_challenge` with `code_challenge_method=S256`, and `/token` (`grant_type=authorization_code`) requires a `code_verifier` matching a pending challenge in `pkceStore`. Unbound authorization codes are rejected with `invalid_request` / `invalid_grant`.
 3. **Streaming in-process dispatch (`internal/netguard/inprocess.go`)**:
@@ -38,6 +39,8 @@ OAuth and MCP routes on the public HTTP tree (`buildPublicRouter`):
 4. **Dedicated streaming client for `/attachment`**:
    - Ordinary Graph JSON API calls use a 30-second client timeout (`Config.HTTPClient`).
    - `/attachment` upstream fetches use `Config.StreamHTTPClient`, which bounds TCP dial (10s), TLS handshake (10s), and response headers (30s) without a whole-exchange timeout so multi-minute attachment downloads are not cut off mid-stream.
+5. **Approval gating on all mutating Microsoft 365 tools**:
+   - Every mutating tool in `internal/ms365mcp/tools_catalog.json` (`readOnlyHint: false` — mail sends/replies/forwards/drafts/moves, calendar event creation/updates/deletes/RSVPs, Teams chat/channel sends and replies, and To Do task creation/updates) is marked `"critical": true` and published with `"critical": true` in `tools/list` so Fleet's MCP broker and per-run `runCriticalTools` gate require human approval in interactive chat and `confirm_audit` in scheduled runs.
 
 ## Tool surface (57 tools)
 

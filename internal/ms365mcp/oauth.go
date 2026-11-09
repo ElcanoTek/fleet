@@ -76,20 +76,32 @@ func (p *pkceStore) put(state, clientCodeChallenge, serverCodeVerifier, scope st
 	})
 }
 
-func (p *pkceStore) consumeMatchingVerifier(clientCodeVerifier string) (string, string, bool) {
+func (p *pkceStore) lookupMatchingVerifier(clientCodeVerifier string) (string, string, bool) {
 	clientChallenge := computeS256Challenge(clientCodeVerifier)
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.sweepLocked(now)
-	for i, e := range p.entries {
+	for _, e := range p.entries {
 		if e.clientCodeChallenge == clientChallenge {
-			p.entries = append(p.entries[:i], p.entries[i+1:]...)
 			return e.serverCodeVerifier, e.scope, true
 		}
 	}
 	return "", "", false
+}
+
+func (p *pkceStore) deleteMatchingVerifier(clientCodeVerifier string) {
+	clientChallenge := computeS256Challenge(clientCodeVerifier)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for i, e := range p.entries {
+		if e.clientCodeChallenge == clientChallenge {
+			p.entries = append(p.entries[:i], p.entries[i+1:]...)
+			return
+		}
+	}
 }
 
 func generatePKCEVerifier() (string, error) {
@@ -300,7 +312,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		serverVerifier, authorizedScope, ok := h.pkce.consumeMatchingVerifier(codeVerifier)
+		serverVerifier, authorizedScope, ok := h.pkce.lookupMatchingVerifier(codeVerifier)
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error":             "invalid_grant",
@@ -351,6 +363,9 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			"error_description": err.Error(),
 		})
 		return
+	}
+	if grantType == "authorization_code" {
+		h.pkce.deleteMatchingVerifier(codeVerifier)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, status, payload)
@@ -468,8 +483,11 @@ func filterAllowedScopes(raw string) string {
 }
 
 func isRedirectURIAllowed(redirectURI string, patterns []string) bool {
+	if strings.Contains(redirectURI, "#") {
+		return false
+	}
 	parsed, err := url.Parse(redirectURI)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return false
 	}
 	for _, rawPattern := range patterns {
@@ -486,6 +504,9 @@ func isRedirectURIAllowed(redirectURI string, patterns []string) bool {
 			if !strings.EqualFold(parsed.Scheme, pp.Scheme) || !strings.EqualFold(parsed.Hostname(), pp.Hostname()) {
 				continue
 			}
+			if parsed.RawQuery != pp.RawQuery {
+				continue
+			}
 			afterPort := ""
 			if idx := strings.Index(pattern, ":*"); idx >= 0 {
 				afterPort = pattern[idx+2:]
@@ -496,13 +517,14 @@ func isRedirectURIAllowed(redirectURI string, patterns []string) bool {
 			continue
 		}
 		pp, err := url.Parse(pattern)
-		if err != nil {
+		if err != nil || pp.Fragment != "" {
 			continue
 		}
 		if strings.EqualFold(parsed.Scheme, pp.Scheme) &&
 			strings.EqualFold(parsed.Hostname(), pp.Hostname()) &&
 			effectivePort(parsed) == effectivePort(pp) &&
-			parsed.Path == pp.Path {
+			parsed.Path == pp.Path &&
+			parsed.RawQuery == pp.RawQuery {
 			return true
 		}
 	}

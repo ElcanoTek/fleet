@@ -1010,6 +1010,7 @@ func run() error {
 	webServer, err := buildWebServer(cfg, backendHandlers{
 		chat: chatRoutes, orch: orchHandler,
 		chatListener: chatHandler, orchListener: orchHandlerWithProbes,
+		ms365AttachmentSocket: mcpRuntime.ms365AttachmentSocketPath(),
 	})
 	if err != nil {
 		return err

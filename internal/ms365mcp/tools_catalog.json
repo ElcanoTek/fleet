@@ -106,7 +106,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-chat",
@@ -187,7 +188,7 @@
   },
   {
     "name": "list-chat-members",
-    "description": "List all conversation members in a chat or channel.\n\n\ud83d\udca1 TIP: Lists members of a chat. Each member has displayName, email, roles (owner/guest), and visibleHistoryStartDateTime. For meeting chats, use the chatInfo.threadId from get-online-meeting as the chat-id to see who participated in the meeting chat. Pass name to keep only members whose displayName or email contains that text (case-insensitive); use the returned userId in an @mention.",
+    "description": "List all conversation members in a chat or channel.\n\n\ud83d\udca1 TIP: Lists members of a chat. Each member has displayName, email, roles (owner/guest), and visibleHistoryStartDateTime. For meeting chats, use the chatInfo.threadId from get-calendar-event as the chat-id to see who participated in the meeting chat. Pass name to keep only members whose displayName or email contains that text (case-insensitive); use the returned userId in an @mention.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -315,7 +316,7 @@
   },
   {
     "name": "list-chat-messages",
-    "description": "Retrieve the list of messages in a chat. This method supports federation. To list chat messages in application context, the request must be made from the tenant that the channel owner belongs to (represented by the tenantId property on the channel).\n\n\ud83d\udca1 TIP: Lists messages in a chat. $top is capped at 50 (higher values return 400) and $orderby accepts only descending order on createdDateTime or lastModifiedDateTime - ascending is rejected. Meeting chats mostly hold system events; transcripts are not available here, use list-meeting-transcripts instead.",
+    "description": "Retrieve the list of messages in a chat. This method supports federation. To list chat messages in application context, the request must be made from the tenant that the channel owner belongs to (represented by the tenantId property on the channel).\n\n\ud83d\udca1 TIP: Lists messages in a chat. $top is capped at 50 (higher values return 400) and $orderby accepts only descending order on createdDateTime or lastModifiedDateTime - ascending is rejected. Meeting chats mostly hold system events; transcripts are not available here, use list-chat-messages instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -560,7 +561,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-chat-message",
@@ -774,7 +776,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-drive-item",
@@ -991,7 +994,7 @@
   },
   {
     "name": "search-onedrive-files",
-    "description": "Search the hierarchy of items for items matching a query.\nYou can search within a folder hierarchy, a whole drive, or files shared with the current user.\n\n\ud83d\udca1 TIP: Searches for files in a drive by name or content. The q parameter searches file names, metadata, and file content. Returns matching driveItems with id, name, webUrl, size, lastModifiedDateTime. Use list-drives first to get the drive-id.",
+    "description": "Search the hierarchy of items for items matching a query.\nYou can search within a folder hierarchy, a whole drive, or files shared with the current user.\n\n\ud83d\udca1 TIP: Searches for files in a drive by name or content. The q parameter searches file names, metadata, and file content. Returns matching driveItems with id, name, webUrl, size, lastModifiedDateTime. Use search-query or get-drive-item to locate drive items.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1096,7 +1099,7 @@
       "destructiveHint": false,
       "openWorldHint": true
     },
-    "pathPattern": "/drives/{drive-id}/search(q='{q}')",
+    "pathPattern": "/drives/{drive-id}/root/search(q='{q}')",
     "method": "GET",
     "pathParams": [
       "drive-id",
@@ -1236,7 +1239,7 @@
   },
   {
     "name": "get-calendar-view",
-    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the user's default calendar,\nor from some other calendar of the user.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range for the default calendar. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2024-01-01T00:00:00Z). Use get-specific-calendar-view if you need a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep the events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness; neither property is filterable (isOnlineMeeting returns 400 ErrorInvalidProperty). To search by subject, use $filter=contains(subject,'keyword'). Teams meetings expose their join link as onlineMeeting/joinUrl; the event resource has no joinWebUrl property. Pass that joinUrl to list-online-meetings as $filter=JoinWebUrl eq '{url}' to reach transcripts.",
+    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the user's default calendar,\nor from some other calendar of the user.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range for the default calendar. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2024-01-01T00:00:00Z). Use get-calendar-view if you need a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep the events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness; neither property is filterable (isOnlineMeeting returns 400 ErrorInvalidProperty). To search by subject, use $filter=contains(subject,'keyword'). Teams meetings expose their join link as onlineMeeting/joinUrl; the event resource has no joinWebUrl property. Pass that joinUrl to get-calendar-event as $filter=JoinWebUrl eq '{url}' to reach transcripts.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1812,7 +1815,7 @@
   },
   {
     "name": "create-calendar-event",
-    "description": "Create (schedule) a new calendar event \u2014 a meeting or appointment \u2014 on the user's calendar. Times use nested objects, not flat fields: start: {dateTime, timeZone}, end: {dateTime, timeZone}. Do NOT use startDateTime/startTimeZone. For one-off events, UTC is simplest (e.g. 3:30 PM AEDT = 04:30 UTC). For recurring events, use the organizer's own time zone name instead \u2014 Graph resolves DST against the zone in start.timeZone, so UTC drifts after DST changes. Get the zone from get-mailbox-settings, or validate one with list-supported-time-zones instead of guessing from memory. Set subject, location, body, and attendees; supports online meetings and recurrence.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-users tool to find the email address of the recipients.",
+    "description": "Create (schedule) a new calendar event \u2014 a meeting or appointment \u2014 on the user's calendar. Times use nested objects, not flat fields: start: {dateTime, timeZone}, end: {dateTime, timeZone}. Do NOT use startDateTime/startTimeZone. For one-off events, UTC is simplest (e.g. 3:30 PM AEDT = 04:30 UTC). For recurring events, use the organizer's own time zone name instead \u2014 Graph resolves DST against the zone in start.timeZone, so UTC drifts after DST changes. Get the zone from get-calendar-view, or validate one with IANA or Windows time zone names instead of guessing from memory. Set subject, location, body, and attendees; supports online meetings and recurrence.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1966,7 +1969,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-calendar-event",
@@ -2055,7 +2059,7 @@
   },
   {
     "name": "update-calendar-event",
-    "description": "Update an event on the default calendar. Requires eventId (the event's ID from get-calendar-view or list-calendar-events). Times use nested {dateTime, timeZone} objects. UTC is simplest for one-off events; for recurring events use the organizer's own time zone (from get-mailbox-settings or list-supported-time-zones) instead of UTC, since Graph resolves DST against that zone.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-users tool to find the email address of the recipients. WARNING: Setting attendees replaces the entire attendee list \u2014 include all attendees, not just new ones.",
+    "description": "Update an event on the default calendar. Requires eventId (the event's ID from get-calendar-view or list-calendar-events). Times use nested {dateTime, timeZone} objects. UTC is simplest for one-off events; for recurring events use the organizer's own time zone (from get-calendar-view or IANA or Windows time zone names) instead of UTC, since Graph resolves DST against that zone.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients. WARNING: Setting attendees replaces the entire attendee list \u2014 include all attendees, not just new ones.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2216,11 +2220,12 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "delete-calendar-event",
-    "description": "Removes the specified event from the containing calendar.  If the event is a meeting, deleting the event on the organizer's calendar sends a cancellation message to the meeting attendees.\n\n\ud83d\udca1 TIP: Deleting a seriesMaster deletes ALL occurrences of the recurring event. To cancel a single occurrence, delete that specific instance ID from list-calendar-event-instances.",
+    "description": "Removes the specified event from the containing calendar.  If the event is a meeting, deleting the event on the organizer's calendar sends a cancellation message to the meeting attendees.\n\n\ud83d\udca1 TIP: Deleting a seriesMaster deletes ALL occurrences of the recurring event. To cancel a single occurrence, delete that specific instance ID from get-calendar-view.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2264,7 +2269,8 @@
     "bodyParams": [],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "accept-calendar-event",
@@ -2327,7 +2333,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "decline-calendar-event",
@@ -2393,7 +2400,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "tentatively-accept-calendar-event",
@@ -2459,7 +2467,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "list-joined-teams",
@@ -3020,7 +3029,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-mail-message",
@@ -3342,7 +3352,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "create-reply-draft",
@@ -3402,7 +3413,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "create-reply-all-draft",
@@ -3462,7 +3474,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "forward-mail-message",
@@ -3525,7 +3538,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "move-mail-message",
@@ -3579,7 +3593,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "reply-mail-message",
@@ -3639,7 +3654,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "reply-all-mail-message",
@@ -3699,7 +3715,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "send-draft-message",
@@ -3741,11 +3758,12 @@
     "bodyParams": [],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "send-mail",
-    "description": "Send the message specified in the request body using either JSON or MIME format. When using JSON format, you can include a file attachment in the same sendMail action call. When using MIME format: This method saves the message in the Sent Items folder. Alternatively, create a draft message to send later. To learn more about the steps involved in the backend before a mail is delivered to recipients, see here.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-users tool to find the email address of the recipients.",
+    "description": "Send the message specified in the request body using either JSON or MIME format. When using JSON format, you can include a file attachment in the same sendMail action call. When using MIME format: This method saves the message in the Sent Items folder. Alternatively, create a draft message to send later. To learn more about the steps involved in the backend before a mail is delivered to recipients, see here.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3795,11 +3813,12 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "list-todo-task-lists",
-    "description": "Get a list of the todoTaskList objects and their properties.\n\n\ud83d\udca1 TIP: If it returns only 'Flagged Emails', use list-todo-task-lists-delta instead.",
+    "description": "Get a list of the todoTaskList objects and their properties.\n\n\ud83d\udca1 TIP: If it returns only 'Flagged Emails', use list-todo-task-lists instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -4094,11 +4113,12 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "update-todo-task",
-    "description": "Update the properties of a todoTask object.\n\n\ud83d\udca1 TIP: Updates a Microsoft To Do task. Use this to mark a to-do item complete or done (body: { status: \"completed\" }), reopen it (status: \"notStarted\"), rename it (title), or change its due date (dueDateTime), reminder (reminderDateTime), importance, or notes (body). Requires todoTaskListId from list-todo-task-lists and todoTaskId from list-todo-tasks. Steps (checklistItems) can't be changed here: Graph rejects checklistItems in a PATCH on the task with 400. Use create-todo-checklist-item, update-todo-checklist-item, or delete-todo-checklist-item instead.",
+    "description": "Update the properties of a todoTask object.\n\n\ud83d\udca1 TIP: Updates a Microsoft To Do task. Use this to mark a to-do item complete or done (body: { status: \"completed\" }), reopen it (status: \"notStarted\"), rename it (title), or change its due date (dueDateTime), reminder (reminderDateTime), importance, or notes (body). Requires todoTaskListId from list-todo-task-lists and todoTaskId from list-todo-tasks. Steps (checklistItems) can't be changed here: Graph rejects checklistItems in a PATCH on the task with 400. Use update-todo-task instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -4240,7 +4260,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "search-query",
@@ -4781,7 +4802,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "get-channel-message",
@@ -5077,7 +5099,8 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": false,
+    "critical": true
   },
   {
     "name": "list-team-members",
@@ -5209,7 +5232,7 @@
   },
   {
     "name": "parse-teams-url",
-    "description": "Converts any Teams meeting URL format (short /meet/, full /meetup-join/, or recap ?threadId=) into a standard joinWebUrl. Use this before list-online-meetings when the user provides a recap or short URL.",
+    "description": "Converts any Teams meeting URL format (short /meet/, full /meetup-join/, or recap ?threadId=) into a standard joinWebUrl. Use this before get-calendar-view or get-calendar-event when the user provides a recap or short URL.",
     "inputSchema": {
       "type": "object",
       "properties": {

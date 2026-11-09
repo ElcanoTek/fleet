@@ -636,7 +636,7 @@ var table = []Entry{
 	{Name: "MS365_MCP_ALLOWED_REDIRECT_URIS", Group: GroupIntegrations, Scope: ScopeServer, Type: TypeCSV, Default: "(<public_url>/api/oauth/mcp/callback and each alias callback)",
 		Description: "Additional comma-separated redirect URIs permitted by the Microsoft 365 /authorize endpoint."},
 	{Name: "MS365_MCP_ATTACHMENT_URL_TTL_S", Group: GroupIntegrations, Scope: ScopeServer, Type: TypeInt, Default: "300",
-		Knob:        &Knob{Min: b(1), ReadBy: "internal/ms365mcp (attachment download ticket TTL)"},
+		Knob:        &Knob{Min: b(1), Max: b(3600), ReadBy: "internal/ms365mcp (attachment download ticket TTL)"},
 		Description: "Lifetime in seconds of single-use attachment download tickets minted by Microsoft 365 mail and drive tools."},
 
 	// ───────────────────────────── Notifications and Web Push ─────────────────────────────

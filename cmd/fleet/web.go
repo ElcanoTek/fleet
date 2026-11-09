@@ -43,7 +43,7 @@ func webAddr() (addr string, enabled bool) {
 // (buildPublicRouter) over the browser tier and the in-process chat and
 // orchestrator handlers. It returns nil when FLEET_WEB_ADDR=off.
 func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error) {
-	ms365Handler, ms365Cfg := wireMS365MCP(cfg)
+	ms365Handler, ms365Cfg := wireMS365MCPWithBroker(cfg, b.ms365AttachmentSocket)
 	if ms365Handler != nil {
 		slog.Info("web: built-in Microsoft 365 MCP enabled",
 			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
@@ -97,6 +97,11 @@ type backendHandlers struct {
 	// chatListener and orchListener are the handlers of the chat and
 	// orchestrator listeners; nil means chat and orch themselves.
 	chatListener, orchListener http.Handler
+	// ms365AttachmentSocket is the private Unix domain socket path of the
+	// credential-owning mcp-broker child process for token-free /attachment
+	// ticket redemption. When set, the parent web server refuses authenticated
+	// POST /mcp calls and proxies GET /attachment?t=<ticket> to the child.
+	ms365AttachmentSocket string
 }
 
 // surface is the public tree's input once the gateway exists.
@@ -141,10 +146,18 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 // MCP handler when MS365_MCP_CLIENT_ID is configured and registers (or clears)
 // the in-process netguard dispatch hook.
 func wireMS365MCP(cfg *config.Config) (http.Handler, ms365mcp.Config) {
+	return wireMS365MCPWithBroker(cfg, "")
+}
+
+func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (http.Handler, ms365mcp.Config) {
 	ms365Cfg := ms365mcp.ConfigFromEnv(cfg)
 	if !ms365Cfg.Enabled() {
 		netguard.RegisterInProcessHandler("ms365mcp", nil, nil)
 		return nil, ms365Cfg
+	}
+	if brokerAttachmentSocket != "" {
+		ms365Cfg.DisableAuthenticatedMCP = true
+		ms365Cfg.AttachmentProxy = ms365mcp.NewUnixSocketAttachmentProxy(brokerAttachmentSocket)
 	}
 	h := ms365mcp.NewHandler(ms365Cfg)
 	netguard.RegisterInProcessHandler("ms365mcp", ms365Cfg.MatchesInProcessURL, h)

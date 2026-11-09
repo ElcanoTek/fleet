@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
+	"github.com/ElcanoTek/fleet/internal/ms365mcp"
 	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 )
@@ -29,11 +32,19 @@ const mcpBrokerBootTimeout = 60 * time.Second
 // credential-owning child. The client transports calls; inventory is the live
 // names/uses-workspace snapshot consumed by scheduled scope construction.
 type productionMCPRuntime struct {
-	client    *mcpbroker.Client
-	stop      func() error
-	inventory *brokerMCPInventory
-	catalog   []mcp.ServerTool
-	accounts  map[string][]string
+	client                *mcpbroker.Client
+	stop                  func() error
+	inventory             *brokerMCPInventory
+	catalog               []mcp.ServerTool
+	accounts              map[string][]string
+	ms365AttachmentSocket string
+}
+
+func (r *productionMCPRuntime) ms365AttachmentSocketPath() string {
+	if r == nil {
+		return ""
+	}
+	return r.ms365AttachmentSocket
 }
 
 type brokerMCPInventory struct {
@@ -104,9 +115,52 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 
 	resolvedSpecs := agent.BuildMCPSpecs(cfg)
 	publicSpecs := publicMCPServerSpecs(resolvedSpecs)
-	client, stop, err := mcpbroker.SpawnClient(cmd)
+
+	var (
+		attachmentDir    string
+		attachmentSocket string
+		listenerFile     *os.File
+	)
+	if ms365mcp.ConfigFromEnv(cfg).Enabled() && len(cmd.ExtraFiles) == 0 {
+		dir, mkErr := os.MkdirTemp("", "fleet-ms365-attachment-*")
+		if mkErr != nil {
+			return nil, nil, fmt.Errorf("start MCP broker: create ms365 attachment dir: %w", mkErr)
+		}
+		sockPath := filepath.Join(dir, "attachment.sock")
+		ul, listenErr := net.ListenUnix("unix", &net.UnixAddr{Name: sockPath, Net: "unix"})
+		if listenErr != nil {
+			_ = os.RemoveAll(dir)
+			return nil, nil, fmt.Errorf("start MCP broker: listen ms365 attachment socket: %w", listenErr)
+		}
+		ul.SetUnlinkOnClose(false)
+		f, fileErr := ul.File()
+		_ = ul.Close()
+		if fileErr != nil {
+			_ = os.RemoveAll(dir)
+			return nil, nil, fmt.Errorf("start MCP broker: dup ms365 attachment listener: %w", fileErr)
+		}
+		attachmentDir = dir
+		attachmentSocket = sockPath
+		listenerFile = f
+		cmd.ExtraFiles = []*os.File{f}
+	}
+
+	client, rawStop, err := mcpbroker.SpawnClient(cmd)
+	if listenerFile != nil {
+		_ = listenerFile.Close()
+	}
 	if err != nil {
+		if attachmentDir != "" {
+			_ = os.RemoveAll(attachmentDir)
+		}
 		return nil, nil, err
+	}
+	stop := func() error {
+		stopErr := rawStop()
+		if attachmentDir != "" {
+			_ = os.RemoveAll(attachmentDir)
+		}
+		return stopErr
 	}
 	failed := true
 	defer func() {
@@ -133,11 +187,12 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 	}
 	inventory := &brokerMCPInventory{servers: taskMCPInventoryFromResolvedSpecs(resolvedSpecs)}
 	runtime := &productionMCPRuntime{
-		client:    client,
-		stop:      stop,
-		inventory: inventory,
-		catalog:   brokerToolCatalog(descriptors),
-		accounts:  cloneToolAllowlist(accounts),
+		client:                client,
+		stop:                  stop,
+		inventory:             inventory,
+		catalog:               brokerToolCatalog(descriptors),
+		accounts:              cloneToolAllowlist(accounts),
+		ms365AttachmentSocket: attachmentSocket,
 	}
 
 	if err := scrubParentConnectorState(bundle, cfg, resolvedSpecs); err != nil {
@@ -498,6 +553,9 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_ACCOUNT_EVENTS_URL", "FLEET_ACCOUNT_EVENTS_SECRET",
 		"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
+		"MS365_MCP_CLIENT_ID", "MS365_MCP_TENANT_ID", "MS365_MCP_CLIENT_SECRET",
+		"MS365_MCP_PUBLIC_URL", "MS365_MCP_ALIASES", "MS365_MCP_ALLOWED_REDIRECT_URIS",
+		"MS365_MCP_ATTACHMENT_URL_TTL_S",
 		// Scheduled-task inputs the boot loader reads, and the canonical
 		// CUTLASS_ image keys.
 		"FLEET_TASK_MODEL", "FLEET_TASK_FALLBACK_MODEL",

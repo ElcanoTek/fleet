@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
+	"net/http"
+	"os"
 	"os/signal"
 	"slices"
 	"sort"
@@ -15,7 +18,9 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/ms365mcp"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/version"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -102,8 +107,10 @@ func runMCPBroker() error {
 	}
 	var remoteStore *store.Store
 	var remoteMCP agent.RemoteMCPResolver
+	var runtimeCfg *config.Config
 	if mcpBrokerRemoteConfigured() {
-		runtimeCfg, loadErr := config.Load("")
+		var loadErr error
+		runtimeCfg, loadErr = config.Load("")
 		if loadErr != nil {
 			return fmt.Errorf("load broker runtime config: %w", loadErr)
 		}
@@ -111,6 +118,15 @@ func runMCPBroker() error {
 		if err != nil {
 			return err
 		}
+	}
+	ms365Handler, ms365Cfg := wireMS365MCP(runtimeCfg)
+	if ms365Handler != nil {
+		slog.Info("mcp-broker: built-in Microsoft 365 MCP enabled",
+			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
+			"public_url", safe.LogSafe(ms365Cfg.PublicURL),
+		)
+		closeAttachmentSrv := serveInheritedMS365AttachmentListener(serveCtx, ms365Handler)
+		defer func() { _ = closeAttachmentSrv() }()
 	}
 
 	// The SAME builder the interactive Manager uses — one credential path. Inline
@@ -142,6 +158,30 @@ func mcpBrokerRemoteConfigured() bool {
 		return strings.TrimSpace(envreg.Get(name)) != ""
 	}
 	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
+}
+
+func serveInheritedMS365AttachmentListener(ctx context.Context, h http.Handler) func() error {
+	f := os.NewFile(3, "ms365-attachment-listener")
+	if f == nil {
+		return func() error { return nil }
+	}
+	ln, err := net.FileListener(f)
+	_ = f.Close()
+	if err != nil {
+		return func() error { return nil }
+	}
+	srv := &http.Server{
+		Handler:           ms365mcp.AttachmentOnlyHandler(h),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	return srv.Close
 }
 
 func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCPResolver, error) {

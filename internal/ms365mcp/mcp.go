@@ -26,6 +26,7 @@ type ToolSpec struct {
 	Description       string          `json:"description"`
 	InputSchema       json.RawMessage `json:"inputSchema"`
 	Annotations       json.RawMessage `json:"annotations,omitempty"`
+	Critical          bool            `json:"critical,omitempty"`
 	PathPattern       string          `json:"pathPattern"`
 	Method            string          `json:"method"`
 	PathParams        []string        `json:"pathParams"`
@@ -254,6 +255,14 @@ func (h *Handler) handleMCPPost(w http.ResponseWriter, r *http.Request) {
 		h.writeMCPUnauthorized(w, r, "Missing Bearer token")
 		return
 	}
+	if h.cfg.DisableAuthenticatedMCP {
+		writeJSON(w, http.StatusForbidden, jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage("null"),
+			Error:   &jsonRPCError{Code: -32001, Message: "Microsoft 365 Graph MCP execution is hosted in the credential broker process"},
+		})
+		return
+	}
 	if isJWTExpired(token) {
 		h.writeMCPUnauthorized(w, r, "Access token expired")
 		return
@@ -401,6 +410,9 @@ func (h *Handler) dispatchJSONRPC(r *http.Request, token string, req jsonRPCRequ
 			}
 			if len(t.Annotations) > 0 && string(t.Annotations) != "null" {
 				item["annotations"] = t.Annotations
+			}
+			if t.Critical {
+				item["critical"] = true
 			}
 			toolList = append(toolList, item)
 		}

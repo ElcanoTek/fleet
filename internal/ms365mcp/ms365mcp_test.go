@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -545,5 +547,198 @@ func TestUtilityToolsAndMentionsAndExpiredJWT(t *testing.T) {
 	}
 	if errMap, ok := tooManyRes.(map[string]any); !ok || errMap["error"] == nil {
 		t.Fatalf("expected error map for >20 messageIds, got %#v", tooManyRes)
+	}
+}
+
+func TestMutatingToolsMarkedCriticalInToolsList(t *testing.T) {
+	h := NewHandler(Config{
+		ClientID:  "client-123",
+		PublicURL: "https://fleet.example.com",
+	})
+	listReq := httptest.NewRequest(http.MethodPost, "https://fleet.example.com/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	listReq.Header.Set("Authorization", "Bearer valid-token")
+	listRec := httptest.NewRecorder()
+	h.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("tools/list status = %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var rpcResp struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				Critical    bool   `json:"critical"`
+				Annotations struct {
+					ReadOnlyHint *bool `json:"readOnlyHint"`
+				} `json:"annotations"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &rpcResp); err != nil {
+		t.Fatalf("unmarshal tools/list: %v", err)
+	}
+	criticalCount := 0
+	for _, tool := range rpcResp.Result.Tools {
+		readOnly := tool.Annotations.ReadOnlyHint != nil && *tool.Annotations.ReadOnlyHint
+		if !readOnly && !tool.Critical {
+			t.Errorf("mutating tool %q must have critical=true in tools/list", tool.Name)
+		}
+		if readOnly && tool.Critical {
+			t.Errorf("read-only tool %q must not have critical=true in tools/list", tool.Name)
+		}
+		if tool.Critical {
+			criticalCount++
+		}
+	}
+	if criticalCount != 23 {
+		t.Fatalf("critical tool count = %d, want 23", criticalCount)
+	}
+}
+
+func TestBrokerIsolatedMCPAndUnixSocketAttachmentProxy(t *testing.T) {
+	mockGraph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.0/me/messages/msg-1/attachments/att-1":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id":          "att-1",
+				"name":        "broker.csv",
+				"contentType": "text/csv",
+				"size":        12,
+			})
+		case "/v1.0/me/messages/msg-1/attachments/att-1/$value":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte("col1,col2\n1,2"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockGraph.Close()
+
+	// Child broker handler: owns Graph execution and attachment tickets.
+	brokerHandler := NewHandler(Config{
+		ClientID:     "client-123",
+		PublicURL:    "https://fleet.example.com",
+		GraphBaseURL: mockGraph.URL + "/v1.0",
+		HTTPClient:   mockGraph.Client(),
+	})
+
+	sockPath := filepath.Join(t.TempDir(), "attachment.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Listen unix: %v", err)
+	}
+	defer ln.Close()
+	sockSrv := &http.Server{Handler: AttachmentOnlyHandler(brokerHandler)}
+	defer sockSrv.Close()
+	go func() { _ = sockSrv.Serve(ln) }()
+
+	// Parent web handler: refuses authenticated POST /mcp and proxies /attachment over unix socket.
+	parentHandler := NewHandler(Config{
+		ClientID:                "client-123",
+		PublicURL:               "https://fleet.example.com",
+		DisableAuthenticatedMCP: true,
+		AttachmentProxy:         NewUnixSocketAttachmentProxy(sockPath),
+	})
+
+	// 1. Unauthenticated POST /mcp on parent still returns 401 + WWW-Authenticate for OAuth discovery.
+	unauthReq := httptest.NewRequest(http.MethodPost, "https://fleet.example.com/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	unauthRec := httptest.NewRecorder()
+	parentHandler.ServeHTTP(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusUnauthorized || !strings.Contains(unauthRec.Header().Get("WWW-Authenticate"), "resource_metadata=") {
+		t.Fatalf("expected 401 with WWW-Authenticate on parent unauth /mcp, got %d (%q)", unauthRec.Code, unauthRec.Header().Get("WWW-Authenticate"))
+	}
+
+	// 2. Authenticated POST /mcp on parent is refused with 403 Forbidden.
+	authReq := httptest.NewRequest(http.MethodPost, "https://fleet.example.com/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	authReq.Header.Set("Authorization", "Bearer graph-token")
+	authRec := httptest.NewRecorder()
+	parentHandler.ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden on parent authenticated /mcp, got %d: %s", authRec.Code, authRec.Body.String())
+	}
+
+	// 3. Mint ticket inside broker handler and redeem via parent handler over the token-free unix socket.
+	res, isErr, err := brokerHandler.executeToolCall(context.Background(), nil, "graph-token", "get-mail-attachment-content", map[string]any{
+		"messageId":    "msg-1",
+		"attachmentId": "att-1",
+	})
+	if err != nil || isErr {
+		t.Fatalf("broker get-mail-attachment-content failed: isErr=%v err=%v", isErr, err)
+	}
+	dlURL, _ := res.(map[string]any)["downloadUrl"].(string)
+	if dlURL == "" {
+		t.Fatalf("missing downloadUrl in %#v", res)
+	}
+
+	dlReq := httptest.NewRequest(http.MethodGet, dlURL, nil)
+	dlRec := httptest.NewRecorder()
+	parentHandler.ServeHTTP(dlRec, dlReq)
+	if dlRec.Code != http.StatusOK {
+		t.Fatalf("parent proxied GET /attachment status = %d: %s", dlRec.Code, dlRec.Body.String())
+	}
+	if dlRec.Body.String() != "col1,col2\n1,2" {
+		t.Fatalf("parent proxied body = %q, want %q", dlRec.Body.String(), "col1,col2\n1,2")
+	}
+	if gotCD := dlRec.Header().Get("Content-Disposition"); !strings.Contains(gotCD, "broker.csv") {
+		t.Fatalf("parent proxied Content-Disposition = %q, want broker.csv", gotCD)
+	}
+}
+
+func TestRedirectURIMatchesQueryAndFragmentAndCalendarAndOneDriveFixes(t *testing.T) {
+	patterns := []string{
+		"http://localhost:*",
+		"https://fleet.elcanotek.com/api/oauth/mcp/callback",
+	}
+	if !isRedirectURIAllowed("https://fleet.elcanotek.com/api/oauth/mcp/callback", patterns) {
+		t.Fatal("exact callback URI must be allowed")
+	}
+	if isRedirectURIAllowed("https://fleet.elcanotek.com/api/oauth/mcp/callback?code=injected", patterns) {
+		t.Fatal("callback URI with unexpected query must be rejected")
+	}
+	if isRedirectURIAllowed("https://fleet.elcanotek.com/api/oauth/mcp/callback#frag", patterns) {
+		t.Fatal("callback URI with fragment must be rejected")
+	}
+	if isRedirectURIAllowed("http://localhost:8080/callback?injected=1", patterns) {
+		t.Fatal("loopback URI with unexpected query must be rejected")
+	}
+
+	var gotCalExpand, gotDriveSearchPath string
+	mockGraph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1.0/me/events":
+			gotCalExpand = r.URL.Query().Get("$expand")
+			writeJSON(w, http.StatusOK, map[string]any{"value": []any{}})
+		case strings.HasPrefix(r.URL.Path, "/v1.0/drives/"):
+			gotDriveSearchPath = r.URL.Path
+			writeJSON(w, http.StatusOK, map[string]any{"value": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockGraph.Close()
+
+	h := NewHandler(Config{
+		ClientID:     "client-123",
+		PublicURL:    "https://fleet.elcanotek.com",
+		GraphBaseURL: mockGraph.URL + "/v1.0",
+		HTTPClient:   mockGraph.Client(),
+	})
+
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "list-calendar-events", map[string]any{
+		"expandExtendedProperties": true,
+	}); err != nil || isErr {
+		t.Fatalf("list-calendar-events failed: isErr=%v err=%v", isErr, err)
+	}
+	if gotCalExpand != "singleValueExtendedProperties($filter=id ne '')" {
+		t.Fatalf("calendar $expand = %q, want singleValueExtendedProperties($filter=id ne '')", gotCalExpand)
+	}
+
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "search-onedrive-files", map[string]any{
+		"driveId": "drv-1",
+		"q":       "budget",
+	}); err != nil || isErr {
+		t.Fatalf("search-onedrive-files failed: isErr=%v err=%v", isErr, err)
+	}
+	if gotDriveSearchPath != "/v1.0/drives/drv-1/root/search(q='budget')" {
+		t.Fatalf("search-onedrive-files path = %q, want /v1.0/drives/drv-1/root/search(q='budget')", gotDriveSearchPath)
 	}
 }

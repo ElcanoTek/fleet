@@ -19,6 +19,7 @@ const (
 	defaultMailAttachmentExpand = "attachments($select=id,name,contentType,size,isInline)"
 	maxPaginationPages          = 100
 	maxPaginationItems          = 5000
+	maxGraphJSONBytes           = 20 << 20
 )
 
 var (
@@ -139,7 +140,15 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 		query.Set("$search", normalizeMailSearchQuery(rawSearch))
 	}
 
-	if expProps, ok := args["expandExtendedProperties"].([]any); ok && len(expProps) > 0 {
+	if expBool, ok := args["expandExtendedProperties"].(bool); ok && expBool {
+		const clause = "singleValueExtendedProperties($filter=id ne '')"
+		if cur := query.Get("$expand"); cur != "" && !autoExpandedAttachments {
+			query.Set("$expand", cur+","+clause)
+		} else {
+			query.Set("$expand", clause)
+			autoExpandedAttachments = false
+		}
+	} else if expProps, ok := args["expandExtendedProperties"].([]any); ok && len(expProps) > 0 {
 		var ids []string
 		for _, item := range expProps {
 			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
@@ -459,9 +468,12 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 	}
 	defer resp.Body.Close()
 
-	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphJSONBytes+1))
 	if err != nil {
 		return nil, nil, fmt.Errorf("read Microsoft Graph response: %w", err)
+	}
+	if len(rawBytes) > maxGraphJSONBytes {
+		return nil, resp.Header, fmt.Errorf("Microsoft Graph response exceeded maximum size (%d bytes)", maxGraphJSONBytes)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
