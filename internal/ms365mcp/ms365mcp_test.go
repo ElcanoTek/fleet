@@ -742,3 +742,86 @@ func TestRedirectURIMatchesQueryAndFragmentAndCalendarAndOneDriveFixes(t *testin
 		t.Fatalf("search-onedrive-files path = %q, want /v1.0/drives/drv-1/root/search(q='budget')", gotDriveSearchPath)
 	}
 }
+
+func TestDCRValidationPKCENonEvictionListAttachmentsAndForwardedMail(t *testing.T) {
+	var gotAttachmentSelect string
+	mockGraph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.0/me/messages/msg-1/attachments" {
+			gotAttachmentSelect = r.URL.Query().Get("$select")
+			writeJSON(w, http.StatusOK, map[string]any{
+				"value": []any{
+					map[string]any{
+						"id":           "att-1",
+						"name":         "huge.pdf",
+						"contentType":  "application/pdf",
+						"size":         1048576,
+						"isInline":     false,
+						"contentBytes": "BASE64_PAYLOAD_SHOULD_BE_STRIPPED",
+					},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockGraph.Close()
+
+	h := NewHandler(Config{
+		ClientID:            "client-123",
+		PublicURL:           "https://fleet.elcanotek.com",
+		AllowedRedirectURIs: []string{"https://fleet.elcanotek.com/api/oauth/mcp/callback"},
+		GraphBaseURL:        mockGraph.URL + "/v1.0",
+		HTTPClient:          mockGraph.Client(),
+	})
+
+	// 1. Dynamic client registration rejects disallowed redirect_uris.
+	badRegReq := httptest.NewRequest(http.MethodPost, "https://fleet.elcanotek.com/register", strings.NewReader(`{"client_name":"Test","redirect_uris":["https://evil.example.com/cb"]}`))
+	badRegRec := httptest.NewRecorder()
+	h.ServeHTTP(badRegRec, badRegReq)
+	if badRegRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for disallowed DCR redirect_uri, got %d: %s", badRegRec.Code, badRegRec.Body.String())
+	}
+
+	// 2. PKCE per-IP cap rejects flood from one IP without evicting another IP's active entry.
+	legitVerifier := "legit-verifier-value-1234567890"
+	if !h.pkce.put("198.51.100.10", "legit-state", computeS256Challenge(legitVerifier), "srv-verifier-1", "Mail.Read") {
+		t.Fatal("expected legitimate PKCE put to succeed")
+	}
+	for i := range pkceStoreMaxPerIP {
+		ok := h.pkce.put("203.0.113.99", fmt.Sprintf("flood-%d", i), fmt.Sprintf("chal-%d", i), "srv-flood", "Mail.Read")
+		if !ok {
+			t.Fatalf("expected put %d under per-IP cap to succeed", i)
+		}
+	}
+	if h.pkce.put("203.0.113.99", "flood-over", "chal-over", "srv-flood", "Mail.Read") {
+		t.Fatal("expected put exceeding per-IP cap to be rejected")
+	}
+	if gotSrv, _, ok := h.pkce.lookupMatchingVerifier(legitVerifier); !ok || gotSrv != "srv-verifier-1" {
+		t.Fatalf("legitimate PKCE entry was evicted: ok=%v gotSrv=%q", ok, gotSrv)
+	}
+
+	// 3. list-mail-attachments defaults $select and strips contentBytes.
+	attRes, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "list-mail-attachments", map[string]any{
+		"messageId": "msg-1",
+	})
+	if err != nil || isErr {
+		t.Fatalf("list-mail-attachments failed: isErr=%v err=%v", isErr, err)
+	}
+	if gotAttachmentSelect != "id,name,contentType,size,isInline" {
+		t.Fatalf("list-mail-attachments $select = %q, want id,name,contentType,size,isInline", gotAttachmentSelect)
+	}
+	attJSON, _ := json.Marshal(attRes)
+	if strings.Contains(string(attJSON), "contentBytes") || strings.Contains(string(attJSON), "BASE64_PAYLOAD") {
+		t.Fatalf("list-mail-attachments leaked contentBytes: %s", string(attJSON))
+	}
+
+	// 4. cleanMailText preserves forwarded message content while still stripping reply history.
+	forwarded := "FYI see below.\n\n---------- Forwarded message ----------\nFrom: Alice <alice@example.com>\nDate: Mon, Nov 9, 2026 at 10:00 AM\nSubject: Q4 Numbers\nTo: Bob <bob@example.com>\n\nRevenue grew 28% YoY.\n\n-----Original Message-----\nFrom: Old Thread <old@example.com>\nSent: Sunday\nTo: Alice\nSubject: Re: Q4 Numbers\n\nOlder reply quote."
+	cleaned := cleanMailText(forwarded, true)
+	if !strings.Contains(cleaned, "Revenue grew 28% YoY.") {
+		t.Fatalf("cleanMailText stripped forwarded body: %q", cleaned)
+	}
+	if strings.Contains(cleaned, "Older reply quote.") {
+		t.Fatalf("cleanMailText failed to strip trailing Original Message reply: %q", cleaned)
+	}
+}

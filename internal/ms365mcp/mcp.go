@@ -67,13 +67,20 @@ func NewHandler(cfg Config) *Handler {
 		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
 
+	catalogRaw := embeddedToolsCatalog
+	if len(bytes.TrimSpace(cfg.CatalogJSON)) > 0 {
+		catalogRaw = cfg.CatalogJSON
+	}
 	var specs []ToolSpec
-	if err := json.Unmarshal(embeddedToolsCatalog, &specs); err != nil {
-		panic(fmt.Sprintf("ms365mcp: unmarshal embedded tools catalog: %v", err))
+	if err := json.Unmarshal(catalogRaw, &specs); err != nil {
+		panic(fmt.Sprintf("ms365mcp: unmarshal tools catalog: %v", err))
 	}
 	byName := make(map[string]ToolSpec, len(specs))
-	for _, s := range specs {
-		byName[s.Name] = s
+	for i := range specs {
+		if !specs[i].Critical && isMutatingGraphTool(specs[i]) {
+			specs[i].Critical = true
+		}
+		byName[specs[i].Name] = specs[i]
 	}
 
 	return &Handler{
@@ -82,6 +89,10 @@ func NewHandler(cfg Config) *Handler {
 		tools:       specs,
 		toolsByName: byName,
 	}
+}
+
+func isMutatingGraphTool(s ToolSpec) bool {
+	return s.Method != "" && !strings.EqualFold(s.Method, http.MethodGet) && s.Name != "search-query"
 }
 
 func (h *Handler) httpClient() *http.Client {

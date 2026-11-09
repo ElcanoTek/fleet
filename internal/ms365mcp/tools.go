@@ -52,13 +52,13 @@ func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, t
 	headers := buildGraphHeaders(spec, toolName, query, args)
 	reqBody := buildGraphRequestBody(spec, toolName, args)
 
-	res, respHeaders, err := h.graphRequestWithExpandFallback(ctx, token, spec.Method, path, query, reqBody, headers, autoExpandedAttachments)
+	res, respHeaders, firstPageBytes, err := h.graphRequestWithExpandFallback(ctx, token, spec.Method, path, query, reqBody, headers, autoExpandedAttachments)
 	if err != nil {
 		return nil, true, err
 	}
 
 	if fetchAll, ok := args["fetchAllPages"].(bool); ok && fetchAll && spec.Method == "GET" {
-		res, err = h.followAllPages(ctx, token, res, headers)
+		res, err = h.followAllPages(ctx, token, res, firstPageBytes, headers)
 		if err != nil {
 			return nil, true, err
 		}
@@ -134,6 +134,9 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 	if isMailMessageTool(toolName) && query.Get("$expand") == "" {
 		query.Set("$expand", defaultMailAttachmentExpand)
 		autoExpandedAttachments = true
+	}
+	if toolName == "list-mail-attachments" && query.Get("$select") == "" {
+		query.Set("$select", "id,name,contentType,size,isInline")
 	}
 
 	if rawSearch := query.Get("$search"); rawSearch != "" && isMailEndpoint(spec.PathPattern) {
@@ -262,6 +265,9 @@ func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) 
 func postProcessGraphResult(toolName string, query url.Values, args map[string]any, res any, respHeaders http.Header) any {
 	if isMailMessageTool(toolName) {
 		normalizeMailResponseAttachments(res)
+	}
+	if toolName == "list-mail-attachments" {
+		stripAttachmentListBytes(res)
 	}
 	if selectRaw := query.Get("$select"); selectRaw != "" {
 		res = projectSelectFields(res, selectRaw, isMailMessageTool(toolName))
@@ -400,8 +406,8 @@ func (h *Handler) mintAttachmentDownloadResultWithMeta(r *http.Request, token, t
 	return out, false, nil
 }
 
-func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string, autoExpanded bool) (any, http.Header, error) {
-	res, respHeaders, err := h.graphRequest(ctx, token, method, path, query, body, headers)
+func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string, autoExpanded bool) (any, http.Header, int, error) {
+	res, respHeaders, nBytes, err := h.graphRequestWithSize(ctx, token, method, path, query, body, headers)
 	if err != nil && autoExpanded && query.Get("$expand") != "" && query.Get("$search") != "" {
 		clonedQuery := url.Values{}
 		for k, v := range query {
@@ -409,22 +415,30 @@ func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, met
 				clonedQuery[k] = append([]string(nil), v...)
 			}
 		}
-		if retryRes, retryHeaders, retryErr := h.graphRequest(ctx, token, method, path, clonedQuery, body, headers); retryErr == nil {
-			return retryRes, retryHeaders, nil
+		if retryRes, retryHeaders, retryBytes, retryErr := h.graphRequestWithSize(ctx, token, method, path, clonedQuery, body, headers); retryErr == nil {
+			return retryRes, retryHeaders, retryBytes, nil
 		}
 	}
-	return res, respHeaders, err
+	return res, respHeaders, nBytes, err
 }
 
 func (h *Handler) graphRequest(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string) (any, http.Header, error) {
+	res, hdrs, _, err := h.graphRequestWithSize(ctx, token, method, path, query, body, headers)
+	return res, hdrs, err
+}
+
+func (h *Handler) graphRequestWithSize(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string) (any, http.Header, int, error) {
+	base := strings.TrimRight(h.cfg.GraphBaseURL, "/")
+	if base == "" {
+		base = defaultGraphBaseURL
+	}
 	var fullURL string
 	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		if !strings.HasPrefix(path, base+"/") && path != base {
+			return nil, nil, 0, fmt.Errorf("graph pagination URL does not match configured Graph base URL")
+		}
 		fullURL = path
 	} else {
-		base := strings.TrimRight(h.cfg.GraphBaseURL, "/")
-		if base == "" {
-			base = defaultGraphBaseURL
-		}
 		fullURL = base + path
 		if len(query) > 0 {
 			fullURL += "?" + encodeGraphQuery(query)
@@ -441,15 +455,15 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 		default:
 			encoded, err := json.Marshal(v)
 			if err != nil {
-				return nil, nil, fmt.Errorf("marshal request body: %w", err)
+				return nil, nil, 0, fmt.Errorf("marshal request body: %w", err)
 			}
 			bodyReader = bytes.NewReader(encoded)
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader) //nolint:gosec // fullURL is pinned to configured GraphBaseURL.
 	if err != nil {
-		return nil, nil, fmt.Errorf("build Graph request: %w", err)
+		return nil, nil, 0, fmt.Errorf("build Graph request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -462,22 +476,22 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 		}
 	}
 
-	resp, err := h.httpClient().Do(req)
+	resp, err := h.httpClient().Do(req) //nolint:gosec // fullURL is pinned to configured GraphBaseURL.
 	if err != nil {
-		return nil, nil, fmt.Errorf("graph request failed: %w", err)
+		return nil, nil, 0, fmt.Errorf("graph request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphJSONBytes+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read Microsoft Graph response: %w", err)
+		return nil, nil, 0, fmt.Errorf("read Microsoft Graph response: %w", err)
 	}
 	if len(rawBytes) > maxGraphJSONBytes {
-		return nil, resp.Header, fmt.Errorf("Microsoft Graph response exceeded maximum size (%d bytes)", maxGraphJSONBytes)
+		return nil, resp.Header, len(rawBytes), fmt.Errorf("graph response exceeded maximum size (%d bytes)", maxGraphJSONBytes)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, resp.Header, errGraphUnauthorized
+		return nil, resp.Header, len(rawBytes), errGraphUnauthorized
 	}
 
 	if resp.StatusCode >= 400 {
@@ -485,21 +499,21 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 		if errText == "" {
 			errText = resp.Status
 		}
-		return nil, resp.Header, fmt.Errorf("graph HTTP %d: %s", resp.StatusCode, errText)
+		return nil, resp.Header, len(rawBytes), fmt.Errorf("graph HTTP %d: %s", resp.StatusCode, errText)
 	}
 
 	if resp.StatusCode == http.StatusNoContent || len(bytes.TrimSpace(rawBytes)) == 0 {
-		return map[string]any{"status": "success", "statusCode": resp.StatusCode}, resp.Header, nil
+		return map[string]any{"status": "success", "statusCode": resp.StatusCode}, resp.Header, len(rawBytes), nil
 	}
 
 	var parsed any
 	if err := json.Unmarshal(rawBytes, &parsed); err != nil {
-		return map[string]any{"rawText": string(rawBytes)}, resp.Header, nil
+		return map[string]any{"rawText": string(rawBytes)}, resp.Header, len(rawBytes), nil
 	}
-	return parsed, resp.Header, nil
+	return parsed, resp.Header, len(rawBytes), nil
 }
 
-func (h *Handler) followAllPages(ctx context.Context, token string, firstPage any, headers map[string]string) (any, error) {
+func (h *Handler) followAllPages(ctx context.Context, token string, firstPage any, firstPageBytes int, headers map[string]string) (any, error) {
 	firstMap, ok := firstPage.(map[string]any)
 	if !ok {
 		return firstPage, nil
@@ -510,10 +524,15 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 	}
 	nextLink, _ := firstMap["@odata.nextLink"].(string)
 	pages := 1
+	totalBytes := firstPageBytes
 	for nextLink != "" && pages < maxPaginationPages && len(combined) < maxPaginationItems {
-		pageRes, _, err := h.graphRequest(ctx, token, "GET", nextLink, nil, nil, headers)
+		pageRes, _, pageBytes, err := h.graphRequestWithSize(ctx, token, "GET", nextLink, nil, nil, headers)
 		if err != nil {
 			return nil, err
+		}
+		totalBytes += pageBytes
+		if totalBytes > maxGraphJSONBytes {
+			return nil, fmt.Errorf("graph paginated response exceeded maximum aggregate size (%d bytes)", maxGraphJSONBytes)
 		}
 		pageMap, ok := pageRes.(map[string]any)
 		if !ok {
@@ -806,6 +825,9 @@ func summarizeAttachments(raw any) []map[string]any {
 			}
 		}
 		for k, v := range m {
+			if k == "contentBytes" {
+				continue
+			}
 			if _, exists := clean[k]; !exists && !strings.HasPrefix(k, "@odata.") {
 				clean[k] = v
 			}
@@ -813,6 +835,21 @@ func summarizeAttachments(raw any) []map[string]any {
 		out = append(out, clean)
 	}
 	return out
+}
+
+func stripAttachmentListBytes(res any) {
+	m, ok := res.(map[string]any)
+	if !ok {
+		return
+	}
+	if vals, ok := m["value"].([]any); ok {
+		for _, item := range vals {
+			if attMap, ok := item.(map[string]any); ok {
+				delete(attMap, "contentBytes")
+			}
+		}
+	}
+	delete(m, "contentBytes")
 }
 
 func normalizeMailResponseAttachments(res any) {

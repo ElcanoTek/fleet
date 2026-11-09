@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	pkceStoreTTL        = time.Hour
-	pkceStoreMaxEntries = 1000
+	pkceStoreTTL        = 15 * time.Minute
+	pkceStoreMaxEntries = 4096
+	pkceStoreMaxPerIP   = 64
 )
 
 var defaultLoopbackRedirectPatterns = []string{
@@ -30,6 +32,7 @@ var defaultLoopbackRedirectPatterns = []string{
 }
 
 type pkceEntry struct {
+	clientIP            string
 	state               string
 	clientCodeChallenge string
 	serverCodeVerifier  string
@@ -52,28 +55,49 @@ func (p *pkceStore) sweepLocked(now time.Time) {
 	p.entries = kept
 }
 
-func (p *pkceStore) put(state, clientCodeChallenge, serverCodeVerifier, scope string) {
+func (p *pkceStore) put(clientIP, state, clientCodeChallenge, serverCodeVerifier, scope string) bool {
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.sweepLocked(now)
 	for i := range p.entries {
-		if (state != "" && p.entries[i].state == state) || p.entries[i].clientCodeChallenge == clientCodeChallenge {
-			p.entries = append(p.entries[:i], p.entries[i+1:]...)
-			break
+		if p.entries[i].clientCodeChallenge == clientCodeChallenge ||
+			(state != "" && p.entries[i].state == state && p.entries[i].clientIP == clientIP) {
+			p.entries[i] = pkceEntry{
+				clientIP:            clientIP,
+				state:               state,
+				clientCodeChallenge: clientCodeChallenge,
+				serverCodeVerifier:  serverCodeVerifier,
+				scope:               scope,
+				createdAt:           now,
+			}
+			return true
 		}
 	}
-	for len(p.entries) >= pkceStoreMaxEntries {
-		p.entries = p.entries[1:]
+	if clientIP != "" {
+		perIP := 0
+		for _, e := range p.entries {
+			if e.clientIP == clientIP {
+				perIP++
+			}
+		}
+		if perIP >= pkceStoreMaxPerIP {
+			return false
+		}
+	}
+	if len(p.entries) >= pkceStoreMaxEntries {
+		return false
 	}
 	p.entries = append(p.entries, pkceEntry{
+		clientIP:            clientIP,
 		state:               state,
 		clientCodeChallenge: clientCodeChallenge,
 		serverCodeVerifier:  serverCodeVerifier,
 		scope:               scope,
 		createdAt:           now,
 	})
+	return true
 }
 
 func (p *pkceStore) lookupMatchingVerifier(clientCodeVerifier string) (string, string, bool) {
@@ -143,6 +167,24 @@ func (h *Handler) handleOAuthAuthorizationServer(w http.ResponseWriter, r *http.
 	})
 }
 
+func (h *Handler) allowedRedirectPatterns() []string {
+	patterns := make([]string, 0, len(defaultLoopbackRedirectPatterns)+len(h.cfg.AllowedRedirectURIs))
+	patterns = append(patterns, defaultLoopbackRedirectPatterns...)
+	patterns = append(patterns, h.cfg.AllowedRedirectURIs...)
+	return patterns
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
 func (h *Handler) handleDynamicClientRegistration(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ClientName    string   `json:"client_name"`
@@ -151,7 +193,23 @@ func (h *Handler) handleDynamicClientRegistration(w http.ResponseWriter, r *http
 		ResponseTypes []string `json:"response_types"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_client_metadata",
+				"error_description": "Invalid registration JSON payload",
+			})
+			return
+		}
+	}
+	patterns := h.allowedRedirectPatterns()
+	for _, uri := range body.RedirectURIs {
+		if !isRedirectURIAllowed(uri, patterns) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_redirect_uri",
+				"error_description": fmt.Sprintf("redirect_uri %q is not in the allowed list", uri),
+			})
+			return
+		}
 	}
 	if body.ClientName == "" {
 		body.ClientName = "MCP Client"
@@ -193,8 +251,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	patterns := append([]string{}, defaultLoopbackRedirectPatterns...)
-	patterns = append(patterns, h.cfg.AllowedRedirectURIs...)
+	patterns := h.allowedRedirectPatterns()
 	if !isRedirectURIAllowed(redirectURI, patterns) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":             "invalid_request",
@@ -250,7 +307,13 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	h.pkce.put(state, codeChallenge, serverVerifier, resolvedScope)
+	if !h.pkce.put(clientIPFromRequest(r), state, codeChallenge, serverVerifier, resolvedScope) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error":             "temporarily_unavailable",
+			"error_description": "Too many pending authorization flows; please retry shortly",
+		})
+		return
+	}
 
 	params := url.Values{}
 	params.Set("client_id", h.cfg.ClientID)
@@ -263,7 +326,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	params.Set("code_challenge", computeS256Challenge(serverVerifier))
 	params.Set("code_challenge_method", "S256")
 	msAuthURL.RawQuery = params.Encode()
-	http.Redirect(w, r, msAuthURL.String(), http.StatusFound)
+	http.Redirect(w, r, msAuthURL.String(), http.StatusFound) //nolint:gosec // redirect_uri is validated against AllowedRedirectURIs and msAuthURL points to configured AuthBaseURL.
 }
 
 func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +448,7 @@ func (h *Handler) postTokenToMicrosoft(ctx interface {
 		if includeSecret && h.cfg.ClientSecret != "" {
 			params.Set("client_secret", h.cfg.ClientSecret)
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(params.Encode()))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(params.Encode())) //nolint:gosec // tokenURL is constructed from configured AuthBaseURL and TenantID.
 		if err != nil {
 			return 0, nil, "", err
 		}
@@ -393,7 +456,7 @@ func (h *Handler) postTokenToMicrosoft(ctx interface {
 		if origin != "" && h.cfg.ClientSecret == "" {
 			req.Header.Set("Origin", origin)
 		}
-		resp, err := h.httpClient().Do(req)
+		resp, err := h.httpClient().Do(req) //nolint:gosec // tokenURL is constructed from configured AuthBaseURL and TenantID.
 		if err != nil {
 			return 0, nil, "", err
 		}

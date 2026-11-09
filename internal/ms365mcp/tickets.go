@@ -69,15 +69,15 @@ func (s *AttachmentTicketStore) sweepLocked(now time.Time) {
 func (s *AttachmentTicketStore) Issue(token, target string, ttlSeconds int, filename, contentType string) (string, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return "", fmt.Errorf("Issue requires a non-empty access token")
+		return "", fmt.Errorf("issue requires a non-empty access token")
 	}
 	if !isValidGraphTargetPath(target) {
-		return "", fmt.Errorf("Issue requires a relative Graph path starting with /")
+		return "", fmt.Errorf("issue requires a relative Graph path starting with /")
 	}
 	if ttlSeconds <= 0 {
 		ttlSeconds = defaultAttachmentURLTTLSeconds
 	}
-	ttlSeconds = clampInt(ttlSeconds, minAttachmentURLTTLSeconds, maxAttachmentURLTTLSeconds)
+	ttlSeconds = min(max(ttlSeconds, minAttachmentURLTTLSeconds), maxAttachmentURLTTLSeconds)
 
 	raw := make([]byte, ticketRandomBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -230,7 +230,7 @@ func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upstreamURL := strings.TrimRight(h.cfg.GraphBaseURL, "/") + ticket.Target
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil) //nolint:gosec // upstreamURL is pinned to configured GraphBaseURL and validated ticket target.
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"error":             "upstream_fetch_failed",
@@ -240,7 +240,7 @@ func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Authorization", "Bearer "+ticket.Token)
 
-	resp, err := h.streamHTTPClient().Do(req)
+	resp, err := h.streamHTTPClient().Do(req) //nolint:gosec // upstreamURL is pinned to configured GraphBaseURL and validated ticket target.
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"error":             "upstream_fetch_failed",
@@ -345,7 +345,7 @@ func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 			return
 		}
 		targetURL := "http://unix/attachment?t=" + url.QueryEscape(ticketID)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil) //nolint:gosec // targetURL dials the fixed broker Unix domain socket.
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"error":             "upstream_fetch_failed",
@@ -353,7 +353,7 @@ func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 			})
 			return
 		}
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // targetURL dials the fixed broker Unix domain socket.
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"error":             "upstream_fetch_failed",

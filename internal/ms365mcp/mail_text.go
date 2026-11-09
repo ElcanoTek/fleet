@@ -28,7 +28,9 @@ var (
 	angleBracketURLRe  = regexp.MustCompile(`<(https?://[^>\s]+)>`)
 	bareURLRe          = regexp.MustCompile(`https?://[^\s<>)"'\]]+`)
 	multiBlankLinesRe  = regexp.MustCompile(`\n{3,}`)
-	originalMessageRe  = regexp.MustCompile(`(?i)^-{2,}\s*(Original Message|Forwarded message)\s*-{2,}`)
+	originalMessageRe  = regexp.MustCompile(`(?i)^-{2,}\s*Original Message\s*-{2,}`)
+	forwardedMessageRe = regexp.MustCompile(`(?i)^(-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:\s*)$`)
+	forwardedHeaderRe  = regexp.MustCompile(`(?i)^(From|Sent|Date|To|Cc|Subject|Reply-To):`)
 	outlookHeaderBlkRe = regexp.MustCompile(`(?i)^From:\s+.+`)
 	outlookHeaderSubRe = regexp.MustCompile(`(?i)^(Sent|Date|To|Subject):`)
 	onWroteSingleRe    = regexp.MustCompile(`(?i)^On\s+.+wrote:\s*$`)
@@ -139,8 +141,19 @@ func cleanMailText(text string, stripQuotes bool) string {
 	lines := strings.Split(text, "\n")
 	if stripQuotes {
 		cutIdx := len(lines)
+		inForwardedHeader := false
 		for i := 0; i < len(lines); i++ {
 			trimmed := strings.TrimSpace(lines[i])
+			if forwardedMessageRe.MatchString(trimmed) {
+				inForwardedHeader = true
+				continue
+			}
+			if inForwardedHeader {
+				if trimmed == "" || forwardedHeaderRe.MatchString(trimmed) {
+					continue
+				}
+				inForwardedHeader = false
+			}
 			if originalMessageRe.MatchString(trimmed) {
 				cutIdx = i
 				break
@@ -222,7 +235,7 @@ func (h *Handler) executeReadMailText(ctx context.Context, token string, args ma
 
 	maxChars := 3000
 	if rawMax, ok := intArg(args, "maxChars"); ok && rawMax > 0 {
-		maxChars = clampInt(rawMax, 1, maxReadMailTotalChars)
+		maxChars = min(max(rawMax, 1), maxReadMailTotalChars)
 	}
 	stripQuoted := true
 	if rawStrip, ok := args["stripQuoted"].(bool); ok {
@@ -288,9 +301,9 @@ func (h *Handler) fetchMessagesForReadMailText(ctx context.Context, token string
 	search, _ := args["search"].(string)
 	limit := 20
 	if rawTop, ok := intArg(args, "top"); ok && rawTop > 0 {
-		limit = clampInt(rawTop, 1, 50)
+		limit = min(max(rawTop, 1), 50)
 	} else if rawLimit, ok := intArg(args, "limit"); ok && rawLimit > 0 {
-		limit = clampInt(rawLimit, 1, 50)
+		limit = min(max(rawLimit, 1), 50)
 	}
 
 	path := fmt.Sprintf("/me/mailFolders/%s/messages", encodeGraphPathSegment(folderID))
@@ -310,7 +323,7 @@ func (h *Handler) fetchMessagesForReadMailText(ctx context.Context, token string
 	} else {
 		q.Set("$orderby", "receivedDateTime desc")
 	}
-	res, _, err := h.graphRequestWithExpandFallback(ctx, token, "GET", path, q, nil, extraHeaders, true)
+	res, _, _, err := h.graphRequestWithExpandFallback(ctx, token, "GET", path, q, nil, extraHeaders, true)
 	if err != nil {
 		return nil, err
 	}

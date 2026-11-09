@@ -3,9 +3,12 @@
 package ms365mcp
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +84,11 @@ type Config struct {
 	// private Unix domain socket.
 	AttachmentProxy http.Handler
 
+	// Optional bundle-supplied tool catalog JSON (loaded from
+	// <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json when present); falls back to
+	// the default Microsoft Graph v1.0 catalog when empty.
+	CatalogJSON []byte
+
 	// Test seams (defaulted automatically when empty/nil).
 	GraphBaseURL     string
 	AuthBaseURL      string
@@ -151,7 +159,15 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 	ttlSeconds := defaultAttachmentURLTTLSeconds
 	if rawTTL := strings.TrimSpace(envreg.Get("MS365_MCP_ATTACHMENT_URL_TTL_S")); rawTTL != "" {
 		if parsed, err := strconv.Atoi(rawTTL); err == nil && parsed > 0 {
-			ttlSeconds = clampInt(parsed, minAttachmentURLTTLSeconds, maxAttachmentURLTTLSeconds)
+			ttlSeconds = min(max(parsed, minAttachmentURLTTLSeconds), maxAttachmentURLTTLSeconds)
+		}
+	}
+
+	var catalogJSON []byte
+	if clientDir := strings.TrimSpace(envreg.Get("FLEET_CLIENT_CONFIG_DIR")); clientDir != "" {
+		overridePath := filepath.Clean(filepath.Join(clientDir, "ms365_tools.json"))
+		if b, err := os.ReadFile(overridePath); err == nil && len(bytes.TrimSpace(b)) > 0 {
+			catalogJSON = b
 		}
 	}
 
@@ -163,6 +179,7 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		Aliases:                 aliases,
 		AllowedRedirectURIs:     redirectURIs,
 		AttachmentURLTTLSeconds: ttlSeconds,
+		CatalogJSON:             catalogJSON,
 		GraphBaseURL:            defaultGraphBaseURL,
 		AuthBaseURL:             defaultAuthBaseURL,
 		HTTPClient:              &http.Client{Timeout: 30 * time.Second},
@@ -285,14 +302,4 @@ func appendUniqueString(list []string, item string) []string {
 		}
 	}
 	return append(list, item)
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }

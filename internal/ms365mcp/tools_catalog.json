@@ -106,8 +106,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-chat",
@@ -561,8 +560,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-chat-message",
@@ -776,8 +774,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-drive-item",
@@ -1239,7 +1236,7 @@
   },
   {
     "name": "get-calendar-view",
-    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the user's default calendar,\nor from some other calendar of the user.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range for the default calendar. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2024-01-01T00:00:00Z). Use get-calendar-view if you need a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep the events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness; neither property is filterable (isOnlineMeeting returns 400 ErrorInvalidProperty). To search by subject, use $filter=contains(subject,'keyword'). Teams meetings expose their join link as onlineMeeting/joinUrl; the event resource has no joinWebUrl property. Pass that joinUrl to get-calendar-event as $filter=JoinWebUrl eq '{url}' to reach transcripts.",
+    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the user's default calendar,\nor from some other calendar of the user.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range for the default calendar. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2024-01-01T00:00:00Z). Use get-calendar-view if you need a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep the events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness; neither property is filterable (isOnlineMeeting returns 400 ErrorInvalidProperty). To search by subject, use $filter=contains(subject,'keyword'). Teams meetings expose their join link as onlineMeeting/joinUrl; the event resource has no joinWebUrl property. Match that onlineMeeting/joinUrl against the normalized joinWebUrl from parse-teams-url.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1969,8 +1966,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-calendar-event",
@@ -2220,8 +2216,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "delete-calendar-event",
@@ -2269,8 +2264,7 @@
     "bodyParams": [],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "accept-calendar-event",
@@ -2333,8 +2327,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "decline-calendar-event",
@@ -2400,8 +2393,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "tentatively-accept-calendar-event",
@@ -2467,8 +2459,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "list-joined-teams",
@@ -3029,8 +3020,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-mail-message",
@@ -3352,8 +3342,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "create-reply-draft",
@@ -3413,8 +3402,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "create-reply-all-draft",
@@ -3474,8 +3462,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "forward-mail-message",
@@ -3538,8 +3525,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "move-mail-message",
@@ -3593,8 +3579,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "reply-mail-message",
@@ -3654,8 +3639,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "reply-all-mail-message",
@@ -3715,8 +3699,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "send-draft-message",
@@ -3758,8 +3741,7 @@
     "bodyParams": [],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "send-mail",
@@ -3813,8 +3795,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "list-todo-task-lists",
@@ -4113,8 +4094,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "update-todo-task",
@@ -4260,8 +4240,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "search-query",
@@ -4802,8 +4781,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "get-channel-message",
@@ -5099,8 +5077,7 @@
     ],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false,
-    "critical": true
+    "returnDownloadUrl": false
   },
   {
     "name": "list-team-members",
@@ -5232,7 +5209,7 @@
   },
   {
     "name": "parse-teams-url",
-    "description": "Converts any Teams meeting URL format (short /meet/, full /meetup-join/, or recap ?threadId=) into a standard joinWebUrl. Use this before get-calendar-view or get-calendar-event when the user provides a recap or short URL.",
+    "description": "Converts any Teams meeting URL format (short /meet/, full /meetup-join/, or recap ?threadId=) into a standard joinWebUrl and extracts meeting identifiers. Match the returned joinWebUrl against onlineMeeting/joinUrl in get-calendar-view results, or use threadId with get-chat / list-chat-messages.",
     "inputSchema": {
       "type": "object",
       "properties": {
