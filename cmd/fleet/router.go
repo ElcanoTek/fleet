@@ -53,6 +53,9 @@ type httpSurface struct {
 	// of each family are served by exactly these handlers.
 	orchListener http.Handler
 	chatListener http.Handler
+	// ms365 is the optional built-in Microsoft 365 OAuth + Graph MCP handler
+	// (mounted when MS365_MCP_CLIENT_ID is set).
+	ms365 http.Handler
 }
 
 // orchestratorPublicPaths are the unversioned-forever orchestrator paths
@@ -61,6 +64,19 @@ var orchestratorPublicPaths = []string{"/api-info", "/.well-known/agent-card.jso
 
 // chatPublicPaths are the chat paths a front proxy exposes.
 var chatPublicPaths = []string{"/webhooks/*"}
+
+// ms365PublicPaths are the built-in Microsoft 365 OAuth + Graph MCP paths
+// mounted on the public tree when MS365_MCP_CLIENT_ID is configured.
+var ms365PublicPaths = []string{
+	"/.well-known/oauth-authorization-server",
+	"/.well-known/oauth-protected-resource",
+	"/.well-known/oauth-protected-resource/*",
+	"/register",
+	"/authorize",
+	"/token",
+	"/mcp",
+	"/attachment",
+}
 
 // orchestratorV1Prefix is the public API's mount point (Family.Prefix).
 const orchestratorV1Prefix = "/v1"
@@ -78,6 +94,12 @@ func buildPublicRouter(s httpSurface) publicRouter {
 	}
 	for _, p := range chatPublicPaths {
 		r.Handle(p, freshRouting(s.chatListener))
+	}
+	if s.ms365 != nil {
+		ms365 := freshRouting(s.ms365)
+		for _, p := range ms365PublicPaths {
+			r.Handle(p, ms365)
+		}
 	}
 	// The browser alias: the gateway gates it (session, CSRF, the backend
 	// contract) and serves it from the same router.

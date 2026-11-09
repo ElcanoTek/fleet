@@ -63,7 +63,7 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: safeTransport(),
+		Transport: netguard.WrapRoundTripper(safeTransport()),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errRedirectBlocked
 		},
@@ -83,7 +83,7 @@ func SafeStreamingHTTPClient() *http.Client {
 	tr := safeTransport()
 	tr.ResponseHeaderTimeout = 30 * time.Second
 	return &http.Client{
-		Transport: tr,
+		Transport: netguard.WrapRoundTripper(tr),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errRedirectBlocked
 		},
