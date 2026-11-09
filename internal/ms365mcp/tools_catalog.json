@@ -695,7 +695,7 @@
   },
   {
     "name": "get-drive-item",
-    "description": "All items contained in the drive. Read-only. Nullable.\n\n\ud83d\udca1 TIP: Gets metadata for a file or folder: name, size, lastModifiedDateTime, createdBy, webUrl, file (mimeType, hashes), folder (childCount), parentReference, and @microsoft.graph.downloadUrl. For large drive/SharePoint files, call get-download-url with target=/drives/{drive-id}/items/{driveItem-id}/content to fetch out-of-band with no Authorization header. For small files where base64 in the tool response is acceptable, call get-download-url with the same /content target.",
+    "description": "Get metadata for a specific file or folder (driveItem) in OneDrive or SharePoint by driveId and driveItemId. Returns name, size, lastModifiedDateTime, webUrl, and file/folder facets. To download the file content to disk, call get-download-url with target=\"/drives/{driveId}/items/{driveItemId}/content\" and pass the returned downloadUrl to download_url.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -896,11 +896,6 @@
           "minimum": 0,
           "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
         },
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
         "select": {
           "anyOf": [
             {
@@ -988,7 +983,6 @@
     ],
     "queryParams": [
       "top",
-      "skip",
       "select",
       "orderby",
       "expand",
@@ -4996,7 +4990,7 @@
   },
   {
     "name": "get-download-url",
-    "description": "Resolve a short-lived, pre-authenticated download URL for Microsoft Graph binary content that exposes one (drive/SharePoint file content). The returned URL streams the bytes with NO Authorization header, so the client can fetch it straight to disk (e.g. curl) without round-tripping base64 through the agent context. Prefer this over get-download-url for any file above a few KB or any bulk download. Returns { downloadUrl, name?, size?, contentType? }. Mail file attachments (/messages/{id}/attachments/{id}/$value), meeting recordings and other $value byte endpoints have no pre-authenticated URL from Graph itself, but call this tool for them anyway: a server running with --enable-attachment-urls mints its own single-use URL for them, and one without it answers with the reason and points at get-download-url.",
+    "description": "Mint a short-lived, single-use host-side download URL (/attachment?t=...) for Microsoft Graph binary content (such as /drives/{drive-id}/items/{driveItem-id}/content or /me/messages/{message-id}/attachments/{attachment-id}/$value). Pass the returned downloadUrl to download_url to save the file into your workspace. Returns { downloadUrl, expiresAt, singleUse, name?, size?, contentType? }.",
     "inputSchema": {
       "type": "object",
       "properties": {

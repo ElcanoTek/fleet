@@ -430,13 +430,21 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		if redirectURI != "" {
 			upParams.Set("redirect_uri", redirectURI)
 		}
-		switch {
-		case requestedScope != "":
-			upParams.Set("scope", filterAllowedScopes(requestedScope))
-		case authorizedScope != "":
+		if authorizedScope == "" {
+			authorizedScope = strings.Join(DefaultAllowedScopes, " ")
+		}
+		if requestedScope != "" {
+			subset, ok := filterAuthorizedScopeSubset(requestedScope, authorizedScope)
+			if !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error":             "invalid_scope",
+					"error_description": "Requested scope exceeds the authorized grant",
+				})
+				return
+			}
+			upParams.Set("scope", subset)
+		} else {
 			upParams.Set("scope", authorizedScope)
-		default:
-			upParams.Set("scope", strings.Join(DefaultAllowedScopes, " "))
 		}
 	case "refresh_token":
 		if refreshToken == "" {
@@ -459,8 +467,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	status, payload, err := h.postTokenToMicrosoft(r.Context(), tokenURL, upParams, origin)
+	status, payload, err := h.postTokenToMicrosoft(r.Context(), tokenURL, upParams)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error":             "server_error",
@@ -480,7 +487,7 @@ func (h *Handler) postTokenToMicrosoft(ctx interface {
 	Done() <-chan struct{}
 	Err() error
 	Value(any) any
-}, tokenURL string, baseParams url.Values, origin string) (int, map[string]any, error) {
+}, tokenURL string, baseParams url.Values) (int, map[string]any, error) {
 	send := func(includeSecret bool) (int, map[string]any, string, error) {
 		params := url.Values{}
 		for k, v := range baseParams {
@@ -494,9 +501,6 @@ func (h *Handler) postTokenToMicrosoft(ctx interface {
 			return 0, nil, "", err
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		if origin != "" && h.cfg.ClientSecret == "" {
-			req.Header.Set("Origin", origin)
-		}
 		resp, err := h.httpClient().Do(req) //nolint:gosec // tokenURL is constructed from configured AuthBaseURL and TenantID.
 		if err != nil {
 			return 0, nil, "", err
@@ -584,6 +588,25 @@ func filterAllowedScopes(raw string) string {
 		return strings.Join(DefaultAllowedScopes, " ")
 	}
 	return strings.Join(filtered, " ")
+}
+
+func filterAuthorizedScopeSubset(requestedRaw, authorizedRaw string) (string, bool) {
+	authorizedSet := make(map[string]string)
+	for _, s := range strings.Fields(authorizedRaw) {
+		authorizedSet[strings.ToLower(s)] = s
+	}
+	var subset []string
+	for _, token := range strings.Fields(requestedRaw) {
+		canonical, ok := authorizedSet[strings.ToLower(token)]
+		if !ok {
+			return "", false
+		}
+		subset = appendUniqueString(subset, canonical)
+	}
+	if len(subset) == 0 {
+		return "", false
+	}
+	return strings.Join(subset, " "), true
 }
 
 func isRedirectURIAllowed(redirectURI string, patterns []string) bool {

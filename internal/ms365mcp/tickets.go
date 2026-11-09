@@ -393,7 +393,7 @@ func NewUnixSocketAttachmentProxy(socketPath string) http.Handler {
 			})
 			return
 		}
-		for _, hdr := range []string{"Content-Type", "Origin", "X-Ms365-Client-IP"} {
+		for _, hdr := range []string{"Content-Type", "X-Ms365-Client-IP"} {
 			if val := r.Header.Get(hdr); val != "" {
 				req.Header.Set(hdr, val)
 			}
