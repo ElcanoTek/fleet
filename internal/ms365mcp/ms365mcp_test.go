@@ -825,3 +825,90 @@ func TestDCRValidationPKCENonEvictionListAttachmentsAndForwardedMail(t *testing.
 		t.Fatalf("cleanMailText failed to strip trailing Original Message reply: %q", cleaned)
 	}
 }
+
+func TestReview5833450252Findings(t *testing.T) {
+	t.Parallel()
+
+	var lastPath, lastContentType string
+	var lastBody map[string]any
+	mockGraph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastPath = r.URL.Path
+		lastContentType = r.Header.Get("Content-Type")
+		lastBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&lastBody)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"value": []any{}})
+	}))
+	defer mockGraph.Close()
+
+	h := NewHandler(Config{
+		ClientID:     "client-123",
+		PublicURL:    "https://fleet.elcanotek.com",
+		GraphBaseURL: mockGraph.URL + "/v1.0",
+		HTTPClient:   mockGraph.Client(),
+	})
+
+	// 1. reply-to-chat-message accepts chatMessageId + body and rejects incomplete payloads.
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "reply-to-chat-message", map[string]any{
+		"chatId": "chat-1",
+	}); err == nil || !isErr {
+		t.Fatal("expected reply-to-chat-message with only chatId to fail")
+	}
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "reply-to-chat-message", map[string]any{
+		"chatId":        "chat-1",
+		"chatMessageId": "msg-99",
+		"body": map[string]any{
+			"body": map[string]any{"contentType": "html", "content": "Quoted reply"},
+		},
+	}); err != nil || isErr {
+		t.Fatalf("reply-to-chat-message with chatMessageId + body failed: isErr=%v err=%v", isErr, err)
+	}
+	if lastPath != "/v1.0/chats/chat-1/messages/replyWithQuote" {
+		t.Fatalf("unexpected path %q", lastPath)
+	}
+	ids, _ := lastBody["messageIds"].([]any)
+	if len(ids) != 1 || ids[0] != "msg-99" {
+		t.Fatalf("expected messageIds=[msg-99], got %#v", lastBody["messageIds"])
+	}
+
+	// 2. get-calendar-view routes to /me/calendars/{calendarId}/calendarView when calendarId is provided.
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "get-calendar-view", map[string]any{
+		"calendarId":    "cal-secondary",
+		"startDateTime": "2026-11-09T00:00:00Z",
+		"endDateTime":   "2026-11-10T00:00:00Z",
+	}); err != nil || isErr {
+		t.Fatalf("get-calendar-view with calendarId failed: isErr=%v err=%v", isErr, err)
+	}
+	if lastPath != "/v1.0/me/calendars/cal-secondary/calendarView" {
+		t.Fatalf("get-calendar-view path = %q, want /v1.0/me/calendars/cal-secondary/calendarView", lastPath)
+	}
+
+	// 3. send-mail with string body sets Content-Type: text/plain.
+	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "send-mail", map[string]any{
+		"body": "RAW_BASE64_MIME_PAYLOAD",
+	}); err != nil || isErr {
+		t.Fatalf("send-mail string body failed: isErr=%v err=%v", isErr, err)
+	}
+	if lastContentType != "text/plain" {
+		t.Fatalf("send-mail string body Content-Type = %q, want text/plain", lastContentType)
+	}
+
+	// 4. AttachmentTicketStore preserves live tickets when full instead of evicting them.
+	store := NewAttachmentTicketStore()
+	firstID, err := store.Issue("tok-1", "/me/messages/m1/attachments/a1/$value", 300, "first.pdf", "application/pdf")
+	if err != nil {
+		t.Fatalf("first Issue failed: %v", err)
+	}
+	for i := 1; i < maxAttachmentTickets; i++ {
+		if _, err := store.Issue("tok-flood", "/me/messages/m1/attachments/a1/$value", 300, "f.pdf", "application/pdf"); err != nil {
+			t.Fatalf("Issue %d failed before cap: %v", i, err)
+		}
+	}
+	if _, err := store.Issue("tok-over", "/me/messages/m1/attachments/a1/$value", 300, "over.pdf", "application/pdf"); err == nil {
+		t.Fatal("expected Issue at capacity to return an error instead of evicting live tickets")
+	}
+	if redeemed, ok := store.Redeem(firstID); !ok || redeemed.Filename != "first.pdf" {
+		t.Fatalf("first ticket was evicted at capacity: ok=%v redeemed=%+v", ok, redeemed)
+	}
+}

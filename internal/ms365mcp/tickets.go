@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxAttachmentTickets = 256
+	maxAttachmentTickets = 4096
 	ticketRandomBytes    = 32
 )
 
@@ -90,8 +90,8 @@ func (s *AttachmentTicketStore) Issue(token, target string, ttlSeconds int, file
 	defer s.mu.Unlock()
 
 	s.sweepLocked(now)
-	for len(s.tickets) >= maxAttachmentTickets {
-		s.tickets = s.tickets[1:]
+	if len(s.tickets) >= maxAttachmentTickets {
+		return "", fmt.Errorf("too many active attachment download tickets; please retry shortly")
 	}
 	s.tickets = append(s.tickets, AttachmentTicket{
 		id:          id,

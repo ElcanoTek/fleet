@@ -57,5 +57,5 @@ The embedded catalog (`internal/ms365mcp/tools_catalog.json`) exposes all 57 too
 
 ## Scope and deviations
 
-- **In-memory ticket and PKCE stores**: Both `pkceStore` (15-minute TTL, 4,096-entry total cap, 64-entry per-client-IP cap) and `AttachmentTicketStore` (`MS365_MCP_ATTACHMENT_URL_TTL_S` default 300s, 256-entry cap) are held in process memory inside `fleet mcp-broker` (with `/authorize`, `/token`, and `/attachment` proxied from the parent web server over a private Unix domain socket when the broker is active).
+- **In-memory ticket and PKCE stores**: Both `pkceStore` (15-minute TTL, 4,096-entry total cap, 64-entry per-client-IP cap) and `AttachmentTicketStore` (`MS365_MCP_ATTACHMENT_URL_TTL_S` default 300s, 4,096-entry cap without evicting unexpired tickets) are held in process memory inside `fleet mcp-broker` (with `/authorize`, `/token`, and `/attachment` proxied from the parent web server over a private Unix domain socket when the broker is active).
 - **Disabled by default**: When `MS365_MCP_CLIENT_ID` is unset (or when `<FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json` exists and fails to load), neither the public routes nor the `netguard` in-process hook are registered.

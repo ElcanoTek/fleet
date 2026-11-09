@@ -126,7 +126,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -140,15 +140,11 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "chatId": {
           "type": "string",
           "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -191,48 +187,17 @@
     "inputSchema": {
       "type": "object",
       "properties": {
-        "skip": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
-        },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
-        "count": {
-          "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
-        },
-        "orderby": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
-        },
         "chatId": {
           "type": "string",
           "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "name": {
           "type": "string",
-          "description": "Case-insensitive text to match against each member's displayName and email. Applied after $select projection, so only fields you can see are matched. Without fetchAllPages only the fetched page is filtered, and @odata.count still reports the unfiltered total."
-        },
-        "skiptoken": {
-          "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Case-insensitive substring filter matched client-side against each member's displayName and email."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -268,18 +233,18 @@
   },
   {
     "name": "list-chat-messages",
-    "description": "Retrieve the list of messages in a chat. This method supports federation. To list chat messages in application context, the request must be made from the tenant that the channel owner belongs to (represented by the tenantId property on the channel).\n\n\ud83d\udca1 TIP: Lists messages in a chat. $top is capped at 50 (higher values return 400) and $orderby accepts only descending order on createdDateTime or lastModifiedDateTime - ascending is rejected. Meeting chats mostly hold system events; transcripts are not available here, use list-chat-messages instead.",
+    "description": "Retrieve the list of messages in a Microsoft Teams chat. $top is capped at 50 and $orderby accepts descending order on createdDateTime or lastModifiedDateTime.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "orderby": {
           "anyOf": [
@@ -293,7 +258,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "chatId": {
           "type": "string",
@@ -301,11 +266,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -487,7 +452,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -501,7 +466,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "chatId": {
           "type": "string",
@@ -510,10 +475,6 @@
         "chatMessageId": {
           "type": "string",
           "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -554,7 +515,7 @@
   },
   {
     "name": "reply-to-chat-message",
-    "description": "Reply to (quote) message(s) in a Microsoft Teams chat via replyWithQuote. Provide chatId and either {messageIds, replyMessage} or {messageId, body}.",
+    "description": "Reply to (quote) message(s) in a Microsoft Teams chat via replyWithQuote. Provide chatId and either {messageIds, replyMessage} or {messageId (or chatMessageId), body}.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -644,7 +605,7 @@
         },
         "chatMessageId": {
           "type": "string",
-          "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
+          "description": "Alias for messageId: ID of the chat message being replied to."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -665,11 +626,38 @@
           "type": "object",
           "description": "The chatMessage reply payload (with body: {contentType, content}).",
           "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "ID of the chat message being replied to (use with body as an alternative to messageIds + replyMessage)."
         }
       },
       "additionalProperties": true,
       "required": [
         "chatId"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "chatId",
+            "messageIds",
+            "replyMessage"
+          ]
+        },
+        {
+          "required": [
+            "chatId",
+            "messageId",
+            "body"
+          ]
+        },
+        {
+          "required": [
+            "chatId",
+            "chatMessageId",
+            "body"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -711,7 +699,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -725,7 +713,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "driveId": {
           "type": "string",
@@ -734,10 +722,6 @@
         "driveItemId": {
           "type": "string",
           "description": "Value for the 'driveItemId' path segment. Pass it under the name 'driveItemId', not as 'id'. Use the 'id' field of the drive item object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -785,7 +769,7 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "orderby": {
           "anyOf": [
@@ -799,7 +783,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -813,7 +797,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -827,7 +811,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "driveId": {
           "type": "string",
@@ -839,11 +823,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -894,7 +878,7 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "select": {
           "anyOf": [
@@ -908,7 +892,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "orderby": {
           "anyOf": [
@@ -922,7 +906,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "expand": {
           "anyOf": [
@@ -936,7 +920,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "driveId": {
           "type": "string",
@@ -948,11 +932,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1003,20 +987,20 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -1030,7 +1014,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -1044,7 +1028,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1058,15 +1042,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1106,7 +1090,7 @@
   },
   {
     "name": "get-calendar-view",
-    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the user's default calendar,\nor from some other calendar of the user.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range for the default calendar. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2024-01-01T00:00:00Z). Use get-calendar-view if you need a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep the events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness; neither property is filterable (isOnlineMeeting returns 400 ErrorInvalidProperty). To search by subject, use $filter=contains(subject,'keyword'). Teams meetings expose their join link as onlineMeeting/joinUrl; the event resource has no joinWebUrl property. Match that onlineMeeting/joinUrl against the normalized joinWebUrl from parse-teams-url.",
+    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the signed-in user's default calendar or from a specific calendar when calendarId is provided.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2026-01-01T00:00:00Z). Pass calendarId (from list-calendars) to query a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness. Teams meetings expose their join link as onlineMeeting/joinUrl; match it against the normalized joinWebUrl from parse-teams-url.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1121,20 +1105,20 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -1148,7 +1132,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -1162,7 +1146,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1176,15 +1160,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1199,8 +1183,22 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "type": "boolean",
-          "description": "When true, expands singleValueExtendedProperties on each event. Use this to retrieve custom extended properties (e.g., sync metadata) stored on calendar events."
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Optional calendar ID (from list-calendars) to query a specific non-default calendar. Defaults to the signed-in user's default calendar."
         }
       },
       "additionalProperties": true,
@@ -1254,11 +1252,11 @@
               "maximum": 50
             }
           ],
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "orderby": {
           "anyOf": [
@@ -1272,7 +1270,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "expand": {
           "anyOf": [
@@ -1286,15 +1284,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1338,24 +1336,24 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "search": {
           "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
+          "description": "Search query string (Graph $search)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -1369,7 +1367,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -1383,7 +1381,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1397,15 +1395,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1462,7 +1460,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1476,15 +1474,11 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "contactId": {
           "type": "string",
           "description": "Value for the 'contactId' path segment. Pass it under the name 'contactId', not as 'id'. Use the 'id' field of the contact object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1530,24 +1524,24 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "search": {
           "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
+          "description": "Search query string (Graph $search)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -1561,7 +1555,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -1575,7 +1569,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1589,15 +1583,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1612,8 +1606,18 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "type": "boolean",
-          "description": "When true, expands singleValueExtendedProperties on each event. Use this to retrieve custom extended properties (e.g., sync metadata) stored on calendar events."
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
         }
       },
       "additionalProperties": true
@@ -1820,7 +1824,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -1834,15 +1838,11 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "eventId": {
           "type": "string",
           "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -1857,8 +1857,18 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "type": "boolean",
-          "description": "When true, expands singleValueExtendedProperties on each event. Use this to retrieve custom extended properties (e.g., sync metadata) stored on calendar events."
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
         }
       },
       "additionalProperties": true,
@@ -2300,7 +2310,7 @@
       "properties": {
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -2342,20 +2352,20 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -2369,7 +2379,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -2383,7 +2393,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -2397,15 +2407,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -2453,24 +2463,24 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "search": {
           "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
+          "description": "Search query string (Graph $search)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -2484,7 +2494,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -2498,7 +2508,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -2512,7 +2522,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "mailFolderId": {
           "type": "string",
@@ -2520,11 +2530,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -2533,6 +2543,24 @@
         "excludeResponse": {
           "type": "boolean",
           "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
         }
       },
       "additionalProperties": true,
@@ -2581,24 +2609,24 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "search": {
           "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
+          "description": "Search query string (Graph $search)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -2612,7 +2640,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -2626,7 +2654,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -2640,15 +2668,15 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -2657,6 +2685,24 @@
         "excludeResponse": {
           "type": "boolean",
           "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
         }
       },
       "additionalProperties": true
@@ -2866,7 +2912,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -2880,15 +2926,11 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "messageId": {
           "type": "string",
           "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -2897,6 +2939,24 @@
         "excludeResponse": {
           "type": "boolean",
           "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
         }
       },
       "additionalProperties": true,
@@ -2934,20 +2994,20 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination. Not supported with $search."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "count": {
           "type": "boolean",
-          "description": "Set true to enable advanced query mode (ConsistencyLevel: eventual). Required for complex $filter on flag/flagStatus or contains(). The response then includes @odata.count, the total for the filtered collection, which can exceed the items returned when fetchAllPages hits its page/item cap."
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
         },
         "orderby": {
           "anyOf": [
@@ -2961,7 +3021,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "select": {
           "anyOf": [
@@ -2975,7 +3035,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -2989,7 +3049,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "messageId": {
           "type": "string",
@@ -2997,7 +3057,7 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -3055,19 +3115,7 @@
         },
         "fileName": {
           "type": "string",
-          "description": "Name of the file, used as the last segment of the returned resource URI when the server runs with blob output. Optional."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
-        },
-        "includeHeaders": {
-          "type": "boolean",
-          "description": "Include response headers (including ETag) in the response metadata"
-        },
-        "excludeResponse": {
-          "type": "boolean",
-          "description": "Exclude the full response body and only return success or failure indication"
+          "description": "Optional fallback filename for the downloaded attachment when Graph metadata does not include a name."
         }
       },
       "additionalProperties": true,
@@ -3088,14 +3136,12 @@
       "message-id",
       "attachment-id"
     ],
-    "queryParams": [
-      "fileName"
-    ],
+    "queryParams": [],
     "headerParams": [],
     "bodyParams": [],
     "contentType": "",
     "supportsTimezone": false,
-    "returnDownloadUrl": false
+    "returnDownloadUrl": true
   },
   {
     "name": "create-forward-draft",
@@ -3161,7 +3207,7 @@
   },
   {
     "name": "create-reply-draft",
-    "description": "Create a draft to reply to the sender of a message in either JSON or MIME format. When using JSON format:\n- Specify either a comment or the body property of the message parameter. Specifying both will return an HTTP 400 Bad Request error.\n- If replyTo is specified in the original message, per Internet Message Format (RFC 2822), you should send the reply to the recipients in replyTo, and not the recipients in from.\n- You can update the draft later to add reply content to the body or change other message properties. When using MIME format:\n- Provide the applicable Internet message headers and the MIME content, all encoded in base64 format in the request body.\n- Add any attachments and S/MIME properties to the MIME content. Send the draft message in a subsequent operation. Alternatively, reply to a message in a single operation.\n\n\ud83d\udca1 TIP: For HTML replies pass Message.body.contentType: 'html' with Message.body.content as HTML. Note: supplying Message.body replaces the whole draft body, so the original quoted history is not included. Specifying both 'comment' and Message.body returns 400. Signatures are added by the Outlook client only, not via Graph.",
+    "description": "Create a draft reply to the sender of an Outlook email message in the signed-in user's mailbox. Pass an optional JSON body with comment (reply text prepended above quoted history) or message (draft message property overrides). Specifying both comment and message.body returns an HTTP 400 Bad Request error; supplying message.body replaces the entire draft body without quoted history.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3220,7 +3266,7 @@
   },
   {
     "name": "create-reply-all-draft",
-    "description": "Create a draft to reply to the sender and all recipients of a message in either JSON or MIME format. When using JSON format:\n- Specify either a comment or the body property of the message parameter. Specifying both will return an HTTP 400 Bad Request error.\n- If the original message specifies a recipient in the replyTo property, per Internet Message Format (RFC 2822), you should send the reply to the recipients in the replyTo and toRecipients properties, and not the recipients in the from and toRecipients properties.\n- You can update the draft later to add reply content to the body or change other message properties. When using MIME format:\n- Provide the applicable Internet message headers and the MIME content, all encoded in base64 format in the request body.\n- Add any attachments and S/MIME properties to the MIME content. Send the draft message in a subsequent operation. Alternatively, reply-all to a message in a single action.\n\n\ud83d\udca1 TIP: For HTML replies pass Message.body.contentType: 'html' with Message.body.content as HTML. Note: supplying Message.body replaces the whole draft body, so the original quoted history is not included. Specifying both 'comment' and Message.body returns 400. Signatures are added by the Outlook client only, not via Graph.",
+    "description": "Create a draft reply-all to the sender and all recipients of an Outlook email message in the signed-in user's mailbox. Pass an optional JSON body with comment (reply text prepended above quoted history) or message (draft message property overrides). Specifying both comment and message.body returns an HTTP 400 Bad Request error; supplying message.body replaces the entire draft body without quoted history.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3279,7 +3325,7 @@
   },
   {
     "name": "forward-mail-message",
-    "description": "Forward a message using either JSON or MIME format. When using JSON format, you can:\n- Specify either a comment or the body property of the message parameter. Specifying both will return an HTTP 400 Bad Request error.\n- Specify either the toRecipients parameter or the toRecipients property of the message parameter. Specifying both or specifying neither will return an HTTP 400 Bad Request error. When using MIME format:\n- Provide the applicable Internet message headers and the MIME content, all encoded in base64 format in the request body.\n- Add any attachments and S/MIME properties to the MIME content. This method saves the message in the Sent Items folder. Alternatively, create a draft to forward a message, and send it later.\n\n\ud83d\udca1 TIP: Forward an email preserving full HTML formatting and attachments. The 'comment' field adds text above the forwarded content. toRecipients is required. Do NOT reconstruct the email manually - this endpoint handles everything server-side.",
+    "description": "Forward an Outlook email message to recipients, preserving full HTML formatting and attachments. Pass body with toRecipients (required array of recipient objects) and optional comment (text added above the forwarded message) or message.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3396,7 +3442,7 @@
   },
   {
     "name": "reply-mail-message",
-    "description": "Reply to the sender of a message using either JSON or MIME format. When using JSON format:\n* Specify either a comment or the body property of the message parameter. Specifying both will return an HTTP 400 Bad Request error.\n* If the original message specifies a recipient in the replyTo property, per Internet Message Format (RFC 2822), send the reply to the recipients in replyTo and not the recipient in the from property. When using MIME format:\n- Provide the applicable Internet message headers and the MIME content, all encoded in base64 format in the request body.\n- Add any attachments and S/MIME properties to the MIME content. This method saves the message in the Sent Items folder. Alternatively, create a draft to reply to an existing message and send it later.\n\n\ud83d\udca1 TIP: Reply to an email preserving full HTML formatting. The 'comment' field is your reply text. Do NOT reconstruct the email manually.",
+    "description": "Reply to the sender of an Outlook email message, preserving HTML formatting and quoted history, and save the sent reply in Sent Items. Pass body with comment (your reply text) or message. Specifying both comment and message.body returns an HTTP 400 Bad Request error.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3456,7 +3502,7 @@
   },
   {
     "name": "reply-all-mail-message",
-    "description": "Reply to all recipients of a message using either JSON or MIME format. When using JSON format:\n- Specify either a comment or the body property of the message parameter. Specifying both will return an HTTP 400 Bad Request error.\n- If the original message specifies a recipient in the replyTo property, per Internet Message Format (RFC 2822), send the reply to the recipients in replyTo and not the recipient in the from property. When using MIME format:\n- Provide the applicable Internet message headers and the MIME content, all encoded in base64 format in the request body.\n- Add any attachments and S/MIME properties to the MIME content. This method saves the message in the Sent Items folder. Alternatively, create a draft to reply-all to a message and send it later.\n\n\ud83d\udca1 TIP: Reply-all preserving full HTML formatting. The 'comment' field is your reply text.",
+    "description": "Reply to the sender and all recipients of an Outlook email message, preserving HTML formatting and quoted history, and save the sent reply in Sent Items. Pass body with comment (your reply text) or message. Specifying both comment and message.body returns an HTTP 400 Bad Request error.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3558,7 +3604,7 @@
   },
   {
     "name": "send-mail",
-    "description": "Send the message specified in the request body using either JSON or MIME format. When using JSON format, you can include a file attachment in the same sendMail action call. When using MIME format: This method saves the message in the Sent Items folder. Alternatively, create a draft message to send later. To learn more about the steps involved in the backend before a mail is delivered to recipients, see here.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients.",
+    "description": "Send an Outlook email message specified in the JSON request body ({ message: { subject, body: { contentType, content }, toRecipients, ccRecipients, bccRecipients, attachments }, saveToSentItems }). Saves the message in Sent Items by default.\n\n\ud83d\udca1 TIP: Do not guess recipient email addresses; use list-outlook-contacts to find recipient email addresses when needed.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3612,31 +3658,31 @@
   },
   {
     "name": "list-todo-task-lists",
-    "description": "Get a list of the todoTaskList objects and their properties.\n\n\ud83d\udca1 TIP: If it returns only 'Flagged Emails', use list-todo-task-lists instead.",
+    "description": "Get a list of the signed-in user's Microsoft To Do task lists (todoTaskList objects) and their properties.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression."
+          "description": "OData $filter expression."
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -3679,16 +3725,16 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "skip": {
           "type": "integer",
           "minimum": 0,
-          "description": "Items to skip for pagination."
+          "description": "Number of items to skip for pagination (Graph $skip)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression."
+          "description": "OData $filter expression."
         },
         "orderby": {
           "anyOf": [
@@ -3702,7 +3748,7 @@
               }
             }
           ],
-          "description": "Sort expression, e.g. receivedDateTime desc"
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
         },
         "expand": {
           "anyOf": [
@@ -3716,7 +3762,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "todoTaskListId": {
           "type": "string",
@@ -3724,11 +3770,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -3771,7 +3817,7 @@
   },
   {
     "name": "create-todo-task",
-    "description": "Create a new task object in a specified todoTaskList.\n\n\ud83d\udca1 TIP: Creates a new task in a Microsoft To Do list. Body: { title: \"...\" }; optional dueDateTime, reminderDateTime, importance, body (notes), recurrence, categories, and checklistItems: [{ displayName: \"...\", isChecked: false }] to create the task's steps inline (isChecked is optional). Requires todoTaskListId from list-todo-task-lists. To change steps after the task exists, use the *-todo-checklist-item tools.",
+    "description": "Create a new task in a specified Microsoft To Do task list (requires todoTaskListId from list-todo-task-lists). Body accepts title, body (notes), dueDateTime, reminderDateTime, importance, recurrence, categories, and inline checklistItems: [{ displayName: \"...\", isChecked: false }].",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3911,7 +3957,7 @@
   },
   {
     "name": "update-todo-task",
-    "description": "Update the properties of a todoTask object.\n\n\ud83d\udca1 TIP: Updates a Microsoft To Do task. Use this to mark a to-do item complete or done (body: { status: \"completed\" }), reopen it (status: \"notStarted\"), rename it (title), or change its due date (dueDateTime), reminder (reminderDateTime), importance, or notes (body). Requires todoTaskListId from list-todo-task-lists and todoTaskId from list-todo-tasks. Steps (checklistItems) can't be changed here: Graph rejects checklistItems in a PATCH on the task with 400. Use update-todo-task instead.",
+    "description": "Update the properties of a Microsoft To Do task (such as status: \"completed\" or \"notStarted\", title, body, dueDateTime, reminderDateTime, or importance). Requires todoTaskListId from list-todo-task-lists and todoTaskId from list-todo-tasks. Note: Graph rejects checklistItems in a task PATCH.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3988,24 +4034,9 @@
               ],
               "description": "A brief description of the task."
             },
-            "attachments": {
-              "type": "array",
-              "description": "A collection of file attachments for the task."
-            },
-            "attachmentSessions": {
-              "type": "array"
-            },
-            "checklistItems": {
-              "type": "array",
-              "description": "A collection of checklistItems linked to a task."
-            },
             "extensions": {
               "type": "array",
               "description": "The collection of open extensions defined for the task. Nullable."
-            },
-            "linkedResources": {
-              "type": "array",
-              "description": "A collection of resources linked to the task."
             }
           },
           "additionalProperties": true
@@ -4120,7 +4151,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -4134,15 +4165,11 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "teamId": {
           "type": "string",
           "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4187,7 +4214,7 @@
       "properties": {
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "select": {
           "anyOf": [
@@ -4201,7 +4228,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "teamId": {
           "type": "string",
@@ -4209,7 +4236,7 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4264,7 +4291,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -4278,7 +4305,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "teamId": {
           "type": "string",
@@ -4287,10 +4314,6 @@
         "channelId": {
           "type": "string",
           "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4338,7 +4361,7 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "expand": {
           "anyOf": [
@@ -4352,7 +4375,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "teamId": {
           "type": "string",
@@ -4364,11 +4387,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4557,7 +4580,7 @@
               }
             }
           ],
-          "description": "Comma-separated fields to return, e.g. id,subject,from,receivedDateTime"
+          "description": "Comma-separated list of properties to return (Graph $select)."
         },
         "expand": {
           "anyOf": [
@@ -4571,7 +4594,7 @@
               }
             }
           ],
-          "description": "Navigation properties to inline, e.g. attachments on a message or event. Only navigation properties can be expanded: expanding a non-navigation property such as a message body fails with \"Parsing OData Select and Expand failed\". Request ordinary fields with $select instead. Some APIs accept only one relationship per request, so prefer a single value. Some relationships support nested selection, e.g. children($select=id,name)."
+          "description": "Navigation properties to expand inline (Graph $expand)."
         },
         "teamId": {
           "type": "string",
@@ -4584,10 +4607,6 @@
         "chatMessageId": {
           "type": "string",
           "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
-        },
-        "fetchAllPages": {
-          "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4637,7 +4656,7 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "teamId": {
           "type": "string",
@@ -4653,11 +4672,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "skiptoken": {
           "type": "string",
-          "description": "Next page: the @odata.nextLink from the previous response. Keep the other arguments the same."
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4844,11 +4863,11 @@
         "top": {
           "type": "integer",
           "minimum": 0,
-          "description": "Page size (Graph $top). Start small (e.g. 5\u201315) so responses fit the model context; raise only if needed. Use $select to return fewer fields per item. For more rows, use @odata.nextLink from the response instead of a very large $top."
+          "description": "Maximum number of items to return per page (Graph $top)."
         },
         "filter": {
           "type": "string",
-          "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
+          "description": "OData $filter expression."
         },
         "teamId": {
           "type": "string",
@@ -4856,11 +4875,11 @@
         },
         "fetchAllPages": {
           "type": "boolean",
-          "description": "Follow @odata.nextLink and merge up to 100 pages into one response. Can return enormous payloads\u2014only when the user explicitly needs a full export. Prefer a small $top first, then paginate or narrow with $filter/$search."
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
         },
         "name": {
           "type": "string",
-          "description": "Case-insensitive text to match against each member's displayName and email. Applied after $select projection, so only fields you can see are matched. Without fetchAllPages only the fetched page is filtered, and @odata.count still reports the unfiltered total."
+          "description": "Case-insensitive substring filter matched client-side against each member's displayName and email."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -4996,7 +5015,7 @@
       "properties": {
         "target": {
           "type": "string",
-          "description": "Relative Microsoft Graph path starting with \"/\". Either a driveItem content path or the item path itself, e.g. /drives/{drive-id}/items/{driveItem-id}/content, /me/drive/items/{driveItem-id}/content, or /sites/{site-id}/drive/items/{driveItem-id}. A trailing /content is optional and is stripped automatically for drive items. Mail attachment $value paths and meeting recordings are accepted on a server running with --enable-attachment-urls."
+          "description": "Relative Microsoft Graph path starting with \"/\", such as /drives/{drive-id}/items/{driveItem-id}/content, /me/drive/items/{driveItem-id}/content, /sites/{site-id}/drive/items/{driveItem-id}, or /me/messages/{message-id}/attachments/{attachment-id}/$value. A trailing /content is optional for drive items."
         }
       },
       "additionalProperties": true,

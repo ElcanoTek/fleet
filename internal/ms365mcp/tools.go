@@ -39,18 +39,29 @@ func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, t
 		return res, isErr, err
 	}
 
-	path, err := interpolateGraphPath(spec.PathPattern, args)
+	pathPattern := spec.PathPattern
+	if toolName == "get-calendar-view" {
+		if calID, ok := lookupStringArg(args, "calendarId"); ok && strings.TrimSpace(calID) != "" {
+			pathPattern = "/me/calendars/{calendar-id}/calendarView"
+		}
+	}
+
+	path, err := interpolateGraphPath(pathPattern, args)
 	if err != nil {
 		return nil, true, err
 	}
 
 	if spec.ReturnDownloadURL || toolName == "get-mail-attachment-content" {
-		return h.mintAttachmentDownloadResult(ctx, r, token, path)
+		fallbackName, _ := lookupStringArg(args, "fileName")
+		return h.mintAttachmentDownloadResultWithFallback(ctx, r, token, path, fallbackName)
 	}
 
 	query, autoExpandedAttachments := buildGraphQueryParams(spec, toolName, args)
 	headers := buildGraphHeaders(spec, toolName, query, args)
-	reqBody := buildGraphRequestBody(spec, toolName, args)
+	reqBody, err := buildGraphRequestBody(spec, toolName, args)
+	if err != nil {
+		return nil, true, err
+	}
 
 	res, respHeaders, firstPageBytes, err := h.graphRequestWithExpandFallback(ctx, token, spec.Method, path, query, reqBody, headers, autoExpandedAttachments)
 	if err != nil {
@@ -213,13 +224,24 @@ func buildGraphHeaders(spec ToolSpec, toolName string, query url.Values, args ma
 	}
 	if spec.ContentType != "" {
 		headers["Content-Type"] = spec.ContentType
+	} else if _, isStr := args["body"].(string); isStr && isMailWriteTool(toolName) {
+		headers["Content-Type"] = "text/plain"
 	}
 	return headers
 }
 
-func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) any {
+func isMailWriteTool(toolName string) bool {
+	switch toolName {
+	case "send-mail", "create-draft-email", "create-reply-draft", "create-reply-all-draft",
+		"create-forward-draft", "reply-mail-message", "reply-all-mail-message", "forward-mail-message":
+		return true
+	}
+	return false
+}
+
+func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) (any, error) {
 	if spec.Method != "POST" && spec.Method != "PATCH" && spec.Method != "PUT" && spec.Method != "DELETE" {
-		return nil
+		return nil, nil
 	}
 	var reqBody any
 	if len(spec.BodyParams) == 1 && spec.BodyParams[0] == "body" {
@@ -243,13 +265,13 @@ func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) 
 		reqBody = bodyMap
 	}
 	if toolName == "reply-to-chat-message" {
-		reqBody = buildChatReplyWithQuoteBody(reqBody, args)
+		return buildChatReplyWithQuoteBody(reqBody, args)
 	} else if isTeamsMessageSendTool(toolName) {
 		if bodyMap, ok := reqBody.(map[string]any); ok {
 			reqBody = rewriteTeamsMentions(bodyMap)
 		}
 	}
-	return reqBody
+	return reqBody, nil
 }
 
 var actionFieldAliases = map[string]string{
@@ -282,33 +304,70 @@ func lookupActionFieldArg(args map[string]any, canonicalKey string) (any, bool) 
 	return nil, false
 }
 
-func buildChatReplyWithQuoteBody(reqBody any, args map[string]any) map[string]any {
+func buildChatReplyWithQuoteBody(reqBody any, args map[string]any) (map[string]any, error) {
 	bodyMap, _ := reqBody.(map[string]any)
 	if bodyMap == nil {
 		bodyMap = map[string]any{}
 	}
-	out := map[string]any{}
-	if ids, ok := bodyMap["messageIds"]; ok && ids != nil {
-		out["messageIds"] = ids
-	} else if msgID, ok := lookupStringArg(args, "messageId"); ok && strings.TrimSpace(msgID) != "" {
-		out["messageIds"] = []string{strings.TrimSpace(msgID)}
+	msgIDs := extractChatReplyMessageIDs(bodyMap, args)
+	if len(msgIDs) == 0 {
+		return nil, fmt.Errorf("reply-to-chat-message requires messageIds or messageId (or chatMessageId)")
 	}
 	var replyMsg map[string]any
-	if rm, ok := bodyMap["replyMessage"].(map[string]any); ok {
+	if rm, ok := bodyMap["replyMessage"].(map[string]any); ok && len(rm) > 0 {
+		replyMsg = rm
+	} else if rm, ok := args["replyMessage"].(map[string]any); ok && len(rm) > 0 {
 		replyMsg = rm
 	} else if nestedBody, ok := args["body"].(map[string]any); ok {
 		if _, hasInnerBody := nestedBody["body"]; hasInnerBody {
 			replyMsg = nestedBody
 		} else if _, hasContent := nestedBody["content"]; hasContent {
 			replyMsg = map[string]any{"body": nestedBody}
-		} else {
-			replyMsg = nestedBody
 		}
 	}
-	if replyMsg != nil {
-		out["replyMessage"] = rewriteTeamsMentions(replyMsg)
+	if len(replyMsg) == 0 {
+		return nil, fmt.Errorf("reply-to-chat-message requires replyMessage or body with message content")
 	}
-	return out
+	return map[string]any{
+		"messageIds":   msgIDs,
+		"replyMessage": rewriteTeamsMentions(replyMsg),
+	}, nil
+}
+
+func extractChatReplyMessageIDs(bodyMap, args map[string]any) []string {
+	for _, raw := range []any{bodyMap["messageIds"], args["messageIds"]} {
+		switch v := raw.(type) {
+		case []string:
+			var out []string
+			for _, s := range v {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		case []any:
+			var out []string
+			for _, item := range v {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, strings.TrimSpace(s))
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	for _, key := range []string{"messageId", "chatMessageId"} {
+		if id, ok := lookupStringArg(args, key); ok && strings.TrimSpace(id) != "" {
+			return []string{strings.TrimSpace(id)}
+		}
+		if id, ok := lookupStringArg(bodyMap, key); ok && strings.TrimSpace(id) != "" {
+			return []string{strings.TrimSpace(id)}
+		}
+	}
+	return nil
 }
 
 func postProcessGraphResult(toolName string, query url.Values, args map[string]any, res any, respHeaders http.Header) any {
@@ -408,6 +467,10 @@ func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, to
 }
 
 func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Request, token, target string) (any, bool, error) {
+	return h.mintAttachmentDownloadResultWithFallback(ctx, r, token, target, "")
+}
+
+func (h *Handler) mintAttachmentDownloadResultWithFallback(ctx context.Context, r *http.Request, token, target, fallbackName string) (any, bool, error) {
 	var probedName, probedCT string
 	var probedSize any
 
@@ -424,6 +487,9 @@ func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Requ
 		} else if errors.Is(err, errGraphUnauthorized) {
 			return nil, true, err
 		}
+	}
+	if strings.TrimSpace(probedName) == "" && strings.TrimSpace(fallbackName) != "" {
+		probedName = strings.TrimSpace(fallbackName)
 	}
 
 	return h.mintAttachmentDownloadResultWithMeta(r, token, target, probedName, probedCT, probedSize)
