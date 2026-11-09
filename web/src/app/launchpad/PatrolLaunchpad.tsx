@@ -936,40 +936,34 @@ const CARD =
 
 /* ── 0 · Why (the expanding mind) ───────────────────────────────────────── */
 
-// The rungs of the expanding-mind meme. Each rung has a hand-drawn head
-// (MindArt) whose brain grows, glows and finally outgrows it into a galaxy,
-// and a one-line quote of what you would say to the assistant at that rung.
+// The four rungs of the Expanding Brain meme: each pairs the real meme panel
+// (MindArt) with a one-line quote of what you say to Fleet at that rung.
 type MindRung = {
   title: string;
   quote: string;
   text: string;
-  meme: string;
 };
 
 const MIND_RUNGS: MindRung[] = [
   {
     title: "Chat with Fleet",
-    quote: "“Hey Fleet, what did we spend yesterday?”",
-    text: "You ask, it answers — then waits politely for you to ask again.",
-    meme: "Small brain",
+    quote: "“What did we spend yesterday?”",
+    text: "You ask, it answers — then waits for you to ask again.",
   },
   {
     title: "Schedule reports",
-    quote: "“Email me the pacing report every Monday.”",
-    text: "The numbers show up on time. Reading them and deciding is still all you.",
-    meme: "Bigger brain",
+    quote: "“Email me pacing every Monday.”",
+    text: "Numbers arrive on time, but reading and deciding is still on you.",
   },
   {
     title: "Patrols that analyze and decide",
     quote: "“Watch my deals. Tell me what’s broken and how to fix it.”",
-    text: "It checks your tools on a schedule and brings you findings, not spreadsheets.",
-    meme: "Glowing brain",
+    text: "Checks your tools on a schedule and brings you findings, not spreadsheets.",
   },
   {
     title: "Let it act on your behalf",
     quote: "“Fix the routine stuff while I sleep. Brief me over coffee.”",
-    text: "Routine fixes just happen — every action listed for you to check.",
-    meme: "Galaxy brain",
+    text: "Routine fixes just happen — with every action logged for you.",
   },
 ];
 
@@ -977,8 +971,8 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
   return (
     <div>
       <StepTitle kicker="Why patrol?" title="Where the real gains from AI come from">
-        Most teams stop at the first rung. The step change comes when the assistant does the checking — and then the
-        doing — on its own schedule.
+        Most people stop at chat. Real leverage starts when Fleet watches your work — and fixes the routine stuff — on
+        its own schedule.
       </StepTitle>
       <ol className="grid gap-2" aria-label="The expanding mind of AI adoption" data-testid="launchpad-mind">
         {MIND_RUNGS.map((r, i) => {
@@ -986,22 +980,17 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           return (
             <li
               key={r.title}
-              className={`grid grid-cols-[4.75rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
+              className={`grid grid-cols-[4.5rem_1fr] items-center gap-3.5 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2 ${
                 top
                   ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_18%,transparent),transparent_70%)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
               }`}
             >
               <span aria-hidden="true" className="flex justify-center">
-                <MindArt level={(i + 1) as MindLevel} className="size-[4.5rem] overflow-visible" />
+                <MindArt level={(i + 1) as MindLevel} className="size-[4.5rem]" />
               </span>
               <span className="min-w-0">
-                <span className="flex flex-wrap items-baseline justify-between gap-x-2">
-                  <span className="text-[0.9rem] font-semibold text-[var(--color-text-primary)]">{r.title}</span>
-                  <span className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-                    {r.meme}
-                  </span>
-                </span>
+                <span className="block text-[0.9rem] font-semibold text-[var(--color-text-primary)]">{r.title}</span>
                 <q className="block text-[0.8rem] italic text-[var(--color-text-primary)] before:content-none after:content-none">
                   {r.quote}
                 </q>
@@ -1011,32 +1000,9 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           );
         })}
       </ol>
-      <div className={`${CARD} mt-4 px-4 py-3 text-[0.82rem] leading-relaxed text-[var(--color-text-secondary)]`}>
-        <p>
-          <a
-            className="text-[var(--color-link)] underline underline-offset-2"
-            href="https://www.oneusefulthing.org/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Dr. Ethan Mollick
-          </a>{" "}
-          — Wharton professor and author of the <em>One Useful Thing</em> newsletter — calls the gap between what AI
-          can already do and what we actually use it for a{" "}
-          <strong className="text-[var(--color-text-primary)]">capability overhang</strong> (
-          <a
-            className="text-[var(--color-link)] underline underline-offset-2"
-            href="https://www.penguinrandomhouse.com/books/813026/co-existence-by-ethan-mollick/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <cite>Co-Existence</cite>
-          </a>
-          , 2026). Patrols are how you close it: you delegate the watching, check its work,
-          and hand over more as it earns your trust.
-        </p>
-        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[0.78rem]" data-testid="launchpad-trust-path">
-          <span className="font-medium text-[var(--color-text-primary)]">You climb at your pace:</span>
+      <div className={`${CARD} mt-3 px-3.5 py-2.5 text-[0.8rem] leading-relaxed text-[var(--color-text-secondary)]`}>
+        <p className="flex flex-wrap items-center gap-1.5 text-[0.78rem]" data-testid="launchpad-trust-path">
+          <span className="font-medium text-[var(--color-text-primary)]">Move up when you’re ready:</span>
           <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">Just report</span>
           <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
           <span className="rounded-full border border-[var(--color-primary)] px-2 py-0.5 text-[var(--color-text-primary)]">
@@ -1045,9 +1011,17 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
           <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">⚡ Act for me</span>
         </p>
-        <p className="mt-2">
-          Start where it only suggests and asks before acting. When you trust its calls, flip on ⚡ Auto-approve in the
-          Patrol bar — one switch, and you can flip it back any time.
+        <p className="mt-1.5">
+          Start with <strong className="text-[var(--color-text-primary)]">Suggest &amp; ask</strong>. Once you trust its
+          calls, flip on ⚡ Auto-approve in the Patrol bar any time.{" "}
+          <a
+            className="text-[var(--color-link)] underline underline-offset-2"
+            href="/help/chat#in-chat-patrols-and-timers"
+            target="_blank"
+            rel="noopener"
+          >
+            How patrols work
+          </a>
         </p>
       </div>
       {readOnly ? (

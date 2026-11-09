@@ -153,11 +153,13 @@ async function walkToLaunch(calls: Call[], onClose: () => void = () => {}) {
   // The preamble: the expanding-mind ladder and the trust path.
   expect(screen.getByTestId("launchpad-mind").querySelectorAll("li")).toHaveLength(4);
   expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Suggest & ask");
-  // Each rung has its own hand-drawn picture: the meme's brain, one level per rung.
-  const levels = screen.getAllByTestId("launchpad-mind-art").map((svg) => svg.getAttribute("data-level"));
-  expect(levels).toEqual(["1", "2", "3", "4"]);
-  const mollick = screen.getByRole("link", { name: "Dr. Ethan Mollick" });
-  expect(mollick.getAttribute("href")).toBe("https://www.oneusefulthing.org/");
+  // Each rung renders its own Expanding Brain meme panel image (no text tags like "Small brain" or "Galaxy brain").
+  const arts = screen.getAllByTestId("launchpad-mind-art");
+  expect(arts.map((img) => img.tagName)).toEqual(["IMG", "IMG", "IMG", "IMG"]);
+  expect(arts.map((img) => img.getAttribute("data-level"))).toEqual(["1", "2", "3", "4"]);
+  expect(new Set(arts.map((img) => img.getAttribute("src"))).size).toBe(4);
+  expect(screen.queryByText(/Small brain|Bigger brain|Glowing brain|Galaxy brain/i)).toBeNull();
+  expect(screen.queryByText(/Ethan Mollick|capability overhang/i)).toBeNull();
   next();
   await screen.findByTestId("launchpad-readiness");
   await waitFor(() => expect(screen.getByTestId("launchpad-readiness").textContent).not.toMatch(/Checking tools/));
