@@ -531,11 +531,10 @@ remote_mcp_catalog: []
 #                               as critical_tools, in seconds. Highest-priority
 #                               layer of the approval-timeout resolution chain
 #                               (per-tool > per-conversation > the global
-#                               FLEET_APPROVAL_TIMEOUT_SECONDS > 300s default).
-#                               Omit it (as below) to use the global default for
-#                               every tool. Example:
+#                               FLEET_APPROVAL_TIMEOUT_SECONDS > 86400s default).
+#                               Omit it (as below) to use the 24h global default
+#                               for every tool. Example:
 #                                 critical_tool_timeouts:
-#                                   send_email: 600   # user reads the draft
 #                                   bash: 60          # risky shell decides fast
 agent_policy:
   parallel_safe_tools: []
