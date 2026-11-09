@@ -2106,7 +2106,7 @@ function SuggestAdvancedModelCard({
   // pending (the server never recorded a choice) and says why, inline.
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const reason = approval.summary.reason ?? "Advanced mode would handle this better.";
+  const reason = approval.summary.reason ?? "Switching to the fallback model may handle this better.";
   const recommendedSlug = approval.summary.recommend_model ?? currentAdvancedModel();
   const recommendedLabel = labelForModel(recommendedSlug);
 

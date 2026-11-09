@@ -115,7 +115,7 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 		}
 	}
 
-	primary := openRouterModel("google/gemini-primary")
+	primary := &routeModel{namedMockModel: namedMockModel{name: "gemini-3-pro"}, provider: google.Name}
 	var primarySaw [][]fantasy.Message
 	callThenFail(primary, func(yield func(fantasy.StreamPart) bool) {
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningStart, ID: "thinking"})
@@ -134,7 +134,7 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 20, OutputTokens: 10}})
 	}, &otherSaw)
 
-	gemini := openRouterModel("google/gemini-fallback")
+	gemini := &routeModel{namedMockModel: namedMockModel{name: "google/gemini-fallback"}, provider: "vercel"}
 	var geminiSaw [][]fantasy.Message
 	gemini.streamFunc = func(_ context.Context, c fantasy.Call) (fantasy.StreamResponse, error) {
 		geminiSaw = append(geminiSaw, c.Prompt)
@@ -205,7 +205,11 @@ func TestGeminiSignatureStepStripsOnlyForModelsThatAreNotGemini(t *testing.T) {
 		provider, model string
 		gemini          bool
 	}{
-		{openrouter.Name, "google/gemini-4-argon", true},
+		// OpenRouter google/gemini* strips upstream-specific thought signatures so
+		// OpenRouter's adapter injects its cross-provider bypass signature, allowing
+		// mid-turn failover between Google Vertex AI ("Google") and "Google AI Studio"
+		// without HTTP 400 "Corrupted thought signature".
+		{openrouter.Name, "google/gemini-4-argon", false},
 		{"vercel", "google/gemini-4-argon", true},
 		{google.Name, "gemini-2.5-pro", true},
 		{google.Name, "models/gemini-2.5-flash", true},

@@ -2,12 +2,18 @@
 //
 // The chat-server has no concept of a "default" model — every /chat
 // request carries the slug the UI resolved. What lives here is the two
-// ROLE slots the UI pins:
-//   - the DEFAULT tier — what a new conversation starts on (shown with
-//     the "recommended" pill in the picker)
-//   - the ADVANCED tier — the stronger escalation target: the model the
-//     agent's suggest_advanced_model card and the spreadsheet nudge
-//     offer to switch to (also pinned in the picker)
+// frontier ROLE slots the UI pins at the top of the model picker:
+//   - the DEFAULT tier — our smartest frontier model, which every new
+//     conversation starts on by default (shown first with the "recommended"
+//     pill in the picker)
+//   - the FALLBACK tier (historically ADVANCED_MODEL) — our alternative smart
+//     frontier model from a different provider family, used for automatic
+//     task/patrol failover and offered by suggest_advanced_model when a chat
+//     turn struggles (also pinned with the "recommended" pill)
+//
+// Operator-pinned cheaper/free models (configured via FLEET_PINNED_MODELS)
+// appear right below the two frontier tiers so users can switch whenever they
+// want to optimize spend.
 //
 // Since #1187 the EFFECTIVE slugs are admin-configurable (Settings →
 // Admin → Features → Model tiers) and arrive with /api/client-config on
@@ -15,8 +21,8 @@
 // as they land. The constants below are the compiled-in FALLBACK —
 // what renders before the first config fetch resolves and what a bare
 // deployment runs on — and they mirror the server seeds
-// (agentcore/models.go → DefaultCoreModel / DefaultMaxModel). Read the
-// live values through currentDefaultModel()/currentAdvancedModel()/
+// (agentcore/models.go → DefaultCoreModel / DefaultFallbackModel). Read the
+// live values through currentDefaultModel()/currentFallbackModel()/
 // currentTierModels(); import the constants only to reference the
 // shipped defaults themselves.
 //
@@ -31,13 +37,14 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "anthropic/claude-opus-5.5";
-export const DEFAULT_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
+export const DEFAULT_MODEL = "google/gemini-4-argon";
+export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Argon";
 
-export const ADVANCED_MODEL = "google/gemini-4-argon";
-export const ADVANCED_MODEL_LABEL = "Google: Gemini 4 Argon";
+export const FALLBACK_MODEL = "anthropic/claude-opus-5.5";
+export const FALLBACK_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
 
-export const FALLBACK_MODEL = ADVANCED_MODEL;
+export const ADVANCED_MODEL = FALLBACK_MODEL;
+export const ADVANCED_MODEL_LABEL = FALLBACK_MODEL_LABEL;
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback
@@ -194,12 +201,20 @@ export function currentDefaultModel(): string {
   return liveTiers.defaultModel;
 }
 
-export function currentAdvancedModel(): string {
+export function currentFallbackModel(): string {
   return liveTiers.advancedModel;
 }
 
-export function currentAdvancedModelLabel(): string {
+export function currentFallbackModelLabel(): string {
   return labelForModel(liveTiers.advancedModel);
+}
+
+export function currentAdvancedModel(): string {
+  return currentFallbackModel();
+}
+
+export function currentAdvancedModelLabel(): string {
+  return currentFallbackModelLabel();
 }
 
 // currentTierModels is the ordered pair the picker pins to the top of the

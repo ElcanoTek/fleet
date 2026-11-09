@@ -1072,16 +1072,18 @@ func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool)
 	return fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: md}}, true
 }
 
-// isGeminiModel reports whether model is Gemini, the one kind a Gemini
-// signature is for: a google/gemini id, the form fantasy's OpenRouter and
-// Vercel providers send a signature back for (they do for any google/ id), or
-// a gemini model of fantasy's own google provider. Gemma shares the google/
-// namespace but has no thought signatures (see unpinnedOpenWeightsPrefixes),
-// so it is shown none. The test must not miss a Gemini route:
-// geminiSignatureStep would then take the signatures fantasy keeps within a
-// run from every step after the first.
+// isGeminiModel reports whether model is a direct/non-OpenRouter Gemini route
+// that expects upstream-minted thought signatures echoed back: a google/gemini
+// id on fantasy's Vercel provider, or a gemini model of fantasy's own google
+// provider. OpenRouter's google/gemini routes soft-pin across both "Google"
+// (Vertex AI) and "Google AI Studio", which encrypt thought signatures with
+// incompatible keys (causing HTTP 400 "Corrupted thought signature" on mid-turn
+// failover if echoed); when reasoning.encrypted is omitted on OpenRouter,
+// OpenRouter's Gemini adapter injects the cross-provider validator bypass
+// automatically. Gemma shares the google/ namespace but has no thought
+// signatures (see unpinnedOpenWeightsPrefixes), so it is shown none.
 func isGeminiModel(model fantasy.LanguageModel) bool {
-	if model == nil {
+	if model == nil || model.Provider() == openrouter.Name {
 		return false
 	}
 	id := model.Model()

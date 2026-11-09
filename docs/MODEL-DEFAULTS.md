@@ -1,6 +1,6 @@
-# Model defaults: Claude Opus 5.5 as primary default, Gemini 4 Argon as fallback frontier tier
+# Model defaults: Gemini 4 Argon as primary default, Claude Opus 5.5 as fallback frontier tier
 
-**Status:** shipped 2026-10-28 (previous swaps 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
+**Status:** shipped 2026-11-09 (previous swaps 2026-10-28, 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
 note for the default-model swaps, and the checklist for the next one.
 
 ## Changing the defaults (checklist)
@@ -8,10 +8,10 @@ note for the default-model swaps, and the checklist for the next one.
 The compiled-in tiers are meant to change often. There are now two places that
 hold the slugs, plus data that has to be checked by hand:
 
-1. **`internal/agentcore/models.go`**: `DefaultCoreModel` / `DefaultMaxModel`, and a
+1. **`internal/agentcore/models.go`**: `DefaultCoreModel` / `DefaultFallbackModel` (aliased as `DefaultMaxModel`), and a
    one-paragraph comment on each with price, window and endpoints. `config.DefaultTitleModel`
    and the fake-LLM catalog derive from these constants.
-2. **`web/src/app/lib/modelAliases.ts`**: `DEFAULT_MODEL` / `ADVANCED_MODEL` and their
+2. **`web/src/app/lib/modelAliases.ts`**: `DEFAULT_MODEL` / `FALLBACK_MODEL` (aliased as `ADVANCED_MODEL`) and their
    `*_LABEL`s (OpenRouter's display `name`). Web code and tests reference these
    constants. `scripts/check_model_defaults_test.go` fails if they disagree with Go.
 3. **Look up the data** (no key needed):
@@ -31,12 +31,24 @@ hold the slugs, plus data that has to be checked by hand:
 7. **Docs**: a row in the table below, plus the pools in
    [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
 8. **Configuration registry**: `FLEET_TITLE_MODEL`'s `Default` in
-   `internal/config/envreg/table.go` is the everyday tier's slug. Update it,
+   `internal/config/envreg/table.go` is the primary default tier's slug. Update it,
    then `make config-docs`. `TestTitleModelDefaultIsTheCoreModel` fails
    until the two match.
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-11-09: Gemini 4 Argon as primary default tier, Claude Opus 5.5 as fallback frontier tier
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (chat default, pre-filled `task_model` tier, and auxiliary calls) | `anthropic/claude-opus-5.5` | `google/gemini-4-argon` |
+| `DefaultFallbackModel` / `DefaultMaxModel` (fallback frontier model for in-chat patrols, Operations Center task form pre-fill, and `suggest_advanced_model`) | `google/gemini-4-argon` | `anthropic/claude-opus-5.5` |
+
+- **Why: Gemini 4 Argon as our smartest default frontier model at half the cost, with soft-pinned multi-upstream Google reliability and Claude Opus 5.5 as the cross-provider frontier fallback.** Users get a great experience on `google/gemini-4-argon` ($2/M in, $10/M out, $0.10/M cache reads, 1,048,576-token window) by default, with `anthropic/claude-opus-5.5` ($4/M in, $20/M out, 1,000,000-token window) as the fallback frontier model and operator-pinned models (`FLEET_PINNED_MODELS`) available for spend optimization.
+- **OpenRouter routing improvements verified live (2026-11-09):**
+  - `google/` now uses a soft pin (`Order=["Google"], AllowFallbacks=true`) with `google/gemini-4-argon` in `officialPoolSlugs` (`Only=["Google", "Google AI Studio"]`), and OpenRouter `google/gemini*` requests strip upstream-specific `reasoning.encrypted` signatures in `geminiSignatureStep` so OpenRouter's adapter uses its cross-provider validator bypass — allowing seamless mid-turn failover between Google Vertex AI (`Google`) and `Google AI Studio` while preserving sticky Vertex prompt caching (`73.9%` warm hit rate, `90.5%` on Turn 3 in `TestPromptCacheLive`).
+  - `deepseek/` now soft-pins to `DeepInfra` with the `fp8AndAbove` quantization floor (`Order=["DeepInfra"], Quantizations=["fp8","fp16","bf16","fp32"], AllowFallbacks=true`), hitting `81.2%` warm prompt cache (`98.9%` on Turn 3) on `deepseek/deepseek-v4.1-flash-1017` while strictly excluding all `fp4`/`mxfp4` endpoints.
 
 ## 2026-10-28 (update): Claude Opus 5.5 as primary default tier, Gemini 4 Argon as fallback frontier tier
 

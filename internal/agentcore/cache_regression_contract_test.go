@@ -317,16 +317,16 @@ func TestWireCacheContract_EndToEndMultiTurnAndMultiStep(t *testing.T) {
 		{
 			slug:           "google/gemini-4-argon",
 			family:         familyGoogle,
-			allowFallbacks: false,
-			expectedOrder:  nil,
-			expectedOnly:   []string{"Google"},
+			allowFallbacks: true,
+			expectedOrder:  []string{"Google"},
+			expectedOnly:   []string{"Google", "Google AI Studio"},
 		},
 		{
 			slug:           "google/gemini-3.8-flash",
 			family:         familyGoogle,
-			allowFallbacks: false,
-			expectedOrder:  nil,
-			expectedOnly:   []string{"Google"},
+			allowFallbacks: true,
+			expectedOrder:  []string{"Google"},
+			expectedOnly:   nil,
 		},
 		{
 			slug:           "openai/gpt-6-luna-pro",
@@ -346,7 +346,7 @@ func TestWireCacheContract_EndToEndMultiTurnAndMultiStep(t *testing.T) {
 			slug:           "deepseek/deepseek-v4.1-flash",
 			family:         familyImplicit,
 			allowFallbacks: true,
-			expectedOrder:  []string{"DeepSeek"},
+			expectedOrder:  []string{"DeepInfra"},
 			expectedOnly:   nil,
 		},
 		{

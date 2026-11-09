@@ -769,16 +769,16 @@ func (a *approvalStager) stageSuggestion(reason, source string) (string, string,
 }
 
 func (a *approvalStager) stageSuggestionGated(reason, source string) (string, string, error) {
-	advancedModel := agentcore.CurrentAdvancedModel()
+	fallbackModel := agentcore.CurrentFallbackModel()
 	conv, err := a.store.Get(a.ctx, a.userEmail, a.conversationID)
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == advancedModel {
-		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
+	if conv != nil && conv.Model == fallbackModel {
+		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the fallback model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
-	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(advancedModel) {
-		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the advanced model. Do not call suggest_advanced_model again — keep working with the current model.", nil
+	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(fallbackModel) {
+		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the fallback model. Do not call suggest_advanced_model again — keep working with the current model.", nil
 	}
 	if a.inputKind != "" {
 		return "", "SUGGESTION_SUPPRESSED: this is an unattended background turn with no live user at the keyboard. Do not call suggest_advanced_model — proceed with the current model.", nil
@@ -827,7 +827,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	// Persist the reason as the args payload so the approval card can
 	// render it on page reload and the audit trail is intact. source records
 	// who asked, for the card and the escalation metrics.
-	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": advancedModel, "source": source})
+	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": fallbackModel, "source": source})
 	if err != nil {
 		return "", "", fmt.Errorf("encode reason: %w", err)
 	}

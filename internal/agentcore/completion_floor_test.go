@@ -16,8 +16,9 @@ func TestCompletionTokensForModel(t *testing.T) {
 		{"~Google/Gemini-4-Argon", 1024, 32_768}, // alias sigil + case
 		{"google/gemini-4-argon", 65_536, 65_536},
 		{"google/gemini-3.8-flash", DefaultMaxCompletionTokens, DefaultMaxCompletionTokens},
-		{DefaultCoreModel, DefaultMaxCompletionTokens, DefaultMaxCompletionTokens},
-		{DefaultMaxModel, DefaultMaxCompletionTokens, 32_768},
+		{DefaultCoreModel, DefaultMaxCompletionTokens, 32_768},
+		{DefaultFallbackModel, DefaultMaxCompletionTokens, DefaultMaxCompletionTokens},
+		{DefaultMaxModel, DefaultMaxCompletionTokens, DefaultMaxCompletionTokens},
 		{"anthropic/claude-opus-5.5", 512, 512},
 	} {
 		if got := completionTokensForModel(tc.slug, tc.configured); got != tc.want {

@@ -1355,7 +1355,7 @@ export function ChatTranscript({
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                                      title="Run your last message again on the advanced model, and keep it for this chat"
+                                      title="Run your last message again on the fallback model, and keep it for this chat"
                                       data-testid="retry-with-advanced"
                                       onClick={() => {
                                         const advanced = currentAdvancedModel();

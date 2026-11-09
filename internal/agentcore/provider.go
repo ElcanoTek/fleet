@@ -267,12 +267,14 @@ func (t *baseURLRewriteTransport) RoundTrip(req *http.Request) (*http.Response, 
 // Canonical OpenRouter provider routing names for the upstreams we pin. Each
 // matches the spelling OpenRouter's API expects in provider.order / provider.only.
 const (
-	upstreamProviderGoogle    = "Google"
-	upstreamProviderAnthropic = "Anthropic"
-	upstreamProviderOpenAI    = "OpenAI"
-	upstreamProviderMoonshot  = "Moonshot AI"
-	upstreamProviderZAI       = "Z.AI"
-	upstreamProviderDeepSeek  = "DeepSeek"
+	upstreamProviderGoogle         = "Google"
+	upstreamProviderGoogleAIStudio = "Google AI Studio"
+	upstreamProviderAnthropic      = "Anthropic"
+	upstreamProviderOpenAI         = "OpenAI"
+	upstreamProviderMoonshot       = "Moonshot AI"
+	upstreamProviderZAI            = "Z.AI"
+	upstreamProviderDeepSeek       = "DeepSeek"
+	upstreamProviderDeepInfra      = "DeepInfra"
 
 	// The cloud resellers that serve a vendor's official weights. They are
 	// never a canonicalUpstream preference of their own — they appear only
@@ -334,17 +336,20 @@ type familyPin struct {
 }
 
 var canonicalUpstream = []familyPin{
-	// The strong tier (DefaultMaxModel, Gemini 4 Argon) lives here.
-	// Google serves this family alone, so the pin is STRICT (Only, no
-	// fallbacks) and needs no serving-precision floor — there is no second
-	// upstream to degrade onto.
-	{"google/", upstreamProviderGoogle, true, nil},
-	// This family carries the everyday default (DefaultCoreModel, Claude
-	// Haiku 5.5, since 2026-10-15; Opus 5.5 was the strong tier until
-	// 2026-10-14), so it is the hot path for ordinary chat turns and every
-	// scheduled run: a soft pin to Anthropic's own endpoint with graceful
-	// degradation onto the cloud resellers of the same weights. The default-pin guard's exemption for that
-	// slug — and the allow-list that enforces it — is recorded per SLUG in
+	// The default frontier tier (DefaultCoreModel, Gemini 4 Argon) lives here.
+	// OpenRouter serves Gemini from two first-party Google upstreams — "Google"
+	// (Vertex AI) and "Google AI Studio". A soft pin prefers "Google" (Vertex AI)
+	// for implicit prompt-cache locality while allowing seamless failover onto
+	// "Google AI Studio" when a Vertex region blips (closed to the two official
+	// Google providers in officialPoolSlugs below; OpenRouter's adapter handles
+	// cross-upstream Gemini thought-signature bypass when upstream-specific
+	// signatures are stripped in geminiSignatureStep).
+	{"google/", upstreamProviderGoogle, false, nil},
+	// The fallback frontier tier (DefaultFallbackModel, Claude Opus 5.5; also
+	// DefaultCoreModel until 2026-11-09 and Claude Haiku 5.5 before that): a
+	// soft pin to Anthropic's own endpoint with graceful degradation onto the
+	// cloud resellers of the same weights. The default-pin guard's exemption for
+	// those slugs — and the allow-list that enforces it — is recorded per SLUG in
 	// officialPoolSlugs, not here.
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
 	// This family carried the everyday default until 2026-10-15 (GPT-6 Luna
@@ -354,20 +359,17 @@ var canonicalUpstream = []familyPin{
 	{"openai/", upstreamProviderOpenAI, false, nil},
 	{"moonshotai/", upstreamProviderMoonshot, false, nil},
 	{"z-ai/", upstreamProviderZAI, false, nil},
-	// DeepSeek's own endpoint, non-strict. 28 OpenRouter endpoints serve this
-	// family at context lengths from 131K to 1M and quantizations from fp4 to
-	// fp8, so an unpinned route varies in both window and quality run to run —
-	// on top of losing the per-upstream prompt cache. Order (not Only) keeps
-	// graceful degradation if the first-party endpoint is unavailable.
-	//
-	// The fp8 floor is what makes that degradation graceful rather than silent:
-	// an fp4 serving of a flash-tier model degrades in a way that reads as the
-	// model being broken (token-level misspellings, topic drift, runaway output)
-	// rather than as a routing event. DeepSeek's first-party endpoint is fp8, so
-	// the floor costs nothing on the preferred route. This family is no longer
-	// the everyday default, but the pin and the floor stay: operators still
-	// select these slugs explicitly, and they are the reason it is safe to.
-	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
+	// DeepSeek family (including deepseek/deepseek-v4.1-flash-1017), non-strict
+	// with the fp8AndAbove quantization floor. OpenRouter endpoints serve this
+	// family at context lengths from 163K to 1M and quantizations from fp4 to
+	// fp8. DeepSeek's own first-party endpoint reports quantization "unknown"
+	// (and requires paid-model training opt-in), so fp8AndAbove excludes it;
+	// preferring DeepInfra (which serves native fp8 with the full
+	// 1,048,576-token window and sticky implicit prompt caching — 98.5% warm hit
+	// rate verified live on 2026-11-09) keeps the prompt cache warm on one
+	// upstream while allowing graceful fallback across the other fp8+ endpoints
+	// and strictly blocking fp4/mxfp4.
+	{"deepseek/", upstreamProviderDeepInfra, false, fp8AndAbove},
 }
 
 // officialPoolAllowlist is one slug's validated endpoint pool: the exact
@@ -405,9 +407,20 @@ type officialPoolAllowlist struct {
 // Every name below must be OpenRouter's own routing name for the endpoint —
 // a misspelling narrows the pool to nothing.
 var officialPoolSlugs = map[string]officialPoolAllowlist{
+	// 2026-11-09: Google ×3 (google-vertex/global, google-vertex/us,
+	// google-vertex/global/priority), Google AI Studio ×3 (google-ai-studio,
+	// google-ai-studio/flex, google-ai-studio/priority) — six first-party
+	// Google endpoints, every quantization "unknown". DefaultCoreModel.
+	"google/gemini-4-argon": {
+		checked: "2026-11-09",
+		providers: []string{
+			upstreamProviderGoogle,
+			upstreamProviderGoogleAIStudio,
+		},
+	},
 	// 2026-10-15: Anthropic ×1, Claude Platform on AWS ×1, Amazon Bedrock ×3,
 	// Azure ×2, Google ×3 — ten endpoints, every quantization "unknown".
-	// DefaultCoreModel.
+	// DefaultCoreModel until 2026-10-28.
 	"anthropic/claude-haiku-5.5": {
 		checked: "2026-10-15",
 		providers: []string{

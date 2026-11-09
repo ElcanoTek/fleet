@@ -35,7 +35,7 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 
 	for _, tc := range []struct{ web, goName, goValue string }{
 		{"DEFAULT_MODEL", "agentcore.DefaultCoreModel", agentcore.DefaultCoreModel},
-		{"ADVANCED_MODEL", "agentcore.DefaultMaxModel", agentcore.DefaultMaxModel},
+		{"FALLBACK_MODEL", "agentcore.DefaultFallbackModel", agentcore.DefaultFallbackModel},
 	} {
 		if got := constant(tc.web); got != tc.goValue {
 			t.Errorf("web %s = %q but %s = %q: change both (docs/MODEL-DEFAULTS.md)", tc.web, got, tc.goName, tc.goValue)
@@ -43,10 +43,10 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 	}
 
 	// The chat guide names both defaults in prose ("By default those two are
-	// **GPT-6 Luna Pro** … and **Gemini 4 Argon** …"). The label's provider
-	// prefix ("OpenAI: ") is dropped there.
+	// **Gemini 4 Argon** … and **Claude Opus 5.5** …"). The label's provider
+	// prefix ("Google: ") is dropped there.
 	guide := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/chat.md")
-	for _, name := range []string{"DEFAULT_MODEL_LABEL", "ADVANCED_MODEL_LABEL"} {
+	for _, name := range []string{"DEFAULT_MODEL_LABEL", "FALLBACK_MODEL_LABEL"} {
 		label := constant(name)
 		if i := strings.Index(label, ": "); i >= 0 {
 			label = label[i+2:]
@@ -56,18 +56,16 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 		}
 	}
 
-	// The Operations Center guide names the task form's pre-filled model
-	// ("pre-filled with your workspace's task model, which is the advanced
-	// model by default (**Gemini 4 Argon** …"). The task tier follows the
-	// advanced tier unless overridden, so the advanced label is the one to
-	// name. It went stale once (still naming GPT-5.6 Luna Pro after the
-	// 2026-09-22 swap) because only the chat guide was checked.
+	// The Operations Center guide names both the task form's pre-filled primary
+	// model (DEFAULT_MODEL_LABEL) and its fallback model (FALLBACK_MODEL_LABEL).
 	ops := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/operations-center.md")
-	label := constant("ADVANCED_MODEL_LABEL")
-	if i := strings.Index(label, ": "); i >= 0 {
-		label = label[i+2:]
-	}
-	if !strings.Contains(ops, "**"+label+"**") {
-		t.Errorf("fleet-guide/operations-center.md does not name the task form's default %q (from ADVANCED_MODEL_LABEL); update the guide and run make sync-guides", label)
+	for _, name := range []string{"DEFAULT_MODEL_LABEL", "FALLBACK_MODEL_LABEL"} {
+		label := constant(name)
+		if i := strings.Index(label, ": "); i >= 0 {
+			label = label[i+2:]
+		}
+		if !strings.Contains(ops, "**"+label+"**") {
+			t.Errorf("fleet-guide/operations-center.md does not name the task form's %q (from %s); update the guide and run make sync-guides", label, name)
+		}
 	}
 }

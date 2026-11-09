@@ -19,23 +19,24 @@ func TestUpstreamPinFor(t *testing.T) {
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		{DefaultCoreModel, "Anthropic", false},     // default frontier tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
+		{DefaultCoreModel, "Google", false},        // default frontier tier (Gemini 4 Argon): soft pin to Google, official-weights pool (Google + Google AI Studio)
 		{"openai/gpt-6-luna-pro", "OpenAI", false}, // previous everyday default: soft pin to OpenAI
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
-		{"deepseek/deepseek-v4-flash-0731", "DeepSeek", false},
-		{DefaultMaxModel, "Google", true},                  // fallback frontier tier (Gemini 4 Argon): strict pin to Google
+		{"deepseek/deepseek-v4-flash-0731", "DeepInfra", false},
+		{"deepseek/deepseek-v4.1-flash-1017", "DeepInfra", false},
+		{DefaultMaxModel, "Anthropic", false},              // fallback frontier tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
 		{"anthropic/claude-haiku-5.5", "Anthropic", false}, // previous default: soft pin to Anthropic
 		{"openai/gpt-5.4", "OpenAI", false},
 		// x-ai/ has no entry: it held the strong tier for one release and was
 		// deliberately left unpinned (xAI is its only upstream).
 		{"x-ai/grok-4.6", "", false},
-		{"google/gemini-3-flash-preview", "Google", true},
-		// The whole DeepSeek family pins to the first-party upstream: OpenRouter
-		// serves it from 28 endpoints spanning 131K–1M context and fp4–fp8, so an
-		// unpinned route varies in window and quality between runs.
-		{"deepseek/deepseek-v3.1", "DeepSeek", false},
+		{"google/gemini-3-flash-preview", "Google", false},
+		// The DeepSeek family soft-pins to DeepInfra with the fp8AndAbove floor:
+		// OpenRouter serves it from 20+ endpoints spanning 163K–1M context and
+		// fp4–fp8, and DeepInfra serves native fp8 with sticky prompt caching.
+		{"deepseek/deepseek-v3.1", "DeepInfra", false},
 		{"x-ai/grok-4", "", false}, // "x-ai/" must not collide with "z-ai/"
 	}
 	for _, tc := range cases {
@@ -360,12 +361,12 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:             "Anthropic", // default frontier tier: Claude Opus 5.5
+		DefaultCoreModel:             "Google", // default frontier tier: Gemini 4 Argon
 		"openai/gpt-6-luna-pro":      "OpenAI",
-		"deepseek/v3":                "DeepSeek",
+		"deepseek/v3":                "DeepInfra",
 		"~z-ai/glm-latest":           "Z.AI",
 		"openai/gpt-5.4":             "OpenAI",
-		DefaultMaxModel:              "Google",    // fallback frontier tier: Gemini 4 Argon on the strict google/ pin
+		DefaultMaxModel:              "Anthropic", // fallback frontier tier: Claude Opus 5.5
 		"anthropic/claude-haiku-5.5": "Anthropic", // previous default tier
 		"x-ai/grok-4.6":              "",          // xAI is unpinned: single upstream already
 		"mistralai/mixtral":          "",
@@ -377,8 +378,8 @@ func TestPreferredUpstreamFor(t *testing.T) {
 	}
 }
 
-// Gemma is open weights under the google/ prefix: the strict Google pin (there
-// for Gemini's thought signatures) must not govern it. Pinned to Google's one
+// Gemma is open weights under the google/ prefix: the Google pin
+// must not govern it. Pinned to Google's one
 // endpoint, google/gemma-4-26b-a4b-it failed 4 of 6 live calls with 429 while a
 // dozen other hosts served it (2026-10-15).
 func TestUpstreamPinFor_GemmaIsNotPinnedToGoogle(t *testing.T) {
@@ -404,10 +405,10 @@ func TestUpstreamPinFor_GemmaIsNotPinnedToGoogle(t *testing.T) {
 	if got := upstreamPinFor("google/gemma-4-31b-it"); got != nil {
 		t.Fatalf("upstreamPinFor(gemma-4-31b) = %+v, want nil", got)
 	}
-	// Gemini keeps the strict pin.
+	// Gemini 4 Argon has a soft pin preferring Google with official-pool allow-list [Google, Google AI Studio].
 	g := upstreamPinFor("google/gemini-4-argon")
-	if g == nil || len(g.Only) != 1 || g.Only[0] != "Google" || g.AllowFallbacks == nil || *g.AllowFallbacks {
-		t.Fatalf("Gemini pin = %+v, want strict Only=[Google]", g)
+	if g == nil || len(g.Order) != 1 || g.Order[0] != "Google" || len(g.Only) != 2 || g.Only[0] != "Google" || g.Only[1] != "Google AI Studio" || g.AllowFallbacks == nil || !*g.AllowFallbacks {
+		t.Fatalf("Gemini 4 Argon pin = %+v, want Order=[Google] Only=[Google, Google AI Studio] AllowFallbacks=true", g)
 	}
 	// No preferred upstream, so a step served by any host is not a "fallback".
 	if got := preferredUpstreamFor("google/gemma-4-26b-a4b-it"); got != "" {

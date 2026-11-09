@@ -169,10 +169,10 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `OPENROUTER_HTTP_REFERER` | string | — | server | HTTP-Referer header sent with image-generation calls (OpenRouter app attribution). |
 | `OPENROUTER_X_TITLE` | string | — | server | X-Title header sent with image-generation calls (OpenRouter app attribution). |
 | `OPENAI_CUSTOM_HEADERS` | string | — | server | The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. Treated as a secret: a header line can carry an Authorization value or an API key. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's everyday model tier (admin setting default_model). |
-| `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the advanced model tier (admin setting advanced_model). |
+| `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's primary default frontier model tier (admin setting default_model). |
+| `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the fallback frontier model tier (admin setting advanced_model). |
 | `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). |
-| `FLEET_TITLE_MODEL` | string | `anthropic/claude-opus-5.5` | server | Model that titles conversations. |
+| `FLEET_TITLE_MODEL` | string | `google/gemini-4-argon` | server | Model that titles conversations. |
 | `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. |
 | `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. |
 | `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. |

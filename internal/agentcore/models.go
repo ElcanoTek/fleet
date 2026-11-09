@@ -63,22 +63,28 @@ const (
 	// providers, and prompt caches are per-upstream; and an alias slug defeats
 	// the send-side reasoning reconstruction (see isAliasModel).
 	//
-	// Claude Opus 5.5 (2026-10-28): 1,000,000-token window and eleven official
-	// endpoints across Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure
-	// and Google Vertex, at $4/M in and $20/M out. The `anthropic/` soft pin
-	// keeps the prompt cache on one upstream with explicit cache breakpoints.
-	DefaultCoreModel = "anthropic/claude-opus-5.5"
-	// DefaultMaxModel (and DefaultFallbackModel) is the frontier fallback tier —
-	// the second pinned picker slot, the automatic fallback for scheduled tasks
-	// and chat patrols, and the switch-on-struggle target. Exact slug, never a
-	// `~latest` alias. Google Gemini 4 Argon (2026-10-28): 1,048,576-token
-	// context window and 32K minimum output floor.
-	DefaultMaxModel = "google/gemini-4-argon"
-	// DefaultFallbackModel is the explicit fallback-tier name for DefaultMaxModel.
-	DefaultFallbackModel = DefaultMaxModel
-	// AdvancedModelSlug is chat's historical name for the second frontier slot.
-	// Kept in sync with DefaultMaxModel / DefaultFallbackModel.
-	AdvancedModelSlug = DefaultMaxModel
+	// Google Gemini 4 Argon (2026-11-09, swapping roles with anthropic/claude-opus-5.5):
+	// 1,048,576-token context window, 32K minimum output floor, served across
+	// Google Vertex AI ("Google") and Google AI Studio ("Google AI Studio") with
+	// soft-pinned first-party failover. Users start on our smartest frontier
+	// model by default, with Claude Opus 5.5 as the frontier fallback and
+	// operator-pinned free/cheaper models (`FLEET_PINNED_MODELS`) for spend
+	// optimization.
+	DefaultCoreModel = "google/gemini-4-argon"
+	// DefaultFallbackModel is the frontier fallback model — the second pinned
+	// picker slot, the automatic cross-provider fallback for scheduled tasks and
+	// chat patrols, and the fallback switch target when a turn struggles. Exact
+	// slug, never a `~latest` alias.
+	//
+	// Claude Opus 5.5 (2026-11-09): 1,000,000-token context window and eleven
+	// official endpoints across Anthropic, Claude Platform on AWS, Amazon
+	// Bedrock, Azure and Google Vertex, with explicit prompt-cache breakpoints.
+	DefaultFallbackModel = "anthropic/claude-opus-5.5"
+	// DefaultMaxModel is the historical name for DefaultFallbackModel.
+	DefaultMaxModel = DefaultFallbackModel
+	// AdvancedModelSlug is chat's historical name for DefaultFallbackModel.
+	// Kept in sync with DefaultFallbackModel / DefaultMaxModel.
+	AdvancedModelSlug = DefaultFallbackModel
 	// DefaultMaxCompletionTokens caps a single completion's output tokens.
 	DefaultMaxCompletionTokens = 16384
 	// SuggestAdvancedCooldownTurns is the chat suggest_advanced_model cooldown.

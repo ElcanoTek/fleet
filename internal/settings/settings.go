@@ -153,11 +153,11 @@ func Registry() []Spec {
 		{Key: "subagents_enabled", Kind: KindBool,
 			EnvVar: "FLEET_SUBAGENTS_ENABLED"},
 
-		// Model tiers (#1187): the two role slots the chat UI pins — what a new
-		// conversation starts on, and the suggest_advanced_model escalation
-		// target. Live: the web re-reads them from /client-config on every
-		// shell mount, and the Go escalation path reads the agentcore holder
-		// per call.
+		// Model tiers (#1187): the two frontier role slots the chat UI pins —
+		// what a new conversation starts on (default_model), and the fallback
+		// frontier model / suggest_advanced_model target (advanced_model). Live:
+		// the web re-reads them from /client-config on every shell mount, and the
+		// Go escalation path reads the agentcore holder per call.
 		{Key: "default_model", Kind: KindModel,
 			EnvVar: "FLEET_DEFAULT_MODEL"},
 		{Key: "advanced_model", Kind: KindModel,
@@ -166,16 +166,16 @@ func Registry() []Spec {
 		// what a task with no pinned model runs on. Live: the scheduled runner,
 		// the create gate and the cost estimate read the agentcore holder per
 		// task, and the web re-reads it with the other tiers. Its env default
-		// is usually unset, which means "follow advanced_model"
+		// is usually unset, which means "follow default_model"
 		// (docs/TASK-MODEL-TIER.md).
 		{Key: "task_model", Kind: KindModel, EmptyDefaultOK: true,
 			EnvVar: "FLEET_TASK_MODEL"},
 
 		// Chat escalation (docs/CHAT-ESCALATION.md): when fleet itself offers
-		// a conversation on the everyday model the advanced one. Live: the
-		// chat turn reads all four at turn start. The classifier model is any
-		// OpenRouter decision model; the default is a moving alias, so a new
-		// Jev release needs no change here.
+		// a struggling conversation a switch to the fallback frontier model.
+		// Live: the chat turn reads all four at turn start. The classifier model
+		// is any OpenRouter decision model; the default is a moving alias, so a
+		// new Jev release needs no change here.
 		{Key: "escalation_signals_enabled", Kind: KindBool,
 			EnvVar: "FLEET_ESCALATION_SIGNALS_ENABLED"},
 		{Key: "escalation_classifier_mode", Kind: KindEnum,

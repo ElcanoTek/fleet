@@ -4,25 +4,35 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/chattui"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // cmdChat is overloaded by design (#457):
 //   - `fleet chat`                  → the interactive TUI to chat with the agent
 //   - `fleet chat --message "…"`    → a one-shot non-interactive turn
 //   - `fleet chat user add|…`       → chat-USER administration (email + bcrypt)
+//   - `fleet chat set-model …`      → bulk-update conversation models
 //
-// The TUI is the common case, so anything that isn't the `user` admin verb routes
-// to chattui.Run. (The two never collide: `user` is a bare positional, while the
-// TUI takes only flags/none.)
+// The TUI is the common case, so anything that isn't the `user` or `set-model`
+// admin verb routes to chattui.Run. (They never collide: `user` and `set-model`
+// are bare positionals, while the TUI takes only flags/none.)
 func cmdChat(argv []string) int {
-	if len(argv) == 0 || argv[0] != "user" {
+	if len(argv) == 0 {
+		return chattui.Run(argv)
+	}
+	if argv[0] == "set-model" {
+		return chatSetModel(argv[1:])
+	}
+	if argv[0] != "user" {
 		return chattui.Run(argv)
 	}
 	if len(argv) < 2 {
-		return errf(1, "usage: fleet chat user add|update|role|del|list  (or `fleet chat` for the agent TUI)")
+		return errf(1, "usage: fleet chat user add|update|role|del|list | fleet chat set-model --model <slug>  (or `fleet chat` for the agent TUI)")
 	}
 	sub := argv[1]
 	rest := argv[2:]
@@ -40,6 +50,75 @@ func cmdChat(argv []string) int {
 	default:
 		return errf(1, "unknown chat user subcommand %q", sub)
 	}
+}
+
+type chatModelStore interface {
+	ListConversationsForModelUpdate(ctx context.Context, fromModel string) ([]store.ConversationModelEntry, error)
+	BulkUpdateConversationModel(ctx context.Context, model, fromModel string) (int, error)
+}
+
+// chatSetModel implements `fleet chat set-model`:
+//
+//	fleet chat set-model --model <slug> [--from-model <slug>] [--dry-run] [--no-confirm]
+func chatSetModel(argv []string) int {
+	fs := flag.NewFlagSet("chat set-model", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	model := fs.String("model", "", "the model slug to set (required)")
+	fromModel := fs.String("from-model", "", "only re-assign conversations currently pinned to this slug")
+	dryRun := fs.Bool("dry-run", false, "print the conversations that would change without writing")
+	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted bulk updates)")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(*model) == "" {
+		return errf(1, "--model is required")
+	}
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := openChatStoreDSN(dsn)
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+	return runChatSetModel(context.Background(), st, os.Stdout, os.Stderr, strings.TrimSpace(*model), strings.TrimSpace(*fromModel), *dryRun, *noConfirm)
+}
+
+func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Writer, model, fromModel string, dryRun, noConfirm bool) int {
+	if dryRun {
+		convs, err := st.ListConversationsForModelUpdate(ctx, fromModel)
+		if err != nil {
+			fmt.Fprintf(errW, "list conversations: %v\n", err)
+			return 5
+		}
+		for _, c := range convs {
+			cur := c.Model
+			if cur == "" {
+				cur = "<none>"
+			}
+			fmt.Fprintf(outW, "%s\t%s\tmodel %s → %s\n", c.ID, c.UserEmail, cur, model)
+		}
+		fmt.Fprintf(errW, "dry-run: %d conversation(s) would be re-assigned\n", len(convs))
+		return 0
+	}
+
+	scope := "all non-deleted conversations"
+	if fromModel != "" {
+		scope = "conversations currently pinned to " + fromModel
+	}
+	prompt := fmt.Sprintf("Set model=%s on %s? [y/N]: ", model, scope)
+	if code := confirmBulkMutation(noConfirm, prompt); code != 0 {
+		return code
+	}
+
+	updated, err := st.BulkUpdateConversationModel(ctx, model, fromModel)
+	if err != nil {
+		fmt.Fprintf(errW, "re-assign conversation model: %v\n", err)
+		return 5
+	}
+	fmt.Fprintf(errW, "re-assigned model on %d conversation(s)\n", updated)
+	return 0
 }
 
 // chatUserRole assigns an RBAC role and/or team to an existing chat user (#237):
