@@ -33,6 +33,7 @@ type pkceEntry struct {
 	state               string
 	clientCodeChallenge string
 	serverCodeVerifier  string
+	scope               string
 	createdAt           time.Time
 }
 
@@ -51,14 +52,14 @@ func (p *pkceStore) sweepLocked(now time.Time) {
 	p.entries = kept
 }
 
-func (p *pkceStore) put(state, clientCodeChallenge, serverCodeVerifier string) {
+func (p *pkceStore) put(state, clientCodeChallenge, serverCodeVerifier, scope string) {
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.sweepLocked(now)
 	for i := range p.entries {
-		if p.entries[i].state == state {
+		if (state != "" && p.entries[i].state == state) || p.entries[i].clientCodeChallenge == clientCodeChallenge {
 			p.entries = append(p.entries[:i], p.entries[i+1:]...)
 			break
 		}
@@ -70,11 +71,12 @@ func (p *pkceStore) put(state, clientCodeChallenge, serverCodeVerifier string) {
 		state:               state,
 		clientCodeChallenge: clientCodeChallenge,
 		serverCodeVerifier:  serverCodeVerifier,
+		scope:               scope,
 		createdAt:           now,
 	})
 }
 
-func (p *pkceStore) consumeMatchingVerifier(clientCodeVerifier string) string {
+func (p *pkceStore) consumeMatchingVerifier(clientCodeVerifier string) (string, string, bool) {
 	clientChallenge := computeS256Challenge(clientCodeVerifier)
 	now := time.Now()
 	p.mu.Lock()
@@ -84,10 +86,10 @@ func (p *pkceStore) consumeMatchingVerifier(clientCodeVerifier string) string {
 	for i, e := range p.entries {
 		if e.clientCodeChallenge == clientChallenge {
 			p.entries = append(p.entries[:i], p.entries[i+1:]...)
-			return e.serverCodeVerifier
+			return e.serverCodeVerifier, e.scope, true
 		}
 	}
-	return ""
+	return "", "", false
 }
 
 func generatePKCEVerifier() (string, error) {
@@ -195,7 +197,14 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if codeChallenge != "" && codeChallengeMethod != "" && codeChallengeMethod != "S256" {
+	if strings.TrimSpace(codeChallenge) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":             "invalid_request",
+			"error_description": "Missing required parameter: code_challenge (PKCE S256 is required)",
+		})
+		return
+	}
+	if codeChallengeMethod != "" && codeChallengeMethod != "S256" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":             "invalid_request",
 			"error_description": fmt.Sprintf("Only code_challenge_method=S256 is supported, got %q", codeChallengeMethod),
@@ -221,6 +230,16 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	serverVerifier, err := generatePKCEVerifier()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":             "server_error",
+			"error_description": err.Error(),
+		})
+		return
+	}
+	h.pkce.put(state, codeChallenge, serverVerifier, resolvedScope)
+
 	params := url.Values{}
 	params.Set("client_id", h.cfg.ClientID)
 	params.Set("response_type", "code")
@@ -229,23 +248,8 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if state != "" {
 		params.Set("state", state)
 	}
-	if codeChallenge != "" && state != "" {
-		if serverVerifier, err := generatePKCEVerifier(); err == nil {
-			h.pkce.put(state, codeChallenge, serverVerifier)
-			params.Set("code_challenge", computeS256Challenge(serverVerifier))
-			params.Set("code_challenge_method", "S256")
-		} else {
-			params.Set("code_challenge", codeChallenge)
-			params.Set("code_challenge_method", "S256")
-		}
-	} else if codeChallenge != "" {
-		params.Set("code_challenge", codeChallenge)
-		if codeChallengeMethod != "" {
-			params.Set("code_challenge_method", codeChallengeMethod)
-		} else {
-			params.Set("code_challenge_method", "S256")
-		}
-	}
+	params.Set("code_challenge", computeS256Challenge(serverVerifier))
+	params.Set("code_challenge_method", "S256")
 	msAuthURL.RawQuery = params.Encode()
 	http.Redirect(w, r, msAuthURL.String(), http.StatusFound)
 }
@@ -265,6 +269,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	redirectURI := vals.Get("redirect_uri")
 	codeVerifier := vals.Get("code_verifier")
 	refreshToken := vals.Get("refresh_token")
+	requestedScope := strings.TrimSpace(vals.Get("scope"))
 
 	authBase := strings.TrimRight(h.cfg.AuthBaseURL, "/")
 	if authBase == "" {
@@ -278,7 +283,6 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	upParams := url.Values{}
 	upParams.Set("client_id", h.cfg.ClientID)
-	upParams.Set("scope", strings.Join(DefaultAllowedScopes, " "))
 
 	switch grantType {
 	case "authorization_code":
@@ -289,17 +293,34 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if strings.TrimSpace(codeVerifier) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_request",
+				"error_description": "Missing required parameter: code_verifier",
+			})
+			return
+		}
+		serverVerifier, authorizedScope, ok := h.pkce.consumeMatchingVerifier(codeVerifier)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":             "invalid_grant",
+				"error_description": "Invalid or expired code_verifier",
+			})
+			return
+		}
 		upParams.Set("grant_type", "authorization_code")
 		upParams.Set("code", code)
+		upParams.Set("code_verifier", serverVerifier)
 		if redirectURI != "" {
 			upParams.Set("redirect_uri", redirectURI)
 		}
-		if codeVerifier != "" {
-			if serverVerifier := h.pkce.consumeMatchingVerifier(codeVerifier); serverVerifier != "" {
-				upParams.Set("code_verifier", serverVerifier)
-			} else {
-				upParams.Set("code_verifier", codeVerifier)
-			}
+		switch {
+		case requestedScope != "":
+			upParams.Set("scope", filterAllowedScopes(requestedScope))
+		case authorizedScope != "":
+			upParams.Set("scope", authorizedScope)
+		default:
+			upParams.Set("scope", strings.Join(DefaultAllowedScopes, " "))
 		}
 	case "refresh_token":
 		if refreshToken == "" {
@@ -311,6 +332,9 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		}
 		upParams.Set("grant_type", "refresh_token")
 		upParams.Set("refresh_token", refreshToken)
+		if requestedScope != "" {
+			upParams.Set("scope", filterAllowedScopes(requestedScope))
+		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":             "unsupported_grant_type",

@@ -43,7 +43,14 @@ func webAddr() (addr string, enabled bool) {
 // (buildPublicRouter) over the browser tier and the in-process chat and
 // orchestrator handlers. It returns nil when FLEET_WEB_ADDR=off.
 func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error) {
-	ms365Handler := wireMS365MCP(cfg)
+	ms365Handler, ms365Cfg := wireMS365MCP(cfg)
+	if ms365Handler != nil {
+		slog.Info("web: built-in Microsoft 365 MCP enabled",
+			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
+			"public_url", safe.LogSafe(ms365Cfg.PublicURL),
+			"aliases", len(ms365Cfg.Aliases),
+		)
+	}
 	addr, enabled := webAddr()
 	if !enabled {
 		slog.Info("web: browser tier disabled (FLEET_WEB_ADDR=off)")
@@ -133,20 +140,15 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 // wireMS365MCP constructs the optional built-in Microsoft 365 OAuth + Graph
 // MCP handler when MS365_MCP_CLIENT_ID is configured and registers (or clears)
 // the in-process netguard dispatch hook.
-func wireMS365MCP(cfg *config.Config) http.Handler {
+func wireMS365MCP(cfg *config.Config) (http.Handler, ms365mcp.Config) {
 	ms365Cfg := ms365mcp.ConfigFromEnv(cfg)
 	if !ms365Cfg.Enabled() {
 		netguard.RegisterInProcessHandler("ms365mcp", nil, nil)
-		return nil
+		return nil, ms365Cfg
 	}
 	h := ms365mcp.NewHandler(ms365Cfg)
 	netguard.RegisterInProcessHandler("ms365mcp", ms365Cfg.MatchesInProcessURL, h)
-	slog.Info("web: built-in Microsoft 365 MCP enabled",
-		"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
-		"public_url", safe.LogSafe(ms365Cfg.PublicURL),
-		"aliases", len(ms365Cfg.Aliases),
-	)
-	return h
+	return h, ms365Cfg
 }
 
 // serveInBackground runs one plain-HTTP listener (the orchestrator's, the

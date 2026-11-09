@@ -3,10 +3,17 @@ package ms365mcp
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
+)
+
+const (
+	maxReadMailMessageIDs = 20
+	maxReadMailTotalChars = 300000
 )
 
 var (
@@ -207,10 +214,15 @@ func (h *Handler) executeReadMailText(ctx context.Context, token string, args ma
 			"error": "Provide either messageIds (single ID or array of IDs) or folderId (e.g. \"inbox\" or a folder ID from list-mail-folders).",
 		}, nil
 	}
+	if len(messageIDs) > maxReadMailMessageIDs {
+		return map[string]any{
+			"error": fmt.Sprintf("messageIds supports at most %d message IDs per call (got %d).", maxReadMailMessageIDs, len(messageIDs)),
+		}, nil
+	}
 
 	maxChars := 3000
 	if rawMax, ok := intArg(args, "maxChars"); ok && rawMax > 0 {
-		maxChars = clampInt(rawMax, 1, 300000)
+		maxChars = clampInt(rawMax, 1, maxReadMailTotalChars)
 	}
 	stripQuoted := true
 	if rawStrip, ok := args["stripQuoted"].(bool); ok {
@@ -254,8 +266,11 @@ func (h *Handler) fetchMessagesForReadMailText(ctx context.Context, token string
 			q := url.Values{}
 			q.Set("$select", selectFields)
 			q.Set("$expand", defaultMailAttachmentExpand)
-			res, err := h.graphRequest(ctx, token, "GET", path, q, nil, extraHeaders)
+			res, _, err := h.graphRequest(ctx, token, "GET", path, q, nil, extraHeaders)
 			if err != nil {
+				if errors.Is(err, errGraphUnauthorized) {
+					return nil, errGraphUnauthorized
+				}
 				messages = append(messages, map[string]any{
 					"id":    id,
 					"error": err.Error(),
@@ -295,7 +310,7 @@ func (h *Handler) fetchMessagesForReadMailText(ctx context.Context, token string
 	} else {
 		q.Set("$orderby", "receivedDateTime desc")
 	}
-	res, err := h.graphRequestWithExpandFallback(ctx, token, "GET", path, q, nil, extraHeaders, true)
+	res, _, err := h.graphRequestWithExpandFallback(ctx, token, "GET", path, q, nil, extraHeaders, true)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +329,7 @@ func (h *Handler) fetchMessagesForReadMailText(ctx context.Context, token string
 
 func formatReadMailTextResults(messages []map[string]any, maxChars int, stripQuoted bool) []map[string]any {
 	results := make([]map[string]any, 0, len(messages))
+	remainingTotalRunes := maxReadMailTotalChars
 	for _, msg := range messages {
 		if errStr, ok := msg["error"].(string); ok && errStr != "" {
 			results = append(results, msg)
@@ -324,10 +340,21 @@ func formatReadMailTextResults(messages []map[string]any, maxChars int, stripQuo
 			rawBody, _ = bodyObj["content"].(string)
 		}
 		cleaned := cleanMailText(rawBody, stripQuoted)
-		truncated := maxChars > 0 && len(cleaned) > maxChars
+		runes := []rune(cleaned)
+		msgLimit := maxChars
+		if msgLimit <= 0 || msgLimit > remainingTotalRunes {
+			msgLimit = remainingTotalRunes
+		}
+		if msgLimit < 0 {
+			msgLimit = 0
+		}
+		truncated := len(runes) > msgLimit
 		bodyText := cleaned
 		if truncated {
-			bodyText = cleaned[:maxChars] + "…"
+			bodyText = string(runes[:msgLimit]) + "…"
+			remainingTotalRunes -= msgLimit
+		} else {
+			remainingTotalRunes -= len(runes)
 		}
 		toList := formatRecipientList(msg["toRecipients"])
 		if toList == nil {
@@ -349,14 +376,14 @@ func formatReadMailTextResults(messages []map[string]any, maxChars int, stripQuo
 			"hasAttachments":   msg["hasAttachments"],
 			"text":             bodyText,
 			"body":             bodyText,
-			"chars":            len(bodyText),
+			"chars":            utf8.RuneCountInString(bodyText),
 			"truncated":        truncated,
 		}
 		if atts := summarizeAttachments(msg["attachments"]); len(atts) > 0 {
 			entry["attachments"] = atts
 		}
 		if truncated {
-			entry["fullLength"] = len(cleaned)
+			entry["fullLength"] = len(runes)
 		}
 		results = append(results, entry)
 	}

@@ -200,6 +200,11 @@ func inferFilenameFromTarget(target string) string {
 }
 
 func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	ticketID := strings.TrimSpace(r.URL.Query().Get("t"))
 	if ticketID == "" {
@@ -229,7 +234,7 @@ func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Authorization", "Bearer "+ticket.Token)
 
-	resp, err := h.httpClient().Do(req)
+	resp, err := h.streamHTTPClient().Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"error":             "upstream_fetch_failed",

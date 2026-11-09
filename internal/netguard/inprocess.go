@@ -1,9 +1,12 @@
 package netguard
 
 import (
+	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -65,8 +68,9 @@ func matchInProcessHandler(u *url.URL) http.Handler {
 }
 
 // WrapRoundTripper wraps base so requests matching a registered in-process
-// handler are served directly in memory without dialing the network. All other
-// requests delegate to base unchanged.
+// handler are served directly in memory via a streaming pipe without dialing
+// the network or buffering the response body. All other requests delegate to
+// base unchanged.
 func WrapRoundTripper(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
@@ -87,9 +91,6 @@ func (rt *inProcessRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 				}
 				return nil, err
 			}
-			if req.Body != nil {
-				defer func() { _ = req.Body.Close() }()
-			}
 			srvReq := req.Clone(req.Context())
 			srvReq.RequestURI = req.URL.RequestURI()
 			if srvReq.Host == "" {
@@ -101,11 +102,42 @@ func (rt *inProcessRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 			if srvReq.Body == nil {
 				srvReq.Body = http.NoBody
 			}
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, srvReq)
-			resp := rec.Result()
-			resp.Request = req
-			return resp, nil
+
+			pr, pw := io.Pipe()
+			sw := &streamingResponseWriter{
+				header:    make(http.Header),
+				pw:        pw,
+				committed: make(chan struct{}),
+			}
+
+			go func() {
+				defer func() {
+					if req.Body != nil {
+						_ = req.Body.Close()
+					}
+					sw.commit(http.StatusOK)
+					_ = pw.Close()
+				}()
+				h.ServeHTTP(sw, srvReq)
+			}()
+
+			select {
+			case <-sw.committed:
+				return &http.Response{
+					StatusCode:    sw.code,
+					Status:        fmt.Sprintf("%d %s", sw.code, http.StatusText(sw.code)),
+					Proto:         "HTTP/1.1",
+					ProtoMajor:    1,
+					ProtoMinor:    1,
+					Header:        sw.snapHeader,
+					Body:          pr,
+					ContentLength: parseInProcessContentLength(sw.snapHeader.Get("Content-Length")),
+					Request:       req,
+				}, nil
+			case <-req.Context().Done():
+				_ = pr.CloseWithError(req.Context().Err())
+				return nil, req.Context().Err()
+			}
 		}
 	}
 	return rt.base.RoundTrip(req)
@@ -115,4 +147,53 @@ func (rt *inProcessRoundTripper) CloseIdleConnections() {
 	if closer, ok := rt.base.(interface{ CloseIdleConnections() }); ok {
 		closer.CloseIdleConnections()
 	}
+}
+
+type streamingResponseWriter struct {
+	header     http.Header
+	snapHeader http.Header
+	pw         *io.PipeWriter
+	code       int
+	once       sync.Once
+	committed  chan struct{}
+}
+
+func (w *streamingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *streamingResponseWriter) WriteHeader(statusCode int) {
+	w.commit(statusCode)
+}
+
+func (w *streamingResponseWriter) Write(p []byte) (int, error) {
+	w.commit(http.StatusOK)
+	return w.pw.Write(p)
+}
+
+func (w *streamingResponseWriter) Flush() {
+	w.commit(http.StatusOK)
+}
+
+func (w *streamingResponseWriter) commit(statusCode int) {
+	w.once.Do(func() {
+		if statusCode <= 0 {
+			statusCode = http.StatusOK
+		}
+		w.code = statusCode
+		w.snapHeader = w.header.Clone()
+		close(w.committed)
+	})
+}
+
+func parseInProcessContentLength(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return -1
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
 }

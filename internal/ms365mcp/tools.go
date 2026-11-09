@@ -51,16 +51,19 @@ func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, t
 	headers := buildGraphHeaders(spec, toolName, query, args)
 	reqBody := buildGraphRequestBody(spec, toolName, args)
 
-	res, err := h.graphRequestWithExpandFallback(ctx, token, spec.Method, path, query, reqBody, headers, autoExpandedAttachments)
+	res, respHeaders, err := h.graphRequestWithExpandFallback(ctx, token, spec.Method, path, query, reqBody, headers, autoExpandedAttachments)
 	if err != nil {
 		return nil, true, err
 	}
 
 	if fetchAll, ok := args["fetchAllPages"].(bool); ok && fetchAll && spec.Method == "GET" {
-		res = h.followAllPages(ctx, token, res, headers)
+		res, err = h.followAllPages(ctx, token, res, headers)
+		if err != nil {
+			return nil, true, err
+		}
 	}
 
-	return postProcessGraphResult(toolName, query, args, res), false, nil
+	return postProcessGraphResult(toolName, query, args, res, respHeaders), false, nil
 }
 
 func (h *Handler) executeBuiltInUtilityTool(ctx context.Context, r *http.Request, token, toolName string, args map[string]any) (any, bool, bool, error) {
@@ -247,7 +250,7 @@ func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) 
 	return reqBody
 }
 
-func postProcessGraphResult(toolName string, query url.Values, args map[string]any, res any) any {
+func postProcessGraphResult(toolName string, query url.Values, args map[string]any, res any, respHeaders http.Header) any {
 	if isMailMessageTool(toolName) {
 		normalizeMailResponseAttachments(res)
 	}
@@ -260,9 +263,41 @@ func postProcessGraphResult(toolName string, query url.Values, args map[string]a
 		}
 	}
 	if excl, ok := args["excludeResponse"].(bool); ok && excl {
-		return map[string]any{"success": true}
+		out := map[string]any{"success": true}
+		if inc, ok := args["includeHeaders"].(bool); ok && inc {
+			if hdrs := extractGraphResponseHeaders(respHeaders); len(hdrs) > 0 {
+				out["_headers"] = hdrs
+			}
+		}
+		return out
 	}
-	return cleanODataMetadata(res)
+	cleaned := cleanODataMetadata(res)
+	if inc, ok := args["includeHeaders"].(bool); ok && inc {
+		if hdrs := extractGraphResponseHeaders(respHeaders); len(hdrs) > 0 {
+			if m, ok := cleaned.(map[string]any); ok {
+				m["_headers"] = hdrs
+				return m
+			}
+			return map[string]any{
+				"data":     cleaned,
+				"_headers": hdrs,
+			}
+		}
+	}
+	return cleaned
+}
+
+func extractGraphResponseHeaders(h http.Header) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, vals := range h {
+		if len(vals) > 0 {
+			out[strings.ToLower(k)] = strings.Join(vals, ", ")
+		}
+	}
+	return out
 }
 
 func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, token, target string) (any, bool, error) {
@@ -280,7 +315,7 @@ func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, to
 	if strings.HasSuffix(strings.ToLower(itemPath), "/content") {
 		itemPath = itemPath[:len(itemPath)-len("/content")]
 	}
-	res, err := h.graphRequest(ctx, token, "GET", itemPath, nil, nil, nil)
+	res, _, err := h.graphRequest(ctx, token, "GET", itemPath, nil, nil, nil)
 	if err != nil {
 		if errors.Is(err, errGraphUnauthorized) {
 			return nil, true, err
@@ -290,29 +325,22 @@ func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, to
 		}
 		return nil, true, err
 	}
-	itemMap, _ := res.(map[string]any)
-	if itemMap != nil {
-		if dlURL, _ := itemMap["@microsoft.graph.downloadUrl"].(string); strings.TrimSpace(dlURL) != "" {
-			out := map[string]any{
-				"downloadUrl": dlURL,
-			}
-			if name, _ := itemMap["name"].(string); name != "" {
-				out["name"] = name
-			}
-			if size, ok := itemMap["size"]; ok && size != nil {
-				out["size"] = size
-			}
-			if fileObj, _ := itemMap["file"].(map[string]any); fileObj != nil {
-				if mt, _ := fileObj["mimeType"].(string); mt != "" {
-					out["contentType"] = mt
-				}
-			}
-			return out, false, nil
+
+	var probedName, probedCT string
+	var probedSize any
+	if itemMap, ok := res.(map[string]any); ok && itemMap != nil {
+		probedName, _ = itemMap["name"].(string)
+		probedSize = itemMap["size"]
+		if fileObj, _ := itemMap["file"].(map[string]any); fileObj != nil {
+			probedCT, _ = fileObj["mimeType"].(string)
 		}
 	}
 
+	// Never return Graph's pre-authenticated @microsoft.graph.downloadUrl
+	// capability URL into model context or logs; always mint a host-side
+	// single-use ticket for <itemPath>/content.
 	contentPath := itemPath + "/content"
-	return h.mintAttachmentDownloadResult(ctx, r, token, contentPath)
+	return h.mintAttachmentDownloadResultWithMeta(r, token, contentPath, probedName, probedCT, probedSize)
 }
 
 func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Request, token, target string) (any, bool, error) {
@@ -323,7 +351,7 @@ func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Requ
 		metaPath := target[:len(target)-len("/$value")]
 		q := url.Values{}
 		q.Set("$select", "id,name,contentType,size")
-		if metaRes, err := h.graphRequest(ctx, token, "GET", metaPath, q, nil, nil); err == nil {
+		if metaRes, _, err := h.graphRequest(ctx, token, "GET", metaPath, q, nil, nil); err == nil {
 			if m, ok := metaRes.(map[string]any); ok {
 				probedName, _ = m["name"].(string)
 				probedCT, _ = m["contentType"].(string)
@@ -334,6 +362,10 @@ func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Requ
 		}
 	}
 
+	return h.mintAttachmentDownloadResultWithMeta(r, token, target, probedName, probedCT, probedSize)
+}
+
+func (h *Handler) mintAttachmentDownloadResultWithMeta(r *http.Request, token, target, probedName, probedCT string, probedSize any) (any, bool, error) {
 	ticketID, err := h.tickets.Issue(token, target, h.cfg.AttachmentURLTTLSeconds, probedName, probedCT)
 	if err != nil {
 		return nil, true, err
@@ -359,8 +391,8 @@ func (h *Handler) mintAttachmentDownloadResult(ctx context.Context, r *http.Requ
 	return out, false, nil
 }
 
-func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string, autoExpanded bool) (any, error) {
-	res, err := h.graphRequest(ctx, token, method, path, query, body, headers)
+func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string, autoExpanded bool) (any, http.Header, error) {
+	res, respHeaders, err := h.graphRequest(ctx, token, method, path, query, body, headers)
 	if err != nil && autoExpanded && query.Get("$expand") != "" && query.Get("$search") != "" {
 		clonedQuery := url.Values{}
 		for k, v := range query {
@@ -368,14 +400,14 @@ func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, met
 				clonedQuery[k] = append([]string(nil), v...)
 			}
 		}
-		if retryRes, retryErr := h.graphRequest(ctx, token, method, path, clonedQuery, body, headers); retryErr == nil {
-			return retryRes, nil
+		if retryRes, retryHeaders, retryErr := h.graphRequest(ctx, token, method, path, clonedQuery, body, headers); retryErr == nil {
+			return retryRes, retryHeaders, nil
 		}
 	}
-	return res, err
+	return res, respHeaders, err
 }
 
-func (h *Handler) graphRequest(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string) (any, error) {
+func (h *Handler) graphRequest(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string) (any, http.Header, error) {
 	var fullURL string
 	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
 		fullURL = path
@@ -400,7 +432,7 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 		default:
 			encoded, err := json.Marshal(v)
 			if err != nil {
-				return nil, fmt.Errorf("marshal request body: %w", err)
+				return nil, nil, fmt.Errorf("marshal request body: %w", err)
 			}
 			bodyReader = bytes.NewReader(encoded)
 		}
@@ -408,7 +440,7 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("build Graph request: %w", err)
+		return nil, nil, fmt.Errorf("build Graph request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -423,17 +455,17 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 
 	resp, err := h.httpClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("graph request failed: %w", err)
+		return nil, nil, fmt.Errorf("graph request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	rawBytes, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read Microsoft Graph response: %w", err)
+		return nil, nil, fmt.Errorf("read Microsoft Graph response: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, errGraphUnauthorized
+		return nil, resp.Header, errGraphUnauthorized
 	}
 
 	if resp.StatusCode >= 400 {
@@ -441,35 +473,35 @@ func (h *Handler) graphRequest(ctx context.Context, token, method, path string, 
 		if errText == "" {
 			errText = resp.Status
 		}
-		return nil, fmt.Errorf("graph HTTP %d: %s", resp.StatusCode, errText)
+		return nil, resp.Header, fmt.Errorf("graph HTTP %d: %s", resp.StatusCode, errText)
 	}
 
 	if resp.StatusCode == http.StatusNoContent || len(bytes.TrimSpace(rawBytes)) == 0 {
-		return map[string]any{"status": "success", "statusCode": resp.StatusCode}, nil
+		return map[string]any{"status": "success", "statusCode": resp.StatusCode}, resp.Header, nil
 	}
 
 	var parsed any
 	if err := json.Unmarshal(rawBytes, &parsed); err != nil {
-		return map[string]any{"rawText": string(rawBytes)}, nil
+		return map[string]any{"rawText": string(rawBytes)}, resp.Header, nil
 	}
-	return parsed, nil
+	return parsed, resp.Header, nil
 }
 
-func (h *Handler) followAllPages(ctx context.Context, token string, firstPage any, headers map[string]string) any {
+func (h *Handler) followAllPages(ctx context.Context, token string, firstPage any, headers map[string]string) (any, error) {
 	firstMap, ok := firstPage.(map[string]any)
 	if !ok {
-		return firstPage
+		return firstPage, nil
 	}
 	combined, ok := firstMap["value"].([]any)
 	if !ok {
-		return firstPage
+		return firstPage, nil
 	}
 	nextLink, _ := firstMap["@odata.nextLink"].(string)
 	pages := 1
 	for nextLink != "" && pages < maxPaginationPages && len(combined) < maxPaginationItems {
-		pageRes, err := h.graphRequest(ctx, token, "GET", nextLink, nil, nil, headers)
+		pageRes, _, err := h.graphRequest(ctx, token, "GET", nextLink, nil, nil, headers)
 		if err != nil {
-			break
+			return nil, err
 		}
 		pageMap, ok := pageRes.(map[string]any)
 		if !ok {
@@ -487,7 +519,7 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 	} else {
 		firstMap["@odata.nextLink"] = nextLink
 	}
-	return firstMap
+	return firstMap, nil
 }
 
 func encodeGraphQuery(q url.Values) string {
@@ -808,7 +840,7 @@ func projectSelectFields(res any, selectRaw string, keepAttachments bool) any {
 	projectMap := func(m map[string]any) map[string]any {
 		out := map[string]any{}
 		for k, v := range m {
-			if strings.HasPrefix(k, "@odata.") || strings.HasPrefix(k, "@microsoft.graph.") {
+			if strings.HasPrefix(k, "@odata.") {
 				out[k] = v
 			}
 		}
@@ -882,6 +914,10 @@ func cleanODataMetadata(v any) any {
 	case map[string]any:
 		for k, child := range val {
 			if strings.HasPrefix(k, "@odata.") && k != "@odata.nextLink" && k != "@odata.deltaLink" && k != "@odata.count" {
+				delete(val, k)
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(k), "@microsoft.graph.") && strings.Contains(strings.ToLower(k), "downloadurl") {
 				delete(val, k)
 				continue
 			}

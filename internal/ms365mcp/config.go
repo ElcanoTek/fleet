@@ -70,9 +70,31 @@ type Config struct {
 	AttachmentURLTTLSeconds int
 
 	// Test seams (defaulted automatically when empty/nil).
-	GraphBaseURL string
-	AuthBaseURL  string
-	HTTPClient   *http.Client
+	GraphBaseURL     string
+	AuthBaseURL      string
+	HTTPClient       *http.Client
+	StreamHTTPClient *http.Client
+}
+
+func newDefaultStreamHTTPClient() *http.Client {
+	return &http.Client{
+		// Deliberately no whole-exchange Timeout so large /attachment downloads
+		// can stream for as long as they take; connection, TLS, and response
+		// header phases remain bounded on the transport.
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
 }
 
 // ConfigFromEnv builds Config from registered environment variables and the
@@ -132,6 +154,7 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		GraphBaseURL:            defaultGraphBaseURL,
 		AuthBaseURL:             defaultAuthBaseURL,
 		HTTPClient:              &http.Client{Timeout: 30 * time.Second},
+		StreamHTTPClient:        newDefaultStreamHTTPClient(),
 	}
 }
 

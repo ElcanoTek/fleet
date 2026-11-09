@@ -391,6 +391,17 @@ func TestMailAutoExpandAttachmentsAndTicketDownload(t *testing.T) {
 	}
 
 	safeClient := mcpoauth.SafeHTTPClient(10 * time.Second)
+	// HEAD request must be rejected with 405 without consuming the single-use ticket.
+	headReq, _ := http.NewRequest(http.MethodHead, dlURL, nil)
+	headResp, err := safeClient.Do(headReq)
+	if err != nil {
+		t.Fatalf("HEAD %s failed: %v", dlURL, err)
+	}
+	_ = headResp.Body.Close()
+	if headResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("HEAD /attachment status = %d, want 405", headResp.StatusCode)
+	}
+
 	attResp, err := safeClient.Get(dlURL)
 	if err != nil {
 		t.Fatalf("GET %s failed: %v", dlURL, err)
@@ -519,5 +530,20 @@ func TestUtilityToolsAndMentionsAndExpiredJWT(t *testing.T) {
 	}
 	if gotText, _ := entries[0]["text"].(string); gotText != "Check https://example.com/doc?id=42" {
 		t.Fatalf("unexpected cleaned mail text: %q", gotText)
+	}
+
+	// 5. read-mail-text rejects > 20 messageIds.
+	manyIDs := make([]any, 21)
+	for i := range manyIDs {
+		manyIDs[i] = fmt.Sprintf("msg-%d", i)
+	}
+	tooManyRes, err := h.executeReadMailText(context.Background(), "valid-token", map[string]any{
+		"messageIds": manyIDs,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on >20 messageIds: %v", err)
+	}
+	if errMap, ok := tooManyRes.(map[string]any); !ok || errMap["error"] == nil {
+		t.Fatalf("expected error map for >20 messageIds, got %#v", tooManyRes)
 	}
 }

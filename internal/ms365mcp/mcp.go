@@ -90,6 +90,16 @@ func (h *Handler) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+func (h *Handler) streamHTTPClient() *http.Client {
+	if h.cfg.StreamHTTPClient != nil {
+		return h.cfg.StreamHTTPClient
+	}
+	if h.cfg.HTTPClient != nil && h.cfg.HTTPClient.Transport != nil {
+		return &http.Client{Transport: h.cfg.HTTPClient.Transport}
+	}
+	return newDefaultStreamHTTPClient()
+}
+
 // Tickets returns the handler's attachment ticket store.
 func (h *Handler) Tickets() *AttachmentTicketStore {
 	return h.tickets
@@ -140,7 +150,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleToken(w, r)
 	case path == "/attachment":
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}

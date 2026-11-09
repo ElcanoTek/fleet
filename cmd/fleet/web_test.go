@@ -237,7 +237,7 @@ func TestWebServerMountsMS365MCPWhenConfigured(t *testing.T) {
 	t.Setenv("MS365_MCP_ALIASES", "https://fleetdev.elcanotek.com")
 	defer func() {
 		t.Setenv("MS365_MCP_CLIENT_ID", "")
-		wireMS365MCP(&config.Config{})
+		_, _ = wireMS365MCP(&config.Config{})
 	}()
 
 	srv, err := buildWebServer(&config.Config{PublicBaseURL: "https://fleet.elcanotek.com"}, backendHandlers{
