@@ -105,11 +105,13 @@ var minCompletionTokens = []struct {
 	{"google/gemini-4", 32_768},
 }
 
-// completionTokensForModel returns the per-call output allowance for slug: the
+// CompletionTokensForModel returns the per-call output allowance for slug: the
 // configured cap, raised to the model's minCompletionTokens floor when it is
-// below it. Callers use the SAME value for the request's MaxOutputTokens and
-// for the context reserve (contextAccounting), so the reserve stays exact.
-func completionTokensForModel(slug string, configured int64) int64 {
+// below it. Callers (including auxiliary one-shot calls in internal/agent) use
+// the SAME value for the request's MaxOutputTokens and for the context reserve
+// (contextAccounting), so the reserve stays exact and thinking models never
+// spend a small auxiliary cap entirely on reasoning.
+func CompletionTokensForModel(slug string, configured int64) int64 {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(slug)), "~")
 	for _, f := range minCompletionTokens {
 		if strings.HasPrefix(m, f.prefix) {
@@ -117,6 +119,10 @@ func completionTokensForModel(slug string, configured int64) int64 {
 		}
 	}
 	return configured
+}
+
+func completionTokensForModel(slug string, configured int64) int64 {
+	return CompletionTokensForModel(slug, configured)
 }
 
 // modelOpenAIGPT5 is hoisted because the context-window table and several test

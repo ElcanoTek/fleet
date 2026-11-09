@@ -8,7 +8,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/chattui"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -53,8 +55,49 @@ func cmdChat(argv []string) int {
 }
 
 type chatModelStore interface {
-	ListConversationsForModelUpdate(ctx context.Context, fromModel string) ([]store.ConversationModelEntry, error)
-	BulkUpdateConversationModel(ctx context.Context, model, fromModel string) (int, error)
+	ListConversationsForModelUpdate(ctx context.Context, fromModel string, includeLockdown bool) ([]store.ConversationModelEntry, error)
+	BulkUpdateConversationModel(ctx context.Context, model, fromModel string, includeLockdown bool) (int, error)
+}
+
+type chatWorkspaceSettingsReader interface {
+	WorkspaceSettings(ctx context.Context) (map[string]store.WorkspaceSetting, error)
+}
+
+// chatLockdownAllowsModel resolves the effective lockdown allow-list the same
+// way the server does (FLEET_LOCKDOWN_ALLOWED_MODELS when set, else the
+// workspace default and fallback model tiers with any workspace_settings DB
+// overrides) and reports whether model is permitted in lockdown conversations.
+func chatLockdownAllowsModel(ctx context.Context, st chatModelStore, model string) bool {
+	if raw := strings.TrimSpace(envOrFile("FLEET_LOCKDOWN_ALLOWED_MODELS")); raw != "" {
+		var patterns []string
+		for _, p := range strings.Split(raw, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				patterns = append(patterns, p)
+			}
+		}
+		if len(patterns) > 0 {
+			return config.ModelAllowed(model, patterns)
+		}
+	}
+	def := agentcore.DefaultCoreModel
+	if v := strings.TrimSpace(envOrFile("FLEET_DEFAULT_MODEL")); v != "" {
+		def = v
+	}
+	fallback := agentcore.DefaultFallbackModel
+	if v := strings.TrimSpace(envOrFile("FLEET_ADVANCED_MODEL")); v != "" {
+		fallback = v
+	}
+	if r, ok := st.(chatWorkspaceSettingsReader); ok {
+		if ws, err := r.WorkspaceSettings(ctx); err == nil {
+			if v, ok := ws["default_model"]; ok && strings.TrimSpace(v.Value) != "" {
+				def = strings.TrimSpace(v.Value)
+			}
+			if v, ok := ws["advanced_model"]; ok && strings.TrimSpace(v.Value) != "" {
+				fallback = strings.TrimSpace(v.Value)
+			}
+		}
+	}
+	return config.ModelAllowed(model, []string{def, fallback})
 }
 
 // chatSetModel implements `fleet chat set-model`:
@@ -86,8 +129,12 @@ func chatSetModel(argv []string) int {
 }
 
 func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Writer, model, fromModel string, dryRun, noConfirm bool) int {
+	includeLockdown := chatLockdownAllowsModel(ctx, st, model)
+	if !includeLockdown {
+		fmt.Fprintf(errW, "note: %s is not in the lockdown allow-list; excluding lockdown conversations\n", model)
+	}
 	if dryRun {
-		convs, err := st.ListConversationsForModelUpdate(ctx, fromModel)
+		convs, err := st.ListConversationsForModelUpdate(ctx, fromModel, includeLockdown)
 		if err != nil {
 			fmt.Fprintf(errW, "list conversations: %v\n", err)
 			return 5
@@ -104,15 +151,21 @@ func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Write
 	}
 
 	scope := "all non-deleted conversations"
+	if !includeLockdown {
+		scope = "all non-deleted non-lockdown conversations"
+	}
 	if fromModel != "" {
 		scope = "conversations currently pinned to " + fromModel
+		if !includeLockdown {
+			scope = "non-lockdown conversations currently pinned to " + fromModel
+		}
 	}
 	prompt := fmt.Sprintf("Set model=%s on %s? [y/N]: ", model, scope)
 	if code := confirmBulkMutation(noConfirm, prompt); code != 0 {
 		return code
 	}
 
-	updated, err := st.BulkUpdateConversationModel(ctx, model, fromModel)
+	updated, err := st.BulkUpdateConversationModel(ctx, model, fromModel, includeLockdown)
 	if err != nil {
 		fmt.Fprintf(errW, "re-assign conversation model: %v\n", err)
 		return 5

@@ -16,6 +16,7 @@ import (
 // receives (and the deadline it ran under) and answers with content, or err.
 type oneShotModel struct {
 	itMockModel
+	slug     string
 	content  []fantasy.Content
 	err      error
 	calls    int
@@ -23,7 +24,12 @@ type oneShotModel struct {
 	deadline time.Time
 }
 
-func (m *oneShotModel) Model() string { return "test/one-shot" }
+func (m *oneShotModel) Model() string {
+	if m.slug != "" {
+		return m.slug
+	}
+	return "test/one-shot"
+}
 
 func (m *oneShotModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
 	m.calls++
@@ -131,5 +137,18 @@ func TestGenerateOnce(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "aux model call") {
 		t.Errorf("a failed call is not metered, log = %q", logs.String())
+	}
+
+	// Gemini 4 Argon applies the 32K completion-token floor on one-shot aux
+	// calls so thinking never consumes a small auxiliary token budget.
+	gemini := &oneShotModel{
+		slug:    "google/gemini-4-argon",
+		content: []fantasy.Content{fantasy.TextContent{Text: "Title"}},
+	}
+	if _, _, err := generateOnce(context.Background(), gemini, oneShotCall{System: "s", Prompt: "p", MaxTokens: 512, Timeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if gemini.call.MaxOutputTokens == nil || *gemini.call.MaxOutputTokens != 32768 {
+		t.Errorf("gemini-4-argon MaxOutputTokens = %v, want 32768", gemini.call.MaxOutputTokens)
 	}
 }

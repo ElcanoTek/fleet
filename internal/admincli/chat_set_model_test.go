@@ -10,15 +10,20 @@ import (
 )
 
 type fakeChatModelStore struct {
-	entries   []store.ConversationModelEntry
-	updated   int
-	lastModel string
-	lastFrom  string
+	entries             []store.ConversationModelEntry
+	updated             int
+	lastModel           string
+	lastFrom            string
+	lastIncludeLockdown bool
 }
 
-func (f *fakeChatModelStore) ListConversationsForModelUpdate(_ context.Context, fromModel string) ([]store.ConversationModelEntry, error) {
+func (f *fakeChatModelStore) ListConversationsForModelUpdate(_ context.Context, fromModel string, includeLockdown bool) ([]store.ConversationModelEntry, error) {
+	f.lastIncludeLockdown = includeLockdown
 	var out []store.ConversationModelEntry
 	for _, e := range f.entries {
+		if !includeLockdown && e.Lockdown {
+			continue
+		}
 		if fromModel == "" || e.Model == fromModel {
 			out = append(out, e)
 		}
@@ -26,9 +31,10 @@ func (f *fakeChatModelStore) ListConversationsForModelUpdate(_ context.Context, 
 	return out, nil
 }
 
-func (f *fakeChatModelStore) BulkUpdateConversationModel(_ context.Context, model, fromModel string) (int, error) {
+func (f *fakeChatModelStore) BulkUpdateConversationModel(_ context.Context, model, fromModel string, includeLockdown bool) (int, error) {
 	f.lastModel = model
 	f.lastFrom = fromModel
+	f.lastIncludeLockdown = includeLockdown
 	return f.updated, nil
 }
 
@@ -70,5 +76,37 @@ func TestChatSetModel_DryRunAndApply(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "re-assigned model on 2 conversation(s)") {
 		t.Errorf("apply stderr = %s", errBuf.String())
+	}
+	if !st.lastIncludeLockdown {
+		t.Errorf("lastIncludeLockdown = false, want true when model is in lockdown allow-list")
+	}
+}
+
+func TestChatSetModel_SkipsLockdownWhenDisallowed(t *testing.T) {
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "anthropic/claude-opus-5.5")
+	resetEnvFileCache()
+	t.Cleanup(resetEnvFileCache)
+
+	st := &fakeChatModelStore{
+		entries: []store.ConversationModelEntry{
+			{ID: "conv-normal", UserEmail: "alice@example.com", Model: "anthropic/claude-opus-5.5", Lockdown: false},
+			{ID: "conv-lockdown", UserEmail: "bob@example.com", Model: "anthropic/claude-opus-5.5", Lockdown: true},
+		},
+		updated: 1,
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	code := runChatSetModel(context.Background(), st, &outBuf, &errBuf, "deepseek/deepseek-v4.1-flash-1017", "", true, false)
+	if code != 0 {
+		t.Fatalf("dry-run code = %d, want 0 (stderr=%s)", code, errBuf.String())
+	}
+	if st.lastIncludeLockdown {
+		t.Errorf("lastIncludeLockdown = true, want false when target model is disallowed in lockdown")
+	}
+	if strings.Contains(outBuf.String(), "conv-lockdown") {
+		t.Errorf("dry-run included lockdown conversation: %s", outBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "excluding lockdown conversations") {
+		t.Errorf("stderr missing lockdown exclusion note: %s", errBuf.String())
 	}
 }
