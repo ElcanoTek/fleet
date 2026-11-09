@@ -4936,7 +4936,7 @@
   },
   {
     "name": "read-mail-text",
-    "description": "Triage view of up to 20 mail messages at once, as text with the bulk junk removed: invisible padding, image placeholders and quoted reply history (forwards keep theirs). Links are kept: Safe Links, Proofpoint and Google redirects are unwrapped to the real address and tracking parameters (utm_* and similar) dropped; only an address still over 300 characters (a tracking redirect) is shortened to \u27e6link: domain\u27e7. Everything else (signatures, footers, whitespace) is left as the message has it; line endings become \\n and \u27e6 \u27e7 in the body itself appear as [ ]. Use get-mail-message for the raw body or the quoted thread. Give messageIds (up to 20), or folderId with optional top and filter or search for the newest messages in a folder. Each message is cut to maxChars characters (default 3,000; marked truncated: true): pass a larger maxChars, up to 300,000, for the whole of a long message; a body over 300,000 characters is cleaned only that far. If the whole result would exceed the server limit (MS365_MCP_READ_MAIL_TEXT_MAX_CHARS, default 80000) the call fails, listing the largest messages, instead of returning part of it. Returns [{ id, from, to, cc, subject, received, hasAttachments, text, chars, truncated }].",
+    "description": "Read email messages as clean plain text with unwrapped tracking/SafeLinks URLs, stripped reply quotes, and expanded attachment metadata (id, name, contentType, size, isInline). Provide either messageIds (up to 20 message IDs) or folderId (e.g. 'inbox'). Each message body is truncated at maxChars runes (default 3000) within a 300,000-rune aggregate budget across the call (marking truncated: true and fullLength).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -4970,7 +4970,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 300000,
-          "description": "Cut each message text to this many characters (marked truncated). Default 3,000; pass up to 300,000 for the whole of a long message (a body over 300,000 characters is cleaned only that far, also marked truncated)."
+          "description": "Maximum characters (UTF-8 runes) of body text to return per message (default 3000, subject to a 300,000-rune aggregate budget across the call)."
         }
       },
       "additionalProperties": true

@@ -119,7 +119,11 @@ func runMCPBroker() error {
 			return err
 		}
 	}
-	ms365Handler, ms365Cfg := wireMS365MCP(runtimeCfg)
+	ms365RuntimeCfg := runtimeCfg
+	if ms365RuntimeCfg == nil {
+		ms365RuntimeCfg = cfg
+	}
+	ms365Handler, ms365Cfg := wireMS365MCP(ms365RuntimeCfg)
 	if ms365Handler != nil {
 		slog.Info("mcp-broker: built-in Microsoft 365 MCP enabled",
 			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),

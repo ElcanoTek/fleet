@@ -310,7 +310,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if codeChallengeMethod != "" && codeChallengeMethod != "S256" {
+	if codeChallengeMethod != "S256" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":             "invalid_request",
 			"error_description": fmt.Sprintf("Only code_challenge_method=S256 is supported, got %q", codeChallengeMethod),

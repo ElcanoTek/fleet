@@ -48,11 +48,21 @@ func ParseTeamsURL(rawURL string) ParseTeamsURLResult {
 	if m := meetShortlinkRe.FindStringSubmatch(parsed.Path); len(m) == 2 {
 		meetingID := m[1]
 		passcode := parsed.Query().Get("p")
+		cleanShort := url.URL{
+			Scheme: "https",
+			Host:   parsed.Host,
+			Path:   "/meet/" + meetingID,
+		}
+		if passcode != "" {
+			q := url.Values{}
+			q.Set("p", passcode)
+			cleanShort.RawQuery = q.Encode()
+		}
 		return ParseTeamsURLResult{
 			Type:          "meet-shortlink",
 			MeetingID:     meetingID,
 			Passcode:      passcode,
-			JoinOnlineURL: fmt.Sprintf("https://teams.microsoft.com/l/meetup-join/19:meeting_%s@thread.v2/0", meetingID),
+			JoinOnlineURL: cleanShort.String(),
 			Hint: "This is a /meet/ shortlink containing a numeric meeting ID, not a Graph thread ID. " +
 				"To find the meeting in Graph: use get-calendar-view across the relevant date range; the response includes onlineMeeting.joinUrl for each event. " +
 				"Alternatively, ask the user for the full /l/meetup-join/... link (found in the Outlook calendar invite body) or the meeting recap link.",

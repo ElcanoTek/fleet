@@ -121,7 +121,7 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 		attachmentSocket string
 		listenerFile     *os.File
 	)
-	if ms365mcp.ConfigFromEnv(cfg).Enabled() && len(cmd.ExtraFiles) == 0 {
+	if mcpBrokerRemoteConfigured() && ms365mcp.ConfigFromEnv(cfg).Enabled() && len(cmd.ExtraFiles) == 0 {
 		dir, mkErr := os.MkdirTemp("", "fleet-ms365-attachment-*")
 		if mkErr != nil {
 			return nil, nil, fmt.Errorf("start MCP broker: create ms365 attachment dir: %w", mkErr)
