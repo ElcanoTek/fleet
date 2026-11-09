@@ -115,8 +115,8 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if cfg.TitleModel != DefaultTitleModel {
 		t.Errorf("TitleModel default: got %q, want %q", cfg.TitleModel, DefaultTitleModel)
 	}
-	if cfg.ShutdownGraceSeconds != 30 {
-		t.Errorf("ShutdownGraceSeconds default: got %d, want 30", cfg.ShutdownGraceSeconds)
+	if cfg.ShutdownGraceSeconds != 300 {
+		t.Errorf("ShutdownGraceSeconds default: got %d, want 300", cfg.ShutdownGraceSeconds)
 	}
 	// Sub-agent / delegation defaults (#175 tightened by #264): depth 1
 	// (parent → sub-agent only), fan-out 20, per-child budget fraction 0.10.

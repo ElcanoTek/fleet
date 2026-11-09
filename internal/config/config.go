@@ -290,7 +290,7 @@ type Config struct {
 	// ── process lifecycle ──
 	// ShutdownGraceSeconds bounds how long graceful shutdown (SIGTERM) waits for
 	// in-flight chat turns and scheduled tasks to finish before force-cancelling
-	// them. FLEET_SHUTDOWN_GRACE_SECONDS, default 30; 0 means no wait (force
+	// them. FLEET_SHUTDOWN_GRACE_SECONDS, default 300; 0 means no wait (force
 	// immediately). Pair with the systemd unit's TimeoutStopSec (> this value) so
 	// systemd sends SIGKILL only after fleet's own drain budget is spent.
 	ShutdownGraceSeconds int
@@ -1290,7 +1290,7 @@ func Load(envFile string) (*Config, error) {
 
 		DefaultThinkingBudgetTokens: lp.getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
 
-		ShutdownGraceSeconds: lp.getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
+		ShutdownGraceSeconds: lp.getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 300),
 
 		TurnTimeoutSeconds:   lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 14400),
 		Temperature:          lp.getenvFleetFloat("TEMPERATURE", 0.3),

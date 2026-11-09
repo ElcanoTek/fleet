@@ -78,7 +78,7 @@ type InstallOptions struct {
 	// RollbackTimeout bounds the rollback's restart + readiness wait. The
 	// rollback runs under its OWN context, derived from the caller's but not
 	// cancelled with it: a SIGINT/SIGTERM that interrupted the health gate must
-	// not also abort the restore. Default: HealthTimeout + 2 minutes.
+	// not also abort the restore. Default: HealthTimeout + 7 minutes.
 	RollbackTimeout time.Duration
 	// ClearDrain, when set, removes the update drain marker (see
 	// httpapi.UpdateDrainActive) that the caller — update.sh, inside its
@@ -245,7 +245,7 @@ func (o *InstallOptions) rollbackContext(ctx context.Context) (context.Context, 
 		if budget <= 0 {
 			budget = 90 * time.Second
 		}
-		budget += 2 * time.Minute
+		budget += 7 * time.Minute
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), budget)
 }
@@ -459,12 +459,12 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 }
 
 // detachedTimeout caps a detached stop, start or fallback restart (within
-// ctx's deadline): well past the shipped unit's TimeoutStopSec (60s), after
+// ctx's deadline): well past the shipped unit's TimeoutStopSec (330s), after
 // which systemd has killed the process. minStartTimeout is what a step still
 // gets when ctx's deadline has already passed — the start must be attempted,
 // never skipped.
 const (
-	detachedTimeout = 3 * time.Minute
+	detachedTimeout = 7 * time.Minute
 	minStartTimeout = 10 * time.Second
 )
 

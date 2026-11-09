@@ -105,7 +105,7 @@
 #                          build/install/restart while full admission quiescing
 #                          takes effect once the updated daemon is running.)
 #   --wait-timeout <sec>   maximum seconds to wait for in-flight work to finish
-#                          (env FLEET_UPDATE_WAIT_SECONDS, default 600)
+#                          (env FLEET_UPDATE_WAIT_SECONDS, default 5400)
 #   --force                skip the active-work blocker and update/restart
 #                          immediately even when a task or turn is running
 #                          (env FLEET_UPDATE_FORCE=1)
@@ -331,7 +331,7 @@ _update_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 [[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="$(fleet_env_or_file FLEET_UPDATE_WAIT "$_update_env_file")"
 [[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="0"
 [[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="$(fleet_env_or_file FLEET_UPDATE_WAIT_SECONDS "$_update_env_file")"
-[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="600"
+[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="5400"
 [[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="$(fleet_env_or_file FLEET_UPDATE_FORCE "$_update_env_file")"
 [[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="0"
 
@@ -347,7 +347,7 @@ if [[ "$FORCE_UPDATE" != "1" ]]; then
 elif [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
   WAIT_SECONDS=$(( 10#$WAIT_SECONDS ))
 else
-  WAIT_SECONDS=600
+  WAIT_SECONDS=5400
 fi
 
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets

@@ -131,7 +131,7 @@ func poolDrainGrace(cfg *config.Config) time.Duration {
 }
 
 // shutdownGrace resolves the graceful-shutdown grace period from
-// FLEET_SHUTDOWN_GRACE_SECONDS (config default 30). A non-positive value means
+// FLEET_SHUTDOWN_GRACE_SECONDS (config default 300). A non-positive value means
 // "no wait" (force-cancel immediately) and is returned as 0.
 func shutdownGrace(cfg *config.Config) time.Duration {
 	if cfg == nil || cfg.ShutdownGraceSeconds <= 0 {

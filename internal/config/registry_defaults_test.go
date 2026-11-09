@@ -277,7 +277,7 @@ func TestRegistryDefaultsMatchCodeFallbacks(t *testing.T) {
 // against the registry here (each read site named).
 func TestRegistryDefaultsOfHandParsedSettings(t *testing.T) {
 	for key, want := range map[string]string{
-		"FLEET_UPDATE_WAIT_SECONDS":                      "600",            // internal/admincli/service.go parseConfiguredWaitTimeout: 10 * time.Minute
+		"FLEET_UPDATE_WAIT_SECONDS":                      "5400",           // internal/admincli/service.go parseConfiguredWaitTimeout: 90 * time.Minute
 		"FLEET_TASK_WALL_TIMEOUT":                        "4h",             // internal/runner DefaultTaskWallClockTimeout
 		"FLEET_MAX_CONCURRENT_AGENTS":                    "8",              // internal/runner DefaultMaxConcurrentAgents
 		"FLEET_NOTIFY_TIMEOUT":                           "10s",            // internal/notify defaultTimeout

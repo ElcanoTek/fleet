@@ -342,7 +342,7 @@
             "FLEET_SERVER_ADDR": { "type": ["string", "number", "boolean"], "description": "Listen address of the chat API (and the webhooks it serves). Bound at startup; a change needs a restart. The chart sets it from fixed: 0.0.0.0:8080; set that value instead. Default: 127.0.0.1:8080." },
             "FLEET_SERVICE_NAME": { "type": ["string", "number", "boolean"], "description": "systemd unit name the CLI manages, and the trace service name. Default: fleet." },
             "FLEET_SHARED_FILES_MAX_TOTAL_MB": { "type": ["string", "number", "boolean"], "description": "Total size cap on shared files, in MB. Also an admin setting. Default: 10240." },
-            "FLEET_SHUTDOWN_GRACE_SECONDS": { "type": ["string", "number", "boolean"], "description": "How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. Default: 30." },
+            "FLEET_SHUTDOWN_GRACE_SECONDS": { "type": ["string", "number", "boolean"], "description": "How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. Default: 300." },
             "FLEET_SMTP_FROM": { "type": ["string", "number", "boolean"], "description": "Sender address of notification email." },
             "FLEET_SMTP_HOST": { "type": ["string", "number", "boolean"], "description": "SMTP host for notification email." },
             "FLEET_SMTP_PASSWORD": { "type": ["string", "number", "boolean"], "description": "SMTP password. Secret: set it through config.existingSecret, not config.env." },
