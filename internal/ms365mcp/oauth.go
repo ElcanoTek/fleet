@@ -585,72 +585,7 @@ func (h *Handler) activeAllowedScopes() []string {
 		"profile":        true,
 	}
 	for _, t := range tools {
-		isWrite := t.Method != "" && !strings.EqualFold(t.Method, http.MethodGet)
-		p := t.PathPattern
-		switch {
-		case t.Name == "get-mail-attachment-content":
-			needed["Mail.Read"] = true
-		case isMailEndpoint(p):
-			needed["Mail.Read"] = true
-			needed["MailboxSettings.Read"] = true
-			if strings.HasSuffix(p, "/sendMail") || strings.HasSuffix(p, "/send") {
-				needed["Mail.Send"] = true
-				needed["Mail.ReadWrite"] = true
-			} else if isWrite {
-				needed["Mail.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/me/events") || strings.HasPrefix(p, "/me/calendar") || strings.HasPrefix(p, "/me/calendars"):
-			needed["Calendars.Read"] = true
-			if isWrite {
-				needed["Calendars.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/me/drive") || strings.HasPrefix(p, "/drives/"):
-			needed["Files.Read"] = true
-			needed["Files.Read.All"] = true
-			if isWrite {
-				needed["Files.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/me/contacts"):
-			needed["Contacts.Read"] = true
-			if isWrite {
-				needed["Contacts.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/me/todo/"):
-			needed["Tasks.Read"] = true
-			if isWrite {
-				needed["Tasks.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/chats") || strings.HasPrefix(p, "/me/chats") || t.Name == "reply-to-chat-message":
-			needed["Chat.Read"] = true
-			switch {
-			case t.Name == "create-chat":
-				needed["Chat.Create"] = true
-				needed["Chat.ReadWrite"] = true
-			case t.Name == "list-chat-members":
-				needed["ChatMember.Read"] = true
-			case isWrite:
-				needed["ChatMessage.Send"] = true
-				needed["Chat.ReadWrite"] = true
-			}
-		case strings.HasPrefix(p, "/me/joinedTeams") || strings.HasPrefix(p, "/teams/"):
-			switch {
-			case strings.Contains(p, "/channels") && strings.Contains(p, "/messages"):
-				needed["ChannelMessage.Read.All"] = true
-				if isWrite {
-					needed["ChannelMessage.Send"] = true
-				}
-			case strings.Contains(p, "/channels"):
-				needed["Channel.ReadBasic.All"] = true
-			case strings.Contains(p, "/members"):
-				needed["TeamMember.Read.All"] = true
-			default:
-				needed["Team.ReadBasic.All"] = true
-			}
-		case strings.HasPrefix(p, "/sites"):
-			needed["Sites.Read.All"] = true
-		case strings.HasPrefix(p, "/me/people"):
-			needed["People.Read"] = true
-		}
+		addToolScopes(needed, t)
 	}
 	out := make([]string, 0, len(needed))
 	for _, s := range DefaultAllowedScopes {
@@ -659,6 +594,87 @@ func (h *Handler) activeAllowedScopes() []string {
 		}
 	}
 	return out
+}
+
+func addToolScopes(needed map[string]bool, t ToolSpec) {
+	isWrite := t.Method != "" && !strings.EqualFold(t.Method, http.MethodGet)
+	p := t.PathPattern
+	switch {
+	case t.Name == "get-mail-attachment-content":
+		needed["Mail.Read"] = true
+	case isMailEndpoint(p):
+		addMailToolScopes(needed, p, isWrite)
+	case strings.HasPrefix(p, "/me/events") || strings.HasPrefix(p, "/me/calendar") || strings.HasPrefix(p, "/me/calendars"):
+		needed["Calendars.Read"] = true
+		if isWrite {
+			needed["Calendars.ReadWrite"] = true
+		}
+	case strings.HasPrefix(p, "/me/drive") || strings.HasPrefix(p, "/drives/"):
+		needed["Files.Read"] = true
+		needed["Files.Read.All"] = true
+		if isWrite {
+			needed["Files.ReadWrite"] = true
+		}
+	case strings.HasPrefix(p, "/me/contacts"):
+		needed["Contacts.Read"] = true
+		if isWrite {
+			needed["Contacts.ReadWrite"] = true
+		}
+	case strings.HasPrefix(p, "/me/todo/"):
+		needed["Tasks.Read"] = true
+		if isWrite {
+			needed["Tasks.ReadWrite"] = true
+		}
+	case strings.HasPrefix(p, "/chats") || strings.HasPrefix(p, "/me/chats") || t.Name == "reply-to-chat-message":
+		addChatToolScopes(needed, t.Name, isWrite)
+	case strings.HasPrefix(p, "/me/joinedTeams") || strings.HasPrefix(p, "/teams/"):
+		addTeamToolScopes(needed, p, isWrite)
+	case strings.HasPrefix(p, "/sites"):
+		needed["Sites.Read.All"] = true
+	case strings.HasPrefix(p, "/me/people"):
+		needed["People.Read"] = true
+	}
+}
+
+func addMailToolScopes(needed map[string]bool, p string, isWrite bool) {
+	needed["Mail.Read"] = true
+	needed["MailboxSettings.Read"] = true
+	if strings.HasSuffix(p, "/sendMail") || strings.HasSuffix(p, "/send") {
+		needed["Mail.Send"] = true
+		needed["Mail.ReadWrite"] = true
+	} else if isWrite {
+		needed["Mail.ReadWrite"] = true
+	}
+}
+
+func addChatToolScopes(needed map[string]bool, name string, isWrite bool) {
+	needed["Chat.Read"] = true
+	switch {
+	case name == "create-chat":
+		needed["Chat.Create"] = true
+		needed["Chat.ReadWrite"] = true
+	case name == "list-chat-members":
+		needed["ChatMember.Read"] = true
+	case isWrite:
+		needed["ChatMessage.Send"] = true
+		needed["Chat.ReadWrite"] = true
+	}
+}
+
+func addTeamToolScopes(needed map[string]bool, p string, isWrite bool) {
+	switch {
+	case strings.Contains(p, "/channels") && strings.Contains(p, "/messages"):
+		needed["ChannelMessage.Read.All"] = true
+		if isWrite {
+			needed["ChannelMessage.Send"] = true
+		}
+	case strings.Contains(p, "/channels"):
+		needed["Channel.ReadBasic.All"] = true
+	case strings.Contains(p, "/members"):
+		needed["TeamMember.Read.All"] = true
+	default:
+		needed["Team.ReadBasic.All"] = true
+	}
 }
 
 func (h *Handler) filterAllowedScopes(raw string) string {
