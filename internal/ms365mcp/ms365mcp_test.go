@@ -972,4 +972,91 @@ func TestReloadCatalogFromEnv(t *testing.T) {
 	if got := h.ToolNames(); len(got) != 0 {
 		t.Fatalf("expected failed reload to clear tools, got %v", got)
 	}
+
+	// RegisterActiveHandler + ReloadActiveHandlerFromEnv updates registered handler.
+	RegisterActiveHandler(h)
+	t.Cleanup(func() { RegisterActiveHandler(nil) })
+	if err := os.Remove(overridePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReloadActiveHandlerFromEnv(); err != nil {
+		t.Fatalf("ReloadActiveHandlerFromEnv failed: %v", err)
+	}
+	if got := len(h.ToolNames()); got != 57 {
+		t.Fatalf("expected ReloadActiveHandlerFromEnv to restore 57 tools, got %d", got)
+	}
+}
+
+func TestReview5833885603Findings(t *testing.T) {
+	t.Parallel()
+
+	// 1. Mail auto-expanded attachments are preserved alongside expandExtendedProperties.
+	spec := ToolSpec{
+		Name:        "list-mail-messages",
+		PathPattern: "/me/messages",
+		Method:      http.MethodGet,
+	}
+	q, autoExpanded := buildGraphQueryParams(spec, "list-mail-messages", map[string]any{
+		"expandExtendedProperties": []any{"String {00020329-0000-0000-C000-000000000046} Name customProp"},
+	})
+	if !autoExpanded {
+		t.Fatal("expected autoExpandedAttachments=true when expandExtendedProperties is combined with mail default")
+	}
+	wantExpand := defaultMailAttachmentExpand + ",singleValueExtendedProperties($filter=id eq 'String {00020329-0000-0000-C000-000000000046} Name customProp')"
+	if got := q.Get("$expand"); got != wantExpand {
+		t.Fatalf("$expand = %q, want %q", got, wantExpand)
+	}
+	if stripped := stripAutoMailAttachmentExpand(wantExpand); stripped != "singleValueExtendedProperties($filter=id eq 'String {00020329-0000-0000-C000-000000000046} Name customProp')" {
+		t.Fatalf("stripAutoMailAttachmentExpand = %q", stripped)
+	}
+
+	// 2. isMutatingGraphTool only exempts POST /search/query.
+	if isMutatingGraphTool(ToolSpec{Name: "search-query", Method: "POST", PathPattern: "/search/query"}) {
+		t.Fatal("expected POST /search/query not to be marked mutating")
+	}
+	if !isMutatingGraphTool(ToolSpec{Name: "search-query", Method: "POST", PathPattern: "/me/sendMail"}) {
+		t.Fatal("expected POST /me/sendMail reused under name search-query to be marked mutating")
+	}
+
+	// 3. followAllPages caps combined items at maxPaginationItems and preserves nextLink.
+	var mockURL string
+	mockGraph := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		items := make([]any, 500)
+		for i := range items {
+			items[i] = map[string]any{"id": fmt.Sprintf("page2-%d", i)}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"value":           items,
+			"@odata.nextLink": mockURL + "/v1.0/me/messages?$skip=5400",
+		})
+	}))
+	defer mockGraph.Close()
+	mockURL = mockGraph.URL
+
+	h := NewHandler(Config{
+		ClientID:     "client-123",
+		PublicURL:    "https://fleet.elcanotek.com",
+		GraphBaseURL: mockGraph.URL + "/v1.0",
+		HTTPClient:   mockGraph.Client(),
+	})
+	firstItems := make([]any, 4900)
+	for i := range firstItems {
+		firstItems[i] = map[string]any{"id": fmt.Sprintf("page1-%d", i)}
+	}
+	firstPage := map[string]any{
+		"value":           firstItems,
+		"@odata.nextLink": mockGraph.URL + "/v1.0/me/messages?$skip=4900",
+	}
+	res, err := h.followAllPages(context.Background(), "tok", firstPage, 1024, nil)
+	if err != nil {
+		t.Fatalf("followAllPages failed: %v", err)
+	}
+	resMap := res.(map[string]any)
+	vals := resMap["value"].([]any)
+	if len(vals) != maxPaginationItems {
+		t.Fatalf("len(value) = %d, want %d", len(vals), maxPaginationItems)
+	}
+	if gotNext, _ := resMap["@odata.nextLink"].(string); gotNext == "" {
+		t.Fatal("expected @odata.nextLink to be preserved when followAllPages truncates at maxPaginationItems")
+	}
 }

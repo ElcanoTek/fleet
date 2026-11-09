@@ -155,11 +155,10 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 			filters = append(filters, fmt.Sprintf("id eq '%s'", strings.ReplaceAll(id, "'", "''")))
 		}
 		clause := fmt.Sprintf("singleValueExtendedProperties($filter=%s)", strings.Join(filters, " or "))
-		if cur := query.Get("$expand"); cur != "" && !autoExpandedAttachments {
+		if cur := query.Get("$expand"); cur != "" {
 			query.Set("$expand", cur+","+clause)
 		} else {
 			query.Set("$expand", clause)
-			autoExpandedAttachments = false
 		}
 	}
 	return query, autoExpandedAttachments
@@ -580,11 +579,21 @@ func (h *Handler) graphRequestWithExpandFallback(ctx context.Context, token, met
 				clonedQuery[k] = append([]string(nil), v...)
 			}
 		}
+		if stripped := stripAutoMailAttachmentExpand(query.Get("$expand")); stripped != "" {
+			clonedQuery.Set("$expand", stripped)
+		}
 		if retryRes, retryHeaders, retryBytes, retryErr := h.graphRequestWithSize(ctx, token, method, path, clonedQuery, body, headers); retryErr == nil {
 			return retryRes, retryHeaders, retryBytes, nil
 		}
 	}
 	return res, respHeaders, nBytes, err
+}
+
+func stripAutoMailAttachmentExpand(expand string) string {
+	if expand == defaultMailAttachmentExpand {
+		return ""
+	}
+	return strings.TrimPrefix(expand, defaultMailAttachmentExpand+",")
 }
 
 func (h *Handler) graphRequest(ctx context.Context, token, method, path string, query url.Values, body any, headers map[string]string) (any, http.Header, error) {
@@ -688,6 +697,9 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 		return firstPage, nil
 	}
 	nextLink, _ := firstMap["@odata.nextLink"].(string)
+	if len(combined) > maxPaginationItems {
+		combined = combined[:maxPaginationItems]
+	}
 	pages := 1
 	totalBytes := firstPageBytes
 	for nextLink != "" && pages < maxPaginationPages && len(combined) < maxPaginationItems {
@@ -703,10 +715,20 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 		if !ok {
 			break
 		}
+		pageNextLink, _ := pageMap["@odata.nextLink"].(string)
 		if vals, ok := pageMap["value"].([]any); ok {
+			remaining := maxPaginationItems - len(combined)
+			if len(vals) > remaining {
+				combined = append(combined, vals[:remaining]...)
+				if pageNextLink == "" {
+					pageNextLink = nextLink
+				}
+				nextLink = pageNextLink
+				break
+			}
 			combined = append(combined, vals...)
 		}
-		nextLink, _ = pageMap["@odata.nextLink"].(string)
+		nextLink = pageNextLink
 		pages++
 	}
 	firstMap["value"] = combined

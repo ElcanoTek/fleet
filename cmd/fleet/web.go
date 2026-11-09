@@ -159,6 +159,7 @@ func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (
 		ms365Cfg = ms365mcp.BrokerConfigFromEnv(cfg)
 	}
 	if !ms365Cfg.Enabled() {
+		ms365mcp.RegisterActiveHandler(nil)
 		netguard.RegisterInProcessHandler("ms365mcp", nil, nil)
 		return nil, ms365Cfg
 	}
@@ -167,6 +168,7 @@ func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (
 		ms365Cfg.AttachmentProxy = ms365mcp.NewUnixSocketAttachmentProxy(brokerAttachmentSocket)
 	}
 	h := ms365mcp.NewHandler(ms365Cfg)
+	ms365mcp.RegisterActiveHandler(h)
 	netguard.RegisterInProcessHandler("ms365mcp", h.MatchesInProcessURL, h)
 	return h, ms365Cfg
 }

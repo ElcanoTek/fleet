@@ -111,6 +111,32 @@ func parseToolsCatalog(overrideJSON []byte) ([]ToolSpec, map[string]ToolSpec, er
 	return specs, byName, nil
 }
 
+var (
+	activeHandlerMu sync.RWMutex
+	activeHandler   *Handler
+)
+
+// RegisterActiveHandler registers (or clears when nil) the process-wide public
+// Handler so live config reloads in the parent process update its tool catalog
+// alongside the mcp-broker child's handler.
+func RegisterActiveHandler(h *Handler) {
+	activeHandlerMu.Lock()
+	activeHandler = h
+	activeHandlerMu.Unlock()
+}
+
+// ReloadActiveHandlerFromEnv reloads the registered public Handler's tool
+// catalog from <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json when one is active.
+func ReloadActiveHandlerFromEnv() error {
+	activeHandlerMu.RLock()
+	h := activeHandler
+	activeHandlerMu.RUnlock()
+	if h == nil {
+		return nil
+	}
+	return h.ReloadCatalogFromEnv()
+}
+
 // ReloadCatalogFromEnv re-reads <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json and
 // atomically updates the handler's active tool catalog. If the override file
 // exists and cannot be read or parsed, the handler fails closed (clearing its
@@ -164,7 +190,13 @@ func (h *Handler) snapshotCatalog() ([]ToolSpec, map[string]ToolSpec, bool) {
 }
 
 func isMutatingGraphTool(s ToolSpec) bool {
-	return s.Method != "" && !strings.EqualFold(s.Method, http.MethodGet) && s.Name != "search-query"
+	if s.Method == "" || strings.EqualFold(s.Method, http.MethodGet) {
+		return false
+	}
+	if s.Name == "search-query" && strings.EqualFold(s.Method, http.MethodPost) && s.PathPattern == "/search/query" {
+		return false
+	}
+	return true
 }
 
 func (h *Handler) httpClient() *http.Client {
