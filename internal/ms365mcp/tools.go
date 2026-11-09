@@ -699,6 +699,7 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 	nextLink, _ := firstMap["@odata.nextLink"].(string)
 	if len(combined) > maxPaginationItems {
 		combined = combined[:maxPaginationItems]
+		nextLink = ""
 	}
 	pages := 1
 	totalBytes := firstPageBytes
@@ -717,13 +718,14 @@ func (h *Handler) followAllPages(ctx context.Context, token string, firstPage an
 		}
 		pageNextLink, _ := pageMap["@odata.nextLink"].(string)
 		if vals, ok := pageMap["value"].([]any); ok {
-			remaining := maxPaginationItems - len(combined)
-			if len(vals) > remaining {
-				combined = append(combined, vals[:remaining]...)
-				if pageNextLink == "" {
-					pageNextLink = nextLink
-				}
-				nextLink = pageNextLink
+			if len(combined) > 0 && len(combined)+len(vals) > maxPaginationItems {
+				// Stop before appending a page that would cross the item cap so
+				// nextLink continues to point at the start of this unconsumed page.
+				break
+			}
+			if len(combined)+len(vals) > maxPaginationItems {
+				combined = append(combined, vals[:maxPaginationItems-len(combined)]...)
+				nextLink = ""
 				break
 			}
 			combined = append(combined, vals...)

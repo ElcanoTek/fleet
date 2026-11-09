@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -350,7 +349,7 @@ func brokerScopePolicy(policy agent.MCPScopePolicy) *mcpbroker.ScopePolicy {
 
 func (r *productionMCPRuntime) reload(ctx context.Context) (*agent.MCPReloadResult, error) {
 	if err := ms365mcp.ReloadActiveHandlerFromEnv(); err != nil {
-		slog.Warn("mcp-runtime: failed to reload public ms365_tools.json catalog", "err", safe.LogSafe(err.Error()))
+		logging.From(ctx).Warn("mcp-runtime: failed to reload public ms365_tools.json catalog", "err", safe.LogSafe(err.Error()))
 	}
 	result, err := r.client.Reload(ctx)
 	if err != nil {

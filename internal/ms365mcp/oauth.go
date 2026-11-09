@@ -146,7 +146,7 @@ func (h *Handler) handleOAuthProtectedResource(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{
 		"resource":                 baseURL + "/mcp",
 		"authorization_servers":    []string{baseURL},
-		"scopes_supported":         DefaultAllowedScopes,
+		"scopes_supported":         h.activeAllowedScopes(),
 		"bearer_methods_supported": []string{"header"},
 	})
 }
@@ -163,7 +163,7 @@ func (h *Handler) handleOAuthAuthorizationServer(w http.ResponseWriter, r *http.
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"code_challenge_methods_supported":      []string{"S256"},
-		"scopes_supported":                      DefaultAllowedScopes,
+		"scopes_supported":                      h.activeAllowedScopes(),
 	})
 }
 
@@ -318,7 +318,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolvedScope := filterAllowedScopes(scope)
+	resolvedScope := h.filterAllowedScopes(scope)
 
 	authBase := strings.TrimRight(h.cfg.AuthBaseURL, "/")
 	if authBase == "" {
@@ -431,7 +431,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			upParams.Set("redirect_uri", redirectURI)
 		}
 		if authorizedScope == "" {
-			authorizedScope = strings.Join(DefaultAllowedScopes, " ")
+			authorizedScope = strings.Join(h.activeAllowedScopes(), " ")
 		}
 		if requestedScope != "" {
 			subset, ok := filterAuthorizedScopeSubset(requestedScope, authorizedScope)
@@ -457,7 +457,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		upParams.Set("grant_type", "refresh_token")
 		upParams.Set("refresh_token", refreshToken)
 		if requestedScope != "" {
-			upParams.Set("scope", filterAllowedScopes(requestedScope))
+			upParams.Set("scope", h.filterAllowedScopes(requestedScope))
 		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -573,9 +573,98 @@ func parseTokenRequestParams(r *http.Request) (url.Values, error) {
 	return vals, nil
 }
 
-func filterAllowedScopes(raw string) string {
-	allowedSet := make(map[string]string, len(DefaultAllowedScopes))
+func (h *Handler) activeAllowedScopes() []string {
+	tools, _, ok := h.snapshotCatalog()
+	if !ok || len(tools) == 0 {
+		return []string{"User.Read", "offline_access", "openid", "profile"}
+	}
+	needed := map[string]bool{
+		"User.Read":      true,
+		"offline_access": true,
+		"openid":         true,
+		"profile":        true,
+	}
+	for _, t := range tools {
+		isWrite := t.Method != "" && !strings.EqualFold(t.Method, http.MethodGet)
+		p := t.PathPattern
+		switch {
+		case t.Name == "get-mail-attachment-content":
+			needed["Mail.Read"] = true
+		case isMailEndpoint(p):
+			needed["Mail.Read"] = true
+			needed["MailboxSettings.Read"] = true
+			if strings.HasSuffix(p, "/sendMail") || strings.HasSuffix(p, "/send") {
+				needed["Mail.Send"] = true
+				needed["Mail.ReadWrite"] = true
+			} else if isWrite {
+				needed["Mail.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/me/events") || strings.HasPrefix(p, "/me/calendar") || strings.HasPrefix(p, "/me/calendars"):
+			needed["Calendars.Read"] = true
+			if isWrite {
+				needed["Calendars.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/me/drive") || strings.HasPrefix(p, "/drives/"):
+			needed["Files.Read"] = true
+			needed["Files.Read.All"] = true
+			if isWrite {
+				needed["Files.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/me/contacts"):
+			needed["Contacts.Read"] = true
+			if isWrite {
+				needed["Contacts.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/me/todo/"):
+			needed["Tasks.Read"] = true
+			if isWrite {
+				needed["Tasks.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/chats") || strings.HasPrefix(p, "/me/chats") || t.Name == "reply-to-chat-message":
+			needed["Chat.Read"] = true
+			switch {
+			case t.Name == "create-chat":
+				needed["Chat.Create"] = true
+				needed["Chat.ReadWrite"] = true
+			case t.Name == "list-chat-members":
+				needed["ChatMember.Read"] = true
+			case isWrite:
+				needed["ChatMessage.Send"] = true
+				needed["Chat.ReadWrite"] = true
+			}
+		case strings.HasPrefix(p, "/me/joinedTeams") || strings.HasPrefix(p, "/teams/"):
+			switch {
+			case strings.Contains(p, "/channels") && strings.Contains(p, "/messages"):
+				needed["ChannelMessage.Read.All"] = true
+				if isWrite {
+					needed["ChannelMessage.Send"] = true
+				}
+			case strings.Contains(p, "/channels"):
+				needed["Channel.ReadBasic.All"] = true
+			case strings.Contains(p, "/members"):
+				needed["TeamMember.Read.All"] = true
+			default:
+				needed["Team.ReadBasic.All"] = true
+			}
+		case strings.HasPrefix(p, "/sites"):
+			needed["Sites.Read.All"] = true
+		case strings.HasPrefix(p, "/me/people"):
+			needed["People.Read"] = true
+		}
+	}
+	out := make([]string, 0, len(needed))
 	for _, s := range DefaultAllowedScopes {
+		if needed[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (h *Handler) filterAllowedScopes(raw string) string {
+	allowed := h.activeAllowedScopes()
+	allowedSet := make(map[string]string, len(allowed))
+	for _, s := range allowed {
 		allowedSet[strings.ToLower(s)] = s
 	}
 	var filtered []string
@@ -585,7 +674,7 @@ func filterAllowedScopes(raw string) string {
 		}
 	}
 	if len(filtered) == 0 {
-		return strings.Join(DefaultAllowedScopes, " ")
+		return strings.Join(allowed, " ")
 	}
 	return strings.Join(filtered, " ")
 }

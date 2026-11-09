@@ -1053,10 +1053,23 @@ func TestReview5833885603Findings(t *testing.T) {
 	}
 	resMap := res.(map[string]any)
 	vals := resMap["value"].([]any)
-	if len(vals) != maxPaginationItems {
-		t.Fatalf("len(value) = %d, want %d", len(vals), maxPaginationItems)
+	if len(vals) != 4900 {
+		t.Fatalf("len(value) = %d, want 4900 (unconsumed page 2 not partially truncated)", len(vals))
 	}
-	if gotNext, _ := resMap["@odata.nextLink"].(string); gotNext == "" {
-		t.Fatal("expected @odata.nextLink to be preserved when followAllPages truncates at maxPaginationItems")
+	if gotNext, _ := resMap["@odata.nextLink"].(string); gotNext != mockGraph.URL+"/v1.0/me/messages?$skip=4900" {
+		t.Fatalf("@odata.nextLink = %q, want unconsumed page 2 URL", gotNext)
+	}
+
+	// 4. Narrowed catalog derives only the scopes needed by active tools.
+	narrowH := NewHandler(Config{
+		ClientID:    "client-123",
+		PublicURL:   "https://fleet.elcanotek.com",
+		CatalogJSON: []byte(`[{"name":"list-mail-messages","description":"d","inputSchema":{"type":"object"},"pathPattern":"/me/messages","method":"GET"}]`),
+	})
+	scopes := narrowH.activeAllowedScopes()
+	for _, s := range scopes {
+		if s == "Mail.Send" || s == "Mail.ReadWrite" || s == "Contacts.ReadWrite" {
+			t.Fatalf("narrow read-only mail catalog advertised write scope %q in %v", s, scopes)
+		}
 	}
 }

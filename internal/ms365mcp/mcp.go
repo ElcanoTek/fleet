@@ -414,12 +414,24 @@ func (h *Handler) handleMCPPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var responses []jsonRPCResponse
+		anyExecuted := false
 		for _, req := range batch {
 			resp, isNotif, err := h.dispatchJSONRPC(r, token, req)
 			if errors.Is(err, errGraphUnauthorized) {
-				h.writeMCPUnauthorized(w, r, "Upstream Microsoft Graph rejected the access token")
-				return
+				if !anyExecuted {
+					h.writeMCPUnauthorized(w, r, "Upstream Microsoft Graph rejected the access token")
+					return
+				}
+				if !isNotif {
+					responses = append(responses, jsonRPCResponse{
+						JSONRPC: "2.0",
+						ID:      defaultID(req.ID),
+						Result:  formatToolResult(map[string]any{"error": "Microsoft Graph authentication failed (401 Unauthorized): token expired or revoked"}, true),
+					})
+				}
+				continue
 			}
+			anyExecuted = true
 			if !isNotif {
 				responses = append(responses, resp)
 			}

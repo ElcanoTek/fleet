@@ -229,12 +229,12 @@ func (h *Handler) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if h.cfg.AttachmentProxy != nil {
-		h.cfg.AttachmentProxy.ServeHTTP(w, r)
-		return
-	}
 	ticket, ok := h.tickets.Redeem(ticketID)
 	if !ok {
+		if h.cfg.AttachmentProxy != nil {
+			h.cfg.AttachmentProxy.ServeHTTP(w, r)
+			return
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]any{
 			"error":             "invalid_ticket",
 			"error_description": "Invalid or expired attachment download ticket",
