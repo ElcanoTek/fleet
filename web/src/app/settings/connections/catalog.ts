@@ -118,10 +118,15 @@ export const MS365_GRAPH_DELEGATED_PERMISSIONS = [
   "Calendars.ReadWrite",
   "Files.ReadWrite",
   "Chat.ReadWrite",
+  "Chat.Create",
   "ChannelMessage.Read.All",
+  "ChannelMessage.Send",
+  "Team.ReadBasic.All",
+  "TeamMember.Read.All",
   "Sites.Read.All",
   "Tasks.ReadWrite",
   "Contacts.Read",
+  "People.Read",
 ] as const;
 
 export type CatalogResponse = {

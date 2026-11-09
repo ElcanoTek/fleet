@@ -19,7 +19,10 @@ type ms365ConfigStore interface {
 
 var _ ms365ConfigStore = (*store.Store)(nil)
 
-var ms365IdentifierRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var (
+	ms365ClientUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	ms365IdentifierRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+)
 
 type ms365ConfigResponse struct {
 	Configured           bool   `json:"configured"`
@@ -56,6 +59,19 @@ func (s *Server) resolveMS365Config(ctx context.Context) ms365ConfigResponse {
 		CanEdit:              s.callerIsAdmin(ctx),
 	}
 
+	ms365Cfg := ms365mcp.ConfigFromEnv(s.cfg)
+	if cid := strings.TrimSpace(ms365Cfg.ClientID); cid != "" {
+		tid := strings.TrimSpace(ms365Cfg.TenantID)
+		if tid == "" {
+			tid = "common"
+		}
+		resp.Configured = true
+		resp.Source = "env"
+		resp.ClientID = cid
+		resp.TenantID = tid
+		return resp
+	}
+
 	if st, ok := s.store.(ms365ConfigStore); ok && st != nil {
 		if cid, tid, found, err := st.MS365MCPConfig(ctx); err == nil && found && strings.TrimSpace(cid) != "" {
 			if strings.TrimSpace(tid) == "" {
@@ -69,7 +85,6 @@ func (s *Server) resolveMS365Config(ctx context.Context) ms365ConfigResponse {
 		}
 	}
 
-	ms365Cfg := ms365mcp.ConfigFromEnv(s.cfg)
 	if cid, tid, src, ok := ms365Cfg.EffectiveCredentials(ctx); ok && cid != "" {
 		resp.Configured = true
 		resp.Source = src
@@ -110,8 +125,8 @@ func (s *Server) handleMS365Config(w http.ResponseWriter, r *http.Request) {
 		if tenantID == "" {
 			tenantID = "common"
 		}
-		if !ms365IdentifierRe.MatchString(clientID) {
-			http.Error(w, "client_id must be a valid Microsoft Entra Application (client) ID", http.StatusBadRequest)
+		if !ms365ClientUUIDRe.MatchString(clientID) {
+			http.Error(w, "client_id must be a valid Microsoft Entra Application (client) UUID", http.StatusBadRequest)
 			return
 		}
 		if !ms365IdentifierRe.MatchString(tenantID) {

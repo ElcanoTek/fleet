@@ -1190,8 +1190,8 @@ function MS365SetupDialog({
             </a>{" "}
             and click <strong>New registration</strong>. Under{" "}
             <strong>Redirect URI</strong>, select{" "}
-            <strong>Public client/native (mobile &amp; desktop)</strong> or{" "}
-            <strong>Web</strong> and paste this exact callback URL:
+            <strong>Public client/native (mobile &amp; desktop)</strong> and
+            paste this exact callback URL:
           </p>
           {effectiveRedirectUri ? (
             <div className="flex min-w-0 items-center gap-2">

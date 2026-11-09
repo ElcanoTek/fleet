@@ -273,18 +273,18 @@ func (c Config) CanMount() bool {
 // TenantID, preferring Config.ClientID (environment) and falling back to the
 // registered workspace DB credentials provider. source is "env", "db", or "none".
 func (c Config) EffectiveCredentials(ctx context.Context) (clientID, tenantID, source string, ok bool) {
-	if cid, tid, dynOK := lookupDynamicCredentials(ctx); dynOK && cid != "" {
-		if tid == "" {
-			tid = defaultTenantID
-		}
-		return cid, tid, "db", true
-	}
 	if cid := strings.TrimSpace(c.ClientID); cid != "" {
 		tid := strings.TrimSpace(c.TenantID)
 		if tid == "" {
 			tid = defaultTenantID
 		}
 		return cid, tid, "env", true
+	}
+	if cid, tid, dynOK := lookupDynamicCredentials(ctx); dynOK && cid != "" {
+		if tid == "" {
+			tid = defaultTenantID
+		}
+		return cid, tid, "db", true
 	}
 	return "", defaultTenantID, "none", false
 }
@@ -345,9 +345,6 @@ func lookupDynamicCredentials(ctx context.Context) (string, string, bool) {
 	dynCredsMu.RUnlock()
 	if prov == nil {
 		return "", "", false
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	cid, tid, ok := prov(ctx)
 	cid = strings.TrimSpace(cid)

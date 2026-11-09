@@ -247,7 +247,7 @@ while public DNS is fine). A row is not re-verified by later releases.
 
 Counts — can CI hit?: yes 12 · key-fixture 42 · oauth-manual 196 · tenant 40 ·
 dead-suspect 0. Auth: oauth 196 · tenant 39 · api_key 41 · open 14.
-Provenance: official 282 · third_party 5 · community 3. Featured: 20. Last
+Provenance: official 283 · third_party 5 · community 2. Featured: 21. Last
 verified: live 15 · probe 2026-09-14 181 · probe 2026-09-16 33 · probe
 2026-09-25 7 · probe 2026-11-02 1 · probe 2026-11-04 1 · probe 2026-11-08 18 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
@@ -415,7 +415,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | messari | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | meta-ads | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | metabase | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
-| microsoft-365-self-hosted | tenant | community | productivity |  | tenant | — | not probeable — `{placeholder}` in the URL |  |
+| microsoft-365 | tenant | official | productivity | ★ | tenant | — | not probeable — `{placeholder}` in the URL |  |
 | microsoft-dataverse | tenant | official | crm-sales |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | microsoft-learn | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
 | microsoft-workiq-calendar | tenant | official | productivity |  | tenant | — | tenant — not probeable without a real tenant value |  |
