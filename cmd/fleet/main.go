@@ -58,6 +58,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/ms365mcp"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
@@ -591,6 +592,10 @@ func run() error {
 	// when the remote-MCP feature (which additionally needs a public base URL)
 	// is enabled.
 	installStoreCipher(cfg, chatStore)
+	ms365mcp.RegisterCredentialsProvider(func(ctx context.Context) (string, string, bool) {
+		cid, tid, ok, err := chatStore.MS365MCPConfig(ctx)
+		return cid, tid, err == nil && ok
+	})
 
 	// ── per-user remote (hosted) MCP servers + OAuth (#443) ──
 	// The concrete service remains parent-side for explicit OAuth/connectors HTTP

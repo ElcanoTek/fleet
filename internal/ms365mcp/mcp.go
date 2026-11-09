@@ -234,6 +234,10 @@ func (h *Handler) ToolNames() []string {
 // ServeHTTP dispatches requests across the Microsoft 365 OAuth, MCP, and
 // attachment endpoints.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if _, _, _, ok := h.cfg.EffectiveCredentials(r.Context()); !ok {
+		http.NotFound(w, r)
+		return
+	}
 	path := r.URL.Path
 	switch {
 	case path == "/.well-known/oauth-authorization-server":

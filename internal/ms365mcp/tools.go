@@ -498,18 +498,17 @@ func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, to
 	}
 	res, _, err := h.graphRequest(ctx, token, "GET", itemPath, nil, nil, nil)
 	if err != nil {
-		if errors.Is(err, errGraphUnauthorized) {
-			return nil, true, err
-		}
-		if strings.HasSuffix(strings.ToLower(pathPart), "/content") {
-			return h.mintAttachmentDownloadResult(ctx, r, token, pathPart)
-		}
 		return nil, true, err
 	}
 
 	var probedName, probedCT string
 	var probedSize any
 	if itemMap, ok := res.(map[string]any); ok && itemMap != nil {
+		if _, isFolder := itemMap["folder"]; isFolder {
+			return map[string]any{
+				"error": "target driveItem is a folder, not a downloadable file.",
+			}, true, nil
+		}
 		probedName, _ = itemMap["name"].(string)
 		probedSize = itemMap["size"]
 		if fileObj, _ := itemMap["file"].(map[string]any); fileObj != nil {

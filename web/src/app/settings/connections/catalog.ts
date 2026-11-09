@@ -101,6 +101,29 @@ export function effectiveEnabled(
   return prefFor(prefs, kind, id)?.enabled ?? true;
 }
 
+export type MS365Config = {
+  configured: boolean;
+  source: "env" | "db" | "none";
+  client_id?: string;
+  tenant_id?: string;
+  authorize_redirect_uri: string;
+  mcp_url?: string;
+  can_edit?: boolean;
+};
+
+export const MS365_GRAPH_DELEGATED_PERMISSIONS = [
+  "User.Read",
+  "Mail.ReadWrite",
+  "Mail.Send",
+  "Calendars.ReadWrite",
+  "Files.ReadWrite",
+  "Chat.ReadWrite",
+  "ChannelMessage.Read.All",
+  "Sites.Read.All",
+  "Tasks.ReadWrite",
+  "Contacts.Read",
+] as const;
+
 export type CatalogResponse = {
   bundled: CatalogBundled[];
   third_party: CatalogThirdParty[];
@@ -108,6 +131,7 @@ export type CatalogResponse = {
   // The OAuth callback URL manual client registrations must use; shown in the
   // guided add form so "the callback URL shown in your Fleet instance" exists.
   oauth_redirect_uri?: string;
+  ms365_config?: MS365Config;
 };
 
 // Display names for the curated category slugs the built-in directory uses.

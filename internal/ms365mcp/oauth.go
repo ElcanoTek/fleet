@@ -41,8 +41,42 @@ type pkceEntry struct {
 }
 
 type pkceStore struct {
-	mu      sync.Mutex
-	entries []pkceEntry
+	mu            sync.Mutex
+	entries       []pkceEntry
+	refreshGrants map[string]string
+}
+
+func (p *pkceStore) putRefreshGrant(refreshToken, scope string) {
+	if strings.TrimSpace(refreshToken) == "" || strings.TrimSpace(scope) == "" {
+		return
+	}
+	key := computeS256Challenge(refreshToken)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.refreshGrants == nil {
+		p.refreshGrants = make(map[string]string)
+	}
+	if len(p.refreshGrants) >= pkceStoreMaxEntries {
+		for k := range p.refreshGrants {
+			delete(p.refreshGrants, k)
+			break
+		}
+	}
+	p.refreshGrants[key] = scope
+}
+
+func (p *pkceStore) lookupRefreshGrant(refreshToken string) (string, bool) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return "", false
+	}
+	key := computeS256Challenge(refreshToken)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.refreshGrants == nil {
+		return "", false
+	}
+	scope, ok := p.refreshGrants[key]
+	return scope, ok
 }
 
 func (p *pkceStore) sweepLocked(now time.Time) {
@@ -320,13 +354,14 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	resolvedScope := h.filterAllowedScopes(scope)
 
+	clientID, tenantID, _, ok := h.cfg.EffectiveCredentials(r.Context())
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 	authBase := strings.TrimRight(h.cfg.AuthBaseURL, "/")
 	if authBase == "" {
 		authBase = defaultAuthBaseURL
-	}
-	tenantID := h.cfg.TenantID
-	if tenantID == "" {
-		tenantID = defaultTenantID
 	}
 	msAuthURL, err := url.Parse(fmt.Sprintf("%s/%s/oauth2/v2.0/authorize", authBase, url.PathEscape(tenantID)))
 	if err != nil {
@@ -353,7 +388,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := url.Values{}
-	params.Set("client_id", h.cfg.ClientID)
+	params.Set("client_id", clientID)
 	params.Set("response_type", "code")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("scope", resolvedScope)
@@ -387,18 +422,19 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	refreshToken := vals.Get("refresh_token")
 	requestedScope := strings.TrimSpace(vals.Get("scope"))
 
+	clientID, tenantID, _, ok := h.cfg.EffectiveCredentials(r.Context())
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 	authBase := strings.TrimRight(h.cfg.AuthBaseURL, "/")
 	if authBase == "" {
 		authBase = defaultAuthBaseURL
 	}
-	tenantID := h.cfg.TenantID
-	if tenantID == "" {
-		tenantID = defaultTenantID
-	}
 	tokenURL := fmt.Sprintf("%s/%s/oauth2/v2.0/token", authBase, url.PathEscape(tenantID))
 
 	upParams := url.Values{}
-	upParams.Set("client_id", h.cfg.ClientID)
+	upParams.Set("client_id", clientID)
 
 	switch grantType {
 	case "authorization_code":
@@ -456,8 +492,26 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		}
 		upParams.Set("grant_type", "refresh_token")
 		upParams.Set("refresh_token", refreshToken)
+		grantedScope, hasGrantedScope := h.pkce.lookupRefreshGrant(refreshToken)
 		if requestedScope != "" {
-			upParams.Set("scope", h.filterAllowedScopes(requestedScope))
+			if !hasGrantedScope {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error":             "invalid_scope",
+					"error_description": "Requested scope cannot be verified against the original refresh grant; omit scope to use the refresh token's bound grant",
+				})
+				return
+			}
+			subset, ok := filterAuthorizedScopeSubset(requestedScope, grantedScope)
+			if !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error":             "invalid_scope",
+					"error_description": "Requested scope exceeds the authorized grant",
+				})
+				return
+			}
+			upParams.Set("scope", subset)
+		} else if hasGrantedScope {
+			upParams.Set("scope", grantedScope)
 		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -477,6 +531,19 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if grantType == "authorization_code" && status != http.StatusTooManyRequests && status < http.StatusInternalServerError {
 		h.pkce.deleteMatchingVerifier(codeVerifier)
+	}
+	if status == http.StatusOK && payload != nil {
+		if rt, ok := payload["refresh_token"].(string); ok && strings.TrimSpace(rt) != "" {
+			grantScope := upParams.Get("scope")
+			if grantScope == "" {
+				if respScope, ok := payload["scope"].(string); ok {
+					grantScope = strings.TrimSpace(respScope)
+				}
+			}
+			if grantScope != "" {
+				h.pkce.putRefreshGrant(rt, grantScope)
+			}
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, status, payload)

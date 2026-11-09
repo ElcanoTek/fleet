@@ -70,7 +70,7 @@ func (s *Server) isAdmin(email string) bool {
 	// Where central Auth manages accounts, Fleet Admin comes from Auth alone
 	// (users.role = 'admin' through its push); an env allowlist would grant
 	// what Auth may have taken away (ADR-0095).
-	if s.accountsManagedByAuth() || len(s.cfg.AdminEmails) == 0 {
+	if s.cfg == nil || s.accountsManagedByAuth() || len(s.cfg.AdminEmails) == 0 {
 		return false
 	}
 	needle := strings.ToLower(strings.TrimSpace(email))

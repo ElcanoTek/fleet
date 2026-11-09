@@ -232,6 +232,13 @@ func (h *Handler) executeReadMailText(ctx context.Context, token string, args ma
 			"error": fmt.Sprintf("messageIds supports at most %d message IDs per call (got %d).", maxReadMailMessageIDs, len(messageIDs)),
 		}, nil
 	}
+	filter, _ := args["filter"].(string)
+	search, _ := args["search"].(string)
+	if len(messageIDs) == 0 && strings.TrimSpace(filter) != "" && strings.TrimSpace(search) != "" {
+		return map[string]any{
+			"error": "Microsoft Graph does not allow combining filter and search on mail folders; provide either filter or search, not both.",
+		}, nil
+	}
 
 	maxChars := 3000
 	if rawMax, ok := intArg(args, "maxChars"); ok && rawMax > 0 {
@@ -388,7 +395,6 @@ func formatReadMailTextResults(messages []map[string]any, maxChars int, stripQuo
 			"isRead":           msg["isRead"],
 			"hasAttachments":   msg["hasAttachments"],
 			"text":             bodyText,
-			"body":             bodyText,
 			"chars":            utf8.RuneCountInString(bodyText),
 			"truncated":        truncated,
 		}

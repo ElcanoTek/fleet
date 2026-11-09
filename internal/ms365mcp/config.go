@@ -4,6 +4,7 @@ package ms365mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -246,9 +248,125 @@ func BrokerConfigFromEnv(fleetCfg *config.Config) Config {
 	return cfg
 }
 
-// Enabled reports whether the built-in Microsoft 365 MCP surface is active.
+// Enabled reports whether the built-in Microsoft 365 MCP surface has active
+// Entra credentials (from env or workspace DB settings) and a valid catalog.
 func (c Config) Enabled() bool {
-	return strings.TrimSpace(c.ClientID) != "" && c.CatalogLoadError == nil
+	if c.CatalogLoadError != nil {
+		return false
+	}
+	_, _, _, ok := c.EffectiveCredentials(context.Background())
+	return ok
+}
+
+// CanMount reports whether the built-in Microsoft 365 routes and in-process
+// transport should be wired at server startup so that either boot-time env
+// credentials or live workspace DB credentials can activate the connector
+// without a service restart.
+func (c Config) CanMount() bool {
+	if c.CatalogLoadError != nil {
+		return false
+	}
+	return strings.TrimSpace(c.ClientID) != "" || strings.TrimSpace(c.PublicURL) != ""
+}
+
+// EffectiveCredentials resolves the active Microsoft Entra ClientID and
+// TenantID, preferring Config.ClientID (environment) and falling back to the
+// registered workspace DB credentials provider. source is "env", "db", or "none".
+func (c Config) EffectiveCredentials(ctx context.Context) (clientID, tenantID, source string, ok bool) {
+	if cid, tid, dynOK := lookupDynamicCredentials(ctx); dynOK && cid != "" {
+		if tid == "" {
+			tid = defaultTenantID
+		}
+		return cid, tid, "db", true
+	}
+	if cid := strings.TrimSpace(c.ClientID); cid != "" {
+		tid := strings.TrimSpace(c.TenantID)
+		if tid == "" {
+			tid = defaultTenantID
+		}
+		return cid, tid, "env", true
+	}
+	return "", defaultTenantID, "none", false
+}
+
+const dynamicCredsCacheTTL = 2 * time.Second
+
+var (
+	dynCredsMu       sync.RWMutex
+	dynCredsProvider func(ctx context.Context) (clientID, tenantID string, ok bool)
+	dynCachedClient  string
+	dynCachedTenant  string
+	dynCachedOK      bool
+	dynCachedAt      time.Time
+)
+
+// RegisterCredentialsProvider registers (or clears when nil) the dynamic
+// workspace credentials lookup (typically backed by store.MS365MCPConfig).
+func RegisterCredentialsProvider(fn func(ctx context.Context) (clientID, tenantID string, ok bool)) {
+	dynCredsMu.Lock()
+	dynCredsProvider = fn
+	dynCachedClient = ""
+	dynCachedTenant = ""
+	dynCachedOK = false
+	dynCachedAt = time.Time{}
+	dynCredsMu.Unlock()
+}
+
+// SetCachedCredentials immediately updates the in-memory dynamic credentials
+// cache after an admin save or reset so subsequent requests in the same
+// process see the new Entra app settings with zero latency.
+func SetCachedCredentials(clientID, tenantID string) {
+	cid := strings.TrimSpace(clientID)
+	tid := strings.TrimSpace(tenantID)
+	if tid == "" {
+		tid = defaultTenantID
+	}
+	dynCredsMu.Lock()
+	dynCachedClient = cid
+	dynCachedTenant = tid
+	dynCachedOK = cid != ""
+	if cid != "" {
+		dynCachedAt = time.Now()
+	} else {
+		dynCachedAt = time.Time{}
+	}
+	dynCredsMu.Unlock()
+}
+
+func lookupDynamicCredentials(ctx context.Context) (string, string, bool) {
+	now := time.Now()
+	dynCredsMu.RLock()
+	prov := dynCredsProvider
+	if dynCachedOK && !dynCachedAt.IsZero() && now.Sub(dynCachedAt) < dynamicCredsCacheTTL {
+		cid, tid, ok := dynCachedClient, dynCachedTenant, dynCachedOK
+		dynCredsMu.RUnlock()
+		return cid, tid, ok
+	}
+	dynCredsMu.RUnlock()
+	if prov == nil {
+		return "", "", false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cid, tid, ok := prov(ctx)
+	cid = strings.TrimSpace(cid)
+	tid = strings.TrimSpace(tid)
+	if tid == "" {
+		tid = defaultTenantID
+	}
+	ok = ok && cid != ""
+	dynCredsMu.Lock()
+	dynCachedClient = cid
+	dynCachedTenant = tid
+	dynCachedOK = ok
+	if ok {
+		dynCachedAt = time.Now()
+	} else {
+		dynCachedAt = time.Time{}
+	}
+	dynCredsMu.Unlock()
+	return cid, tid, ok
 }
 
 // IsMS365Path reports whether path is one of the HTTP paths served by the
@@ -271,24 +389,31 @@ func IsMS365Path(path string) bool {
 // Fleet instance's own Microsoft 365 OAuth/MCP surface (via PublicURL or any
 // configured alias in Aliases) and should be handled in-process.
 func (c Config) MatchesInProcessURL(u *url.URL) bool {
-	if !c.Enabled() || u == nil || !IsMS365Path(u.Path) {
+	if u == nil || !IsMS365Path(u.Path) {
 		return false
 	}
 	targetOrigin := canonicalOrigin(u)
 	if targetOrigin == "" {
 		return false
 	}
+	matchedOrigin := false
 	if c.PublicURL != "" {
 		if pub, err := url.Parse(c.PublicURL); err == nil && canonicalOrigin(pub) == targetOrigin {
-			return true
+			matchedOrigin = true
 		}
 	}
-	for _, alias := range c.Aliases {
-		if parsed, err := url.Parse(alias); err == nil && canonicalOrigin(parsed) == targetOrigin {
-			return true
+	if !matchedOrigin {
+		for _, alias := range c.Aliases {
+			if parsed, err := url.Parse(alias); err == nil && canonicalOrigin(parsed) == targetOrigin {
+				matchedOrigin = true
+				break
+			}
 		}
 	}
-	return false
+	if !matchedOrigin {
+		return false
+	}
+	return c.Enabled()
 }
 
 func (c Config) baseURLForRequest(r *http.Request) string {

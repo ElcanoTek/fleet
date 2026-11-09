@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -60,5 +61,89 @@ func (s *Store) SetWorkspaceSetting(ctx context.Context, key, value, updatedBy s
 // end state ("no override") is what the caller asked for.
 func (s *Store) DeleteWorkspaceSetting(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM workspace_settings WHERE key = $1`, key)
+	return err
+}
+
+const (
+	ms365MCPClientIDSettingKey = "ms365_mcp_client_id"
+	ms365MCPTenantIDSettingKey = "ms365_mcp_tenant_id"
+)
+
+// MS365MCPConfig returns the workspace-level Microsoft 365 Entra application
+// client ID and tenant ID stored in workspace_settings, if configured.
+func (s *Store) MS365MCPConfig(ctx context.Context) (clientID, tenantID string, ok bool, err error) {
+	if s == nil || s.db == nil {
+		return "", "", false, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT key, value FROM workspace_settings WHERE key IN ($1, $2)`,
+		ms365MCPClientIDSettingKey, ms365MCPTenantIDSettingKey,
+	)
+	if err != nil {
+		return "", "", false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return "", "", false, err
+		}
+		switch k {
+		case ms365MCPClientIDSettingKey:
+			clientID = strings.TrimSpace(v)
+		case ms365MCPTenantIDSettingKey:
+			tenantID = strings.TrimSpace(v)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", false, err
+	}
+	if clientID == "" {
+		return "", "", false, nil
+	}
+	if tenantID == "" {
+		tenantID = "common"
+	}
+	return clientID, tenantID, true, nil
+}
+
+// SetMS365MCPConfig persists the workspace-level Microsoft 365 Entra client ID
+// and tenant ID atomically in workspace_settings.
+func (s *Store) SetMS365MCPConfig(ctx context.Context, clientID, tenantID, updatedBy string) error {
+	clientID = strings.TrimSpace(clientID)
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "common"
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
+	for _, kv := range [][2]string{
+		{ms365MCPClientIDSettingKey, clientID},
+		{ms365MCPTenantIDSettingKey, tenantID},
+	} {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO workspace_settings (key, value, updated_at, updated_by)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (key) DO UPDATE
+			SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by`,
+			kv[0], kv[1], now, updatedBy,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteMS365MCPConfig clears any workspace-level Microsoft 365 Entra config
+// stored in workspace_settings.
+func (s *Store) DeleteMS365MCPConfig(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM workspace_settings WHERE key IN ($1, $2)`,
+		ms365MCPClientIDSettingKey, ms365MCPTenantIDSettingKey,
+	)
 	return err
 }

@@ -92,7 +92,8 @@ type mcpCatalogResponse struct {
 	// (GitHub, Google Workspace, …) must be created with. Setup hints tell the
 	// user to find it "in your Fleet instance's OAuth settings" — this field is
 	// what the settings UI shows for that. Empty when the flow is unconfigured.
-	OAuthRedirectURI string `json:"oauth_redirect_uri,omitempty"`
+	OAuthRedirectURI string               `json:"oauth_redirect_uri,omitempty"`
+	MS365Config      *ms365ConfigResponse `json:"ms365_config,omitempty"`
 }
 
 // mcpCatalog handles GET /mcp-catalog. Auth+member like every settings read.
@@ -104,10 +105,12 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ms365Cfg := s.resolveMS365Config(r.Context())
 	resp := mcpCatalogResponse{
 		Bundled:          []mcpCatalogBundledEntry{},
 		ThirdParty:       []mcpCatalogThirdPartyEntry{},
 		RemoteMCPEnabled: s.remoteMCP != nil && s.remoteMCP.Enabled(),
+		MS365Config:      &ms365Cfg,
 	}
 	if resp.RemoteMCPEnabled {
 		resp.OAuthRedirectURI = s.remoteMCP.RedirectURI()
@@ -165,7 +168,13 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		for _, e := range s.clientConfig.RemoteMCPCatalog {
-			resp.ThirdParty = append(resp.ThirdParty, thirdPartyCatalogEntry(e))
+			entry := thirdPartyCatalogEntry(e)
+			if entry.Name == "microsoft-365" && ms365Cfg.Configured && ms365Cfg.MCPURL != "" {
+				entry.URL = ms365Cfg.MCPURL
+				entry.Auth = "oauth"
+				entry.SetupHint = ""
+			}
+			resp.ThirdParty = append(resp.ThirdParty, entry)
 		}
 	}
 	writeJSON(w, r, resp)

@@ -226,6 +226,10 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 		return nil, nil, errors.New("open broker remote MCP store")
 	}
 	st.SetTokenCipher(cipher)
+	ms365mcp.RegisterCredentialsProvider(func(ctx context.Context) (string, string, bool) {
+		cid, tid, ok, err := st.MS365MCPConfig(ctx)
+		return cid, tid, err == nil && ok
+	})
 	// Runtime-acquired credentials — per-user OAuth bearers, rotated refresh
 	// tokens, unsealed api_key secrets — join THIS process's literal redactor at
 	// acquisition time (#1124): boot-time RegisterEnvLiterals only knows env-file
