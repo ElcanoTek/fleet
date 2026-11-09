@@ -188,7 +188,7 @@ What it does, in order (`scripts/update.sh`):
    an operator created by hand, is left in place and named in the output.
    Once the stop is issued, a Ctrl-C or SIGTERM cannot cut it short, and a
    start always follows; both run detached from the signal but bounded by the
-   install's or rollback's own deadline (at most 3 minutes each), so an
+   install's or rollback's own deadline (at most 7 minutes each), so an
    interrupted stop never leaves fleet down and `FLEET_HEALTH_TIMEOUT` /
    the rollback budget still hold. If `systemctl stop` reports an error, the
    old process may still be running and a plain start would be a no-op the

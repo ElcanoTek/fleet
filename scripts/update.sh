@@ -1617,6 +1617,16 @@ if command -v systemctl >/dev/null 2>&1; then
     # applies. (Restarting the backup oneshot would even run a backup right now.)
     is_timer_unit=0
     case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac
+    # Migrate the pre-2111 shipped TimeoutStopSec=60s floor in place even when
+    # --adopt-units is not set, so a 300s default FLEET_SHUTDOWN_GRACE_SECONDS
+    # is never truncated by an un-adopted 60s unit stop timeout (an operator who
+    # customized TimeoutStopSec= to any other value keeps theirs untouched).
+    if [[ "$unit" == "fleet.service" && "$DRY_RUN" != "1" ]] && grep -q '^TimeoutStopSec=60s$' "$installed" 2>/dev/null; then
+      if sed -i 's/^TimeoutStopSec=60s$/TimeoutStopSec=330s/' "$installed" 2>/dev/null; then
+        ok "migrated $installed TimeoutStopSec=60s → 330s (matches 300s default drain grace)"
+        NEED_DAEMON_RELOAD=1
+      fi
+    fi
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move

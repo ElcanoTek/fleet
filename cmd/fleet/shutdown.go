@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -70,8 +71,10 @@ func logApprovalDrain(drained bool, grace time.Duration) {
 // then close the listeners. graceful=false is the fast path (cancel everything
 // now). cancel stops the claim loop / scheduler-fed pool.
 func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer, webServer *http.Server) {
-	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
-	sdNotify("STOPPING=1")
+	// Tell systemd we are stopping and extend its stop timer to cover grace +
+	// listener close even if /etc/systemd/system/fleet.service still has an
+	// older TimeoutStopSec=60s or a smaller value than FLEET_SHUTDOWN_GRACE_SECONDS.
+	sdNotify(stopNotifyPayload(graceful, grace))
 	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
 	// routing here) and notify attached SSE clients to reconnect elsewhere.
 	chatSrv.BeginShutdown()
@@ -174,6 +177,18 @@ func closeServers(grace time.Duration, servers ...*http.Server) {
 		}(srv)
 	}
 	wg.Wait()
+}
+
+// stopNotifyPayload builds the sd_notify state lines sent at the start of
+// performShutdown: STOPPING=1 plus EXTEND_TIMEOUT_USEC covering grace + listener
+// close when draining gracefully, so a Type=notify systemd unit grants the full
+// drain window even before its static TimeoutStopSec= directive is adopted.
+func stopNotifyPayload(graceful bool, grace time.Duration) string {
+	if !graceful || grace <= 0 {
+		return "STOPPING=1"
+	}
+	extend := grace + 2*fallbackServerCloseBudget
+	return fmt.Sprintf("STOPPING=1\nEXTEND_TIMEOUT_USEC=%d", extend.Microseconds())
 }
 
 // sdNotify sends one state line to systemd's notify socket (NOTIFY_SOCKET),
