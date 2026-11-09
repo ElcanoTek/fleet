@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -70,17 +71,20 @@ func logApprovalDrain(drained bool, grace time.Duration) {
 // then close the listeners. graceful=false is the fast path (cancel everything
 // now). cancel stops the claim loop / scheduler-fed pool.
 func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer, webServer *http.Server) {
-	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
-	sdNotify("STOPPING=1")
+	// Tell systemd we are stopping and extend its stop timer to cover grace +
+	// listener close even if /etc/systemd/system/fleet.service still has an
+	// older TimeoutStopSec=60s or a smaller value than FLEET_SHUTDOWN_GRACE_SECONDS.
+	sdNotify(stopNotifyPayload(graceful, grace))
 	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
 	// routing here) and notify attached SSE clients to reconnect elsewhere.
 	chatSrv.BeginShutdown()
 
+	deadline := time.Now().Add(grace)
 	if graceful {
 		// Stop the claim loop + scheduler-fed pool; in-flight tasks keep their
 		// decoupled context and drain within the pool's own grace budget (parallel).
 		cancel()
-		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
+		graceCtx, graceStop := context.WithDeadline(context.Background(), deadline)
 		logChatDrain(chatSrv.DrainTurns(graceCtx), grace, chatSrv.CancelInflightTurns)
 		// An approved card's call can outlive its POST (a long deal write
 		// answers "executing" and finishes detached), so the HTTP handler
@@ -108,14 +112,21 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	}
 
 	// Close the HTTP listeners last: handlers have returned and detached work has
-	// drained or been cancelled, so Shutdown completes promptly. Each server gets
-	// the full grace budget and they close in parallel (not one off the other's
-	// remainder).
+	// drained or been cancelled, so Shutdown completes promptly. Share the grace
+	// deadline with the work-drain phase above (floored at fallbackServerCloseBudget
+	// when the work drain consumed the full grace) so both phases fit inside the
+	// supervisor's 330s TimeoutStopSec / terminationGracePeriodSeconds budget.
 	servers := []*http.Server{chatServer, orchServer}
 	if webServer != nil {
 		servers = append(servers, webServer)
 	}
-	closeServers(grace, servers...)
+	closeBudget := fallbackServerCloseBudget
+	if graceful && grace > 0 {
+		if rem := time.Until(deadline); rem > fallbackServerCloseBudget {
+			closeBudget = rem
+		}
+	}
+	closeServers(closeBudget, servers...)
 	slog.Info("fleet: shutdown complete")
 }
 
@@ -131,7 +142,7 @@ func poolDrainGrace(cfg *config.Config) time.Duration {
 }
 
 // shutdownGrace resolves the graceful-shutdown grace period from
-// FLEET_SHUTDOWN_GRACE_SECONDS (config default 30). A non-positive value means
+// FLEET_SHUTDOWN_GRACE_SECONDS (config default 300). A non-positive value means
 // "no wait" (force-cancel immediately) and is returned as 0.
 func shutdownGrace(cfg *config.Config) time.Duration {
 	if cfg == nil || cfg.ShutdownGraceSeconds <= 0 {
@@ -140,14 +151,19 @@ func shutdownGrace(cfg *config.Config) time.Duration {
 	return time.Duration(cfg.ShutdownGraceSeconds) * time.Second
 }
 
+// fallbackServerCloseBudget bounds HTTP listener close when the work-drain
+// phase already consumed FLEET_SHUTDOWN_GRACE_SECONDS (or when grace <= 0),
+// keeping grace + listener close within the 330s supervisor stop timeout.
+const fallbackServerCloseBudget = 15 * time.Second
+
 // closeServers shuts the HTTP listeners down in parallel, each with the full
-// grace budget (a hung one can't eat the other's time), so both drain their
+// budget (a hung one can't eat the other's time), so both drain their
 // already-finishing connections without one starving the other. A non-positive
-// budget falls back to 30s so Shutdown still has a bounded deadline.
+// budget falls back to fallbackServerCloseBudget so Shutdown still has a bounded deadline.
 func closeServers(grace time.Duration, servers ...*http.Server) {
 	budget := grace
 	if budget <= 0 {
-		budget = 30 * time.Second
+		budget = fallbackServerCloseBudget
 	}
 	var wg sync.WaitGroup
 	for _, srv := range servers {
@@ -161,6 +177,18 @@ func closeServers(grace time.Duration, servers ...*http.Server) {
 		}(srv)
 	}
 	wg.Wait()
+}
+
+// stopNotifyPayload builds the sd_notify state lines sent at the start of
+// performShutdown: STOPPING=1 plus EXTEND_TIMEOUT_USEC covering grace + listener
+// close when draining gracefully, so a Type=notify systemd unit grants the full
+// drain window even before its static TimeoutStopSec= directive is adopted.
+func stopNotifyPayload(graceful bool, grace time.Duration) string {
+	if !graceful || grace <= 0 {
+		return "STOPPING=1"
+	}
+	extend := grace + 2*fallbackServerCloseBudget
+	return fmt.Sprintf("STOPPING=1\nEXTEND_TIMEOUT_USEC=%d", extend.Microseconds())
 }
 
 // sdNotify sends one state line to systemd's notify socket (NOTIFY_SOCKET),

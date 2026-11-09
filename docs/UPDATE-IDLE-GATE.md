@@ -25,7 +25,7 @@
 ### 3. Operator CLI & status visibility
 
 - `fleet update`, `fleet restart`, and `fleet stop` accept:
-  - `--wait` (`FLEET_UPDATE_WAIT=1`) and `--wait-timeout <duration/seconds>` (`FLEET_UPDATE_WAIT_SECONDS=600`, default 10 minutes) to drain and wait for in-flight work to finish.
+  - `--wait` (`FLEET_UPDATE_WAIT=1`) and `--wait-timeout <duration/seconds>` (`FLEET_UPDATE_WAIT_SECONDS=5400`, default 90 minutes) to drain and wait for in-flight work to finish.
   - `--force` (`FLEET_UPDATE_FORCE=1`) to bypass the active-work check when an immediate restart is required.
 - `fleet status` and `fleet diagnose` surface an `active work` check showing whether the deployment is `idle` or listing in-flight tasks, turns, and approval executions.
 

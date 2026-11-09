@@ -51,7 +51,7 @@ func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 func parseConfiguredWaitTimeout() (time.Duration, error) {
 	raw := envOrFile("FLEET_UPDATE_WAIT_SECONDS")
 	if raw == "" {
-		return 10 * time.Minute, nil
+		return 90 * time.Minute, nil
 	}
 	secs, err := strconv.Atoi(raw)
 	if err != nil || secs < 0 {
@@ -65,7 +65,7 @@ func systemctlVerb(verb string, argv []string) int {
 	service := fs.String("service", "", "systemd unit name (default: $FLEET_SERVICE_NAME or \"fleet\")")
 	force := fs.Bool("force", false, "restart/stop even when scheduled tasks or chat turns are running (env FLEET_UPDATE_FORCE=1)")
 	wait := fs.Bool("wait", false, "wait for running tasks or chat turns to finish before restarting/stopping (env FLEET_UPDATE_WAIT=1)")
-	waitTimeout := fs.Duration("wait-timeout", 10*time.Minute, "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
+	waitTimeout := fs.Duration("wait-timeout", 90*time.Minute, "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}

@@ -336,7 +336,7 @@ func serviceRuntimeState(ctx context.Context, unit string) (string, int64) {
 		return "no-unit", 0
 	}
 	switch activeState {
-	case "active", "activating", "reloading":
+	case "active", "activating", "reloading", "deactivating":
 		return "active", parseServiceTimestamp(startTS)
 	case "":
 		return "unknown", 0

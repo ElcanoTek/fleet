@@ -73,7 +73,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_IP_ALLOWLIST` | csv | — | server | Comma-separated IPs/CIDRs allowed to reach fleet; empty allows every source. A malformed entry refuses to boot. |
 | `FLEET_IP_DENYLIST` | csv | — | server | Comma-separated IPs/CIDRs always blocked (deny overrides allow). |
 | `FLEET_TRUSTED_PROXIES` | csv | — | server | Comma-separated reverse-proxy IPs whose X-Forwarded-For fleet trusts. Empty (the default) never reads X-Forwarded-For. |
-| `FLEET_SHUTDOWN_GRACE_SECONDS` | int | `30` | server | How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. *Validated at boot*. |
+| `FLEET_SHUTDOWN_GRACE_SECONDS` | int | `300` | server | How long a graceful shutdown waits for running turns and tasks before cancelling them; 0 cancels immediately. *Validated at boot*. |
 | `FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE` | int | `10` | server | Per-slug rate limit on inbound webhook triggers. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_BUFFER_DURATION` | duration | `60m` | server | How long a finished turn's SSE events stay in memory for reattach. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN` | int | `5242880` | server | Cap on the in-memory SSE replay buffer per turn, in bytes. *Validated at boot* (≥ 0). |
@@ -390,7 +390,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | --- | --- | --- | --- | --- |
 | `FLEET_BACKUP_DIR` | path | — | cli | Directory `fleet backup` writes dumps to. |
 | `FLEET_BACKUP_RETENTION_DAYS` | int | `30` | cli | Age after which `fleet backup --prune` deletes dumps. *Validated at boot* (≥ 1). |
-| `FLEET_UPDATE_WAIT_SECONDS` | int | `600` | cli | Default of `--wait-timeout` for restart/stop/update. *Validated at boot* (≥ 0). |
+| `FLEET_UPDATE_WAIT_SECONDS` | int | `5400` | cli | Default of `--wait-timeout` for restart/stop/update. *Validated at boot* (≥ 0). |
 | `FLEET_UPDATE_WAIT` | bool | — | cli | Same as `fleet update --wait`. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_FORCE` | bool | — | cli | Same as `fleet update --force`. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_ROOT` | path | — | cli | Repository checkout the CLI runs scripts/ from, when it is not the working directory. *Process env only* (fleet's env-file loader does not admit it; export it). |

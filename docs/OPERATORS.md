@@ -410,7 +410,7 @@ If the pull changed `update.sh` itself, the script **re-execs the fresh copy**
 **The drain is the binary's.** `systemctl restart` sends `SIGTERM`, and
 `cmd/fleet` handles it gracefully — it flips `/healthz` and `/readyz` to `503`,
 lets in-flight chat turns **and** running scheduled tasks finish within
-`FLEET_SHUTDOWN_GRACE_SECONDS` (default 30s, bounded by the unit's
+`FLEET_SHUTDOWN_GRACE_SECONDS` (default 300s, bounded by the unit's
 `TimeoutStopSec`), then force-cancels stragglers and exits 0. `update`'s own
 drain gate (above the steps) refuses to start while work is in flight unless
 `--wait` or `--force`. While it waits it holds the update drain marker

@@ -732,7 +732,7 @@ fleet_service_runtime_state() {
     printf 'no-unit|0\n'
     return 0
   fi
-  if [[ "$active_state" == "active" || "$active_state" == "activating" || "$active_state" == "reloading" ]]; then
+  if [[ "$active_state" == "active" || "$active_state" == "activating" || "$active_state" == "reloading" || "$active_state" == "deactivating" ]]; then
     start_ts="${start_ts#"${start_ts%%[![:space:]]*}"}"
     start_ts="${start_ts%"${start_ts##*[![:space:]]}"}"
     if [[ "$start_ts" == @* ]]; then

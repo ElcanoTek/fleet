@@ -58,7 +58,7 @@
 #   # FLEET_MAINTENANCE_MIN_INTERVAL=5m # rate limit for the OPPORTUNISTIC
 #   #                                   # post-turn sweep. The hourly maintenance
 #   #                                   # loop is unaffected. 0 = sweep every turn.
-#   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
+#   # FLEET_SHUTDOWN_GRACE_SECONDS=300           # drain budget on SIGTERM (keep < TimeoutStopSec)
 #   # Process log file sink (#298) — OPT-IN, default OFF. Under this unit the
 #   # process log goes to stderr → journald, which already rotates it, so leave
 #   # FLEET_LOG_FILE unset. Set it (e.g. a container/non-systemd box) to ALSO tee
@@ -164,12 +164,12 @@ Restart=always
 RestartSec=5s
 # Graceful shutdown: on SIGTERM cmd/fleet stops admitting new work (/healthz → 503
 # so a load balancer drains it), then drains in-flight chat turns AND scheduled
-# tasks within FLEET_SHUTDOWN_GRACE_SECONDS (default 30) before force-cancelling
+# tasks within FLEET_SHUTDOWN_GRACE_SECONDS (default 300) before force-cancelling
 # the stragglers and exiting 0. TimeoutStopSec MUST exceed that grace + listener
 # close so systemd sends SIGKILL only after fleet's own budget is spent; bump both
 # together for longer-running tasks. SIGINT (dev Ctrl-C) is the immediate path.
 KillSignal=SIGTERM
-TimeoutStopSec=60s
+TimeoutStopSec=330s
 
 # ── Service identity + rootless-Podman sandbox ──
 # Runs as a DEDICATED fixed system user, NOT DynamicUser. The execution sandbox is

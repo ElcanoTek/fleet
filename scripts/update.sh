@@ -105,7 +105,7 @@
 #                          build/install/restart while full admission quiescing
 #                          takes effect once the updated daemon is running.)
 #   --wait-timeout <sec>   maximum seconds to wait for in-flight work to finish
-#                          (env FLEET_UPDATE_WAIT_SECONDS, default 600)
+#                          (env FLEET_UPDATE_WAIT_SECONDS, default 5400)
 #   --force                skip the active-work blocker and update/restart
 #                          immediately even when a task or turn is running
 #                          (env FLEET_UPDATE_FORCE=1)
@@ -331,7 +331,7 @@ _update_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 [[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="$(fleet_env_or_file FLEET_UPDATE_WAIT "$_update_env_file")"
 [[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="0"
 [[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="$(fleet_env_or_file FLEET_UPDATE_WAIT_SECONDS "$_update_env_file")"
-[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="600"
+[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="5400"
 [[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="$(fleet_env_or_file FLEET_UPDATE_FORCE "$_update_env_file")"
 [[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="0"
 
@@ -347,7 +347,7 @@ if [[ "$FORCE_UPDATE" != "1" ]]; then
 elif [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
   WAIT_SECONDS=$(( 10#$WAIT_SECONDS ))
 else
-  WAIT_SECONDS=600
+  WAIT_SECONDS=5400
 fi
 
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
@@ -1617,6 +1617,16 @@ if command -v systemctl >/dev/null 2>&1; then
     # applies. (Restarting the backup oneshot would even run a backup right now.)
     is_timer_unit=0
     case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac
+    # Migrate the pre-2111 shipped TimeoutStopSec=60s floor in place even when
+    # --adopt-units is not set, so a 300s default FLEET_SHUTDOWN_GRACE_SECONDS
+    # is never truncated by an un-adopted 60s unit stop timeout (an operator who
+    # customized TimeoutStopSec= to any other value keeps theirs untouched).
+    if [[ "$unit" == "fleet.service" && "$DRY_RUN" != "1" ]] && grep -q '^TimeoutStopSec=60s$' "$installed" 2>/dev/null; then
+      if sed -i 's/^TimeoutStopSec=60s$/TimeoutStopSec=330s/' "$installed" 2>/dev/null; then
+        ok "migrated $installed TimeoutStopSec=60s → 330s (matches 300s default drain grace)"
+        NEED_DAEMON_RELOAD=1
+      fi
+    fi
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move

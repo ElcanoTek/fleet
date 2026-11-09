@@ -291,9 +291,9 @@ podAnnotations: {}
 podLabels: {}
 
 # Pod-level shutdown budget for the control plane. Must exceed
-# FLEET_SHUTDOWN_GRACE_SECONDS (default 30) with headroom for pool and DB
+# FLEET_SHUTDOWN_GRACE_SECONDS (default 300) with headroom for pool and DB
 # teardown; raise both together for long turns.
-terminationGracePeriodSeconds: 90
+terminationGracePeriodSeconds: 330
 
 # startupProbe budget, in 10s periods, before liveness takes over. 60 = 10
 # minutes, sized for a first boot that has to run migrations against an

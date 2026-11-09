@@ -37,7 +37,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "fleet.serviceAccountName" . }}
-      # Must exceed FLEET_SHUTDOWN_GRACE_SECONDS (default 30) with headroom for
+      # Must exceed FLEET_SHUTDOWN_GRACE_SECONDS (default 300) with headroom for
       # pool and DB teardown. Without it the kubelet SIGKILLs at its own 30s
       # default — the same number — so the documented drain had no slack and
       # raising the fleet knob for long turns silently did nothing.
