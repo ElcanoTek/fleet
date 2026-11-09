@@ -921,6 +921,66 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 	return s.updateOwnedConversation(ctx, userEmail, convID, "model = $1", model)
 }
 
+// ConversationModelEntry is a lightweight summary returned by
+// ListConversationsForModelUpdate for `fleet chat set-model --dry-run`.
+type ConversationModelEntry struct {
+	ID        string
+	UserEmail string
+	Model     string
+	Title     string
+	Lockdown  bool
+}
+
+// ListConversationsForModelUpdate lists non-deleted conversations that would be
+// updated by BulkUpdateConversationModel(ctx, ..., fromModel, includeLockdown).
+// When includeLockdown is false, lockdown conversations are excluded.
+func (s *Store) ListConversationsForModelUpdate(ctx context.Context, fromModel string, includeLockdown bool) ([]ConversationModelEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_email, COALESCE(model, ''), COALESCE(title, ''), COALESCE(lockdown, FALSE)
+		 FROM conversations
+		 WHERE deleted_at IS NULL
+		   AND ($1 = '' OR model = $1)
+		   AND ($2 OR NOT COALESCE(lockdown, FALSE))
+		 ORDER BY updated_at DESC, id ASC`,
+		strings.TrimSpace(fromModel), includeLockdown,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConversationModelEntry
+	for rows.Next() {
+		var e ConversationModelEntry
+		if err := rows.Scan(&e.ID, &e.UserEmail, &e.Model, &e.Title, &e.Lockdown); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// BulkUpdateConversationModel updates the pinned model on all non-deleted
+// conversations (or only those currently matching fromModel when non-empty).
+// When includeLockdown is false, lockdown conversations are left untouched so
+// bulk updates respect the deployment's lockdown allow-list. Leaves updated_at
+// untouched so bulk model migrations do not reorder users' sidebar conversation
+// lists or reset retention TTL timestamps.
+func (s *Store) BulkUpdateConversationModel(ctx context.Context, model, fromModel string, includeLockdown bool) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations
+		 SET model = $1
+		 WHERE deleted_at IS NULL
+		   AND ($2 = '' OR model = $2)
+		   AND ($3 OR NOT COALESCE(lockdown, FALSE))`,
+		strings.TrimSpace(model), strings.TrimSpace(fromModel), includeLockdown,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // SetPersona updates the conversation's persona before any messages have been
 // recorded. Once a conversation has history entries, its persona is locked so
 // the system prompt and tool allowlist stay stable across turns.

@@ -11,13 +11,13 @@
 // The helper is pure. The composer wires its result to a banner;
 // tests assert the predicate without touching the DOM.
 
-import { currentAdvancedModel, currentDefaultModel } from "./modelAliases";
+import { currentFallbackModel, currentDefaultModel } from "./modelAliases";
 
 // Roughly the size of a single-sheet ad-hoc export. Anything heavier
-// is almost always a multi-sheet workbook with curated tabs — the
-// case where Sonnet's depth pays off. Tuned from observed tracking
-// docs (~1.7 MB) vs. ad-hoc exports (~30–80 KB); 250 KB sits in the
-// quiet middle and avoids false positives on simple downloads.
+// is almost always a multi-sheet workbook with curated tabs. Tuned from
+// observed tracking docs (~1.7 MB) vs. ad-hoc exports (~30–80 KB);
+// 250 KB sits in the quiet middle and avoids false positives on simple
+// downloads.
 export const HEAVY_SPREADSHEET_THRESHOLD_BYTES = 250_000;
 
 // The nudge fires only on these extensions. CSVs and Google Sheets
@@ -55,13 +55,10 @@ export type NudgeDecision = {
 
 export function decideSpreadsheetNudge(args: NudgeArgs): NudgeDecision {
   const defaultModel = args.defaultModel ?? currentDefaultModel();
-  const advancedModel = args.advancedModel ?? currentAdvancedModel();
-  const decision: NudgeDecision = { show: false, recommendedModel: advancedModel };
+  const fallbackModel = args.advancedModel ?? currentFallbackModel();
+  const decision: NudgeDecision = { show: false, recommendedModel: fallbackModel };
   if (args.dismissed) return decision;
-  // Only nudge from the cheap fast tier — if the user is already on
-  // a non-default model they've made an explicit choice we should
-  // respect.
   if (args.selectedModel !== defaultModel) return decision;
   if (!args.attachments.some(isHeavySpreadsheet)) return decision;
-  return { show: true, recommendedModel: advancedModel };
+  return { show: true, recommendedModel: fallbackModel };
 }

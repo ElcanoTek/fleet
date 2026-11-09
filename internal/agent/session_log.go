@@ -103,16 +103,16 @@ type oneShotCall struct {
 // cost money. text concatenates every text part of the response; res is the
 // raw result, nil on error.
 func generateOnce(ctx context.Context, model fantasy.LanguageModel, call oneShotCall) (text string, res *fantasy.AgentResult, err error) {
+	maxTokens := agentcore.CompletionTokensForModel(model.Model(), int64(call.MaxTokens))
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(call.System),
 		fantasy.WithTemperature(call.Temperature),
-		fantasy.WithMaxOutputTokens(int64(call.MaxTokens)),
+		fantasy.WithMaxOutputTokens(maxTokens),
 		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, call.Timeout)
 	defer cancel()
 
-	maxTokens := int64(call.MaxTokens)
 	res, err = ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(call.Prompt)},
 		MaxOutputTokens: &maxTokens,

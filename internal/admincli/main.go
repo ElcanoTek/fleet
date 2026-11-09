@@ -246,6 +246,7 @@ Users, credentials, notes:
   fleet chat user role <email>   --role member|viewer|admin [--team <id>]
   fleet chat user del <email>
   fleet chat user list
+  fleet chat set-model --model <slug> [--from-model <slug>] [--dry-run] [--no-confirm]
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly

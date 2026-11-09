@@ -523,12 +523,13 @@ type Config struct {
 	VerifierModel string
 
 	// ── model tiers (#1187) ──
-	// DefaultModel / AdvancedModel seed the workspace's two role slots — what a
-	// new conversation starts on and the suggest_advanced_model escalation
-	// target — as the env-derived DEFAULTS of the default_model /
-	// advanced_model admin settings. Empty means "use the compiled-in
-	// agentcore.DefaultCoreModel / DefaultMaxModel". These are the CHAT tiers,
-	// not the scheduler's TaskModel above, which stays its own knob.
+	// DefaultModel / AdvancedModel seed the workspace's two frontier role slots —
+	// the primary default frontier model a new conversation starts on, and the
+	// fallback frontier model (the second pinned picker slot and
+	// suggest_advanced_model target) — as the env-derived DEFAULTS of the
+	// default_model / advanced_model admin settings. Empty means "use the
+	// compiled-in agentcore.DefaultCoreModel / DefaultFallbackModel". These are
+	// the CHAT tiers, not the scheduler's TaskModel above, which stays its own knob.
 	DefaultModel  string
 	AdvancedModel string
 
@@ -1603,11 +1604,11 @@ func (c *Config) LockdownModels() []string {
 	if len(c.LockdownAllowedModels) > 0 {
 		return c.LockdownAllowedModels
 	}
-	def, adv := agentcore.CurrentDefaultModel(), agentcore.CurrentAdvancedModel()
-	if adv == "" || adv == def {
+	def, fallback := agentcore.CurrentDefaultModel(), agentcore.CurrentFallbackModel()
+	if fallback == "" || fallback == def {
 		return []string{def}
 	}
-	return []string{def, adv}
+	return []string{def, fallback}
 }
 
 // ModelAllowed reports whether slug matches any pattern in the allow-list.

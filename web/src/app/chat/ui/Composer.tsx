@@ -897,7 +897,7 @@ export function Composer({
                 title={
                   modelError
                     ? modelError.message
-                    : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (strongest)`
+                    : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (fallback)`
                 }
                 className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
                   modelError

@@ -18,10 +18,10 @@ const SuggestAdvancedModelToolName = "suggest_advanced_model"
 // and returns a SUGGESTION_DISPLAYED blocking response. The user picks
 // Switch & retry / Just switch / Dismiss in the UI.
 type SuggestAdvancedModelParams struct {
-	Reason string `json:"reason" description:"One short sentence the user will see on the suggestion card, explaining why advanced mode would help here. Keep it concrete (e.g. 'I'm uncertain about the CPDPV formula for this client and would cross-reference better in advanced mode.'). Required."`
+	Reason string `json:"reason" description:"One short sentence the user will see on the suggestion card, explaining why switching to the fallback frontier model would help here. Keep it concrete (e.g. 'I'm uncertain about the CPDPV formula for this client and switching to the fallback frontier model would give a fresh cross-check.'). Required."`
 }
 
-const suggestAdvancedModelDescription = `Recommend the user switch this conversation to the ADVANCED model for the rest of the session. The runtime renders an inline card with three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. You do NOT switch the model yourself; you only stage the suggestion.
+const suggestAdvancedModelDescription = `Recommend the user switch this conversation to the FALLBACK frontier model for the rest of the session (our second smart frontier model from a different provider family, or back to a frontier model when the user is on a cheaper/free model). The runtime renders an inline card with three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. You do NOT switch the model yourself; you only stage the suggestion.
 
 When to call:
 - You've hit a domain-specific KPI / formula / business rule you're uncertain about and the answer matters (a client's primary KPI in a tracking sheet, a contract-specific margin definition, etc.).

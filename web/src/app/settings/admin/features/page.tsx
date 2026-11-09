@@ -169,12 +169,12 @@ const META: Record<string, SettingMeta> = {
   default_model: {
     label: "Default model",
     description:
-      "The model every new conversation starts on, shown first in each model picker. Pick from the list or type a model name. Conversations that already chose a model keep it.",
+      "Our smartest frontier model, which every new conversation starts on by default and which appears first in each model picker. Users can switch to a cheaper or free model in the picker when they want to optimize spend. Conversations that already chose a model keep it.",
   },
   advanced_model: {
     label: "Fallback model",
     description:
-      "The stronger model the assistant offers to switch to when a chat struggles, and the one tasks and patrols fall back to if their model fails. Shown second in each model picker.",
+      "Our alternative smart frontier model from a different provider family — offered when a chat turn struggles, and used as the fallback for tasks and patrols if their primary model fails. Shown second in each model picker.",
   },
   task_model: {
     label: "Task model",
@@ -183,9 +183,9 @@ const META: Record<string, SettingMeta> = {
     emptyDefault: "Follows the default model",
   },
   escalation_signals_enabled: {
-    label: "Offer the advanced model when a turn struggles",
+    label: "Offer the fallback model when a turn struggles",
     description:
-      "After a reply that clearly struggled (several tool errors in a row, the same step repeated, the chat had to be summarized, or a very long run), offer to switch to the advanced model. Free: no extra model call.",
+      "After a reply that clearly struggled (several tool errors in a row, the same step repeated, the chat had to be summarized, or a very long run), offer to switch to the fallback model. Free: no extra model call.",
   },
   escalation_classifier_mode: {
     label: "Frustration check",
@@ -194,7 +194,7 @@ const META: Record<string, SettingMeta> = {
     optionHelp: {
       off: "Off: no check, nothing sent.",
       observe: "Check every message and count frustrated ones on the Users page, without showing a card.",
-      suggest: "Suggest (default): check, count, and offer the advanced model when the user is pushing back.",
+      suggest: "Suggest (default): check, count, and offer the fallback model when the user is pushing back.",
     },
   },
   escalation_classifier_model: {
@@ -233,7 +233,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
     keys: ["default_model", "advanced_model", "task_model"],
   },
   {
-    title: "Advanced-model suggestions",
+    title: "Fallback-model suggestions",
     keys: [
       "escalation_signals_enabled",
       "escalation_classifier_mode",

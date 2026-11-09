@@ -48,7 +48,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => screen.getByText(ADVANCED_MODEL_LABEL));
-    fireEvent.change(input, { target: { value: "opus" } });
+    fireEvent.change(input, { target: { value: "argon" } });
     await waitFor(() => {
       expect(screen.getByText(DEFAULT_MODEL_LABEL)).toBeInTheDocument();
     });

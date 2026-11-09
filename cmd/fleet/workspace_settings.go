@@ -47,9 +47,9 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"max_total_tokens":          strconv.Itoa(cfg.MaxTotalTokens),
 		"subagents_enabled":         strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":             defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
-		"advanced_model":            defaultModelTier(cfg.AdvancedModel, agentcore.DefaultMaxModel),
+		"advanced_model":            defaultModelTier(cfg.AdvancedModel, agentcore.DefaultFallbackModel),
 		// Usually empty: an unset FLEET_TASK_MODEL means the task tier follows
-		// the advanced model (agentcore.CurrentTaskModel).
+		// the default model (agentcore.CurrentTaskModel).
 		"task_model":                        strings.TrimSpace(cfg.TaskModel),
 		"escalation_signals_enabled":        strconv.FormatBool(cfg.EscalationSignalsEnabled),
 		"escalation_classifier_mode":        cfg.EscalationClassifierMode,
@@ -85,8 +85,8 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// never blank a tier. /client-config re-reads the holders per request,
 		// which is what makes the web side live.
 		"default_model":  applyModelTier(agentcore.SetDefaultModel),
-		"advanced_model": applyModelTier(agentcore.SetAdvancedModel),
-		// The task tier's setter treats "" as "follow the advanced tier", so
+		"advanced_model": applyModelTier(agentcore.SetFallbackModel),
+		// The task tier's setter treats "" as "follow the default tier", so
 		// the usual empty default and a Reset both restore the follow.
 		"task_model": applyModelTier(agentcore.SetTaskModel),
 		// Chat escalation (docs/CHAT-ESCALATION.md): plain live config fields,

@@ -73,8 +73,9 @@ The list is now the **allow-list on the request**. For a listed slug
 
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
-| `anthropic/claude-haiku-5.5` (default since 2026-10-15) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
-| `anthropic/claude-opus-5.5` (strong tier, restored 2026-10-28) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+| `google/gemini-4-argon` (default frontier tier since 2026-11-09) | Google | Google, Google AI Studio |
+| `anthropic/claude-opus-5.5` (fallback frontier tier since 2026-11-09; primary default 2026-10-28–2026-11-09) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+| `anthropic/claude-haiku-5.5` (default 2026-10-15–2026-10-28) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-6-luna-pro` (default until 2026-10-15) | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |

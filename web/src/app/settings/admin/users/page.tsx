@@ -1081,7 +1081,7 @@ export default function AdminUsersPage() {
                   </th>
                   <th
                     className={TH_NUM}
-                    title="Chat messages the frustration check scored as the user pushing back on a wrong or incomplete answer. Counts only while the check is on (Features → Advanced-model suggestions)."
+                    title="Chat messages the frustration check scored as the user pushing back on a wrong or incomplete answer. Counts only while the check is on (Features → Fallback-model suggestions)."
                   >
                     Frustrated
                   </th>
@@ -1093,7 +1093,7 @@ export default function AdminUsersPage() {
                   </th>
                   <th
                     className={TH_NUM}
-                    title="Times this user accepted a suggestion to switch a chat to the advanced model."
+                    title="Times this user accepted a suggestion to switch a chat to the fallback model."
                   >
                     Switched up
                   </th>

@@ -50,7 +50,7 @@ const (
 	escalationSignalCompaction  = "compaction"
 	escalationSignalLongTurn    = "long_turn"
 
-	escalationClassifierReason = "Your last message suggests my previous answer missed what you needed. The advanced model may handle this better."
+	escalationClassifierReason = "Your last message suggests my previous answer missed what you needed. Switching to the fallback model may handle this better."
 )
 
 // turnStruggle is what the turn's own history and stream say about how it went.
@@ -122,13 +122,13 @@ func isControlResult(text string) bool {
 func (t turnStruggle) strongest() (signal, reason string) {
 	switch {
 	case t.loopGuardBlocks > 0:
-		return escalationSignalLoopGuard, "I kept repeating the same step without making progress. The advanced model may find a better approach."
+		return escalationSignalLoopGuard, "I kept repeating the same step without making progress. Switching to the fallback model may find a better approach."
 	case t.toolErrorStreak >= escalationToolErrorStreak:
-		return escalationSignalToolErrors, fmt.Sprintf("%d tool calls in a row failed on this request. The advanced model may get further.", t.toolErrorStreak)
+		return escalationSignalToolErrors, fmt.Sprintf("%d tool calls in a row failed on this request. Switching to the fallback model may get further.", t.toolErrorStreak)
 	case t.compactions > 0:
-		return escalationSignalCompaction, "This conversation outgrew my working memory and had to be summarized. The advanced model handles long, detailed work better."
+		return escalationSignalCompaction, "This conversation outgrew my working memory and had to be summarized. Switching to the fallback model may handle long, detailed work better."
 	case t.toolCalls >= escalationLongTurnToolCalls:
-		return escalationSignalLongTurn, fmt.Sprintf("This request took %d tool steps. The advanced model may reach the answer more directly.", t.toolCalls)
+		return escalationSignalLongTurn, fmt.Sprintf("This request took %d tool steps. Switching to the fallback model may reach the answer more directly.", t.toolCalls)
 	}
 	return "", ""
 }

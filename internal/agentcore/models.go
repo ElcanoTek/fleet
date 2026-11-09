@@ -63,22 +63,28 @@ const (
 	// providers, and prompt caches are per-upstream; and an alias slug defeats
 	// the send-side reasoning reconstruction (see isAliasModel).
 	//
-	// Claude Opus 5.5 (2026-10-28): 1,000,000-token window and eleven official
-	// endpoints across Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure
-	// and Google Vertex, at $4/M in and $20/M out. The `anthropic/` soft pin
-	// keeps the prompt cache on one upstream with explicit cache breakpoints.
-	DefaultCoreModel = "anthropic/claude-opus-5.5"
-	// DefaultMaxModel (and DefaultFallbackModel) is the frontier fallback tier —
-	// the second pinned picker slot, the automatic fallback for scheduled tasks
-	// and chat patrols, and the switch-on-struggle target. Exact slug, never a
-	// `~latest` alias. Google Gemini 4 Argon (2026-10-28): 1,048,576-token
-	// context window and 32K minimum output floor.
-	DefaultMaxModel = "google/gemini-4-argon"
-	// DefaultFallbackModel is the explicit fallback-tier name for DefaultMaxModel.
-	DefaultFallbackModel = DefaultMaxModel
-	// AdvancedModelSlug is chat's historical name for the second frontier slot.
-	// Kept in sync with DefaultMaxModel / DefaultFallbackModel.
-	AdvancedModelSlug = DefaultMaxModel
+	// Google Gemini 4 Argon (2026-11-09, swapping roles with anthropic/claude-opus-5.5):
+	// 1,048,576-token context window, 32K minimum output floor, served across
+	// Google Vertex AI ("Google") and Google AI Studio ("Google AI Studio") with
+	// soft-pinned first-party failover. Users start on our smartest frontier
+	// model by default, with Claude Opus 5.5 as the frontier fallback and
+	// operator-pinned free/cheaper models (`FLEET_PINNED_MODELS`) for spend
+	// optimization.
+	DefaultCoreModel = "google/gemini-4-argon"
+	// DefaultFallbackModel is the frontier fallback model — the second pinned
+	// picker slot, the automatic cross-provider fallback for scheduled tasks and
+	// chat patrols, and the fallback switch target when a turn struggles. Exact
+	// slug, never a `~latest` alias.
+	//
+	// Claude Opus 5.5 (2026-11-09): 1,000,000-token context window and eleven
+	// official endpoints across Anthropic, Claude Platform on AWS, Amazon
+	// Bedrock, Azure and Google Vertex, with explicit prompt-cache breakpoints.
+	DefaultFallbackModel = "anthropic/claude-opus-5.5"
+	// DefaultMaxModel is the historical name for DefaultFallbackModel.
+	DefaultMaxModel = DefaultFallbackModel
+	// AdvancedModelSlug is chat's historical name for DefaultFallbackModel.
+	// Kept in sync with DefaultFallbackModel / DefaultMaxModel.
+	AdvancedModelSlug = DefaultFallbackModel
 	// DefaultMaxCompletionTokens caps a single completion's output tokens.
 	DefaultMaxCompletionTokens = 16384
 	// SuggestAdvancedCooldownTurns is the chat suggest_advanced_model cooldown.
@@ -99,11 +105,13 @@ var minCompletionTokens = []struct {
 	{"google/gemini-4", 32_768},
 }
 
-// completionTokensForModel returns the per-call output allowance for slug: the
+// CompletionTokensForModel returns the per-call output allowance for slug: the
 // configured cap, raised to the model's minCompletionTokens floor when it is
-// below it. Callers use the SAME value for the request's MaxOutputTokens and
-// for the context reserve (contextAccounting), so the reserve stays exact.
-func completionTokensForModel(slug string, configured int64) int64 {
+// below it. Callers (including auxiliary one-shot calls in internal/agent) use
+// the SAME value for the request's MaxOutputTokens and for the context reserve
+// (contextAccounting), so the reserve stays exact and thinking models never
+// spend a small auxiliary cap entirely on reasoning.
+func CompletionTokensForModel(slug string, configured int64) int64 {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(slug)), "~")
 	for _, f := range minCompletionTokens {
 		if strings.HasPrefix(m, f.prefix) {
@@ -111,6 +119,10 @@ func completionTokensForModel(slug string, configured int64) int64 {
 		}
 	}
 	return configured
+}
+
+func completionTokensForModel(slug string, configured int64) int64 {
+	return CompletionTokensForModel(slug, configured)
 }
 
 // modelOpenAIGPT5 is hoisted because the context-window table and several test

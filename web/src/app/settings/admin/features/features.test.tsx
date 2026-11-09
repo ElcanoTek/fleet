@@ -301,7 +301,7 @@ describe("FeaturesAdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
 
-    expect(await screen.findByText("Advanced-model suggestions")).toBeInTheDocument();
+    expect(await screen.findByText("Fallback-model suggestions")).toBeInTheDocument();
     const list = await screen.findByTestId("decision-models-escalation_classifier_model");
     await waitFor(() => expect(within(list).getByText(/Liquid: D1/)).toBeInTheDocument());
     expect(list.querySelector('option[value="~typesafe/jev-latest"]')).not.toBeNull();
