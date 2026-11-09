@@ -174,13 +174,16 @@ func (h *Handler) allowedRedirectPatterns() []string {
 	return patterns
 }
 
-func clientIPFromRequest(r *http.Request) string {
+func (h *Handler) clientIPFromRequest(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
+	if ip := h.cfg.TrustedProxies.ClientIP(r); ip.IsValid() {
+		return ip.String()
+	}
 	host := strings.TrimSpace(r.RemoteAddr)
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		return parsedHost
 	}
 	return host
 }
@@ -307,7 +310,7 @@ func (h *Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !h.pkce.put(clientIPFromRequest(r), state, codeChallenge, serverVerifier, resolvedScope) {
+	if !h.pkce.put(h.clientIPFromRequest(r), state, codeChallenge, serverVerifier, resolvedScope) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{
 			"error":             "temporarily_unavailable",
 			"error_description": "Too many pending authorization flows; please retry shortly",
@@ -427,7 +430,7 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if grantType == "authorization_code" {
+	if grantType == "authorization_code" && status != http.StatusTooManyRequests && status < http.StatusInternalServerError {
 		h.pkce.deleteMatchingVerifier(codeVerifier)
 	}
 	w.Header().Set("Cache-Control", "no-store")

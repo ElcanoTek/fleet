@@ -733,7 +733,7 @@ var preRegistryEnvKnobs = []envKnob{
 		why:     "tracing dial with a documented total order over bad input: unset/unparseable/NaN/±Inf/≥1 all mean AlwaysSample and ≤0 means never. Refusing to boot the whole service over an observability knob is worse than sampling everything, so validate-config reports a malformed ratio as an advisory instead"},
 
 	// ── built-in Microsoft 365 MCP proxy (internal/ms365mcp) ──
-	{key: "MS365_MCP_ATTACHMENT_URL_TTL_S", kind: kindInt, min: bound(1),
+	{key: "MS365_MCP_ATTACHMENT_URL_TTL_S", kind: kindInt, min: bound(1), max: bound(3600),
 		scope: scopeExternal, readBy: "internal/ms365mcp (attachment download ticket TTL)"},
 }
 

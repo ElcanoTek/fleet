@@ -15,6 +15,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 )
 
 const (
@@ -71,6 +72,7 @@ type Config struct {
 	Aliases                 []string
 	AllowedRedirectURIs     []string
 	AttachmentURLTTLSeconds int
+	TrustedProxies          httpmw.TrustedProxies
 
 	// When true (set on the parent web server when the credential-owning
 	// mcp-broker child process is active), unauthenticated POST /mcp probes
@@ -127,14 +129,17 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 	}
 	clientSecret := strings.TrimSpace(envreg.Get("MS365_MCP_CLIENT_SECRET"))
 
-	publicURL := strings.TrimSpace(envreg.Get("MS365_MCP_PUBLIC_URL"))
-	if publicURL == "" && fleetCfg != nil {
-		publicURL = strings.TrimSpace(fleetCfg.PublicBaseURL)
+	var fleetPublicURL string
+	if fleetCfg != nil {
+		fleetPublicURL = trimBaseURL(fleetCfg.PublicBaseURL)
 	}
+	if fleetPublicURL == "" {
+		fleetPublicURL = trimBaseURL(envreg.Get("FLEET_PUBLIC_BASE_URL"))
+	}
+	publicURL := trimBaseURL(envreg.Get("MS365_MCP_PUBLIC_URL"))
 	if publicURL == "" {
-		publicURL = strings.TrimSpace(envreg.Get("FLEET_PUBLIC_BASE_URL"))
+		publicURL = fleetPublicURL
 	}
-	publicURL = trimBaseURL(publicURL)
 
 	var aliases []string
 	for _, raw := range strings.Split(envreg.Get("MS365_MCP_ALIASES"), ",") {
@@ -146,6 +151,9 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 	var redirectURIs []string
 	if publicURL != "" {
 		redirectURIs = appendUniqueString(redirectURIs, publicURL+"/api/oauth/mcp/callback")
+	}
+	if fleetPublicURL != "" {
+		redirectURIs = appendUniqueString(redirectURIs, fleetPublicURL+"/api/oauth/mcp/callback")
 	}
 	for _, alias := range aliases {
 		redirectURIs = appendUniqueString(redirectURIs, alias+"/api/oauth/mcp/callback")
@@ -171,6 +179,17 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		}
 	}
 
+	var trustedIPs []net.IP
+	if fleetCfg != nil && len(fleetCfg.TrustedProxies) > 0 {
+		trustedIPs = fleetCfg.TrustedProxies
+	} else if rawTP := strings.TrimSpace(envreg.Get("FLEET_TRUSTED_PROXIES")); rawTP != "" {
+		for _, part := range strings.Split(rawTP, ",") {
+			if ip := net.ParseIP(strings.TrimSpace(part)); ip != nil {
+				trustedIPs = append(trustedIPs, ip)
+			}
+		}
+	}
+
 	return Config{
 		ClientID:                clientID,
 		TenantID:                tenantID,
@@ -179,6 +198,7 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		Aliases:                 aliases,
 		AllowedRedirectURIs:     redirectURIs,
 		AttachmentURLTTLSeconds: ttlSeconds,
+		TrustedProxies:          httpmw.NewTrustedProxies(trustedIPs),
 		CatalogJSON:             catalogJSON,
 		GraphBaseURL:            defaultGraphBaseURL,
 		AuthBaseURL:             defaultAuthBaseURL,

@@ -329,10 +329,6 @@
           "minimum": 0,
           "description": "Items to skip for pagination. Not supported with $search."
         },
-        "search": {
-          "type": "string",
-          "description": "KQL search query in one pair of double quotes; directory (users/groups) instead quotes each clause with no outer pair. Cannot combine with $filter."
-        },
         "filter": {
           "type": "string",
           "description": "OData filter expression. Add $count=true for advanced filters (flag/flagStatus, contains()). Cannot combine with $search."
@@ -423,7 +419,6 @@
     "queryParams": [
       "top",
       "skip",
-      "search",
       "filter",
       "count",
       "orderby",
@@ -647,7 +642,7 @@
   },
   {
     "name": "reply-to-chat-message",
-    "description": "Reply to a chat message.\n\n\ud83d\udca1 TIP: To @mention someone, put <at user-id=\"<aad-user-id>\">Display Name</at> in the html content; the server numbers the tag and builds the mentions array. Use the userId field (not id) from list-team-members or list-chat-members. Use contentType 'html' in the body \u2014 plain text contentType gets mangled by Graph API. Alternatively, hand-build the raw form: put an <at id=\"0\">Name</at> tag in the html content and add a mentions array to the request body, as a sibling of the body property (not a separate top-level tool parameter): { body: { contentType: 'html', content: 'Hi <at id=\"0\">Name</at>' }, mentions: [{ id: 0, mentionText: 'Name', mentioned: { user: { id: '<aad-user-id>', displayName: 'Name', userIdentityType: 'aadUser' } } }] }. Each mention id must match its <at id> value; include userIdentityType: 'aadUser' or Graph returns 400 'value without a type name'.",
+    "description": "Reply to (quote) message(s) in a Microsoft Teams chat via replyWithQuote. Provide chatId and either {messageIds, replyMessage} or {messageId, body}.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -746,13 +741,23 @@
         "excludeResponse": {
           "type": "boolean",
           "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "messageIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IDs of the chat message(s) being quoted/replied to."
+        },
+        "replyMessage": {
+          "type": "object",
+          "description": "The chatMessage reply payload (with body: {contentType, content}).",
+          "additionalProperties": true
         }
       },
       "additionalProperties": true,
       "required": [
-        "body",
-        "chatId",
-        "chatMessageId"
+        "chatId"
       ]
     },
     "annotations": {
@@ -761,16 +766,16 @@
       "destructiveHint": true,
       "openWorldHint": true
     },
-    "pathPattern": "/chats/{chat-id}/messages/{chatMessage-id}/replies",
+    "pathPattern": "/chats/{chat-id}/messages/replyWithQuote",
     "method": "POST",
     "pathParams": [
-      "chat-id",
-      "chatMessage-id"
+      "chat-id"
     ],
     "queryParams": [],
     "headerParams": [],
     "bodyParams": [
-      "body"
+      "messageIds",
+      "replyMessage"
     ],
     "contentType": "",
     "supportsTimezone": false,
@@ -778,7 +783,7 @@
   },
   {
     "name": "get-drive-item",
-    "description": "All items contained in the drive. Read-only. Nullable.\n\n\ud83d\udca1 TIP: Gets metadata for a file or folder: name, size, lastModifiedDateTime, createdBy, webUrl, file (mimeType, hashes), folder (childCount), parentReference, and @microsoft.graph.downloadUrl. For large drive/SharePoint files, call get-download-url with target=/drives/{drive-id}/items/{driveItem-id}/content to fetch out-of-band with no Authorization header. For small files where base64 in the tool response is acceptable, call download-bytes with the same /content target.",
+    "description": "All items contained in the drive. Read-only. Nullable.\n\n\ud83d\udca1 TIP: Gets metadata for a file or folder: name, size, lastModifiedDateTime, createdBy, webUrl, file (mimeType, hashes), folder (childCount), parentReference, and @microsoft.graph.downloadUrl. For large drive/SharePoint files, call get-download-url with target=/drives/{drive-id}/items/{driveItem-id}/content to fetch out-of-band with no Authorization header. For small files where base64 in the tool response is acceptable, call get-download-url with the same /content target.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2275,15 +2280,15 @@
         "body": {
           "type": "object",
           "properties": {
-            "SendResponse": {
+            "comment": {
               "type": [
-                "boolean",
+                "string",
                 "null"
               ]
             },
-            "Comment": {
+            "sendResponse": {
               "type": [
-                "string",
+                "boolean",
                 "null"
               ]
             }
@@ -2338,20 +2343,20 @@
         "body": {
           "type": "object",
           "properties": {
-            "ProposedNewTime": {
-              "type": "object"
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
-            "SendResponse": {
+            "sendResponse": {
               "type": [
                 "boolean",
                 "null"
               ]
             },
-            "Comment": {
-              "type": [
-                "string",
-                "null"
-              ]
+            "proposedNewTime": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -2404,20 +2409,20 @@
         "body": {
           "type": "object",
           "properties": {
-            "ProposedNewTime": {
-              "type": "object"
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
-            "SendResponse": {
+            "sendResponse": {
               "type": [
                 "boolean",
                 "null"
               ]
             },
-            "Comment": {
-              "type": [
-                "string",
-                "null"
-              ]
+            "proposedNewTime": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -3290,17 +3295,17 @@
         "body": {
           "type": "object",
           "properties": {
-            "ToRecipients": {
-              "type": "array"
-            },
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
+            },
+            "toRecipients": {
+              "type": "array"
             }
           },
           "additionalProperties": true
@@ -3353,14 +3358,14 @@
         "body": {
           "type": "object",
           "properties": {
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -3413,14 +3418,14 @@
         "body": {
           "type": "object",
           "properties": {
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -3473,17 +3478,17 @@
         "body": {
           "type": "object",
           "properties": {
-            "ToRecipients": {
-              "type": "array"
-            },
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
+            },
+            "toRecipients": {
+              "type": "array"
             }
           },
           "additionalProperties": true
@@ -3536,7 +3541,7 @@
         "body": {
           "type": "object",
           "properties": {
-            "DestinationId": {
+            "destinationId": {
               "type": "string"
             }
           },
@@ -3590,14 +3595,14 @@
         "body": {
           "type": "object",
           "properties": {
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -3650,14 +3655,14 @@
         "body": {
           "type": "object",
           "properties": {
-            "Message": {
-              "type": "object"
-            },
-            "Comment": {
+            "comment": {
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object"
             }
           },
           "additionalProperties": true
@@ -3752,15 +3757,15 @@
         "body": {
           "type": "object",
           "properties": {
-            "Message": {
-              "type": "object",
-              "description": "[Note: Simplified from 35 properties to 25 most common ones]"
-            },
             "SaveToSentItems": {
               "type": [
                 "boolean",
                 "null"
               ]
+            },
+            "message": {
+              "type": "object",
+              "description": "[Note: Simplified from 35 properties to 25 most common ones]"
             }
           },
           "additionalProperties": true
@@ -5300,7 +5305,7 @@
   },
   {
     "name": "get-download-url",
-    "description": "Resolve a short-lived, pre-authenticated download URL for Microsoft Graph binary content that exposes one (drive/SharePoint file content). The returned URL streams the bytes with NO Authorization header, so the client can fetch it straight to disk (e.g. curl) without round-tripping base64 through the agent context. Prefer this over download-bytes for any file above a few KB or any bulk download. Returns { downloadUrl, name?, size?, contentType? }. Mail file attachments (/messages/{id}/attachments/{id}/$value), meeting recordings and other $value byte endpoints have no pre-authenticated URL from Graph itself, but call this tool for them anyway: a server running with --enable-attachment-urls mints its own single-use URL for them, and one without it answers with the reason and points at download-bytes.",
+    "description": "Resolve a short-lived, pre-authenticated download URL for Microsoft Graph binary content that exposes one (drive/SharePoint file content). The returned URL streams the bytes with NO Authorization header, so the client can fetch it straight to disk (e.g. curl) without round-tripping base64 through the agent context. Prefer this over get-download-url for any file above a few KB or any bulk download. Returns { downloadUrl, name?, size?, contentType? }. Mail file attachments (/messages/{id}/attachments/{id}/$value), meeting recordings and other $value byte endpoints have no pre-authenticated URL from Graph itself, but call this tool for them anyway: a server running with --enable-attachment-urls mints its own single-use URL for them, and one without it answers with the reason and points at get-download-url.",
     "inputSchema": {
       "type": "object",
       "properties": {

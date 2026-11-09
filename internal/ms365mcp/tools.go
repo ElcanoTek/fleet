@@ -115,6 +115,9 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 		setQueryParamValue(query, paramKey, val)
 	}
 	for _, odataName := range []string{"top", "skip", "search", "filter", "count", "orderby", "select", "expand", "skiptoken", "startDateTime", "endDateTime"} {
+		if odataName == "search" && spec.Name == "list-chat-messages" {
+			continue
+		}
 		paramKey := "$" + odataName
 		if odataName == "startDateTime" || odataName == "endDateTime" {
 			paramKey = odataName
@@ -244,22 +247,83 @@ func buildGraphRequestBody(spec ToolSpec, toolName string, args map[string]any) 
 		bodyMap := map[string]any{}
 		if nested, ok := args["body"].(map[string]any); ok {
 			for k, v := range nested {
-				bodyMap[k] = v
+				bodyMap[normalizeActionFieldKey(k)] = v
 			}
 		}
 		for _, bp := range spec.BodyParams {
-			if v, ok := args[bp]; ok {
+			if v, ok := lookupActionFieldArg(args, bp); ok {
 				bodyMap[bp] = v
 			}
 		}
 		reqBody = bodyMap
 	}
-	if isTeamsMessageSendTool(toolName) {
+	if toolName == "reply-to-chat-message" {
+		reqBody = buildChatReplyWithQuoteBody(reqBody, args)
+	} else if isTeamsMessageSendTool(toolName) {
 		if bodyMap, ok := reqBody.(map[string]any); ok {
 			reqBody = rewriteTeamsMentions(bodyMap)
 		}
 	}
 	return reqBody
+}
+
+var actionFieldAliases = map[string]string{
+	"Comment":         "comment",
+	"SendResponse":    "sendResponse",
+	"Message":         "message",
+	"ToRecipients":    "toRecipients",
+	"DestinationId":   "destinationId",
+	"ProposedNewTime": "proposedNewTime",
+}
+
+func normalizeActionFieldKey(k string) string {
+	if canonical, ok := actionFieldAliases[k]; ok {
+		return canonical
+	}
+	return k
+}
+
+func lookupActionFieldArg(args map[string]any, canonicalKey string) (any, bool) {
+	if v, ok := args[canonicalKey]; ok {
+		return v, true
+	}
+	for pascal, camel := range actionFieldAliases {
+		if camel == canonicalKey {
+			if v, ok := args[pascal]; ok {
+				return v, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func buildChatReplyWithQuoteBody(reqBody any, args map[string]any) map[string]any {
+	bodyMap, _ := reqBody.(map[string]any)
+	if bodyMap == nil {
+		bodyMap = map[string]any{}
+	}
+	out := map[string]any{}
+	if ids, ok := bodyMap["messageIds"]; ok && ids != nil {
+		out["messageIds"] = ids
+	} else if msgID, ok := lookupStringArg(args, "messageId"); ok && strings.TrimSpace(msgID) != "" {
+		out["messageIds"] = []string{strings.TrimSpace(msgID)}
+	}
+	var replyMsg map[string]any
+	if rm, ok := bodyMap["replyMessage"].(map[string]any); ok {
+		replyMsg = rm
+	} else if nestedBody, ok := args["body"].(map[string]any); ok {
+		if _, hasInnerBody := nestedBody["body"]; hasInnerBody {
+			replyMsg = nestedBody
+		} else if _, hasContent := nestedBody["content"]; hasContent {
+			replyMsg = map[string]any{"body": nestedBody}
+		} else {
+			replyMsg = nestedBody
+		}
+	}
+	if replyMsg != nil {
+		out["replyMessage"] = rewriteTeamsMentions(replyMsg)
+	}
+	return out
 }
 
 func postProcessGraphResult(toolName string, query url.Values, args map[string]any, res any, respHeaders http.Header) any {
