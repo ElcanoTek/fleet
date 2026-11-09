@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,8 +47,10 @@ type Handler struct {
 	cfg         Config
 	pkce        pkceStore
 	tickets     *AttachmentTicketStore
+	catalogMu   sync.RWMutex
 	tools       []ToolSpec
 	toolsByName map[string]ToolSpec
+	catalogErr  error
 }
 
 // NewHandler constructs a Handler for the given Config.
@@ -67,15 +71,35 @@ func NewHandler(cfg Config) *Handler {
 		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	var specs []ToolSpec
+	var (
+		specs  []ToolSpec
+		byName map[string]ToolSpec
+	)
 	if cfg.CatalogLoadError == nil {
-		catalogRaw := embeddedToolsCatalog
-		if len(bytes.TrimSpace(cfg.CatalogJSON)) > 0 {
-			catalogRaw = cfg.CatalogJSON
-		}
-		if err := json.Unmarshal(catalogRaw, &specs); err != nil {
+		var err error
+		specs, byName, err = parseToolsCatalog(cfg.CatalogJSON)
+		if err != nil {
 			panic(fmt.Sprintf("ms365mcp: unmarshal tools catalog: %v", err))
 		}
+	}
+
+	return &Handler{
+		cfg:         cfg,
+		tickets:     NewAttachmentTicketStore(),
+		tools:       specs,
+		toolsByName: byName,
+		catalogErr:  cfg.CatalogLoadError,
+	}
+}
+
+func parseToolsCatalog(overrideJSON []byte) ([]ToolSpec, map[string]ToolSpec, error) {
+	catalogRaw := embeddedToolsCatalog
+	if len(bytes.TrimSpace(overrideJSON)) > 0 {
+		catalogRaw = overrideJSON
+	}
+	var specs []ToolSpec
+	if err := json.Unmarshal(catalogRaw, &specs); err != nil {
+		return nil, nil, err
 	}
 	byName := make(map[string]ToolSpec, len(specs))
 	for i := range specs {
@@ -84,13 +108,59 @@ func NewHandler(cfg Config) *Handler {
 		}
 		byName[specs[i].Name] = specs[i]
 	}
+	return specs, byName, nil
+}
 
-	return &Handler{
-		cfg:         cfg,
-		tickets:     NewAttachmentTicketStore(),
-		tools:       specs,
-		toolsByName: byName,
+// ReloadCatalogFromEnv re-reads <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json and
+// atomically updates the handler's active tool catalog. If the override file
+// exists and cannot be read or parsed, the handler fails closed (clearing its
+// active tools) and returns the load error.
+func (h *Handler) ReloadCatalogFromEnv() error {
+	overrideJSON, err := LoadCatalogOverrideFromEnv()
+	if err != nil {
+		h.catalogMu.Lock()
+		h.tools = nil
+		h.toolsByName = nil
+		h.catalogErr = err
+		h.catalogMu.Unlock()
+		return err
 	}
+	specs, byName, err := parseToolsCatalog(overrideJSON)
+	if err != nil {
+		h.catalogMu.Lock()
+		h.tools = nil
+		h.toolsByName = nil
+		h.catalogErr = err
+		h.catalogMu.Unlock()
+		return err
+	}
+	h.catalogMu.Lock()
+	h.tools = specs
+	h.toolsByName = byName
+	h.catalogErr = nil
+	h.catalogMu.Unlock()
+	return nil
+}
+
+// MatchesInProcessURL reports whether u targets this Handler's configured
+// Microsoft 365 surface while its tool catalog is healthy.
+func (h *Handler) MatchesInProcessURL(u *url.URL) bool {
+	if h == nil {
+		return false
+	}
+	h.catalogMu.RLock()
+	err := h.catalogErr
+	h.catalogMu.RUnlock()
+	if err != nil {
+		return false
+	}
+	return h.cfg.MatchesInProcessURL(u)
+}
+
+func (h *Handler) snapshotCatalog() ([]ToolSpec, map[string]ToolSpec, bool) {
+	h.catalogMu.RLock()
+	defer h.catalogMu.RUnlock()
+	return h.tools, h.toolsByName, h.catalogErr == nil
 }
 
 func isMutatingGraphTool(s ToolSpec) bool {
@@ -121,8 +191,9 @@ func (h *Handler) Tickets() *AttachmentTicketStore {
 
 // ToolNames returns the names of all registered MCP tools in catalog order.
 func (h *Handler) ToolNames() []string {
-	out := make([]string, len(h.tools))
-	for i, t := range h.tools {
+	tools, _, _ := h.snapshotCatalog()
+	out := make([]string, len(tools))
+	for i, t := range tools {
 		out[i] = t.Name
 	}
 	return out
@@ -414,8 +485,16 @@ func (h *Handler) dispatchJSONRPC(r *http.Request, token string, req jsonRPCRequ
 		}, false, nil
 
 	case "tools/list":
-		toolList := make([]map[string]any, 0, len(h.tools))
-		for _, t := range h.tools {
+		tools, _, catOK := h.snapshotCatalog()
+		if !catOK {
+			return jsonRPCResponse{
+				JSONRPC: "2.0",
+				ID:      defaultID(req.ID),
+				Error:   &jsonRPCError{Code: -32603, Message: "Microsoft 365 tool catalog is unavailable"},
+			}, false, nil
+		}
+		toolList := make([]map[string]any, 0, len(tools))
+		for _, t := range tools {
 			item := map[string]any{
 				"name":        t.Name,
 				"description": t.Description,

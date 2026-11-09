@@ -152,6 +152,7 @@ func runMCPBroker() error {
 		scopes:      make(map[string]*brokerScope),
 		remoteMCP:   remoteMCP,
 		remoteStore: remoteStore,
+		ms365:       ms365Handler,
 	}
 	serveErr := mcpbroker.ServeStdio(serveCtx, backend)
 	return errors.Join(serveErr, backend.Close())
@@ -302,6 +303,7 @@ type brokerBackend struct {
 	scopes      map[string]*brokerScope
 	remoteMCP   agent.RemoteMCPResolver
 	remoteStore *store.Store
+	ms365       *ms365mcp.Handler
 }
 
 type brokerScope struct {
@@ -542,6 +544,11 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	}
 	if err != nil {
 		return nil, err
+	}
+	if b.ms365 != nil {
+		if err := b.ms365.ReloadCatalogFromEnv(); err != nil {
+			return nil, fmt.Errorf("reload ms365 catalog: %w", err)
+		}
 	}
 	specs := agent.BuildMCPSpecs(cfg)
 	// A reloaded catalog may carry new header credentials: the redactors

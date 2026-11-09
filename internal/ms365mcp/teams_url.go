@@ -114,7 +114,8 @@ func ParseTeamsURL(rawURL string) ParseTeamsURLResult {
 			"Oid": organizerID,
 		})
 		joinWebURL := fmt.Sprintf(
-			"https://teams.microsoft.com/l/meetup-join/%s/0?context=%s",
+			"https://%s/l/meetup-join/%s/0?context=%s",
+			parsed.Host,
 			url.PathEscape(threadID),
 			url.QueryEscape(string(ctxJSON)),
 		)

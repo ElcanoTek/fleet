@@ -177,31 +177,7 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		}
 	}
 
-	var (
-		catalogJSON []byte
-		catalogErr  error
-	)
-	if clientDir := strings.TrimSpace(envreg.Get("FLEET_CLIENT_CONFIG_DIR")); clientDir != "" {
-		overridePath := filepath.Clean(filepath.Join(clientDir, "ms365_tools.json"))
-		if _, statErr := os.Stat(overridePath); statErr == nil {
-			b, readErr := os.ReadFile(overridePath)
-			switch {
-			case readErr != nil:
-				catalogErr = fmt.Errorf("read %s: %w", overridePath, readErr)
-			case len(bytes.TrimSpace(b)) == 0:
-				catalogErr = fmt.Errorf("read %s: empty catalog file", overridePath)
-			default:
-				var probe []ToolSpec
-				if unmarshalErr := json.Unmarshal(b, &probe); unmarshalErr != nil {
-					catalogErr = fmt.Errorf("parse %s: %w", overridePath, unmarshalErr)
-				} else {
-					catalogJSON = b
-				}
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			catalogErr = fmt.Errorf("stat %s: %w", overridePath, statErr)
-		}
-	}
+	catalogJSON, catalogErr := LoadCatalogOverrideFromEnv()
 
 	var trustedIPs []net.IP
 	if fleetCfg != nil && len(fleetCfg.TrustedProxies) > 0 {
@@ -229,6 +205,37 @@ func ConfigFromEnv(fleetCfg *config.Config) Config {
 		HTTPClient:              &http.Client{Timeout: 30 * time.Second},
 		StreamHTTPClient:        newDefaultStreamHTTPClient(),
 	}
+}
+
+// LoadCatalogOverrideFromEnv reads and validates the optional
+// <FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json catalog override. When the file
+// does not exist, it returns (nil, nil). When the file exists (or stat fails
+// with a non-ENOENT error) and cannot be read or parsed, it returns a non-nil
+// error so callers fail closed.
+func LoadCatalogOverrideFromEnv() ([]byte, error) {
+	clientDir := strings.TrimSpace(envreg.Get("FLEET_CLIENT_CONFIG_DIR"))
+	if clientDir == "" {
+		return nil, nil
+	}
+	overridePath := filepath.Clean(filepath.Join(clientDir, "ms365_tools.json"))
+	if _, statErr := os.Stat(overridePath); statErr == nil {
+		b, readErr := os.ReadFile(overridePath)
+		switch {
+		case readErr != nil:
+			return nil, fmt.Errorf("read %s: %w", overridePath, readErr)
+		case len(bytes.TrimSpace(b)) == 0:
+			return nil, fmt.Errorf("read %s: empty catalog file", overridePath)
+		default:
+			var probe []ToolSpec
+			if unmarshalErr := json.Unmarshal(b, &probe); unmarshalErr != nil {
+				return nil, fmt.Errorf("parse %s: %w", overridePath, unmarshalErr)
+			}
+			return b, nil
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat %s: %w", overridePath, statErr)
+	}
+	return nil, nil
 }
 
 // BrokerConfigFromEnv builds the credential-owning broker's Config, including

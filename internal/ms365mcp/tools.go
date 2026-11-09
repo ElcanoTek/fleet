@@ -23,19 +23,26 @@ const (
 )
 
 var (
-	pathPlaceholderRe       = regexp.MustCompile(`\{([^}]+)\}`)
-	attachmentValueTargetRe = regexp.MustCompile(`^(/me|/users/[^/]+)/(messages|events)/[^/]+/attachments/[^/]+/\$value$`)
-	mentionTagRe            = regexp.MustCompile(`(?i)<at\s+user-id=["']([0-9a-fA-F-]{36})["']\s*>([^<]+)</at>`)
-	existingAtIDRe          = regexp.MustCompile(`(?i)<at\s+id=["'](\d+)["']`)
+	pathPlaceholderRe            = regexp.MustCompile(`\{([^}]+)\}`)
+	mailAttachmentValueTargetRe  = regexp.MustCompile(`(?i)^(/me|/users/[^/]+)/(messages|mailFolders/[^/]+/messages)/[^/]+/attachments/[^/]+/\$value$`)
+	eventAttachmentValueTargetRe = regexp.MustCompile(`(?i)^(/me|/users/[^/]+)/(events|calendars/[^/]+/events)/[^/]+/attachments/[^/]+/\$value$`)
+	driveItemTargetRe            = regexp.MustCompile(`(?i)^(/drives/[^/]+/items/[^/]+|(/me|/users/[^/]+|/sites/[^/]+|/groups/[^/]+)/drive/items/[^/]+|/shares/[^/]+/driveItem)(/content)?$`)
+	driveItemContentTargetRe     = regexp.MustCompile(`(?i)^(/drives/[^/]+/items/[^/]+|(/me|/users/[^/]+|/sites/[^/]+|/groups/[^/]+)/drive/items/[^/]+|/shares/[^/]+/driveItem)/content$`)
+	mentionTagRe                 = regexp.MustCompile(`(?i)<at\s+user-id=["']([0-9a-fA-F-]{36})["']\s*>([^<]+)</at>`)
+	existingAtIDRe               = regexp.MustCompile(`(?i)<at\s+id=["'](\d+)["']`)
 )
 
 func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, toolName string, args map[string]any) (any, bool, error) {
-	spec, ok := h.toolsByName[toolName]
+	_, toolsByName, catOK := h.snapshotCatalog()
+	if !catOK {
+		return map[string]any{"error": "Microsoft 365 tool catalog is unavailable"}, true, nil
+	}
+	spec, ok := toolsByName[toolName]
 	if !ok {
 		return map[string]any{"error": fmt.Sprintf("Unknown tool: %s", toolName)}, true, nil
 	}
 
-	if res, isErr, handled, err := h.executeBuiltInUtilityTool(ctx, r, token, toolName, args); handled {
+	if res, isErr, handled, err := h.executeBuiltInUtilityTool(ctx, r, token, toolName, args, toolsByName); handled {
 		return res, isErr, err
 	}
 
@@ -78,7 +85,7 @@ func (h *Handler) executeToolCall(ctx context.Context, r *http.Request, token, t
 	return postProcessGraphResult(toolName, query, args, res, respHeaders), false, nil
 }
 
-func (h *Handler) executeBuiltInUtilityTool(ctx context.Context, r *http.Request, token, toolName string, args map[string]any) (any, bool, bool, error) {
+func (h *Handler) executeBuiltInUtilityTool(ctx context.Context, r *http.Request, token, toolName string, args map[string]any, toolsByName map[string]ToolSpec) (any, bool, bool, error) {
 	switch toolName {
 	case "parse-teams-url":
 		rawURL, _ := args["url"].(string)
@@ -106,7 +113,7 @@ func (h *Handler) executeBuiltInUtilityTool(ctx context.Context, r *http.Request
 		if target == "" {
 			return map[string]any{"error": "target is required and must be a non-empty string."}, true, true, nil
 		}
-		res, isErr, err := h.executeGetDownloadURL(ctx, r, token, target)
+		res, isErr, err := h.executeGetDownloadURL(ctx, r, token, target, toolsByName)
 		return res, isErr, true, err
 	}
 	return nil, false, false, nil
@@ -142,32 +149,43 @@ func buildGraphQueryParams(spec ToolSpec, toolName string, args map[string]any) 
 		query.Set("$search", normalizeMailSearchQuery(rawSearch))
 	}
 
-	if expBool, ok := args["expandExtendedProperties"].(bool); ok && expBool {
-		const clause = "singleValueExtendedProperties($filter=id ne '')"
+	if ids := extractExtendedPropertyIDs(args["expandExtendedProperties"]); len(ids) > 0 {
+		var filters []string
+		for _, id := range ids {
+			filters = append(filters, fmt.Sprintf("id eq '%s'", strings.ReplaceAll(id, "'", "''")))
+		}
+		clause := fmt.Sprintf("singleValueExtendedProperties($filter=%s)", strings.Join(filters, " or "))
 		if cur := query.Get("$expand"); cur != "" && !autoExpandedAttachments {
 			query.Set("$expand", cur+","+clause)
 		} else {
 			query.Set("$expand", clause)
 			autoExpandedAttachments = false
 		}
-	} else if expProps, ok := args["expandExtendedProperties"].([]any); ok && len(expProps) > 0 {
-		var ids []string
-		for _, item := range expProps {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				ids = append(ids, fmt.Sprintf("id eq '%s'", strings.ReplaceAll(strings.TrimSpace(s), "'", "''")))
-			}
-		}
-		if len(ids) > 0 {
-			clause := fmt.Sprintf("singleValueExtendedProperties($filter=%s)", strings.Join(ids, " or "))
-			if cur := query.Get("$expand"); cur != "" && !autoExpandedAttachments {
-				query.Set("$expand", cur+","+clause)
-			} else {
-				query.Set("$expand", clause)
-				autoExpandedAttachments = false
-			}
-		}
 	}
 	return query, autoExpandedAttachments
+}
+
+func extractExtendedPropertyIDs(raw any) []string {
+	var out []string
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+	case string:
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func setQueryParamValue(query url.Values, paramKey string, val any) {
@@ -423,18 +441,50 @@ func extractGraphResponseHeaders(h http.Header) map[string]string {
 	return out
 }
 
-func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, token, target string) (any, bool, error) {
+func hasAnyToolInCatalog(toolsByName map[string]ToolSpec, names ...string) bool {
+	for _, name := range names {
+		if _, ok := toolsByName[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, token, target string, toolsByName map[string]ToolSpec) (any, bool, error) {
 	if !isValidGraphTargetPath(target) {
 		return map[string]any{
 			"error": `target must be a relative Microsoft Graph path starting with "/", e.g. /me/messages/{id}/attachments/{id}/$value or /drives/{drive-id}/items/{driveItem-id}/content.`,
 		}, true, nil
 	}
-
-	if strings.HasSuffix(strings.ToLower(target), "/$value") || attachmentValueTargetRe.MatchString(target) {
-		return h.mintAttachmentDownloadResult(ctx, r, token, target)
+	pathPart := target
+	if q := strings.IndexByte(pathPart, '?'); q >= 0 {
+		pathPart = pathPart[:q]
 	}
 
-	itemPath := target
+	switch {
+	case mailAttachmentValueTargetRe.MatchString(pathPart):
+		if !hasAnyToolInCatalog(toolsByName, "get-mail-attachment-content", "list-mail-attachments", "get-mail-message", "list-mail-messages", "list-mail-folder-messages") {
+			return map[string]any{"error": "mail attachment downloads are not enabled in this tool catalog."}, true, nil
+		}
+		return h.mintAttachmentDownloadResult(ctx, r, token, pathPart)
+
+	case eventAttachmentValueTargetRe.MatchString(pathPart):
+		if !hasAnyToolInCatalog(toolsByName, "get-calendar-event", "list-calendar-events", "get-calendar-view") {
+			return map[string]any{"error": "calendar event attachment downloads are not enabled in this tool catalog."}, true, nil
+		}
+		return h.mintAttachmentDownloadResult(ctx, r, token, pathPart)
+
+	case driveItemTargetRe.MatchString(pathPart):
+		if !hasAnyToolInCatalog(toolsByName, "get-drive-item", "list-folder-files", "search-onedrive-files") {
+			return map[string]any{"error": "drive item downloads are not enabled in this tool catalog."}, true, nil
+		}
+	default:
+		return map[string]any{
+			"error": `target must be a valid Microsoft Graph attachment $value path (e.g. /me/messages/{id}/attachments/{id}/$value) or driveItem path (e.g. /drives/{drive-id}/items/{driveItem-id}/content).`,
+		}, true, nil
+	}
+
+	itemPath := pathPart
 	if strings.HasSuffix(strings.ToLower(itemPath), "/content") {
 		itemPath = itemPath[:len(itemPath)-len("/content")]
 	}
@@ -443,8 +493,8 @@ func (h *Handler) executeGetDownloadURL(ctx context.Context, r *http.Request, to
 		if errors.Is(err, errGraphUnauthorized) {
 			return nil, true, err
 		}
-		if strings.HasSuffix(strings.ToLower(target), "/content") {
-			return h.mintAttachmentDownloadResult(ctx, r, token, target)
+		if strings.HasSuffix(strings.ToLower(pathPart), "/content") {
+			return h.mintAttachmentDownloadResult(ctx, r, token, pathPart)
 		}
 		return nil, true, err
 	}

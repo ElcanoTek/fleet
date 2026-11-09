@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -724,12 +725,12 @@ func TestRedirectURIMatchesQueryAndFragmentAndCalendarAndOneDriveFixes(t *testin
 	})
 
 	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "list-calendar-events", map[string]any{
-		"expandExtendedProperties": true,
+		"expandExtendedProperties": []any{"String {00020329-0000-0000-C000-000000000046} Name syncId"},
 	}); err != nil || isErr {
 		t.Fatalf("list-calendar-events failed: isErr=%v err=%v", isErr, err)
 	}
-	if gotCalExpand != "singleValueExtendedProperties($filter=id ne '')" {
-		t.Fatalf("calendar $expand = %q, want singleValueExtendedProperties($filter=id ne '')", gotCalExpand)
+	if gotCalExpand != "singleValueExtendedProperties($filter=id eq 'String {00020329-0000-0000-C000-000000000046} Name syncId')" {
+		t.Fatalf("calendar $expand = %q, want eq filter", gotCalExpand)
 	}
 
 	if _, isErr, err := h.executeToolCall(context.Background(), nil, "tok", "search-onedrive-files", map[string]any{
@@ -910,5 +911,65 @@ func TestReview5833450252Findings(t *testing.T) {
 	}
 	if redeemed, ok := store.Redeem(firstID); !ok || redeemed.Filename != "first.pdf" {
 		t.Fatalf("first ticket was evicted at capacity: ok=%v redeemed=%+v", ok, redeemed)
+	}
+
+	// 5. get-download-url rejects raw message MIME $value and respects narrowed catalogs.
+	if _, isErr, _ := h.executeToolCall(context.Background(), nil, "tok", "get-download-url", map[string]any{
+		"target": "/me/messages/msg-1/$value",
+	}); !isErr {
+		t.Fatal("expected get-download-url to reject /me/messages/msg-1/$value")
+	}
+	narrowH := NewHandler(Config{
+		ClientID:     "client-123",
+		PublicURL:    "https://fleet.elcanotek.com",
+		GraphBaseURL: mockGraph.URL + "/v1.0",
+		HTTPClient:   mockGraph.Client(),
+		CatalogJSON:  []byte(`[{"name":"get-download-url","description":"d","inputSchema":{"type":"object"}}]`),
+	})
+	if _, isErr, _ := narrowH.executeToolCall(context.Background(), nil, "tok", "get-download-url", map[string]any{
+		"target": "/me/messages/msg-1/attachments/att-1/$value",
+	}); !isErr {
+		t.Fatal("expected get-download-url to reject mail attachment when mail tools are absent from catalog")
+	}
+
+	// 6. ParseTeamsURL preserves gov/dod/live host on /meetingrecap URLs.
+	recap := ParseTeamsURL("https://gov.teams.microsoft.us/l/meetingrecap?tenantId=t1&threadId=19%3Ameeting_abc%40thread.v2&organizerId=o1")
+	if recap.Error != "" || !strings.HasPrefix(recap.JoinWebURL, "https://gov.teams.microsoft.us/l/meetup-join/") {
+		t.Fatalf("unexpected gov recap JoinWebURL: %+v", recap)
+	}
+}
+
+func TestReloadCatalogFromEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+
+	h := NewHandler(Config{
+		ClientID:  "client-123",
+		PublicURL: "https://fleet.elcanotek.com",
+	})
+	if len(h.ToolNames()) != 57 {
+		t.Fatalf("initial ToolNames count = %d, want 57", len(h.ToolNames()))
+	}
+
+	overridePath := filepath.Join(dir, "ms365_tools.json")
+	if err := os.WriteFile(overridePath, []byte(`[{"name":"list-mail-messages","description":"d","inputSchema":{"type":"object"},"pathPattern":"/me/messages","method":"GET"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ReloadCatalogFromEnv(); err != nil {
+		t.Fatalf("ReloadCatalogFromEnv failed: %v", err)
+	}
+	if got := h.ToolNames(); len(got) != 1 || got[0] != "list-mail-messages" {
+		t.Fatalf("reloaded ToolNames = %v, want [list-mail-messages]", got)
+	}
+
+	// Malformed override fails closed.
+	if err := os.WriteFile(overridePath, []byte(`{invalid`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ReloadCatalogFromEnv(); err == nil {
+		t.Fatal("expected ReloadCatalogFromEnv to fail on malformed ms365_tools.json")
+	}
+	if got := h.ToolNames(); len(got) != 0 {
+		t.Fatalf("expected failed reload to clear tools, got %v", got)
 	}
 }

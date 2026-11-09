@@ -1183,18 +1183,11 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         },
         "calendarId": {
           "type": "string",
@@ -1606,18 +1599,11 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         }
       },
       "additionalProperties": true
@@ -1857,18 +1843,11 @@
           "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         }
       },
       "additionalProperties": true,
@@ -2549,18 +2528,11 @@
           "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         }
       },
       "additionalProperties": true,
@@ -2691,18 +2663,11 @@
           "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         }
       },
       "additionalProperties": true
@@ -2945,18 +2910,11 @@
           "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
         },
         "expandExtendedProperties": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ],
-          "description": "Set to true to expand all singleValueExtendedProperties, or pass an array of extended property IDs to expand."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
         }
       },
       "additionalProperties": true,

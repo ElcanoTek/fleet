@@ -71,8 +71,8 @@ func (s *AttachmentTicketStore) Issue(token, target string, ttlSeconds int, file
 	if token == "" {
 		return "", fmt.Errorf("issue requires a non-empty access token")
 	}
-	if !isValidGraphTargetPath(target) {
-		return "", fmt.Errorf("issue requires a relative Graph path starting with /")
+	if !isAllowedTicketTargetPath(target) {
+		return "", fmt.Errorf("issue requires a valid relative Graph attachment $value or driveItem content path")
 	}
 	if ttlSeconds <= 0 {
 		ttlSeconds = defaultAttachmentURLTTLSeconds
@@ -149,6 +149,19 @@ func isValidGraphTargetPath(target string) bool {
 		}
 	}
 	return true
+}
+
+func isAllowedTicketTargetPath(target string) bool {
+	if !isValidGraphTargetPath(target) {
+		return false
+	}
+	pathPart := target
+	if q := strings.IndexByte(pathPart, '?'); q >= 0 {
+		pathPart = pathPart[:q]
+	}
+	return mailAttachmentValueTargetRe.MatchString(pathPart) ||
+		eventAttachmentValueTargetRe.MatchString(pathPart) ||
+		driveItemContentTargetRe.MatchString(pathPart)
 }
 
 func buildContentDisposition(filename string) string {

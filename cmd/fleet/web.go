@@ -69,7 +69,9 @@ func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error)
 	}
 	slog.Info("web: bundle loaded", "build_id", g.BuildID())
 	surface := b.surface(g)
-	surface.ms365 = ms365Handler
+	if ms365Handler != nil {
+		surface.ms365 = ms365Handler
+	}
 	return &http.Server{
 		Addr:              addr,
 		Handler:           buildPublicRouter(surface),
@@ -145,11 +147,11 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 // wireMS365MCP constructs the optional built-in Microsoft 365 OAuth + Graph
 // MCP handler when MS365_MCP_CLIENT_ID is configured and registers (or clears)
 // the in-process netguard dispatch hook.
-func wireMS365MCP(cfg *config.Config) (http.Handler, ms365mcp.Config) {
+func wireMS365MCP(cfg *config.Config) (*ms365mcp.Handler, ms365mcp.Config) {
 	return wireMS365MCPWithBroker(cfg, "")
 }
 
-func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (http.Handler, ms365mcp.Config) {
+func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (*ms365mcp.Handler, ms365mcp.Config) {
 	var ms365Cfg ms365mcp.Config
 	if brokerAttachmentSocket != "" {
 		ms365Cfg = ms365mcp.ConfigFromEnv(cfg)
@@ -161,11 +163,11 @@ func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (
 		return nil, ms365Cfg
 	}
 	if brokerAttachmentSocket != "" {
-		ms365Cfg.DisableAuthenticatedMCP = true
+		ms365Cfg.DisableAuthenticatedMCP = mcpBrokerRemoteConfigured()
 		ms365Cfg.AttachmentProxy = ms365mcp.NewUnixSocketAttachmentProxy(brokerAttachmentSocket)
 	}
 	h := ms365mcp.NewHandler(ms365Cfg)
-	netguard.RegisterInProcessHandler("ms365mcp", ms365Cfg.MatchesInProcessURL, h)
+	netguard.RegisterInProcessHandler("ms365mcp", h.MatchesInProcessURL, h)
 	return h, ms365Cfg
 }
 
