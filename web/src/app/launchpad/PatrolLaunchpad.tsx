@@ -665,12 +665,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         />
       ) : (
         <>
-          <div
-            ref={bodyRef}
-            tabIndex={state.step === "why" ? 0 : undefined}
-            className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-7"
-            data-testid={`launchpad-step-${state.step}`}
-          >
+          <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-7" data-testid={`launchpad-step-${state.step}`}>
             {state.step === "why" ? <WhyStep readOnly={readOnly} /> : null}
             {state.step === "welcome" ? (
               <WelcomeStep
@@ -1018,7 +1013,15 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
         </p>
         <p className="mt-1.5">
           Start with <strong className="text-[var(--color-text-primary)]">Suggest &amp; ask</strong>. Once you trust its
-          calls, flip on ⚡ Auto-approve in the Patrol bar any time.
+          calls, flip on ⚡ Auto-approve in the Patrol bar any time.{" "}
+          <a
+            className="text-[var(--color-link)] underline underline-offset-2"
+            href="/help/chat#in-chat-patrols-and-timers"
+            target="_blank"
+            rel="noopener"
+          >
+            How patrols work
+          </a>
         </p>
       </div>
       {readOnly ? (
