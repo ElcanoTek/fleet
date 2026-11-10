@@ -292,6 +292,25 @@ func (m *SessionManager) GetSession(id string, ownerEmail string, viewToken stri
 	return sess, nil
 }
 
+// PeekSession returns a live session's start and current URLs for its owner,
+// for display (an approval card). Unlike GetSession it does not touch the
+// session: looking does not count as activity, so the idle timer keeps
+// running, and it reaps nothing. An expired or closed session reads as gone.
+func (m *SessionManager) PeekSession(id, ownerEmail string) (startURL, currentURL string, ok bool) {
+	m.mu.Lock()
+	sess, found := m.sessions[strings.TrimSpace(id)]
+	m.mu.Unlock()
+	if !found || sess == nil || !sess.Authorize(ownerEmail, "") {
+		return "", "", false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.closed || time.Since(sess.lastActive) > sessionIdleTTL {
+		return "", "", false
+	}
+	return sess.baseURL, sess.currentURL, true
+}
+
 // CloseSession closes and removes a session by ID.
 func (m *SessionManager) CloseSession(id string, ownerEmail string, viewToken string) error {
 	sess, err := m.GetSession(id, ownerEmail, viewToken)

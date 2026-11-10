@@ -59,6 +59,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			continue
 		}
 		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
+		if summary, ok := card["summary"].(map[string]any); ok {
+			card["summary"] = withBrowserSessionSite(summary, a.ToolName, a.ArgsJSON, a.UserEmail)
+		}
 		card["approval_id"] = a.ID
 		card["tool"] = a.ToolName
 		// Re-hydrate the countdown on reload (#225); 0 = no expiry.
