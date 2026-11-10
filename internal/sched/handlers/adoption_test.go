@@ -386,4 +386,16 @@ func TestAdoptionReportCSVExport(t *testing.T) {
 	if !strings.Contains(body, "TOTAL") {
 		t.Errorf("csv should end with a TOTAL row, got:\n%s", body)
 	}
+
+	// Named for its window (#2105 QA), like the usage CSV; `to` is exclusive.
+	wr := httptest.NewRequest("GET", "/admin/usage/adoption?format=csv&from=2026-10-01&to=2026-11-01", nil)
+	wr.Header.Set("X-API-Key", "admin-key")
+	ww := httptest.NewRecorder()
+	h.GetAdoptionReport(ww, wr)
+	if ww.Code != http.StatusOK {
+		t.Fatalf("windowed csv: got %d, want 200 (body: %s)", ww.Code, ww.Body.String())
+	}
+	if cd := ww.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="fleet-adoption-20261001-20261031.csv"`) {
+		t.Errorf("Content-Disposition = %q, want the window 20261001-20261031", cd)
+	}
 }

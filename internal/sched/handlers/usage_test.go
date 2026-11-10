@@ -255,6 +255,22 @@ func TestUsageReportCSVExport(t *testing.T) {
 		t.Errorf("csv should end with a TOTAL row, got:\n%s", body)
 	}
 
+	// The filename names the report's window, not the download date (#2105 QA:
+	// a 7-day and a 90-day export got the same name). `to` is exclusive, and a
+	// window over 366 days is named as clamped, the window the rows cover.
+	for _, tc := range []struct{ query, want string }{
+		{"?format=csv&group_by=key&from=2026-08-12&to=2026-11-11", "fleet-usage-key-20260812-20261110.csv"},
+		{"?format=csv&group_by=model&from=2020-01-01&to=2026-11-11", "fleet-usage-model-20251110-20261110.csv"},
+	} {
+		w := do(tc.query)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200 (body: %s)", tc.query, w.Code, w.Body.String())
+		}
+		if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="`+tc.want+`"`) {
+			t.Errorf("%s: Content-Disposition = %q, want filename %s", tc.query, cd, tc.want)
+		}
+	}
+
 	// Unknown format → 400.
 	if w := do("?format=xlsx"); w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown format: got %d, want 400", w.Code)
@@ -299,6 +315,31 @@ func TestUsageReportZeroesZeroRatedModels(t *testing.T) {
 	for _, b := range rep.Buckets {
 		if b.Key == "qwen/qwen3.6-plus" && (b.CostUSD != 0 || b.ChatCostUSD != 0 || b.TaskCostUSD != 0) {
 			t.Fatalf("expected zero-rated model bucket cost to be 0, got %+v", b)
+		}
+	}
+}
+
+func TestCSVWindowStamp(t *testing.T) {
+	t.Parallel()
+	day := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, tc := range []struct{ from, to, want string }{
+		// A preset: from a midnight to "now" — the last day is today.
+		{"2026-11-03T00:00:00Z", "2026-11-10T21:14:47Z", "20261103-20261110"},
+		// An exclusive midnight `to` ends the day before.
+		{"2026-08-12T00:00:00Z", "2026-11-11T00:00:00Z", "20260812-20261110"},
+		// A sub-day window stays on its one day.
+		{"2026-11-08T23:59:59Z", "2026-11-09T00:00:00Z", "20261108-20261108"},
+		// A non-UTC offset is named in UTC.
+		{"2026-11-01T01:00:00+02:00", "2026-11-02T01:00:00+02:00", "20261031-20261101"},
+	} {
+		if got := csvWindowStamp(day(tc.from), day(tc.to)); got != tc.want {
+			t.Errorf("csvWindowStamp(%s, %s) = %s, want %s", tc.from, tc.to, got, tc.want)
 		}
 	}
 }
