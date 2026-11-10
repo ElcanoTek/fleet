@@ -9,6 +9,22 @@ import (
 var authorizationValue = regexp.MustCompile(`(?i)authorization:\s*(?:bearer|basic)\s+([A-Za-z0-9\-._~+/]+=*)`)
 var secretJSONKey = regexp.MustCompile(`(?i)(?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?$`)
 
+// publicIdentifierKey names the few fields that end in "token" but hold an ID
+// meant to be handed out, never a credential: an SSP's deal token (Magnite's
+// deal_token / dealToken, a marketplace deal's or an auction package's token)
+// is the deal ID a trader sends to buyers and a DSP targets. Blanking it left
+// users unable to see the IDs of deals they had just created. Only the
+// key-name rule skips these keys: their values still pass through every
+// literal and value-shape pattern, so a real credential stored under one is
+// still caught by its shape.
+var publicIdentifierKey = regexp.MustCompile(`(?i)^(?:deal|marketplace[_-]?deal|auction[_-]?package|buyer[_-]?deal)[_-]?tokens?$`)
+
+// isSecretKeyName reports whether a JSON key, by name alone, marks its value
+// as a credential.
+func isSecretKeyName(key string) bool {
+	return secretJSONKey.MatchString(key) && !publicIdentifierKey.MatchString(key)
+}
+
 // Redact decoded JSON strings, never the escapes framing them. In particular,
 // a second marker pass over an escaped curl example must not eat its closing
 // quote's backslash. Keep number lexemes and untouched documents byte-exact.
@@ -55,7 +71,7 @@ func (r *Redactor) redactJSON(input string) string {
 			for _, credential := range credentials {
 				clean = strings.ReplaceAll(clean, credential, placeholder)
 			}
-			if secretJSONKey.MatchString(key) && len(clean) >= minLiteralLen {
+			if isSecretKeyName(key) && len(clean) >= minLiteralLen {
 				clean = placeholder
 			} else {
 				clean = r.redactPlain(clean)
@@ -64,7 +80,7 @@ func (r *Redactor) redactJSON(input string) string {
 			return clean
 		case json.Number:
 			clean := r.redactPlain(x.String())
-			if secretJSONKey.MatchString(key) && len(clean) >= minLiteralLen {
+			if isSecretKeyName(key) && len(clean) >= minLiteralLen {
 				clean = placeholder
 			}
 			if clean != x.String() {

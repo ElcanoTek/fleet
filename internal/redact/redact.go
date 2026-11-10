@@ -91,6 +91,51 @@ type pattern struct {
 	// carry no credential shape at all.
 	hint string
 	fold bool
+	// keyMarker marks the "<key> = value" marker pattern: its match starts at
+	// the credential keyword, which may sit inside a longer key name. A key
+	// that publicIdentifierKey names (deal_token) is left as it is.
+	keyMarker bool
+}
+
+// replace applies p to s. For the key-marker pattern, a match whose whole key
+// name is a public identifier keeps its value.
+func (p pattern) replace(s string) string {
+	if !p.keyMarker {
+		return p.re.ReplaceAllString(s, p.repl)
+	}
+	matches := p.re.FindAllStringSubmatchIndex(s, -1)
+	if matches == nil {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range matches {
+		b.WriteString(s[last:m[0]])
+		if publicIdentifierKey.MatchString(enclosingKey(s, m[0])) {
+			b.WriteString(s[m[0]:m[1]])
+		} else {
+			b.Write(p.re.ExpandString(nil, p.repl, s, m))
+		}
+		last = m[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// enclosingKey returns the run of key-name characters ([A-Za-z0-9_-]) around
+// position i: the whole key a marker match starting at i belongs to.
+func enclosingKey(s string, i int) string {
+	isKeyChar := func(c byte) bool {
+		return c == '_' || c == '-' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+	}
+	start, end := i, i
+	for start > 0 && isKeyChar(s[start-1]) {
+		start--
+	}
+	for end < len(s) && isKeyChar(s[end]) {
+		end++
+	}
+	return s[start:end]
 }
 
 // mayMatch reports whether p could match s (its hint is present).
@@ -250,30 +295,30 @@ func (r *Redactor) SetReservedKeys(keys ...string) {
 func canonicalPatterns() []pattern {
 	return []pattern{
 		// Entire PEM private-key blocks.
-		{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED PRIVATE KEY]", "PRIVATE KEY-----", false},
+		{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED PRIVATE KEY]", "PRIVATE KEY-----", false, false},
 		// Vendor API-key prefixes (specific → generic). Every prefix rule is
 		// anchored with \b so a hyphenated prose word that happens to END in a
 		// prefix ("desk-mounted-display-arm-…") is not eaten: the generic sk-
 		// rule below admits `-` and `_` because current OpenAI keys carry
 		// hyphenated sub-prefixes (sk-proj-…, sk-svcacct-…, sk-admin-…) that the
 		// old alnum-only tail never matched past the first hyphen.
-		{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-ant-", false},       // Anthropic
-		{regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-or-v1-", false},   // OpenRouter
-		{regexp.MustCompile(`\bsk-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-", false},               // OpenAI (incl. sk-proj-/sk-svcacct-) + generic sk-
-		{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`), placeholder, "github_pat_", false}, // GitHub fine-grained PAT
-		{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), placeholder, "gh", false},            // GitHub classic PAT/OAuth/refresh
-		{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}`), placeholder, "glpat-", false},         // GitLab PAT
-		{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), placeholder, "xox", false},        // Slack bot/user/app/refresh/config tokens
-		{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}`), placeholder, "k_", false},  // Stripe secret / restricted keys
-		{regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}`), placeholder, "AIza", false},              // Google API key
-		{regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`), placeholder, "AKIA", false},                    // AWS access key ID
+		{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-ant-", false, false},       // Anthropic
+		{regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-or-v1-", false, false},   // OpenRouter
+		{regexp.MustCompile(`\bsk-[A-Za-z0-9\-_]{20,}`), placeholder, "sk-", false, false},               // OpenAI (incl. sk-proj-/sk-svcacct-) + generic sk-
+		{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`), placeholder, "github_pat_", false, false}, // GitHub fine-grained PAT
+		{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), placeholder, "gh", false, false},            // GitHub classic PAT/OAuth/refresh
+		{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}`), placeholder, "glpat-", false, false},         // GitLab PAT
+		{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), placeholder, "xox", false, false},        // Slack bot/user/app/refresh/config tokens
+		{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}`), placeholder, "k_", false, false},  // Stripe secret / restricted keys
+		{regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}`), placeholder, "AIza", false, false},              // Google API key
+		{regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`), placeholder, "AKIA", false, false},                    // AWS access key ID
 		// HTTP Authorization: Bearer <token> (e.g. in captured curl/wget output).
-		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder, "authorization", true},
+		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder, "authorization", true, false},
 		// HTTP Authorization: Basic <base64(user:pass)>. A dedicated pattern
 		// because the scheme word ("Basic", 5 chars) sits where the generic
 		// marker rule expects the 8+-char value, so Basic credentials — which
 		// decode to the plaintext user:password — used to pass through.
-		{regexp.MustCompile(`(?i)(authorization:\s*basic\s+)([A-Za-z0-9+/\-._~]+=*)`), "${1}" + placeholder, "authorization", true},
+		{regexp.MustCompile(`(?i)(authorization:\s*basic\s+)([A-Za-z0-9+/\-._~]+=*)`), "${1}" + placeholder, "authorization", true, false},
 		// Marker = value, including the JSON-quoted form {"api_key":"..."}: the
 		// separator class includes : = whitespace and quotes so the value after a
 		// recognized marker is scrubbed even with no spaces. Value is 8+ chars up
@@ -284,7 +329,7 @@ func canonicalPatterns() []pattern {
 		// the keyword, `_`/`-`-led name characters are allowed before the
 		// separator. Requiring that boundary keeps prose words that merely embed
 		// a keyword (secretary, tokenizer) from matching.
-		{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), "${1}" + placeholder, "", false},
+		{re: regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), repl: "${1}" + placeholder, keyMarker: true},
 	}
 }
 
@@ -773,7 +818,7 @@ func (r *Redactor) redactPlain(input string) string {
 	}
 	r.mu.RUnlock()
 	for _, p := range r.patterns {
-		out = p.re.ReplaceAllString(out, p.repl)
+		out = p.replace(out)
 	}
 	return out
 }
