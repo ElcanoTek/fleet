@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { AccountMenu } from "./AccountMenu";
+
+let mockAdminState: "unknown" | "admin" | "member" = "admin";
+vi.mock("@/app/settings/useIsAdmin", () => ({
+  useIsAdmin: () => mockAdminState,
+}));
+
+beforeEach(() => {
+  mockAdminState = "admin";
+});
 
 afterEach(() => {
   cleanup();
@@ -24,21 +33,34 @@ describe("AccountMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
   });
 
-  // Analytics and the user guides live in this menu, beside Settings.
-  it("offers Analytics and the guides beside Settings, tinted on their surfaces", () => {
+  it("groups items under Workspace, Model Context & Tools, and Administration (for admins)", () => {
     render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} guidesCurrent />);
     const button = screen.getByRole("button", { name: /account menu/i });
     expect(button.className).toContain("account-current");
     fireEvent.click(button);
-    const items = screen.getAllByRole("menuitem").map((i) => i.textContent ?? "");
-    const settings = items.findIndex((t) => t.startsWith("Settings"));
-    expect(items[settings + 1]).toMatch(/^Analytics/);
-    expect(items[settings + 2]).toMatch(/^Guides/);
+    const menu = screen.getByRole("menu", { name: "Account" });
+    expect(within(menu).getByText("Workspace")).toBeInTheDocument();
+    expect(within(menu).getByText("Model Context & Tools")).toBeInTheDocument();
+    expect(within(menu).getByText("Administration")).toBeInTheDocument();
+    expect(screen.getByTestId("nav-to-settings")).toBeInTheDocument();
     expect(screen.getByTestId("nav-to-help")).toHaveClass("menu-item-current");
-    // The current page is exposed to assistive tech too, not only styled.
     expect(screen.getByTestId("nav-to-help")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("nav-to-context-settings")).toBeInTheDocument();
+    expect(screen.getByTestId("nav-to-admin-settings")).toBeInTheDocument();
     expect(screen.getByTestId("nav-to-analytics")).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("menuitem", { name: /^Settings/ })).not.toHaveAttribute("aria-current");
+    expect(screen.getByTestId("nav-to-settings")).not.toHaveAttribute("aria-current");
+  });
+
+  it("hides Administration (Admin Settings & Analytics) for non-admin members", () => {
+    mockAdminState = "member";
+    render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+    const menu = screen.getByRole("menu", { name: "Account" });
+    expect(within(menu).getByText("Workspace")).toBeInTheDocument();
+    expect(within(menu).getByText("Model Context & Tools")).toBeInTheDocument();
+    expect(within(menu).queryByText("Administration")).toBeNull();
+    expect(screen.queryByTestId("nav-to-admin-settings")).toBeNull();
+    expect(screen.queryByTestId("nav-to-analytics")).toBeNull();
   });
 
   it("tints Analytics when analyticsCurrent is set", () => {
@@ -143,7 +165,7 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
   });
 
-  it("navigates to Settings from the menu; Connections/Skills/Admin are not menu items", () => {
+  it("navigates to Settings, Context & Connections, and Admin Settings from the menu", () => {
     // jsdom marks location.assign non-configurable; swap the whole location
     // object for a stub to observe navigations.
     const original = window.location;
@@ -156,15 +178,16 @@ describe("AccountMenu", () => {
     try {
       render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} />);
       fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
-      // Connections, Skills, and Admin live in the settings area's own
-      // sub-nav now (Admin only for admins) — the menu must not offer them.
-      // (Exact-name queries: the Settings item's accessible name includes its
-      // "Connections, skills & workspace settings" subtext.)
-      expect(screen.queryByRole("menuitem", { name: "Connections" })).toBeNull();
-      expect(screen.queryByRole("menuitem", { name: "Skills" })).toBeNull();
-      expect(screen.queryByRole("menuitem", { name: "Admin" })).toBeNull();
-      fireEvent.click(screen.getByRole("menuitem", { name: /Settings/ }));
+      fireEvent.click(screen.getByTestId("nav-to-settings"));
       expect(assign).toHaveBeenCalledWith("/settings");
+
+      fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+      fireEvent.click(screen.getByTestId("nav-to-context-settings"));
+      expect(assign).toHaveBeenCalledWith("/settings/connections");
+
+      fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+      fireEvent.click(screen.getByTestId("nav-to-admin-settings"));
+      expect(assign).toHaveBeenCalledWith("/settings/admin");
     } finally {
       Object.defineProperty(window, "location", { value: original, configurable: true, writable: true });
     }
@@ -173,8 +196,8 @@ describe("AccountMenu", () => {
   it("renders the Settings item's subtext line", () => {
     render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
-    const item = screen.getByRole("menuitem", { name: /Settings/ });
-    expect(item).toHaveTextContent("Connections, skills & workspace settings");
+    const item = screen.getByTestId("nav-to-settings");
+    expect(item).toHaveTextContent("General preferences & team settings");
   });
 
   it("tints the anchor and the Settings item on the settings surface", () => {
@@ -182,7 +205,7 @@ describe("AccountMenu", () => {
     const button = screen.getByRole("button", { name: /account menu/i });
     expect(button.className).toContain("account-current");
     fireEvent.click(button);
-    expect(screen.getByRole("menuitem", { name: /Settings/ }).className).toContain(
+    expect(screen.getByTestId("nav-to-settings").className).toContain(
       "menu-item-current",
     );
   });

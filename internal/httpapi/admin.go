@@ -58,6 +58,7 @@ type dailyCacheStat struct {
 type userStat struct {
 	Email                    string  `json:"email"`
 	ConversationCount        int     `json:"conversation_count"`
+	TaskCount                int     `json:"task_count"`
 	PinnedCount              int     `json:"pinned_count"`
 	LastActivity             int64   `json:"last_activity"` // unix seconds
 	TotalCostUSD             float64 `json:"total_cost_usd"`
@@ -145,6 +146,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		users = append(users, userStat{
 			Email:                    row.Email,
 			ConversationCount:        row.ConversationCount,
+			TaskCount:                row.TaskCount,
 			PinnedCount:              row.PinnedCount,
 			LastActivity:             row.LastActivity,
 			TotalCostUSD:             row.TotalCostUSD,

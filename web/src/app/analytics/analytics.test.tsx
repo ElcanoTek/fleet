@@ -18,8 +18,19 @@ vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
   }),
 }));
 
+let mockPinnedModels: Array<{
+  slug: string;
+  label?: string;
+  free?: boolean;
+  inputPricePerMtok?: number;
+  outputPricePerMtok?: number;
+}> = [];
+
 vi.mock("@/app/lib/useClientConfig", () => ({
-  useClientConfig: () => ({ branding: { app_name: "Fleet", logo_url: "" } }),
+  useClientConfig: () => ({
+    branding: { app_name: "Fleet", logo_url: "" },
+    models: { pinned: mockPinnedModels },
+  }),
 }));
 
 vi.mock("@/app/shared/ui/NavRail", () => ({
@@ -160,6 +171,7 @@ const SAMPLE_ADMIN_STATS = {
 beforeEach(() => {
   mockRole = "admin";
   mockSignedIn = true;
+  mockPinnedModels = [];
   window.history.replaceState(null, "", "/analytics");
   usageMock.mockReset();
   usageMock.mockResolvedValue(SAMPLE_MODEL_REPORT);
@@ -172,8 +184,8 @@ beforeEach(() => {
         JSON.stringify({
           settings: [
             {
-              key: "monthly_soft_token_limit",
-              value: "20000000",
+              key: "monthly_soft_spend_limit_usd",
+              value: "100",
               default_value: "0",
               source: "admin",
             },
@@ -182,7 +194,7 @@ beforeEach(() => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    if (url.endsWith("/api/admin/settings/monthly_soft_token_limit") && init?.method === "PUT") {
+    if (url.endsWith("/api/admin/settings/monthly_soft_spend_limit_usd") && init?.method === "PUT") {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
     if (url.endsWith("/api/admin/stats")) {
@@ -190,6 +202,49 @@ beforeEach(() => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+    if (url.endsWith("/api/admin/server-stats")) {
+      return new Response(
+        JSON.stringify({
+          available: true,
+          sampled_at: "2026-11-10T00:00:00Z",
+          hostname: "fleet-box",
+          platform: "linux/amd64",
+          uptime_seconds: 86400,
+          cpu: { available: true, cores: 8, usage_percent: 25.0, load_1: 0.4, load_5: 0.3, load_15: 0.2 },
+          memory: { available: true, total_bytes: 8 * 1024 ** 3, used_bytes: 2 * 1024 ** 3, available_bytes: 6 * 1024 ** 3, swap_total_bytes: 0, swap_used_bytes: 0 },
+          disk: { available: true, path: "/", total_bytes: 100 * 1024 ** 3, used_bytes: 20 * 1024 ** 3, available_bytes: 80 * 1024 ** 3, usage_percent: 20 },
+          network: { available: true, interfaces: 1, received_bytes: 1024, transmitted_bytes: 1024, receive_bytes_per_second: 100, transmit_bytes_per_second: 100 },
+          agents: {
+            active_agents_total: 4,
+            active_chat_turns: 1,
+            running_tasks: 1,
+            queued_tasks: 2,
+            completed_tasks_today: 12,
+            failed_tasks_today: 0,
+            active_subagents: 2,
+            subagents_spawned_24h: 10,
+            subagents_spawned_total: 50,
+            tool_calls_24h: 300,
+            tool_calls_total: 2000,
+            active_conversations_24h: 15,
+            llm_calls_today: 60,
+            llm_cost_today_usd: 9.5,
+            sandbox_pool_size: 4,
+            sandbox_pool_available: 4,
+            db_pool_in_use: 1,
+            db_pool_idle: 4,
+            db_pool_size: 5,
+            mcp_servers_enabled: 10,
+            mcp_servers_total: 12,
+            goroutines: 48,
+            process_memory_mb: 96.0,
+            fleet_version: "v2026.11.10.6",
+          },
+          warnings: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }
     return new Response("{}", { status: 200 });
   });
@@ -210,7 +265,7 @@ describe("AnalyticsPage", () => {
     });
     expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("83.3%");
     expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$42.50");
-    expect(within(banner).getByText(/60\.0%/)).toBeTruthy();
+    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(42\.5%\)/)).toBeTruthy();
 
     const table = await screen.findByTestId("model-breakdown-table");
     const rows = within(table).getAllByTestId("model-breakdown-row");
@@ -219,38 +274,109 @@ describe("AnalyticsPage", () => {
     expect(rows[0].textContent).toContain("Included ($0)");
     expect(rows[1].textContent).toContain("anthropic/claude-opus-4-6");
     expect(rows[1].textContent).toContain("Billed");
+    expect(screen.getByTestId("model-attribution-note").textContent).toContain(
+      "(deleted chats & default-model turns)",
+    );
   });
 
-  it("allows editing the monthly soft token limit inline", async () => {
+  it("treats pinned free:true models as Included ($0) even when historical cost_usd > 0 and labels empty key clearly", async () => {
+    mockPinnedModels = [
+      { slug: "qwen/qwen3.6-plus", label: "Custom Zero Model", free: true },
+    ];
+    usageMock.mockResolvedValue({
+      ...SAMPLE_MODEL_REPORT,
+      buckets: [
+        {
+          key: "openrouter/qwen/qwen3.6-plus",
+          label: "",
+          cost_usd: 15.0,
+          task_cost_usd: 5.0,
+          chat_cost_usd: 10.0,
+          prompt_tokens: 6_000_000,
+          completion_tokens: 2_000_000,
+          cached_tokens: 4_000_000,
+          uncached_tokens: 2_000_000,
+          cache_hit_rate_pct: 66.7,
+          task_iterations: 20,
+          chat_turns: 80,
+        },
+        {
+          key: "",
+          label: "",
+          cost_usd: 0,
+          task_cost_usd: 0,
+          chat_cost_usd: 0,
+          prompt_tokens: 1_500_000,
+          completion_tokens: 500_000,
+          cached_tokens: 500_000,
+          uncached_tokens: 1_000_000,
+          cache_hit_rate_pct: 33.3,
+          task_iterations: 0,
+          chat_turns: 40,
+        },
+      ],
+      totals: {
+        ...SAMPLE_MODEL_REPORT.totals,
+        cost_usd: 15.0,
+        task_cost_usd: 5.0,
+        chat_cost_usd: 10.0,
+        prompt_tokens: 7_500_000,
+        completion_tokens: 2_500_000,
+      },
+    });
+
+    render(<AnalyticsPage />);
+
+    const banner = await screen.findByTestId("analytics-monthly-banner");
+    await waitFor(() => {
+      expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$0.00");
+    });
+    expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("80.0%");
+    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(0\.0%\)/)).toBeTruthy();
+
+    const table = await screen.findByTestId("model-breakdown-table");
+    const rows = within(table).getAllByTestId("model-breakdown-row");
+    expect(rows[0].textContent).toContain("Custom Zero Model (openrouter/qwen/qwen3.6-plus)");
+    expect(rows[0].textContent).toContain("Included ($0)");
+    expect(rows[0].textContent).toContain("$0.00");
+    expect(rows[1].textContent).toContain("(deleted chats & default-model turns)");
+    expect(rows[1].textContent).toContain("No price data");
+  });
+
+  it("allows editing the monthly soft spend limit inline", async () => {
     render(<AnalyticsPage />);
     const editBtn = await screen.findByTestId("edit-monthly-soft-limit");
     fireEvent.click(editBtn);
 
     const input = await screen.findByTestId("monthly-soft-limit-input");
-    fireEvent.change(input, { target: { value: "50000000" } });
+    fireEvent.change(input, { target: { value: "$500" } });
     fireEvent.click(screen.getByTestId("save-monthly-soft-limit"));
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/admin/settings/monthly_soft_token_limit",
+        "/api/admin/settings/monthly_soft_spend_limit_usd",
         expect.objectContaining({
           method: "PUT",
-          body: JSON.stringify({ value: "50000000" }),
+          body: JSON.stringify({ value: "500" }),
         }),
       );
     });
   });
 
-  it("renders Outliers & Friction tab with top chats, heavy tasks, and user struggle signals", async () => {
+  it("renders Problem Chats & Friction tab with top chats, heavy tasks, and user struggle signals", async () => {
     render(<AnalyticsPage />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: /Outliers & Friction/i }));
+    fireEvent.click(await screen.findByRole("tab", { name: /Problem Chats & Friction/i }));
 
     const convTable = await screen.findByTestId("outliers-conversations-table");
+    expect(screen.getByTestId("friction-signals-explainer").textContent).toContain(
+      "How Friction & Escalation Signals Work",
+    );
     const convLink = within(convTable).getByText("Patrol: Tech HQ & Fleet Production Watch");
     expect(convLink).toBeTruthy();
     expect(convLink.closest("a")?.getAttribute("href")).toBe("/chat?c=11111111-2222-3333-4444-555555555555");
     expect(within(convTable).getByText("Patrol")).toBeTruthy();
+    expect(within(convTable).getByText("0 frustrated · 1 struggles · 0 upgrades")).toBeTruthy();
 
     const taskTable = await screen.findByTestId("outliers-tasks-table");
     expect(within(taskTable).getByText("Morning Executive Brief")).toBeTruthy();
@@ -262,13 +388,15 @@ describe("AnalyticsPage", () => {
     expect(userRow.textContent).toContain("$18.25");
   });
 
-  it("honors ?tab=adoption and ?tab=usage deep links", async () => {
+  it("honors ?tab=adoption, ?tab=usage, and ?tab=server deep links", async () => {
     window.history.replaceState(null, "", "/analytics?tab=adoption");
     render(<AnalyticsPage />);
 
     expect(await screen.findByTestId("adoption-panel-stub")).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Spend & Budgets" }));
     expect(await screen.findByTestId("usage-panel-stub")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Server & Live Agents" }));
+    expect(await screen.findByTestId("analytics-server-tab")).toBeTruthy();
   });
 
   it("blocks non-admins with an Admin access required view", async () => {

@@ -783,9 +783,9 @@ type Config struct {
 	// the team without requiring a project). FLEET_TEAM_CHATS_SHARED_BY_DEFAULT,
 	// default false.
 	TeamChatsSharedByDefault bool
-	// MonthlySoftTokenLimit is the workspace's monthly soft token allowance
-	// across all models (FLEET_MONTHLY_SOFT_TOKEN_LIMIT, default 0 = unlimited).
-	MonthlySoftTokenLimit int
+	// MonthlySoftSpendLimitUSD is the workspace's monthly soft spend allowance in
+	// USD across billed models (FLEET_MONTHLY_SOFT_SPEND_LIMIT_USD, default 0 = unlimited).
+	MonthlySoftSpendLimitUSD float64
 	// A2AEnabled gates the A2A (Agent2Agent) protocol server (#1279): the Agent
 	// Card at /.well-known/agent-card.json and the JSON-RPC endpoint at /a2a on
 	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
@@ -1424,7 +1424,7 @@ func Load(envFile string) (*Config, error) {
 
 		// Per-instance default team chat sharing — optional, default off.
 		TeamChatsSharedByDefault: lp.getenvFleetBool("TEAM_CHATS_SHARED_BY_DEFAULT", false),
-		MonthlySoftTokenLimit:    lp.getenvFleetInt("MONTHLY_SOFT_TOKEN_LIMIT", 0),
+		MonthlySoftSpendLimitUSD: lp.getenvFleetFloat("MONTHLY_SOFT_SPEND_LIMIT_USD", 0),
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.

@@ -68,17 +68,17 @@ test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", 
   await expect(menu).toContainText("e2e@example.com");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
-  // The settings redesign: one Settings item with its subtext line; the
-  // sections (Connections/Skills/Admin) live in the settings area's own
-  // sub-nav, not the menu.
-  const settingsItem = page.getByRole("menuitem", { name: /Settings/ });
+  // The account menu groups Workspace (Settings, Guides) and Model Context & Tools
+  // (Context & Connections), while Administration is hidden for non-admins.
+  const settingsItem = page.getByTestId("nav-to-settings");
   await expect(settingsItem).toBeVisible();
-  await expect(settingsItem).toContainText("Connections, skills & workspace settings");
-  // exact: Playwright's name matching is substring by default, and the
-  // Settings item's accessible name contains "Connections, skills…".
+  await expect(settingsItem).toContainText("General preferences & team settings");
+  const contextItem = page.getByTestId("nav-to-context-settings");
+  await expect(contextItem).toBeVisible();
+  await expect(contextItem).toContainText("Connections, memories, skills, personas & files");
   await expect(page.getByRole("menuitem", { name: "Connections", exact: true })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Skills", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "Admin", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("nav-to-admin-settings")).toHaveCount(0);
 });
 
 test("Sign out asks first in a centred dialog, then signs out", async ({ page }) => {

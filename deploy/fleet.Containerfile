@@ -30,7 +30,8 @@ ARG FLEET_ARCH
 # fleet's browser runner launches by path — PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
 # keeps it that way.
 COPY deploy/python/requirements.txt /tmp/fleet-requirements.txt
-RUN microdnf install -y --setopt=install_weak_deps=0 \
+RUN microdnf upgrade -y \
+    && microdnf install -y --setopt=install_weak_deps=0 \
         git ca-certificates tzdata python3 python3-pip chromium-headless postgresql \
     && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pip3 install --no-cache-dir --require-hashes --no-deps \
         -r /tmp/fleet-requirements.txt \

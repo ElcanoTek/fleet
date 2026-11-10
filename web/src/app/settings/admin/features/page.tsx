@@ -208,11 +208,11 @@ const META: Record<string, SettingMeta> = {
       "How sure the check must be before a message counts as frustration. Higher means fewer, more certain suggestions.",
     unitHint: "percent — 50 to 99; default 80",
   },
-  monthly_soft_token_limit: {
-    label: "Monthly soft token allowance",
+  monthly_soft_spend_limit_usd: {
+    label: "Monthly soft spend limit",
     description:
-      "Soft monthly token allowance across all models (including included / $0-cost models) displayed on the Analytics overview banner. Set 0 for unlimited.",
-    unitHint: "tokens — 1000000 to 1000000000000; 0 = unlimited",
+      "Soft monthly billed spend allowance in USD displayed on the Analytics overview banner (included / $0-cost models count $0 toward this limit). Set 0 for unlimited.",
+    unitHint: "USD — 1 to 1000000; 0 = unlimited",
   },
 };
 
@@ -256,7 +256,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "auto_title_enabled",
       "connector_recommendations_enabled",
       "context_handles_enabled",
-      "monthly_soft_token_limit",
+      "monthly_soft_spend_limit_usd",
     ],
   },
 ];

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import AdminServerPage from "./page";
+import AdminServerPage, { ServerStatsView } from "./page";
 import { jsonResponse, textResponse } from "@/test/fetch";
 
 vi.mock("@/app/lib/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
@@ -16,6 +16,32 @@ const STATS = {
   memory: { available: true, total_bytes: 8 * 1024 ** 3, used_bytes: 3 * 1024 ** 3, available_bytes: 5 * 1024 ** 3, swap_total_bytes: 0, swap_used_bytes: 0 },
   disk: { available: true, path: "/", total_bytes: 100 * 1024 ** 3, used_bytes: 25 * 1024 ** 3, available_bytes: 75 * 1024 ** 3, usage_percent: 25 },
   network: { available: true, interfaces: 1, received_bytes: 10 * 1024 ** 3, transmitted_bytes: 2 * 1024 ** 3, receive_bytes_per_second: 1536, transmit_bytes_per_second: 512 },
+  agents: {
+    active_agents_total: 6,
+    active_chat_turns: 2,
+    running_tasks: 1,
+    queued_tasks: 4,
+    completed_tasks_today: 18,
+    failed_tasks_today: 0,
+    active_subagents: 3,
+    subagents_spawned_24h: 15,
+    subagents_spawned_total: 84,
+    tool_calls_24h: 420,
+    tool_calls_total: 3100,
+    active_conversations_24h: 19,
+    llm_calls_today: 95,
+    llm_cost_today_usd: 14.5,
+    sandbox_pool_size: 4,
+    sandbox_pool_available: 3,
+    db_pool_in_use: 2,
+    db_pool_idle: 6,
+    db_pool_size: 8,
+    mcp_servers_enabled: 11,
+    mcp_servers_total: 14,
+    goroutines: 64,
+    process_memory_mb: 128.4,
+    fleet_version: "v2026.11.10.6",
+  },
   warnings: [],
 };
 
@@ -234,5 +260,23 @@ describe("AdminServerPage", () => {
     render(<AdminServerPage />);
     await screen.findByTestId("server-stats-panel");
     expect(await screen.findByTestId("storage-error")).toHaveTextContent("storage stats unavailable on this server");
+  });
+
+  it("renders bot & sub-agent activity and hides destructive cleanup button when allowCleanup=false", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    render(<ServerStatsView allowCleanup={false} />);
+
+    const agentPanel = await screen.findByTestId("server-agent-stats-panel");
+    expect(agentPanel).toHaveTextContent("2 chat · 1 task bots · 3 sub-agents");
+    expect(agentPanel).toHaveTextContent("3 active · 15 (24h)");
+    expect(agentPanel).toHaveTextContent("84 total sub-agents spawned");
+    expect(agentPanel).toHaveTextContent("420");
+    expect(agentPanel).toHaveTextContent("3,100 total tool calls logged");
+
+    await screen.findByTestId("storage-panel");
+    expect(screen.queryByTestId("storage-cleanup-run")).toBeNull();
+    expect(screen.getByTestId("storage-readonly-note")).toHaveTextContent(
+      "Settings → Admin → Server",
+    );
   });
 });

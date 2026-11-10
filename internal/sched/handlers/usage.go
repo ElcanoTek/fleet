@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -239,6 +240,11 @@ func mergeUsage(taskRows, chatRows []models.UsageBucket) []models.UsageBucket {
 	out := make([]models.UsageBucket, 0, len(order))
 	for _, key := range order {
 		b := byKey[key]
+		if b.Key != "" && agentcore.IsZeroRatedModel(b.Key) {
+			b.TaskCostUSD = 0
+			b.ChatCostUSD = 0
+			b.CostUSD = 0
+		}
 		finalizeUsageCacheFields(b)
 		out = append(out, *b)
 	}

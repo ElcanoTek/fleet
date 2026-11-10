@@ -372,3 +372,32 @@ func TestUpdateUsage_DefaultUsesOpenRouterCost(t *testing.T) {
 		t.Fatalf("default-path CostUSD = %v, want 0.0042 (the OR cost)", p.orch.CostUSD)
 	}
 }
+
+func TestIsZeroRatedModel(t *testing.T) {
+	t.Cleanup(func() { ConfigurePricing(PricingConfig{}) })
+	ConfigurePricing(PricingConfig{
+		Overrides: []PricingOverride{
+			{Model: "qwen/qwen3.6-plus"},
+			{Model: "anthropic/claude-opus-4-6", InputCostPerMillionTokens: 15, OutputCostPerMillionTokens: 75},
+		},
+	})
+
+	if !IsZeroRatedModel("qwen/qwen3.6-plus") {
+		t.Error("expected qwen/qwen3.6-plus to be zero-rated")
+	}
+	if !IsZeroRatedModel("openrouter/qwen/qwen3.6-plus") {
+		t.Error("expected openrouter/qwen/qwen3.6-plus to match zero-rated override")
+	}
+	if !IsZeroRatedModel("meta-llama/llama-4-maverick:free") {
+		t.Error("expected :free suffix to be zero-rated")
+	}
+	if IsZeroRatedModel("anthropic/claude-opus-4-6") {
+		t.Error("expected billed override to not be zero-rated")
+	}
+	if IsZeroRatedModel("openai/gpt-4o") {
+		t.Error("expected unlisted model to not be zero-rated")
+	}
+	if IsZeroRatedModel("   ") {
+		t.Error("expected empty slug to not be zero-rated")
+	}
+}

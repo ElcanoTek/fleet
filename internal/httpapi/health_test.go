@@ -17,9 +17,10 @@ import (
 // rest are promoted from the embedded (nil) *store.Store and never called here.
 type healthStubStore struct {
 	*store.Store
-	calls int64
-	cost  float64
-	pings int
+	calls  int64
+	cost   float64
+	pings  int
+	counts store.AgentRuntimeCounts
 }
 
 func (h *healthStubStore) Ping(context.Context) error { h.pings++; return nil }
@@ -28,6 +29,9 @@ func (h *healthStubStore) PoolStats() sql.DBStats {
 }
 func (h *healthStubStore) LLMUsageSince(context.Context, int64) (int64, float64, error) {
 	return h.calls, h.cost, nil
+}
+func (h *healthStubStore) AgentRuntimeCounts(context.Context, int64) (store.AgentRuntimeCounts, error) {
+	return h.counts, nil
 }
 
 func TestHandleHealthSummary(t *testing.T) {
@@ -108,5 +112,60 @@ func TestStartOfUTCDay(t *testing.T) {
 	want := time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC).Unix()
 	if got != want {
 		t.Errorf("startOfUTCDay = %d, want %d", got, want)
+	}
+}
+
+func TestHandleServerStatsIncludesAgentMetrics(t *testing.T) {
+	t.Parallel()
+
+	st := &healthStubStore{
+		calls: 14,
+		cost:  2.75,
+		counts: store.AgentRuntimeCounts{
+			SubagentsSpawnedTotal:  42,
+			SubagentsSpawned24h:    9,
+			ToolCalls24h:           180,
+			ToolCallsTotal:         1250,
+			ActiveConversations24h: 11,
+		},
+	}
+	s := New(&config.Config{}, &fakeEngine{}, st)
+	s.version = "v2026.11.10.6"
+	s.workerStats = func(context.Context) (*WorkerStats, error) {
+		return &WorkerStats{
+			QueuedTasks:    3,
+			RunningTasks:   2,
+			CompletedToday: 18,
+			FailedToday:    1,
+		}, nil
+	}
+
+	rr := httptest.NewRecorder()
+	s.handleServerStats(rr, httptest.NewRequest(http.MethodGet, "/admin/server-stats", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rr.Code)
+	}
+
+	var got serverStatsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Agents.RunningTasks != 2 || got.Agents.QueuedTasks != 3 || got.Agents.CompletedTasksToday != 18 {
+		t.Fatalf("unexpected task stats: %+v", got.Agents)
+	}
+	if got.Agents.ActiveAgentsTotal < 2 {
+		t.Fatalf("expected ActiveAgentsTotal >= 2, got %d", got.Agents.ActiveAgentsTotal)
+	}
+	if got.Agents.SubagentsSpawned24h != 9 || got.Agents.SubagentsSpawnedTotal != 42 {
+		t.Fatalf("unexpected subagent counts: %+v", got.Agents)
+	}
+	if got.Agents.ToolCalls24h != 180 || got.Agents.ToolCallsTotal != 1250 || got.Agents.ActiveConversations24h != 11 {
+		t.Fatalf("unexpected tool/conv counts: %+v", got.Agents)
+	}
+	if got.Agents.LLMCallsToday != 14 || got.Agents.LLMCostTodayUSD != 2.75 {
+		t.Fatalf("unexpected llm stats: %+v", got.Agents)
+	}
+	if got.Agents.DBPoolSize != 3 || got.Agents.DBPoolInUse != 1 || got.Agents.DBPoolIdle != 2 {
+		t.Fatalf("unexpected db pool stats: %+v", got.Agents)
 	}
 }

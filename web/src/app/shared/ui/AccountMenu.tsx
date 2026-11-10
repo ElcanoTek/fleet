@@ -26,6 +26,8 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "@/app/chat/ui/ConfirmDialog";
+import { usePathname } from "@/app/lib/navigation";
+import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { useTheme } from "@/app/shared/hooks/useTheme";
 import { Icon } from "./Icon";
 import { Menu, MenuItem, MenuSeparator } from "./Menu";
@@ -52,6 +54,9 @@ const THEME_OPTIONS = [
   { value: "dark", label: "Dark" },
 ] as const;
 
+const MENU_GROUP_HEADING =
+  "px-2 pb-0.5 pt-1.5 text-[0.64rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]";
+
 export function AccountMenu({
   email,
   appName,
@@ -70,7 +75,7 @@ export function AccountMenu({
   // square and the menu opens at a fixed 15rem instead of stretching to the
   // (now tiny) anchor. The <sm drawer always shows the full button.
   railCollapsed?: boolean;
-  // True on the settings surface — tints the anchor + Settings item.
+  // True on the settings surface — tints the anchor + active Settings item.
   current?: boolean;
   // True on the analytics surface — tints the anchor + Analytics item.
   analyticsCurrent?: boolean;
@@ -81,6 +86,21 @@ export function AccountMenu({
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const { themePreference, setTheme } = useTheme();
+  const pathname = usePathname();
+  const adminState = useIsAdmin();
+  const showAdmin =
+    adminState === "admin" ||
+    analyticsCurrent ||
+    pathname === "/settings/admin" ||
+    pathname.startsWith("/settings/admin/");
+  const isContextSettings =
+    current &&
+    /^\/settings\/(connections|skills|personas|memories|prompts|shared-files)(\/|$)/.test(
+      pathname,
+    );
+  const isAdminSettings =
+    current && (pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"));
+  const isWorkspaceSettings = current && !isContextSettings && !isAdminSettings;
   const close = () => setOpen(false);
   const shown = email || "Loading…";
 
@@ -146,11 +166,13 @@ export function AccountMenu({
           </span>
         </div>
         <MenuSeparator />
+        <div className={MENU_GROUP_HEADING}>Workspace</div>
         <MenuItem
           icon={<Icon name="settings" className="size-4" />}
-          description="Connections, skills & workspace settings"
-          className={current ? "menu-item-current" : ""}
-          current={current}
+          description="General preferences & team settings"
+          className={isWorkspaceSettings ? "menu-item-current" : ""}
+          current={isWorkspaceSettings}
+          testId="nav-to-settings"
           onClick={() => {
             close();
             window.location.assign("/settings");
@@ -158,23 +180,6 @@ export function AccountMenu({
         >
           Settings
         </MenuItem>
-        <MenuItem
-          icon={<Icon name="bar-chart" className="size-4" />}
-          description="Usage, model mix, and adoption"
-          className={analyticsCurrent ? "menu-item-current" : ""}
-          current={analyticsCurrent}
-          testId="nav-to-analytics"
-          onClick={() => {
-            close();
-            window.location.assign("/analytics");
-          }}
-        >
-          Analytics
-        </MenuItem>
-        {/* The user guides live here, beside Settings, rather than in the
-            rail: the rail is for the ways of working (chat, operations,
-            patrols), and Chat itself answers "how do I…" questions — the
-            guides are the reference behind it. */}
         <MenuItem
           icon={<Icon name="book" className="size-4" />}
           description="How chat, patrols & background tasks work"
@@ -188,6 +193,51 @@ export function AccountMenu({
         >
           Guides
         </MenuItem>
+        <div className={MENU_GROUP_HEADING}>Model Context &amp; Tools</div>
+        <MenuItem
+          icon={<Icon name="plug" className="size-4" />}
+          description="Connections, memories, skills, personas & files"
+          className={isContextSettings ? "menu-item-current" : ""}
+          current={isContextSettings}
+          testId="nav-to-context-settings"
+          onClick={() => {
+            close();
+            window.location.assign("/settings/connections");
+          }}
+        >
+          Context &amp; Connections
+        </MenuItem>
+        {showAdmin ? (
+          <>
+            <div className={MENU_GROUP_HEADING}>Administration</div>
+            <MenuItem
+              icon={<Icon name="shield" className="size-4" />}
+              description="Server, users, features, providers & checks"
+              className={isAdminSettings ? "menu-item-current" : ""}
+              current={isAdminSettings}
+              testId="nav-to-admin-settings"
+              onClick={() => {
+                close();
+                window.location.assign("/settings/admin");
+              }}
+            >
+              Admin Settings
+            </MenuItem>
+            <MenuItem
+              icon={<Icon name="bar-chart" className="size-4" />}
+              description="Spend, model mix, live agents & adoption"
+              className={analyticsCurrent ? "menu-item-current" : ""}
+              current={analyticsCurrent}
+              testId="nav-to-analytics"
+              onClick={() => {
+                close();
+                window.location.assign("/analytics");
+              }}
+            >
+              Analytics
+            </MenuItem>
+          </>
+        ) : null}
         <MenuSeparator />
         <div className="flex items-center gap-2 px-2 py-1.5 text-[0.82rem] text-[var(--color-text-secondary)]">
           <Icon name="moon" className="size-4 shrink-0 text-[var(--color-text-muted)]" />

@@ -3,6 +3,9 @@ package clientconfig
 import (
 	"reflect"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // fillNonZero sets every exported field of v (a pointer to a struct) to a
@@ -66,5 +69,50 @@ func TestAgentcorePolicyMapsEveryField(t *testing.T) {
 		if got.Field(i).IsZero() {
 			t.Errorf("agentcore.AgentPolicy.%s is not mapped from the bundle policy", got.Type().Field(i).Name)
 		}
+	}
+}
+
+func TestMergePinnedModelPricing(t *testing.T) {
+	zero := 0.0
+	pos := 5.0
+	base := agentcore.PricingConfig{
+		Overrides: []agentcore.PricingOverride{
+			{Model: "already/overridden", InputCostPerMillionTokens: 2.5, OutputCostPerMillionTokens: 10.0},
+		},
+	}
+	pins := []config.PinnedModel{
+		{Slug: "qwen/qwen3.6-plus", Label: "Custom Label", Free: true},
+		{Slug: "openrouter/z-ai/glm-5.1", InputPricePerMtok: &zero, OutputPricePerMtok: &zero},
+		{Slug: "already/overridden", Free: true},
+		{Slug: "billed/model", InputPricePerMtok: &pos, OutputPricePerMtok: &pos},
+	}
+
+	merged := MergePinnedModelPricing(base, pins)
+	byModel := make(map[string]agentcore.PricingOverride, len(merged.Overrides))
+	for _, o := range merged.Overrides {
+		byModel[o.Model] = o
+	}
+
+	// Explicit manifest override wins over a free pin.
+	if got := byModel["already/overridden"]; got.InputCostPerMillionTokens != 2.5 {
+		t.Fatalf("already/overridden input rate = %v, want 2.5", got.InputCostPerMillionTokens)
+	}
+	// Free pin registers both bare and openrouter/-prefixed zero overrides.
+	for _, slug := range []string{
+		"qwen/qwen3.6-plus",
+		"openrouter/qwen/qwen3.6-plus",
+		"openrouter/z-ai/glm-5.1",
+		"z-ai/glm-5.1",
+	} {
+		o, ok := byModel[slug]
+		if !ok {
+			t.Fatalf("expected zero-rate override for %q, got %+v", slug, merged.Overrides)
+		}
+		if o.InputCostPerMillionTokens != 0 || o.OutputCostPerMillionTokens != 0 {
+			t.Fatalf("override for %q has non-zero rate: %+v", slug, o)
+		}
+	}
+	if _, ok := byModel["billed/model"]; ok {
+		t.Fatal("positive-priced pin should not be added as a zero-rate override")
 	}
 }

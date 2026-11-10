@@ -9,6 +9,7 @@ import { getGatedJson } from "@/app/settings/lib/getGated";
 export type UserStat = {
   email: string;
   conversation_count: number;
+  task_count?: number;
   pinned_count: number;
   last_activity: number;
   total_cost_usd: number;

@@ -171,7 +171,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `OPENAI_CUSTOM_HEADERS` | string | — | server | The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. Treated as a secret: a header line can carry an Authorization value or an API key. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's primary default frontier model tier (admin setting default_model). |
 | `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the fallback frontier model tier (admin setting advanced_model). |
-| `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). |
+| `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. The real slug is sent and recorded; setting `free: true` (or both prices to `0`) also installs a runtime `$0.00` pricing override unless overridden in `manifest.yaml`. A malformed value refuses to boot (docs/PINNED-MODELS.md). |
 | `FLEET_TITLE_MODEL` | string | `google/gemini-4-argon` | server | Model that titles conversations. |
 | `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. |
 | `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. |
@@ -236,7 +236,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_PERSONA_DEFAULT` | string | `assistant` | server | Default persona name for new conversations. Also read as `PERSONA_DEFAULT`. |
 | `SYSTEM_PROMPT` | path | `default.md` | server | System-prompt file name in the bundle; .md is appended when no known extension is given. |
 | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | bool | `true` | server | Connector auto-recommendation. Also an admin setting. *Validated at boot*. |
-| `FLEET_MONTHLY_SOFT_TOKEN_LIMIT` | int | `0` | server | Monthly soft token allowance across all models (0 = unlimited). Also an admin setting. *Validated at boot* (≥ 0). |
+| `FLEET_MONTHLY_SOFT_SPEND_LIMIT_USD` | float | `0` | server | Monthly soft spend limit in USD across billed models (0 = unlimited). Also an admin setting. *Validated at boot* (≥ 0). |
 
 ## Scheduler and tasks
 

@@ -103,22 +103,24 @@ test("settings render inside the unified shell with the section sub-nav", async 
   await expect(page.getByRole("switch", { name: "Browser notifications" })).toBeVisible();
 });
 
-test("the Admin parent expands to its sections for admins", async ({ page }) => {
+test("the Admin group displays its sections for admins", async ({ page }) => {
   await mockShell(page, { admin: true });
   await page.goto("/settings");
 
   const nav = page.getByRole("navigation", { name: "Settings sections" });
+  await expect(page.getByTestId("setnav-group-workspace")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("setnav-group-context")).toBeVisible();
+  await expect(page.getByTestId("setnav-group-admin")).toBeVisible();
   const admin = page.getByTestId("setnav-admin");
-  await expect(admin).toBeVisible({ timeout: 15_000 });
-  await expect(admin).toHaveAttribute("aria-expanded", "false");
+  await expect(admin).toBeVisible();
 
-  // Clicking Admin lands on Overview and reveals the children.
-  await admin.click();
-  await page.waitForURL("**/settings/admin");
-  await expect(admin).toHaveAttribute("aria-expanded", "true");
   for (const child of ["Overview", "Server", "Users", "Features", "Providers"]) {
     await expect(nav.getByRole("link", { name: child })).toBeVisible();
   }
+
+  // Clicking Overview lands on /settings/admin and marks it active.
+  await admin.click();
+  await page.waitForURL("**/settings/admin");
   await expect(nav.getByRole("link", { name: "Overview" })).toHaveAttribute(
     "aria-current",
     "page",
