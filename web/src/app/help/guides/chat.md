@@ -808,7 +808,7 @@ a web portal — click **Build a connection in chat** in **Settings →
 Connections** (or type `/connector-builder` in Chat) to open a guided
 Connector Studio chat. The assistant checks for an official MCP server first,
 falls back to a custom HTTP API connector (badged **Custom API**) or a headless
-Chromium automation connector (badged **Playwright Browser**, with an optional
+Chromium automation connector (badged **Browser automation**, with an optional
 live Co-Pilot browser view when you need to complete SSO, 2FA, or a CAPTCHA
 yourself), collects any API key or password through a masked password field so
 the secret stays on the host, and saves the connection for you alone or for the
