@@ -814,6 +814,9 @@ yourself), collects any API key or password through a masked password field so
 the secret stays on the host, and saves the connection for you alone or for the
 whole workspace.
 
+When the live browser view can't do something you ask, a short note at its top
+says so, and for an address it won't open (one that isn't a web page, say), why.
+
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
 questioning the arithmetic.
