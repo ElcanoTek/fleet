@@ -313,11 +313,18 @@ func TestStage_ConversationAutoApprove(t *testing.T) {
 		t.Errorf("Stage after toggle off returned PreApprovedSentinel, want staged card")
 	}
 
-	// 7. In an auto-approved patrol turn, a self-addressed inline digest email is
-	// pre-approved, whereas an email to another recipient is not pre-approved and
-	// patrol resolveTimeoutSeconds enforces at least the 24-hour patrol floor.
-	liveFlag = true
+	// 7. In an unattended patrol/timer turn (even when liveAutoApprove is false,
+	// e.g. a schedule created in a regular chat), a self-addressed inline digest
+	// email is pre-approved, whereas an email to another recipient is not
+	// pre-approved and patrol resolveTimeoutSeconds enforces at least the 24-hour
+	// patrol floor.
+	liveFlag = false
 	a.inputKind = agent.InputKindChatPatrol
+	id, err = a.Stage("mcp_sendgrid_send_email", "call_patrol_self_no_autoapprove", `{"to_email":"alice@example.com","subject":"24h Check-in","content":"<p>Status update</p>"}`)
+	if err != nil || id != agentcore.PreApprovedSentinel {
+		t.Fatalf("self-addressed patrol email with liveFlag=false = (%q, %v), want PreApprovedSentinel", id, err)
+	}
+	liveFlag = true
 	id, err = a.Stage("mcp_sendgrid_send_email", "call_patrol_self", `{"to_email":"alice@example.com","subject":"Daily Brief","content":"<p>Summary</p>"}`)
 	if err != nil || id != agentcore.PreApprovedSentinel {
 		t.Fatalf("self-addressed patrol email = (%q, %v), want PreApprovedSentinel", id, err)

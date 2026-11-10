@@ -247,7 +247,9 @@ describe("AnalyticsPage", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /Outliers & Friction/i }));
 
     const convTable = await screen.findByTestId("outliers-conversations-table");
-    expect(within(convTable).getByText("Patrol: Tech HQ & Fleet Production Watch")).toBeTruthy();
+    const convLink = within(convTable).getByText("Patrol: Tech HQ & Fleet Production Watch");
+    expect(convLink).toBeTruthy();
+    expect(convLink.closest("a")?.getAttribute("href")).toBe("/chat?c=11111111-2222-3333-4444-555555555555");
     expect(within(convTable).getByText("Patrol")).toBeTruthy();
 
     const taskTable = await screen.findByTestId("outliers-tasks-table");
