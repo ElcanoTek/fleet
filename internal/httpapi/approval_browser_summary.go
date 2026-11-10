@@ -332,9 +332,7 @@ func withBrowserSessionSite(summary map[string]any, toolName, rawInput, owner st
 		}
 	}
 	// Keep "What" first, then the session's site, then the rest.
-	out := make([]map[string]string, 0, len(rows)+len(site))
-	out = append(out, rows[0])
-	out = append(out, site...)
+	out := append([]map[string]string{rows[0]}, site...)
 	out = append(out, rows[1:]...)
 	summary["args"] = out
 	return summary

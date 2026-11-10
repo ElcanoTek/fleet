@@ -106,7 +106,7 @@ func TestBrowserApprovalSummaryReadsInWords(t *testing.T) {
 // types it, not in a step that types a literal into a password-like field.
 func TestBrowserApprovalSummaryHidesCredentialValues(t *testing.T) {
 	t.Parallel()
-	raw := `{"action":"run","url":"https://a.example.com/","password_ref":"hunter2-plain-1928","steps":[` +
+	raw := `{"action":"run","url":"https://a.example.com/","password_ref":"hunter2-plain-1928","steps":[` + // gitleaks:allow (made-up test value)
 		`{"action":"fill","selector":"#login-pw","value":"hunter2-plain-1928"},` +
 		`{"action":"fill","selector":"input[type=password]","value":"other-literal-1928"},` +
 		`{"action":"fill","selector":"#otp","value":"123456"},` +
