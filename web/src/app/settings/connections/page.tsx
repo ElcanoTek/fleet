@@ -718,8 +718,8 @@ function DirectoryCard({
           ) : null}
         </p>
       ) : null}
-      <div className="mt-auto flex items-center gap-[0.6rem] text-[0.72rem] text-[var(--color-text-muted)]">
-        <span className="min-w-0 flex-1 truncate">
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-x-[0.6rem] gap-y-2 pt-1 text-[0.72rem] text-[var(--color-text-muted)]">
+        <span className="min-w-[8rem] flex-1 truncate">
           {entry.vendor || entry.url}
           {entry.docs_url ? (
             <>
@@ -762,7 +762,7 @@ function DirectoryCard({
           ) : null}
         </span>
         {remoteEnabled ? (
-          <>
+          <div className="flex flex-wrap items-center gap-1.5">
             {hint ? (
               <span className="shrink-0 whitespace-nowrap">{hint}</span>
             ) : null}
@@ -820,7 +820,7 @@ function DirectoryCard({
                       : "Set up…"
                     : "Add"}
             </button>
-          </>
+          </div>
         ) : null}
       </div>
       {remoteEnabled && (needsForm || anotherAccount) && formOpen ? (
@@ -1111,15 +1111,17 @@ function MS365SetupDialog({
   const canEdit = (config?.can_edit ?? false) && !isEnvLocked;
   const permissionsText = MS365_GRAPH_DELEGATED_PERMISSIONS.join(" ");
 
-  return (
+  const dialog = (
     <DialogShell
       label="Set up Microsoft 365"
       scrimLabel="Close the Microsoft 365 setup dialog"
+      layer="rail"
+      sheetOnPhone
       onDismiss={onClose}
-      className="max-h-[88dvh] max-w-xl overflow-y-auto p-5"
+      className="flex max-h-[90dvh] max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-w-xl flex-col overflow-hidden p-0"
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--color-border-subtle)] px-5 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-4 max-sm:px-4">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="m-0 text-[1rem] font-semibold">
               Microsoft 365 (Built-in Graph Connector)
@@ -1134,185 +1136,187 @@ function MS365SetupDialog({
         <CloseButton label="Close" onClick={onClose} />
       </div>
 
-      {/* Clear comparison callout: Built-in Microsoft 365 vs. Microsoft Work IQ */}
-      <div
-        data-testid="ms365-vs-workiq-callout"
-        className="mb-4 grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 text-[0.75rem] leading-[1.5]"
-      >
-        <div>
-          <strong className="text-[var(--color-text-primary)]">
-            Why use this connector instead of Microsoft Work IQ?
-          </strong>
-        </div>
-        <div className="grid gap-1.5 text-[var(--color-text-secondary)]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 max-sm:px-4">
+        {/* Clear comparison callout: Built-in Microsoft 365 vs. Microsoft Work IQ */}
+        <div
+          data-testid="ms365-vs-workiq-callout"
+          className="mb-4 grid min-w-0 gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 text-[0.75rem] leading-[1.5]"
+        >
           <div>
-            •{" "}
             <strong className="text-[var(--color-text-primary)]">
-              Microsoft 365 (this connector)
+              Why use this connector instead of Microsoft Work IQ?
             </strong>
-            : Works with{" "}
-            <strong className="text-[var(--color-text-primary)]">
-              any standard Microsoft 365 / Outlook business or school account
-            </strong>{" "}
-            at no extra license cost. One sign-in covers Mail (with attachments),
-            Teams, Calendar, OneDrive, SharePoint, To Do &amp; Contacts.
           </div>
-          <div>
-            •{" "}
-            <strong className="text-[var(--color-text-primary)]">
-              Microsoft Work IQ (Copilot Only)
-            </strong>
-            : Microsoft’s Agent 365 preview servers — requires a paid{" "}
-            <strong className="text-[var(--color-text-primary)]">
-              $30/user/month Microsoft 365 Copilot
-            </strong>{" "}
-            add-on license, Frontier preview enrollment, and 4 separate
-            connectors.
+          <div className="grid gap-1.5 text-[var(--color-text-secondary)]">
+            <div>
+              •{" "}
+              <strong className="text-[var(--color-text-primary)]">
+                Microsoft 365 (this connector)
+              </strong>
+              : Works with{" "}
+              <strong className="text-[var(--color-text-primary)]">
+                any standard Microsoft 365 / Outlook business or school account
+              </strong>{" "}
+              at no extra license cost. One sign-in covers Mail (with attachments),
+              Teams, Calendar, OneDrive, SharePoint, To Do &amp; Contacts.
+            </div>
+            <div>
+              •{" "}
+              <strong className="text-[var(--color-text-primary)]">
+                Microsoft Work IQ (Copilot Only)
+              </strong>
+              : Microsoft’s Agent 365 preview servers — requires a paid{" "}
+              <strong className="text-[var(--color-text-primary)]">
+                $30/user/month Microsoft 365 Copilot
+              </strong>{" "}
+              add-on license, Frontier preview enrollment, and 4 separate
+              connectors.
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* 3-Step Entra App Registration Walkthrough */}
-      <div className="mb-4 grid gap-3 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
-          <div className="mb-1 font-semibold text-[var(--color-text-primary)]">
-            Step 1 — Register an app in Microsoft Entra ID
-          </div>
-          <p className="m-0 mb-2 text-[0.74rem]">
-            Open{" "}
-            <a
-              href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-              target="_blank"
-              rel="noreferrer"
-              className="text-[var(--color-link)] underline underline-offset-2"
-            >
-              Microsoft Entra App Registrations
-            </a>{" "}
-            and click <strong>New registration</strong>. Under{" "}
-            <strong>Redirect URI</strong>, select{" "}
-            <strong>Public client/native (mobile &amp; desktop)</strong> and
-            paste this exact callback URL:
-          </p>
-          {effectiveRedirectUri ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <code
-                data-testid="ms365-redirect-uri"
-                className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]"
+        {/* 3-Step Entra App Registration Walkthrough */}
+        <div className="grid min-w-0 gap-3 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+          <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+            <div className="mb-1 font-semibold text-[var(--color-text-primary)]">
+              Step 1 — Register an app in Microsoft Entra ID
+            </div>
+            <p className="m-0 mb-2 text-[0.74rem]">
+              Open{" "}
+              <a
+                href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--color-link)] underline underline-offset-2"
               >
-                {effectiveRedirectUri}
-              </code>
+                Microsoft Entra App Registrations
+              </a>{" "}
+              and click <strong>New registration</strong>. Under{" "}
+              <strong>Redirect URI</strong>, select{" "}
+              <strong>Public client/native (mobile &amp; desktop)</strong> and
+              paste this exact callback URL:
+            </p>
+            {effectiveRedirectUri ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
+                <code
+                  data-testid="ms365-redirect-uri"
+                  className="min-w-0 flex-1 break-all rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)] sm:truncate"
+                >
+                  {effectiveRedirectUri}
+                </code>
+                <button
+                  type="button"
+                  data-testid="ms365-copy-redirect-uri"
+                  className={btnClass({ sm: true, reveal: true })}
+                  onClick={() => {
+                    void copyText(effectiveRedirectUri);
+                    setCopiedRedirect(true);
+                    setTimeout(() => setCopiedRedirect(false), 2000);
+                  }}
+                >
+                  {copiedRedirect ? "Copied" : "Copy"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-[var(--color-text-primary)]">
+                Step 2 — Add Microsoft Graph Delegated Permissions
+              </span>
               <button
                 type="button"
-                data-testid="ms365-copy-redirect-uri"
+                data-testid="ms365-copy-permissions"
                 className={btnClass({ sm: true, reveal: true })}
                 onClick={() => {
-                  void copyText(effectiveRedirectUri);
-                  setCopiedRedirect(true);
-                  setTimeout(() => setCopiedRedirect(false), 2000);
+                  void copyText(permissionsText);
+                  setCopiedPerms(true);
+                  setTimeout(() => setCopiedPerms(false), 2000);
                 }}
               >
-                {copiedRedirect ? "Copied" : "Copy"}
+                {copiedPerms ? "Copied" : "Copy permissions"}
               </button>
             </div>
-          ) : null}
-        </div>
+            <p className="m-0 mb-2 text-[0.74rem]">
+              In <strong>Authentication</strong>, set{" "}
+              <strong>Allow public client flows</strong> to <strong>Yes</strong>{" "}
+              (no client secret is needed). Then in{" "}
+              <strong>API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
+              , enable these permissions and click{" "}
+              <strong>Grant admin consent</strong>:
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {MS365_GRAPH_DELEGATED_PERMISSIONS.map((perm) => (
+                <CodeChip key={perm}>{perm}</CodeChip>
+              ))}
+            </div>
+          </div>
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <span className="font-semibold text-[var(--color-text-primary)]">
-              Step 2 — Add Microsoft Graph Delegated Permissions
-            </span>
-            <button
-              type="button"
-              data-testid="ms365-copy-permissions"
-              className={btnClass({ sm: true, reveal: true })}
-              onClick={() => {
-                void copyText(permissionsText);
-                setCopiedPerms(true);
-                setTimeout(() => setCopiedPerms(false), 2000);
-              }}
-            >
-              {copiedPerms ? "Copied" : "Copy permissions"}
-            </button>
-          </div>
-          <p className="m-0 mb-2 text-[0.74rem]">
-            In <strong>Authentication</strong>, set{" "}
-            <strong>Allow public client flows</strong> to <strong>Yes</strong>{" "}
-            (no client secret is needed). Then in{" "}
-            <strong>API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
-            , enable these permissions and click{" "}
-            <strong>Grant admin consent</strong>:
-          </p>
-          <div className="flex flex-wrap gap-1">
-            {MS365_GRAPH_DELEGATED_PERMISSIONS.map((perm) => (
-              <CodeChip key={perm}>{perm}</CodeChip>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
-          <div className="mb-2 font-semibold text-[var(--color-text-primary)]">
-            Step 3 — Save your Entra App IDs for this workspace
-          </div>
-          {isEnvLocked ? (
-            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
-              Configured via server environment (<CodeChip>MS365_MCP_CLIENT_ID</CodeChip>).
-            </p>
-          ) : !canEdit ? (
-            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-warning)]">
-              Ask a workspace administrator to enter your organization’s Entra
-              Application (client) ID and Directory (tenant) ID here once. Once
-              saved, everyone in this workspace can connect Microsoft 365 in one
-              click.
-            </p>
-          ) : (
-            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
-              From your app’s <strong>Overview</strong> page in Microsoft Entra,
-              paste the IDs below. Once saved, everyone on this workspace can
-              connect Microsoft 365 in one click.
-            </p>
-          )}
-          <div className="grid gap-2.5">
-            <label
-              htmlFor="ms365ClientIdInput"
-              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
-            >
-              <span className="font-medium">Application (client) ID</span>
-              <input
-                id="ms365ClientIdInput"
-                data-testid="ms365-client-id-input"
-                className={SETTINGS_INPUT}
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                disabled={!canEdit || busy}
-                placeholder="e.g. 68dad9d6-e1aa-4195-9bd5-2e94a0e4a073"
-              />
-            </label>
-            <label
-              htmlFor="ms365TenantIdInput"
-              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
-            >
-              <span className="font-medium">Directory (tenant) ID</span>
-              <input
-                id="ms365TenantIdInput"
-                data-testid="ms365-tenant-id-input"
-                className={SETTINGS_INPUT}
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                disabled={!canEdit || busy}
-                placeholder="e.g. 5db5070c-2c68-449d-868f-2b0d3407f6d2 (or organizations / common)"
-              />
-              <span className="text-[0.68rem] text-[var(--color-text-muted)]">
-                Use your Entra tenant UUID for single-tenant apps, or{" "}
-                <code>organizations</code> / <code>common</code> for multi-tenant
-                apps.
-              </span>
-            </label>
+          <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+            <div className="mb-2 font-semibold text-[var(--color-text-primary)]">
+              Step 3 — Save your Entra App IDs for this workspace
+            </div>
+            {isEnvLocked ? (
+              <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
+                Configured via server environment (<CodeChip>MS365_MCP_CLIENT_ID</CodeChip>).
+              </p>
+            ) : !canEdit ? (
+              <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-warning)]">
+                Ask a workspace administrator to enter your organization’s Entra
+                Application (client) ID and Directory (tenant) ID here once. Once
+                saved, everyone in this workspace can connect Microsoft 365 in one
+                click.
+              </p>
+            ) : (
+              <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
+                From your app’s <strong>Overview</strong> page in Microsoft Entra,
+                paste the IDs below. Once saved, everyone on this workspace can
+                connect Microsoft 365 in one click.
+              </p>
+            )}
+            <div className="grid min-w-0 gap-2.5">
+              <label
+                htmlFor="ms365ClientIdInput"
+                className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+              >
+                <span className="font-medium">Application (client) ID</span>
+                <input
+                  id="ms365ClientIdInput"
+                  data-testid="ms365-client-id-input"
+                  className={`${SETTINGS_INPUT} min-w-0`}
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  disabled={!canEdit || busy}
+                  placeholder="e.g. 68dad9d6-e1aa-4195-9bd5-2e94a0e4a073"
+                />
+              </label>
+              <label
+                htmlFor="ms365TenantIdInput"
+                className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+              >
+                <span className="font-medium">Directory (tenant) ID</span>
+                <input
+                  id="ms365TenantIdInput"
+                  data-testid="ms365-tenant-id-input"
+                  className={`${SETTINGS_INPUT} min-w-0`}
+                  value={tenantId}
+                  onChange={(e) => setTenantId(e.target.value)}
+                  disabled={!canEdit || busy}
+                  placeholder="e.g. 5db5070c-2c68-449d-868f-2b0d3407f6d2 (or organizations / common)"
+                />
+                <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+                  Use your Entra tenant UUID for single-tenant apps, or{" "}
+                  <code>organizations</code> / <code>common</code> for multi-tenant
+                  apps.
+                </span>
+              </label>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-5 pb-[max(0.875rem,env(safe-area-inset-bottom))] pt-3.5 sm:pb-3.5 max-sm:px-4">
         <div>
           {config?.source === "db" && canEdit ? (
             <InlineConfirmButton
@@ -1324,7 +1328,7 @@ function MS365SetupDialog({
             />
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={onClose}
@@ -1349,6 +1353,10 @@ function MS365SetupDialog({
       </div>
     </DialogShell>
   );
+
+  return typeof document !== "undefined"
+    ? createPortal(dialog, document.body)
+    : dialog;
 }
 
 export default function ConnectionsPage() {
@@ -1430,7 +1438,7 @@ function ConnectionsPageInner() {
   // Guided Microsoft 365 Entra App Registration setup modal state.
   const [ms365SetupModal, setMs365SetupModal] = useState<{
     connectAfterSave: boolean;
-    entry: CatalogThirdParty;
+    entry?: CatalogThirdParty;
   } | null>(null);
   // A banner is delivered as a one-shot TOAST, so it must fire again when the
   // same message repeats. Keyed on the message VALUE, a retry that failed
@@ -2120,7 +2128,7 @@ function ConnectionsPageInner() {
       setMs365SetupModal(null);
 
       const alreadyAdded = (servers ?? []).some((s) => s.name === "microsoft-365");
-      if (modalState?.connectAfterSave && !alreadyAdded && saved.mcp_url) {
+      if (modalState?.connectAfterSave && modalState.entry && !alreadyAdded && saved.mcp_url) {
         await addFromCatalog(
           { ...modalState.entry, url: saved.mcp_url, auth: "oauth" },
           { url: saved.mcp_url },
@@ -2449,6 +2457,22 @@ function ConnectionsPageInner() {
                                   className={btnClass({ sm: true })}
                                 >
                                   Sign out
+                                </button>
+                              ) : null}
+                              {s.name === "microsoft-365" &&
+                              catalog?.ms365_config &&
+                              (catalog.ms365_config.can_edit ||
+                                catalog.ms365_config.source === "env") ? (
+                                <button
+                                  type="button"
+                                  data-testid="row-configure-ms365"
+                                  onClick={() =>
+                                    setMs365SetupModal({ connectAfterSave: false })
+                                  }
+                                  disabled={busy}
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Entra app
                                 </button>
                               ) : null}
                               {multi && !s.is_default ? (
@@ -3022,129 +3046,137 @@ function ConnectionsPageInner() {
       {/* Post-add sign-in prompt: an OAuth server was just added and needs a
           login to finish connecting. Offer it here so the user doesn't have
           to scroll up to the "Your connections" row to click Sign in. */}
-      {connectPromptFor ? (
-        <DialogShell
-          label={`Sign in to ${connectPromptFor.name}?`}
-          scrimLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
-          onDismiss={() => setConnectPromptFor(null)}
-          className="max-w-md p-5"
-        >
-          <h3 className="mb-2 text-[0.9375rem] font-semibold">
-            {connectPromptFor.name} added — sign in now?
-          </h3>
-          <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-            One step left: sign in so you can use it in your chats. You can also
-            do it later with its Sign in button under Your connections.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setConnectPromptFor(null)}
-              className={btnClass({ reveal: true })}
+      {connectPromptFor
+        ? createPortal(
+            <DialogShell
+              label={`Sign in to ${connectPromptFor.name}?`}
+              scrimLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
+              layer="rail"
+              onDismiss={() => setConnectPromptFor(null)}
+              className="max-w-md p-5"
             >
-              Later
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const id = connectPromptFor.id;
-                setConnectPromptFor(null);
-                connect(id);
-              }}
-              disabled={busy}
-              className={btnClass({ variant: "primary" })}
+              <h3 className="mb-2 text-[0.9375rem] font-semibold">
+                {connectPromptFor.name} added — sign in now?
+              </h3>
+              <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                One step left: sign in so you can use it in your chats. You can also
+                do it later with its Sign in button under Your connections.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConnectPromptFor(null)}
+                  className={btnClass({ reveal: true })}
+                >
+                  Later
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = connectPromptFor.id;
+                    setConnectPromptFor(null);
+                    connect(id);
+                  }}
+                  disabled={busy}
+                  className={btnClass({ variant: "primary" })}
+                >
+                  Sign in
+                </button>
+              </div>
+            </DialogShell>,
+            document.body,
+          )
+        : null}
+      {consentFor
+        ? createPortal(
+            <DialogShell
+              label={`Connect ${consentFor.entry.display_name}?`}
+              scrimLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
+              layer="rail"
+              onDismiss={() => setConsentFor(null)}
+              className="max-w-md p-5"
             >
-              Sign in
-            </button>
-          </div>
-        </DialogShell>
-      ) : null}
-      {consentFor ? (
-        <DialogShell
-          label={`Connect ${consentFor.entry.display_name}?`}
-          scrimLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
-          onDismiss={() => setConsentFor(null)}
-          className="max-w-md p-5"
-        >
-          <div className="mb-2 flex items-center gap-2">
-            <h3 className="text-[0.9375rem] font-semibold">
-              Connect {consentFor.entry.display_name}?
-            </h3>
-            <ConnBadge
-              variant={provenanceVariant(consentFor.entry.provenance)}
-            >
-              {provenanceBadge(consentFor.entry.provenance).label}
-            </ConnBadge>
-          </div>
-          <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
-            This endpoint is operated by{" "}
-            <strong className="text-[var(--color-text-primary)]">
-              {consentFor.entry.vendor || "an unnamed operator"}
-            </strong>
-            {provenanceBadge(consentFor.entry.provenance).label ===
-            "Aggregator"
-              ? " — a platform that hosts access to other vendors' services, not the services themselves."
-              : " — not the vendor of the underlying service, and not your workspace."}{" "}
-            Once connected, it receives your tool calls (which can include
-            parts of your conversations)
-            {consentFor.entry.auth === "oauth"
-              ? " and holds the access token you grant during sign-in"
-              : ""}
-            {consentFor.overrides?.apiKey
-              ? " and holds the API key you provide"
-              : ""}
-            .
-          </p>
-          <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
-            Vet it first:{" "}
-            {consentFor.entry.docs_url ? (
-              <a
-                href={consentFor.entry.docs_url}
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-2"
-              >
-                documentation
-              </a>
-            ) : null}
-            {consentFor.entry.docs_url && consentFor.entry.repo_url
-              ? " · "
-              : null}
-            {consentFor.entry.repo_url ? (
-              <a
-                href={consentFor.entry.repo_url}
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-2"
-              >
-                source code
-              </a>
-            ) : null}
-            {!consentFor.entry.docs_url && !consentFor.entry.repo_url
-              ? "no docs or source were provided for this entry."
-              : null}
-          </p>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setConsentFor(null)}
-              className={btnClass({ reveal: true })}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void addFromCatalog(consentFor.entry, consentFor.overrides)
-              }
-              disabled={busy}
-              className={btnClass({ variant: "primary" })}
-            >
-              I trust this operator — add
-            </button>
-          </div>
-        </DialogShell>
-      ) : null}
+              <div className="mb-2 flex items-center gap-2">
+                <h3 className="text-[0.9375rem] font-semibold">
+                  Connect {consentFor.entry.display_name}?
+                </h3>
+                <ConnBadge
+                  variant={provenanceVariant(consentFor.entry.provenance)}
+                >
+                  {provenanceBadge(consentFor.entry.provenance).label}
+                </ConnBadge>
+              </div>
+              <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                This endpoint is operated by{" "}
+                <strong className="text-[var(--color-text-primary)]">
+                  {consentFor.entry.vendor || "an unnamed operator"}
+                </strong>
+                {provenanceBadge(consentFor.entry.provenance).label ===
+                "Aggregator"
+                  ? " — a platform that hosts access to other vendors' services, not the services themselves."
+                  : " — not the vendor of the underlying service, and not your workspace."}{" "}
+                Once connected, it receives your tool calls (which can include
+                parts of your conversations)
+                {consentFor.entry.auth === "oauth"
+                  ? " and holds the access token you grant during sign-in"
+                  : ""}
+                {consentFor.overrides?.apiKey
+                  ? " and holds the API key you provide"
+                  : ""}
+                .
+              </p>
+              <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
+                Vet it first:{" "}
+                {consentFor.entry.docs_url ? (
+                  <a
+                    href={consentFor.entry.docs_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    documentation
+                  </a>
+                ) : null}
+                {consentFor.entry.docs_url && consentFor.entry.repo_url
+                  ? " · "
+                  : null}
+                {consentFor.entry.repo_url ? (
+                  <a
+                    href={consentFor.entry.repo_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    source code
+                  </a>
+                ) : null}
+                {!consentFor.entry.docs_url && !consentFor.entry.repo_url
+                  ? "no docs or source were provided for this entry."
+                  : null}
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConsentFor(null)}
+                  className={btnClass({ reveal: true })}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void addFromCatalog(consentFor.entry, consentFor.overrides)
+                  }
+                  disabled={busy}
+                  className={btnClass({ variant: "primary" })}
+                >
+                  I trust this operator — add
+                </button>
+              </div>
+            </DialogShell>,
+            document.body,
+          )
+        : null}
       {ms365SetupModal ? (
         <MS365SetupDialog
           config={catalog?.ms365_config}
