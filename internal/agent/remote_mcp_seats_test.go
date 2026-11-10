@@ -102,6 +102,22 @@ func TestDefaultRemoteSeatFallsBackToUnlabeledThenFirst(t *testing.T) {
 	if got := defaultRemoteSeat(seats).ID; got != "b" {
 		t.Fatalf("default = %s, want the first seat", got)
 	}
+	// A NeedsReauth default seat is skipped when a connected seat is present.
+	seats = []RemoteMCPConn{
+		{ID: "expired-default", Account: "work", Default: true, NeedsReauth: true},
+		{ID: "connected-backup", Account: "personal"},
+	}
+	if got := defaultRemoteSeat(seats).ID; got != "connected-backup" {
+		t.Fatalf("default with expired Default seat = %s, want connected-backup", got)
+	}
+	// If all seats require reauth, the Default seat still wins for skip reporting.
+	seats = []RemoteMCPConn{
+		{ID: "expired-other", Account: "personal", NeedsReauth: true},
+		{ID: "expired-default", Account: "work", Default: true, NeedsReauth: true},
+	}
+	if got := defaultRemoteSeat(seats).ID; got != "expired-default" {
+		t.Fatalf("default when all expired = %s, want expired-default", got)
+	}
 }
 
 func TestGroupRemoteMCPSeats(t *testing.T) {

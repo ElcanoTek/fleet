@@ -263,7 +263,7 @@ func selectRemoteSeats(conns []RemoteMCPConn, sel RemoteMCPSelection) (chosen []
 // so they resolve exactly as before.)
 func defaultRemoteSeat(seats []RemoteMCPConn) RemoteMCPConn {
 	for _, c := range seats {
-		if c.Default {
+		if !c.NeedsReauth && c.Default {
 			return c
 		}
 	}
@@ -274,6 +274,11 @@ func defaultRemoteSeat(seats []RemoteMCPConn) RemoteMCPConn {
 	}
 	for _, c := range seats {
 		if !c.NeedsReauth {
+			return c
+		}
+	}
+	for _, c := range seats {
+		if c.Default {
 			return c
 		}
 	}

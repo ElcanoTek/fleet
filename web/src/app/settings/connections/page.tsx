@@ -1433,7 +1433,11 @@ function ConnectionsPageInner() {
   // linked entry — search spans every category, so this works wherever the
   // entry is grouped, and clearing the box restores the popular picks.
   const [catalogQuery, setCatalogQuery] = useState(spotlight ?? "");
-  const [selectedCategory, setSelectedCategory] = useState<string>("popular");
+  const [dirFilter, setDirFilter] = useState<
+    | { mode: "popular" }
+    | { mode: "all" }
+    | { mode: "category"; slug: string }
+  >({ mode: "popular" });
   const [showAllCategories, setShowAllCategories] = useState(false);
   const [dirVisibleLimit, setDirVisibleLimit] = useState(DIRECTORY_PAGE_SIZE);
   // Consent modal state: the non-official (aggregator/community) entry
@@ -2115,44 +2119,50 @@ function ConnectionsPageInner() {
     .sort((a, b) => popularRank(a) - popularRank(b))
     .slice(0, DIRECTORY_PREVIEW_COUNT);
   const categories = categoriesOf(thirdParty);
+  const activeCategoryFilter =
+    dirFilter.mode === "category" ? dirFilter.slug : "";
   const inlineCategories = showAllCategories
     ? categories
     : categories.filter(
         (cat, idx) =>
-          idx < MAX_INLINE_CATEGORIES || cat.slug === selectedCategory,
+          idx < MAX_INLINE_CATEGORIES || cat.slug === activeCategoryFilter,
       );
   const hiddenCategoryCount = Math.max(
     0,
     categories.length - MAX_INLINE_CATEGORIES,
   );
   const trimmedQuery = catalogQuery.trim();
-  const activeCategoryFilter =
-    selectedCategory !== "popular" && selectedCategory !== "all"
-      ? selectedCategory
-      : "";
+  const categoryFilteredThirdParty = activeCategoryFilter
+    ? thirdParty.filter((e) => (e.category || "other") === activeCategoryFilter)
+    : thirdParty;
   const dirHits = trimmedQuery
-    ? filterCatalog(thirdParty, catalogQuery, activeCategoryFilter)
-    : selectedCategory === "popular"
+    ? filterCatalog(categoryFilteredThirdParty, catalogQuery, "")
+    : dirFilter.mode === "popular"
       ? dirPopular
-      : selectedCategory === "all"
+      : dirFilter.mode === "all"
         ? thirdParty
-        : filterCatalog(thirdParty, "", selectedCategory);
+        : categoryFilteredThirdParty;
   const allCatalogSearchCount =
     trimmedQuery && activeCategoryFilter
       ? filterCatalog(thirdParty, catalogQuery, "").length
       : dirHits.length;
   const visibleDirHits =
-    trimmedQuery || selectedCategory === "popular"
+    trimmedQuery || dirFilter.mode === "popular"
       ? dirHits
       : dirHits.slice(0, dirVisibleLimit);
   const remainingDirHits = Math.max(0, dirHits.length - visibleDirHits.length);
   const groupedAllHits =
-    !trimmedQuery && selectedCategory === "all"
+    !trimmedQuery && dirFilter.mode === "all"
       ? groupByCategory(visibleDirHits)
       : [];
 
+  const selectDirectoryMode = (mode: "popular" | "all") => {
+    setDirFilter({ mode });
+    setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
+  };
+
   const selectDirectoryCategory = (catSlug: string) => {
-    setSelectedCategory(catSlug);
+    setDirFilter({ mode: "category", slug: catSlug });
     setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
   };
 
@@ -2990,11 +3000,11 @@ function ConnectionsPageInner() {
                     <button
                       type="button"
                       data-testid="dir-cat-popular"
-                      aria-pressed={selectedCategory === "popular"}
-                      onClick={() => selectDirectoryCategory("popular")}
+                      aria-pressed={dirFilter.mode === "popular"}
+                      onClick={() => selectDirectoryMode("popular")}
                       className={[
                         "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
-                        selectedCategory === "popular"
+                        dirFilter.mode === "popular"
                           ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]"
                           : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
                       ].join(" ")}
@@ -3008,11 +3018,11 @@ function ConnectionsPageInner() {
                     <button
                       type="button"
                       data-testid="dir-cat-all"
-                      aria-pressed={selectedCategory === "all"}
-                      onClick={() => selectDirectoryCategory("all")}
+                      aria-pressed={dirFilter.mode === "all"}
+                      onClick={() => selectDirectoryMode("all")}
                       className={[
                         "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
-                        selectedCategory === "all"
+                        dirFilter.mode === "all"
                           ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]"
                           : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
                       ].join(" ")}
@@ -3024,7 +3034,7 @@ function ConnectionsPageInner() {
                       </span>
                     </button>
                     {inlineCategories.map((cat) => {
-                      const active = selectedCategory === cat.slug;
+                      const active = activeCategoryFilter === cat.slug;
                       return (
                         <button
                           key={cat.slug}
@@ -3032,9 +3042,9 @@ function ConnectionsPageInner() {
                           data-testid={`dir-cat-${cat.slug}`}
                           aria-pressed={active}
                           onClick={() =>
-                            selectDirectoryCategory(
-                              active ? "popular" : cat.slug,
-                            )
+                            active
+                              ? selectDirectoryMode("popular")
+                              : selectDirectoryCategory(cat.slug)
                           }
                           className={[
                             "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
@@ -3079,7 +3089,7 @@ function ConnectionsPageInner() {
               </div>
 
               <div>
-                {selectedCategory !== "popular" && !trimmedQuery ? (
+                {dirFilter.mode !== "popular" && !trimmedQuery ? (
                   <div
                     data-testid="dir-active-category-header"
                     className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2"
@@ -3087,16 +3097,16 @@ function ConnectionsPageInner() {
                     <div className="flex items-center gap-2">
                       <Icon
                         name={
-                          selectedCategory === "all"
+                          dirFilter.mode === "all"
                             ? "grid"
-                            : categoryIcon(selectedCategory)
+                            : categoryIcon(dirFilter.slug)
                         }
                         className="size-[0.95rem] text-[var(--color-text-secondary)]"
                       />
                       <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
-                        {selectedCategory === "all"
+                        {dirFilter.mode === "all"
                           ? "All connectors"
-                          : categoryLabel(selectedCategory)}
+                          : categoryLabel(dirFilter.slug)}
                       </span>
                       <ConnBadge>
                         {dirHits.length === 1
@@ -3107,7 +3117,7 @@ function ConnectionsPageInner() {
                     <button
                       type="button"
                       data-testid="dir-reset-popular"
-                      onClick={() => selectDirectoryCategory("popular")}
+                      onClick={() => selectDirectoryMode("popular")}
                       className={btnClass({ sm: true, reveal: true })}
                     >
                       Back to Popular
@@ -3128,7 +3138,7 @@ function ConnectionsPageInner() {
                       <button
                         type="button"
                         data-testid="dir-search-all-categories-btn"
-                        onClick={() => selectDirectoryCategory("all")}
+                        onClick={() => selectDirectoryMode("all")}
                         className={btnClass({ sm: true, reveal: true })}
                       >
                         Search all categories ({allCatalogSearchCount})
@@ -3149,7 +3159,7 @@ function ConnectionsPageInner() {
                       {activeCategoryFilter && allCatalogSearchCount > 0 ? (
                         <button
                           type="button"
-                          onClick={() => selectDirectoryCategory("all")}
+                          onClick={() => selectDirectoryMode("all")}
                           className={btnClass({ sm: true, variant: "primary" })}
                         >
                           Show {allCatalogSearchCount}{" "}
@@ -3177,7 +3187,7 @@ function ConnectionsPageInner() {
                       </button>
                     </span>
                   </ConnEmpty>
-                ) : !trimmedQuery && selectedCategory === "all" ? (
+                ) : !trimmedQuery && dirFilter.mode === "all" ? (
                   <div
                     data-testid="dir-grouped-sections"
                     className="grid gap-5"
@@ -3243,7 +3253,7 @@ function ConnectionsPageInner() {
                   </div>
                 ) : null}
                 {!trimmedQuery &&
-                selectedCategory === "popular" &&
+                dirFilter.mode === "popular" &&
                 categories.length > 1 ? (
                   <div
                     data-testid="dir-category-grid"
@@ -3262,7 +3272,7 @@ function ConnectionsPageInner() {
                       <button
                         type="button"
                         data-testid="dir-browse-all-categories-btn"
-                        onClick={() => selectDirectoryCategory("all")}
+                        onClick={() => selectDirectoryMode("all")}
                         className={btnClass({ sm: true, reveal: true })}
                       >
                         View all ({thirdParty.length})
