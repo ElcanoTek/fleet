@@ -35,8 +35,9 @@ type ms365ConfigResponse struct {
 }
 
 func (s *Server) resolveMS365Config(ctx context.Context) ms365ConfigResponse {
-	publicURL := ""
-	if s.cfg != nil && strings.TrimSpace(s.cfg.PublicBaseURL) != "" {
+	ms365Cfg := ms365mcp.ConfigFromEnv(s.cfg)
+	publicURL := ms365Cfg.PublicURL
+	if publicURL == "" && s.cfg != nil && strings.TrimSpace(s.cfg.PublicBaseURL) != "" {
 		publicURL = strings.TrimRight(strings.TrimSpace(s.cfg.PublicBaseURL), "/")
 	}
 	if envPub := strings.TrimRight(strings.TrimSpace(envreg.Get("MS365_MCP_PUBLIC_URL")), "/"); envPub != "" {
@@ -59,7 +60,6 @@ func (s *Server) resolveMS365Config(ctx context.Context) ms365ConfigResponse {
 		CanEdit:              s.callerIsAdmin(ctx),
 	}
 
-	ms365Cfg := ms365mcp.ConfigFromEnv(s.cfg)
 	if cid := strings.TrimSpace(ms365Cfg.ClientID); cid != "" {
 		tid := strings.TrimSpace(ms365Cfg.TenantID)
 		if tid == "" {

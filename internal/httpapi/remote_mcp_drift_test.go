@@ -151,7 +151,21 @@ func TestRemoteMCPServersListReportsCatalogDrift(t *testing.T) {
 func TestRemoteMCPServersListAppliesMS365CatalogOverrideBeforeDrift(t *testing.T) {
 	t.Setenv("MS365_MCP_CLIENT_ID", "68dad9d6-e1aa-4195-9bd5-2e94a0e4a073")
 	t.Setenv("MS365_MCP_TENANT_ID", "5db5070c-2c68-449d-868f-2b0d3407f6d2")
-	t.Setenv("FLEET_PUBLIC_BASE_URL", "https://fleetdev.elcanotek.com")
+	t.Setenv("MS365_MCP_PUBLIC_URL", "https://fleetdev.elcanotek.com")
+
+	// Unit-check resolveMS365Config + applyMS365CatalogOverride + driftFromCatalog
+	// even when FLEET_TEST_CHAT_DATABASE_URL is unset locally.
+	unitSrv := &Server{}
+	overridden := applyMS365CatalogOverride([]clientconfig.RemoteMCPCatalogEntry{
+		{Name: "microsoft-365", URL: "https://fleet.elcanotek.com/mcp", Auth: "oauth"},
+	}, unitSrv.resolveMS365Config(context.Background()))
+	if d := driftFromCatalog(store.RemoteMCPServer{
+		Name:     "microsoft-365",
+		URL:      "https://fleetdev.elcanotek.com/mcp",
+		AuthKind: store.RemoteMCPAuthOAuth,
+	}, overridden); d != nil {
+		t.Fatalf("expected nil drift after applyMS365CatalogOverride, got %+v", d)
+	}
 
 	srv, st, _, user := remoteMCPFixture(t)
 	msRow, err := st.CreateRemoteMCPServer(context.Background(), store.RemoteMCPServerInput{
