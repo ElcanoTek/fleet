@@ -140,19 +140,45 @@ export function PatrolBanner({
 
             <div className="flex shrink-0 flex-wrap items-center gap-1.5">
               {onToggleAutoApprove ? (
+                // A switch, not a status pill: "Auto-approve off" in a plain
+                // pill read as the current state, not as the control that turns
+                // it on (a Raptive trader, 2026-11-10). The label stays fixed;
+                // the knob and the accent tint show the state.
                 <button
                   type="button"
-                  aria-pressed={Boolean(isAutoApprove)}
+                  role="switch"
+                  aria-checked={Boolean(isAutoApprove)}
+                  data-testid="patrol-auto-approve"
                   onClick={onToggleAutoApprove}
                   title={
                     isAutoApprove
-                      ? "Auto-approve is ON for this patrol chat (click to turn off)"
-                      : "Enable Auto-approve so unattended patrol runs don't pause on approval cards"
+                      ? "Auto-approve is on: patrol runs act without approval cards. Click to turn it off."
+                      : "Auto-approve is off: patrol runs wait on approval cards. Click to turn it on."
                   }
-                  className="pill-btn inline-flex items-center gap-1"
+                  className={`pill-btn inline-flex items-center gap-1.5 ${
+                    isAutoApprove
+                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                      : ""
+                  }`}
                 >
                   <Icon name="zap" className="size-3" />
-                  <span>{isAutoApprove ? "Auto-approve on" : "Auto-approve off"}</span>
+                  <span>Auto-approve</span>
+                  <span
+                    aria-hidden="true"
+                    className={`relative inline-block h-[0.875rem] w-[1.5rem] shrink-0 rounded-full transition ${
+                      isAutoApprove
+                        ? "bg-[var(--color-switch-track-on)]"
+                        : "bg-[var(--color-switch-track-off)]"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-[2px] top-[2px] size-[0.625rem] rounded-full shadow-[var(--shadow-switch-knob)] transition-transform ${
+                        isAutoApprove
+                          ? "translate-x-[0.625rem] bg-[var(--color-switch-knob-on)]"
+                          : "bg-[var(--color-switch-knob)]"
+                      }`}
+                    />
+                  </span>
                 </button>
               ) : null}
               <button

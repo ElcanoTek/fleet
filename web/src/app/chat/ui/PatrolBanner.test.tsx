@@ -98,7 +98,10 @@ describe("PatrolBanner", () => {
 
     expect(screen.getByTestId("patrol-banner")).toBeInTheDocument();
     expect(screen.getByText("Pacing & Margin Patrol")).toBeInTheDocument();
-    expect(screen.getByText("Auto-approve on")).toBeInTheDocument();
+    const autoApprove = screen.getByRole("switch", { name: "Auto-approve" });
+    expect(autoApprove).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(autoApprove);
+    expect(onToggleAutoApprove).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: /Run now/i }));
     await waitFor(() => expect(onRunNow).toHaveBeenCalledWith("sched-1"));
@@ -112,6 +115,27 @@ describe("PatrolBanner", () => {
       screen.getByRole("button", { name: "Stop Pacing & Margin Patrol" }),
     );
     await waitFor(() => expect(onCancel).toHaveBeenCalledWith("sched-1"));
+  });
+
+  it("shows auto-approve as a switch that is off, with a fixed label", () => {
+    render(
+      <PatrolBanner
+        schedules={[sampleSchedule]}
+        isAutoApprove={false}
+        isStreaming={false}
+        onToggleAutoApprove={vi.fn()}
+        onRunNow={vi.fn()}
+        onTogglePause={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    // The label never reads "Auto-approve off": that read as a status, not
+    // as the control that turns it on. The state lives in aria-checked.
+    const autoApprove = screen.getByRole("switch", { name: "Auto-approve" });
+    expect(autoApprove).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByText(/Auto-approve off/)).not.toBeInTheDocument();
+    expect(autoApprove).toHaveAttribute("title", expect.stringContaining("Click to turn it on"));
   });
 });
 
