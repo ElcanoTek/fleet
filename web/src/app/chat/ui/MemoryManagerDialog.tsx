@@ -472,7 +472,7 @@ export function MemoryPromoteDialog({
       >
         <header className="picker-modal__head">
           <span aria-hidden="true" className="picker-icon-tile shrink-0">
-            <Icon name="users" className="size-4" />
+            <Icon name="folder" className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="picker-modal__title">Move to team learnings</h2>
