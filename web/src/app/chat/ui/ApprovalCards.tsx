@@ -1163,6 +1163,23 @@ function GenericActionCard({
       </pre>
     ) : null;
 
+  // A card whose rows describe the call in words (the browser tools) keeps
+  // the call's own arguments, credentials hidden, under Details.
+  const rawCallArgs = Array.isArray(approval.summary.raw_args) ? approval.summary.raw_args : [];
+  const rawCallBlock =
+    rawCallArgs.length > 0 ? (
+      <ApprovalCardDetails>
+        <div data-testid="approval-raw-args" className="grid gap-0.5 break-words text-[0.75rem] text-[var(--color-text-secondary)]">
+          {rawCallArgs.map((row) => (
+            <div key={row.key} className="min-w-0">
+              <span className="font-mono text-[var(--color-card-text-muted)]">{row.key}: </span>
+              <span className="break-all font-mono">{row.value}</span>
+            </div>
+          ))}
+        </div>
+      </ApprovalCardDetails>
+    ) : null;
+
   // A settled success whose result carried an outcome card (a tool in
   // critical_tool_result_cards, docs/APPROVAL-RESULT-CARDS.md): the completed
   // card reads it. It keeps the approved card's title in view and its
@@ -1338,6 +1355,7 @@ function GenericActionCard({
         <>
           {toolHeader}
           {argsBlock}
+          {rawCallBlock}
         </>
       )}
 

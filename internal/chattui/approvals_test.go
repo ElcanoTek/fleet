@@ -241,6 +241,12 @@ func TestApprovalSummaryLine(t *testing.T) {
 			want:    "alpha=first tool=mcp_pages_deploy zeta=last",
 		},
 		{
+			name:    "browser card leaves Details out",
+			tool:    "playwright_browser",
+			summary: map[string]any{"tool": "playwright_browser", "args": "open", "raw_args": []any{map[string]any{"key": "steps[1]", "value": "x"}}},
+			want:    "args=open tool=playwright_browser",
+		},
+		{
 			name:    "nil summary",
 			tool:    "whatever",
 			summary: nil,

@@ -586,6 +586,12 @@ export type Approval = {
     // bundle-declared pages deploy): top-level arguments as display rows,
     // pre-truncated server-side. `raw` is the unparseable-args fallback.
     args?: Array<{ key: string; value: string }>;
+    /**
+     * The call's own arguments, for a card whose args rows describe it in
+     * words (the browser tools): shown under Details, with the same values
+     * hidden as in the rows.
+     */
+    raw_args?: Array<{ key: string; value: string }>;
     raw?: string;
   };
   status: ApprovalStatus;
