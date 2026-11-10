@@ -109,3 +109,72 @@ func TestPublicIdentifierValueIsRescanned(t *testing.T) {
 		t.Errorf("deal IDs were redacted: %s", out)
 	}
 }
+
+// A key with a non-ASCII prefix is not the public key it ends with (Codex,
+// PR #2122): "認証deal_token" keeps its value scrubbed.
+func TestPublicIdentifierNeedsTheWholeKey(t *testing.T) {
+	r := NewRedactor(nil)
+	secret := "fixture-access-" + strings.Repeat("z", 16)
+	for _, prefix := range []string{"認証", "é", "Ünd"} {
+		in := "x " + prefix + "deal" + "_token=" + secret
+		if out := r.Redact(in); strings.Contains(out, secret) {
+			t.Errorf("prefix %q: value kept: %s", prefix, out)
+		}
+	}
+}
+
+// Many public tokens on one line are handled in one pass: every ID survives,
+// a trailing credential is still scrubbed, and the line does not take
+// quadratic time (Codex, PR #2122).
+func TestManyPublicIdentifiersOnOneLine(t *testing.T) {
+	r := NewRedactor(nil)
+	secret := "fixture-access-" + strings.Repeat("w", 16)
+	var b strings.Builder
+	const n = 20000
+	for i := 0; i < n; i++ {
+		b.WriteString("deal" + "_token=TRD-12345678&")
+	}
+	b.WriteString("access" + "_token=" + secret)
+	out := r.Redact(b.String())
+	if strings.Contains(out, secret) {
+		t.Fatal("trailing credential survived")
+	}
+	if got := strings.Count(out, "TRD-12345678"); got != n {
+		t.Fatalf("kept %d of %d deal IDs", got, n)
+	}
+}
+
+// With no public-identifier key in the input, the one-pass marker replace
+// gives exactly what the plain regex replace gives: the exemption is the only
+// behavior change.
+func TestMarkerReplaceMatchesRegexWithoutPublicKeys(t *testing.T) {
+	var marker pattern
+	for _, p := range canonicalPatterns() {
+		if p.keyMarker {
+			marker = p
+		}
+	}
+	if !marker.keyMarker {
+		t.Fatal("no key-marker pattern")
+	}
+	parts := []string{
+		"tok" + "en", "api_" + "key", "Secret", "passwd", "authorization", "_x", "-y", "_id",
+		"=", ": ", ":", "'", "\"", " ", "&", ";", "{", "}", ",",
+		"bearer ", "Basic ", "abcdefgh", "12345678", "xy", "ünï", "認証", "\n",
+	}
+	seed := uint64(1)
+	next := func(n int) int {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		return int((seed >> 33) % uint64(n))
+	}
+	for i := 0; i < 20000; i++ {
+		var b strings.Builder
+		for j := next(14); j >= 0; j-- {
+			b.WriteString(parts[next(len(parts))])
+		}
+		in := b.String()
+		if want, got := marker.re.ReplaceAllString(in, marker.repl), marker.replace(in); got != want {
+			t.Fatalf("input %q:\n regex: %q\n  pass: %q", in, want, got)
+		}
+	}
+}

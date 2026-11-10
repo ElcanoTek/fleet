@@ -31,6 +31,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // placeholder is what every matched secret is replaced with.
@@ -97,50 +99,92 @@ type pattern struct {
 	keyMarker bool
 }
 
+// The marker pattern in its two parts: the key and separator, then the value.
+// markerRe is the whole pattern; markerKeyRe finds just a key (cheap: it
+// never runs into the value), and markerAtRe matches the whole pattern only at
+// the start of its input.
+const (
+	markerKeyExpr   = `(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)`
+	markerValueExpr = `([^\s"',}{]{8,})`
+)
+
+var (
+	markerRe    = regexp.MustCompile(markerKeyExpr + markerValueExpr)
+	markerKeyRe = regexp.MustCompile(markerKeyExpr)
+	markerAtRe  = regexp.MustCompile(`^` + markerKeyExpr + markerValueExpr)
+)
+
 // replace applies p to s. For the key-marker pattern, a match whose whole key
-// name is a public identifier keeps its key, and its value is scanned again on
-// its own: the value class admits "&", "=" and ";", so the value of
-// "deal_token=X&access_token=Y" runs to the end of the line and would
-// otherwise carry the credential through unscanned.
+// name is a public identifier keeps its key and separator, and scanning
+// resumes at the start of its value: the value class admits "&", "=" and ";",
+// so the value of "deal_token=X&access_token=Y" runs to the end of the line,
+// and a credential later in it must still be found.
+//
+// One forward pass. Keys are found with markerKeyRe, which stops at the
+// separator; the full pattern (whose value runs greedily to the next
+// delimiter) is matched only at a key that will be scrubbed, and the pass then
+// moves past that value. A public key costs only its own length, so a line of
+// many public tokens stays linear. A scrubbed key whose value is too short to
+// match is passed over the same way the plain regex would.
 func (p pattern) replace(s string) string {
 	if !p.keyMarker {
 		return p.re.ReplaceAllString(s, p.repl)
 	}
-	matches := p.re.FindAllStringSubmatchIndex(s, -1)
-	if matches == nil {
+	var b strings.Builder
+	pos, copied := 0, 0
+	for pos < len(s) {
+		k := markerKeyRe.FindStringIndex(s[pos:])
+		if k == nil {
+			break
+		}
+		start, keyEnd := pos+k[0], pos+k[1]
+		if publicIdentifierKey.MatchString(enclosingKey(s, start)) {
+			pos = keyEnd
+			continue
+		}
+		m := markerAtRe.FindStringSubmatchIndex(s[start:])
+		if m == nil {
+			pos = keyEnd
+			continue
+		}
+		for i := range m {
+			if m[i] >= 0 {
+				m[i] += start
+			}
+		}
+		b.WriteString(s[copied:start])
+		b.Write(markerAtRe.ExpandString(nil, p.repl, s, m))
+		pos, copied = m[1], m[1]
+	}
+	if copied == 0 {
 		return s
 	}
-	var b strings.Builder
-	last := 0
-	for _, m := range matches {
-		b.WriteString(s[last:m[0]])
-		if publicIdentifierKey.MatchString(enclosingKey(s, m[0])) && m[4] >= 0 {
-			// Group 1 is the key and separator, group 2 the value (the match's
-			// tail). The value is strictly shorter than s, so this ends.
-			b.WriteString(s[m[0]:m[4]])
-			b.WriteString(p.replace(s[m[4]:m[5]]))
-			b.WriteString(s[m[5]:m[1]])
-		} else {
-			b.Write(p.re.ExpandString(nil, p.repl, s, m))
-		}
-		last = m[1]
-	}
-	b.WriteString(s[last:])
+	b.WriteString(s[copied:])
 	return b.String()
 }
 
-// enclosingKey returns the run of key-name characters ([A-Za-z0-9_-]) around
-// position i: the whole key a marker match starting at i belongs to.
+// enclosingKey returns the whole key name around position i: the run of
+// letters (any script), digits, "_" and "-" a marker match starting at i
+// belongs to. Non-ASCII letters count, so "認証deal_token" is its own key and
+// never mistaken for the public "deal_token".
 func enclosingKey(s string, i int) string {
-	isKeyChar := func(c byte) bool {
-		return c == '_' || c == '-' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+	isKeyRune := func(r rune) bool {
+		return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 	}
 	start, end := i, i
-	for start > 0 && isKeyChar(s[start-1]) {
-		start--
+	for start > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:start])
+		if !isKeyRune(r) {
+			break
+		}
+		start -= size
 	}
-	for end < len(s) && isKeyChar(s[end]) {
-		end++
+	for end < len(s) {
+		r, size := utf8.DecodeRuneInString(s[end:])
+		if !isKeyRune(r) {
+			break
+		}
+		end += size
 	}
 	return s[start:end]
 }
@@ -336,7 +380,7 @@ func canonicalPatterns() []pattern {
 		// the keyword, `_`/`-`-led name characters are allowed before the
 		// separator. Requiring that boundary keeps prose words that merely embed
 		// a keyword (secretary, tokenizer) from matching.
-		{re: regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), repl: "${1}" + placeholder, keyMarker: true},
+		{re: markerRe, repl: "${1}" + placeholder, keyMarker: true},
 	}
 }
 
