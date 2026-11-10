@@ -797,6 +797,14 @@ var webrtcIPPolicyArgs = []string{
 // per launch when a proxy is configured. Each list is defined once here and
 // rendered into its scripts (renderLaunchArgs) so the Python and Node
 // launchers cannot drift.
+//
+// Chromium's own sandbox stays on. Neither list carries --no-sandbox, and
+// all four launchers pass Playwright's chromium_sandbox / chromiumSandbox
+// option, because Playwright adds --no-sandbox itself when that option is
+// left at its default (false). So where the sandbox cannot start (no
+// unprivileged user namespaces, a container whose seccomp profile or dropped
+// capabilities refuse a call the sandbox makes, or running as root) the
+// launch fails with an error instead of running without it.
 var (
 	chromiumLaunchArgs = append([]string{
 		"--disable-dev-shm-usage",
@@ -926,7 +934,7 @@ def main():
         exe = find_chromium_executable()
         last_exc = None
         for exe_candidate in ([None, exe] if exe else [None]):
-            kwargs = {"headless": True, "args": list(launch_args)}
+            kwargs = {"headless": True, "chromium_sandbox": True, "args": list(launch_args)}
             if proxy_server:
                 kwargs["proxy"] = {"server": proxy_server}
             if exe_candidate:
@@ -1261,7 +1269,7 @@ function loadPlaywright() {
     const exe = findChromiumExecutable();
     let lastErr;
     for (const exeCandidate of exe ? [null, exe] : [null]) {
-      const opts = { headless: true, args: [...launchArgs] };
+      const opts = { headless: true, chromiumSandbox: true, args: [...launchArgs] };
       if (proxyServer) opts.proxy = { server: proxyServer };
       if (exeCandidate) opts.executablePath = exeCandidate;
       try {

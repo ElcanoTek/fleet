@@ -310,3 +310,56 @@ func TestRunnersLaunchWithSharedChromiumArgs(t *testing.T) {
 		}
 	}
 }
+
+// TestRunnersLaunchWithChromiumSandbox pins Chromium's own sandbox on in all
+// four launchers. Playwright's chromium_sandbox / chromiumSandbox option
+// defaults to false, and Playwright then adds --no-sandbox to the command
+// line itself, so a launcher that leaves the option out runs the browser
+// without the sandbox.
+func TestRunnersLaunchWithChromiumSandbox(t *testing.T) {
+	for _, list := range [][]string{chromiumLaunchArgs, chromiumSessionLaunchArgs} {
+		for _, arg := range list {
+			if strings.Contains(arg, "sandbox") {
+				t.Errorf("shared launch args carry a sandbox switch: %s", arg)
+			}
+		}
+	}
+	scripts := []struct {
+		name, script, option, want, call string
+	}{
+		{"python runner", embeddedPythonRunner, "chromium_sandbox", `kwargs = {"headless": True, "chromium_sandbox": True, "args": list(launch_args)}`, "p.chromium.launch(**kwargs)"},
+		{"node runner", embeddedNodeRunner, "chromiumSandbox", `const opts = { headless: true, chromiumSandbox: true, args: [...launchArgs] };`, "pw.chromium.launch(opts)"},
+		{"python session", embeddedPythonSessionWorker, "chromium_sandbox", `kwargs = {"headless": True, "chromium_sandbox": True, "args": list(launch_args)}`, "p.chromium.launch(**kwargs)"},
+		{"node session", embeddedNodeSessionWorker, "chromiumSandbox", `const opts = { headless: true, chromiumSandbox: true, args: [...launchArgs] };`, "pw.chromium.launch(opts)"},
+	}
+	for _, sc := range scripts {
+		if !strings.Contains(sc.script, sc.want) {
+			t.Errorf("%s does not launch Chromium with its sandbox on (want %s)", sc.name, sc.want)
+		}
+		// The pinned literal is the only mention of the option, so no later
+		// assignment (kwargs["chromium_sandbox"] = False, opts.chromiumSandbox
+		// = false) can turn it back off.
+		if got := strings.Count(sc.script, sc.option); got != 1 {
+			t.Errorf("%s mentions %s %d times, want exactly once (the pinned launch options)", sc.name, sc.option, got)
+		}
+		// One launch, through chromium.launch with the pinned options: a
+		// persistent context, a launch server, a CDP connection or an inline
+		// options object would bypass them.
+		if got := strings.Count(sc.script, "chromium.launch"); got != 1 {
+			t.Errorf("%s calls chromium.launch %d times, want exactly 1 (the sandboxed launch)", sc.name, got)
+		}
+		if !strings.Contains(sc.script, sc.call) {
+			t.Errorf("%s does not launch with the pinned options (want %s)", sc.name, sc.call)
+		}
+		for _, other := range []string{"launch_persistent_context", "launchPersistentContext", "launch_server", "launchServer", "connect_over_cdp", "connectOverCDP"} {
+			if strings.Contains(sc.script, other) {
+				t.Errorf("%s launches Chromium another way (%s)", sc.name, other)
+			}
+		}
+		for _, off := range []string{"--no-sandbox", "--disable-setuid-sandbox", "--disable-namespace-sandbox", "--disable-seccomp-filter-sandbox", "--no-zygote-sandbox"} {
+			if strings.Contains(sc.script, off) {
+				t.Errorf("%s weakens the Chromium sandbox (%s)", sc.name, off)
+			}
+		}
+	}
+}

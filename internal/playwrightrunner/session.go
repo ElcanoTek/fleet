@@ -947,7 +947,7 @@ async def main():
         exe = find_chromium_executable()
         last_exc = None
         for exe_candidate in ([None, exe] if exe else [None]):
-            kwargs = {"headless": True, "args": list(launch_args)}
+            kwargs = {"headless": True, "chromium_sandbox": True, "args": list(launch_args)}
             if proxy_server:
                 kwargs["proxy"] = {"server": proxy_server}
             if exe_candidate:
@@ -1377,7 +1377,7 @@ async function pushSnapshotFrame(page) {
     const exe = findChromiumExecutable();
     let lastErr;
     for (const exeCandidate of exe ? [null, exe] : [null]) {
-      const opts = { headless: true, args: [...launchArgs] };
+      const opts = { headless: true, chromiumSandbox: true, args: [...launchArgs] };
       if (proxyServer) opts.proxy = { server: proxyServer };
       if (exeCandidate) opts.executablePath = exeCandidate;
       try {
