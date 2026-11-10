@@ -248,21 +248,35 @@ func describeBrowserStep(st playwrightrunner.Step, hidden []string) string {
 	case "select":
 		return fmt.Sprintf("Choose %s in %s%s", value(), sel, optional)
 	case "wait_for":
-		if sel != "" {
+		switch v := strings.TrimSpace(st.Value); {
+		case sel != "":
 			return fmt.Sprintf("Wait for %s%s", sel, optional)
+		case v == "networkidle":
+			return "Wait until the page stops loading"
+		case v != "":
+			return "Wait until the address is " + hideCredentialInURL(v, hidden)
 		}
-		if st.TimeoutMs > 0 {
-			return fmt.Sprintf("Wait %d ms", st.TimeoutMs)
-		}
-		return "Wait for " + strings.TrimSpace(st.Value)
+		return fmt.Sprintf("Wait %d ms", browserWaitMs(st.TimeoutMs))
 	case "sleep":
-		return fmt.Sprintf("Wait %d ms", st.TimeoutMs)
+		return fmt.Sprintf("Wait %d ms", browserWaitMs(st.TimeoutMs))
 	case "extract":
 		return fmt.Sprintf("Read %s%s", sel, optional)
 	}
 	// An action the browser does not know fails when it runs; name it without
 	// its value.
 	return fmt.Sprintf("%q on %s (not a known step)", strings.TrimSpace(st.Action), sel)
+}
+
+// browserWaitMs is how long the browser workers actually pause for a sleep
+// (or a wait_for with nothing to wait for): timeout_ms clamped to 500..30000,
+// an omitted or zero value taking the step default (12 s in a live session,
+// half the run's 45 s budget up to 15 s in a one-shot run), and the pause
+// itself capped at 10 s.
+func browserWaitMs(timeoutMs int) int {
+	if timeoutMs <= 0 {
+		return 10000
+	}
+	return min(max(timeoutMs, 500), 10000)
 }
 
 // describeStepValue names a step value: a credential placeholder by what it

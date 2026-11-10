@@ -229,3 +229,19 @@ func TestBrowserApprovalSummaryEdgeCases(t *testing.T) {
 		t.Errorf("rows = %q, want the missing session named", rows)
 	}
 }
+
+// TestBrowserApprovalSummaryWaitsMatchTheRunner: a sleep or an empty wait_for
+// shows the pause the browser workers take (timeout_ms clamped to 500..10000,
+// 10000 when omitted), and a wait_for on a value says what it waits for.
+func TestBrowserApprovalSummaryWaitsMatchTheRunner(t *testing.T) {
+	t.Parallel()
+	rows := summaryRows(t, summarizeApprovalInput(tools.PlaywrightBrowserToolName, `{"action":"run","url":"https://a.example.com/","steps":[`+
+		`{"action":"sleep"},{"action":"sleep","timeout_ms":100},{"action":"sleep","timeout_ms":25000},{"action":"wait_for","timeout_ms":3000},`+
+		`{"action":"wait_for","value":"networkidle"},{"action":"wait_for","value":"https://a.example.com/done"},{"action":"click","selector":"#go"}]}`, ""))
+	want := []string{"Wait 10000 ms", "Wait 500 ms", "Wait 10000 ms", "Wait 3000 ms", "Wait until the page stops loading", "Wait until the address is https://a.example.com/done"}
+	for i, w := range want {
+		if got := rows[2+i][1]; got != w {
+			t.Errorf("step %d = %q, want %q", i+1, got, w)
+		}
+	}
+}
