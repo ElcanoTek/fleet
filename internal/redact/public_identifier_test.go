@@ -85,3 +85,27 @@ func TestPublicIdentifierKeyStillScrubsCredentialShapes(t *testing.T) {
 		t.Fatalf("credential-shaped value survived in text: %s", out)
 	}
 }
+
+// A deal token's value runs to the next delimiter the marker pattern knows,
+// and "&", "=" and ";" are not among them: a credential that follows in the
+// same query string or cookie-style list must still be scrubbed (Codex,
+// PR #2122).
+func TestPublicIdentifierValueIsRescanned(t *testing.T) {
+	r := NewRedactor(nil)
+	secret := "fixture-access-" + strings.Repeat("y", 16)
+	for _, sep := range []string{"&", ";", "&amp;"} {
+		in := "GET /x?deal" + "_token=TRD-9262-016c4" + sep + "access" + "_token=" + secret
+		out := r.Redact(in)
+		if strings.Contains(out, secret) {
+			t.Errorf("sep %q: credential after a deal token survived: %s", sep, out)
+		}
+		if !strings.Contains(out, "TRD-9262-016c4") {
+			t.Errorf("sep %q: deal ID was redacted: %s", sep, out)
+		}
+	}
+	// Two deal tokens in a row both survive.
+	two := "deal" + "_token=TRD-9262-016c4&deal" + "_token=TRD-9262-016c5"
+	if out := r.Redact(two); !strings.Contains(out, "TRD-9262-016c4") || !strings.Contains(out, "TRD-9262-016c5") {
+		t.Errorf("deal IDs were redacted: %s", out)
+	}
+}

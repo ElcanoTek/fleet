@@ -98,7 +98,10 @@ type pattern struct {
 }
 
 // replace applies p to s. For the key-marker pattern, a match whose whole key
-// name is a public identifier keeps its value.
+// name is a public identifier keeps its key, and its value is scanned again on
+// its own: the value class admits "&", "=" and ";", so the value of
+// "deal_token=X&access_token=Y" runs to the end of the line and would
+// otherwise carry the credential through unscanned.
 func (p pattern) replace(s string) string {
 	if !p.keyMarker {
 		return p.re.ReplaceAllString(s, p.repl)
@@ -111,8 +114,12 @@ func (p pattern) replace(s string) string {
 	last := 0
 	for _, m := range matches {
 		b.WriteString(s[last:m[0]])
-		if publicIdentifierKey.MatchString(enclosingKey(s, m[0])) {
-			b.WriteString(s[m[0]:m[1]])
+		if publicIdentifierKey.MatchString(enclosingKey(s, m[0])) && m[4] >= 0 {
+			// Group 1 is the key and separator, group 2 the value (the match's
+			// tail). The value is strictly shorter than s, so this ends.
+			b.WriteString(s[m[0]:m[4]])
+			b.WriteString(p.replace(s[m[4]:m[5]]))
+			b.WriteString(s[m[5]:m[1]])
 		} else {
 			b.Write(p.re.ExpandString(nil, p.repl, s, m))
 		}
