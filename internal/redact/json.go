@@ -7,6 +7,20 @@ import (
 )
 
 var authorizationValue = regexp.MustCompile(`(?i)authorization:\s*(?:bearer|basic)\s+([A-Za-z0-9\-._~+/]+=*)`)
+
+// vaultReference is a show_ui credential reference ("$secret:<field_id>",
+// docs/CONNECTOR-BUILDER.md §1.2): what a tool call carries in its *_ref
+// arguments in place of a vaulted credential, resolved host-side. Field IDs
+// include a repeater's "creds[0].password"; one is at most 64 characters, so
+// a long token wrapped in the syntax is not taken for one. Redacted, a
+// reference would hide from the model, on later turns, which credential its
+// own earlier call used, so keepVaultReference keeps one; see there for when.
+var vaultReference = regexp.MustCompile(`^\$secret:[A-Za-z0-9_.\[\]-]{1,64}$`)
+
+// refKey is the argument a reference is passed in (password_ref, secret_ref,
+// username_ref).
+var refKey = regexp.MustCompile(`(?i)_ref$`)
+
 var secretJSONKey = regexp.MustCompile(`(?i)(?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?$`)
 
 // Redact decoded JSON strings, never the escapes framing them. In particular,
@@ -51,6 +65,9 @@ func (r *Redactor) redactJSON(input string) string {
 	scrub = func(v any, key string) any {
 		switch x := v.(type) {
 		case string:
+			if r.keepVaultReference(key, x, credentials) {
+				return x
+			}
 			clean := x
 			for _, credential := range credentials {
 				clean = strings.ReplaceAll(clean, credential, placeholder)
@@ -100,4 +117,54 @@ func (r *Redactor) redactJSON(input string) string {
 		return placeholder
 	} // never fall back to unsanitized bytes
 	return string(encoded)
+}
+
+// keepVaultReference reports whether a JSON string value is a vault reference
+// to leave as it is: the value under a *_ref key is exactly "$secret:<id>",
+// and the id itself is nothing any other rule would redact (no registered
+// literal, no vendor key shape, no credential seen elsewhere in this payload).
+// A secret wrapped in the reference syntax is therefore still redacted.
+func (r *Redactor) keepVaultReference(key, value string, credentials []string) bool {
+	if !refKey.MatchString(key) || !vaultReference.MatchString(value) {
+		return false
+	}
+	id := strings.TrimPrefix(value, "$secret:")
+	for _, c := range credentials {
+		// A Basic credential is collected with its "=" padding, which a
+		// field ID cannot hold.
+		if t := strings.TrimRight(c, "="); t != "" && strings.Contains(id, t) {
+			return false
+		}
+	}
+	return r.redactPlain(id) == id
+}
+
+// MarkerArgumentRefusal is the reason a tool gives when it refuses an
+// argument that carries MarkerPrefix: the model copied the placeholder out of
+// an earlier, redacted call, and sending or typing it would act on the
+// placeholder as if it were the value. It names the placeholder in a form the
+// redactor leaves alone, so the model can still read it.
+const MarkerArgumentRefusal = `an argument contains "[REDACTED]", the placeholder the conversation shows in place of a secret; it is not the secret itself. If you are quoting redacted text, leave the placeholder out. If the call needs the secret, it has to be supplied again: in a chat, ask the user to submit it with show_ui and pass the reference that submission gives you`
+
+// ContainsMarker reports whether any string in v (a decoded JSON value:
+// strings, maps, slices) carries a redaction marker: a value the model copied
+// out of an earlier, redacted tool call, which must not be used as written.
+func ContainsMarker(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(x, MarkerPrefix)
+	case map[string]any:
+		for _, c := range x {
+			if ContainsMarker(c) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range x {
+			if ContainsMarker(c) {
+				return true
+			}
+		}
+	}
+	return false
 }

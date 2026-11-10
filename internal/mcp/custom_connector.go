@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // AddHTTPToolsOnServer registers inline HTTP tools under a named server (for
@@ -31,7 +32,7 @@ func (c *Client) AddHTTPToolsOnServer(serverName string, specs []HTTPToolSpec, h
 		_ = existing.transport.Close()
 	}
 
-	tr := &httpToolTransport{tools: make(map[string]HTTPToolSpec, len(specs))}
+	tr := &httpToolTransport{tools: make(map[string]HTTPToolSpec, len(specs)), refuseRedactedArgs: true}
 	if len(httpClient) > 0 && httpClient[0] != nil {
 		// Preserve newHTTPToolClient's redirect policy (follow redirects while
 		// stripping credential headers on cross-origin hops) even when the caller
@@ -170,6 +171,12 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 		return nil, fmt.Errorf("playwright tool not found: %s", name)
 	}
 	args, _ := p["arguments"].(map[string]interface{})
+	if redact.ContainsMarker(args) {
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.MarkerArgumentRefusal}},
+			IsError: true,
+		})
+	}
 
 	runRes, err := playwrightrunner.Run(ctx, playwrightrunner.RunRequest{
 		URL:         spec.URL,

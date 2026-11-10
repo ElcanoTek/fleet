@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -837,6 +838,12 @@ func secretFieldID(refOrValue string) string {
 }
 
 func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, convID, connectorName, refOrValue, targetURL string) (string, error) {
+	// A model that copies a credential out of its own earlier tool call sees
+	// the redactor's placeholder there; used as a literal, "[REDACTED]" would
+	// be typed into the site or sent as the key.
+	if strings.Contains(refOrValue, redact.MarkerPrefix) {
+		return "", errors.New(`a credential argument contains "[REDACTED]", the placeholder the conversation shows in place of a secret, not a credential; ask the user to submit the credential again with show_ui and pass the reference that submission gives you`)
+	}
 	val, isVaulted := s.uiSecrets.lookupSecret(userEmail, convID, refOrValue)
 	if !isVaulted {
 		return val, nil
@@ -900,6 +907,11 @@ func (s *Server) newConnectorStudioHandler(conv *store.Conversation, user string
 		convID = conv.ID
 	}
 	return func(ctx context.Context, params tools.ConnectorStudioParams) (any, error) {
+		// A value copied out of an earlier, redacted call (a header, a
+		// custom tool's body, a step) would be sent or typed as "[REDACTED]".
+		if tools.ArgsCarryRedactionMarker(params) {
+			return nil, tools.ErrRedactionMarkerArgument
+		}
 		switch strings.ToLower(strings.TrimSpace(params.Action)) {
 		case tools.ConnectorStudioActionSearchCatalog:
 			return s.connectorStudioSearchCatalog(ctx, user, params.Query)

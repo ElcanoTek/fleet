@@ -61,3 +61,32 @@ func TestJSONRedactionCustomPatternsAndNumericSecrets(t *testing.T) {
 		t.Fatalf("numeric secret survived: %s", got)
 	}
 }
+
+// TestRedactJSONKeepsVaultReferences: a "$secret:<field_id>" reference in a
+// *_ref argument names a vaulted credential and is kept, so a saved tool call
+// still says which credential it used. Anything else shaped like one is not:
+// a literal under a *_ref key, a reference under another key, and a secret
+// wrapped in the reference syntax (a vendor key shape, a registered literal,
+// a credential seen elsewhere in the same payload).
+func TestRedactJSONKeepsVaultReferences(t *testing.T) {
+	r := NewRedactor(nil)
+	r.RegisterSecrets("test", false, "Hunter2Registered9")
+	in := `{"password_ref":"$secret:password","secret_ref":"$secret:api_token","username_ref":"$secret:creds[0].user-name",` +
+		`"api_key":"literal-key-value-1928","token":"$secret:password","note":"$secret:not-a-ref-key",` +
+		`"api_key_ref":"$secret:sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",` +
+		`"login":{"password_ref":"$secret:Hunter2Registered9"},` +
+		`"header":"Authorization: Bearer abcdefgh12345678","Secret_Ref_3":"$secret:abcdefgh12345678",` + // gitleaks:allow (made-up test values)
+		`"basic":"Authorization: Basic dXNlcjpwYXNzd29yZA==","token_ref":"$secret:dXNlcjpwYXNzd29yZA",` + // gitleaks:allow (made-up test values)
+		`"long_ref":"$secret:` + strings.Repeat("a1", 33) + `"}` // gitleaks:allow (made-up test values)
+	got := r.Redact(in)
+	for _, keep := range []string{`"password_ref":"$secret:password"`, `"secret_ref":"$secret:api_token"`, `"username_ref":"$secret:creds[0].user-name"`} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("Redact = %s, want it to keep %s", got, keep)
+		}
+	}
+	for _, gone := range []string{"literal-key-value-1928", `"token":"$secret:password"`, "sk-ant-api03", "Hunter2Registered9", "$secret:abcdefgh12345678", "$secret:dXNlcjpwYXNzd29yZA", strings.Repeat("a1", 33)} { // gitleaks:allow (made-up test values)
+		if strings.Contains(got, gone) {
+			t.Errorf("Redact = %s, want %q redacted", got, gone)
+		}
+	}
+}

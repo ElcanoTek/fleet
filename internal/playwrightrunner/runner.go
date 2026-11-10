@@ -23,6 +23,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 const (
@@ -113,8 +114,24 @@ type RunResult struct {
 	StorageState map[string]any `json:"storage_state,omitempty"`
 }
 
+// refuseRedactedValue refuses a typed step (fill, select, press) whose value
+// carries the redactor's placeholder: a value copied out of an earlier,
+// redacted call, which would be typed as written.
+func refuseRedactedValue(st Step) error {
+	switch action := strings.ToLower(strings.TrimSpace(st.Action)); action {
+	case "fill", "select", "press":
+		if strings.Contains(st.Value, redact.MarkerPrefix) {
+			return fmt.Errorf(`%s step value contains "[REDACTED]", the placeholder the conversation shows in place of a secret; use {{PASSWORD}}, {{USERNAME}} or {{SECRET}} with a credential reference instead`, action)
+		}
+	}
+	return nil
+}
+
 // ValidateStep validates a single declarative Playwright step.
 func ValidateStep(st Step) error {
+	if err := refuseRedactedValue(st); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(st.Action)) {
 	case "goto":
 		target := strings.TrimSpace(st.Value)
@@ -276,6 +293,11 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		} else {
 			st.Selector = substituteArgs(st.Selector, req.Args)
 			st.Value = substituteArgs(st.Value, req.Args)
+		}
+		// A saved connector's {arg} can bring in a value copied from an
+		// earlier, redacted call; check the step as it will be typed.
+		if err := refuseRedactedValue(st); err != nil {
+			return nil, err
 		}
 		if err := validateStepNavigationOrigin(targetURL, req.Credentials, st); err != nil {
 			return nil, err
