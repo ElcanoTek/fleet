@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"unicode"
 
@@ -371,37 +370,104 @@ func originOf(rawURL string) string {
 	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
 }
 
-// plainCredentialRefRE finds a password_ref or secret_ref given as a JSON
-// string, in input that may not decode.
-var plainCredentialRefRE = regexp.MustCompile(`(?i)("(?:password|secret)_ref"\s*:\s*")([^"\\]*)(")`)
-
-// maskBrowserFallback hides plain credentials in the generic card a browser
-// call falls back to when its arguments do not decode (a wrong field type; the
-// call cannot run either, but its card must not print the credential). A
-// "$secret:" reference is shown as itself.
-func maskBrowserFallback(summary map[string]any, rawInput string) map[string]any {
+// summarizeBrowserFallback builds the generic card for a browser tool call
+// that has no browser summary: arguments that do not decode into the tool's
+// parameters (a wrong field type; the call cannot run either), or an action
+// that drives no browser. Its plain credentials (password_ref and secret_ref
+// given as values, under any key case) are hidden in the decoded arguments,
+// before the card renders or shortens them, so one written with JSON escapes
+// or past the display limit is hidden too. Input that is not a JSON object is
+// not shown at all. A "$secret:" reference is shown as itself.
+func summarizeBrowserFallback(toolName, rawInput string) map[string]any {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil || args == nil {
+		return map[string]any{"tool": toolName, "args": []map[string]string{
+			{"key": "Arguments", "value": "not shown here: they are not a JSON object, so this call cannot run"},
+		}}
+	}
 	var hidden []string
-	for _, m := range plainCredentialRefRE.FindAllStringSubmatch(rawInput, -1) {
-		if v := strings.TrimSpace(m[2]); v != "" && !strings.HasPrefix(v, "$secret:") {
-			hidden = append(hidden, v)
+	for k, v := range args {
+		if !strings.EqualFold(k, "password_ref") && !strings.EqualFold(k, "secret_ref") {
+			continue
 		}
+		if s, ok := v.(string); ok && (strings.TrimSpace(s) == "" || strings.HasPrefix(strings.TrimSpace(s), "$secret:")) {
+			continue
+		}
+		hidden = append(hidden, credentialLeaves(v)...)
+		args[k] = hiddenValue
 	}
+	masked, err := json.Marshal(hideCredentialStrings(args, hidden))
+	if err != nil {
+		return map[string]any{"tool": toolName}
+	}
+	return summarizeGenericToolInput(toolName, string(masked))
+}
+
+// credentialLeaves is what a credential given as a decoded JSON value can
+// show up as elsewhere in the call: its strings, and its numbers as written.
+func credentialLeaves(v any) []string {
+	switch t := v.(type) {
+	case string:
+		if s := strings.TrimSpace(t); s != "" {
+			return []string{s}
+		}
+	case float64:
+		b, _ := json.Marshal(t)
+		return []string{string(b)}
+	case map[string]any:
+		var out []string
+		for _, c := range t {
+			out = append(out, credentialLeaves(c)...)
+		}
+		return out
+	case []any:
+		var out []string
+		for _, c := range t {
+			out = append(out, credentialLeaves(c)...)
+		}
+		return out
+	}
+	return nil
+}
+
+// hideCredentialStrings returns v (a decoded JSON value) with every string
+// and object key that contains one of hidden replaced by hiddenValue, whole,
+// so neither display truncation nor JSON escaping can leave part of it.
+func hideCredentialStrings(v any, hidden []string) any {
 	if len(hidden) == 0 {
-		return summary
-	}
-	mask := func(v string) string {
-		for _, h := range hidden {
-			v = strings.ReplaceAll(v, h, "(not shown here)")
-		}
 		return v
 	}
-	if rows, ok := summary["args"].([]map[string]string); ok {
-		for _, r := range rows {
-			r["value"] = mask(r["value"])
+	contains := func(s string) bool {
+		for _, h := range hidden {
+			if strings.Contains(s, h) {
+				return true
+			}
 		}
+		return false
 	}
-	if raw, ok := summary["raw"].(string); ok {
-		summary["raw"] = mask(raw)
+	switch t := v.(type) {
+	case string:
+		if contains(t) {
+			return hiddenValue
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		n := 0
+		for k, c := range t {
+			if contains(k) {
+				n++
+				k = fmt.Sprintf("%s (%d)", hiddenValue, n)
+			}
+			out[k] = hideCredentialStrings(c, hidden)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, c := range t {
+			out[i] = hideCredentialStrings(c, hidden)
+		}
+		return out
 	}
-	return summary
+	return v
 }

@@ -248,8 +248,9 @@ func TestBrowserApprovalSummaryWaitsMatchTheRunner(t *testing.T) {
 
 // TestBrowserApprovalPressAndFallbackHideCredentials: a press of a plain
 // credential is hidden (a key name into a password field is not), and a
-// browser call whose arguments do not decode still does not print a plain
-// credential on the generic card it falls back to.
+// browser call without a browser summary (arguments that do not decode, or
+// another action) does not print a plain credential on the generic card it
+// falls back to, however the JSON spells or escapes it and however long it is.
 func TestBrowserApprovalPressAndFallbackHideCredentials(t *testing.T) {
 	t.Parallel()
 	rows := summaryRows(t, summarizeApprovalInput(tools.PlaywrightBrowserToolName,
@@ -260,11 +261,31 @@ func TestBrowserApprovalPressAndFallbackHideCredentials(t *testing.T) {
 	for _, raw := range []string{
 		`{"action":"run","password_ref":"hunter3-wrongtype","steps":[{"action":"sleep","timeout_ms":"5000"},{"action":"fill","selector":"#pw","value":"hunter3-wrongtype"}]}`, // gitleaks:allow (made-up test value)
 		`{"action":"run","password_ref":"hunter3-wrongtype","steps":[`, // gitleaks:allow (made-up test value)
+		// Escaped key and value: the card shows them decoded.
+		`{"action":"run","pass\u0077ord_ref":"hunter3-wrong\u0074ype","steps":[{"action":"sleep","timeout_ms":"x"}]}`,                  // gitleaks:allow (made-up test value)
+		`{"action":"run","PASSWORD_REF":"hunter3-wrongtype","steps":[{"action":"sleep","timeout_ms":"x"}],"note":"hunter3-wrongtype"}`, // gitleaks:allow (made-up test value)
+		// Past the 300-character display limit, inside a nested value.
+		`{"action":"run","password_ref":"hunter3-wrongtype","steps":[{"action":"fill","selector":"#` + strings.Repeat("s", 290) + `","value":"hunter3-wrongtype"},{"action":"sleep","timeout_ms":"x"}]}`, // gitleaks:allow (made-up test value)
+		`{"action":"run","secret_ref":"` + strings.Repeat("hunter3-wrongtype", 25) + `","steps":[{"action":"sleep","timeout_ms":"x"}]}`,                                                                  // gitleaks:allow (made-up test value)
+		// Characters JSON would escape for HTML.
+		`{"action":"run","password_ref":"hunter3<&>wrongtype","steps":[{"action":"fill","selector":"#pw","value":"hunter3<&>wrongtype"},{"action":"sleep","timeout_ms":"x"}]}`, // gitleaks:allow (made-up test value)
+		// A password_ref that is not a string, also typed elsewhere.
+		`{"action":"run","password_ref":31337313373,"steps":[{"action":"fill","selector":"#pw","value":"31337313373"}]}`,
+		`{"action":"run","password_ref":["hunter3-array"],"steps":[{"action":"fill","selector":"#pw","value":"hunter3-array"}]}`, // gitleaks:allow (made-up test value)
 	} {
 		b, _ := json.Marshal(summarizeApprovalInput(tools.PlaywrightBrowserToolName, raw, ""))
-		if strings.Contains(string(b), "hunter3-wrongtype") || !strings.Contains(string(b), "not shown here") {
-			t.Errorf("fallback card for %s = %s", raw, b)
+		for _, leak := range []string{"hunter3", "wrongtype", "wrong\\u0074ype", "31337313373"} {
+			if strings.Contains(string(b), leak) {
+				t.Errorf("fallback card for %.80s… shows %q: %s", raw, leak, b)
+			}
 		}
+		if !strings.Contains(string(b), "hidden here") && !strings.Contains(string(b), "not shown here") {
+			t.Errorf("fallback card for %.80s… says nothing is hidden: %s", raw, b)
+		}
+	}
+	// connector_studio's other actions take the same fallback.
+	if b, _ := json.Marshal(summarizeApprovalInput(tools.ConnectorStudioToolName, `{"action":"probe_http","url":"https://a.example.com/","secret_ref":"hunter3-http","headers":{"X-Key":"hunter3-http"}}`, "")); strings.Contains(string(b), "hunter3-http") { // gitleaks:allow (made-up test value)
+		t.Errorf("probe_http card shows the credential: %s", b)
 	}
 	if b, _ := json.Marshal(summarizeApprovalInput(tools.PlaywrightBrowserToolName, `{"action":"run","password_ref":"$secret:password","steps":[{"action":"sleep","timeout_ms":"x"}]}`, "")); !strings.Contains(string(b), "$secret:password") {
 		t.Errorf("a vaulted reference is hidden on the fallback card: %s", b)
