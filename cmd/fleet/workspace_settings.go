@@ -62,7 +62,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"context_handles_enabled":           strconv.FormatBool(cfg.ContextHandlesEnabled),
 		"team_chats_shared_by_default":      strconv.FormatBool(cfg.TeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         strconv.Itoa(cfg.SharedFilesMaxTotalMB),
-		"monthly_soft_token_limit":          strconv.Itoa(cfg.MonthlySoftTokenLimit),
+		"monthly_soft_spend_limit_usd":      strconv.FormatFloat(cfg.MonthlySoftSpendLimitUSD, 'f', -1, 64),
 	}
 	pii := newPIIRedactorState(cfg)
 	guard := newGuardrailState(cfg)
@@ -110,7 +110,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"context_handles_enabled":           applyBoolSetting(cfg.SetContextHandlesEnabled),
 		"team_chats_shared_by_default":      applyBoolSetting(cfg.SetTeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         applyIntSetting(cfg.SetSharedFilesMaxTotalMB),
-		"monthly_soft_token_limit":          applyIntSetting(cfg.SetMonthlySoftTokenLimit),
+		"monthly_soft_spend_limit_usd":      applyFloatSetting(cfg.SetMonthlySoftSpendLimitUSD),
 	}
 	svc, err := settings.NewService(st, defaults, hooks)
 	return svc, guard, err
@@ -339,6 +339,17 @@ func applyIntSetting(set func(int)) settings.ApplyFunc {
 			return fmt.Errorf("not an integer: %q", value)
 		}
 		set(n)
+		return nil
+	}
+}
+
+func applyFloatSetting(set func(float64)) settings.ApplyFunc {
+	return func(value string, _ bool) error {
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("not a number: %q", value)
+		}
+		set(f)
 		return nil
 	}
 }

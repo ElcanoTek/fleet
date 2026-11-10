@@ -37,6 +37,16 @@ func (c *Config) liveInt(read func() int) int {
 	return read()
 }
 
+// liveFloat reads a float64 field under the runtime read lock.
+func (c *Config) liveFloat(read func() float64) float64 {
+	if c.reload == nil {
+		return read()
+	}
+	c.reload.mu.RLock()
+	defer c.reload.mu.RUnlock()
+	return read()
+}
+
 // setLive mutates Config under the runtime write lock. A Config built directly
 // in a test (nil reload state) mutates unguarded — such a Config is never
 // concurrently served.
@@ -134,16 +144,16 @@ func (c *Config) SetSharedFilesMaxTotalMB(v int) {
 	c.setLive(func() { c.SharedFilesMaxTotalMB = v })
 }
 
-// LiveMonthlySoftTokenLimit reports the monthly soft token allowance across all
-// models (0 = unlimited), admin-override-aware.
-func (c *Config) LiveMonthlySoftTokenLimit() int {
-	return c.liveInt(func() int { return c.MonthlySoftTokenLimit })
+// LiveMonthlySoftSpendLimitUSD reports the monthly soft spend allowance in USD
+// across billed models (0 = unlimited), admin-override-aware.
+func (c *Config) LiveMonthlySoftSpendLimitUSD() float64 {
+	return c.liveFloat(func() float64 { return c.MonthlySoftSpendLimitUSD })
 }
 
-// SetMonthlySoftTokenLimit applies the admin override for the monthly soft
-// token allowance.
-func (c *Config) SetMonthlySoftTokenLimit(v int) {
-	c.setLive(func() { c.MonthlySoftTokenLimit = v })
+// SetMonthlySoftSpendLimitUSD applies the admin override for the monthly soft
+// spend allowance in USD.
+func (c *Config) SetMonthlySoftSpendLimitUSD(v float64) {
+	c.setLive(func() { c.MonthlySoftSpendLimitUSD = v })
 }
 
 // LiveContextHandlesEnabled reports whether composer context handles (#517)

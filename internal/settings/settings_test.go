@@ -73,7 +73,7 @@ func testDefaults() map[string]string {
 		"context_handles_enabled":           "false",
 		"team_chats_shared_by_default":      "false",
 		"shared_files_max_total_mb":         "10240",
-		"monthly_soft_token_limit":          "0",
+		"monthly_soft_spend_limit_usd":      "0",
 	}
 }
 

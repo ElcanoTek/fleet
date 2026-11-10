@@ -235,9 +235,9 @@ function MonthlyAllowanceBanner() {
   );
 
   const limitItem = settingsData?.settings?.find(
-    (s) => s.key === "monthly_soft_token_limit",
+    (s) => s.key === "monthly_soft_spend_limit_usd",
   );
-  const parsedLimit = limitItem ? Number.parseInt(limitItem.value, 10) : 0;
+  const parsedLimit = limitItem ? Number.parseFloat(limitItem.value) : 0;
   const softLimit =
     Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 0;
   const limitSource: "default" | "admin" = limitItem?.source ?? "default";
@@ -246,8 +246,8 @@ function MonthlyAllowanceBanner() {
     setSavingLimit(true);
     setLimitError(null);
     try {
-      const cleaned = rawValue.replace(/[,_\s]/g, "").trim();
-      const res = await fetch("/api/admin/settings/monthly_soft_token_limit", {
+      const cleaned = rawValue.replace(/[$,_\s]/g, "").trim();
+      const res = await fetch("/api/admin/settings/monthly_soft_spend_limit_usd", {
         method: "PUT",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -260,7 +260,7 @@ function MonthlyAllowanceBanner() {
       setSettingsNonce((n) => n + 1);
       setEditingLimit(false);
     } catch (err) {
-      setLimitError(errorMessage(err, "Failed to update monthly soft token limit"));
+      setLimitError(errorMessage(err, "Failed to update monthly soft spend limit"));
     } finally {
       setSavingLimit(false);
     }
@@ -301,12 +301,12 @@ function MonthlyAllowanceBanner() {
   );
   const includedSharePct =
     totalTokens > 0 ? (includedTokens / totalTokens) * 100 : 0;
-  const limitPct = softLimit > 0 ? (totalTokens / softLimit) * 100 : 0;
+  const limitPct = softLimit > 0 ? (billedCostUSD / softLimit) * 100 : 0;
 
   return (
     <section
       className="mb-6 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-sm)]"
-      aria-label="Monthly token allowance and spend overview"
+      aria-label="Monthly spend allowance and model mix overview"
       data-testid="analytics-monthly-banner"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -315,7 +315,7 @@ function MonthlyAllowanceBanner() {
             Current UTC Month (since {monthStart})
           </p>
           <h2 className="mt-0.5 font-heading text-[1.1rem] font-bold text-[var(--color-text-primary)]">
-            Workspace Token Allowance &amp; Model Mix Overview
+            Workspace Spend &amp; Model Mix Overview
           </h2>
         </div>
         <div className="flex items-center gap-2">
@@ -330,7 +330,7 @@ function MonthlyAllowanceBanner() {
                 setEditingLimit(true);
               }}
             >
-              {softLimit > 0 ? "Edit monthly token limit" : "Set monthly token limit"}
+              {softLimit > 0 ? "Edit monthly spend limit" : "Set monthly spend limit"}
             </button>
           ) : (
             <form
@@ -340,14 +340,14 @@ function MonthlyAllowanceBanner() {
                 void saveSoftLimit(limitDraft);
               }}
             >
-              <label htmlFor="monthlySoftTokenLimitInput" className="sr-only">
-                Monthly soft token limit
+              <label htmlFor="monthlySoftSpendLimitInput" className="sr-only">
+                Monthly soft spend limit (USD)
               </label>
               <input
-                id="monthlySoftTokenLimitInput"
+                id="monthlySoftSpendLimitInput"
                 type="text"
-                inputMode="numeric"
-                placeholder="e.g. 500000000 (0 = unlimited)"
+                inputMode="decimal"
+                placeholder="e.g. 500 (USD, 0 = unlimited)"
                 value={limitDraft}
                 onChange={(e) => setLimitDraft(e.target.value)}
                 className="w-full max-w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 font-[family-name:var(--font-code)] text-[0.8rem] text-[var(--color-text-primary)] sm:w-52"
@@ -407,38 +407,9 @@ function MonthlyAllowanceBanner() {
             {usageLoading && !monthUsage ? "…" : fmtTokens(totalTokens)}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {softLimit > 0 ? (
-              <span>
-                of {fmtTokens(softLimit)} soft limit ({limitPct.toFixed(1)}%)
-                {limitSource === "admin" ? " · custom" : ""}
-              </span>
-            ) : (
-              <span>Soft limit: Unlimited (advisory)</span>
-            )}
+            {fmtTokens(monthUsage?.totals?.prompt_tokens ?? 0)} input ·{" "}
+            {fmtTokens(monthUsage?.totals?.completion_tokens ?? 0)} output
           </div>
-          {softLimit > 0 ? (
-            <div className="mt-2">
-              <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${Math.min(100, Math.max(2, limitPct))}%`,
-                    backgroundColor:
-                      limitPct >= 100
-                        ? "var(--color-danger)"
-                        : limitPct >= 80
-                          ? "var(--color-warning)"
-                          : "var(--color-success)",
-                  }}
-                />
-              </div>
-              {limitPct >= 100 ? (
-                <p className="mt-1 text-[0.72rem] font-medium text-[var(--color-danger)]">
-                  Soft allowance exceeded — runs continue without interruption
-                </p>
-              ) : null}
-            </div>
-          ) : null}
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
@@ -470,6 +441,39 @@ function MonthlyAllowanceBanner() {
             Chat {fmtUSD(billedChatCostUSD)} · Tasks{" "}
             {fmtUSD(billedTaskCostUSD)}
           </div>
+          <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
+            {softLimit > 0 ? (
+              <span>
+                of {fmtUSD(softLimit)} soft spend limit ({limitPct.toFixed(1)}%)
+                {limitSource === "admin" ? " · custom" : ""}
+              </span>
+            ) : (
+              <span>Soft spend limit: Unlimited (advisory)</span>
+            )}
+          </div>
+          {softLimit > 0 ? (
+            <div className="mt-2">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${Math.min(100, Math.max(2, limitPct))}%`,
+                    backgroundColor:
+                      limitPct >= 100
+                        ? "var(--color-danger)"
+                        : limitPct >= 80
+                          ? "var(--color-warning)"
+                          : "var(--color-success)",
+                  }}
+                />
+              </div>
+              {limitPct >= 100 ? (
+                <p className="mt-1 text-[0.72rem] font-medium text-[var(--color-danger)]">
+                  Soft spend limit exceeded — runs continue without interruption
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">

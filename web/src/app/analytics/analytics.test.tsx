@@ -184,8 +184,8 @@ beforeEach(() => {
         JSON.stringify({
           settings: [
             {
-              key: "monthly_soft_token_limit",
-              value: "20000000",
+              key: "monthly_soft_spend_limit_usd",
+              value: "100",
               default_value: "0",
               source: "admin",
             },
@@ -194,7 +194,7 @@ beforeEach(() => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    if (url.endsWith("/api/admin/settings/monthly_soft_token_limit") && init?.method === "PUT") {
+    if (url.endsWith("/api/admin/settings/monthly_soft_spend_limit_usd") && init?.method === "PUT") {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
     if (url.endsWith("/api/admin/stats")) {
@@ -265,7 +265,7 @@ describe("AnalyticsPage", () => {
     });
     expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("83.3%");
     expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$42.50");
-    expect(within(banner).getByText(/60\.0%/)).toBeTruthy();
+    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(42\.5%\)/)).toBeTruthy();
 
     const table = await screen.findByTestId("model-breakdown-table");
     const rows = within(table).getAllByTestId("model-breakdown-row");
@@ -332,6 +332,7 @@ describe("AnalyticsPage", () => {
       expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$0.00");
     });
     expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("80.0%");
+    expect(within(banner).getByText(/of \$100\.00 soft spend limit \(0\.0%\)/)).toBeTruthy();
 
     const table = await screen.findByTestId("model-breakdown-table");
     const rows = within(table).getAllByTestId("model-breakdown-row");
@@ -342,21 +343,21 @@ describe("AnalyticsPage", () => {
     expect(rows[1].textContent).toContain("No price data");
   });
 
-  it("allows editing the monthly soft token limit inline", async () => {
+  it("allows editing the monthly soft spend limit inline", async () => {
     render(<AnalyticsPage />);
     const editBtn = await screen.findByTestId("edit-monthly-soft-limit");
     fireEvent.click(editBtn);
 
     const input = await screen.findByTestId("monthly-soft-limit-input");
-    fireEvent.change(input, { target: { value: "50000000" } });
+    fireEvent.change(input, { target: { value: "$500" } });
     fireEvent.click(screen.getByTestId("save-monthly-soft-limit"));
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/admin/settings/monthly_soft_token_limit",
+        "/api/admin/settings/monthly_soft_spend_limit_usd",
         expect.objectContaining({
           method: "PUT",
-          body: JSON.stringify({ value: "50000000" }),
+          body: JSON.stringify({ value: "500" }),
         }),
       );
     });

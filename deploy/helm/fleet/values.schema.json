@@ -249,7 +249,7 @@
             "FLEET_METADATA_MODEL": { "type": ["string", "number", "boolean"], "description": "Model for auxiliary metadata jobs. Default: inherited from FLEET_TITLE_MODEL." },
             "FLEET_MOCK_MODE": { "type": ["string", "number", "boolean"], "description": "Test harness: run without a real model (requires a build with the host-executor tag). Default: false." },
             "FLEET_MODEL_CACHE_TTL_MINUTES": { "type": ["string", "number", "boolean"], "description": "Minutes the live OpenRouter model catalog is cached. Default: 60." },
-            "FLEET_MONTHLY_SOFT_TOKEN_LIMIT": { "type": ["string", "number", "boolean"], "description": "Monthly soft token allowance across all models (0 = unlimited). Also an admin setting. Default: 0." },
+            "FLEET_MONTHLY_SOFT_SPEND_LIMIT_USD": { "type": ["string", "number", "boolean"], "description": "Monthly soft spend limit in USD across billed models (0 = unlimited). Also an admin setting. Default: 0." },
             "FLEET_NOTIFY_EMAIL_TO": { "type": ["string", "number", "boolean"], "description": "Recipients of task notification email." },
             "FLEET_NOTIFY_ON": { "type": ["string", "number", "boolean"], "description": "Task statuses that notify (comma-separated; failure includes blocked); empty notifies on every status. Nothing is sent until a channel (SMTP or webhook) is configured (docs/NOTIFICATIONS.md)." },
             "FLEET_NOTIFY_RETRIES": { "type": ["string", "number", "boolean"], "description": "Retries of a failed notification delivery. Default: 2." },
