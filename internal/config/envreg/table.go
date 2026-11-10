@@ -422,8 +422,11 @@ var table = []Entry{
 		Description: "Default persona name for new conversations."},
 	{Name: "SYSTEM_PROMPT", Group: GroupAgent, Scope: ScopeServer, Type: TypePath, Default: "default.md",
 		Description: "System-prompt file name in the bundle; .md is appended when no known extension is given."},
-	{Name: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", Group: GroupAgent, Scope: ScopeServer, Type: TypeBool, Default: "false", Knob: loader,
+	{Name: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", Group: GroupAgent, Scope: ScopeServer, Type: TypeBool, Default: "true", Knob: loader,
 		Description: "Connector auto-recommendation. Also an admin setting."},
+	{Name: "FLEET_MONTHLY_SOFT_TOKEN_LIMIT", Group: GroupAgent, Scope: ScopeServer, Type: TypeInt, Default: "0",
+		Knob:        &Knob{Min: b(0)},
+		Description: "Monthly soft token allowance across all models (0 = unlimited). Also an admin setting."},
 
 	// ───────────────────────────── Scheduler and tasks ─────────────────────────────
 	{Name: "FLEET_TASK_MODEL", Group: GroupScheduler, Scope: ScopeServer, Type: TypeString,

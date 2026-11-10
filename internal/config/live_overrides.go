@@ -134,6 +134,18 @@ func (c *Config) SetSharedFilesMaxTotalMB(v int) {
 	c.setLive(func() { c.SharedFilesMaxTotalMB = v })
 }
 
+// LiveMonthlySoftTokenLimit reports the monthly soft token allowance across all
+// models (0 = unlimited), admin-override-aware.
+func (c *Config) LiveMonthlySoftTokenLimit() int {
+	return c.liveInt(func() int { return c.MonthlySoftTokenLimit })
+}
+
+// SetMonthlySoftTokenLimit applies the admin override for the monthly soft
+// token allowance.
+func (c *Config) SetMonthlySoftTokenLimit(v int) {
+	c.setLive(func() { c.MonthlySoftTokenLimit = v })
+}
+
 // LiveContextHandlesEnabled reports whether composer context handles (#517)
 // are on, admin-override-aware.
 func (c *Config) LiveContextHandlesEnabled() bool {

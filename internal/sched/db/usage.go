@@ -114,3 +114,101 @@ func (db *Database) TaskUsage(ctx context.Context, from, to time.Time, groupBy s
 	}
 	return out, rows.Err()
 }
+
+// TaskOutlierRow summarizes one high-spend, high-token, high-iteration, or
+// failing background task for /analytics.
+type TaskOutlierRow struct {
+	TaskID           string  `json:"task_id"`
+	Title            string  `json:"title"`
+	OwnerEmail       string  `json:"owner_email"`
+	Status           string  `json:"status"`
+	Model            string  `json:"model"`
+	Recurrence       string  `json:"recurrence,omitempty"`
+	Iterations       int64   `json:"iterations"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+	ErrorMessage     string  `json:"error_message,omitempty"`
+}
+
+// TopTaskOutliers returns top background tasks ranked across cost, token
+// volume, iteration count, and failure states over the last 30 days.
+func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutlierRow, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	perRank := max(10, limit/2)
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	rows, err := db.conn.QueryContext(ctx, `
+		WITH ti_agg AS (
+			SELECT task_id,
+			       COUNT(*) AS iterations,
+			       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+			       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			       COALESCE(SUM(cost_usd), 0)::float8 AS cost_usd
+			FROM task_iterations
+			WHERE started_at >= $1
+			GROUP BY task_id
+		),
+		base AS (
+			SELECT
+				t.id::text AS task_id,
+				COALESCE(NULLIF(BTRIM(t.title), ''), LEFT(BTRIM(t.prompt), 80)) AS title,
+				COALESCE(u.email, '') AS owner_email,
+				t.status::text AS status,
+				COALESCE(t.model, '') AS model,
+				COALESCE(t.recurrence, '') AS recurrence,
+				COALESCE(ti_agg.iterations, 0) AS iterations,
+				COALESCE(ti_agg.prompt_tokens, 0) AS prompt_tokens,
+				COALESCE(ti_agg.completion_tokens, 0) AS completion_tokens,
+				COALESCE(ti_agg.cost_usd, 0)::float8 AS cost_usd,
+				COALESCE(t.error_message, COALESCE(t.dead_letter_reason, '')) AS error_message
+			FROM tasks t
+			LEFT JOIN ti_agg ON ti_agg.task_id = t.id
+			LEFT JOIN core.users u ON u.id = t.created_by
+			WHERE ti_agg.task_id IS NOT NULL
+			   OR (t.created_at >= $1 AND t.status IN ('error', 'dead_lettered'))
+		),
+		ranked AS (
+			SELECT *,
+				ROW_NUMBER() OVER (ORDER BY cost_usd DESC, (prompt_tokens + completion_tokens) DESC) AS rk_cost,
+				ROW_NUMBER() OVER (ORDER BY (prompt_tokens + completion_tokens) DESC, iterations DESC) AS rk_tokens,
+				ROW_NUMBER() OVER (ORDER BY iterations DESC, (prompt_tokens + completion_tokens) DESC) AS rk_iters,
+				ROW_NUMBER() OVER (ORDER BY CASE WHEN status IN ('error', 'dead_lettered') THEN 1 ELSE 0 END DESC, cost_usd DESC) AS rk_fail
+			FROM base
+		)
+		SELECT
+			task_id, title, owner_email, status, model, recurrence,
+			iterations, prompt_tokens, completion_tokens, cost_usd, error_message
+		FROM ranked
+		WHERE rk_cost <= $2 OR rk_tokens <= $2 OR rk_iters <= $2 OR (status IN ('error', 'dead_lettered') AND rk_fail <= $2)
+		ORDER BY cost_usd DESC, (prompt_tokens + completion_tokens) DESC, iterations DESC
+		LIMIT $3`,
+		cutoff, perRank, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TaskOutlierRow
+	for rows.Next() {
+		var r TaskOutlierRow
+		if err := rows.Scan(
+			&r.TaskID,
+			&r.Title,
+			&r.OwnerEmail,
+			&r.Status,
+			&r.Model,
+			&r.Recurrence,
+			&r.Iterations,
+			&r.PromptTokens,
+			&r.CompletionTokens,
+			&r.CostUSD,
+			&r.ErrorMessage,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

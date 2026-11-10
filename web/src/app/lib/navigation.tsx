@@ -47,9 +47,14 @@ function currentSearch(): string {
 export function resolveAlias(pathname: string, search: string): string | null {
   if (pathname === "/") return "/chat";
   if (pathname === "/admin") return "/settings/admin";
+  if (pathname === "/orchestrator") {
+    const tab = new URLSearchParams(search).get("tab");
+    if (tab === "usage" || tab === "adoption") {
+      return `/analytics?tab=${encodeURIComponent(tab)}`;
+    }
+  }
   const task = /^\/orchestrator\/tasks\/([^/]+)$/.exec(pathname);
   if (task) return `/orchestrator?task=${encodeURIComponent(decodeURIComponent(task[1]))}`;
-  void search;
   return null;
 }
 

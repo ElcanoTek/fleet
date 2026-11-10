@@ -58,6 +58,7 @@ export function AccountMenu({
   onSignOut,
   railCollapsed = false,
   current = false,
+  analyticsCurrent = false,
   guidesCurrent = false,
 }: {
   email: string;
@@ -71,6 +72,8 @@ export function AccountMenu({
   railCollapsed?: boolean;
   // True on the settings surface — tints the anchor + Settings item.
   current?: boolean;
+  // True on the analytics surface — tints the anchor + Analytics item.
+  analyticsCurrent?: boolean;
   // True on the guides surface — tints the anchor + Guides item.
   guidesCurrent?: boolean;
 }) {
@@ -104,7 +107,7 @@ export function AccountMenu({
           "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-2 text-left transition",
           "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
           open ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]" : "",
-          (current || guidesCurrent) && !open ? "account-current" : "",
+          (current || analyticsCurrent || guidesCurrent) && !open ? "account-current" : "",
           railCollapsed ? "sm:mx-auto sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
         ].join(" ")}
       >
@@ -154,6 +157,19 @@ export function AccountMenu({
           }}
         >
           Settings
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="bar-chart" className="size-4" />}
+          description="Usage, model mix, and adoption"
+          className={analyticsCurrent ? "menu-item-current" : ""}
+          current={analyticsCurrent}
+          testId="nav-to-analytics"
+          onClick={() => {
+            close();
+            window.location.assign("/analytics");
+          }}
+        >
+          Analytics
         </MenuItem>
         {/* The user guides live here, beside Settings, rather than in the
             rail: the rail is for the ways of working (chat, operations,

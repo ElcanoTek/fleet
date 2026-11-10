@@ -238,6 +238,12 @@ type Server struct {
 	workerStats func(context.Context) (*WorkerStats, error)
 	// schedPing (optional) pings the sched DB for the admin doctor.
 	schedPing func(context.Context) error
+	// sweepTaskWorkspaces (optional) sweeps completed/orphaned task and mcp-run
+	// workspace directories under the workspace root.
+	sweepTaskWorkspaces func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)
+	// taskOutliers (optional) returns top background tasks by cost, tokens,
+	// iterations, and failure state for /analytics.
+	taskOutliers func(ctx context.Context, limit int) ([]TaskOutlierStat, error)
 	// hostStats is the dependency-free procfs/statfs collector behind the
 	// admin-only Server settings page. It retains only the previous counters
 	// needed to calculate CPU/network rates.
@@ -562,6 +568,19 @@ func WithDiskGuard(g *diskguard.Guard) Option {
 // database the process actually uses (#2018). nil leaves that check skipped.
 func WithSchedPing(fn func(context.Context) error) Option {
 	return func(s *Server) { s.schedPing = fn }
+}
+
+// WithTaskWorkspaceSweeper injects the scheduler store's task/mcp-run workspace
+// sweeper so maintenance and admin storage cleanup reclaim finished task and
+// MCP-run workspace directories alongside conversation workspaces.
+func WithTaskWorkspaceSweeper(fn func(ctx context.Context, workspaceRoot string, olderThan time.Duration) (int, error)) Option {
+	return func(s *Server) { s.sweepTaskWorkspaces = fn }
+}
+
+// WithTaskOutlierProvider injects the scheduler store's task outlier query into
+// GET /admin/stats for the /analytics Outliers & Friction tab.
+func WithTaskOutlierProvider(fn func(ctx context.Context, limit int) ([]TaskOutlierStat, error)) Option {
+	return func(s *Server) { s.taskOutliers = fn }
 }
 
 // WithWorkerStats injects a provider for scheduler worker/task counts (from the

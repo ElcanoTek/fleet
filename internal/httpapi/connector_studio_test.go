@@ -571,3 +571,50 @@ func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswor
 		t.Fatalf("short/common word 'password' submitted in password field must not poison process-wide redactor: %s", redacted)
 	}
 }
+
+func TestConnectorStudioSearchCatalogLoginRequiredHint(t *testing.T) {
+	t.Parallel()
+
+	memStore := newMemRemoteMCPStore()
+	memStore.servers["srv-ms365"] = &store.RemoteMCPServer{
+		ID:        "srv-ms365",
+		UserEmail: "matt@example.com",
+		Name:      "microsoft-365",
+		Account:   "default",
+		URL:       "https://fleet.example.com/mcp/ms365",
+		AuthKind:  store.RemoteMCPAuthOAuth,
+		Transport: "streamable-http",
+		Status:    "login_required",
+	}
+	rmcp := remotemcp.NewService(memStore, remotemcp.Config{
+		PublicBaseURL:     "https://fleet.example.com",
+		AllowInsecureHTTP: true,
+	})
+	chatSt := newFakeChatStore()
+	conv, _ := chatSt.CreateConversation(context.Background(), "matt@example.com", "Check Email", "default", "", false)
+	s := &Server{
+		store:     chatSt,
+		remoteMCP: rmcp,
+	}
+	h := s.newConnectorStudioHandler(conv, "matt@example.com")
+	res, err := h(context.Background(), tools.ConnectorStudioParams{
+		Action: tools.ConnectorStudioActionSearchCatalog,
+		Query:  "microsoft 365 outlook email",
+	})
+	if err != nil {
+		t.Fatalf("search_catalog: %v", err)
+	}
+	searchMap, _ := res.(map[string]any)
+	existing, _ := searchMap["existing_connections"].([]map[string]any)
+	if len(existing) != 1 {
+		t.Fatalf("expected 1 existing connection, got %#v", existing)
+	}
+	hint, _ := existing[0]["hint"].(string)
+	if !strings.Contains(hint, "login_required") || !strings.Contains(hint, "/settings/connections") || !strings.Contains(hint, "Stop immediately") {
+		t.Fatalf("expected re-authentication hint on login_required connection, got %q", hint)
+	}
+	topHint, _ := searchMap["reauth_required_hint"].(string)
+	if !strings.Contains(topHint, "microsoft-365") {
+		t.Fatalf("expected top-level reauth_required_hint, got %q", topHint)
+	}
+}

@@ -55,7 +55,7 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetDescription(argv[1:])
 	case "set-limits":
 		return schedTaskSetLimits(argv[1:])
-	case "set-owner":
+	case "set-owner", "assign-owner":
 		return schedTaskSetOwner(argv[1:])
 	case "tag":
 		return schedTaskTag(argv[1:])
@@ -418,24 +418,47 @@ func schedTaskSetDescription(argv []string) int {
 type taskOwnerStore interface {
 	GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error)
 	SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID, check func(*models.Task) error) ([]uuid.UUID, error)
+	SetTaskLineageOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error)
 }
 
 var _ taskOwnerStore = (*storage.Storage)(nil)
 
+// reorderOwnerArgs moves flags (--lineage, --include-lineage, --database-url)
+// ahead of positional arguments so `set-owner <id> <email> --lineage` works
+// just like `set-owner --lineage <id> <email>`.
+func reorderOwnerArgs(argv []string) []string {
+	var flags, pos []string
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			if (a == "--database-url" || a == "-database-url") && i+1 < len(argv) {
+				i++
+				flags = append(flags, argv[i])
+			}
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	return append(flags, pos...)
+}
+
 // schedTaskSetOwner makes an existing user the owner (created_by) of a task
 // and of the rest of its recurrence chain that later runs continue from — the CLI
-// twin of PUT /tasks/{id}/owner (docs/TASK-OWNERSHIP.md). It writes the sched
-// DB directly, like every `sched task` verb, so it cannot run the API's
-// mcp_selection check (that needs the running server's bundle inventory).
+// twin of PUT /tasks/{id}/owner (docs/TASK-OWNERSHIP.md). When --lineage /
+// --include-lineage is passed, it also attributes any unowned (created_by IS NULL)
+// historical occurrences in the same lineage.
 func schedTaskSetOwner(argv []string) int {
 	fs := flag.NewFlagSet("sched task set-owner", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
-	if err := fs.Parse(argv); err != nil {
+	lineage := fs.Bool("lineage", false, "also attribute unowned historical tasks in the same lineage")
+	includeLineage := fs.Bool("include-lineage", false, "alias for --lineage")
+	if err := fs.Parse(reorderOwnerArgs(argv)); err != nil {
 		return 1
 	}
 	rest := fs.Args()
 	if len(rest) != 2 || strings.TrimSpace(rest[1]) == "" {
-		return errf(1, "usage: fleet sched task set-owner <task_id> <username>")
+		return errf(1, "usage: fleet sched task set-owner [--lineage] <task_id> <username>")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {
@@ -447,7 +470,7 @@ func schedTaskSetOwner(argv []string) int {
 		return code
 	}
 	defer st.Close()
-	return setTaskOwner(context.Background(), st, os.Stderr, taskID, strings.TrimSpace(rest[1]))
+	return setTaskOwnerWithOptions(context.Background(), st, os.Stderr, taskID, strings.TrimSpace(rest[1]), *lineage || *includeLineage)
 }
 
 // setTaskOwner is schedTaskSetOwner past flag parsing: resolve the user (as
@@ -455,6 +478,10 @@ func schedTaskSetOwner(argv []string) int {
 // reassign, report on w. Exit codes follow the sched verbs: 2 not found, 5 a
 // storage failure.
 func setTaskOwner(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uuid.UUID, username string) int {
+	return setTaskOwnerWithOptions(ctx, st, w, taskID, username, false)
+}
+
+func setTaskOwnerWithOptions(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uuid.UUID, username string, includeLineage bool) int {
 	var owner *models.User
 	for _, name := range []string{username, strings.ToLower(username)} {
 		user, err := st.GetUserByUsernameWithContext(ctx, name)
@@ -469,7 +496,15 @@ func setTaskOwner(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uu
 	if owner == nil {
 		return errf(2, "user %q not found", username)
 	}
-	updated, err := st.SetTaskOwner(ctx, taskID, owner.ID, nil)
+	var (
+		updated []uuid.UUID
+		err     error
+	)
+	if includeLineage {
+		updated, err = st.SetTaskLineageOwner(ctx, taskID, owner.ID)
+	} else {
+		updated, err = st.SetTaskOwner(ctx, taskID, owner.ID, nil)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return errf(2, "task %s not found", taskID)

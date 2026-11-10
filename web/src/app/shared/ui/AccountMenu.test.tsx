@@ -24,19 +24,30 @@ describe("AccountMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
   });
 
-  // The user guides moved out of the rail into this menu, beside Settings.
-  it("offers the guides beside Settings, tinted on the guides surface", () => {
+  // Analytics and the user guides live in this menu, beside Settings.
+  it("offers Analytics and the guides beside Settings, tinted on their surfaces", () => {
     render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} guidesCurrent />);
     const button = screen.getByRole("button", { name: /account menu/i });
     expect(button.className).toContain("account-current");
     fireEvent.click(button);
     const items = screen.getAllByRole("menuitem").map((i) => i.textContent ?? "");
     const settings = items.findIndex((t) => t.startsWith("Settings"));
-    expect(items[settings + 1]).toMatch(/^Guides/);
+    expect(items[settings + 1]).toMatch(/^Analytics/);
+    expect(items[settings + 2]).toMatch(/^Guides/);
     expect(screen.getByTestId("nav-to-help")).toHaveClass("menu-item-current");
     // The current page is exposed to assistive tech too, not only styled.
     expect(screen.getByTestId("nav-to-help")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("nav-to-analytics")).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("menuitem", { name: /^Settings/ })).not.toHaveAttribute("aria-current");
+  });
+
+  it("tints Analytics when analyticsCurrent is set", () => {
+    render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} analyticsCurrent />);
+    const button = screen.getByRole("button", { name: /account menu/i });
+    expect(button.className).toContain("account-current");
+    fireEvent.click(button);
+    expect(screen.getByTestId("nav-to-analytics")).toHaveClass("menu-item-current");
+    expect(screen.getByTestId("nav-to-analytics")).toHaveAttribute("aria-current", "page");
   });
 
   // Sign out asks first: the item opens a centred confirm (portalled out of

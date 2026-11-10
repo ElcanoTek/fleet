@@ -53,15 +53,15 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"SCHED_DATABASE_URL": true,
 	// Other keys boot reads via os.Getenv that predated this allowlist (an
 	// env-file value was silently ignored; only the process env worked).
-	"ADMIN_API_KEY":                        true,
-	"FLEET_BACKUP_DIR":                     true,
-	"FLEET_BACKUP_RETENTION_DAYS":          true,
-	"FLEET_DEFAULT_TIMEZONE":               true,
-	"FLEET_TIMEZONE":                       true,
-	"FLEET_ORCHESTRATOR_ADDR":              true,
-	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS":  true,
-	"FLEET_OTEL_ENDPOINT":                  true,
-	"FLEET_OTEL_SAMPLE_RATIO":              true,
+	"ADMIN_API_KEY":                       true,
+	"FLEET_BACKUP_DIR":                    true,
+	"FLEET_BACKUP_RETENTION_DAYS":         true,
+	"FLEET_DEFAULT_TIMEZONE":              true,
+	"FLEET_TIMEZONE":                      true,
+	"FLEET_ORCHESTRATOR_ADDR":             true,
+	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS": true,
+	"FLEET_OTEL_ENDPOINT":                 true,
+	"FLEET_OTEL_SAMPLE_RATIO":             true,
 	// Added after the registry (#2052, OTLP over TLS/mTLS): a deliberate
 	// registry change, recorded here per the rule above.
 	"FLEET_OTEL_INSECURE":                  true,
@@ -101,6 +101,7 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_MAX_ITERATIONS":                           true,
 	"FLEET_MAX_COST_USD":                             true,
 	"FLEET_MAX_TOTAL_TOKENS":                         true,
+	"FLEET_MONTHLY_SOFT_TOKEN_LIMIT":                 true,
 	"FLEET_TASK_DEFAULT_MAX_RETRIES":                 true,
 	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS":     true,
 	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS": true,
@@ -541,6 +542,7 @@ var preRegistryEnvKnobs = []envKnob{
 	{key: "FLEET_PII_REDACTION_ENABLED", kind: kindBool},
 	{key: "FLEET_CONTEXT_HANDLES_ENABLED", kind: kindBool},
 	{key: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", kind: kindBool},
+	{key: "FLEET_MONTHLY_SOFT_TOKEN_LIMIT", kind: kindInt, min: bound(0)},
 	{key: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT", kind: kindBool},
 	// Waives the boot requirement for the open-egress NetworkPolicy, so it is
 	// a security posture rather than a preference: registered like any other
