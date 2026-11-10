@@ -1356,6 +1356,58 @@ func (s *Storage) SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID, c
 	return rows, nil
 }
 
+// SetTaskLineageOwner reassigns taskID and its forward recurrence chain via
+// SetTaskOwner, and additionally attributes any unowned (created_by IS NULL)
+// historical occurrences in the same lineage or backward previous_occurrence_id
+// chain.
+func (s *Storage) SetTaskLineageOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error) {
+	updated, err := s.SetTaskOwner(ctx, taskID, ownerID, nil)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		WITH RECURSIVE target AS (
+			SELECT id, COALESCE(NULLIF(lineage_id::text, ''), id::text) AS lin, previous_occurrence_id
+			FROM tasks WHERE id = $1
+		),
+		ancestors(id, prev_id, depth) AS (
+			SELECT t.id, t.previous_occurrence_id, 1
+			FROM tasks t JOIN target tg ON t.id::text = tg.previous_occurrence_id
+			UNION ALL
+			SELECT t.id, t.previous_occurrence_id, a.depth + 1
+			FROM tasks t JOIN ancestors a ON t.id::text = a.prev_id
+			WHERE a.depth < 1000
+		)
+		UPDATE tasks
+		SET created_by = $2
+		WHERE created_by IS NULL
+		  AND (
+		    COALESCE(NULLIF(lineage_id::text, ''), id::text) = (SELECT lin FROM target)
+		    OR id IN (SELECT id FROM ancestors)
+		  )
+		RETURNING id::text
+	`, taskID, ownerID)
+	if err != nil {
+		return updated, err
+	}
+	defer rows.Close()
+	seen := make(map[uuid.UUID]bool, len(updated))
+	for _, id := range updated {
+		seen[id] = true
+	}
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return updated, err
+		}
+		if id, perr := uuid.Parse(idStr); perr == nil && !seen[id] {
+			seen[id] = true
+			updated = append(updated, id)
+		}
+	}
+	return updated, rows.Err()
+}
+
 // taskOwnerChainRows returns the rows SetTaskOwner rewrites for taskID — the
 // task, its unfinished later occurrences, and its chain's last occurrence —
 // with the task first. Read inside the caller's transaction; each call is a
@@ -1793,6 +1845,12 @@ func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy str
 // (user, UTC day) for the adoption report. See db.TaskUsageByUserDay.
 func (s *Storage) TaskUsageByUserDay(ctx context.Context, from, to time.Time) ([]models.UserDayUsage, error) {
 	return s.db.TaskUsageByUserDay(ctx, from, to)
+}
+
+// TopTaskOutliers returns top background tasks ranked across cost, token
+// volume, iteration count, and failure states over the last 30 days.
+func (s *Storage) TopTaskOutliers(ctx context.Context, limit int) ([]db.TaskOutlierRow, error) {
+	return s.db.TopTaskOutliers(ctx, limit)
 }
 
 // UpsertBudget inserts or replaces a per-principal rolling budget (#601 part 2).

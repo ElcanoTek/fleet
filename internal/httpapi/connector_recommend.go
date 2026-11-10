@@ -14,7 +14,7 @@ import (
 // so the agent can suggest connecting it — via the EXISTING /settings/connections
 // OAuth flow, never auto-connecting. Detection reuses the #506 BM25 index over the
 // connector catalog's {name, display, description}; it is deterministic, needs no
-// network, and is DEFAULT OFF (FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED).
+// network, and is DEFAULT ON (FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED).
 
 const maxConnectorRecommendations = 2
 

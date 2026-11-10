@@ -21,11 +21,10 @@ import { SleepingTasks } from "./SleepingTasks";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { SLAReportPanel } from "./SLAReportPanel";
-import { UsagePanel } from "./UsagePanel";
-import { AdoptionPanel } from "./AdoptionPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
 import { taskRunLabel } from "./taskDisplay";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useRouter } from "@/app/lib/navigation";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -61,13 +60,12 @@ function OrchestratorSlimHeader() {
 }
 
 // Top-level dashboard tabs. "tasks" is the legacy Recent Tasks view; the
-// admin-only entries (sla/usage/adoption) are render-guarded below.
+// admin-only entry (sla) is render-guarded below. Usage and Adoption moved to
+// the top-level /analytics view under the account menu.
 const DASH_TABS = [
   "tasks",
   "upcoming",
   "sla",
-  "usage",
-  "adoption",
 ] as const;
 type DashTab = (typeof DASH_TABS)[number];
 
@@ -322,18 +320,20 @@ function OrchestratorInner({
   };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
   const railCollapse = useRailCollapse();
+  const router = useRouter();
+  useEffect(() => {
+    if (typeof window === "undefined" || session.role !== "admin") return;
+    const want = new URLSearchParams(window.location.search).get("tab");
+    if (want === "usage" || want === "adoption") {
+      router.replace(`/analytics?tab=${want}`);
+    }
+  }, [router, session.role]);
   // Top-level dashboard tab (#274): defaults to Recent Tasks (the existing
   // dashboard shape) unless a ?tab= deep link picks another view.
   const [tab, setTab] = useState<DashTab>(initialDashboardTab);
-  // The admin-only tabs (sla/usage/adoption) clamp to Recent Tasks for a
-  // non-admin: a ?tab=usage deep link used to leave the tab row with nothing
-  // selected while the tasks view rendered underneath it. (session.role, not
-  // isAdmin: that alias is declared further down.)
+  // The admin-only tab (sla) clamps to Recent Tasks for a non-admin.
   const effectiveTab: DashTab =
-    session.role !== "admin" &&
-    (tab === "sla" || tab === "usage" || tab === "adoption")
-      ? "tasks"
-      : tab;
+    session.role !== "admin" && tab === "sla" ? "tasks" : tab;
   const tabsRef = useRef<HTMLDivElement | null>(null);
   // switchTab pins the tab row to the top of the scroll container when the
   // user had scrolled: the new tab then starts at its beginning instead of
@@ -597,30 +597,6 @@ function OrchestratorInner({
                 ) : null}
                 {/* Usage/spend analytics (#601) is admin-only like SLA: the
                     report is global across all principals. */}
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={effectiveTab === "usage"}
-                    className={`tab-btn${effectiveTab === "usage" ? " tab-btn-active" : ""}`}
-                    onClick={() => switchTab("usage")}
-                  >
-                    Usage
-                  </button>
-                ) : null}
-                {/* The exec adoption audit is admin-only for the same reason
-                    as Usage: it is global across all users' activity. */}
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={effectiveTab === "adoption"}
-                    className={`tab-btn${effectiveTab === "adoption" ? " tab-btn-active" : ""}`}
-                    onClick={() => switchTab("adoption")}
-                  >
-                    Adoption
-                  </button>
-                ) : null}
               </div>
 
               {/* The tab-panel wrapper keeps a floor under the content: when a
@@ -633,10 +609,6 @@ function OrchestratorInner({
                   <UpcomingPanel />
                 ) : tab === "sla" && isAdmin ? (
                   <SLAReportPanel />
-                ) : tab === "usage" && isAdmin ? (
-                  <UsagePanel />
-                ) : tab === "adoption" && isAdmin ? (
-                  <AdoptionPanel />
                 ) : (
                   <>
                     <SleepingTasks

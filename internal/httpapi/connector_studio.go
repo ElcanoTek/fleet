@@ -921,6 +921,18 @@ func (s *Server) newConnectorStudioHandler(conv *store.Conversation, user string
 	}
 }
 
+func connectorReauthHint(name string) string {
+	return fmt.Sprintf("The user's '%s' connection requires re-authentication (status: login_required). Stop immediately and ask the user to click 'Sign in' next to '%s' in Settings → Connections (/settings/connections) — do NOT fall back to shared report tools or other users' data as a substitute.", name, name)
+}
+
+func sharedConnectorReauthHint(name, owner string) string {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		owner = "the connection owner"
+	}
+	return fmt.Sprintf("The shared '%s' connection (owned by %s) requires re-authentication (status: login_required). Stop immediately and tell the user to ask %s to re-sign in to '%s' in Settings → Connections (/settings/connections), or to connect their own '%s' account — do NOT fall back to unrelated shared report tools or other users' data as a substitute.", name, owner, owner, name, name)
+}
+
 func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query string) (any, error) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	tokens := strings.Fields(q)
@@ -978,11 +990,12 @@ func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query s
 	}
 
 	var existing []map[string]any
+	var reauthHints []string
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() && user != "" {
 		if own, err := s.remoteMCP.ListServers(ctx, user); err == nil {
 			for _, srv := range own {
 				if matchesQuery(srv.Name, srv.Account, srv.URL, srv.Transport) {
-					existing = append(existing, map[string]any{
+					entry := map[string]any{
 						"id":                srv.ID,
 						"name":              srv.Name,
 						"account":           srv.Account,
@@ -992,14 +1005,20 @@ func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query s
 						"status":            srv.Status,
 						"custom_tool_count": len(srv.CustomTools),
 						"scope":             "personal",
-					})
+					}
+					if strings.EqualFold(strings.TrimSpace(srv.Status), "login_required") {
+						hint := connectorReauthHint(srv.Name)
+						entry["hint"] = hint
+						reauthHints = append(reauthHints, hint)
+					}
+					existing = append(existing, entry)
 				}
 			}
 		}
 		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 			for _, srv := range shared {
 				if matchesQuery(srv.Name, srv.Account, srv.URL, srv.Transport) {
-					existing = append(existing, map[string]any{
+					entry := map[string]any{
 						"id":                srv.ID,
 						"name":              srv.Name,
 						"account":           srv.Account,
@@ -1010,19 +1029,29 @@ func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query s
 						"custom_tool_count": len(srv.CustomTools),
 						"scope":             "shared",
 						"owner":             srv.UserEmail,
-					})
+					}
+					if strings.EqualFold(strings.TrimSpace(srv.Status), "login_required") {
+						hint := sharedConnectorReauthHint(srv.Name, srv.UserEmail)
+						entry["hint"] = hint
+						reauthHints = append(reauthHints, hint)
+					}
+					existing = append(existing, entry)
 				}
 			}
 		}
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"query":                query,
 		"catalog_matches":      catalogMatches,
 		"bundled_matches":      bundledMatches,
 		"existing_connections": existing,
 		"tier_guidance":        "Tier 1 (Preferred): If an official MCP server exists in catalog_matches, connect it with action='connect_mcp'. Tier 2 (API Wrapper): If the service has a REST/GraphQL/JSON API (or you discover one via action='probe_http' or action='probe_browser' with capture_network=true), build a custom 'http_tools' connector with action='create_custom_connector'. Tier 3 (Browser Automation Fallback): If the site has no usable API, use action='probe_browser' (or action='start_copilot_session' if login hits CAPTCHA/2FA) and build a custom 'playwright' connector with action='create_custom_connector'.",
-	}, nil
+	}
+	if len(reauthHints) > 0 {
+		out["reauth_required_hint"] = strings.Join(reauthHints, " ")
+	}
+	return out, nil
 }
 
 func (s *Server) allowInsecureHTTP() bool {

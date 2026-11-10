@@ -699,6 +699,8 @@ func run() error {
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
 	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
 	chatOpts = append(chatOpts, httpapi.WithSchedPing(schedStorage.DB().Ping))
+	chatOpts = append(chatOpts, httpapi.WithTaskWorkspaceSweeper(schedStorage.SweepTaskWorkspaces))
+	chatOpts = append(chatOpts, httpapi.WithTaskOutlierProvider(taskOutlierProvider(schedStorage)))
 
 	// Admin-managed LLM providers: after a persisted edit the handler invokes
 	// this to re-read the store, re-merge with the bundle table, and swap the
@@ -2061,6 +2063,32 @@ func chatUsageProvider(chatStore *store.Store) handlers.ChatUsageProvider {
 				CompletionTokens: r.CompletionTokens,
 				CachedTokens:     r.CachedTokens,
 				ChatTurns:        r.Turns,
+			})
+		}
+		return out, nil
+	}
+}
+
+func taskOutlierProvider(schedStorage *storage.Storage) func(ctx context.Context, limit int) ([]httpapi.TaskOutlierStat, error) {
+	return func(ctx context.Context, limit int) ([]httpapi.TaskOutlierStat, error) {
+		rows, err := schedStorage.TopTaskOutliers(ctx, limit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]httpapi.TaskOutlierStat, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, httpapi.TaskOutlierStat{
+				TaskID:           r.TaskID,
+				Title:            r.Title,
+				OwnerEmail:       r.OwnerEmail,
+				Status:           r.Status,
+				Model:            r.Model,
+				Recurrence:       r.Recurrence,
+				Iterations:       r.Iterations,
+				PromptTokens:     r.PromptTokens,
+				CompletionTokens: r.CompletionTokens,
+				CostUSD:          r.CostUSD,
+				ErrorMessage:     r.ErrorMessage,
 			})
 		}
 		return out, nil

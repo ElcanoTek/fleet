@@ -7,10 +7,12 @@ outbound webhook** ([WEBHOOK-SIGNING.md](WEBHOOK-SIGNING.md)), and per-user
 and webhook are deployment-wide; push is per-user. Default OFF — with nothing
 configured, nothing fires.
 
-## Configuring from the web UI (recommended)
+## Configuring at runtime via the admin API
 
-Settings → Admin → **Notifications** lets an admin configure the email and
-webhook channels at runtime:
+The `/admin/notify-settings` endpoints let an operator configure the email and
+webhook channels at runtime (while per-user browser push notifications are
+managed in **Settings → General → Browser notifications**; legacy links to
+`/settings/admin/notifications` redirect to `/settings/admin`):
 
 - **Notify on**: which statuses fire (`success` / `failure` / `blocked` /
   `progress`; none selected = all terminal statuses). One filter, shared by

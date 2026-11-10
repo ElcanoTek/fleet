@@ -196,3 +196,60 @@ func TestSetTaskOwnerReachesTheNextSpawn(t *testing.T) {
 		t.Fatalf("successor previous_occurrence_id = %v, want %s", succ[0].PreviousOccurrenceID, done.ID)
 	}
 }
+
+func TestSetTaskLineageOwnerAttributesUnownedHistoricalOccurrences(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	owner := uuid.New()
+
+	// Seed an unowned historical occurrence and a current scheduled occurrence in the same lineage.
+	histID := uuid.New()
+	completed := time.Now().Add(-24 * time.Hour).UTC()
+	hist := &models.Task{
+		ID:          histID,
+		LineageID:   histID,
+		Prompt:      "daily report",
+		Status:      models.TaskStatusSuccess,
+		Priority:    models.PriorityNormal,
+		Recurrence:  "@daily",
+		Timezone:    "UTC",
+		CreatedAt:   completed.Add(-time.Hour),
+		CompletedAt: &completed,
+	}
+	if _, err := store.AddTask(hist); err != nil {
+		t.Fatalf("AddTask(hist): %v", err)
+	}
+
+	future := time.Now().Add(time.Hour).UTC()
+	liveID := uuid.New()
+	live := &models.Task{
+		ID:                   liveID,
+		LineageID:            histID,
+		Prompt:               "daily report",
+		Status:               models.TaskStatusScheduled,
+		ScheduledFor:         &future,
+		Priority:             models.PriorityNormal,
+		Recurrence:           "@daily",
+		Timezone:             "UTC",
+		CreatedAt:            time.Now().UTC(),
+		PreviousOccurrenceID: &histID,
+	}
+	if _, err := store.AddTask(live); err != nil {
+		t.Fatalf("AddTask(live): %v", err)
+	}
+
+	updated, err := store.SetTaskLineageOwner(ctx, liveID, owner)
+	if err != nil {
+		t.Fatalf("SetTaskLineageOwner: %v", err)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated = %v, want 2 rows (live + hist)", updated)
+	}
+	for _, id := range []uuid.UUID{liveID, histID} {
+		if got := ownerOf(t, store, id); got != owner {
+			t.Errorf("owner of %s = %s, want %s", id, got, owner)
+		}
+	}
+}

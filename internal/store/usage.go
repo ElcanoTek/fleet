@@ -135,3 +135,123 @@ func (s *Store) UsageSummary(ctx context.Context, from, to time.Time, groupBy st
 	}
 	return out, rows.Err()
 }
+
+// ConversationOutlierRow is one high-spend, high-token, or high-friction
+// conversation surfaced on /analytics.
+type ConversationOutlierRow struct {
+	ConversationID     string  `json:"conversation_id"`
+	Title              string  `json:"title"`
+	UserEmail          string  `json:"user_email"`
+	Model              string  `json:"model"`
+	Turns              int64   `json:"turns"`
+	PromptTokens       int64   `json:"prompt_tokens"`
+	CompletionTokens   int64   `json:"completion_tokens"`
+	CachedTokens       int64   `json:"cached_tokens"`
+	CostUSD            float64 `json:"cost_usd"`
+	FrustratedMessages int     `json:"frustrated_messages"`
+	StruggleSignals    int     `json:"struggle_signals"`
+	AdvancedSwitches   int     `json:"advanced_switches"`
+	UpdatedAt          int64   `json:"updated_at"`
+}
+
+// TopConversations returns the highest-spend, highest-token, and
+// highest-friction conversations for the /analytics outliers view.
+func (s *Store) TopConversations(ctx context.Context, limit int) ([]ConversationOutlierRow, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	perRank := max(10, limit/2)
+	rows, err := s.db.QueryContext(ctx, `
+		WITH esc AS (
+			SELECT conversation_id,
+			       COUNT(*) FILTER (WHERE source = 'classifier') AS frustrated,
+			       COUNT(*) FILTER (WHERE source = 'signal') AS struggles
+			FROM escalation_events
+			GROUP BY conversation_id
+		),
+		sw AS (
+			SELECT conversation_id,
+			       COUNT(*) AS switches
+			FROM approvals
+			WHERE tool_name = 'suggest_advanced_model' AND status = 'approved'
+			GROUP BY conversation_id
+		),
+		tm AS (
+			SELECT conversation_id,
+			       MAX(user_email) AS user_email,
+			       COUNT(*) AS turns,
+			       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+			       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+			       COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+			       COALESCE(SUM(cost_usd), 0) AS cost_usd,
+			       MAX(completed_at) AS last_turn_at
+			FROM turn_metrics
+			GROUP BY conversation_id
+		),
+		base AS (
+			SELECT
+				tm.conversation_id,
+				COALESCE(c.title, '') AS title,
+				COALESCE(NULLIF(c.user_email, ''), tm.user_email, '') AS user_email,
+				COALESCE(c.model, '') AS model,
+				tm.turns,
+				tm.prompt_tokens,
+				tm.completion_tokens,
+				tm.cached_tokens,
+				tm.cost_usd,
+				COALESCE(esc.frustrated, 0) AS frustrated_messages,
+				COALESCE(esc.struggles, 0) AS struggle_signals,
+				COALESCE(sw.switches, 0) AS advanced_switches,
+				GREATEST(COALESCE(c.updated_at, 0), COALESCE(tm.last_turn_at, 0)) AS updated_at
+			FROM tm
+			JOIN conversations c ON c.id = tm.conversation_id AND c.deleted_at IS NULL
+			LEFT JOIN esc ON esc.conversation_id = tm.conversation_id
+			LEFT JOIN sw ON sw.conversation_id = tm.conversation_id
+		),
+		ranked AS (
+			SELECT *,
+				ROW_NUMBER() OVER (ORDER BY cost_usd DESC, (prompt_tokens + completion_tokens) DESC) AS rk_cost,
+				ROW_NUMBER() OVER (ORDER BY (prompt_tokens + completion_tokens) DESC, turns DESC) AS rk_tokens,
+				ROW_NUMBER() OVER (ORDER BY (frustrated_messages + struggle_signals + advanced_switches) DESC, turns DESC) AS rk_friction
+			FROM base
+		)
+		SELECT
+			conversation_id, title, user_email, model, turns,
+			prompt_tokens, completion_tokens, cached_tokens, cost_usd,
+			frustrated_messages, struggle_signals, advanced_switches, updated_at
+		FROM ranked
+		WHERE rk_cost <= $1 OR rk_tokens <= $1 OR (frustrated_messages + struggle_signals + advanced_switches > 0 AND rk_friction <= $1)
+		ORDER BY
+			LEAST(rk_cost, rk_tokens, CASE WHEN frustrated_messages + struggle_signals + advanced_switches > 0 THEN rk_friction ELSE 999999 END) ASC,
+			cost_usd DESC, (prompt_tokens + completion_tokens) DESC, turns DESC
+		LIMIT $2`,
+		perRank, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ConversationOutlierRow
+	for rows.Next() {
+		var r ConversationOutlierRow
+		if err := rows.Scan(
+			&r.ConversationID,
+			&r.Title,
+			&r.UserEmail,
+			&r.Model,
+			&r.Turns,
+			&r.PromptTokens,
+			&r.CompletionTokens,
+			&r.CachedTokens,
+			&r.CostUSD,
+			&r.FrustratedMessages,
+			&r.StruggleSignals,
+			&r.AdvancedSwitches,
+			&r.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

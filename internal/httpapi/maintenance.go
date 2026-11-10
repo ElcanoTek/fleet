@@ -114,6 +114,13 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		logging.From(ctx).Info("maintenance: workspace sweep removed orphan dirs", "removed", removed)
 	}
 	s.sweepOrphanPrivateWorkspaceStashes(ctx)
+	if s.sweepTaskWorkspaces != nil {
+		if taskRemoved, terr := s.sweepTaskWorkspaces(ctx, tools.WorkspaceDirForConversation(""), time.Duration(s.cfg.ConversationTTL)*24*time.Hour); terr != nil {
+			logging.From(ctx).Error("maintenance: task workspace sweep failed", "err", terr)
+		} else if taskRemoved > 0 {
+			logging.From(ctx).Info("maintenance: task workspace sweep removed dirs", "removed", taskRemoved)
+		}
+	}
 
 	// download_url partial files a cancelled turn left behind (the sandbox
 	// was retired before the download could abort its own partial). Without

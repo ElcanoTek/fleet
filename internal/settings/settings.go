@@ -208,6 +208,8 @@ func Registry() []Spec {
 		// bytes conversion.
 		{Key: "shared_files_max_total_mb", Kind: KindInt, Min: 1, Max: 16 * 1024 * 1024, MinZeroOK: true,
 			EnvVar: "FLEET_SHARED_FILES_MAX_TOTAL_MB"},
+		{Key: "monthly_soft_token_limit", Kind: KindInt, Min: 1000, Max: 1_000_000_000_000, MinZeroOK: true,
+			EnvVar: "FLEET_MONTHLY_SOFT_TOKEN_LIMIT"},
 	}
 }
 

@@ -62,6 +62,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"context_handles_enabled":           strconv.FormatBool(cfg.ContextHandlesEnabled),
 		"team_chats_shared_by_default":      strconv.FormatBool(cfg.TeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         strconv.Itoa(cfg.SharedFilesMaxTotalMB),
+		"monthly_soft_token_limit":          strconv.Itoa(cfg.MonthlySoftTokenLimit),
 	}
 	pii := newPIIRedactorState(cfg)
 	guard := newGuardrailState(cfg)
@@ -109,6 +110,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"context_handles_enabled":           applyBoolSetting(cfg.SetContextHandlesEnabled),
 		"team_chats_shared_by_default":      applyBoolSetting(cfg.SetTeamChatsSharedByDefault),
 		"shared_files_max_total_mb":         applyIntSetting(cfg.SetSharedFilesMaxTotalMB),
+		"monthly_soft_token_limit":          applyIntSetting(cfg.SetMonthlySoftTokenLimit),
 	}
 	svc, err := settings.NewService(st, defaults, hooks)
 	return svc, guard, err

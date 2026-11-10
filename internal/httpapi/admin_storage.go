@@ -178,14 +178,22 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		resp.DeletedConversations = n
-		// Their workspace dirs are now orphans — reap them in the same
-		// action so the operator sees the space come back immediately.
-		removed, err := s.store.SweepOrphanWorkspaces(r.Context(), workspaceRoot)
-		if err != nil {
-			logging.From(ctx).Error("admin storage cleanup: workspace sweep failed", "err", err)
+	}
+
+	// Reap orphan conversation workspaces and finished task / mcp-run workspaces.
+	removed, err := s.store.SweepOrphanWorkspaces(r.Context(), workspaceRoot)
+	if err != nil {
+		logging.From(ctx).Error("admin storage cleanup: workspace sweep failed", "err", err)
+	}
+	s.sweepOrphanPrivateWorkspaceStashes(r.Context())
+	resp.RemovedWorkspaces += removed
+
+	if s.sweepTaskWorkspaces != nil {
+		taskRemoved, terr := s.sweepTaskWorkspaces(r.Context(), workspaceRoot, age)
+		if terr != nil {
+			logging.From(ctx).Error("admin storage cleanup: task workspace sweep failed", "err", terr)
 		}
-		s.sweepOrphanPrivateWorkspaceStashes(r.Context())
-		resp.RemovedWorkspaces = removed
+		resp.RemovedWorkspaces += taskRemoved
 	}
 
 	if req.SweepFiles {
@@ -239,7 +247,11 @@ func (s *Server) workspaceUsage(r *http.Request, root string, n int) (storageTre
 		sub := duTree(ctx, filepath.Join(root, e.Name()))
 		total.Bytes += sub.Bytes
 		total.Files += sub.Files
-		if sub.Bytes == 0 {
+		// Only conversation workspace directories (UUID-named) belong in the
+		// per-conversation LargestWorkspaces breakdown; system subdirectories
+		// such as "tasks", "mcp-runs", "mcp-shared", and "shared" still count
+		// toward total.Bytes/total.Files but are never conversation IDs.
+		if sub.Bytes == 0 || !store.LooksLikeConversationID(e.Name()) {
 			continue
 		}
 		rows = append(rows, storageWorkspaceRow{ConversationID: e.Name(), Bytes: sub.Bytes})

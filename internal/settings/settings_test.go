@@ -69,10 +69,11 @@ func testDefaults() map[string]string {
 		"memory_autoindex_enabled":          "true",
 		"error_analysis_enabled":            "true",
 		"auto_title_enabled":                "true",
-		"connector_recommendations_enabled": "false",
+		"connector_recommendations_enabled": "true",
 		"context_handles_enabled":           "false",
 		"team_chats_shared_by_default":      "false",
 		"shared_files_max_total_mb":         "10240",
+		"monthly_soft_token_limit":          "0",
 	}
 }
 

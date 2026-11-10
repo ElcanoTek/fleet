@@ -193,7 +193,7 @@ const META: Record<string, SettingMeta> = {
       "After each message from the second on, a small model reads the end of the chat to tell whether the person is unhappy with an answer. It runs alongside the reply, so nothing is slowed down, and costs a tiny fraction of a cent. Only recent messages are sent to that model's provider, never files or tool results. Lockdown chats are never checked.",
     optionHelp: {
       off: "Off: no check, nothing sent.",
-      observe: "Check every message and count frustrated ones on the Users page, without showing a card.",
+      observe: "Check every message and count frustrated ones in Analytics, without showing a card.",
       suggest: "Suggest (default): check, count, and offer the fallback model when the user is pushing back.",
     },
   },
@@ -207,6 +207,12 @@ const META: Record<string, SettingMeta> = {
     description:
       "How sure the check must be before a message counts as frustration. Higher means fewer, more certain suggestions.",
     unitHint: "percent — 50 to 99; default 80",
+  },
+  monthly_soft_token_limit: {
+    label: "Monthly soft token allowance",
+    description:
+      "Soft monthly token allowance across all models (including included / $0-cost models) displayed on the Analytics overview banner. Set 0 for unlimited.",
+    unitHint: "tokens — 1000000 to 1000000000000; 0 = unlimited",
   },
 };
 
@@ -250,6 +256,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "auto_title_enabled",
       "connector_recommendations_enabled",
       "context_handles_enabled",
+      "monthly_soft_token_limit",
     ],
   },
 ];

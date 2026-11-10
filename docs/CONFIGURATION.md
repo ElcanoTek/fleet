@@ -235,7 +235,8 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_PERSONA` | path | `personas/assistant.yaml` | server | Persona FILE the drivers load (by basename, from the bundle's personas/); .yaml is appended when no known extension is given. Also read as `PERSONA`. |
 | `FLEET_PERSONA_DEFAULT` | string | `assistant` | server | Default persona name for new conversations. Also read as `PERSONA_DEFAULT`. |
 | `SYSTEM_PROMPT` | path | `default.md` | server | System-prompt file name in the bundle; .md is appended when no known extension is given. |
-| `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | bool | `false` | server | Connector auto-recommendation. Also an admin setting. *Validated at boot*. |
+| `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | bool | `true` | server | Connector auto-recommendation. Also an admin setting. *Validated at boot*. |
+| `FLEET_MONTHLY_SOFT_TOKEN_LIMIT` | int | `0` | server | Monthly soft token allowance across all models (0 = unlimited). Also an admin setting. *Validated at boot* (≥ 0). |
 
 ## Scheduler and tasks
 

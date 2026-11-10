@@ -15,11 +15,12 @@ import (
 
 // fakeOwnerStore resolves users from a map and records SetTaskOwner calls.
 type fakeOwnerStore struct {
-	users    map[string]*models.User
-	tasks    map[uuid.UUID][]uuid.UUID // task → the ids a reassignment rewrites
-	setErr   error
-	gotTask  uuid.UUID
-	gotOwner uuid.UUID
+	users      map[string]*models.User
+	tasks      map[uuid.UUID][]uuid.UUID // task → the ids a reassignment rewrites
+	setErr     error
+	gotTask    uuid.UUID
+	gotOwner   uuid.UUID
+	gotLineage bool
 }
 
 func (f *fakeOwnerStore) GetUserByUsernameWithContext(_ context.Context, username string) (*models.User, error) {
@@ -38,6 +39,18 @@ func (f *fakeOwnerStore) SetTaskOwner(_ context.Context, taskID, ownerID uuid.UU
 		return nil, sql.ErrNoRows
 	}
 	f.gotTask, f.gotOwner = taskID, ownerID
+	return ids, nil
+}
+
+func (f *fakeOwnerStore) SetTaskLineageOwner(_ context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error) {
+	if f.setErr != nil {
+		return nil, f.setErr
+	}
+	ids, ok := f.tasks[taskID]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	f.gotTask, f.gotOwner, f.gotLineage = taskID, ownerID, true
 	return ids, nil
 }
 
@@ -62,6 +75,16 @@ func TestSetTaskOwnerCLI(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "now owned by owner@example.com (2 row(s)") {
 			t.Fatalf("output = %q", out.String())
+		}
+	})
+	t.Run("reassigns with --lineage", func(t *testing.T) {
+		st := newStore()
+		var out bytes.Buffer
+		if code := setTaskOwnerWithOptions(context.Background(), st, &out, taskID, owner.Username, true); code != 0 {
+			t.Fatalf("exit = %d, want 0", code)
+		}
+		if !st.gotLineage || st.gotTask != taskID || st.gotOwner != owner.ID {
+			t.Fatalf("SetTaskLineageOwner not called: gotLineage=%v gotTask=%s gotOwner=%s", st.gotLineage, st.gotTask, st.gotOwner)
 		}
 	})
 	t.Run("unknown user exits 2", func(t *testing.T) {

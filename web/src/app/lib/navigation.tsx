@@ -43,13 +43,22 @@ function currentSearch(): string {
 }
 
 // Client-side aliases the server also answers with a redirect on a full load
-// (internal/webui/spa.go): a soft navigation to one lands where a reload would.
+// (internal/webui/spa.go), plus legacy /orchestrator?tab=usage|adoption links
+// (which OrchestratorInner also redirects on a full load once the admin role
+// is confirmed, while non-admins fall back to Recent Tasks).
 export function resolveAlias(pathname: string, search: string): string | null {
   if (pathname === "/") return "/chat";
-  if (pathname === "/admin") return "/settings/admin";
+  if (pathname === "/admin" || pathname === "/settings/admin/notifications") {
+    return "/settings/admin";
+  }
+  if (pathname === "/orchestrator") {
+    const tab = new URLSearchParams(search).get("tab");
+    if (tab === "usage" || tab === "adoption") {
+      return `/analytics?tab=${encodeURIComponent(tab)}`;
+    }
+  }
   const task = /^\/orchestrator\/tasks\/([^/]+)$/.exec(pathname);
   if (task) return `/orchestrator?task=${encodeURIComponent(decodeURIComponent(task[1]))}`;
-  void search;
   return null;
 }
 

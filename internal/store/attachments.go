@@ -150,6 +150,12 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 // resolve any name that escapes it, so a planted link can redirect neither the
 // chmods nor the removal outside the tree. WalkDir does not follow symlinks
 // either, so only real directories are visited.
+// RemoveWorkspaceTree deletes root/name, repairing directory permissions inside
+// root/name first if a sandboxed process left read-only subdirectories behind.
+func RemoveWorkspaceTree(root, name string) error {
+	return removeWorkspaceTree(root, name)
+}
+
 func removeWorkspaceTree(root, name string) error {
 	r, err := os.OpenRoot(root)
 	if err != nil {
@@ -179,9 +185,10 @@ func removeWorkspaceTree(root, name string) error {
 	return r.RemoveAll(name)
 }
 
-// liveConversationIDs returns the set of conversation ids currently in
-// the DB. Used by SweepOrphanWorkspaces to decide what on-disk dirs to
-// reap.
+// liveConversationIDs returns the set of conversation ids currently in the DB
+// (including soft-deleted tombstones within their restore window, until
+// PurgeSoftDeletedConversations removes them). Used by SweepOrphanWorkspaces
+// to decide what on-disk dirs to reap.
 func (s *Store) liveConversationIDs(ctx context.Context) (map[string]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM conversations`)
 	if err != nil {
@@ -197,6 +204,12 @@ func (s *Store) liveConversationIDs(ctx context.Context) (map[string]struct{}, e
 		out[id] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// LooksLikeConversationID reports whether name has the shape of a UUID in
+// 8-4-4-4-12 hex form.
+func LooksLikeConversationID(name string) bool {
+	return looksLikeConversationID(name)
 }
 
 // looksLikeConversationID reports whether name has the shape of a v4
@@ -291,7 +304,7 @@ type ConversationStorageMeta struct {
 // from the map — the caller labels those workspaces as orphaned.
 func (s *Store) ConversationStorageMetaByIDs(ctx context.Context, ids []string) (map[string]ConversationStorageMeta, error) {
 	out := make(map[string]ConversationStorageMeta, len(ids))
-	if len(ids) == 0 {
+	if len(ids) == 0 || s == nil || s.db == nil {
 		return out, nil
 	}
 	rows, err := s.db.QueryContext(ctx,

@@ -116,7 +116,7 @@ test("the Admin parent expands to its sections for admins", async ({ page }) => 
   await admin.click();
   await page.waitForURL("**/settings/admin");
   await expect(admin).toHaveAttribute("aria-expanded", "true");
-  for (const child of ["Overview", "Server", "Users", "Features", "Providers", "Notifications"]) {
+  for (const child of ["Overview", "Server", "Users", "Features", "Providers"]) {
     await expect(nav.getByRole("link", { name: child })).toBeVisible();
   }
   await expect(nav.getByRole("link", { name: "Overview" })).toHaveAttribute(

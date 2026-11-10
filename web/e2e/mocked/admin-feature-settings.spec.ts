@@ -5,8 +5,7 @@ import { loginViaCookie } from "./_session";
 // Mocked e2e for the admin Features page (settings redesign): /settings/admin/
 // features renders every workspace feature setting from GET /api/admin/settings,
 // a toggle PUTs the override and re-renders with the Overridden badge + Reset,
-// and Reset DELETEs back to the default. The Notifications page renders from
-// its own endpoint at /settings/admin/notifications.
+// and Reset DELETEs back to the default.
 
 type Resolved = {
   key: string;
@@ -134,15 +133,4 @@ test("the Features filter narrows rows and hides empty groups", async ({ page })
 
   await page.getByRole("textbox", { name: "Filter settings" }).fill("zzz-no-match");
   await expect(page.getByText(/No settings match/)).toBeVisible();
-});
-
-test("the Notifications page renders channel status without secret material", async ({ page }) => {
-  await mockAdmin(page);
-  await page.goto("/settings/admin/notifications");
-
-  const notifications = page.getByTestId("notifications-panel");
-  await expect(notifications).toBeVisible({ timeout: 15_000 });
-  await expect(notifications).toContainText("Env config");
-  await expect(page.getByTestId("notify-webhook-url")).toHaveValue("https://hooks.example.com/x");
-  await expect(page.getByTestId("notify-webhook-secret")).toHaveValue("");
 });

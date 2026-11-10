@@ -1,6 +1,6 @@
 // SetNav — the settings area's sticky left sub-nav (the design's .set-nav).
 // General · Team · Connections · Skills · Personas · Shared files, plus an expandable Admin parent whose
-// children (Overview · Server · Doctor · Users · Features · Providers · Notifications) indent
+// children (Overview · Server · Doctor · Users · Features · Providers) indent
 // behind a left border and fade in. Admin renders only for admins (resolved
 // client-side by useIsAdmin; every admin API stays server-gated regardless).
 // Clicking Admin lands on Overview; the parent reads expanded whenever the
@@ -38,7 +38,6 @@ export const ADMIN_SUBS = [
   { href: "/settings/admin/users", label: "Users" },
   { href: "/settings/admin/features", label: "Features" },
   { href: "/settings/admin/providers", label: "Providers" },
-  { href: "/settings/admin/notifications", label: "Notifications" },
 ] as const;
 
 const ITEM_BASE =

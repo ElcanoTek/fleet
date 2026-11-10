@@ -187,6 +187,7 @@ func TestServerSideRedirects(t *testing.T) {
 	}{
 		{"/", 307, "/chat"},
 		{"/admin", 308, "/settings/admin"},
+		{"/settings/admin/notifications", 308, "/settings/admin"},
 		{"/orchestrator/tasks/abc%20def", 307, "/orchestrator?task=abc%20def"},
 		{"/orchestrator/tasks/99999999-9999-9999-9999-999999999999", 307, "/orchestrator?task=99999999-9999-9999-9999-999999999999"},
 	}

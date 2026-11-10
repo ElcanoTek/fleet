@@ -27,7 +27,7 @@ in `web/` runs on the server.
   `src/app/lib/Link.tsx` the link component. Paths that need a server-side
   decision (`/` → `/chat`, `/admin`, the `/chat` membership gate, a missing
   `/shared/{token}`) are redirected by Go before the page is served. Keep
-  URLs stable: `/chat`, `/orchestrator`, `/settings/...`, `/admin`,
+  URLs stable: `/chat`, `/orchestrator`, `/analytics`, `/settings/...`, `/admin`,
   `/help/...`, `/shared/{token}`, `/login`, `/no-access`.
 
 ## Commands (run from `web/`; verified)

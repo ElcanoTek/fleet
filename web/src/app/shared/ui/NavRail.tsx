@@ -36,9 +36,9 @@ import { readPref, writePref } from "@/app/shared/lib/storage";
 
 // "settings" renders the rail with neither surface active (the design's
 // settings view): Chat/Operations Center stay plain links and the account
-// button below takes the `current` tint instead. "help" is the guides surface
-// (/help), reached from the account menu, so it tints the account button too.
-export type RailView = "chat" | "orchestrator" | "settings" | "help";
+// button below takes the `current` tint instead. "analytics" and "help" are
+// reached from the account menu, so they tint the account button too.
+export type RailView = "chat" | "orchestrator" | "settings" | "analytics" | "help";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "rail-collapsed";
 const NARROW_QUERY = "(max-width: 900px)";
@@ -395,6 +395,7 @@ export function NavRail({
           onSignOut={account.onSignOut}
           railCollapsed={collapsed}
           current={activeView === "settings"}
+          analyticsCurrent={activeView === "analytics"}
           guidesCurrent={activeView === "help"}
         />
       </aside>

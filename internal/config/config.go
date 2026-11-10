@@ -775,7 +775,7 @@ type Config struct {
 	// when a chat message matches an Optional MCP connector the user has NOT
 	// enabled, a note is added to the turn so the agent can suggest connecting it
 	// (via the existing /settings/connections OAuth flow — never auto-connecting).
-	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default false.
+	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default true.
 	ConnectorRecommendationsEnabled bool
 	// TeamChatsSharedByDefault gates per-instance default team chat sharing: when
 	// enabled, non-lockdown conversations created by team members automatically
@@ -783,6 +783,9 @@ type Config struct {
 	// the team without requiring a project). FLEET_TEAM_CHATS_SHARED_BY_DEFAULT,
 	// default false.
 	TeamChatsSharedByDefault bool
+	// MonthlySoftTokenLimit is the workspace's monthly soft token allowance
+	// across all models (FLEET_MONTHLY_SOFT_TOKEN_LIMIT, default 0 = unlimited).
+	MonthlySoftTokenLimit int
 	// A2AEnabled gates the A2A (Agent2Agent) protocol server (#1279): the Agent
 	// Card at /.well-known/agent-card.json and the JSON-RPC endpoint at /a2a on
 	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
@@ -1416,11 +1419,12 @@ func Load(envFile string) (*Config, error) {
 		// Composer context handles (#517) — optional, default off.
 		ContextHandlesEnabled: lp.getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
 
-		// Connector auto-recommendation (#512) — optional, default off.
-		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
+		// Connector auto-recommendation (#512) — default on.
+		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", true),
 
 		// Per-instance default team chat sharing — optional, default off.
 		TeamChatsSharedByDefault: lp.getenvFleetBool("TEAM_CHATS_SHARED_BY_DEFAULT", false),
+		MonthlySoftTokenLimit:    lp.getenvFleetInt("MONTHLY_SOFT_TOKEN_LIMIT", 0),
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.

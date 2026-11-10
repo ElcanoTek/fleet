@@ -121,15 +121,12 @@ describe("AdminUsersPage", () => {
     expect(within(aliceRow).getByText(/team: blue/)).toBeInTheDocument();
     // Role badge: admin → accent "Admin".
     expect(within(aliceRow).getByText("Admin")).toBeInTheDocument();
-    // Struggle counts (docs/CHAT-ESCALATION.md): frustrated messages,
-    // struggling turns, accepted switches to the advanced model.
-    expect(screen.getByTestId("frustrated-alice@x.com")).toHaveTextContent("5");
-    expect(within(aliceRow).getByText("1")).toBeInTheDocument();
-    expect(within(aliceRow).getByText("0")).toBeInTheDocument();
+    // Frustrated/Struggles/Switched up moved to /analytics and are not shown here.
+    expect(screen.queryByTestId("frustrated-alice@x.com")).toBeNull();
 
     // Bob is provisioned but has no stats: numeric cells show "—".
     const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
-    expect(within(bobRow).getAllByText("—").length).toBe(7);
+    expect(within(bobRow).getAllByText("—").length).toBe(4);
     expect(within(bobRow).getByText(/last active —/)).toBeInTheDocument();
   });
 

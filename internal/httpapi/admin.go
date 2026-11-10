@@ -23,8 +23,26 @@ import (
 // adminStats is the JSON shape the /admin page renders. Intentionally
 // flat so it's easy to template on the frontend.
 type adminStats struct {
-	Users      []userStat       `json:"users"`
-	DailyCache []dailyCacheStat `json:"daily_cache,omitempty"`
+	Users            []userStat                     `json:"users"`
+	DailyCache       []dailyCacheStat               `json:"daily_cache,omitempty"`
+	TopConversations []store.ConversationOutlierRow `json:"top_conversations,omitempty"`
+	TopTasks         []TaskOutlierStat              `json:"top_tasks,omitempty"`
+}
+
+// TaskOutlierStat is one high-spend, high-token, high-iteration, or failing
+// background task surfaced on /analytics.
+type TaskOutlierStat struct {
+	TaskID           string  `json:"task_id"`
+	Title            string  `json:"title"`
+	OwnerEmail       string  `json:"owner_email"`
+	Status           string  `json:"status"`
+	Model            string  `json:"model"`
+	Recurrence       string  `json:"recurrence,omitempty"`
+	Iterations       int64   `json:"iterations"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+	ErrorMessage     string  `json:"error_message,omitempty"`
 }
 
 type dailyCacheStat struct {
@@ -165,7 +183,26 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, r, adminStats{Users: users, DailyCache: dailyCache})
+	var topConversations []store.ConversationOutlierRow
+	if tc, ok := s.store.(interface {
+		TopConversations(ctx context.Context, limit int) ([]store.ConversationOutlierRow, error)
+	}); ok {
+		if rows, err := tc.TopConversations(r.Context(), 30); err == nil {
+			topConversations = rows
+		}
+	}
+	var topTasks []TaskOutlierStat
+	if s.taskOutliers != nil {
+		if rows, err := s.taskOutliers(r.Context(), 30); err == nil {
+			topTasks = rows
+		}
+	}
+	writeJSON(w, r, adminStats{
+		Users:            users,
+		DailyCache:       dailyCache,
+		TopConversations: topConversations,
+		TopTasks:         topTasks,
+	})
 }
 
 // listDecisionModels is the OpenRouter decision-model listing, a seam for tests.

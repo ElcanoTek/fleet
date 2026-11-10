@@ -919,10 +919,9 @@ export default function AdminUsersPage() {
             : "View usage and manage roles of everyone in the workspace. "}
           Numbers here
           are all-time interactive-chat activity per account; for windowed spend
-          across chat + scheduled tasks and the per-user adoption audit, open
-          the{" "}
-          <Link href="/orchestrator?tab=usage">Background tasks → Usage</Link>{" "}
-          and <Link href="/orchestrator?tab=adoption">Adoption</Link> views.
+          across chat + scheduled tasks, model mix, outliers, and the per-user
+          adoption audit, open{" "}
+          <Link href="/analytics">Analytics</Link>.
         </>
       }
     >
@@ -1075,27 +1074,9 @@ export default function AdminUsersPage() {
                   <th className={TH_NUM}>Turns</th>
                   <th
                     className={TH_NUM}
-                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Background tasks → Usage."
+                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Analytics."
                   >
                     Chat spend
-                  </th>
-                  <th
-                    className={TH_NUM}
-                    title="Chat messages the frustration check scored as the user pushing back on a wrong or incomplete answer. Counts only while the check is on (Features → Fallback-model suggestions)."
-                  >
-                    Frustrated
-                  </th>
-                  <th
-                    className={TH_NUM}
-                    title="Chat turns that clearly struggled: repeated tool failures, a repeated call that was stopped, a conversation summarized to fit, or a very long turn."
-                  >
-                    Struggles
-                  </th>
-                  <th
-                    className={TH_NUM}
-                    title="Times this user accepted a suggestion to switch a chat to the fallback model."
-                  >
-                    Switched up
                   </th>
                   {/* The kebab column. A blank header leaves the row-edit
                       buttons announced with no column name at all, so the
@@ -1109,7 +1090,7 @@ export default function AdminUsersPage() {
                 {loading ? (
                   <tr className="group/row">
                     <td
-                      colSpan={9}
+                      colSpan={6}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       Loading…
@@ -1240,15 +1221,6 @@ export default function AdminUsersPage() {
                         <td className={TD_NUM}>
                           {stat ? formatUSD(stat.total_cost_usd) : "—"}
                         </td>
-                        <td className={TD_NUM} data-testid={`frustrated-${row.email}`}>
-                          {stat?.frustrated_messages ?? "—"}
-                        </td>
-                        <td className={TD_NUM}>
-                          {stat?.struggle_signals ?? "—"}
-                        </td>
-                        <td className={TD_NUM}>
-                          {stat?.advanced_switches ?? "—"}
-                        </td>
                         <td className={`${TD} w-[2.4rem] text-right`}>
                           {account && !centralAuth ? (
                             <button
@@ -1269,7 +1241,7 @@ export default function AdminUsersPage() {
                 ) : (
                   <tr className="group/row">
                     <td
-                      colSpan={9}
+                      colSpan={6}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       {centralAuth

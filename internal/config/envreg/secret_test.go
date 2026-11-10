@@ -18,6 +18,7 @@ var notSecret = map[string]string{
 	"FLEET_OTEL_CLIENT_KEY_FILE":          "a PATH to the trace-export mTLS key file, not the key",
 	"FLEET_OIDC_ALLOW_PASSWORD":           "a boolean break-glass switch",
 	"FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET": "the NAME of a Kubernetes Secret object, not its content",
+	"FLEET_MONTHLY_SOFT_TOKEN_LIMIT":      "a token-count allowance integer, not a credential",
 }
 
 // TestCredentialValuesAreSecret — every setting whose name says it holds a
