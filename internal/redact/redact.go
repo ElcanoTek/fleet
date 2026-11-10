@@ -138,7 +138,7 @@ func (p pattern) replace(s string) string {
 			break
 		}
 		start, keyEnd := pos+k[0], pos+k[1]
-		if publicIdentifierKey.MatchString(enclosingKey(s, start)) {
+		if isPublicIdentifierAt(s, start) {
 			pos = keyEnd
 			continue
 		}
@@ -163,15 +163,33 @@ func (p pattern) replace(s string) string {
 	return b.String()
 }
 
-// enclosingKey returns the whole key name around position i: the run of
-// letters (any script), digits, "_" and "-" a marker match starting at i
-// belongs to. Non-ASCII letters count, so "認証deal_token" is its own key and
-// never mistaken for the public "deal_token".
-func enclosingKey(s string, i int) string {
+// isPublicIdentifierAt reports whether the marker key found at i is a public
+// identifier: its whole key name is one publicIdentifierKey names, and that
+// name starts a field, at the start of s or right after whitespace or one of
+// the delimiters a field follows in JSON, query strings, cookie lists and
+// reprs. Anything else before it (".", "/", ":" in a qualified name such as
+// secret.deal_token) fails closed: the value is scrubbed.
+func isPublicIdentifierAt(s string, i int) bool {
+	start, end := enclosingKey(s, i)
+	if !publicIdentifierKey.MatchString(s[start:end]) {
+		return false
+	}
+	if start == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:start])
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'{,&;?([", r)
+}
+
+// enclosingKey returns the bounds of the whole key name around position i:
+// the run of letters (any script), digits, "_" and "-" a marker match starting
+// at i belongs to. Non-ASCII letters count, so "認証deal_token" is its own key
+// and never mistaken for the public "deal_token".
+func enclosingKey(s string, i int) (start, end int) {
 	isKeyRune := func(r rune) bool {
 		return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 	}
-	start, end := i, i
+	start, end = i, i
 	for start > 0 {
 		r, size := utf8.DecodeLastRuneInString(s[:start])
 		if !isKeyRune(r) {
@@ -186,7 +204,7 @@ func enclosingKey(s string, i int) string {
 		}
 		end += size
 	}
-	return s[start:end]
+	return start, end
 }
 
 // mayMatch reports whether p could match s (its hint is present).

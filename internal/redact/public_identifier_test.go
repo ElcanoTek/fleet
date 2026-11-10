@@ -178,3 +178,25 @@ func TestMarkerReplaceMatchesRegexWithoutPublicKeys(t *testing.T) {
 		}
 	}
 }
+
+// A deal-token key counts only where a field starts; a qualified name
+// ("secret.deal_token", "a/deal_token", "x:deal_token") is a different key and
+// keeps its value scrubbed (Codex, PR #2122). Ordinary field starts still
+// keep the deal ID.
+func TestPublicIdentifierNeedsAFieldBoundary(t *testing.T) {
+	r := NewRedactor(nil)
+	secret := "fixture-access-" + strings.Repeat("v", 16)
+	for _, prefix := range []string{"secret.", "a/", "x:", "cfg|", "k@", "n#"} {
+		in := "y " + prefix + "deal" + "_token=" + secret
+		if out := r.Redact(in); strings.Contains(out, secret) {
+			t.Errorf("prefix %q: value kept: %s", prefix, out)
+		}
+	}
+	id := "TRD-9262-016c4"
+	for _, lead := range []string{"", " ", "\t", "?", "&", ";", "{", ",", "(", "[", "'", "\""} {
+		in := lead + "deal" + "_token=" + id
+		if out := r.Redact(in); !strings.Contains(out, id) {
+			t.Errorf("lead %q: deal ID was redacted: %s", lead, out)
+		}
+	}
+}
