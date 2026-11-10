@@ -1372,10 +1372,10 @@ func (s *Storage) SetTaskLineageOwner(ctx context.Context, taskID, ownerID uuid.
 		),
 		ancestors(id, prev_id, depth) AS (
 			SELECT t.id, t.previous_occurrence_id, 1
-			FROM tasks t JOIN target tg ON t.id = tg.previous_occurrence_id
+			FROM tasks t JOIN target tg ON t.id::text = tg.previous_occurrence_id
 			UNION ALL
 			SELECT t.id, t.previous_occurrence_id, a.depth + 1
-			FROM tasks t JOIN ancestors a ON t.id = a.prev_id
+			FROM tasks t JOIN ancestors a ON t.id::text = a.prev_id
 			WHERE a.depth < 1000
 		)
 		UPDATE tasks

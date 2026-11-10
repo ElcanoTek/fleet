@@ -185,10 +185,12 @@ func removeWorkspaceTree(root, name string) error {
 	return r.RemoveAll(name)
 }
 
-// liveConversationIDs returns the set of non-deleted conversation ids currently
-// in the DB. Used by SweepOrphanWorkspaces to decide what on-disk dirs to reap.
+// liveConversationIDs returns the set of conversation ids currently in the DB
+// (including soft-deleted tombstones within their restore window, until
+// PurgeSoftDeletedConversations removes them). Used by SweepOrphanWorkspaces
+// to decide what on-disk dirs to reap.
 func (s *Store) liveConversationIDs(ctx context.Context) (map[string]struct{}, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM conversations WHERE deleted_at IS NULL`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM conversations`)
 	if err != nil {
 		return nil, err
 	}

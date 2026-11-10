@@ -167,7 +167,7 @@ func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutli
 			LEFT JOIN ti_agg ON ti_agg.task_id = t.id
 			LEFT JOIN core.users u ON u.id = t.created_by
 			WHERE ti_agg.task_id IS NOT NULL
-			   OR (t.created_at >= $1 AND t.status IN ('error', 'dead_lettered'))
+			   OR (COALESCE(t.completed_at, t.dead_lettered_at, t.created_at) >= $1 AND t.status IN ('error', 'dead_lettered'))
 		),
 		ranked AS (
 			SELECT *,
@@ -182,7 +182,9 @@ func (db *Database) TopTaskOutliers(ctx context.Context, limit int) ([]TaskOutli
 			iterations, prompt_tokens, completion_tokens, cost_usd, error_message
 		FROM ranked
 		WHERE rk_cost <= $2 OR rk_tokens <= $2 OR rk_iters <= $2 OR (status IN ('error', 'dead_lettered') AND rk_fail <= $2)
-		ORDER BY cost_usd DESC, (prompt_tokens + completion_tokens) DESC, iterations DESC
+		ORDER BY
+			LEAST(rk_cost, rk_tokens, rk_iters, CASE WHEN status IN ('error', 'dead_lettered') THEN rk_fail ELSE 999999 END) ASC,
+			cost_usd DESC, (prompt_tokens + completion_tokens) DESC, iterations DESC
 		LIMIT $3`,
 		cutoff, perRank, limit)
 	if err != nil {

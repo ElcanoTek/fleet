@@ -204,7 +204,7 @@ func (s *Store) TopConversations(ctx context.Context, limit int) ([]Conversation
 				COALESCE(sw.switches, 0) AS advanced_switches,
 				GREATEST(COALESCE(c.updated_at, 0), COALESCE(tm.last_turn_at, 0)) AS updated_at
 			FROM tm
-			LEFT JOIN conversations c ON c.id = tm.conversation_id AND c.deleted_at IS NULL
+			JOIN conversations c ON c.id = tm.conversation_id AND c.deleted_at IS NULL
 			LEFT JOIN esc ON esc.conversation_id = tm.conversation_id
 			LEFT JOIN sw ON sw.conversation_id = tm.conversation_id
 		),
@@ -221,7 +221,9 @@ func (s *Store) TopConversations(ctx context.Context, limit int) ([]Conversation
 			frustrated_messages, struggle_signals, advanced_switches, updated_at
 		FROM ranked
 		WHERE rk_cost <= $1 OR rk_tokens <= $1 OR (frustrated_messages + struggle_signals + advanced_switches > 0 AND rk_friction <= $1)
-		ORDER BY cost_usd DESC, (prompt_tokens + completion_tokens) DESC, turns DESC
+		ORDER BY
+			LEAST(rk_cost, rk_tokens, CASE WHEN frustrated_messages + struggle_signals + advanced_switches > 0 THEN rk_friction ELSE 999999 END) ASC,
+			cost_usd DESC, (prompt_tokens + completion_tokens) DESC, turns DESC
 		LIMIT $2`,
 		perRank, limit)
 	if err != nil {

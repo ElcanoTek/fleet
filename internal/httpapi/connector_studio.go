@@ -925,6 +925,14 @@ func connectorReauthHint(name string) string {
 	return fmt.Sprintf("The user's '%s' connection requires re-authentication (status: login_required). Stop immediately and ask the user to click 'Sign in' next to '%s' in Settings → Connections (/settings/connections) — do NOT fall back to shared report tools or other users' data as a substitute.", name, name)
 }
 
+func sharedConnectorReauthHint(name, owner string) string {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		owner = "the connection owner"
+	}
+	return fmt.Sprintf("The shared '%s' connection (owned by %s) requires re-authentication (status: login_required). Stop immediately and tell the user to ask %s to re-sign in to '%s' in Settings → Connections (/settings/connections), or to connect their own '%s' account — do NOT fall back to unrelated shared report tools or other users' data as a substitute.", name, owner, owner, name, name)
+}
+
 func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query string) (any, error) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	tokens := strings.Fields(q)
@@ -1023,7 +1031,7 @@ func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query s
 						"owner":             srv.UserEmail,
 					}
 					if strings.EqualFold(strings.TrimSpace(srv.Status), "login_required") {
-						hint := connectorReauthHint(srv.Name)
+						hint := sharedConnectorReauthHint(srv.Name, srv.UserEmail)
 						entry["hint"] = hint
 						reauthHints = append(reauthHints, hint)
 					}

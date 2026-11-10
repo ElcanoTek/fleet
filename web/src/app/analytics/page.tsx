@@ -129,7 +129,48 @@ function modelDisplayName(b: UsageBucket): string {
   return b.key;
 }
 
+type PinnedModelMeta = {
+  slug: string;
+  free?: boolean;
+  inputPricePerMtok?: number;
+  outputPricePerMtok?: number;
+};
+
+function classifyModelBucket(
+  b: UsageBucket,
+  pinned: ReadonlyArray<PinnedModelMeta> | undefined,
+): "included" | "billed" | "unpriced" {
+  if (b.cost_usd > 0) return "billed";
+  const rawKey = (b.key ?? "").trim().toLowerCase();
+  if (!rawKey) return "unpriced";
+  const cleanKey = rawKey.replace(/^openrouter\//, "");
+  if (cleanKey.endsWith(":free")) return "included";
+  const hasFreePinned =
+    !!pinned &&
+    pinned.some(
+      (p) =>
+        p.free === true ||
+        (p.inputPricePerMtok === 0 && p.outputPricePerMtok === 0),
+    );
+  if (hasFreePinned && pinned) {
+    const matched = pinned.some((p) => {
+      const isFree =
+        p.free === true ||
+        (p.inputPricePerMtok === 0 && p.outputPricePerMtok === 0);
+      if (!isFree) return false;
+      return p.slug.trim().toLowerCase().replace(/^openrouter\//, "") === cleanKey;
+    });
+    return matched ? "included" : "unpriced";
+  }
+  if (rawKey.startsWith("openrouter/")) {
+    return "included";
+  }
+  return "unpriced";
+}
+
 function MonthlyAllowanceBanner() {
+  const { models } = useClientConfig();
+  const pinnedModels = models?.pinned;
   const monthStart = useMemo(() => currentUTCMonthStart(), []);
   const { data: monthUsage, loading: usageLoading } = useCancellableFetch(
     useCallback(
@@ -199,18 +240,19 @@ function MonthlyAllowanceBanner() {
 
   const buckets = monthUsage?.buckets ?? [];
   const totalTokens =
-    (monthUsage?.totals.prompt_tokens ?? 0) +
-    (monthUsage?.totals.completion_tokens ?? 0);
-  const totalCostUSD = monthUsage?.totals.cost_usd ?? 0;
-  const cacheHitPct = monthUsage?.totals.cache_hit_rate_pct ?? 0;
+    (monthUsage?.totals?.prompt_tokens ?? 0) +
+    (monthUsage?.totals?.completion_tokens ?? 0);
+  const totalCostUSD = monthUsage?.totals?.cost_usd ?? 0;
+  const cacheHitPct = monthUsage?.totals?.cache_hit_rate_pct ?? 0;
 
   let includedTokens = 0;
   let billedTokens = 0;
   for (const b of buckets) {
     const t = b.prompt_tokens + b.completion_tokens;
-    if (b.cost_usd === 0) {
+    const tier = classifyModelBucket(b, pinnedModels);
+    if (tier === "included") {
       includedTokens += t;
-    } else {
+    } else if (tier === "billed") {
       billedTokens += t;
     }
   }
@@ -382,8 +424,8 @@ function MonthlyAllowanceBanner() {
             {usageLoading && !monthUsage ? "…" : fmtUSD(totalCostUSD)}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            Chat {fmtUSD(monthUsage?.totals.chat_cost_usd ?? 0)} · Tasks{" "}
-            {fmtUSD(monthUsage?.totals.task_cost_usd ?? 0)}
+            Chat {fmtUSD(monthUsage?.totals?.chat_cost_usd ?? 0)} · Tasks{" "}
+            {fmtUSD(monthUsage?.totals?.task_cost_usd ?? 0)}
           </div>
         </div>
 
@@ -398,8 +440,8 @@ function MonthlyAllowanceBanner() {
             {usageLoading && !monthUsage ? "…" : `${cacheHitPct.toFixed(1)}%`}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {fmtTokens(monthUsage?.totals.cached_tokens ?? 0)} cached ·{" "}
-            {fmtTokens(monthUsage?.totals.uncached_tokens ?? 0)} uncached
+            {fmtTokens(monthUsage?.totals?.cached_tokens ?? 0)} cached ·{" "}
+            {fmtTokens(monthUsage?.totals?.uncached_tokens ?? 0)} uncached
           </div>
         </div>
       </div>
@@ -414,6 +456,8 @@ const MODEL_RANGES = [
 ] as const;
 
 function ModelUsageTab() {
+  const { models } = useClientConfig();
+  const pinnedModels = models?.pinned;
   const [rangeDays, setRangeDays] = useState<number>(30);
   const {
     data: report,
@@ -443,13 +487,17 @@ function ModelUsageTab() {
   }, [report]);
 
   const totalTokens =
-    (report?.totals.prompt_tokens ?? 0) + (report?.totals.completion_tokens ?? 0);
-  const totalCost = report?.totals.cost_usd ?? 0;
+    (report?.totals?.prompt_tokens ?? 0) + (report?.totals?.completion_tokens ?? 0);
+  const totalCost = report?.totals?.cost_usd ?? 0;
 
   const includedBuckets = buckets.filter(
-    (b) => b.cost_usd === 0 && b.prompt_tokens + b.completion_tokens > 0,
+    (b) =>
+      classifyModelBucket(b, pinnedModels) === "included" &&
+      b.prompt_tokens + b.completion_tokens > 0,
   );
-  const billedBuckets = buckets.filter((b) => b.cost_usd > 0);
+  const billedBuckets = buckets.filter(
+    (b) => classifyModelBucket(b, pinnedModels) === "billed",
+  );
 
   const includedTokens = includedBuckets.reduce(
     (acc, b) => acc + b.prompt_tokens + b.completion_tokens,
@@ -602,7 +650,9 @@ function ModelUsageTab() {
               {buckets.map((b) => {
                 const tok = b.prompt_tokens + b.completion_tokens;
                 const share = totalTokens > 0 ? (tok / totalTokens) * 100 : 0;
-                const isIncluded = b.cost_usd === 0;
+                const tier = classifyModelBucket(b, pinnedModels);
+                const isIncluded = tier === "included";
+                const isUnpriced = tier === "unpriced";
                 const totalSteps = b.chat_turns + b.task_iterations;
                 const avgCost = totalSteps > 0 ? b.cost_usd / totalSteps : 0;
                 return (
@@ -614,6 +664,10 @@ function ModelUsageTab() {
                       {isIncluded ? (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-status-success-border)] bg-[var(--color-status-success-bg)] px-2 py-0.5 text-[0.7rem] font-semibold text-[var(--color-success)]">
                           Included ($0)
+                        </span>
+                      ) : isUnpriced ? (
+                        <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
+                          Unpriced
                         </span>
                       ) : (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
@@ -656,10 +710,10 @@ function ModelUsageTab() {
                     <td className="num">{plain.format(b.chat_turns)}</td>
                     <td className="num">{plain.format(b.task_iterations)}</td>
                     <td className="num">
-                      {isIncluded ? "$0.00" : fmtUSD(b.cost_usd)}
+                      {isIncluded ? "$0.00" : isUnpriced ? "—" : fmtUSD(b.cost_usd)}
                     </td>
                     <td className="num">
-                      {isIncluded || totalSteps === 0 ? "$0.00" : fmtUSD(avgCost)}
+                      {isIncluded ? "$0.00" : isUnpriced || totalSteps === 0 ? "—" : fmtUSD(avgCost)}
                     </td>
                   </tr>
                 );

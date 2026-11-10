@@ -264,8 +264,10 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 	case p == "/":
 		temporaryRedirect(w, g.redirectURL(r, "/chat"))
 		return
-	case p == "/admin":
-		// /admin moved under the settings area; the alias keeps bookmarks working.
+	case p == "/admin" || p == "/settings/admin/notifications":
+		// /admin moved under the settings area, and /settings/admin/notifications
+		// was retired in favor of Settings → General → Browser notifications and
+		// env/API configuration; the alias keeps bookmarks working.
 		w.Header().Set("Location", g.redirectURL(r, "/settings/admin"))
 		w.WriteHeader(http.StatusPermanentRedirect)
 		return

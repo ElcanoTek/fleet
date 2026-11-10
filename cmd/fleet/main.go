@@ -2055,13 +2055,9 @@ func chatUsageProvider(chatStore *store.Store) handlers.ChatUsageProvider {
 		}
 		out := make([]schedmodels.UsageBucket, 0, len(rows))
 		for _, r := range rows {
-			label := r.Label
-			if groupBy == "model" && r.Key == "" && label == "" {
-				label = agentcore.CurrentDefaultModel()
-			}
 			out = append(out, schedmodels.UsageBucket{
 				Key:              r.Key,
-				Label:            label,
+				Label:            r.Label,
 				ChatCostUSD:      r.CostUSD,
 				PromptTokens:     r.PromptTokens,
 				CompletionTokens: r.CompletionTokens,
