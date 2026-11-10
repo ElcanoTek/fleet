@@ -1223,31 +1223,6 @@ func (s *Server) resolvePlaywrightCredentials(ctx context.Context, user, convID,
 	}, nil
 }
 
-func substituteStepCreds(steps []playwrightrunner.Step, creds playwrightrunner.Credentials) []playwrightrunner.Step {
-	if len(steps) == 0 {
-		return nil
-	}
-	out := make([]playwrightrunner.Step, len(steps))
-	repl := func(v string) string {
-		if creds.Username != "" {
-			v = strings.ReplaceAll(v, "{{USERNAME}}", creds.Username)
-		}
-		if creds.Password != "" {
-			v = strings.ReplaceAll(v, "{{PASSWORD}}", creds.Password)
-		}
-		if creds.Secret != "" {
-			v = strings.ReplaceAll(v, "{{SECRET}}", creds.Secret)
-		}
-		return v
-	}
-	for i, st := range steps {
-		st.Value = repl(st.Value)
-		st.Selector = repl(st.Selector)
-		out[i] = st
-	}
-	return out
-}
-
 func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
 	sessionID := strings.TrimSpace(params.SessionID)
 	var sess *playwrightrunner.LiveSession
@@ -1267,7 +1242,12 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 		}
 	}
 	credTargetURL := cleanURL
-	if credTargetURL == "" && sess != nil {
+	if sess != nil {
+		// A live session uses a credential only on the origin it started on
+		// (the worker refuses it anywhere else), so the credential must be
+		// authorized for that origin. params.URL only says where to go next;
+		// resolving against it would let a secret confirmed for one site be
+		// bound to a session started on another.
 		credTargetURL = sess.BaseURL()
 	}
 	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, credTargetURL, params)
@@ -1285,7 +1265,12 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 		if creds.Username != "" || creds.Password != "" || creds.Secret != "" {
 			sess.UpdateCredentials(creds)
 		}
-		steps := substituteStepCreds(params.Steps, creds)
+		// The steps keep their {{USERNAME}}/{{PASSWORD}}/{{SECRET}}
+		// placeholders: the session worker substitutes them, and only after
+		// checking that the page is still on the session's origin. That check
+		// keys on the placeholder, so substituting here would skip it.
+		// (playwright_browser hands its steps over the same way.)
+		steps := append([]playwrightrunner.Step(nil), params.Steps...)
 		if cleanURL != "" && (len(steps) == 0 || steps[0].Action != "goto") {
 			steps = append([]playwrightrunner.Step{{Action: "goto", Value: cleanURL}}, steps...)
 		}

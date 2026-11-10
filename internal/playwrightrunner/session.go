@@ -409,6 +409,12 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 	creds := s.credentials
 	currentURL := s.currentURL
 	s.mu.Unlock()
+	// pageURL is where the page should be when each step starts: the
+	// session's current URL, then the target of each goto that passed the
+	// origin check. A click can still navigate; the worker re-checks the live
+	// page URL before every credential step, so this is an early refusal, not
+	// the only one.
+	pageURL := currentURL
 	for i := range steps {
 		steps[i].Action = strings.ToLower(strings.TrimSpace(steps[i].Action))
 		if err := ValidateStep(steps[i]); err != nil {
@@ -417,10 +423,17 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 		if err := validateStepNavigationOrigin(s.baseURL, creds, steps[i]); err != nil {
 			return nil, err
 		}
-		if stepUsesCredentials(steps[i].Value, creds) && currentURL != "" {
-			if err := validateStepNavigationOrigin(s.baseURL, creds, Step{Action: "goto", Value: currentURL}); err != nil {
-				return nil, fmt.Errorf("refusing secret-bearing step %q after cross-origin navigation: %w", steps[i].Action, err)
+		if steps[i].Action == "goto" {
+			if target := strings.TrimSpace(steps[i].Value); target != "" {
+				pageURL = target
+			} else if target := strings.TrimSpace(steps[i].Selector); target != "" {
+				pageURL = target
 			}
+			continue
+		}
+		if stepUsesCredentials(steps[i].Value, creds) && pageURL != "" && !sameOriginURL(s.baseURL, pageURL) {
+			return nil, fmt.Errorf("refusing secret-bearing step %q after cross-origin navigation: the page is on %s, not on this session's origin %s",
+				steps[i].Action, urlOrigin(pageURL), urlOrigin(s.baseURL))
 		}
 	}
 	reqID, _ := randomHex(8)

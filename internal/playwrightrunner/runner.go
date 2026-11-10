@@ -218,6 +218,16 @@ func sameOriginURL(a, b string) bool {
 	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
 }
 
+// urlOrigin renders rawURL as scheme://host for error messages, or rawURL
+// itself when it does not parse as an absolute URL.
+func urlOrigin(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return rawURL
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
 func validateStepNavigationOrigin(baseURL string, creds Credentials, st Step) error {
 	if strings.ToLower(strings.TrimSpace(st.Action)) != "goto" {
 		return nil
