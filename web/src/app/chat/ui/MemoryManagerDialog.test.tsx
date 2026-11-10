@@ -197,4 +197,37 @@ describe("MemoryManagerDialog", () => {
     expect(await within(dialog()).findByText("db locked")).toBeInTheDocument();
     expect(screen.getByText("Deal names may contain typos.")).toBeInTheDocument();
   });
+
+  it("renders standard picker-modal shell and filters memories by search and status", async () => {
+    stored = [
+      memory({ id: "m1", content: "Deal names may contain typos.", pinned: true }),
+      memory({ id: "m2", content: "Always format dates as ISO-8601.", pinned: false }),
+      memory({ id: "m3", content: "Legacy archived note.", retired_at: 100 }),
+    ];
+    mockBackend();
+    render(<Harness />);
+
+    const dlg = await screen.findByTestId("memory-manager-dialog");
+    expect(dlg.classList.contains("picker-modal")).toBe(true);
+    expect(dlg.querySelector(".picker-modal__head")).toBeTruthy();
+    expect(dlg.querySelector(".picker-modal__rail")).toBeTruthy();
+    expect(dlg.querySelector(".picker-modal__body")).toBeTruthy();
+    expect(dlg.querySelector(".picker-modal__foot")).toBeTruthy();
+    expect(await within(dlg).findByText("2 active · 1 pinned")).toBeInTheDocument();
+    expect(within(dlg).getByText("3 memories saved")).toBeInTheDocument();
+
+    const searchBox = within(dlg).getByRole("searchbox", { name: "Search memories" });
+    fireEvent.change(searchBox, { target: { value: "ISO-8601" } });
+    expect(within(dlg).getByText("Always format dates as ISO-8601.")).toBeInTheDocument();
+    expect(within(dlg).queryByText("Deal names may contain typos.")).toBeNull();
+
+    fireEvent.change(searchBox, { target: { value: "" } });
+    fireEvent.click(within(dlg).getByRole("button", { name: "Pinned" }));
+    expect(within(dlg).getByText("Deal names may contain typos.")).toBeInTheDocument();
+    expect(within(dlg).queryByText("Always format dates as ISO-8601.")).toBeNull();
+
+    fireEvent.click(within(dlg).getByRole("button", { name: "Retired" }));
+    expect(within(dlg).getByText("Legacy archived note.")).toBeInTheDocument();
+    expect(within(dlg).queryByText("Deal names may contain typos.")).toBeNull();
+  });
 });
