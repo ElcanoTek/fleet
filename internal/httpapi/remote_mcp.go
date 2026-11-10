@@ -105,7 +105,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		// none, since only the owner can act on it.
 		var catalog []clientconfig.RemoteMCPCatalogEntry
 		if s.clientConfig != nil {
-			catalog = s.clientConfig.RemoteMCPCatalog
+			catalog = applyMS365CatalogOverride(s.clientConfig.RemoteMCPCatalog, s.resolveMS365Config(r.Context()))
 		}
 		views := make([]remoteServerView, 0, len(servers))
 		for _, row := range servers {
