@@ -1960,7 +1960,7 @@ servers:
       SharePoint, To Do, and Contacts. Works with any standard Microsoft 365 or
       Outlook account — no Microsoft 365 Copilot license required.
     url: "https://{your-server-host}/mcp"
-    vendor: Microsoft Corporation
+    vendor: Microsoft Graph (built-in)
     docs_url: "https://learn.microsoft.com/en-us/graph/overview"
     category: productivity
     tags: [microsoft-365, outlook, email, calendar, teams, onedrive, sharepoint, todo, contacts]

@@ -717,11 +717,11 @@ on the fleet server (`fleet mcp account set`), and their secrets are never
 shown in the browser.
 
 **Find more connections** starts with eight curated **Popular** picks:
-Microsoft 365 (Outlook), GitHub, Slack, Gmail, Google Drive, Notion, Linear, and
-Salesforce. A workspace with a different catalog may show different picks.
-Search by name or keyword to find connectors across the full directory;
-clearing the search restores the popular picks. If the connector you want is
-missing, use **Contact Elcano** below the search to request it.
+Microsoft 365 (Outlook, Teams & OneDrive), GitHub, Slack, Gmail, Google Drive,
+Notion, Linear, and Salesforce. A workspace with a different catalog may show
+different picks. Search by name or keyword to find connectors across the full
+directory; clearing the search restores the popular picks. If the connector you
+want is missing, use **Contact Elcano** below the search to request it.
 
 The Tools menu opens with its search field ready: type to filter by a
 connector's name, its description, its category, or the name of one of its
@@ -796,6 +796,27 @@ and turn on **Model Context Protocol** under **Features → Agents & AI Apps**).
 An administrator can also set that app's client ID and secret once on the
 server so everyone else in the workspace connects with one click. After the
 form, you sign in at the vendor as usual.
+
+For **Microsoft 365 (Outlook, Teams & OneDrive)** — badged **Recommended ·
+Standard M365** — Fleet includes a built-in Microsoft Graph connector that
+covers Outlook Mail (with full attachment downloads), Calendar, Microsoft Teams
+chats and channels, OneDrive, SharePoint, To Do, and Contacts in a single
+sign-in, with no Microsoft 365 Copilot add-on license required (unlike the
+separate **Microsoft Work IQ** preview entries, which are badged **Requires
+Copilot ($30/mo)**). When your workspace's Microsoft Entra app is already
+configured (via `MS365_MCP_CLIENT_ID` on the server or saved in **Settings →
+Connections**), **Microsoft 365** adds with one click via **Add**, and
+administrators see an **Entra app** button on the card to view, update, or
+**Clear saved Entra app** (when stored in the workspace database). When no
+Entra app is configured yet, clicking **Set up…** on the card opens the **Set
+up Microsoft 365** dialog with a three-step Microsoft Entra App Registration
+walkthrough: register an app with a **Public client/native (mobile & desktop)**
+redirect URI (with **Copy** for the exact callback URL), enable **Allow public
+client flows** and grant admin consent for the listed Microsoft Graph delegated
+permissions (with **Copy permissions**), and enter your **Application (client)
+ID** and **Directory (tenant) ID** (**Save & Add Microsoft 365** or **Save**)
+so everyone in the workspace can connect in one click without restarting the
+server.
 
 When the service you need is not in the directory — or only has an HTTP API or
 a web portal — click **Build a connection in chat** in **Settings →
