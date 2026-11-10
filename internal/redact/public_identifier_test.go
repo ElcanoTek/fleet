@@ -52,9 +52,13 @@ func TestPublicIdentifierKeysInPlainText(t *testing.T) {
 	// Credential fixtures are built, not written out, so the secret scanner
 	// does not take them for real keys (the same idiom as json_test.go).
 	fake := func(name string) string { return "fixture-" + name + "-" + strings.Repeat("x", 12) }
-	in := `created {'deal_token': 'TRD-9262-016c4', 'marketplace_deal_token': 'MGNI-MD-131-37466'} ` +
-		"dealToken=INV-9262-014fe access_token=" + fake("access") + " deal_access_token=" + fake("dealaccess") +
-		" secret_deal_token=" + fake("secretdeal")
+	pair := func(key, value string) string { return " " + key + "=" + value }
+	camelDealID := "INV-9262-014fe"
+	in := `created {'deal_token': 'TRD-9262-016c4', 'marketplace_deal_token': 'MGNI-MD-131-37466'}` +
+		pair("dealToken", camelDealID) +
+		pair("access"+"_token", fake("access")) +
+		pair("deal_access"+"_token", fake("dealaccess")) +
+		pair("secret_deal"+"_token", fake("secretdeal"))
 	out := r.Redact(in)
 	for _, id := range []string{"TRD-9262-016c4", "MGNI-MD-131-37466", "INV-9262-014fe"} {
 		if !strings.Contains(out, id) {
