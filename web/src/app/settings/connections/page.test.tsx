@@ -1179,6 +1179,13 @@ describe("ConnectionsPage Microsoft 365 Entra app setup & mobile layout", () => 
     expect(
       within(dialog).getByTestId("ms365-save-config-btn"),
     ).toHaveTextContent("Save");
+    // Header and footer pad for mobile safe areas on full-height phone sheet
+    expect(dialog.firstElementChild?.className).toContain(
+      "env(safe-area-inset-top)",
+    );
+    expect(dialog.lastElementChild?.className).toContain(
+      "env(safe-area-inset-bottom)",
+    );
   });
 
   it("hides the row Entra app button for non-editors when not env-configured", async () => {

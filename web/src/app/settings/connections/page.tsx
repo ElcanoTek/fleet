@@ -1120,7 +1120,7 @@ function MS365SetupDialog({
       onDismiss={onClose}
       className="flex max-h-[90dvh] max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-w-xl flex-col overflow-hidden p-0"
     >
-      <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border-subtle)] px-5 pb-3 pt-4 max-sm:px-4">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--color-border-subtle)] px-5 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-4 max-sm:px-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="m-0 text-[1rem] font-semibold">
@@ -1316,7 +1316,7 @@ function MS365SetupDialog({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-5 py-3.5 max-sm:px-4">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-5 pb-[max(0.875rem,env(safe-area-inset-bottom))] pt-3.5 sm:pb-3.5 max-sm:px-4">
         <div>
           {config?.source === "db" && canEdit ? (
             <InlineConfirmButton
