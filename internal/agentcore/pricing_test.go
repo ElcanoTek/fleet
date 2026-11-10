@@ -401,4 +401,3 @@ func TestIsZeroRatedModel(t *testing.T) {
 		t.Error("expected empty slug to not be zero-rated")
 	}
 }
-

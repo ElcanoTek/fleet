@@ -382,4 +382,3 @@ func IsZeroRatedModel(slug string) bool {
 	}
 	return false
 }
-

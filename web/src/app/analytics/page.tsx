@@ -13,9 +13,10 @@ import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { ToastProvider } from "@/app/shared/ui/Toast";
 import { UsagePanel } from "@/app/orchestrator/UsagePanel";
 import { AdoptionPanel } from "@/app/orchestrator/AdoptionPanel";
+import { ServerStatsView } from "@/app/settings/admin/server/page";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 
-const ANALYTICS_TABS = ["models", "outliers", "usage", "adoption"] as const;
+const ANALYTICS_TABS = ["models", "outliers", "usage", "adoption", "server"] as const;
 export type AnalyticsTab = (typeof ANALYTICS_TABS)[number];
 
 function initialAnalyticsTab(): AnalyticsTab {
@@ -1365,7 +1366,7 @@ function AnalyticsInner() {
                   <MonthlyAllowanceBanner />
 
                   <div
-                    className="dashboard-tabs"
+                    className="dashboard-tabs flex-wrap overflow-x-auto [-webkit-overflow-scrolling:touch]"
                     role="tablist"
                     aria-label="Analytics view"
                   >
@@ -1376,7 +1377,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "models" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("models")}
                     >
-                      Model Usage
+                      Models &amp; Cost
                     </button>
                     <button
                       type="button"
@@ -1385,7 +1386,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "outliers" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("outliers")}
                     >
-                      Outliers &amp; Friction
+                      Problem Chats &amp; Friction
                     </button>
                     <button
                       type="button"
@@ -1394,7 +1395,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("usage")}
                     >
-                      Usage
+                      Spend &amp; Budgets
                     </button>
                     <button
                       type="button"
@@ -1403,7 +1404,16 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("adoption")}
                     >
-                      Adoption
+                      Team Adoption
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === "server"}
+                      className={`tab-btn${tab === "server" ? " tab-btn-active" : ""}`}
+                      onClick={() => switchTab("server")}
+                    >
+                      Server &amp; Live Agents
                     </button>
                   </div>
 
@@ -1414,6 +1424,20 @@ function AnalyticsInner() {
                       <UsagePanel />
                     ) : tab === "adoption" ? (
                       <AdoptionPanel />
+                    ) : tab === "server" ? (
+                      <div className="section" data-testid="analytics-server-tab">
+                        <div className="section-header mb-4">
+                          <div>
+                            <h2 id="serverAgentsHeading">
+                              Server Resources &amp; Live Agent Concurrency
+                            </h2>
+                            <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
+                              Real-time bot and sub-agent execution counts, tool &amp; LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.
+                            </p>
+                          </div>
+                        </div>
+                        <ServerStatsView allowCleanup={false} />
+                      </div>
                     ) : (
                       <ModelUsageTab />
                     )}

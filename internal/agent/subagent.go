@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -97,6 +98,22 @@ import (
 // bind-mounted workspace (no new namespace, no privilege widen) — so parallel
 // children never clobber one another's outputs. The JSON result reports
 // {role, child_session_id, workdir} alongside the answer and spend.
+
+var (
+	activeSubagents         atomic.Int64
+	subagentsSpawnedSession atomic.Int64
+)
+
+// ActiveSubagents returns the number of child sub-agent runs currently executing.
+func ActiveSubagents() int {
+	return int(activeSubagents.Load())
+}
+
+// SubagentsSpawnedSession returns the total number of child sub-agents spawned
+// in this process since startup.
+func SubagentsSpawnedSession() int64 {
+	return subagentsSpawnedSession.Load()
+}
 
 // subagentConfig is the per-Agent sub-agent state: the feature gate, the caps,
 // this run's depth-in-tree, the per-child model resolution, and the live fan-out
@@ -561,6 +578,9 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput, toolCallID str
 		childCtx, cancel = context.WithTimeout(childCtx, time.Duration(in.TimeoutMinutes)*time.Minute)
 		defer cancel()
 	}
+	activeSubagents.Add(1)
+	subagentsSpawnedSession.Add(1)
+	defer activeSubagents.Add(-1)
 	runErr := childAgent.Execute(childCtx, task)
 	// Execute surfaces StoppedByBudget as ErrCostCeilingExceeded for the
 	// scheduled runner's terminal classification (#1105). For a CHILD, though,

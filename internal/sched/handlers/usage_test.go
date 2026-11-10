@@ -302,4 +302,3 @@ func TestUsageReportZeroesZeroRatedModels(t *testing.T) {
 		}
 	}
 }
-

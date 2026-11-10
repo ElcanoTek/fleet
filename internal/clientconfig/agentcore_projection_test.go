@@ -116,4 +116,3 @@ func TestMergePinnedModelPricing(t *testing.T) {
 		t.Fatal("positive-priced pin should not be added as a zero-rate override")
 	}
 }
-

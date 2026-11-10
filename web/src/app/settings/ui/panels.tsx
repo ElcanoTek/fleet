@@ -361,11 +361,14 @@ export type AdminStat = { title: string; value: string; sub?: string };
 
 export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: string }) {
   return (
-    <div className="grid grid-cols-4 gap-[0.7rem] max-[860px]:grid-cols-2" data-testid={testId}>
+    <div
+      className="grid grid-cols-4 gap-[0.7rem] max-[860px]:grid-cols-2 max-[520px]:grid-cols-1"
+      data-testid={testId}
+    >
       {items.map((s) => (
         <div
           key={s.title}
-          className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] pb-[0.95rem] pt-[0.85rem]"
+          className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] pb-[0.95rem] pt-[0.85rem]"
         >
           <div className="mb-[0.55rem] flex items-center gap-2">
             <span className="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
@@ -376,7 +379,9 @@ export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: str
             {s.value}
           </div>
           {s.sub ? (
-            <div className="mt-[0.4rem] text-[0.7rem] text-[var(--color-text-muted)]">{s.sub}</div>
+            <div className="mt-[0.4rem] break-words text-[0.7rem] text-[var(--color-text-muted)] [overflow-wrap:anywhere]">
+              {s.sub}
+            </div>
           ) : null}
         </div>
       ))}

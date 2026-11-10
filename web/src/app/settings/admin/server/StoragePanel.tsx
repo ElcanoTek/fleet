@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 
+import { Link } from "@/app/lib/Link";
 import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
@@ -51,7 +52,7 @@ type CleanupResponse = {
 // operator notices before boxdoctor starts failing health checks (85/95%).
 const CHAT_DATA_WARN_FRACTION = 0.5;
 
-export function StoragePanel() {
+export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean } = {}) {
   const [data, setData] = useState<StorageResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
@@ -191,103 +192,124 @@ export function StoragePanel() {
               <h4 className="m-0 mb-2 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Largest conversation workspaces</h4>
               <ul className="m-0 list-none p-0 text-sm">
                 {data.largest_workspaces.map((w) => (
-                  <li key={w.conversation_id} className="flex items-baseline justify-between gap-3 border-b border-[var(--color-border)] py-1.5 last:border-b-0">
-                    <span className="min-w-0 truncate text-[var(--color-text-secondary)]">
+                  <li
+                    key={w.conversation_id}
+                    className="flex flex-col gap-0.5 border-b border-[var(--color-border)] py-2 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3"
+                  >
+                    <span className="min-w-0 break-words text-[var(--color-text-secondary)] sm:truncate">
                       {w.orphaned ? "(orphaned — reclaimed on next sweep)" : w.title || "(untitled)"}
                       {w.user_email ? <span className="text-[var(--color-text-muted)]"> · {w.user_email}</span> : null}
                       {w.pinned ? <span className="text-[var(--color-text-muted)]"> · pinned</span> : null}
                     </span>
-                    <span className="shrink-0 tabular-nums text-[var(--color-text-primary)]">{formatBytes(w.bytes)}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-[var(--color-text-primary)]">
+                      {formatBytes(w.bytes)}
+                    </span>
                   </li>
                 ))}
               </ul>
             </div>
           ) : null}
 
-          <div className="mt-5 border-t border-[var(--color-border)] pt-4">
-            <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Delete old data</h4>
-            <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
-              Permanently deletes chats with no activity, and uploaded files older than, the number of days
-              below. Pinned, archived, shared, and project chats are always kept.{" "}
-              <span data-testid="storage-cleanup-preview">
-                {previewAtDefault ? (
-                  <>
-                    A cleanup at {days} days would remove{" "}
-                    <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
-                    conversation{data.reclaimable_conversations === 1 ? "" : "s"}.
-                  </>
-                ) : (
-                  <>
-                    At the default {data.default_days}-day cutoff a cleanup would remove{" "}
-                    <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
-                    conversation{data.reclaimable_conversations === 1 ? "" : "s"}; the count at {days} days isn&apos;t
-                    known until it runs.
-                  </>
-                )}
-              </span>
-            </p>
-            <div className="flex flex-wrap items-center gap-3">
-              <label
-                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
-                htmlFor="cleanupDays"
-              >
-                Cutoff
-                <input
-                  id="cleanupDays"
-                  type="number"
-                  min={1}
-                  value={days}
-                  onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-16 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.8rem] text-[var(--color-text-primary)]"
-                />
-                days
-              </label>
-              <label
-                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
-                htmlFor="cleanupDeleteChats"
-              >
-                <input
-                  id="cleanupDeleteChats"
-                  type="checkbox"
-                  checked={deleteChats}
-                  onChange={(e) => setDeleteChats(e.target.checked)}
-                />
-                Delete unpinned chats
-              </label>
-              <label
-                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
-                htmlFor="cleanupSweepFiles"
-              >
-                <input
-                  id="cleanupSweepFiles"
-                  type="checkbox"
-                  checked={sweepFiles}
-                  onChange={(e) => setSweepFiles(e.target.checked)}
-                />
-                Delete old uploaded files
-              </label>
-              {/* Cleanup deletes chats and files for good, so it takes the
-                  same two-click inline confirmation as every other
-                  irreversible action in Settings — no native dialog. */}
-              <InlineConfirmButton
-                label={cleaning ? "Deleting…" : "Delete old data"}
-                confirmLabel="Permanently delete"
-                disabled={cleaning || (!deleteChats && !sweepFiles)}
-                onConfirm={() => void runCleanup()}
-                testId="storage-cleanup-run"
-              />
-            </div>
-            {result ? (
-              <p className="m-0 mt-3 text-[0.8rem] text-[var(--color-text-secondary)]" data-testid="storage-cleanup-result" role="status">
-                {result}
+          {allowCleanup ? (
+            <div className="mt-5 border-t border-[var(--color-border)] pt-4">
+              <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Delete old data</h4>
+              <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
+                Permanently deletes chats with no activity, and uploaded files older than, the number of days
+                below. Pinned, archived, shared, and project chats are always kept.{" "}
+                <span data-testid="storage-cleanup-preview">
+                  {previewAtDefault ? (
+                    <>
+                      A cleanup at {days} days would remove{" "}
+                      <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
+                      conversation{data.reclaimable_conversations === 1 ? "" : "s"}.
+                    </>
+                  ) : (
+                    <>
+                      At the default {data.default_days}-day cutoff a cleanup would remove{" "}
+                      <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
+                      conversation{data.reclaimable_conversations === 1 ? "" : "s"}; the count at {days} days isn&apos;t
+                      known until it runs.
+                    </>
+                  )}
+                </span>
               </p>
-            ) : null}
-            {cleanupError ? (
-              <NoticeBanner tone="danger" className="mt-3" data-testid="storage-cleanup-error" role="alert">
-                Cleanup failed: {cleanupError}
-              </NoticeBanner>
-            ) : null}
-          </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label
+                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                  htmlFor="cleanupDays"
+                >
+                  Cutoff
+                  <input
+                    id="cleanupDays"
+                    type="number"
+                    min={1}
+                    value={days}
+                    onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-16 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.8rem] text-[var(--color-text-primary)]"
+                  />
+                  days
+                </label>
+                <label
+                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                  htmlFor="cleanupDeleteChats"
+                >
+                  <input
+                    id="cleanupDeleteChats"
+                    type="checkbox"
+                    checked={deleteChats}
+                    onChange={(e) => setDeleteChats(e.target.checked)}
+                  />
+                  Delete unpinned chats
+                </label>
+                <label
+                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                  htmlFor="cleanupSweepFiles"
+                >
+                  <input
+                    id="cleanupSweepFiles"
+                    type="checkbox"
+                    checked={sweepFiles}
+                    onChange={(e) => setSweepFiles(e.target.checked)}
+                  />
+                  Delete old uploaded files
+                </label>
+                {/* Cleanup deletes chats and files for good, so it takes the
+                    same two-click inline confirmation as every other
+                    irreversible action in Settings — no native dialog. */}
+                <InlineConfirmButton
+                  label={cleaning ? "Deleting…" : "Delete old data"}
+                  confirmLabel="Permanently delete"
+                  disabled={cleaning || (!deleteChats && !sweepFiles)}
+                  onConfirm={() => void runCleanup()}
+                  testId="storage-cleanup-run"
+                />
+              </div>
+              {result ? (
+                <p className="m-0 mt-3 text-[0.8rem] text-[var(--color-text-secondary)]" data-testid="storage-cleanup-result" role="status">
+                  {result}
+                </p>
+              ) : null}
+              {cleanupError ? (
+                <NoticeBanner tone="danger" className="mt-3" data-testid="storage-cleanup-error" role="alert">
+                  Cleanup failed: {cleanupError}
+                </NoticeBanner>
+              ) : null}
+            </div>
+          ) : (
+            <p
+              className="m-0 mt-5 border-t border-[var(--color-border)] pt-3 text-[0.78rem] text-[var(--color-text-muted)]"
+              data-testid="storage-readonly-note"
+            >
+              To prune old conversations or reclaim workspace files, go to{" "}
+              <Link
+                href="/settings/admin/server"
+                className="font-medium text-[var(--color-accent)] hover:underline"
+              >
+                Settings → Admin → Server
+              </Link>
+              .
+            </p>
+          )}
         </div>
       )}
     </ConnGroup>

@@ -203,6 +203,49 @@ beforeEach(() => {
         headers: { "Content-Type": "application/json" },
       });
     }
+    if (url.endsWith("/api/admin/server-stats")) {
+      return new Response(
+        JSON.stringify({
+          available: true,
+          sampled_at: "2026-11-10T00:00:00Z",
+          hostname: "fleet-box",
+          platform: "linux/amd64",
+          uptime_seconds: 86400,
+          cpu: { available: true, cores: 8, usage_percent: 25.0, load_1: 0.4, load_5: 0.3, load_15: 0.2 },
+          memory: { available: true, total_bytes: 8 * 1024 ** 3, used_bytes: 2 * 1024 ** 3, available_bytes: 6 * 1024 ** 3, swap_total_bytes: 0, swap_used_bytes: 0 },
+          disk: { available: true, path: "/", total_bytes: 100 * 1024 ** 3, used_bytes: 20 * 1024 ** 3, available_bytes: 80 * 1024 ** 3, usage_percent: 20 },
+          network: { available: true, interfaces: 1, received_bytes: 1024, transmitted_bytes: 1024, receive_bytes_per_second: 100, transmit_bytes_per_second: 100 },
+          agents: {
+            active_agents_total: 4,
+            active_chat_turns: 1,
+            running_tasks: 1,
+            queued_tasks: 2,
+            completed_tasks_today: 12,
+            failed_tasks_today: 0,
+            active_subagents: 2,
+            subagents_spawned_24h: 10,
+            subagents_spawned_total: 50,
+            tool_calls_24h: 300,
+            tool_calls_total: 2000,
+            active_conversations_24h: 15,
+            llm_calls_today: 60,
+            llm_cost_today_usd: 9.5,
+            sandbox_pool_size: 4,
+            sandbox_pool_available: 4,
+            db_pool_in_use: 1,
+            db_pool_idle: 4,
+            db_pool_size: 5,
+            mcp_servers_enabled: 10,
+            mcp_servers_total: 12,
+            goroutines: 48,
+            process_memory_mb: 96.0,
+            fleet_version: "v2026.11.10.6",
+          },
+          warnings: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     return new Response("{}", { status: 200 });
   });
 });
@@ -319,10 +362,10 @@ describe("AnalyticsPage", () => {
     });
   });
 
-  it("renders Outliers & Friction tab with top chats, heavy tasks, and user struggle signals", async () => {
+  it("renders Problem Chats & Friction tab with top chats, heavy tasks, and user struggle signals", async () => {
     render(<AnalyticsPage />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: /Outliers & Friction/i }));
+    fireEvent.click(await screen.findByRole("tab", { name: /Problem Chats & Friction/i }));
 
     const convTable = await screen.findByTestId("outliers-conversations-table");
     expect(screen.getByTestId("friction-signals-explainer").textContent).toContain(
@@ -344,13 +387,15 @@ describe("AnalyticsPage", () => {
     expect(userRow.textContent).toContain("$18.25");
   });
 
-  it("honors ?tab=adoption and ?tab=usage deep links", async () => {
+  it("honors ?tab=adoption, ?tab=usage, and ?tab=server deep links", async () => {
     window.history.replaceState(null, "", "/analytics?tab=adoption");
     render(<AnalyticsPage />);
 
     expect(await screen.findByTestId("adoption-panel-stub")).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Spend & Budgets" }));
     expect(await screen.findByTestId("usage-panel-stub")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Server & Live Agents" }));
+    expect(await screen.findByTestId("analytics-server-tab")).toBeTruthy();
   });
 
   it("blocks non-admins with an Admin access required view", async () => {
