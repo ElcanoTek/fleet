@@ -2206,6 +2206,7 @@ func (s *Store) RecordTurn(ctx context.Context, m TurnMetric) error {
 type AdminRow struct {
 	Email                    string
 	ConversationCount        int
+	TaskCount                int
 	PinnedCount              int
 	LastActivity             int64
 	TotalCostUSD             float64
@@ -2408,6 +2409,48 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 	}
 	if err := switchRows.Err(); err != nil {
 		return nil, err
+	}
+
+	var hasSchedTasks, hasCoreUsers, hasChatSchedules bool
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT to_regclass('sched.tasks') IS NOT NULL,
+		        to_regclass('core.users') IS NOT NULL,
+		        to_regclass('sched.chat_schedules') IS NOT NULL`,
+	).Scan(&hasSchedTasks, &hasCoreUsers, &hasChatSchedules)
+	if hasSchedTasks && hasCoreUsers {
+		if taskRows, err := s.db.QueryContext(ctx,
+			`SELECT LOWER(BTRIM(u.email)), COUNT(*)
+			 FROM sched.tasks t
+			 JOIN core.users u ON u.id = t.created_by
+			 WHERE BTRIM(u.email) <> ''
+			 GROUP BY LOWER(BTRIM(u.email))`,
+		); err == nil {
+			for taskRows.Next() {
+				var email string
+				var n int
+				if err := taskRows.Scan(&email, &n); err == nil {
+					rowFor(email).TaskCount += n
+				}
+			}
+			_ = taskRows.Close()
+		}
+	}
+	if hasChatSchedules {
+		if schedRows, err := s.db.QueryContext(ctx,
+			`SELECT LOWER(BTRIM(user_email)), COUNT(*)
+			 FROM sched.chat_schedules
+			 WHERE BTRIM(user_email) <> ''
+			 GROUP BY LOWER(BTRIM(user_email))`,
+		); err == nil {
+			for schedRows.Next() {
+				var email string
+				var n int
+				if err := schedRows.Scan(&email, &n); err == nil {
+					rowFor(email).TaskCount += n
+				}
+			}
+			_ = schedRows.Close()
+		}
 	}
 
 	out := make([]AdminRow, 0, len(byEmail))

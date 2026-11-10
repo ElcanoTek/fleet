@@ -193,7 +193,7 @@ function classifyModelBucket(
   if (rawKey.startsWith("openrouter/")) {
     return "included";
   }
-  return "included";
+  return "unpriced";
 }
 
 function MonthlyAllowanceBanner() {
@@ -932,7 +932,7 @@ function OutliersAndFrictionTab() {
               Struggles (Assistant Struggle Signals)
             </div>
             <p className="mt-0.5">
-              Automated detections where the assistant ran into trouble during a turn — such as repeated tool errors, loop-guard trips, hitting iteration caps, or turns that timed out or were cancelled.
+              Automated detections where the assistant ran into trouble during a turn — repeated tool failures, loop-guard blocks, context compaction, or turns requiring 25+ tool calls.
             </p>
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
@@ -940,7 +940,7 @@ function OutliersAndFrictionTab() {
               Model Upgrades (Switched up / Model Escalations)
             </div>
             <p className="mt-0.5">
-              Times a user accepted the in-chat prompt to switch mid-conversation from the default model up to the stronger frontier fallback model to finish a harder task.
+              Times a user accepted the in-chat prompt to switch mid-conversation from a lower-cost or non-fallback model up to the stronger frontier fallback model to finish a harder task.
             </p>
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
@@ -950,7 +950,7 @@ function OutliersAndFrictionTab() {
             <p className="mt-0.5">
               <strong>Friction</strong> is the combined count of{" "}
               <strong>Frustrated + Struggles + Model Upgrades</strong>.{" "}
-              <strong>Top Conversations</strong> below lists only <strong>live (non-deleted)</strong> chats you can click to open and inspect, whereas <strong>User Signal Totals</strong> and <strong>Model Usage</strong> include all historical turns (including from deleted chats).
+              <strong>Top Conversations</strong> and <strong>User Escalation Signals</strong> below count <strong>live (non-deleted)</strong> chats, whereas <strong>Chat Spend / Turns</strong> and <strong>Models &amp; Cost</strong> retain completed turn metrics from deleted chats.
             </p>
           </div>
         </div>

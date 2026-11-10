@@ -85,6 +85,13 @@ func MergePinnedModelPricing(base agentcore.PricingConfig, pins []config.PinnedM
 	for _, o := range out.Overrides {
 		if s := strings.ToLower(strings.TrimSpace(o.Model)); s != "" {
 			seen[s] = true
+			if bare := strings.TrimPrefix(s, "openrouter/"); bare != s {
+				if bare != "" {
+					seen[bare] = true
+				}
+			} else {
+				seen["openrouter/"+s] = true
+			}
 		}
 	}
 	for _, pin := range pins {

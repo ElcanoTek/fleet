@@ -51,6 +51,7 @@ const STATS = [
   {
     email: "alice@x.com",
     conversation_count: 3,
+    task_count: 2,
     pinned_count: 2,
     last_activity: NOW - 7200,
     total_cost_usd: 4.96,
@@ -109,12 +110,13 @@ describe("AdminUsersPage", () => {
     expect(await screen.findByText("alice@x.com")).toBeInTheDocument();
     expect(screen.getByText("bob@x.com")).toBeInTheDocument();
 
-    // Alice has stats: convs/pinned/turns/spend + last active.
+    // Alice has stats: convs + tasks + last active.
     const aliceRow = screen
       .getByText("alice@x.com")
       .closest("tr") as HTMLElement;
-    expect(within(aliceRow).getAllByText("3").length).toBe(2); // convs + turns
-    expect(within(aliceRow).getByText("$4.96")).toBeInTheDocument();
+    expect(within(aliceRow).getByText("3")).toBeInTheDocument(); // convs
+    expect(within(aliceRow).getByText("2")).toBeInTheDocument(); // tasks
+    expect(within(aliceRow).queryByText("$4.96")).toBeNull();
     expect(
       within(aliceRow).getByText(/last active 2h ago/),
     ).toBeInTheDocument();
@@ -126,7 +128,7 @@ describe("AdminUsersPage", () => {
 
     // Bob is provisioned but has no stats: numeric cells show "—".
     const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
-    expect(within(bobRow).getAllByText("—").length).toBe(4);
+    expect(within(bobRow).getAllByText("—").length).toBe(2);
     expect(within(bobRow).getByText(/last active —/)).toBeInTheDocument();
   });
 

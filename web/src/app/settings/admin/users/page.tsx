@@ -19,7 +19,7 @@ import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 import { useRouter } from "@/app/lib/navigation";
 
-import { fetchStats, formatAgo, formatUSD, type UserStat } from "../lib";
+import { fetchStats, formatAgo, type UserStat } from "../lib";
 import {
   btnClass,
   InlineConfirmButton,
@@ -307,10 +307,10 @@ function TeamPicker({
   }
   const showInput = creating || !known;
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-[0.35rem]">
+    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-[0.35rem]">
       {/* select-wrap draws the chevron inside the text inset (globals.css);
           pr-8 keeps the label clear of it. */}
-      <span className="select-wrap block min-w-0 flex-1">
+      <span className="select-wrap block min-w-[8rem] flex-1">
         <select
           id={id}
           aria-label={label}
@@ -613,11 +613,12 @@ export default function AdminUsersPage() {
     // Fixed positioning, ported from the design's openMenu math: clamp x into
     // the viewport, open below the kebab, flip above when it would overflow.
     const rect = e.currentTarget.getBoundingClientRect();
+    const menuW = Math.min(MENU_WIDTH_PX, window.innerWidth - 16);
     const x = Math.max(
       8,
       Math.min(
-        rect.right - MENU_WIDTH_PX,
-        window.innerWidth - MENU_WIDTH_PX - 8,
+        rect.right - menuW,
+        window.innerWidth - menuW - 8,
       ),
     );
     let y = rect.bottom + 6;
@@ -915,12 +916,11 @@ export default function AdminUsersPage() {
       intro={
         <>
           {centralAuth
-            ? "View usage of everyone in the workspace. People, roles and teams are managed in Auth. "
-            : "View usage and manage roles of everyone in the workspace. "}
-          Numbers here
-          are all-time interactive-chat activity per account; for windowed spend
-          across chat + scheduled tasks, model mix, outliers, and the per-user
-          adoption audit, open{" "}
+            ? "View activity of everyone in the workspace. People, roles and teams are managed in Auth. "
+            : "View activity and manage roles of everyone in the workspace. "}
+          Numbers here show conversations and scheduled tasks per account; for
+          windowed spend, model usage, friction signals, and the team adoption
+          audit, open{" "}
           <Link href="/analytics">Analytics</Link>.
         </>
       }
@@ -1070,14 +1070,7 @@ export default function AdminUsersPage() {
                 <tr>
                   <th className={TH}>User</th>
                   <th className={TH_NUM}>Convs</th>
-                  <th className={TH_NUM}>Pinned</th>
-                  <th className={TH_NUM}>Turns</th>
-                  <th
-                    className={TH_NUM}
-                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Analytics."
-                  >
-                    Chat spend
-                  </th>
+                  <th className={TH_NUM}>Tasks</th>
                   {/* The kebab column. A blank header leaves the row-edit
                       buttons announced with no column name at all, so the
                       name is given visually-hidden rather than dropped. */}
@@ -1090,7 +1083,7 @@ export default function AdminUsersPage() {
                 {loading ? (
                   <tr className="group/row">
                     <td
-                      colSpan={6}
+                      colSpan={4}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       Loading…
@@ -1104,7 +1097,7 @@ export default function AdminUsersPage() {
                     const status = rowStatus[row.email];
                     return (
                       <tr key={row.email} className="group/row">
-                        <td className={`${TD} min-w-[12rem] whitespace-normal`}>
+                        <td className={`${TD} min-w-0 sm:min-w-[12rem] whitespace-normal`}>
                           <span className="flex flex-wrap items-center gap-[0.45rem]">
                             <span
                               className={`text-[0.8rem] text-[var(--color-text-primary)] ${TD_TEXT_WRAP}`}
@@ -1141,9 +1134,6 @@ export default function AdminUsersPage() {
                           </span>
                           <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
                             last active {formatAgo(stat?.last_activity ?? 0)}
-                            {stat?.total_prompt_tokens && stat.total_prompt_tokens > 0
-                              ? ` · cache hit ${(stat.cache_hit_rate_pct ?? (stat.total_cached_tokens ?? 0) / stat.total_prompt_tokens * 100).toFixed(1)}%`
-                              : ""}
                             {account?.team_id.trim()
                               ? ` · team: ${account.team_id.trim()}`
                               : ""}
@@ -1213,13 +1203,7 @@ export default function AdminUsersPage() {
                           {stat ? stat.conversation_count : "—"}
                         </td>
                         <td className={TD_NUM}>
-                          {stat ? stat.pinned_count : "—"}
-                        </td>
-                        <td className={TD_NUM}>
-                          {stat ? stat.total_turns : "—"}
-                        </td>
-                        <td className={TD_NUM}>
-                          {stat ? formatUSD(stat.total_cost_usd) : "—"}
+                          {stat ? (stat.task_count ?? 0) : "—"}
                         </td>
                         <td className={`${TD} w-[2.4rem] text-right`}>
                           {account && !centralAuth ? (
@@ -1241,7 +1225,7 @@ export default function AdminUsersPage() {
                 ) : (
                   <tr className="group/row">
                     <td
-                      colSpan={6}
+                      colSpan={4}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       {centralAuth
@@ -1266,7 +1250,7 @@ export default function AdminUsersPage() {
               // estimated height, and the delete refusal is the one child that
               // can grow it by several lines — without this it could run off
               // the bottom of the viewport with no way to reach it.
-              className="fixed z-[400] grid max-h-[calc(100vh-1rem)] w-[22rem] gap-[0.7rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] focus:outline-none motion-safe:animate-set-fade"
+              className="fixed z-[400] grid max-h-[calc(100vh-1rem)] w-[22rem] max-w-[calc(100vw-1rem)] gap-[0.7rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] focus:outline-none motion-safe:animate-set-fade"
             >
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
@@ -1392,7 +1376,7 @@ export default function AdminUsersPage() {
                     />
                   </ConnField>
                   <ConnField label="Password" grow>
-                    <div className="flex gap-[0.45rem]">
+                    <div className="flex flex-wrap gap-[0.45rem]">
                       <input
                         id="newUserPassword"
                         aria-label="New user password"
@@ -1400,7 +1384,7 @@ export default function AdminUsersPage() {
                         value={newPassword}
                         placeholder="min 8 chars"
                         onChange={(e) => setNewPassword(e.target.value)}
-                        className={`${SETTINGS_INPUT} font-[family-name:var(--font-code)] text-[0.85rem]!`}
+                        className={`${SETTINGS_INPUT} min-w-[10rem] flex-1 font-[family-name:var(--font-code)] text-[0.85rem]!`}
                       />
                       <button
                         type="button"

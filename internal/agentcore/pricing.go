@@ -55,6 +55,24 @@ func LookupModelPrice(slug string) (ModelPrice, bool) {
 	if key == "" {
 		return ModelPrice{}, false
 	}
+	if strings.HasSuffix(key, ":free") {
+		return ModelPrice{}, true
+	}
+	cfg := pricingConfig()
+	candidates := []string{key}
+	if bare := strings.TrimPrefix(key, "openrouter/"); bare != key {
+		candidates = append(candidates, bare)
+	} else {
+		candidates = append(candidates, "openrouter/"+key)
+	}
+	for _, cand := range candidates {
+		if o, ok := cfg.lookup(cand); ok {
+			return ModelPrice{
+				InputPerM:  o.InputCostPerMillionTokens,
+				OutputPerM: o.OutputCostPerMillionTokens,
+			}, true
+		}
+	}
 	for known, price := range KnownModelPricing {
 		if strings.ToLower(known) == key {
 			return price, true
