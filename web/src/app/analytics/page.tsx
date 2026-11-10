@@ -122,29 +122,63 @@ function currentUTCMonthStart(): string {
   return `${y}-${m}-01`;
 }
 
-function modelDisplayName(b: UsageBucket): string {
-  if (b.key === "") {
-    return b.label ? `${b.label} (default model)` : "(default model)";
-  }
-  return b.key;
-}
-
 type PinnedModelMeta = {
   slug: string;
+  label?: string;
   free?: boolean;
   inputPricePerMtok?: number;
   outputPricePerMtok?: number;
 };
 
+function modelDisplayName(
+  b: UsageBucket,
+  pinned?: ReadonlyArray<PinnedModelMeta>,
+): string {
+  if (b.key === "") {
+    return b.label
+      ? `${b.label} (deleted chats & default-model turns)`
+      : "(deleted chats & default-model turns)";
+  }
+  const cleanKey = b.key.trim().toLowerCase().replace(/^openrouter\//, "");
+  const matchedPin = pinned?.find(
+    (p) => p.slug.trim().toLowerCase().replace(/^openrouter\//, "") === cleanKey,
+  );
+  if (matchedPin?.label && matchedPin.label.trim() !== "") {
+    return `${matchedPin.label.trim()} (${b.key})`;
+  }
+  return b.key;
+}
+
 function classifyModelBucket(
   b: UsageBucket,
   pinned: ReadonlyArray<PinnedModelMeta> | undefined,
 ): "included" | "billed" | "unpriced" {
-  if (b.cost_usd > 0) return "billed";
   const rawKey = (b.key ?? "").trim().toLowerCase();
-  if (!rawKey) return "unpriced";
   const cleanKey = rawKey.replace(/^openrouter\//, "");
-  if (cleanKey.endsWith(":free")) return "included";
+  const matchedPin =
+    rawKey && pinned
+      ? pinned.find(
+          (p) =>
+            p.slug.trim().toLowerCase().replace(/^openrouter\//, "") === cleanKey,
+        )
+      : undefined;
+  const isPinnedZeroRated =
+    !!matchedPin &&
+    (matchedPin.free === true ||
+      (matchedPin.inputPricePerMtok === 0 &&
+        matchedPin.outputPricePerMtok === 0));
+  if (rawKey && (cleanKey.endsWith(":free") || isPinnedZeroRated)) {
+    return "included";
+  }
+  if (b.cost_usd > 0) return "billed";
+  if (!rawKey) return "unpriced";
+  if (
+    matchedPin &&
+    ((matchedPin.inputPricePerMtok ?? 0) > 0 ||
+      (matchedPin.outputPricePerMtok ?? 0) > 0)
+  ) {
+    return "unpriced";
+  }
   const hasFreePinned =
     !!pinned &&
     pinned.some(
@@ -152,20 +186,13 @@ function classifyModelBucket(
         p.free === true ||
         (p.inputPricePerMtok === 0 && p.outputPricePerMtok === 0),
     );
-  if (hasFreePinned && pinned) {
-    const matched = pinned.some((p) => {
-      const isFree =
-        p.free === true ||
-        (p.inputPricePerMtok === 0 && p.outputPricePerMtok === 0);
-      if (!isFree) return false;
-      return p.slug.trim().toLowerCase().replace(/^openrouter\//, "") === cleanKey;
-    });
-    return matched ? "included" : "unpriced";
+  if (hasFreePinned) {
+    return rawKey.startsWith("openrouter/") ? "included" : "unpriced";
   }
   if (rawKey.startsWith("openrouter/")) {
     return "included";
   }
-  return "unpriced";
+  return "included";
 }
 
 function MonthlyAllowanceBanner() {
@@ -247,15 +274,30 @@ function MonthlyAllowanceBanner() {
 
   let includedTokens = 0;
   let billedTokens = 0;
+  let includedCostUSD = 0;
+  let includedChatCostUSD = 0;
+  let includedTaskCostUSD = 0;
   for (const b of buckets) {
     const t = b.prompt_tokens + b.completion_tokens;
     const tier = classifyModelBucket(b, pinnedModels);
     if (tier === "included") {
       includedTokens += t;
+      includedCostUSD += b.cost_usd;
+      includedChatCostUSD += b.chat_cost_usd;
+      includedTaskCostUSD += b.task_cost_usd;
     } else if (tier === "billed") {
       billedTokens += t;
     }
   }
+  const billedCostUSD = Math.max(0, totalCostUSD - includedCostUSD);
+  const billedChatCostUSD = Math.max(
+    0,
+    (monthUsage?.totals?.chat_cost_usd ?? 0) - includedChatCostUSD,
+  );
+  const billedTaskCostUSD = Math.max(
+    0,
+    (monthUsage?.totals?.task_cost_usd ?? 0) - includedTaskCostUSD,
+  );
   const includedSharePct =
     totalTokens > 0 ? (includedTokens / totalTokens) * 100 : 0;
   const limitPct = softLimit > 0 ? (totalTokens / softLimit) * 100 : 0;
@@ -421,11 +463,11 @@ function MonthlyAllowanceBanner() {
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-billed-spend"
           >
-            {usageLoading && !monthUsage ? "…" : fmtUSD(totalCostUSD)}
+            {usageLoading && !monthUsage ? "…" : fmtUSD(billedCostUSD)}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            Chat {fmtUSD(monthUsage?.totals?.chat_cost_usd ?? 0)} · Tasks{" "}
-            {fmtUSD(monthUsage?.totals?.task_cost_usd ?? 0)}
+            Chat {fmtUSD(billedChatCostUSD)} · Tasks{" "}
+            {fmtUSD(billedTaskCostUSD)}
           </div>
         </div>
 
@@ -515,6 +557,8 @@ function ModelUsageTab() {
     (acc, b) => acc + b.chat_turns + b.task_iterations,
     0,
   );
+  const includedCost = includedBuckets.reduce((acc, b) => acc + b.cost_usd, 0);
+  const billedCost = Math.max(0, totalCost - includedCost);
 
   const includedPct = totalTokens > 0 ? (includedTokens / totalTokens) * 100 : 0;
   const billedPct = totalTokens > 0 ? (billedTokens / totalTokens) * 100 : 0;
@@ -592,7 +636,7 @@ function ModelUsageTab() {
               Frontier / Billed Models
             </span>
             <span className="rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2.5 py-0.5 font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-text-primary)]">
-              {fmtUSD(totalCost)} billed
+              {fmtUSD(billedCost)} billed
             </span>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
@@ -608,6 +652,41 @@ function ModelUsageTab() {
             {plain.format(billedRuns)} chat turns &amp; task iterations on metered models
           </p>
         </div>
+      </div>
+
+      <div
+        className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3.5 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)]"
+        data-testid="model-attribution-note"
+      >
+        <div className="font-semibold text-[var(--color-text-primary)]">
+          How Model Attribution, Deleted Chats &amp; Tiers Work
+        </div>
+        <ul className="mt-1.5 list-disc space-y-1 pl-4">
+          <li>
+            <strong className="text-[var(--color-text-primary)]">
+              How Model Attribution Works:
+            </strong>{" "}
+            Chat turns are grouped by each conversation&apos;s currently active model setting (whereas background task steps record the exact model used per step). If a conversation&apos;s model is switched later (or bulk-migrated), earlier turns in that conversation are grouped under the conversation&apos;s current model.
+          </li>
+          <li>
+            <strong className="text-[var(--color-text-primary)]">
+              Deleted Chats Are Included in Spend &amp; Token Totals:
+            </strong>{" "}
+            When a user deletes a conversation, its messages are removed, but its completed turn metrics are retained for accurate monthly token and cost accounting and appear under{" "}
+            <code className="font-[family-name:var(--font-code)] text-[0.75rem]">
+              (deleted chats &amp; default-model turns)
+            </code>
+            .
+          </li>
+          <li>
+            <strong className="text-[var(--color-text-primary)]">
+              Model Tiers &amp; Budget Impact:
+            </strong>{" "}
+            <strong>Included ($0)</strong> models (pinned with <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code> or a <code className="font-[family-name:var(--font-code)] text-[0.75rem]">$0</code> pricing override) count 100% toward token volume and the monthly token allowance, and accrue <strong>$0.00</strong> toward billed USD spend and USD budget lines.{" "}
+            <strong>Billed</strong> models accrue metered provider or override rates.{" "}
+            <strong>No price data</strong> indicates runs where no dollar rate was reported.
+          </li>
+        </ul>
       </div>
 
       {loading && !report ? (
@@ -658,7 +737,7 @@ function ModelUsageTab() {
                 return (
                   <tr key={b.key || "__default__"} data-testid="model-breakdown-row">
                     <td className="usage-key font-[family-name:var(--font-code)] text-[0.8rem]">
-                      {modelDisplayName(b)}
+                      {modelDisplayName(b, pinnedModels)}
                     </td>
                     <td>
                       {isIncluded ? (
@@ -667,7 +746,7 @@ function ModelUsageTab() {
                         </span>
                       ) : isUnpriced ? (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                          Unpriced
+                          No price data
                         </span>
                       ) : (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
@@ -828,6 +907,54 @@ function OutliersAndFrictionTab() {
 
   return (
     <div className="space-y-6" data-testid="analytics-outliers">
+      {/* Glossary / Signal Definitions */}
+      <div
+        className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 shadow-[var(--shadow-sm)]"
+        data-testid="friction-signals-explainer"
+      >
+        <h2 className="font-heading text-[0.95rem] font-bold text-[var(--color-text-primary)]">
+          How Friction &amp; Escalation Signals Work
+        </h2>
+        <div className="mt-2.5 grid grid-cols-1 gap-3 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)] sm:grid-cols-2">
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
+            <div className="font-semibold text-[var(--color-text-primary)]">
+              Frustrated (Frustrated Messages)
+            </div>
+            <p className="mt-0.5">
+              User replies that push back on or correct the assistant (for example,{" "}
+              <em>&ldquo;that&apos;s wrong&rdquo;</em>, <em>&ldquo;stop&rdquo;</em>,{" "}
+              <em>&ldquo;you didn&apos;t follow instructions&rdquo;</em>, or repeated corrections).
+            </p>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
+            <div className="font-semibold text-[var(--color-text-primary)]">
+              Struggles (Assistant Struggle Signals)
+            </div>
+            <p className="mt-0.5">
+              Automated detections where the assistant ran into trouble during a turn — such as repeated tool errors, loop-guard trips, hitting iteration caps, or turns that timed out or were cancelled.
+            </p>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
+            <div className="font-semibold text-[var(--color-text-primary)]">
+              Model Upgrades (Switched up / Model Escalations)
+            </div>
+            <p className="mt-0.5">
+              Times a user accepted the in-chat prompt to switch mid-conversation from the default model up to the stronger frontier fallback model to finish a harder task.
+            </p>
+          </div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
+            <div className="font-semibold text-[var(--color-text-primary)]">
+              Friction Score &amp; Deleted Chats Scope
+            </div>
+            <p className="mt-0.5">
+              <strong>Friction</strong> is the combined count of{" "}
+              <strong>Frustrated + Struggles + Model Upgrades</strong>.{" "}
+              <strong>Top Conversations</strong> below lists only <strong>live (non-deleted)</strong> chats you can click to open and inspect, whereas <strong>User Signal Totals</strong> and <strong>Model Usage</strong> include all historical turns (including from deleted chats).
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Section 1: Top Conversations & Patrols */}
       <div className="section" role="region" aria-labelledby="outlierConvsHeading">
         <div className="section-header">
@@ -884,10 +1011,18 @@ function OutliersAndFrictionTab() {
                   <th scope="col" className="num">
                     Tokens
                   </th>
-                  <th scope="col" className="num">
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Share of prompt tokens served from the provider prompt cache"
+                  >
                     Cache Hit %
                   </th>
-                  <th scope="col" className="num">
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades"
+                  >
                     Friction
                   </th>
                   <th scope="col" className="num">
@@ -916,7 +1051,10 @@ function OutliersAndFrictionTab() {
                           {c.title || `Chat ${c.conversation_id.slice(0, 8)}`}
                         </Link>
                         {isPatrol ? (
-                          <span className="ml-2 inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]">
+                          <span
+                            className="ml-2 inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
+                            title="Automated recurring patrol conversation"
+                          >
                             Patrol
                           </span>
                         ) : null}
@@ -935,14 +1073,14 @@ function OutliersAndFrictionTab() {
                         {c.prompt_tokens > 0 ? `${hitRate.toFixed(0)}%` : "—"}
                       </td>
                       <td
-                        className="num font-[family-name:var(--font-code)] text-[0.76rem]"
-                        title={`${c.frustrated_messages} frustrated · ${c.struggle_signals} struggles · ${c.advanced_switches} switched up`}
+                        className="num text-[0.75rem]"
+                        title={`${c.frustrated_messages} frustrated · ${c.struggle_signals} struggles · ${c.advanced_switches} model upgrades`}
                       >
                         {c.frustrated_messages +
                           c.struggle_signals +
                           c.advanced_switches >
                         0
-                          ? `${c.frustrated_messages}F / ${c.struggle_signals}S / ${c.advanced_switches}↑`
+                          ? `${c.frustrated_messages} frustrated · ${c.struggle_signals} struggles · ${c.advanced_switches} upgrade${c.advanced_switches === 1 ? "" : "s"}`
                           : "—"}
                       </td>
                       <td className="num">{fmtUSD(c.cost_usd)}</td>
@@ -1077,7 +1215,7 @@ function OutliersAndFrictionTab() {
               User Struggle, Frustration &amp; Model-Switch Signals
             </h2>
             <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-              Per-user escalation signals from live conversations: classifier-detected frustration, free struggle signals, and accepted switches to the advanced model.
+              Per-user totals across all completed turns: user messages expressing frustration or correction, turns where the assistant hit tool/loop trouble, and mid-chat upgrades to the stronger frontier model.
             </p>
           </div>
         </div>
@@ -1095,25 +1233,37 @@ function OutliersAndFrictionTab() {
               <thead>
                 <tr>
                   <th scope="col">User</th>
-                  <th scope="col" className="num">
+                  <th
+                    scope="col"
+                    className="num"
+                    title="User replies expressing frustration, correction, or pushback"
+                  >
                     Frustrated
                   </th>
-                  <th scope="col" className="num">
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts"
+                  >
                     Struggles
                   </th>
-                  <th scope="col" className="num">
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Times the user accepted the in-chat prompt to switch up to the stronger frontier model"
+                  >
                     Switched up
                   </th>
-                  <th scope="col" className="num">
+                  <th scope="col" className="num" title="Live (non-deleted) conversations owned by this user">
                     Chats
                   </th>
-                  <th scope="col" className="num">
+                  <th scope="col" className="num" title="All completed chat turns (including deleted conversations)">
                     Turns
                   </th>
-                  <th scope="col" className="num">
+                  <th scope="col" className="num" title="Share of prompt tokens served from the provider prompt cache">
                     Cache Hit %
                   </th>
-                  <th scope="col" className="num">
+                  <th scope="col" className="num" title="Total chat spend across all completed turns">
                     Chat Spend
                   </th>
                 </tr>

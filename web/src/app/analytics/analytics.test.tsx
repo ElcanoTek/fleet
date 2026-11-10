@@ -18,8 +18,19 @@ vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
   }),
 }));
 
+let mockPinnedModels: Array<{
+  slug: string;
+  label?: string;
+  free?: boolean;
+  inputPricePerMtok?: number;
+  outputPricePerMtok?: number;
+}> = [];
+
 vi.mock("@/app/lib/useClientConfig", () => ({
-  useClientConfig: () => ({ branding: { app_name: "Fleet", logo_url: "" } }),
+  useClientConfig: () => ({
+    branding: { app_name: "Fleet", logo_url: "" },
+    models: { pinned: mockPinnedModels },
+  }),
 }));
 
 vi.mock("@/app/shared/ui/NavRail", () => ({
@@ -160,6 +171,7 @@ const SAMPLE_ADMIN_STATS = {
 beforeEach(() => {
   mockRole = "admin";
   mockSignedIn = true;
+  mockPinnedModels = [];
   window.history.replaceState(null, "", "/analytics");
   usageMock.mockReset();
   usageMock.mockResolvedValue(SAMPLE_MODEL_REPORT);
@@ -219,6 +231,72 @@ describe("AnalyticsPage", () => {
     expect(rows[0].textContent).toContain("Included ($0)");
     expect(rows[1].textContent).toContain("anthropic/claude-opus-4-6");
     expect(rows[1].textContent).toContain("Billed");
+    expect(screen.getByTestId("model-attribution-note").textContent).toContain(
+      "(deleted chats & default-model turns)",
+    );
+  });
+
+  it("treats pinned free:true models as Included ($0) even when historical cost_usd > 0 and labels empty key clearly", async () => {
+    mockPinnedModels = [
+      { slug: "qwen/qwen3.6-plus", label: "Custom Zero Model", free: true },
+    ];
+    usageMock.mockResolvedValue({
+      ...SAMPLE_MODEL_REPORT,
+      buckets: [
+        {
+          key: "openrouter/qwen/qwen3.6-plus",
+          label: "",
+          cost_usd: 15.0,
+          task_cost_usd: 5.0,
+          chat_cost_usd: 10.0,
+          prompt_tokens: 6_000_000,
+          completion_tokens: 2_000_000,
+          cached_tokens: 4_000_000,
+          uncached_tokens: 2_000_000,
+          cache_hit_rate_pct: 66.7,
+          task_iterations: 20,
+          chat_turns: 80,
+        },
+        {
+          key: "",
+          label: "",
+          cost_usd: 0,
+          task_cost_usd: 0,
+          chat_cost_usd: 0,
+          prompt_tokens: 1_500_000,
+          completion_tokens: 500_000,
+          cached_tokens: 500_000,
+          uncached_tokens: 1_000_000,
+          cache_hit_rate_pct: 33.3,
+          task_iterations: 0,
+          chat_turns: 40,
+        },
+      ],
+      totals: {
+        ...SAMPLE_MODEL_REPORT.totals,
+        cost_usd: 15.0,
+        task_cost_usd: 5.0,
+        chat_cost_usd: 10.0,
+        prompt_tokens: 7_500_000,
+        completion_tokens: 2_500_000,
+      },
+    });
+
+    render(<AnalyticsPage />);
+
+    const banner = await screen.findByTestId("analytics-monthly-banner");
+    await waitFor(() => {
+      expect(within(banner).getByTestId("monthly-billed-spend").textContent).toBe("$0.00");
+    });
+    expect(within(banner).getByTestId("monthly-included-share").textContent).toBe("80.0%");
+
+    const table = await screen.findByTestId("model-breakdown-table");
+    const rows = within(table).getAllByTestId("model-breakdown-row");
+    expect(rows[0].textContent).toContain("Custom Zero Model (openrouter/qwen/qwen3.6-plus)");
+    expect(rows[0].textContent).toContain("Included ($0)");
+    expect(rows[0].textContent).toContain("$0.00");
+    expect(rows[1].textContent).toContain("(deleted chats & default-model turns)");
+    expect(rows[1].textContent).toContain("No price data");
   });
 
   it("allows editing the monthly soft token limit inline", async () => {
@@ -247,10 +325,14 @@ describe("AnalyticsPage", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /Outliers & Friction/i }));
 
     const convTable = await screen.findByTestId("outliers-conversations-table");
+    expect(screen.getByTestId("friction-signals-explainer").textContent).toContain(
+      "How Friction & Escalation Signals Work",
+    );
     const convLink = within(convTable).getByText("Patrol: Tech HQ & Fleet Production Watch");
     expect(convLink).toBeTruthy();
     expect(convLink.closest("a")?.getAttribute("href")).toBe("/chat?c=11111111-2222-3333-4444-555555555555");
     expect(within(convTable).getByText("Patrol")).toBeTruthy();
+    expect(within(convTable).getByText("0 frustrated · 1 struggles · 0 upgrades")).toBeTruthy();
 
     const taskTable = await screen.findByTestId("outliers-tasks-table");
     expect(within(taskTable).getByText("Morning Executive Brief")).toBeTruthy();

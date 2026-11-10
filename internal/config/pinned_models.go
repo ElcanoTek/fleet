@@ -16,12 +16,13 @@ import (
 // operator-chosen display label, a short tag pill ("alpha", "beta", …), and
 // a displayed price: "free", or per-million input / output USD overrides.
 //
-// This is a PRESENTATION alias only. The slug is still what the browser sends
-// and what the run loop resolves, prices and audits — the label renames the
-// row, it does not hide the slug from anyone who reads a request, an export,
-// or the admin surfaces. Likewise the price fields (and free) change only the cost band
-// the pickers show: metering, cost ceilings and recorded spend keep using the
-// provider's real price. See docs/PINNED-MODELS.md.
+// This is a PRESENTATION alias, not a secrecy boundary: the slug is still what
+// the browser sends and what the run loop resolves and audits. Pins marked
+// Free: true (or with both input and output price overrides set to 0) also
+// register a $0.00 runtime pricing override unless the bundle manifest already
+// declares an explicit override for that slug, so zero-rated pinned models
+// accrue $0.00 against per-run cost ceilings, principal USD budgets, and
+// analytics spend. See docs/PINNED-MODELS.md.
 type PinnedModel struct {
 	Slug  string `json:"slug"`
 	Label string `json:"label,omitempty"`

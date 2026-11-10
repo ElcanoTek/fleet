@@ -135,7 +135,7 @@ func run(argv []string, progName string) error {
 	// custom model pricing (#297) and governed lifecycle hooks (#788). The
 	// generic bundle ships none of these, so each is a no-op by default.
 	agentcore.ConfigureAgentPolicy(bundle.AgentcorePolicy())
-	agentcore.ConfigurePricing(bundle.AgentcorePricing())
+	agentcore.ConfigurePricing(clientconfig.MergePinnedModelPricing(bundle.AgentcorePricing(), cfg.PinnedModels))
 	agentcore.ConfigureLifecycleHooks(bundle.AgentcoreHooks())
 
 	// A task YAML without a model runs on the task tier, the same as on the

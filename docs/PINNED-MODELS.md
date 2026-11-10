@@ -64,16 +64,15 @@ FLEET_PINNED_MODELS='[{"slug":"qwen/qwen3-235b-a22b","label":"Acme Nova","tag":"
 
 A user who opens the developer tools can find the base model.
 
-**Prices are display-only too.** `free` and the price overrides change the
-cost band users see in the pickers and on the model chip. They do not change
-what OpenRouter charges your account, or what fleet meters, records and
-enforces against the per-run cost ceilings: a "Free" model still costs you
-its real price, and a run's recorded spend shows that real price. Being free
-to the client is a billing decision outside fleet; this only stops the picker
-from showing a price. Hiding it would
-take a server-side alias: a slug of your own that the resolver maps to the
-real model, with pricing, context-window and reasoning-family lookups all
-following that mapping. That was deliberately left out of this change.
+**Zero-rated (`free: true`) pins also zero out runtime USD metering.** Setting
+`free: true` (or setting both `input_price_per_mtok` and `output_price_per_mtok`
+to `0`) registers a `$0.00` runtime pricing override for the pinned slug (unless
+the client bundle manifest already declares an explicit override for that model).
+Runs on a zero-rated pinned model therefore accrue `$0.00` toward per-run cost
+ceilings, principal USD budgets, and `/analytics` billed spend while still
+recording 100% of prompt, completion, and cached tokens. Non-zero price
+overrides on a pin remain display-only for the picker cost band unless paired
+with a bundle `pricing.overrides` entry.
 
 ## Deferred
 

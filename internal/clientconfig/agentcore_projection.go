@@ -1,9 +1,11 @@
 package clientconfig
 
 import (
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // The bundle's runtime policy is installed into agentcore by BOTH entrypoints
@@ -59,6 +61,60 @@ func (b *Bundle) AgentcorePricing() agentcore.PricingConfig {
 				OutputCostPerMillionTokens:     o.OutputCostPerMillionTokens,
 				CacheReadCostPerMillionTokens:  o.CacheReadCostPerMillionTokens,
 				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
+			})
+		}
+	}
+	return out
+}
+
+// MergePinnedModelPricing appends zero-rate ($0.00) pricing overrides for any
+// pinned model declared with Free: true (or both input and output price set to
+// 0) whose slug is not already explicitly overridden in base.Overrides. Both
+// the bare slug and its "openrouter/<slug>" counterpart are registered so chat
+// turns and scheduled task iterations resolve to $0.00 regardless of whether
+// the provider prefix was recorded.
+func MergePinnedModelPricing(base agentcore.PricingConfig, pins []config.PinnedModel) agentcore.PricingConfig {
+	out := agentcore.PricingConfig{Fallback: base.Fallback}
+	if len(base.Overrides) > 0 {
+		out.Overrides = append([]agentcore.PricingOverride(nil), base.Overrides...)
+	}
+	if len(pins) == 0 {
+		return out
+	}
+	seen := make(map[string]bool, len(out.Overrides)*2)
+	for _, o := range out.Overrides {
+		if s := strings.ToLower(strings.TrimSpace(o.Model)); s != "" {
+			seen[s] = true
+		}
+	}
+	for _, pin := range pins {
+		isZero := pin.Free ||
+			(pin.InputPricePerMtok != nil && *pin.InputPricePerMtok == 0 &&
+				pin.OutputPricePerMtok != nil && *pin.OutputPricePerMtok == 0)
+		if !isZero {
+			continue
+		}
+		raw := strings.TrimSpace(pin.Slug)
+		if raw == "" {
+			continue
+		}
+		lower := strings.ToLower(raw)
+		candidates := []string{raw}
+		if strings.HasPrefix(lower, "openrouter/") {
+			if bare := strings.TrimSpace(raw[len("openrouter/"):]); bare != "" {
+				candidates = append(candidates, bare)
+			}
+		} else {
+			candidates = append(candidates, "openrouter/"+raw)
+		}
+		for _, cand := range candidates {
+			key := strings.ToLower(strings.TrimSpace(cand))
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out.Overrides = append(out.Overrides, agentcore.PricingOverride{
+				Model: cand,
 			})
 		}
 	}

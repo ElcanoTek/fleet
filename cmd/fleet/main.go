@@ -421,7 +421,7 @@ func run() error {
 	// Install the bundle's custom model-pricing overrides (#297). The generic
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned
 	// price (the pre-#297 default). Must run before any turn starts.
-	agentcore.ConfigurePricing(bundle.AgentcorePricing())
+	agentcore.ConfigurePricing(clientconfig.MergePinnedModelPricing(bundle.AgentcorePricing(), cfg.PinnedModels))
 
 	// Optional PII redaction (#450): install the process-wide redactor when
 	// FLEET_PII_REDACTION_ENABLED is set. Default off = nil redactor = the tool-

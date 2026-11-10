@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -263,3 +264,42 @@ func TestUsageReportCSVExport(t *testing.T) {
 		t.Fatalf("json format should stay JSON, got %d ct=%q", w.Code, w.Header().Get("Content-Type"))
 	}
 }
+
+func TestUsageReportZeroesZeroRatedModels(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigurePricing(agentcore.PricingConfig{}) })
+	agentcore.ConfigurePricing(agentcore.PricingConfig{
+		Overrides: []agentcore.PricingOverride{
+			{Model: "qwen/qwen3.6-plus"},
+			{Model: "openrouter/qwen/qwen3.6-plus"},
+		},
+	})
+
+	h, _ := setupTest(t)
+	h.SetChatUsageProvider(func(_ context.Context, _, _ time.Time, _ string) ([]models.UsageBucket, error) {
+		return []models.UsageBucket{
+			{Key: "qwen/qwen3.6-plus", ChatCostUSD: 14.50, PromptTokens: 1_000_000, CompletionTokens: 200_000, ChatTurns: 20},
+			{Key: "anthropic/claude-opus-4-6", ChatCostUSD: 25.00, PromptTokens: 500_000, CompletionTokens: 100_000, ChatTurns: 5},
+		}, nil
+	})
+
+	req := httptest.NewRequest("GET", "/admin/usage?group_by=model", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	w := httptest.NewRecorder()
+	h.GetUsageReport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var rep models.UsageReport
+	if err := json.Unmarshal(w.Body.Bytes(), &rep); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rep.Totals.CostUSD != 25.00 || rep.Totals.ChatCostUSD != 25.00 {
+		t.Fatalf("expected totals to exclude zero-rated model spend, got %+v", rep.Totals)
+	}
+	for _, b := range rep.Buckets {
+		if b.Key == "qwen/qwen3.6-plus" && (b.CostUSD != 0 || b.ChatCostUSD != 0 || b.TaskCostUSD != 0) {
+			t.Fatalf("expected zero-rated model bucket cost to be 0, got %+v", b)
+		}
+	}
+}
+

@@ -77,7 +77,7 @@ function bucketDisplayName(b: UsageBucket, groupBy: UsageGroupBy): string {
       case "project":
         return "(no project)";
       case "model":
-        return "(default model)";
+        return "(deleted chats & default-model turns)";
       default:
         return "(none)";
     }
@@ -457,7 +457,9 @@ function BudgetsSection() {
       <p className="usage-note">
         A soft bound fires one alert per window; a hard bound refuses new task creation until
         the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds
-        cover only priced runs (see the note above) — token bounds are complete regardless.
+        cover only priced runs (see the note above) — zero-rated / included models (free: true or
+        $0 pricing override) accrue $0.00 toward USD bounds while counting 100% of tokens toward
+        token bounds.
       </p>
     </div>
   );

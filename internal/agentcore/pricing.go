@@ -351,3 +351,35 @@ func pricingConfig() PricingConfig {
 func ResolveStepCost(modelSlug string, usage fantasy.Usage, orCost *float64) float64 {
 	return computeCostFromUsage(modelSlug, usage, orCost, pricingConfig())
 }
+
+// IsZeroRatedModel reports whether slug is configured as a zero-rated ($0.00)
+// model under the active pricing policy or carries an explicit ":free" suffix.
+// It checks both the exact slug and its bare/openrouter-prefixed counterpart so
+// chat turns and task runs match regardless of whether the route prefix was
+// recorded.
+func IsZeroRatedModel(slug string) bool {
+	s := normalizeSlug(slug)
+	if s == "" {
+		return false
+	}
+	if strings.HasSuffix(s, ":free") {
+		return true
+	}
+	cfg := pricingConfig()
+	candidates := []string{s}
+	if bare := strings.TrimPrefix(s, "openrouter/"); bare != s {
+		candidates = append(candidates, bare)
+	} else {
+		candidates = append(candidates, "openrouter/"+s)
+	}
+	for _, cand := range candidates {
+		if o, ok := cfg.lookup(cand); ok {
+			return o.InputCostPerMillionTokens <= 0 &&
+				o.OutputCostPerMillionTokens <= 0 &&
+				o.CacheReadCostPerMillionTokens <= 0 &&
+				o.CacheWriteCostPerMillionTokens <= 0
+		}
+	}
+	return false
+}
+
