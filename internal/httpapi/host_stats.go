@@ -32,9 +32,9 @@ type ServerAgentStats struct {
 	LLMCostTodayUSD        float64 `json:"llm_cost_today_usd"`
 	SandboxPoolSize        int     `json:"sandbox_pool_size"`
 	SandboxPoolAvailable   int     `json:"sandbox_pool_available"`
-	DBPoolInUse            int32   `json:"db_pool_in_use"`
-	DBPoolIdle             int32   `json:"db_pool_idle"`
-	DBPoolSize             int32   `json:"db_pool_size"`
+	DBPoolInUse            int     `json:"db_pool_in_use"`
+	DBPoolIdle             int     `json:"db_pool_idle"`
+	DBPoolSize             int     `json:"db_pool_size"`
 	MCPServersEnabled      int     `json:"mcp_servers_enabled"`
 	MCPServersTotal        int     `json:"mcp_servers_total"`
 	Goroutines             int     `json:"goroutines"`
@@ -102,9 +102,9 @@ func (s *Server) collectServerAgentStats(ctx context.Context) ServerAgentStats {
 
 	if s.store != nil {
 		st := s.store.PoolStats()
-		out.DBPoolSize = int32(st.OpenConnections)
-		out.DBPoolInUse = int32(st.InUse)
-		out.DBPoolIdle = int32(st.Idle)
+		out.DBPoolSize = st.OpenConnections
+		out.DBPoolInUse = st.InUse
+		out.DBPoolIdle = st.Idle
 
 		qCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		sinceToday := startOfUTCDay(time.Now())
