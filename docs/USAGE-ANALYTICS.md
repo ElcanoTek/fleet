@@ -6,8 +6,9 @@ API key), what (project / model), and when (day / week) drove cost and tokens
 that same metering. This page records what shipped, what deviated from the
 issue, and what was deliberately deferred.
 
-- **Part 1 — the read model**: `GET /admin/usage` + the Operations Center
-  Usage panel. Strictly read-only.
+- **Part 1 — the read model**: `GET /admin/usage` + the **Spend & Budgets**
+  tab of the admin Analytics page (`/analytics?tab=usage`). Strictly
+  read-only.
 - **Part 2 — rolling budgets**: `{scope: user|key, window:
   day|week|month, soft/hard bounds in dollars AND tokens}`, enforced by one
   shared gate at every task-create path, with a once-per-window soft alert
@@ -62,18 +63,24 @@ in one process); when the seam is nil the report covers tasks only and its
   convention).
 - Admin-only, but registered behind `AdminOrUserAuthMiddleware` with the gate
   enforced in-handler on `PermissionAdmin` — the `/sla-report` pattern (#458),
-  because the Next proxy can never send the admin `X-API-Key`, and the report
+  because the browser tier can never send the admin `X-API-Key`, and the report
   is global across principals so a non-admin member gets 403.
 - The empty bucket key is meaningful, not an error: tasks have no project
   dimension, chat turns have no API-key dimension, some rows have no creator.
 
-### The Operations Center panel
+### The Spend & Budgets tab
 
-An admin-only **Usage** tab (`web/src/app/orchestrator/UsagePanel.tsx`,
-proxied via `web/src/app/api/orchestrator/admin/usage/route.ts`): range
-presets (7/30/90 days) + group-by + measure (cost/tokens) controls, KPI tiles
-(total cost with the task/chat split, prompt/completion/cached tokens, work
-units), a single-hue bar chart for entity groupings (tail folded into “Other”
+The admin-only **Spend & Budgets** tab of the Analytics page
+(`/analytics?tab=usage`, reached from **Analytics** in the account menu;
+`web/src/app/orchestrator/UsagePanel.tsx`, rendered by
+`web/src/app/analytics/page.tsx`). It calls `/api/orchestrator/admin/usage`,
+the orchestrator router mounted behind the browser gateway (ADR-0109 §2,
+ADR-0110). It
+was first an Operations Center tab; `/orchestrator?tab=usage` still
+redirects an admin here. Range
+presets (7/30/90 days) + group-by + measure (cost / tokens / cache hit %)
+controls, KPI tiles (total cost with the task/chat split, prompt/completion/
+cached tokens, cache efficiency, work units), a single-hue bar chart for entity groupings (tail folded into “Other”
 past 11 bars) or a column time series for day/week, and a full table twin so
 no value is gated behind the chart or hover. Built per the dataviz skill: one
 validated hue per theme (`--usage-bar`; lightness band, chroma floor, ≥3:1
@@ -109,7 +116,7 @@ reduced opacity.
 - The issue sketched the endpoint under the bare admin-API-key middleware
   family (`/admin/stats`-style). It ships behind `AdminOrUserAuthMiddleware` +
   in-handler `PermissionAdmin` instead, because the issue also requires the
-  Operations Center panel to render it and the dashboard proxy cannot present
+  dashboard to render it (today the Analytics page) and the browser tier cannot present
   an admin API key (#458 precedent). Both the admin key and an admin-role
   session are accepted; the gate is not weaker, just reachable.
 
@@ -121,7 +128,7 @@ attachment named for its window, `fleet-usage-<group_by>-<first>-<last>.csv`
 exclusive, so a midnight `to` ends on the day before): one row per bucket with
 the group key, cost columns, and token/iteration/turn counts, plus a trailing
 `TOTAL` row. Same admin gate + `group_by`/`from`/`to` params as the JSON form
-(`?format=json` is the default). The Operations Center Usage panel has a
+(`?format=json` is the default). The Spend & Budgets tab has a
 **Download CSV** button that hits it with the panel's current filters.
 
 ## Deferred (deliberately, part 1)
@@ -184,16 +191,20 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 | Create path | Where the gate runs | Principals |
 |---|---|---|
-| `POST /tasks` | `handlers.budgetCapError` | user (bearer/cookie) or key |
+| `POST /tasks` | `handlers.budgetCapError` | user (session cookie) or key |
 | `POST /tasks/batch` | same helper, once per request (the budget bounds the principal, not a task) | user or key |
-| chat `schedule_task` (approval seam) | `taskSchedulerProvider` in `cmd/fleet`, before `EnqueueTask` | user = the approving chat user's email (`TaskScheduleRequest.RequestedBy`) |
+| chat `schedule_task` (approval seam) | `taskSchedulerProvider` in `cmd/fleet`, before `EnqueueTaskAs` | user = the approving chat user's email (`TaskScheduleRequest.RequestedBy`) |
+| `POST /tasks/{id}/rerun` and `/clone` (added after part 2) | `createTaskGovernedFrom`, the same helper | user or key |
+| A2A `POST /a2a` (added after part 2) | `createTaskGoverned`, the same helper | user or key |
+| `POST /tasks/import` (added after part 2) | same helper, once per import, skipped on `dry_run` | user or key |
 
 - **Hard bound reached** → the create is refused with **402 Payment Required**
   plus `Retry-After` at the window rollover (the chat path surfaces the same
   error as the schedule_task failure text). Distinct from the 429 the per-key
   rate limiter uses.
-- **Soft bound crossed** → the create is admitted and **exactly one** notify
-  alert fires per window crossing, through the SAME `internal/notify` pipeline
+- **Soft bound reached** → **exactly one** notify alert fires per window
+  crossing; it is checked before the hard bound, so it also fires on a create
+  the hard bound then refuses, and a create under the hard bound is admitted, through the SAME `internal/notify` pipeline
   task-completion notifications use (email/webhook, plus Web Push routed to
   the user for user-scope budgets). The crossing marker
   (`budgets.soft_alert_window_start`) is claimed with a conditional UPDATE
@@ -240,7 +251,7 @@ mirroring the `priorityCapError` shared-helper discipline:
   `BudgetStatus`; bound in the route/schema parity tests), registered like
   `/admin/usage` behind `AdminOrUserAuthMiddleware` with the admin gate
   enforced in-handler (#458).
-- The Operations Center Usage panel lists budgets under the usage report
+- The Spend & Budgets tab lists budgets under the usage report
   (spend, bounds with the clamp made visible, and an ok/alerted/exhausted
   status) and now creates / deletes them in place. `fleet sched budget
   list|create|delete` is the CLI twin.
@@ -256,17 +267,20 @@ mirroring the `priorityCapError` shared-helper discipline:
 - **Admin-key submissions are not budget-gated.** The admin API key carries
   neither a user nor a scoped key — it is the box operator, whose bound is the
   global ceiling. Likewise the in-process spawn paths (`create_task` from a
-  running task, webhook/email trigger spawns, rerun/clone) are not gated in
-  this PR — deliberate deferral; the three issue-named create paths are.
-- **User identity is string equality with the part-1 buckets**: sched
-  `users.username` on the task meter, chat email on the chat meter. On a
-  standard deployment both are the email and one budget bounds both meters;
-  where they differ, a budget bounds whichever meter matches its
-  `principal_id`. Also: tasks scheduled *from chat* are attributed to no sched
-  user (only the `source-chat` tag), so their iteration spend lands in the
-  unattributed bucket — the chat user's budget gates the *creation* of such
-  tasks but their run cost does not accrue against it. No cross-DB identity
-  map was invented.
+  running task, webhook/email trigger spawns, a recurring task's next
+  occurrence) are not gated — a deliberate deferral; the three issue-named
+  create paths are, and rerun/clone, A2A and import were gated later through
+  the same helper (table above).
+- **User identity is string equality with the part-1 buckets**: the task
+  meter groups by the creator's account email, the chat meter by the chat
+  email. Since the one identity table (#2049 M4) both are the account email,
+  so one budget bounds both meters. Tasks scheduled *from chat* are created as
+  the approving user's account (`created_by`: since #980 when that person also
+  had an Operations Center user, and since #2049 M4 for every enabled
+  account) and carry the `source-chat` tag, so their run cost accrues to that
+  user's bucket and budget like any other task; a requester with no enabled
+  account falls through to the unattributed bucket. (Before #980 every
+  chat-scheduled task was unattributed.)
 - **Enforcement is at task-create, not run-start.** A task admitted under the
   window's remaining budget may still run (and cost) after the window rolls
   over or the budget is exhausted by concurrent work; the per-run global
@@ -283,7 +297,7 @@ mirroring the `priorityCapError` shared-helper discipline:
 ## Deferred (deliberately, part 2)
 
 - Project-scope enforcement (above), run-start enforcement, and gating the
-  in-process spawn/rerun paths.
+  in-process spawn paths (rerun/clone have since been gated).
 - Slack (or other) alert channels — the alert rides the existing notify
   pipeline; new channels belong to that seam.
 - Per-budget alert recipients: alerts go to the deployment-wide
@@ -293,7 +307,7 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 ## What shipped
 
-`GET /admin/usage/adoption` + the Operations Center **Adoption** tab: the
+`GET /admin/usage/adoption` + the Analytics page's **Team Adoption** tab: the
 executive answer to "who is actually using the agents, how often, and is that
 growing" — a different question from part 1's "where did the spend go", which
 is why it is a separate read model rather than a seventh `group_by`.
@@ -350,17 +364,17 @@ trailing-30-day default, `to` exclusive, 366-day clamp, registered behind
 `format=csv` downloads the per-user leaderboard with a TOTAL row, as
 `fleet-adoption-<first>-<last>.csv`.
 
-### The Operations Center panel
+### The Team Adoption tab
 
-`web/src/app/orchestrator/AdoptionPanel.tsx`, an admin-only **Adoption** tab
-beside Usage: KPI tiles with previous-period delta chips (active users with
+`web/src/app/orchestrator/AdoptionPanel.tsx`, the admin-only **Team Adoption**
+tab of the Analytics page beside Spend & Budgets: KPI tiles with previous-period delta chips (active users with
 the seat denominator + adoption rate, new-this-period, tokens, spend), two
 daily small multiples (tokens per day, active users per day — two measures,
 two charts, never a dual axis), the per-user leaderboard (rank, sparkline,
 tokens + delta, active-day ratio, engagement tier, cost, turns/iterations,
-last active), and the "Not yet active" seat roster. The dashboard tabs now
-honor a `?tab=` deep link (`/orchestrator?tab=adoption`), which the Settings
-admin pages link to.
+last active), and the "Not yet active" seat roster. The Analytics tabs honor
+a `?tab=` deep link (`/analytics?tab=adoption`); the older
+`/orchestrator?tab=adoption` link redirects an admin there.
 
 Engagement tiers are a **client-side presentation bucket** (power ≥ 50% of
 window days active, regular ≥ 20%, light below) — not a server concept, not
@@ -381,12 +395,13 @@ persisted, and trivially retuned.
   principals (API keys, sched users with no chat account) still appear as
   active users when they spend, but are not seats — the adoption rate is
   "active users / provisioned chat accounts".
-- Settings → Admin → Users/Overview remain **all-time, chat-only** account
-  administration numbers fed by `GET /api/admin/stats`; they are now labeled
-  "Chat spend" and cross-link here rather than pretending to be the same
-  report. The three surfaces deliberately answer different questions:
-  account admin (Settings), spend accounting (Usage), adoption audit
-  (Adoption).
+- Settings → Admin keeps **all-time, chat-only** account administration
+  numbers fed by `GET /api/admin/stats` (the overview's "Chat spend
+  (all-time)"; conversations and tasks per account on the Users page, which
+  links to Analytics) rather than pretending to be the same report. The
+  three surfaces deliberately answer different questions: account admin
+  (Settings), spend accounting (Spend & Budgets), adoption audit (Team
+  Adoption).
 
 ## Deferred (deliberately, part 3)
 
