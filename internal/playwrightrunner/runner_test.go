@@ -162,6 +162,35 @@ func TestRunBlocksLoopbackSSRFByDefault(t *testing.T) {
 	if err == nil && res != nil && strings.Contains(res.Content, "should never be reached") {
 		t.Fatalf("expected SSRF guard proxy to block loopback server, got content: %q", res.Content)
 	}
+	if err != nil {
+		if strings.Contains(err.Error(), "not available") ||
+			strings.Contains(strings.ToLower(err.Error()), "executable doesn't exist") ||
+			strings.Contains(strings.ToLower(err.Error()), "browsertype.launch") {
+			t.Skipf("skipping the rest when playwright/chromium is not installed: %v", err)
+		}
+		t.Fatalf("plain-HTTP loopback run: %v", err)
+	}
+	// A plain-HTTP page shows the proxy's answer, which says why.
+	if !strings.Contains(res.Content, "is a private or internal network address") {
+		t.Errorf("blocked plain-HTTP page content = %q, want the reason", res.Content)
+	}
+
+	// An HTTPS tunnel is refused outright; the run error names host and reason.
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+	_, err = Run(ctx, RunRequest{URL: "https://" + hostPort + "/"})
+	if err == nil || !strings.Contains(err.Error(), "ERR_TUNNEL_CONNECTION_FAILED") ||
+		!strings.Contains(err.Error(), "("+hostPort+" is a private or internal network address, which Fleet's browser does not open)") {
+		t.Errorf("blocked HTTPS run err = %v, want the refused host and the reason", err)
+	}
+	// So does a live session that starts on it.
+	mgr := NewSessionManager()
+	info, err := mgr.StartSession(ctx, SessionStartRequest{OwnerEmail: "alice@example.com", URL: "https://" + hostPort + "/"})
+	if err == nil {
+		_ = mgr.CloseSession(info.ID, "alice@example.com", "")
+	}
+	if err == nil || !strings.Contains(err.Error(), "("+hostPort+" is a private or internal network address, which Fleet's browser does not open)") {
+		t.Errorf("blocked HTTPS live session err = %v, want the refused host and the reason", err)
+	}
 }
 
 func TestValidateStepsAndScrubStructuredResult(t *testing.T) {
