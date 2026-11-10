@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -244,7 +245,15 @@ func describeBrowserStep(st playwrightrunner.Step, hidden []string) string {
 	case "click":
 		return fmt.Sprintf("Click %s%s", sel, optional)
 	case "press":
-		return fmt.Sprintf("Press %s in %s%s", strings.TrimSpace(st.Value), sel, optional)
+		// A press value is a key name, so a secret-looking field does not
+		// hide it; one of the call's plain credentials does.
+		key := strings.TrimSpace(st.Value)
+		for _, h := range hidden {
+			if strings.Contains(key, h) {
+				key = hiddenValue
+			}
+		}
+		return fmt.Sprintf("Press %s in %s%s", key, sel, optional)
 	case "select":
 		return fmt.Sprintf("Choose %s in %s%s", value(), sel, optional)
 	case "wait_for":
@@ -360,4 +369,39 @@ func originOf(rawURL string) string {
 		return ""
 	}
 	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+// plainCredentialRefRE finds a password_ref or secret_ref given as a JSON
+// string, in input that may not decode.
+var plainCredentialRefRE = regexp.MustCompile(`(?i)("(?:password|secret)_ref"\s*:\s*")([^"\\]*)(")`)
+
+// maskBrowserFallback hides plain credentials in the generic card a browser
+// call falls back to when its arguments do not decode (a wrong field type; the
+// call cannot run either, but its card must not print the credential). A
+// "$secret:" reference is shown as itself.
+func maskBrowserFallback(summary map[string]any, rawInput string) map[string]any {
+	var hidden []string
+	for _, m := range plainCredentialRefRE.FindAllStringSubmatch(rawInput, -1) {
+		if v := strings.TrimSpace(m[2]); v != "" && !strings.HasPrefix(v, "$secret:") {
+			hidden = append(hidden, v)
+		}
+	}
+	if len(hidden) == 0 {
+		return summary
+	}
+	mask := func(v string) string {
+		for _, h := range hidden {
+			v = strings.ReplaceAll(v, h, "(not shown here)")
+		}
+		return v
+	}
+	if rows, ok := summary["args"].([]map[string]string); ok {
+		for _, r := range rows {
+			r["value"] = mask(r["value"])
+		}
+	}
+	if raw, ok := summary["raw"].(string); ok {
+		summary["raw"] = mask(raw)
+	}
+	return summary
 }

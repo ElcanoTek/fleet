@@ -245,3 +245,28 @@ func TestBrowserApprovalSummaryWaitsMatchTheRunner(t *testing.T) {
 		}
 	}
 }
+
+// TestBrowserApprovalPressAndFallbackHideCredentials: a press of a plain
+// credential is hidden (a key name into a password field is not), and a
+// browser call whose arguments do not decode still does not print a plain
+// credential on the generic card it falls back to.
+func TestBrowserApprovalPressAndFallbackHideCredentials(t *testing.T) {
+	t.Parallel()
+	rows := summaryRows(t, summarizeApprovalInput(tools.PlaywrightBrowserToolName,
+		`{"action":"run","url":"https://a.example.com/","password_ref":"hunter3-press","steps":[{"action":"press","selector":"#q","value":"hunter3-press"},{"action":"press","selector":"#password","value":"Enter"}]}`, "")) // gitleaks:allow (made-up test value)
+	if rows[2][1] != "Press a value hidden here in #q" || rows[3][1] != "Press Enter in #password" {
+		t.Errorf("press rows = %q", rows)
+	}
+	for _, raw := range []string{
+		`{"action":"run","password_ref":"hunter3-wrongtype","steps":[{"action":"sleep","timeout_ms":"5000"},{"action":"fill","selector":"#pw","value":"hunter3-wrongtype"}]}`, // gitleaks:allow (made-up test value)
+		`{"action":"run","password_ref":"hunter3-wrongtype","steps":[`, // gitleaks:allow (made-up test value)
+	} {
+		b, _ := json.Marshal(summarizeApprovalInput(tools.PlaywrightBrowserToolName, raw, ""))
+		if strings.Contains(string(b), "hunter3-wrongtype") || !strings.Contains(string(b), "not shown here") {
+			t.Errorf("fallback card for %s = %s", raw, b)
+		}
+	}
+	if b, _ := json.Marshal(summarizeApprovalInput(tools.PlaywrightBrowserToolName, `{"action":"run","password_ref":"$secret:password","steps":[{"action":"sleep","timeout_ms":"x"}]}`, "")); !strings.Contains(string(b), "$secret:password") {
+		t.Errorf("a vaulted reference is hidden on the fallback card: %s", b)
+	}
+}

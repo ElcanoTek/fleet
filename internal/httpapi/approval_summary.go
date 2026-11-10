@@ -120,6 +120,7 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 		if browser := summarizeBrowserInput(toolName, rawInput); browser != nil {
 			return browser
 		}
+		return maskBrowserFallback(summarizeGenericToolInput(toolName, rawInput), rawInput)
 	}
 	return summarizeGenericToolInput(toolName, rawInput)
 }
