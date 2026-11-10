@@ -131,7 +131,7 @@ func TestInvalidPrincipalErrorMessages(t *testing.T) {
 		{InvalidPrincipalError{Scope: models.BudgetScopeUser, PrincipalID: "alcie@example.com", Reason: PrincipalNotFound},
 			[]string{`no account with email "alcie@example.com"`}},
 		{InvalidPrincipalError{Scope: models.BudgetScopeKey, PrincipalID: "key_x", Reason: PrincipalNotFound},
-			[]string{`no API key with key_id "key_x"`, "fleet sched apikey list"}},
+			[]string{`no API key with key_id "key_x"`, "fleet sched key list"}},
 		{InvalidPrincipalError{Scope: models.BudgetScopeKey, PrincipalID: "key_x", Reason: PrincipalInactive},
 			[]string{`API key "key_x" is revoked or expired`}},
 		{InvalidPrincipalError{Scope: models.BudgetScopeKey, PrincipalID: "key_x", Reason: PrincipalCannotCreate},
