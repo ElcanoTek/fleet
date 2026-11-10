@@ -1781,6 +1781,14 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 	return overlay
 }
 
+// enableConnectorsWiredForTurn reports whether the interactive
+// enable_mcp_connectors tool and prompt section should be wired for this turn.
+// Background patrol turns (InputKindChatPatrol) run unattended and never offer
+// interactive connector suggestions.
+func enableConnectorsWiredForTurn(ctx context.Context, in TurnInput) bool {
+	return in.InputKind != InputKindChatPatrol && tools.HasEnableMCPConnectorsHandler(ctx)
+}
+
 // RunTurn executes one interactive turn: it builds the per-turn system prompt +
 // sandbox + tools, resolves the model, drives RunInteractiveTurn (which streams
 // through the sink), then maps the accumulated transcript to history + usage.
@@ -1854,7 +1862,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	turnTools := tools.NewTurnTools(sb, m.browserbaseKeyFunc(ctx, in.UserEmail, in.OptionalMCPServersEnabled))
 	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
-	enableConnectorsWired := tools.HasEnableMCPConnectorsHandler(ctx)
+	enableConnectorsWired := enableConnectorsWiredForTurn(ctx, in)
 	if !enableConnectorsWired {
 		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
 	}

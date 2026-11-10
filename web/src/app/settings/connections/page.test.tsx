@@ -1213,3 +1213,87 @@ describe("ConnectionsPage Microsoft 365 Entra app setup & mobile layout", () => 
     expect(within(group).queryByTestId("row-configure-ms365")).toBeNull();
   });
 });
+
+describe("ConnectionsPage browsable connectors directory", () => {
+  const NOTION = {
+    name: "notion",
+    display_name: "Notion",
+    description: "Docs and wikis.",
+    url: "https://mcp.notion.com/mcp",
+    vendor: "Notion Labs",
+    category: "productivity",
+    provenance: "official",
+    auth: "oauth",
+    featured: true,
+    trust: "third_party",
+  };
+  const SENTRY = {
+    name: "sentry",
+    display_name: "Sentry",
+    description: "Error tracking and performance monitoring.",
+    url: "https://mcp.sentry.dev/mcp",
+    vendor: "Functional Software",
+    category: "observability",
+    provenance: "official",
+    auth: "oauth",
+    featured: false,
+    trust: "third_party",
+  };
+  const SNOWFLAKE = {
+    name: "snowflake",
+    display_name: "Snowflake",
+    description: "Cloud data warehouse.",
+    url: "https://mcp.snowflake.com/mcp",
+    vendor: "Snowflake",
+    category: "databases",
+    provenance: "official",
+    auth: "oauth",
+    featured: false,
+    trust: "third_party",
+  };
+
+  it("lets users explore connectors by category pills, category cards, and grouped All view", async () => {
+    const directoryCatalog = {
+      ...CATALOG,
+      third_party: [NOTION, GITHUB, BROWSERBASE, SENTRY, SNOWFLAKE],
+    };
+    vi.stubGlobal("fetch", mockFetch(undefined, directoryCatalog));
+    visit("");
+
+    // Category filter bar and Explore by category grid are rendered
+    const catBar = await screen.findByTestId("dir-category-bar");
+    expect(within(catBar).getByTestId("dir-cat-popular")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(catBar).getByTestId("dir-cat-all")).toHaveTextContent("All");
+    expect(within(catBar).getByTestId("dir-cat-observability")).toHaveTextContent(
+      "Observability",
+    );
+
+    const catGrid = screen.getByTestId("dir-category-grid");
+    expect(
+      within(catGrid).getByTestId("dir-cat-card-observability"),
+    ).toHaveTextContent("Sentry");
+
+    // Clicking a category card filters to that category and shows the active category header
+    fireEvent.click(within(catGrid).getByTestId("dir-cat-card-observability"));
+    expect(
+      await screen.findByTestId("dir-active-category-header"),
+    ).toHaveTextContent("Observability");
+    expect(screen.getByTestId("dir-card-sentry")).toBeInTheDocument();
+    expect(screen.queryByTestId("dir-card-notion")).toBeNull();
+
+    // Clicking All groups connectors by category with section headers
+    fireEvent.click(within(catBar).getByTestId("dir-cat-all"));
+    const grouped = await screen.findByTestId("dir-grouped-sections");
+    expect(within(grouped).getByTestId("dir-group-productivity")).toBeInTheDocument();
+    expect(within(grouped).getByTestId("dir-group-observability")).toBeInTheDocument();
+    expect(within(grouped).getByTestId("dir-group-databases")).toBeInTheDocument();
+
+    // Back to Popular resets the category filter
+    fireEvent.click(screen.getByTestId("dir-reset-popular"));
+    expect(screen.queryByTestId("dir-active-category-header")).toBeNull();
+    expect(screen.getByTestId("dir-category-grid")).toBeInTheDocument();
+  });
+});

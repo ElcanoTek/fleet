@@ -5,7 +5,9 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { navigate } from "@/app/lib/navigation";
 import {
   authHint,
+  categoriesOf,
   categoryIcon,
+  categoryLabel,
   connectorBuilderMessage,
   connectorParamOf,
   consentRequired,
@@ -14,6 +16,7 @@ import {
   effectiveEnabled,
   fillPlaceholders,
   filterCatalog,
+  groupByCategory,
   placeholderLabel,
   placeholdersOf,
   placeholderValueOK,
@@ -123,6 +126,8 @@ type ListResponse = {
 
 const BUNDLED_PREVIEW_COUNT = 4;
 const DIRECTORY_PREVIEW_COUNT = 8;
+const DIRECTORY_PAGE_SIZE = 24;
+const MAX_INLINE_CATEGORIES = 6;
 // Editorial picks, in display order; these are not usage rankings. Keep the
 // catalog's endpoint, operator and setup instructions behind the short names.
 const POPULAR_CONNECTORS = new Map([
@@ -721,6 +726,7 @@ function DirectoryCard({
       <div className="mt-auto flex flex-wrap items-center justify-between gap-x-[0.6rem] gap-y-2 pt-1 text-[0.72rem] text-[var(--color-text-muted)]">
         <span className="min-w-[8rem] flex-1 truncate">
           {entry.vendor || entry.url}
+          {entry.category ? ` · ${categoryLabel(entry.category)}` : ""}
           {entry.docs_url ? (
             <>
               {" · "}
@@ -1427,6 +1433,13 @@ function ConnectionsPageInner() {
   // linked entry — search spans every category, so this works wherever the
   // entry is grouped, and clearing the box restores the popular picks.
   const [catalogQuery, setCatalogQuery] = useState(spotlight ?? "");
+  const [dirFilter, setDirFilter] = useState<
+    | { mode: "popular" }
+    | { mode: "all" }
+    | { mode: "category"; slug: string }
+  >({ mode: "popular" });
+  const [showAllCategories, setShowAllCategories] = useState(false);
+  const [dirVisibleLimit, setDirVisibleLimit] = useState(DIRECTORY_PAGE_SIZE);
   // Consent modal state: the non-official (aggregator/community) entry
   // awaiting the user's explicit, operator-named consent, plus whatever the
   // card's guided form collected (tenant URL / API key) so the confirm can
@@ -2105,8 +2118,52 @@ function ConnectionsPageInner() {
   const dirPopular = [...thirdParty]
     .sort((a, b) => popularRank(a) - popularRank(b))
     .slice(0, DIRECTORY_PREVIEW_COUNT);
+  const categories = categoriesOf(thirdParty);
+  const activeCategoryFilter =
+    dirFilter.mode === "category" ? dirFilter.slug : "";
+  const collapsedCategories = categories.filter(
+    (cat, idx) =>
+      idx < MAX_INLINE_CATEGORIES || cat.slug === activeCategoryFilter,
+  );
+  const inlineCategories = showAllCategories ? categories : collapsedCategories;
+  const hiddenCategoryCount = Math.max(
+    0,
+    categories.length - collapsedCategories.length,
+  );
   const trimmedQuery = catalogQuery.trim();
-  const dirHits = trimmedQuery ? filterCatalog(thirdParty, catalogQuery, "") : dirPopular;
+  const categoryFilteredThirdParty = activeCategoryFilter
+    ? thirdParty.filter((e) => (e.category || "other") === activeCategoryFilter)
+    : thirdParty;
+  const dirHits = trimmedQuery
+    ? filterCatalog(categoryFilteredThirdParty, catalogQuery, "")
+    : dirFilter.mode === "popular"
+      ? dirPopular
+      : dirFilter.mode === "all"
+        ? thirdParty
+        : categoryFilteredThirdParty;
+  const allCatalogSearchCount =
+    trimmedQuery && activeCategoryFilter
+      ? filterCatalog(thirdParty, catalogQuery, "").length
+      : dirHits.length;
+  const visibleDirHits =
+    trimmedQuery || dirFilter.mode === "popular"
+      ? dirHits
+      : dirHits.slice(0, dirVisibleLimit);
+  const remainingDirHits = Math.max(0, dirHits.length - visibleDirHits.length);
+  const groupedAllHits =
+    !trimmedQuery && dirFilter.mode === "all"
+      ? groupByCategory(visibleDirHits)
+      : [];
+
+  const selectDirectoryMode = (mode: "popular" | "all") => {
+    setDirFilter({ mode });
+    setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
+  };
+
+  const selectDirectoryCategory = (catSlug: string) => {
+    setDirFilter({ mode: "category", slug: catSlug });
+    setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
+  };
 
   const saveMS365Config = async (clientId: string, tenantId: string) => {
     const modalState = ms365SetupModal;
@@ -2922,13 +2979,105 @@ function ConnectionsPageInner() {
 
           {catalogOpen ? (
             <>
-              <div className="mb-[1.1rem] grid gap-[0.55rem]">
+              <div className="mb-[1.1rem] grid gap-[0.65rem]">
                 <DirSearch
                   value={catalogQuery}
-                  onChange={setCatalogQuery}
+                  onChange={(q) => {
+                    setCatalogQuery(q);
+                    setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
+                  }}
                   placeholder="Search connections…"
                   label="Search connections"
                 />
+                {thirdParty.length > 1 ? (
+                  <div
+                    data-testid="dir-category-bar"
+                    role="group"
+                    aria-label="Filter connectors by category"
+                    className="flex flex-wrap items-center gap-1.5"
+                  >
+                    <button
+                      type="button"
+                      data-testid="dir-cat-popular"
+                      aria-pressed={dirFilter.mode === "popular"}
+                      onClick={() => selectDirectoryMode("popular")}
+                      className={[
+                        "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
+                        dirFilter.mode === "popular"
+                          ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
+                      ].join(" ")}
+                    >
+                      <Icon name="sparkles" className="size-[0.8rem] shrink-0" />
+                      <span>Popular</span>
+                      <span className="rounded-[var(--radius-pill)] bg-[var(--color-overlay-soft)] px-1.5 py-[0.05rem] text-[0.68rem] text-[var(--color-text-muted)]">
+                        {dirPopular.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="dir-cat-all"
+                      aria-pressed={dirFilter.mode === "all"}
+                      onClick={() => selectDirectoryMode("all")}
+                      className={[
+                        "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
+                        dirFilter.mode === "all"
+                          ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
+                      ].join(" ")}
+                    >
+                      <Icon name="grid" className="size-[0.8rem] shrink-0" />
+                      <span>All</span>
+                      <span className="rounded-[var(--radius-pill)] bg-[var(--color-overlay-soft)] px-1.5 py-[0.05rem] text-[0.68rem] text-[var(--color-text-muted)]">
+                        {thirdParty.length}
+                      </span>
+                    </button>
+                    {inlineCategories.map((cat) => {
+                      const active = activeCategoryFilter === cat.slug;
+                      return (
+                        <button
+                          key={cat.slug}
+                          type="button"
+                          data-testid={`dir-cat-${cat.slug}`}
+                          aria-pressed={active}
+                          onClick={() =>
+                            active
+                              ? selectDirectoryMode("popular")
+                              : selectDirectoryCategory(cat.slug)
+                          }
+                          className={[
+                            "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-2.5 py-1 text-[0.75rem] font-medium transition",
+                            active
+                              ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]"
+                              : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
+                          ].join(" ")}
+                        >
+                          <Icon
+                            name={categoryIcon(cat.slug)}
+                            className="size-[0.8rem] shrink-0"
+                          />
+                          <span>{cat.label}</span>
+                          <span className="rounded-[var(--radius-pill)] bg-[var(--color-overlay-soft)] px-1.5 py-[0.05rem] text-[0.68rem] text-[var(--color-text-muted)]">
+                            {cat.count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {hiddenCategoryCount > 0 ? (
+                      <button
+                        type="button"
+                        data-testid="dir-cat-more-toggle"
+                        aria-expanded={showAllCategories}
+                        onClick={() => setShowAllCategories((v) => !v)}
+                        className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-dashed border-[var(--color-border-strong)] bg-transparent px-2.5 py-1 text-[0.73rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                      >
+                        {showAllCategories
+                          ? "Fewer categories"
+                          : `+${hiddenCategoryCount} more`}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <p className="m-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
                   Can’t find what you’re looking for?{" "}
                   <a href="mailto:hello@elcanotek.com?subject=Connector%20request" className="text-[var(--color-link)] underline underline-offset-2">
@@ -2939,19 +3088,84 @@ function ConnectionsPageInner() {
               </div>
 
               <div>
+                {dirFilter.mode !== "popular" && !trimmedQuery ? (
+                  <div
+                    data-testid="dir-active-category-header"
+                    className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon
+                        name={
+                          dirFilter.mode === "all"
+                            ? "grid"
+                            : categoryIcon(dirFilter.slug)
+                        }
+                        className="size-[0.95rem] text-[var(--color-text-secondary)]"
+                      />
+                      <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
+                        {dirFilter.mode === "all"
+                          ? "All connectors"
+                          : categoryLabel(dirFilter.slug)}
+                      </span>
+                      <ConnBadge>
+                        {dirHits.length === 1
+                          ? "1 connector"
+                          : `${dirHits.length} connectors`}
+                      </ConnBadge>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="dir-reset-popular"
+                      onClick={() => selectDirectoryMode("popular")}
+                      className={btnClass({ sm: true, reveal: true })}
+                    >
+                      Back to Popular
+                    </button>
+                  </div>
+                ) : null}
                 {trimmedQuery ? (
-                  <p role="status" className="mb-3 mt-0 text-[0.75rem] text-[var(--color-text-muted)]">
-                    {dirHits.length === 1
-                      ? "1 connector matches"
-                      : `${dirHits.length} connectors match`}
-                  </p>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p role="status" className="m-0 text-[0.75rem] text-[var(--color-text-muted)]">
+                      {dirHits.length === 1
+                        ? "1 connector matches"
+                        : `${dirHits.length} connectors match`}
+                      {activeCategoryFilter
+                        ? ` in ${categoryLabel(activeCategoryFilter)}`
+                        : ""}
+                    </p>
+                    {activeCategoryFilter ? (
+                      <button
+                        type="button"
+                        data-testid="dir-search-all-categories-btn"
+                        onClick={() => selectDirectoryMode("all")}
+                        className={btnClass({ sm: true, reveal: true })}
+                      >
+                        Search all categories ({allCatalogSearchCount})
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 {dirHits.length === 0 ? (
                   <ConnEmpty>
                     <span>
-                      No connectors match “{trimmedQuery}”. Try another name or keyword.
+                      No connectors match “{trimmedQuery}”
+                      {activeCategoryFilter
+                        ? ` in ${categoryLabel(activeCategoryFilter)}`
+                        : ""}
+                      . Try another name or keyword.
                     </span>
-                    <span className="mt-2 block">
+                    <span className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                      {activeCategoryFilter && allCatalogSearchCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => selectDirectoryMode("all")}
+                          className={btnClass({ sm: true, variant: "primary" })}
+                        >
+                          Show {allCatalogSearchCount}{" "}
+                          {allCatalogSearchCount === 1 ? "match" : "matches"}{" "}
+                          across all categories
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         data-testid="dir-empty-create-custom-btn"
@@ -2972,11 +3186,137 @@ function ConnectionsPageInner() {
                       </button>
                     </span>
                   </ConnEmpty>
+                ) : !trimmedQuery && dirFilter.mode === "all" ? (
+                  <div
+                    data-testid="dir-grouped-sections"
+                    className="grid gap-5"
+                  >
+                    {groupedAllHits.map((group) => (
+                      <div
+                        key={group.slug}
+                        data-testid={`dir-group-${group.slug}`}
+                        className="grid gap-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border-subtle)] pb-1.5">
+                          <div className="flex items-center gap-2">
+                            <Icon
+                              name={categoryIcon(group.slug)}
+                              className="size-[0.9rem] text-[var(--color-text-secondary)]"
+                            />
+                            <h4 className="m-0 text-[0.84rem] font-semibold text-[var(--color-text-primary)]">
+                              {group.label}
+                            </h4>
+                            <ConnBadge>{group.entries.length}</ConnBadge>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => selectDirectoryCategory(group.slug)}
+                            className="text-[0.72rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+                          >
+                            Filter category →
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+                          {group.entries.map(renderDirCard)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
-                    {dirHits.map(renderDirCard)}
+                    {visibleDirHits.map(renderDirCard)}
                   </div>
                 )}
+                {remainingDirHits > 0 ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="dir-show-more-btn"
+                      onClick={() =>
+                        setDirVisibleLimit((cur) => cur + DIRECTORY_PAGE_SIZE)
+                      }
+                      className={btnClass({ sm: true })}
+                    >
+                      Show more ({remainingDirHits} remaining)
+                    </button>
+                    {remainingDirHits > DIRECTORY_PAGE_SIZE ? (
+                      <button
+                        type="button"
+                        data-testid="dir-show-all-btn"
+                        onClick={() => setDirVisibleLimit(dirHits.length)}
+                        className={btnClass({ sm: true, reveal: true })}
+                      >
+                        Show all {dirHits.length}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {!trimmedQuery &&
+                dirFilter.mode === "popular" &&
+                categories.length > 1 ? (
+                  <div
+                    data-testid="dir-category-grid"
+                    className="mt-6 border-t border-[var(--color-border-subtle)] pt-4"
+                  >
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h4 className="m-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
+                          Explore by category
+                        </h4>
+                        <p className="mb-0 mt-0.5 text-[0.74rem] text-[var(--color-text-muted)]">
+                          Browse {thirdParty.length} connectors across{" "}
+                          {categories.length} categories.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="dir-browse-all-categories-btn"
+                        onClick={() => selectDirectoryMode("all")}
+                        className={btnClass({ sm: true, reveal: true })}
+                      >
+                        View all ({thirdParty.length})
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-[0.6rem] max-[960px]:grid-cols-2 max-[600px]:grid-cols-1">
+                      {categories.map((cat) => {
+                        const sampleNames = thirdParty
+                          .filter(
+                            (e) => (e.category || "other") === cat.slug,
+                          )
+                          .slice(0, 3)
+                          .map((e) => e.display_name)
+                          .join(", ");
+                        return (
+                          <button
+                            key={cat.slug}
+                            type="button"
+                            data-testid={`dir-cat-card-${cat.slug}`}
+                            onClick={() => selectDirectoryCategory(cat.slug)}
+                            className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)]"
+                          >
+                            <div className="flex w-full items-center justify-between gap-2">
+                              <span className="inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
+                                <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                  <Icon
+                                    name={categoryIcon(cat.slug)}
+                                    className="size-[0.85rem]"
+                                  />
+                                </span>
+                                <span className="truncate">{cat.label}</span>
+                              </span>
+                              <ConnBadge>{cat.count}</ConnBadge>
+                            </div>
+                            {sampleNames ? (
+                              <span className="w-full truncate text-[0.72rem] text-[var(--color-text-muted)]">
+                                {sampleNames}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 {!catalog.remote_mcp_enabled ? (
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
                     {adminState === "admin" ? (

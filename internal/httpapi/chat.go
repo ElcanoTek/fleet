@@ -1244,8 +1244,11 @@ func (s *Server) runTurnAsync(
 
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
-	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
-	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
+	var availableOptional []agent.OptionalServerInfo
+	if inputKind != agent.InputKindChatPatrol {
+		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
+		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
+	}
 	senderEmail := ""
 	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user

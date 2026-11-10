@@ -74,6 +74,13 @@ type RemoteMCPConn struct {
 	// CustomTools holds declarative tool definitions for custom HTTP
 	// ("http_tools") or Playwright ("playwright") connectors.
 	CustomTools []RemoteMCPCustomTool
+	// NeedsReauth is true when the connection row exists and is enabled for
+	// the user, but its stored status is login_required or needs_reauth (no
+	// usable credential until the owner signs in). BuildRemoteMCPOverlay
+	// records these in Skipped with SkipReasonNeedsReauth without dialing or
+	// consuming an overlay cap slot, so scheduled tasks pinning the server
+	// skip it with a notice instead of failing the pin check as unknown.
+	NeedsReauth bool
 }
 
 // RemoteMCPCustomStep is a declarative browser action in a Playwright custom connector tool.
@@ -129,6 +136,16 @@ type RemoteMCPStatusMarker interface {
 	MarkRemoteMCPUnauthorized(ctx context.Context, ownerEmail, serverID, detail string) error
 }
 
+// RemoteMCPOverlayResolver is an optional extension of RemoteMCPResolver that
+// returns both connected and sign-in-needed (login_required / needs_reauth,
+// marked with NeedsReauth: true) connections for overlay construction. When
+// implemented, BuildRemoteMCPOverlay records unauthenticated connections in
+// Skipped (SkipReasonNeedsReauth) instead of leaving them invisible to the
+// scheduled-task pin check.
+type RemoteMCPOverlayResolver interface {
+	OverlayServersForUser(ctx context.Context, email string) ([]RemoteMCPConn, error)
+}
+
 // RemoteMCPSelection says which of a user's hosted connections a run mounts,
 // and on which seat (#988). It carries public names and labels only.
 type RemoteMCPSelection struct {
@@ -171,6 +188,20 @@ func (sel RemoteMCPSelection) pinned(name string) (string, bool) {
 		return "", false
 	}
 	return acct, true
+}
+
+// namesServer reports whether sel explicitly names name in Accounts (e.g. a
+// scheduled task's mcp_selection pin, even when its value is "" for the
+// default seat).
+func (sel RemoteMCPSelection) namesServer(name string) bool {
+	if len(sel.Accounts) == 0 {
+		return false
+	}
+	if _, ok := sel.Accounts[name]; ok {
+		return true
+	}
+	_, ok := sel.Accounts[strings.ToLower(name)]
+	return ok
 }
 
 // RemoteMCPAllConnected is the scheduled default: every connected name on its
@@ -231,6 +262,21 @@ func selectRemoteSeats(conns []RemoteMCPConn, sel RemoteMCPSelection) (chosen []
 // (Legacy single-row connections are flagged default by the #988 migration,
 // so they resolve exactly as before.)
 func defaultRemoteSeat(seats []RemoteMCPConn) RemoteMCPConn {
+	for _, c := range seats {
+		if !c.NeedsReauth && c.Default {
+			return c
+		}
+	}
+	for _, c := range seats {
+		if !c.NeedsReauth && c.Account == "" {
+			return c
+		}
+	}
+	for _, c := range seats {
+		if !c.NeedsReauth {
+			return c
+		}
+	}
 	for _, c := range seats {
 		if c.Default {
 			return c
@@ -865,7 +911,15 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 	if resolver == nil || email == "" {
 		return nil, nil
 	}
-	conns, err := resolver.ConnectedServersForUser(ctx, email)
+	var (
+		conns []RemoteMCPConn
+		err   error
+	)
+	if or, ok := resolver.(RemoteMCPOverlayResolver); ok {
+		conns, err = or.OverlayServersForUser(ctx, email)
+	} else {
+		conns, err = resolver.ConnectedServersForUser(ctx, email)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -893,6 +947,20 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// past the cap it would otherwise be reported as a connector the
 			// user could free a slot for, which it can never use.
 			logging.From(ctx).Warn("remote-mcp: skipping remote server — name collides with a built-in server", "reg_name", regName)
+			continue
+		}
+		if conn.NeedsReauth {
+			// Unauthenticated row (login_required / needs_reauth): record as
+			// skipped when the run explicitly asked for it (interactive opt-in
+			// or a scheduled task's mcp_selection pin) so it neither takes a
+			// slot nor fails the pin check as an unknown server. For unpinned
+			// scheduled runs (RemoteMCPAllConnected without a pin for this
+			// name), ignore it silently so unrelated background tasks do not
+			// receive a skip notice for a connector they never requested.
+			if sel.Filter || sel.namesServer(conn.Name) {
+				logging.From(ctx).Warn("remote-mcp: skipping server — sign-in required", "reg_name", regName, "user", email)
+				overlay.skipConn(conn, SkipReasonNeedsReauth)
+			}
 			continue
 		}
 		if registered >= maxOverlayServers {

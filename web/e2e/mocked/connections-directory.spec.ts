@@ -103,4 +103,18 @@ test("popular preview stays compact and search reaches the full directory", asyn
   );
   await search.clear();
   await expect(cards).toHaveCount(8);
+
+  // Category exploration: clicking a category pill filters to that category,
+  // and clicking All shows grouped category sections with pagination instead of
+  // an unbounded scroll wall.
+  await page.getByTestId("dir-cat-databases").click();
+  await expect(page.getByTestId("dir-active-category-header")).toContainText("Databases");
+  await expect(cards).toHaveCount(20);
+  await page.getByTestId("dir-reset-popular").click();
+  await expect(cards).toHaveCount(8);
+
+  await page.getByTestId("dir-cat-all").click();
+  await expect(page.getByTestId("dir-grouped-sections")).toBeVisible();
+  await expect(cards).toHaveCount(24);
+  await expect(page.getByTestId("dir-show-more-btn")).toBeVisible();
 });
