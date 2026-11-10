@@ -331,6 +331,7 @@ above fails otherwise.
 - [`MIGRATIONS.md`](MIGRATIONS.md) — Database migrations
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Claude Haiku 5.5 as the everyday default (2026-10-15), Gemini 4 Argon as the strong tier (2026-10-14); the earlier Luna Pro / Opus swaps (2026-09-21, 2026-09-22), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
+- [`MS365-MCP.md`](MS365-MCP.md) — Built-in Microsoft 365 OAuth and Graph MCP Surface (`internal/ms365mcp`)
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
 - [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back, and how client bundles get their sandbox image (#2051, ADR-0100)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status

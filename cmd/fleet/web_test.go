@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/principal"
 	"github.com/ElcanoTek/fleet/internal/websession"
 	"github.com/ElcanoTek/fleet/internal/webui"
@@ -222,6 +224,59 @@ func TestWebServerTakesAccountManagementFromConfig(t *testing.T) {
 	for _, managed := range []bool{false, true} {
 		if got := gatewayConfig(&config.Config{AccountsManagedByAuth: managed}).AccountsManagedByAuth; got != managed {
 			t.Errorf("AccountsManagedByAuth=%v reached the gateway as %v", managed, got)
+		}
+	}
+}
+
+func TestWebServerMountsMS365MCPWhenConfigured(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "web-test-session-secret-0123456789")
+	t.Setenv("FLEET_WEB_ADDR", "")
+	t.Setenv("MS365_MCP_CLIENT_ID", "68dad9d6-e1aa-4195-9bd5-2e94a0e4a073")
+	t.Setenv("MS365_MCP_TENANT_ID", "5db5070c-2c68-449d-868f-2b0d3407f6d2")
+	t.Setenv("MS365_MCP_PUBLIC_URL", "https://fleet.elcanotek.com")
+	t.Setenv("MS365_MCP_ALIASES", "https://fleetdev.elcanotek.com")
+	defer func() {
+		t.Setenv("MS365_MCP_CLIENT_ID", "")
+		_, _ = wireMS365MCP(&config.Config{})
+	}()
+
+	srv, err := buildWebServer(&config.Config{PublicBaseURL: "https://fleet.elcanotek.com"}, backendHandlers{
+		chat: http.NotFoundHandler(),
+		orch: http.NotFoundHandler(),
+	})
+	if err != nil || srv == nil {
+		t.Fatalf("buildWebServer: %v", err)
+	}
+
+	// Public router serves MS365 routes directly.
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{"GET", "/.well-known/oauth-authorization-server", http.StatusOK},
+		{"GET", "/.well-known/oauth-protected-resource", http.StatusOK},
+		{"GET", "/.well-known/oauth-protected-resource/mcp", http.StatusOK},
+		{"POST", "/register", http.StatusCreated},
+		{"GET", "/mcp", http.StatusMethodNotAllowed},
+		{"POST", "/mcp", http.StatusUnauthorized},
+		{"GET", "/attachment", http.StatusUnauthorized},
+	} {
+		rec := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`)))
+		if rec.Code != tc.status {
+			t.Errorf("%s %s: got status %d, want %d (body=%s)", tc.method, tc.path, rec.Code, tc.status, rec.Body.String())
+		}
+	}
+
+	// In-process dispatch via mcpoauth.SafeHTTPClient works for both primary URL and alias.
+	for _, mcpURL := range []string{"https://fleet.elcanotek.com/mcp", "https://fleetdev.elcanotek.com/mcp"} {
+		disc, err := mcpoauth.Discover(t.Context(), mcpoauth.SafeHTTPClient(5*time.Second), mcpURL)
+		if err != nil {
+			t.Fatalf("mcpoauth.Discover(%s): %v", mcpURL, err)
+		}
+		if disc.AS.AuthorizationEndpoint == "" || disc.AS.TokenEndpoint == "" {
+			t.Fatalf("unexpected discovery for %s: %+v", mcpURL, disc)
 		}
 	}
 }

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
+	"net/http"
+	"os"
 	"os/signal"
 	"slices"
 	"sort"
@@ -15,7 +18,9 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/ms365mcp"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/version"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -102,8 +107,10 @@ func runMCPBroker() error {
 	}
 	var remoteStore *store.Store
 	var remoteMCP agent.RemoteMCPResolver
+	var runtimeCfg *config.Config
 	if mcpBrokerRemoteConfigured() {
-		runtimeCfg, loadErr := config.Load("")
+		var loadErr error
+		runtimeCfg, loadErr = config.Load("")
 		if loadErr != nil {
 			return fmt.Errorf("load broker runtime config: %w", loadErr)
 		}
@@ -111,6 +118,19 @@ func runMCPBroker() error {
 		if err != nil {
 			return err
 		}
+	}
+	ms365RuntimeCfg := runtimeCfg
+	if ms365RuntimeCfg == nil {
+		ms365RuntimeCfg = cfg
+	}
+	ms365Handler, ms365Cfg := wireMS365MCP(ms365RuntimeCfg)
+	if ms365Handler != nil {
+		slog.Info("mcp-broker: built-in Microsoft 365 MCP enabled",
+			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
+			"public_url", safe.LogSafe(ms365Cfg.PublicURL),
+		)
+		closeAttachmentSrv := serveInheritedMS365AttachmentListener(serveCtx, ms365Handler)
+		defer func() { _ = closeAttachmentSrv() }()
 	}
 
 	// The SAME builder the interactive Manager uses — one credential path. Inline
@@ -132,6 +152,7 @@ func runMCPBroker() error {
 		scopes:      make(map[string]*brokerScope),
 		remoteMCP:   remoteMCP,
 		remoteStore: remoteStore,
+		ms365:       ms365Handler,
 	}
 	serveErr := mcpbroker.ServeStdio(serveCtx, backend)
 	return errors.Join(serveErr, backend.Close())
@@ -142,6 +163,30 @@ func mcpBrokerRemoteConfigured() bool {
 		return strings.TrimSpace(envreg.Get(name)) != ""
 	}
 	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
+}
+
+func serveInheritedMS365AttachmentListener(ctx context.Context, h http.Handler) func() error {
+	f := os.NewFile(3, "ms365-attachment-listener")
+	if f == nil {
+		return func() error { return nil }
+	}
+	ln, err := net.FileListener(f)
+	_ = f.Close()
+	if err != nil {
+		return func() error { return nil }
+	}
+	srv := &http.Server{
+		Handler:           ms365mcp.AttachmentOnlyHandler(h),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	return srv.Close
 }
 
 func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCPResolver, error) {
@@ -181,6 +226,10 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 		return nil, nil, errors.New("open broker remote MCP store")
 	}
 	st.SetTokenCipher(cipher)
+	ms365mcp.RegisterCredentialsProvider(func(ctx context.Context) (string, string, bool) {
+		cid, tid, ok, err := st.MS365MCPConfig(ctx)
+		return cid, tid, err == nil && ok
+	})
 	// Runtime-acquired credentials — per-user OAuth bearers, rotated refresh
 	// tokens, unsealed api_key secrets — join THIS process's literal redactor at
 	// acquisition time (#1124): boot-time RegisterEnvLiterals only knows env-file
@@ -258,6 +307,7 @@ type brokerBackend struct {
 	scopes      map[string]*brokerScope
 	remoteMCP   agent.RemoteMCPResolver
 	remoteStore *store.Store
+	ms365       *ms365mcp.Handler
 }
 
 type brokerScope struct {
@@ -498,6 +548,11 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	}
 	if err != nil {
 		return nil, err
+	}
+	if b.ms365 != nil {
+		if err := b.ms365.ReloadCatalogFromEnv(); err != nil {
+			return nil, fmt.Errorf("reload ms365 catalog: %w", err)
+		}
 	}
 	specs := agent.BuildMCPSpecs(cfg)
 	// A reloaded catalog may carry new header credentials: the redactors

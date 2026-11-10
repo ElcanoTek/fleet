@@ -77,6 +77,7 @@ func (s *Server) Routes() http.Handler {
 	// Trust-labeled MCP directory (#538): bundled connectors vs curated
 	// third-party hosted servers, for the settings catalog UI.
 	mux.Handle("/mcp-catalog", auth(member(http.HandlerFunc(s.mcpCatalog))))
+	mux.Handle("/mcp/ms365-config", auth(member(mutate(http.HandlerFunc(s.handleMS365Config)))))
 	// Per-user connector availability prefs (unified connector UX).
 	mux.Handle("/connector-prefs", auth(member(mutate(http.HandlerFunc(s.connectorPrefs)))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback

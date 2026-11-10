@@ -10,7 +10,7 @@ import { loginViaCookie } from "./_session";
 // categories × 20 hosted servers each, plus the eight popular picks.
 const CATEGORIES = ["development", "cloud-infrastructure", "databases"];
 const POPULAR = [
-  "microsoft-workiq-mail", "github", "slack", "google-gmail",
+  "microsoft-365", "github", "slack", "google-gmail",
   "google-drive", "notion", "linear", "salesforce",
 ];
 const catalog = {

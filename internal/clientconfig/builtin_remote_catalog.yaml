@@ -1908,66 +1908,71 @@ servers:
     auth: oauth
     featured: true
   - name: microsoft-workiq-calendar
-    display_name: Microsoft Work IQ Calendar
+    display_name: Microsoft Work IQ Calendar (Copilot Required)
     description: >-
       Microsoft Agent 365 (preview) hosted MCP server for Outlook Calendar --
-      create/list/update/delete events, accept/decline, resolve conflicts. URL
-      is tenant-scoped.
+      create/list/update/delete events, accept/decline, resolve conflicts.
+      Requires a paid Microsoft 365 Copilot license ($30/user/mo). For standard
+      M365/Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead.
     url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_CalendarTools"
     vendor: Microsoft Corporation
     docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-calendar-work-iq"
     category: productivity
-    tags: [calendar, outlook, enterprise, preview]
+    tags: [calendar, outlook, enterprise, preview, copilot]
     provenance: official
     auth: tenant
     setup_hint: >-
-      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
-      an app registration's Overview page in the Entra admin center.
-      Preview: needs an M365 Copilot license and an admin-registered Entra
-      app (client ID) for OAuth.
+      Requires a paid Microsoft 365 Copilot add-on license ($30/user/mo) and
+      Agent 365 tenant preview enrollment. For standard Microsoft 365 or
+      Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead. {tenantId} is your Microsoft Entra Directory (tenant)
+      ID.
     setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
     client_registration: manual
   - name: microsoft-workiq-sharepoint
-    display_name: Microsoft Work IQ SharePoint
+    display_name: Microsoft Work IQ SharePoint (Copilot Required)
     description: >-
       Microsoft Agent 365 (preview) hosted MCP server for SharePoint -- upload
-      files, get metadata, search, and manage lists. URL is tenant-scoped.
+      files, get metadata, search, and manage lists. Requires a paid Microsoft
+      365 Copilot license ($30/user/mo). For standard M365/Outlook accounts
+      without Copilot, use the built-in Microsoft 365 connector instead.
     url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_SharePointTools"
     vendor: Microsoft Corporation
     docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-sharepoint-work-iq"
     category: productivity
-    tags: [file-storage, sharepoint, enterprise, preview]
+    tags: [file-storage, sharepoint, enterprise, preview, copilot]
     provenance: official
     auth: tenant
     setup_hint: >-
-      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
-      an app registration's Overview page in the Entra admin center.
-      Preview: needs an M365 Copilot license and an admin-registered Entra
-      app (client ID) for OAuth.
+      Requires a paid Microsoft 365 Copilot add-on license ($30/user/mo) and
+      Agent 365 tenant preview enrollment. For standard Microsoft 365 or
+      Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead. {tenantId} is your Microsoft Entra Directory (tenant)
+      ID.
     setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
     client_registration: manual
-  - name: microsoft-365-self-hosted
-    display_name: Microsoft 365 (self-hosted)
+  - name: microsoft-365
+    display_name: Microsoft 365
     description: >-
-      Self-hosted community MCP server for Microsoft 365 via the Graph API --
-      Outlook mail and calendar, OneDrive, Excel, OneNote, To Do, Planner,
-      and contacts, with Teams/SharePoint in org mode. Works with personal
-      and work accounts and needs no Copilot license. You deploy it on your
-      infrastructure and connect by URL.
+      Built-in Microsoft Graph connector for Outlook Mail (with full attachment
+      downloads), Calendar, Microsoft Teams chats & channels, OneDrive,
+      SharePoint, To Do, and Contacts. Works with any standard Microsoft 365 or
+      Outlook account — no Microsoft 365 Copilot license required.
     url: "https://{your-server-host}/mcp"
-    vendor: Softeria (community maintainer)
-    docs_url: "https://github.com/softeria/ms-365-mcp-server"
-    repo_url: "https://github.com/softeria/ms-365-mcp-server"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/graph/overview"
     category: productivity
-    tags: [microsoft-365, outlook, onedrive, teams, excel, sharepoint, self-hosted]
-    provenance: community
+    tags: [microsoft-365, outlook, email, calendar, teams, onedrive, sharepoint, todo, contacts]
+    provenance: official
     auth: tenant
+    featured: true
     setup_hint: >-
-      Runs on infrastructure you control: start the server in HTTP mode (npx
-      @softeria/ms-365-mcp-server --http 3000) -- it ships a built-in Entra
-      app and supports OAuth with dynamic client registration -- then enter
-      your deployment's hostname here.
-    setup_url: "https://github.com/softeria/ms-365-mcp-server"
+      Built into your Fleet server over Microsoft Graph OAuth 2.0 (PKCE).
+      Register a free Microsoft Entra app in your tenant with the callback URL
+      and delegated Graph permissions shown in the setup guide, then enter its
+      Application (client) ID and Directory (tenant) ID once for your workspace.
+    setup_url: "https://entra.microsoft.com/"
   - name: monday
     display_name: monday.com
     description: >-
@@ -2237,44 +2242,49 @@ servers:
     provenance: official
     auth: oauth
   - name: microsoft-workiq-mail
-    display_name: Microsoft Work IQ Mail
+    display_name: Microsoft Work IQ Mail (Copilot Required)
     description: >-
       Microsoft Agent 365 (preview) hosted MCP server for Outlook mail --
-      create, update, delete, reply, and semantically search messages. URL is
-      tenant-scoped; requires an M365 Copilot license and Entra app
-      registration.
+      create, update, delete, reply, and semantically search messages.
+      Requires a paid Microsoft 365 Copilot license ($30/user/mo). For standard
+      M365/Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead.
     url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_MailTools"
     vendor: Microsoft Corporation
     docs_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
     category: communication
-    tags: [email, outlook, enterprise, preview]
+    tags: [email, outlook, enterprise, preview, copilot]
     provenance: official
     auth: tenant
     setup_hint: >-
-      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
-      an app registration's Overview page in the Entra admin center.
-      Preview: needs an M365 Copilot license and an admin-registered Entra
-      app (client ID) for OAuth.
+      Requires a paid Microsoft 365 Copilot add-on license ($30/user/mo) and
+      Agent 365 tenant preview enrollment. For standard Microsoft 365 or
+      Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead. {tenantId} is your Microsoft Entra Directory (tenant)
+      ID.
     setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
     client_registration: manual
   - name: microsoft-workiq-teams
-    display_name: Microsoft Work IQ Teams
+    display_name: Microsoft Work IQ Teams (Copilot Required)
     description: >-
       Microsoft Agent 365 (preview) hosted MCP server for Teams -- create/update
-      chats, add members, post messages, and manage channels. URL is tenant-
-      scoped.
+      chats, add members, post messages, and manage channels. Requires a paid
+      Microsoft 365 Copilot license ($30/user/mo). For standard M365/Outlook
+      accounts without Copilot, use the built-in Microsoft 365 connector
+      instead.
     url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_TeamsTools"
     vendor: Microsoft Corporation
     docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-teams-work-iq"
     category: communication
-    tags: [chat, teams, enterprise, preview]
+    tags: [chat, teams, enterprise, preview, copilot]
     provenance: official
     auth: tenant
     setup_hint: >-
-      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
-      an app registration's Overview page in the Entra admin center.
-      Preview: needs an M365 Copilot license and an admin-registered Entra
-      app (client ID) for OAuth.
+      Requires a paid Microsoft 365 Copilot add-on license ($30/user/mo) and
+      Agent 365 tenant preview enrollment. For standard Microsoft 365 or
+      Outlook accounts without Copilot, use the built-in Microsoft 365
+      connector instead. {tenantId} is your Microsoft Entra Directory (tenant)
+      ID.
     setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
     client_registration: manual
   - name: otter-ai

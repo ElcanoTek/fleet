@@ -22,10 +22,12 @@ import {
   setupLink,
   toolCountSuffix,
   keyVerifiedSuffix,
+  MS365_GRAPH_DELEGATED_PERMISSIONS,
   type CatalogBundled,
   type CatalogResponse,
   type CatalogThirdParty,
   type ConnectorPref,
+  type MS365Config,
 } from "./catalog";
 import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
 import {
@@ -124,7 +126,7 @@ const DIRECTORY_PREVIEW_COUNT = 8;
 // Editorial picks, in display order; these are not usage rankings. Keep the
 // catalog's endpoint, operator and setup instructions behind the short names.
 const POPULAR_CONNECTORS = new Map([
-  ["microsoft-workiq-mail", "Microsoft 365 (Outlook)"],
+  ["microsoft-365", "Microsoft 365 (Outlook, Teams & OneDrive)"],
   ["github", "GitHub"],
   ["slack", "Slack"],
   ["google-gmail", "Gmail"],
@@ -563,6 +565,8 @@ function DirectoryCard({
   busy,
   remoteEnabled,
   redirectUri,
+  ms365Config,
+  onOpenMS365Setup,
   onAdd,
   autoOpenForm,
 }: {
@@ -575,6 +579,8 @@ function DirectoryCard({
   busy: boolean;
   remoteEnabled: boolean;
   redirectUri?: string;
+  ms365Config?: MS365Config;
+  onOpenMS365Setup?: (connectAfterSave: boolean) => void;
   // Resolves true when the server was actually added (validated + stored);
   // false keeps the guided form — and whatever the user typed — open so a
   // rejected key or mistyped tenant value can be corrected in place.
@@ -584,9 +590,16 @@ function DirectoryCard({
   // Initial state only — an already-added entry has no form to open.
   autoOpenForm?: boolean;
 }) {
-  const hint = authHint(entry);
+  const isMS365BuiltIn = entry.name === "microsoft-365";
+  const isWorkIQ = entry.name.startsWith("microsoft-workiq-");
+  const ms365NeedsEntraSetup = isMS365BuiltIn && !ms365Config?.configured;
+  const hint = ms365NeedsEntraSetup
+    ? "requires Entra app setup"
+    : isMS365BuiltIn && ms365Config?.configured
+      ? null
+      : authHint(entry);
   const guide = setupLink(entry);
-  const placeholders = placeholdersOf(entry.url);
+  const placeholders = isMS365BuiltIn ? [] : placeholdersOf(entry.url);
   const manualClient =
     entry.client_registration === "manual" && entry.auth !== "api_key";
   // The vendor accepts no public clients: a client ID without its secret sails
@@ -677,11 +690,19 @@ function DirectoryCard({
           {entry.display_name}
         </span>
         {popular ? <ConnBadge>Popular</ConnBadge> : null}
+        {isMS365BuiltIn ? (
+          <ConnBadge variant="success">Recommended · Standard M365</ConnBadge>
+        ) : null}
+        {isWorkIQ ? (
+          <ConnBadge variant="warn">Requires Copilot ($30/mo)</ConnBadge>
+        ) : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
       {entry.setup_hint ? (
         <p className="m-0 text-[0.72rem] leading-[1.5] text-[var(--color-text-secondary)]">
-          {entry.setup_hint}
+          {isMS365BuiltIn && ms365Config?.configured
+            ? "Ready for your workspace — click Add to sign in with your Microsoft 365 account (Outlook, Teams, Calendar, OneDrive, SharePoint & To Do)."
+            : entry.setup_hint}
           {guide ? (
             <>
               {" "}
@@ -745,6 +766,17 @@ function DirectoryCard({
             {hint ? (
               <span className="shrink-0 whitespace-nowrap">{hint}</span>
             ) : null}
+            {isMS365BuiltIn && ms365Config?.configured && (ms365Config.can_edit || ms365Config.source === "env") && onOpenMS365Setup ? (
+              <button
+                type="button"
+                data-testid="dir-configure-ms365"
+                onClick={() => onOpenMS365Setup(false)}
+                disabled={busy}
+                className={btnClass({ sm: true, reveal: true })}
+              >
+                Entra app
+              </button>
+            ) : null}
             {added ? (
               <button
                 type="button"
@@ -764,19 +796,29 @@ function DirectoryCard({
               type="button"
               data-testid={`dir-add-${entry.name}`}
               aria-expanded={needsForm ? formOpen : undefined}
-              onClick={() =>
-                needsForm ? setFormOpen((o) => !o) : void onAdd()
-              }
+              onClick={() => {
+                if (ms365NeedsEntraSetup && onOpenMS365Setup) {
+                  onOpenMS365Setup(true);
+                  return;
+                }
+                if (needsForm) {
+                  setFormOpen((o) => !o);
+                } else {
+                  void onAdd();
+                }
+              }}
               disabled={busy || added}
               className={dirAddButtonClass(added)}
             >
               {added
                 ? "Added"
-                : needsForm
-                  ? formOpen
-                    ? "Cancel"
-                    : "Set up…"
-                  : "Add"}
+                : ms365NeedsEntraSetup
+                  ? "Set up…"
+                  : needsForm
+                    ? formOpen
+                      ? "Cancel"
+                      : "Set up…"
+                    : "Add"}
             </button>
           </>
         ) : null}
@@ -1041,6 +1083,274 @@ function FormShell({
   );
 }
 
+function MS365SetupDialog({
+  config,
+  redirectUri,
+  connectAfterSave,
+  busy,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  config?: MS365Config;
+  redirectUri?: string;
+  connectAfterSave: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (clientId: string, tenantId: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+}) {
+  const [clientId, setClientId] = useState(config?.client_id ?? "");
+  const [tenantId, setTenantId] = useState(config?.tenant_id ?? "");
+  const [copiedRedirect, setCopiedRedirect] = useState(false);
+  const [copiedPerms, setCopiedPerms] = useState(false);
+
+  const effectiveRedirectUri =
+    config?.authorize_redirect_uri || redirectUri || "";
+  const isEnvLocked = config?.source === "env";
+  const canEdit = (config?.can_edit ?? false) && !isEnvLocked;
+  const permissionsText = MS365_GRAPH_DELEGATED_PERMISSIONS.join(" ");
+
+  return (
+    <DialogShell
+      label="Set up Microsoft 365"
+      scrimLabel="Close the Microsoft 365 setup dialog"
+      onDismiss={onClose}
+      className="max-h-[88dvh] max-w-xl overflow-y-auto p-5"
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="m-0 text-[1rem] font-semibold">
+              Microsoft 365 (Built-in Graph Connector)
+            </h3>
+            <ConnBadge variant="success">Recommended</ConnBadge>
+          </div>
+          <p className="mb-0 mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
+            Connects Outlook Mail &amp; Attachments, Microsoft Teams, Calendar,
+            OneDrive, SharePoint, To Do &amp; Contacts in one sign-in.
+          </p>
+        </div>
+        <CloseButton label="Close" onClick={onClose} />
+      </div>
+
+      {/* Clear comparison callout: Built-in Microsoft 365 vs. Microsoft Work IQ */}
+      <div
+        data-testid="ms365-vs-workiq-callout"
+        className="mb-4 grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 text-[0.75rem] leading-[1.5]"
+      >
+        <div>
+          <strong className="text-[var(--color-text-primary)]">
+            Why use this connector instead of Microsoft Work IQ?
+          </strong>
+        </div>
+        <div className="grid gap-1.5 text-[var(--color-text-secondary)]">
+          <div>
+            •{" "}
+            <strong className="text-[var(--color-text-primary)]">
+              Microsoft 365 (this connector)
+            </strong>
+            : Works with{" "}
+            <strong className="text-[var(--color-text-primary)]">
+              any standard Microsoft 365 / Outlook business or school account
+            </strong>{" "}
+            at no extra license cost. One sign-in covers Mail (with attachments),
+            Teams, Calendar, OneDrive, SharePoint, To Do &amp; Contacts.
+          </div>
+          <div>
+            •{" "}
+            <strong className="text-[var(--color-text-primary)]">
+              Microsoft Work IQ (Copilot Only)
+            </strong>
+            : Microsoft’s Agent 365 preview servers — requires a paid{" "}
+            <strong className="text-[var(--color-text-primary)]">
+              $30/user/month Microsoft 365 Copilot
+            </strong>{" "}
+            add-on license, Frontier preview enrollment, and 4 separate
+            connectors.
+          </div>
+        </div>
+      </div>
+
+      {/* 3-Step Entra App Registration Walkthrough */}
+      <div className="mb-4 grid gap-3 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+          <div className="mb-1 font-semibold text-[var(--color-text-primary)]">
+            Step 1 — Register an app in Microsoft Entra ID
+          </div>
+          <p className="m-0 mb-2 text-[0.74rem]">
+            Open{" "}
+            <a
+              href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--color-link)] underline underline-offset-2"
+            >
+              Microsoft Entra App Registrations
+            </a>{" "}
+            and click <strong>New registration</strong>. Under{" "}
+            <strong>Redirect URI</strong>, select{" "}
+            <strong>Public client/native (mobile &amp; desktop)</strong> and
+            paste this exact callback URL:
+          </p>
+          {effectiveRedirectUri ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <code
+                data-testid="ms365-redirect-uri"
+                className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]"
+              >
+                {effectiveRedirectUri}
+              </code>
+              <button
+                type="button"
+                data-testid="ms365-copy-redirect-uri"
+                className={btnClass({ sm: true, reveal: true })}
+                onClick={() => {
+                  void copyText(effectiveRedirectUri);
+                  setCopiedRedirect(true);
+                  setTimeout(() => setCopiedRedirect(false), 2000);
+                }}
+              >
+                {copiedRedirect ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="font-semibold text-[var(--color-text-primary)]">
+              Step 2 — Add Microsoft Graph Delegated Permissions
+            </span>
+            <button
+              type="button"
+              data-testid="ms365-copy-permissions"
+              className={btnClass({ sm: true, reveal: true })}
+              onClick={() => {
+                void copyText(permissionsText);
+                setCopiedPerms(true);
+                setTimeout(() => setCopiedPerms(false), 2000);
+              }}
+            >
+              {copiedPerms ? "Copied" : "Copy permissions"}
+            </button>
+          </div>
+          <p className="m-0 mb-2 text-[0.74rem]">
+            In <strong>Authentication</strong>, set{" "}
+            <strong>Allow public client flows</strong> to <strong>Yes</strong>{" "}
+            (no client secret is needed). Then in{" "}
+            <strong>API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
+            , enable these permissions and click{" "}
+            <strong>Grant admin consent</strong>:
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {MS365_GRAPH_DELEGATED_PERMISSIONS.map((perm) => (
+              <CodeChip key={perm}>{perm}</CodeChip>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
+          <div className="mb-2 font-semibold text-[var(--color-text-primary)]">
+            Step 3 — Save your Entra App IDs for this workspace
+          </div>
+          {isEnvLocked ? (
+            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
+              Configured via server environment (<CodeChip>MS365_MCP_CLIENT_ID</CodeChip>).
+            </p>
+          ) : !canEdit ? (
+            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-warning)]">
+              Ask a workspace administrator to enter your organization’s Entra
+              Application (client) ID and Directory (tenant) ID here once. Once
+              saved, everyone in this workspace can connect Microsoft 365 in one
+              click.
+            </p>
+          ) : (
+            <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
+              From your app’s <strong>Overview</strong> page in Microsoft Entra,
+              paste the IDs below. Once saved, everyone on this workspace can
+              connect Microsoft 365 in one click.
+            </p>
+          )}
+          <div className="grid gap-2.5">
+            <label
+              htmlFor="ms365ClientIdInput"
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
+              <span className="font-medium">Application (client) ID</span>
+              <input
+                id="ms365ClientIdInput"
+                data-testid="ms365-client-id-input"
+                className={SETTINGS_INPUT}
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                disabled={!canEdit || busy}
+                placeholder="e.g. 68dad9d6-e1aa-4195-9bd5-2e94a0e4a073"
+              />
+            </label>
+            <label
+              htmlFor="ms365TenantIdInput"
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
+              <span className="font-medium">Directory (tenant) ID</span>
+              <input
+                id="ms365TenantIdInput"
+                data-testid="ms365-tenant-id-input"
+                className={SETTINGS_INPUT}
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                disabled={!canEdit || busy}
+                placeholder="e.g. 5db5070c-2c68-449d-868f-2b0d3407f6d2 (or organizations / common)"
+              />
+              <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+                Use your Entra tenant UUID for single-tenant apps, or{" "}
+                <code>organizations</code> / <code>common</code> for multi-tenant
+                apps.
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          {config?.source === "db" && canEdit ? (
+            <InlineConfirmButton
+              label="Clear saved Entra app"
+              confirmLabel="Confirm clear"
+              disabled={busy}
+              onConfirm={() => void onDelete()}
+              testId="ms365-delete-config-btn"
+            />
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className={btnClass({ reveal: true })}
+          >
+            {canEdit ? "Cancel" : "Close"}
+          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              data-testid="ms365-save-config-btn"
+              disabled={busy || !clientId.trim()}
+              onClick={() =>
+                void onSave(clientId.trim(), tenantId.trim() || "common")
+              }
+              className={btnClass({ variant: "primary" })}
+            >
+              {connectAfterSave ? "Save & Add Microsoft 365" : "Save"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </DialogShell>
+  );
+}
+
 export default function ConnectionsPage() {
   return (
     <ToastProvider>
@@ -1116,6 +1426,11 @@ function ConnectionsPageInner() {
   const [consentFor, setConsentFor] = useState<{
     entry: CatalogThirdParty;
     overrides?: AddOverrides;
+  } | null>(null);
+  // Guided Microsoft 365 Entra App Registration setup modal state.
+  const [ms365SetupModal, setMs365SetupModal] = useState<{
+    connectAfterSave: boolean;
+    entry: CatalogThirdParty;
   } | null>(null);
   // A banner is delivered as a one-shot TOAST, so it must fire again when the
   // same message repeats. Keyed on the message VALUE, a retry that failed
@@ -1785,6 +2100,61 @@ function ConnectionsPageInner() {
   const trimmedQuery = catalogQuery.trim();
   const dirHits = trimmedQuery ? filterCatalog(thirdParty, catalogQuery, "") : dirPopular;
 
+  const saveMS365Config = async (clientId: string, tenantId: string) => {
+    const modalState = ms365SetupModal;
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/mcp/ms365-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, tenant_id: tenantId }),
+      });
+      if (!res.ok) {
+        throw new Error(await responseErrorText(res, "Failed to save Microsoft 365 configuration"));
+      }
+      const saved = (await res.json()) as MS365Config;
+      const updatedCatalog = await fetchCatalog();
+      if (updatedCatalog) setCatalog(updatedCatalog);
+      setMs365SetupModal(null);
+
+      const alreadyAdded = (servers ?? []).some((s) => s.name === "microsoft-365");
+      if (modalState?.connectAfterSave && !alreadyAdded && saved.mcp_url) {
+        await addFromCatalog(
+          { ...modalState.entry, url: saved.mcp_url, auth: "oauth" },
+          { url: saved.mcp_url },
+        );
+      } else {
+        setNotice("Microsoft 365 Entra app saved for this workspace.");
+      }
+    } catch (err: unknown) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteMS365Config = async () => {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/mcp/ms365-config", { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error(await responseErrorText(res, "Failed to clear Microsoft 365 configuration"));
+      }
+      const updatedCatalog = await fetchCatalog();
+      if (updatedCatalog) setCatalog(updatedCatalog);
+      setMs365SetupModal(null);
+      setNotice("Cleared saved Microsoft 365 Entra app configuration.");
+    } catch (err: unknown) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const renderDirCard = (tp: CatalogThirdParty) => (
     <DirectoryCard
       key={tp.name}
@@ -1799,6 +2169,13 @@ function ConnectionsPageInner() {
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
       redirectUri={catalog?.oauth_redirect_uri}
+      ms365Config={tp.name === "microsoft-365" ? catalog?.ms365_config : undefined}
+      onOpenMS365Setup={
+        tp.name === "microsoft-365"
+          ? (connectAfterSave) =>
+              setMs365SetupModal({ connectAfterSave, entry: tp })
+          : undefined
+      }
       onAdd={(overrides) => requestAddFromCatalog(tp, overrides)}
       autoOpenForm={spotlight === tp.name}
     />
@@ -2767,6 +3144,17 @@ function ConnectionsPageInner() {
             </button>
           </div>
         </DialogShell>
+      ) : null}
+      {ms365SetupModal ? (
+        <MS365SetupDialog
+          config={catalog?.ms365_config}
+          redirectUri={catalog?.oauth_redirect_uri}
+          connectAfterSave={ms365SetupModal.connectAfterSave}
+          busy={busy}
+          onClose={() => setMs365SetupModal(null)}
+          onSave={saveMS365Config}
+          onDelete={deleteMS365Config}
+        />
       ) : null}
     </SetSection>
   );

@@ -181,6 +181,15 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"FLEET_MCP_OAUTH_ENCRYPTION_KEY":       true,
 	"FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP": true,
 
+	// ── built-in Microsoft 365 OAuth + Graph MCP surface (internal/ms365mcp) ──
+	"MS365_MCP_CLIENT_ID":             true,
+	"MS365_MCP_TENANT_ID":             true,
+	"MS365_MCP_CLIENT_SECRET":         true,
+	"MS365_MCP_PUBLIC_URL":            true,
+	"MS365_MCP_ALIASES":               true,
+	"MS365_MCP_ALLOWED_REDIRECT_URIS": true,
+	"MS365_MCP_ATTACHMENT_URL_TTL_S":  true,
+
 	// ── personas / protocols ──
 	// The two default-persona knobs are read as FLEET_<X>
 	// with a bare-name fallback (getenvFleetOrBare), so the canonical FLEET_
@@ -722,6 +731,10 @@ var preRegistryEnvKnobs = []envKnob{
 		scope: scopeExternal, readBy: "internal/otelsetup (head sampler)",
 		lenient: true,
 		why:     "tracing dial with a documented total order over bad input: unset/unparseable/NaN/±Inf/≥1 all mean AlwaysSample and ≤0 means never. Refusing to boot the whole service over an observability knob is worse than sampling everything, so validate-config reports a malformed ratio as an advisory instead"},
+
+	// ── built-in Microsoft 365 MCP proxy (internal/ms365mcp) ──
+	{key: "MS365_MCP_ATTACHMENT_URL_TTL_S", kind: kindInt, min: bound(1), max: bound(3600),
+		scope: scopeExternal, readBy: "internal/ms365mcp (attachment download ticket TTL)"},
 }
 
 // bound builds a *float64 for the snapshot literals above.

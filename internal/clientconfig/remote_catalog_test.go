@@ -412,8 +412,8 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 			t.Errorf("entry %q: community entries cannot be featured (hidden by default)", e.Name)
 		}
 	}
-	if featured < 8 || featured > 20 {
-		t.Errorf("featured shelf should hold 8–20 entries, got %d", featured)
+	if featured < 8 || featured > 22 {
+		t.Errorf("featured shelf should hold 8–22 entries, got %d", featured)
 	}
 
 	// X documents its API-capable XMCP as self-hosted; api.x.com/mcp is not a

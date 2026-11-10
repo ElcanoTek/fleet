@@ -14,6 +14,8 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
+	"github.com/ElcanoTek/fleet/internal/ms365mcp"
+	"github.com/ElcanoTek/fleet/internal/netguard"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
@@ -41,6 +43,14 @@ func webAddr() (addr string, enabled bool) {
 // (buildPublicRouter) over the browser tier and the in-process chat and
 // orchestrator handlers. It returns nil when FLEET_WEB_ADDR=off.
 func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error) {
+	ms365Handler, ms365Cfg := wireMS365MCPWithBroker(cfg, b.ms365AttachmentSocket)
+	if ms365Handler != nil {
+		slog.Info("web: built-in Microsoft 365 MCP enabled",
+			"tenant_id", safe.LogSafe(ms365Cfg.TenantID),
+			"public_url", safe.LogSafe(ms365Cfg.PublicURL),
+			"aliases", len(ms365Cfg.Aliases),
+		)
+	}
 	addr, enabled := webAddr()
 	if !enabled {
 		slog.Info("web: browser tier disabled (FLEET_WEB_ADDR=off)")
@@ -58,9 +68,13 @@ func buildWebServer(cfg *config.Config, b backendHandlers) (*http.Server, error)
 		slog.Warn("WARNING: this fleet binary carries no web bundle — pages answer 503 until it is rebuilt with `make build` (the API still works)")
 	}
 	slog.Info("web: bundle loaded", "build_id", g.BuildID())
+	surface := b.surface(g)
+	if ms365Handler != nil {
+		surface.ms365 = ms365Handler
+	}
 	return &http.Server{
 		Addr:              addr,
-		Handler:           buildPublicRouter(b.surface(g)),
+		Handler:           buildPublicRouter(surface),
 		ReadHeaderTimeout: 30 * time.Second,
 		// Idle keep-alive connections are closed after two minutes; an open
 		// SSE stream is never idle, so it is unaffected.
@@ -85,6 +99,11 @@ type backendHandlers struct {
 	// chatListener and orchListener are the handlers of the chat and
 	// orchestrator listeners; nil means chat and orch themselves.
 	chatListener, orchListener http.Handler
+	// ms365AttachmentSocket is the private Unix domain socket path of the
+	// credential-owning mcp-broker child process for token-free /attachment
+	// ticket redemption. When set, the parent web server refuses authenticated
+	// POST /mcp calls and proxies GET /attachment?t=<ticket> to the child.
+	ms365AttachmentSocket string
 }
 
 // surface is the public tree's input once the gateway exists.
@@ -123,6 +142,35 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 	// The same client-address resolver the backends use.
 	wc.TrustedProxies = httpmw.NewTrustedProxies(cfg.TrustedProxies)
 	return wc
+}
+
+// wireMS365MCP constructs the optional built-in Microsoft 365 OAuth + Graph
+// MCP handler when MS365_MCP_CLIENT_ID is configured and registers (or clears)
+// the in-process netguard dispatch hook.
+func wireMS365MCP(cfg *config.Config) (*ms365mcp.Handler, ms365mcp.Config) {
+	return wireMS365MCPWithBroker(cfg, "")
+}
+
+func wireMS365MCPWithBroker(cfg *config.Config, brokerAttachmentSocket string) (*ms365mcp.Handler, ms365mcp.Config) {
+	var ms365Cfg ms365mcp.Config
+	if brokerAttachmentSocket != "" {
+		ms365Cfg = ms365mcp.ConfigFromEnv(cfg)
+	} else {
+		ms365Cfg = ms365mcp.BrokerConfigFromEnv(cfg)
+	}
+	if !ms365Cfg.CanMount() {
+		ms365mcp.RegisterActiveHandler(nil)
+		netguard.RegisterInProcessHandler("ms365mcp", nil, nil)
+		return nil, ms365Cfg
+	}
+	if brokerAttachmentSocket != "" {
+		ms365Cfg.DisableAuthenticatedMCP = mcpBrokerRemoteConfigured()
+		ms365Cfg.AttachmentProxy = ms365mcp.NewUnixSocketAttachmentProxy(brokerAttachmentSocket)
+	}
+	h := ms365mcp.NewHandler(ms365Cfg)
+	ms365mcp.RegisterActiveHandler(h)
+	netguard.RegisterInProcessHandler("ms365mcp", h.MatchesInProcessURL, h)
+	return h, ms365Cfg
 }
 
 // serveInBackground runs one plain-HTTP listener (the orchestrator's, the

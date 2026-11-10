@@ -103,6 +103,9 @@ DELETE /api/conversations
 GET /api/llm-provider-models
 GET /api/mcp-catalog
 GET /api/mcp-servers
+GET /api/mcp/ms365-config
+PUT /api/mcp/ms365-config
+DELETE /api/mcp/ms365-config
 GET /api/me
 GET /api/me/team
 PUT /api/me/team

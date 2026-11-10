@@ -23,6 +23,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/diskguard"
+	"github.com/ElcanoTek/fleet/internal/netguard"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -191,9 +192,9 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		// Same SSRF guard as web_fetch: without it this tool could fetch
 		// cloud metadata (169.254.169.254) or internal services and
 		// persist the result to disk.
-		Transport: &http.Transport{
+		Transport: netguard.WrapRoundTripper(&http.Transport{
 			DialContext: downloadURLDialContext,
-		},
+		}),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			chain = append(chain, req.URL.String())
 			if len(via) >= 10 {

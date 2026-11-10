@@ -480,7 +480,11 @@ tarpit:
    bundle `manifest.yaml` is the complete contract for what a server needs
    (env keys, tool allowlist, `critical_tools`, `identity_env`) — if fleet
    can't express something a server needs, extend the schema here (as with
-   `${FLEET_WORKSPACE}`), don't special-case a customer.
+   `${FLEET_WORKSPACE}`), don't special-case a customer. Client-agnostic,
+   per-user OAuth 2.1 remote-MCP bridges hosted by the engine (`internal/remotemcp`,
+   `internal/ms365mcp`; see [`docs/MS365-MCP.md`](docs/MS365-MCP.md)) are
+   activated via `MS365_MCP_*` environment variables and accept an optional
+   bundle-level `<FLEET_CLIENT_CONFIG_DIR>/ms365_tools.json` catalog override.
 2. **Engines never depend on intake apps.** fleet MUST NOT import, clone, or
    gate CI on manifest (or any future front door). Intake apps integrate by
    calling fleet's API and receiving webhooks — one create seam in, one

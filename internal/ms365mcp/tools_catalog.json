@@ -1,0 +1,5059 @@
+[
+  {
+    "name": "create-chat",
+    "description": "Create a new chat object.\n\n\ud83d\udca1 TIP: Creates a new 1:1 or group Teams chat. Body: { chatType ('oneOnOne' or 'group'), topic (optional, group only), members: [{ '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner' | 'guest'], 'user@odata.bind': 'https://graph.microsoft.com/v1.0/users({id})' }] }. A oneOnOne chat requires exactly 2 members (self + other), both with role 'owner'. For group chats, include all participants. The signed-in user must be one of the members. Returns the created chat with its id \u2014 use that id with send-chat-message, list-chat-members, etc.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "chatType": {
+              "type": "string",
+              "enum": [
+                "oneOnOne",
+                "group",
+                "meeting",
+                "unknownFutureValue"
+              ]
+            },
+            "migrationMode": {
+              "type": "string",
+              "enum": [
+                "inProgress",
+                "completed",
+                "unknownFutureValue"
+              ]
+            },
+            "onlineMeetingInfo": {
+              "type": "object"
+            },
+            "originalCreatedDateTime": {
+              "type": "string",
+              "description": "Timestamp of the original creation time for the chat. The value is null if the chat never entered migration mode."
+            },
+            "topic": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "(Optional) Subject or topic for the chat. Only available for group chats."
+            },
+            "viewpoint": {
+              "type": "object"
+            },
+            "installedApps": {
+              "type": "array",
+              "description": "A collection of all the apps in the chat. Nullable."
+            },
+            "lastMessagePreview": {
+              "type": "object"
+            },
+            "members": {
+              "type": "array",
+              "description": "A collection of all the members in the chat. Nullable."
+            },
+            "messages": {
+              "type": "array",
+              "description": "A collection of all the messages in the chat. Nullable."
+            },
+            "permissionGrants": {
+              "type": "array",
+              "description": "A collection of permissions granted to apps for the chat."
+            },
+            "pinnedMessages": {
+              "type": "array",
+              "description": "A collection of all the pinned messages in the chat. Nullable."
+            },
+            "tabs": {
+              "type": "array",
+              "description": "A collection of all the tabs in the chat. Nullable."
+            },
+            "targetedMessages": {
+              "type": "array",
+              "description": "A collection of targeted messages in the chat that are visible only to specific users. Nullable. You can't expand this relationship using $expand. Targeted messages can also be retrieved via the userTeamwork: getAllTargetedMessages API."
+            }
+          },
+          "additionalProperties": true
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body"
+      ]
+    },
+    "annotations": {
+      "title": "create-chat",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats",
+    "method": "POST",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-chat",
+    "description": "Retrieve a single chat (without its messages). This method supports federation. To access a chat, at least one chat member must belong to the tenant the request initiated from.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "chatId"
+      ]
+    },
+    "annotations": {
+      "title": "get-chat",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}",
+    "method": "GET",
+    "pathParams": [
+      "chat-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-chat-members",
+    "description": "List members of a Microsoft Teams chat. Optionally filter client-side by display name or email via the name parameter.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "name": {
+          "type": "string",
+          "description": "Case-insensitive substring filter matched client-side against each member's displayName and email."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "chatId"
+      ]
+    },
+    "annotations": {
+      "title": "list-chat-members",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}/members",
+    "method": "GET",
+    "pathParams": [
+      "chat-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-chat-messages",
+    "description": "Retrieve the list of messages in a Microsoft Teams chat. $top is capped at 50 and $orderby accepts descending order on createdDateTime or lastModifiedDateTime.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "chatId"
+      ]
+    },
+    "annotations": {
+      "title": "list-chat-messages",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}/messages",
+    "method": "GET",
+    "pathParams": [
+      "chat-id"
+    ],
+    "queryParams": [
+      "top",
+      "filter",
+      "orderby",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "send-chat-message",
+    "description": "Send a new chatMessage in the specified chat. This API can't create a new chat; you must use the list chats method to retrieve the ID of an existing chat before you can create a chat message.\n\n\ud83d\udca1 TIP: To @mention someone, put <at user-id=\"<aad-user-id>\">Display Name</at> in the html content; the server numbers the tag and builds the mentions array. Use the userId field (not id) from list-team-members or list-chat-members. Use contentType 'html' in the body \u2014 plain text contentType gets mangled by Graph API. Alternatively, hand-build the raw form: put an <at id=\"0\">Name</at> tag in the html content and add a mentions array to the request body, as a sibling of the body property (not a separate top-level tool parameter): { body: { contentType: 'html', content: 'Hi <at id=\"0\">Name</at>' }, mentions: [{ id: 0, mentionText: 'Name', mentioned: { user: { id: '<aad-user-id>', displayName: 'Name', userIdentityType: 'aadUser' } } }] }. Each mention id must match its <at id> value; include userIdentityType: 'aadUser' or Graph returns 400 'value without a type name'.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "type": "array",
+              "description": "References to attached objects like files, tabs, meetings etc."
+            },
+            "body": {
+              "type": "object"
+            },
+            "channelIdentity": {
+              "type": "object"
+            },
+            "chatId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "If the message was sent in a chat, represents the identity of the chat."
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "Timestamp of when the chat message was created."
+            },
+            "eventDetail": {
+              "type": "object"
+            },
+            "from": {
+              "type": "object"
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "high",
+                "urgent",
+                "unknownFutureValue"
+              ],
+              "description": "The importance of the chat message: normal, high, or urgent."
+            },
+            "locale": {
+              "type": "string",
+              "description": "Locale of the chat message set by the client. Always set to en-us."
+            },
+            "mentions": {
+              "type": "array",
+              "description": "List of entities mentioned in the chat message. Supported entities are: user, bot, team, channel, chat, and tag."
+            },
+            "messageHistory": {
+              "type": "array",
+              "description": "List of activity history of a message item, including modification time and actions, such as reactionAdded, reactionRemoved, or reaction changes, on the message."
+            },
+            "messageType": {
+              "type": "string",
+              "enum": [
+                "message",
+                "chatEvent",
+                "typing",
+                "unknownFutureValue",
+                "systemEventMessage"
+              ],
+              "description": "The type of chat message. Default is message."
+            },
+            "policyViolation": {
+              "type": "object"
+            },
+            "reactions": {
+              "type": "array",
+              "description": "Reactions for this chat message (for example, Like)."
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The subject of the chat message, in plaintext."
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Summary text of the chat message that could be used for push notifications and summary views or fall back views. Only applies to channel chat messages, not chat messages in a chat."
+            },
+            "hostedContents": {
+              "type": "array",
+              "description": "Content in a message hosted by Microsoft Teams - for example, images or code snippets."
+            },
+            "replies": {
+              "type": "array",
+              "description": "Replies for a specified message. Supports $expand for channel messages."
+            }
+          },
+          "additionalProperties": true
+        },
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "chatId"
+      ]
+    },
+    "annotations": {
+      "title": "send-chat-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}/messages",
+    "method": "POST",
+    "pathParams": [
+      "chat-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-chat-message",
+    "description": "Retrieve a single message or a message reply in a channel or a chat.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "chatMessageId": {
+          "type": "string",
+          "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "chatId",
+        "chatMessageId"
+      ]
+    },
+    "annotations": {
+      "title": "get-chat-message",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}/messages/{chatMessage-id}",
+    "method": "GET",
+    "pathParams": [
+      "chat-id",
+      "chatMessage-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "reply-to-chat-message",
+    "description": "Reply to (quote) message(s) in a Microsoft Teams chat via replyWithQuote. Provide chatId and either {messageIds, replyMessage} or {messageId (or chatMessageId), body}.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "type": "array",
+              "description": "References to attached objects like files, tabs, meetings etc."
+            },
+            "body": {
+              "type": "object"
+            },
+            "channelIdentity": {
+              "type": "object"
+            },
+            "chatId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "If the message was sent in a chat, represents the identity of the chat."
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "Timestamp of when the chat message was created."
+            },
+            "eventDetail": {
+              "type": "object"
+            },
+            "from": {
+              "type": "object"
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "high",
+                "urgent",
+                "unknownFutureValue"
+              ],
+              "description": "The importance of the chat message: normal, high, or urgent."
+            },
+            "locale": {
+              "type": "string",
+              "description": "Locale of the chat message set by the client. Always set to en-us."
+            },
+            "mentions": {
+              "type": "array",
+              "description": "List of entities mentioned in the chat message. Supported entities are: user, bot, team, channel, chat, and tag."
+            },
+            "messageHistory": {
+              "type": "array",
+              "description": "List of activity history of a message item, including modification time and actions, such as reactionAdded, reactionRemoved, or reaction changes, on the message."
+            },
+            "messageType": {
+              "type": "string",
+              "enum": [
+                "message",
+                "chatEvent",
+                "typing",
+                "unknownFutureValue",
+                "systemEventMessage"
+              ],
+              "description": "The type of chat message. Default is message."
+            },
+            "policyViolation": {
+              "type": "object"
+            },
+            "reactions": {
+              "type": "array",
+              "description": "Reactions for this chat message (for example, Like)."
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The subject of the chat message, in plaintext."
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Summary text of the chat message that could be used for push notifications and summary views or fall back views. Only applies to channel chat messages, not chat messages in a chat."
+            },
+            "hostedContents": {
+              "type": "array",
+              "description": "Content in a message hosted by Microsoft Teams - for example, images or code snippets."
+            },
+            "replies": {
+              "type": "array",
+              "description": "Replies for a specified message. Supports $expand for channel messages."
+            }
+          },
+          "additionalProperties": true
+        },
+        "chatId": {
+          "type": "string",
+          "description": "Value for the 'chatId' path segment. Pass it under the name 'chatId', not as 'id'. Use the 'id' field of the chat object as returned by Microsoft Graph."
+        },
+        "chatMessageId": {
+          "type": "string",
+          "description": "Alias for messageId: ID of the chat message being replied to."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "messageIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IDs of the chat message(s) being quoted/replied to."
+        },
+        "replyMessage": {
+          "type": "object",
+          "description": "The chatMessage reply payload (with body: {contentType, content}).",
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "ID of the chat message being replied to (use with body as an alternative to messageIds + replyMessage)."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "chatId"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "chatId",
+            "messageIds",
+            "replyMessage"
+          ]
+        },
+        {
+          "required": [
+            "chatId",
+            "messageId",
+            "body"
+          ]
+        },
+        {
+          "required": [
+            "chatId",
+            "chatMessageId",
+            "body"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "title": "reply-to-chat-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/chats/{chat-id}/messages/replyWithQuote",
+    "method": "POST",
+    "pathParams": [
+      "chat-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "messageIds",
+      "replyMessage"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-drive-item",
+    "description": "Get metadata for a specific file or folder (driveItem) in OneDrive or SharePoint by driveId and driveItemId. Returns name, size, lastModifiedDateTime, webUrl, and file/folder facets. To download the file content to disk, call get-download-url with target=\"/drives/{driveId}/items/{driveItemId}/content\" and pass the returned downloadUrl to download_url.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "driveId": {
+          "type": "string",
+          "description": "Value for the 'driveId' path segment. Pass it under the name 'driveId', not as 'id'. Use the 'id' field of the drive object as returned by Microsoft Graph."
+        },
+        "driveItemId": {
+          "type": "string",
+          "description": "Value for the 'driveItemId' path segment. Pass it under the name 'driveItemId', not as 'id'. Use the 'id' field of the drive item object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "driveId",
+        "driveItemId"
+      ]
+    },
+    "annotations": {
+      "title": "get-drive-item",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/drives/{drive-id}/items/{driveItem-id}",
+    "method": "GET",
+    "pathParams": [
+      "drive-id",
+      "driveItem-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-folder-files",
+    "description": "Return a collection of DriveItems in the children relationship of a DriveItem. DriveItems with a non-null folder or package facet can have one or more child DriveItems.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "driveId": {
+          "type": "string",
+          "description": "Value for the 'driveId' path segment. Pass it under the name 'driveId', not as 'id'. Use the 'id' field of the drive object as returned by Microsoft Graph."
+        },
+        "driveItemId": {
+          "type": "string",
+          "description": "Value for the 'driveItemId' path segment. Pass it under the name 'driveItemId', not as 'id'. Use the 'id' field of the drive item object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "driveId",
+        "driveItemId"
+      ]
+    },
+    "annotations": {
+      "title": "list-folder-files",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/drives/{drive-id}/items/{driveItem-id}/children",
+    "method": "GET",
+    "pathParams": [
+      "drive-id",
+      "driveItem-id"
+    ],
+    "queryParams": [
+      "expand",
+      "select",
+      "skiptoken",
+      "top",
+      "orderby"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "search-onedrive-files",
+    "description": "Search the hierarchy of items for items matching a query.\nYou can search within a folder hierarchy, a whole drive, or files shared with the current user.\n\n\ud83d\udca1 TIP: Searches for files in a drive by name or content. The q parameter searches file names, metadata, and file content. Returns matching driveItems with id, name, webUrl, size, lastModifiedDateTime. Use search-query or get-drive-item to locate drive items.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "driveId": {
+          "type": "string",
+          "description": "Value for the 'driveId' path segment. Pass it under the name 'driveId', not as 'id'. Use the 'id' field of the drive object as returned by Microsoft Graph."
+        },
+        "q": {
+          "type": "string",
+          "description": "Value for the 'q' path segment."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "driveId",
+        "q"
+      ]
+    },
+    "annotations": {
+      "title": "search-onedrive-files",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/drives/{drive-id}/root/search(q='{q}')",
+    "method": "GET",
+    "pathParams": [
+      "drive-id",
+      "q"
+    ],
+    "queryParams": [
+      "top",
+      "select",
+      "orderby",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-calendars",
+    "description": "Get all the user's calendars (/calendars navigation property), get the calendars from the default calendar group or from a specific calendar group.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-calendars",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/calendars",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "top",
+      "skip",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-calendar-view",
+    "description": "Get the occurrences, exceptions, and single instances of events in a calendar view defined by a time range, from the signed-in user's default calendar or from a specific calendar when calendarId is provided.\n\n\ud83d\udca1 TIP: Returns expanded recurring event instances (not just seriesMaster) within a date range. Requires startDateTime and endDateTime query parameters in ISO 8601 format (e.g., 2026-01-01T00:00:00Z). Pass calendarId (from list-calendars) to query a non-default calendar. To find Teams meetings, use $select=subject,start,isOnlineMeeting,onlineMeetingProvider,onlineMeeting and keep events with isOnlineMeeting true and onlineMeetingProvider teamsForBusiness. Teams meetings expose their join link as onlineMeeting/joinUrl; match it against the normalized joinWebUrl from parse-teams-url.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "startDateTime": {
+          "type": "string",
+          "description": "The start date and time of the time range, represented in ISO 8601 format. For example, 2019-11-08T19:00:00-08:00"
+        },
+        "endDateTime": {
+          "type": "string",
+          "description": "The end date and time of the time range, represented in ISO 8601 format. For example, 2019-11-08T20:00:00-08:00"
+        },
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        },
+        "calendarId": {
+          "type": "string",
+          "description": "Optional calendar ID (from list-calendars) to query a specific non-default calendar. Defaults to the signed-in user's default calendar."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "startDateTime",
+        "endDateTime"
+      ]
+    },
+    "annotations": {
+      "title": "get-calendar-view",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/calendarView",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "startDateTime",
+      "endDateTime",
+      "top",
+      "skip",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": true,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-chats",
+    "description": "List chats.\n\n\ud83d\udca1 TIP: Lists the signed-in user's chats. Only $filter, $top (max 50), $expand (members, lastMessagePreview) and $orderby are supported; $orderby accepts just lastMessagePreview/createdDateTime in descending order. Other options are rejected: $search returns 400 'Query option Search is not allowed', and ordering by lastUpdatedDateTime returns 400 BadRequest. Meeting chats have chatType=meeting and carry the meeting subject in topic.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "allOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Show only the first n items"
+            },
+            {
+              "type": "number",
+              "maximum": 50
+            }
+          ],
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-chats",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/chats",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "expand",
+      "top",
+      "filter",
+      "orderby",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-outlook-contacts",
+    "description": "Get a contact collection from the default contacts folder of the signed-in user. There are two scenarios where an app can get contacts in another user's contact folder:\n\n\ud83d\udca1 TIP: $filter only supports startswith() \u2014 contains() and eq on emailAddresses do not work. Use $search as alternative for broader matching.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "search": {
+          "type": "string",
+          "description": "Search query string (Graph $search)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-outlook-contacts",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/contacts",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "top",
+      "skip",
+      "search",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-outlook-contact",
+    "description": "Retrieve the properties and relationships of a contact object. There are two scenarios where an app can get a contact in another user's contact folder:",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "contactId": {
+          "type": "string",
+          "description": "Value for the 'contactId' path segment. Pass it under the name 'contactId', not as 'id'. Use the 'id' field of the contact object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "contactId"
+      ]
+    },
+    "annotations": {
+      "title": "get-outlook-contact",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/contacts/{contact-id}",
+    "method": "GET",
+    "pathParams": [
+      "contact-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-calendar-events",
+    "description": "Get a list of event objects in the user's mailbox. The list contains single\ninstance meetings and series masters. To get expanded event instances, you can get the calendar view, or\nget the instances of an event. Currently, this operation returns event bodies in only HTML format. There are two scenarios where an app can get events in another user's calendar:\n\n\ud83d\udca1 TIP: WARNING: Does NOT expand recurring events \u2014 only returns seriesMaster. Use get-calendar-view instead to see individual occurrences within a date range.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "search": {
+          "type": "string",
+          "description": "Search query string (Graph $search)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-calendar-events",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "top",
+      "skip",
+      "search",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": true,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "create-calendar-event",
+    "description": "Create (schedule) a new calendar event \u2014 a meeting or appointment \u2014 on the user's calendar. Times use nested objects, not flat fields: start: {dateTime, timeZone}, end: {dateTime, timeZone}. Do NOT use startDateTime/startTimeZone. For one-off events, UTC is simplest (e.g. 3:30 PM AEDT = 04:30 UTC). For recurring events, use the organizer's own time zone name instead \u2014 Graph resolves DST against the zone in start.timeZone, so UTC drifts after DST changes. Get the zone from get-calendar-view, or validate one with IANA or Windows time zone names instead of guessing from memory. Set subject, location, body, and attendees; supports online meetings and recurrence.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "createdDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "lastModifiedDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "singleInstance",
+                "occurrence",
+                "exception",
+                "seriesMaster"
+              ]
+            },
+            "body": {
+              "type": "object"
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The text of the event's subject line."
+            },
+            "start": {
+              "type": "object"
+            },
+            "end": {
+              "type": "object"
+            },
+            "location": {
+              "type": "object"
+            },
+            "showAs": {
+              "type": "string",
+              "enum": [
+                "unknown",
+                "free",
+                "tentative",
+                "busy",
+                "oof",
+                "workingElsewhere"
+              ]
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "personal",
+                "private",
+                "confidential"
+              ]
+            },
+            "isAllDay": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Set to true if the event lasts all day. If true, regardless of whether it's a single-day or multi-day event, start, and endtime must be set to midnight and be in the same time zone."
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "isOnlineMeeting": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "True if this event has online meeting information (that is, onlineMeeting points to an onlineMeetingInfo resource), false otherwise. Default is false (onlineMeeting is null). Optional.  After you set isOnlineMeeting to true, Microsoft Graph initializes onlineMeeting. Subsequently, Outlook ignores any further changes to isOnlineMeeting, and the meeting remains available online."
+            },
+            "isReminderOn": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Set to true if an alert is set to remind the user of the event."
+            },
+            "attendees": {
+              "type": "array",
+              "description": "The collection of attendees for the event."
+            },
+            "recurrence": {
+              "type": "object"
+            },
+            "reminderMinutesBeforeStart": {
+              "type": "integer",
+              "description": "The number of minutes before the event start time that the reminder alert occurs."
+            },
+            "allowNewTimeProposals": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "true if the meeting organizer allows invitees to propose a new time when responding; otherwise, false. Optional. The default is true."
+            },
+            "responseRequested": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Default is true, which represents the organizer would like an invitee to send a response to the event."
+            },
+            "categories": {
+              "type": "array",
+              "description": "The categories associated with the item"
+            }
+          },
+          "additionalProperties": true
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body"
+      ]
+    },
+    "annotations": {
+      "title": "create-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events",
+    "method": "POST",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-calendar-event",
+    "description": "Get the properties and relationships of the specified event object. Currently, this operation returns event bodies in only HTML format. There are two scenarios where an app can get an event in another user's calendar: Since the event resource supports extensions, you can also use the GET operation to get custom properties and extension data in an event instance.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name (e.g., \"America/New_York\", \"Europe/London\", \"Asia/Tokyo\") for calendar event times. If not specified, times are returned in UTC."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "get-calendar-event",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}",
+    "method": "GET",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": true,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "update-calendar-event",
+    "description": "Update an event on the default calendar. Requires eventId (the event's ID from get-calendar-view or list-calendar-events). Times use nested {dateTime, timeZone} objects. UTC is simplest for one-off events; for recurring events use the organizer's own time zone (from get-calendar-view or IANA or Windows time zone names) instead of UTC, since Graph resolves DST against that zone.\n\n\ud83d\udca1 TIP: CRITICAL: Do not try to guess the email address of the recipients. Use the list-outlook-contacts tool to find the email address of the recipients. WARNING: Setting attendees replaces the entire attendee list \u2014 include all attendees, not just new ones.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "createdDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "lastModifiedDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "singleInstance",
+                "occurrence",
+                "exception",
+                "seriesMaster"
+              ]
+            },
+            "body": {
+              "type": "object"
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The text of the event's subject line."
+            },
+            "start": {
+              "type": "object"
+            },
+            "end": {
+              "type": "object"
+            },
+            "location": {
+              "type": "object"
+            },
+            "showAs": {
+              "type": "string",
+              "enum": [
+                "unknown",
+                "free",
+                "tentative",
+                "busy",
+                "oof",
+                "workingElsewhere"
+              ]
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "personal",
+                "private",
+                "confidential"
+              ]
+            },
+            "isAllDay": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Set to true if the event lasts all day. If true, regardless of whether it's a single-day or multi-day event, start, and endtime must be set to midnight and be in the same time zone."
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "isOnlineMeeting": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "True if this event has online meeting information (that is, onlineMeeting points to an onlineMeetingInfo resource), false otherwise. Default is false (onlineMeeting is null). Optional.  After you set isOnlineMeeting to true, Microsoft Graph initializes onlineMeeting. Subsequently, Outlook ignores any further changes to isOnlineMeeting, and the meeting remains available online."
+            },
+            "isReminderOn": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Set to true if an alert is set to remind the user of the event."
+            },
+            "attendees": {
+              "type": "array",
+              "description": "The collection of attendees for the event."
+            },
+            "recurrence": {
+              "type": "object"
+            },
+            "reminderMinutesBeforeStart": {
+              "type": "integer",
+              "description": "The number of minutes before the event start time that the reminder alert occurs."
+            },
+            "allowNewTimeProposals": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "true if the meeting organizer allows invitees to propose a new time when responding; otherwise, false. Optional. The default is true."
+            },
+            "responseRequested": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Default is true, which represents the organizer would like an invitee to send a response to the event."
+            },
+            "categories": {
+              "type": "array",
+              "description": "The categories associated with the item"
+            }
+          },
+          "additionalProperties": true
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "update-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}",
+    "method": "PATCH",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "delete-calendar-event",
+    "description": "Removes the specified event from the containing calendar.  If the event is a meeting, deleting the event on the organizer's calendar sends a cancellation message to the meeting attendees.\n\n\ud83d\udca1 TIP: Deleting a seriesMaster deletes ALL occurrences of the recurring event. To cancel a single occurrence, delete that specific instance ID from get-calendar-view.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "If-Match": {
+          "type": "string",
+          "description": "ETag"
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "delete-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}",
+    "method": "DELETE",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [],
+    "headerParams": [
+      "If-Match"
+    ],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "accept-calendar-event",
+    "description": "Accept the specified event in a user calendar.\n\n\ud83d\udca1 TIP: Accepts a meeting invitation. Optional body: { sendResponse: true, comment: 'I will attend.' }. Set sendResponse to false to accept silently without notifying the organizer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sendResponse": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": true
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "accept-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}/accept",
+    "method": "POST",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "decline-calendar-event",
+    "description": "Decline invitation to the specified event in a user calendar. If the event allows proposals for new times, on declining the event, an invitee can choose to suggest an alternative time by including the proposedNewTime parameter. For more information on how to propose a time, and how to receive and accept a new time proposal, see Propose new meeting times.\n\n\ud83d\udca1 TIP: Declines a meeting invitation. Optional body: { sendResponse: true, comment: 'Cannot attend, conflict.' }. The event remains in the calendar as declined unless the user deletes it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sendResponse": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "proposedNewTime": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "decline-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}/decline",
+    "method": "POST",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "tentatively-accept-calendar-event",
+    "description": "Tentatively accept the specified event in a user calendar. If the event allows proposals for new times, on responding tentative to the event, an invitee can choose to suggest an alternative time by including the proposedNewTime parameter. For more information on how to propose a time, and how to receive and accept a new time proposal, see Propose new meeting times.\n\n\ud83d\udca1 TIP: Tentatively accepts a meeting invitation. Optional body: { sendResponse: true, comment: 'I might be able to attend.' }. Use proposedNewTime to suggest an alternative: { proposedNewTime: { start: { dateTime, timeZone }, end: { dateTime, timeZone } } }.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sendResponse": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "proposedNewTime": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "eventId": {
+          "type": "string",
+          "description": "Value for the 'eventId' path segment. Pass it under the name 'eventId', not as 'id'. Use the 'id' field of the event object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "eventId"
+      ]
+    },
+    "annotations": {
+      "title": "tentatively-accept-calendar-event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/events/{event-id}/tentativelyAccept",
+    "method": "POST",
+    "pathParams": [
+      "event-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-joined-teams",
+    "description": "Get the teams in Microsoft Teams that the user is a direct member of.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-joined-teams",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/joinedTeams",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-mail-folders",
+    "description": "Get the mail folder collection directly under the root folder of the signed-in user. The returned collection includes any mail search folders directly under the root. By default, this operation doesn't return hidden folders. Use a query parameter includeHiddenFolders to include them in the response. This operation doesn't return all mail folders in a mailbox, only the child folders of the root folder. To return all mail folders in a mailbox, each child folder must be traversed separately.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeHiddenFolders": {
+          "type": "string",
+          "description": "Include Hidden Folders"
+        },
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-mail-folders",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/mailFolders",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "includeHiddenFolders",
+      "top",
+      "skip",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-mail-folder-messages",
+    "description": "Get all the messages in the specified user's mailbox, or those messages in a specified folder in the mailbox.\n\n\ud83d\udca1 TIP: List read search Outlook emails within a specific mail folder. CRITICAL: When searching emails, the $search parameter value MUST be wrapped in double quotes. Format: $search=\"your search query here\". Use KQL (Keyword Query Language) syntax to search specific properties: 'from:', 'subject:', 'body:', 'to:', 'cc:', 'bcc:', 'attachment:', 'hasAttachments:', 'importance:', 'received:', 'sent:'. Examples: $search=\"from:john@example.com\" | $search=\"subject:meeting AND hasAttachments:true\" | $search=\"body:urgent AND received>=2024-01-01\" | $search=\"from:alice AND importance:high\". Remember: ALWAYS wrap the entire search expression in double quotes! Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter IMPORTANT: Always use $select to limit returned fields and reduce response size. Recommended default: $select=id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments. Use bodyPreview instead of body for listings. To read the full email body, use get-mail-message with the specific message id. Automatically expands attachments metadata (id, name, contentType, size, isInline) unless $expand is overridden.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "search": {
+          "type": "string",
+          "description": "Search query string (Graph $search)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "mailFolderId": {
+          "type": "string",
+          "description": "Value for the 'mailFolderId' path segment. Pass it under the name 'mailFolderId', not as 'id'. Use the 'id' field of the mail folder object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "mailFolderId"
+      ]
+    },
+    "annotations": {
+      "title": "list-mail-folder-messages",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/mailFolders/{mailFolder-id}/messages",
+    "method": "GET",
+    "pathParams": [
+      "mailFolder-id"
+    ],
+    "queryParams": [
+      "top",
+      "skip",
+      "search",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-mail-messages",
+    "description": "List, search, and filter Outlook email messages in the signed-in user's mailbox across all folders. Returns message metadata (subject, from, receivedDateTime, isRead, hasAttachments) plus a body preview. Use $search for keyword queries, $filter to narrow by sender/read state/date, $top to limit page size, and $select to trim fields.\n\n\ud83d\udca1 TIP: List read search my Outlook emails across folders. CRITICAL: When searching emails, the $search parameter value MUST be wrapped in double quotes. Format: $search=\"your search query here\". Use KQL (Keyword Query Language) syntax to search specific properties: 'from:', 'subject:', 'body:', 'to:', 'cc:', 'bcc:', 'attachment:', 'hasAttachments:', 'importance:', 'received:', 'sent:'. Examples: $search=\"from:john@example.com\" | $search=\"subject:meeting AND hasAttachments:true\" | $search=\"body:urgent AND received>=2024-01-01\" | $search=\"from:john AND importance:high\". Remember: ALWAYS wrap the entire search expression in double quotes! Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter IMPORTANT: Always use $select to limit returned fields and reduce response size. Recommended default: $select=id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments. Use bodyPreview instead of body for listings. To read the full email body, use get-mail-message with the specific message id. Automatically expands attachments metadata (id, name, contentType, size, isInline) unless $expand is overridden.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeHiddenMessages": {
+          "type": "string",
+          "description": "Include Hidden Messages"
+        },
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "search": {
+          "type": "string",
+          "description": "Search query string (Graph $search)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-mail-messages",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "includeHiddenMessages",
+      "top",
+      "skip",
+      "search",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "create-draft-email",
+    "description": "Create a draft Outlook email message in the signed-in user's Drafts folder. Set subject, body, toRecipients, ccRecipients, and importance. The draft is saved, not sent \u2014 use send-mail to send a message directly, or send the draft afterwards.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "createdDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "lastModifiedDateTime": {
+              "type": "string",
+              "description": "The Timestamp type represents date and time information using ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2014 is 2014-01-01T00:00:00Z"
+            },
+            "body": {
+              "type": "object"
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The subject of the message."
+            },
+            "attachments": {
+              "type": "array",
+              "description": "The fileAttachment and itemAttachment attachments for the message."
+            },
+            "singleValueExtendedProperties": {
+              "type": "array",
+              "description": "The collection of single-value extended properties defined for the message. Nullable."
+            },
+            "multiValueExtendedProperties": {
+              "type": "array",
+              "description": "The collection of multi-value extended properties defined for the message. Nullable."
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "from": {
+              "type": "object"
+            },
+            "toRecipients": {
+              "type": "array",
+              "description": "The To: recipients for the message."
+            },
+            "categories": {
+              "type": "array",
+              "description": "The categories associated with the item"
+            },
+            "bccRecipients": {
+              "type": "array",
+              "description": "The Bcc: recipients for the message."
+            },
+            "bodyPreview": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The first 255 characters of the message body. It is in text format."
+            },
+            "ccRecipients": {
+              "type": "array",
+              "description": "The Cc: recipients for the message."
+            },
+            "conversationId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The ID of the conversation the email belongs to."
+            },
+            "conversationIndex": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Indicates the position of the message within the conversation."
+            },
+            "flag": {
+              "type": "object"
+            },
+            "hasAttachments": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Indicates whether the message has attachments. This property doesn't include inline attachments, so if a message contains only inline attachments, this property is false. To verify the existence of inline attachments, parse the body property to look for a src attribute, such as <IMG src='cid:image001.jpg@01D26CD8.6C05F070'>."
+            },
+            "inferenceClassification": {
+              "type": "string",
+              "enum": [
+                "focused",
+                "other"
+              ]
+            },
+            "internetMessageId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The message ID in the format specified by RFC2822."
+            },
+            "isDeliveryReceiptRequested": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Indicates whether a read receipt is requested for the message."
+            },
+            "isDraft": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Indicates whether the message is a draft. A message is a draft if it hasn't been sent yet."
+            }
+          },
+          "additionalProperties": true
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body"
+      ]
+    },
+    "annotations": {
+      "title": "create-draft-email",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages",
+    "method": "POST",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-mail-message",
+    "description": "Get a single Outlook email message by its message ID, including full subject, sender, recipients, body, and attachment flags. Use list-mail-messages first to obtain the message ID. Automatically expands attachments metadata (id, name, contentType, size, isInline) unless $expand is overridden.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        },
+        "preferPlainText": {
+          "type": "boolean",
+          "description": "Request plain-text message bodies via Prefer: outlook.body-content-type=\"text\" (default true). Set false to receive HTML bodies."
+        },
+        "expandExtendedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of singleValueExtendedProperties IDs (e.g., \"String {guid} Name propName\") to expand via $expand=singleValueExtendedProperties($filter=id eq '...')."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "get-mail-message",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}",
+    "method": "GET",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-mail-attachments",
+    "description": "Retrieve a list of attachment objects.\n\n\ud83d\udca1 TIP: Lists attachments on a message: id, name, contentType, size, isInline. To download an attachment into your workspace, call get-mail-attachment-content (with messageId and attachmentId) or get-download-url (with target=/me/messages/{message-id}/attachments/{attachment-id}/$value), then pass the returned downloadUrl to download_url.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "count": {
+          "type": "boolean",
+          "description": "Set true to include total item count (@odata.count) and enable ConsistencyLevel: eventual."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "list-mail-attachments",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/attachments",
+    "method": "GET",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [
+      "top",
+      "skip",
+      "filter",
+      "count",
+      "orderby",
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-mail-attachment-content",
+    "description": "Mint a short-lived, single-use downloadUrl for an Outlook email attachment in the signed-in user's mailbox, by message ID and attachment ID. Pass the returned downloadUrl to download_url to save the file into your workspace.\n\n\ud83d\udca1 TIP: Find the attachment id with list-mail-attachments first, then call get-mail-attachment-content and pass the returned downloadUrl to download_url to save the attachment into your workspace.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "attachmentId": {
+          "type": "string",
+          "description": "Value for the 'attachmentId' path segment. Pass it under the name 'attachmentId', not as 'id'. Use the 'id' field of the attachment object as returned by Microsoft Graph."
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Optional fallback filename for the downloaded attachment when Graph metadata does not include a name."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId",
+        "attachmentId"
+      ]
+    },
+    "annotations": {
+      "title": "get-mail-attachment-content",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/attachments/{attachment-id}/$value",
+    "method": "GET",
+    "pathParams": [
+      "message-id",
+      "attachment-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": true
+  },
+  {
+    "name": "create-forward-draft",
+    "description": "Create a forward draft.\n\n\ud83d\udca1 TIP: Create a forward draft (does not send). Useful when user wants to review before sending.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            },
+            "toRecipients": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "create-forward-draft",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/createForward",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "create-reply-draft",
+    "description": "Create a draft reply to the sender of an Outlook email message in the signed-in user's mailbox. Pass an optional JSON body with comment (reply text prepended above quoted history) or message (draft message property overrides). Specifying both comment and message.body returns an HTTP 400 Bad Request error; supplying message.body replaces the entire draft body without quoted history.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "create-reply-draft",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/createReply",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "create-reply-all-draft",
+    "description": "Create a draft reply-all to the sender and all recipients of an Outlook email message in the signed-in user's mailbox. Pass an optional JSON body with comment (reply text prepended above quoted history) or message (draft message property overrides). Specifying both comment and message.body returns an HTTP 400 Bad Request error; supplying message.body replaces the entire draft body without quoted history.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "create-reply-all-draft",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/createReplyAll",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "forward-mail-message",
+    "description": "Forward an Outlook email message to recipients, preserving full HTML formatting and attachments. Pass body with toRecipients (required array of recipient objects) and optional comment (text added above the forwarded message) or message.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            },
+            "toRecipients": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "forward-mail-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/forward",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "move-mail-message",
+    "description": "Move a message to another folder within the specified user's mailbox. This creates a new copy of the message in the destination folder and removes the original message.\n\n\ud83d\udca1 TIP: destinationId accepts folder ID or well-known name (inbox, drafts, sentitems, deleteditems, junkemail, archive).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "destinationId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "move-mail-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/move",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "reply-mail-message",
+    "description": "Reply to the sender of an Outlook email message, preserving HTML formatting and quoted history, and save the sent reply in Sent Items. Pass body with comment (your reply text) or message. Specifying both comment and message.body returns an HTTP 400 Bad Request error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "reply-mail-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/reply",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "reply-all-mail-message",
+    "description": "Reply to the sender and all recipients of an Outlook email message, preserving HTML formatting and quoted history, and save the sent reply in Sent Items. Pass body with comment (your reply text) or message. Specifying both comment and message.body returns an HTTP 400 Bad Request error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "reply-all-mail-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/replyAll",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "send-draft-message",
+    "description": "Send an existing draft message. The draft message can be a new message draft, reply draft, reply-all draft, or a forward draft. This method saves the message in the Sent Items folder. Alternatively, send a new message in a single operation.\n\n\ud83d\udca1 TIP: No request body needed \u2014 just call with the message ID. Draft must exist in Drafts folder.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "Value for the 'messageId' path segment. Pass it under the name 'messageId', not as 'id'. Use the 'id' field of the message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "messageId"
+      ]
+    },
+    "annotations": {
+      "title": "send-draft-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/messages/{message-id}/send",
+    "method": "POST",
+    "pathParams": [
+      "message-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "send-mail",
+    "description": "Send an Outlook email message specified in the JSON request body ({ message: { subject, body: { contentType, content }, toRecipients, ccRecipients, bccRecipients, attachments }, saveToSentItems }). Saves the message in Sent Items by default.\n\n\ud83d\udca1 TIP: Do not guess recipient email addresses; use list-outlook-contacts to find recipient email addresses when needed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "saveToSentItems": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "object",
+              "description": "The message to send, including subject, body (contentType and content), and toRecipients."
+            }
+          },
+          "additionalProperties": true
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body"
+      ]
+    },
+    "annotations": {
+      "title": "send-mail",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/sendMail",
+    "method": "POST",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-todo-task-lists",
+    "description": "Get a list of the signed-in user's Microsoft To Do task lists (todoTaskList objects) and their properties.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "list-todo-task-lists",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/todo/lists",
+    "method": "GET",
+    "pathParams": [],
+    "queryParams": [
+      "top",
+      "skip",
+      "filter",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-todo-tasks",
+    "description": "Get the todoTask resources from the tasks navigation property of a specified todoTaskList.\n\n\ud83d\udca1 TIP: Lists tasks in a To Do list. Requires todoTaskList-id \u2014 use list-todo-task-lists to find it. Use $filter=status eq 'notStarted' or $filter=status eq 'completed' to filter by status. Use $top to limit results. Status values: 'notStarted', 'inProgress', 'completed', 'waitingOnOthers', 'deferred'. $orderby works on createdDateTime, lastModifiedDateTime, importance, status and reminderDateTime/dateTime, not on title or isReminderOn. A $filter on isReminderOn can also return 400; filter it client-side.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "skip": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip for pagination (Graph $skip)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "orderby": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "OData $orderby sort expression (e.g., receivedDateTime desc)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "todoTaskListId": {
+          "type": "string",
+          "description": "Value for the 'todoTaskListId' path segment. Pass it under the name 'todoTaskListId', not as 'id'. Use the 'id' field of the todo task list object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "todoTaskListId"
+      ]
+    },
+    "annotations": {
+      "title": "list-todo-tasks",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/todo/lists/{todoTaskList-id}/tasks",
+    "method": "GET",
+    "pathParams": [
+      "todoTaskList-id"
+    ],
+    "queryParams": [
+      "top",
+      "skip",
+      "filter",
+      "orderby",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "create-todo-task",
+    "description": "Create a new task in a specified Microsoft To Do task list (requires todoTaskListId from list-todo-task-lists). Body accepts title, body (notes), dueDateTime, reminderDateTime, importance, recurrence, categories, and inline checklistItems: [{ displayName: \"...\", isChecked: false }].",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "object"
+            },
+            "bodyLastModifiedDateTime": {
+              "type": "string",
+              "description": "The date and time when the task body was last modified. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "categories": {
+              "type": "array",
+              "description": "The categories associated with the task. Each category corresponds to the displayName property of an outlookCategory that the user has defined."
+            },
+            "completedDateTime": {
+              "type": "object"
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "The date and time when the task was created. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "dueDateTime": {
+              "type": "object"
+            },
+            "hasAttachments": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Indicates whether the task has attachments."
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "isReminderOn": {
+              "type": "boolean",
+              "description": "Set to true if an alert is set to remind the user of the task."
+            },
+            "lastModifiedDateTime": {
+              "type": "string",
+              "description": "The date and time when the task was last modified. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "recurrence": {
+              "type": "object"
+            },
+            "reminderDateTime": {
+              "type": "object"
+            },
+            "startDateTime": {
+              "type": "object"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "notStarted",
+                "inProgress",
+                "completed",
+                "waitingOnOthers",
+                "deferred"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A brief description of the task."
+            },
+            "attachments": {
+              "type": "array",
+              "description": "A collection of file attachments for the task."
+            },
+            "attachmentSessions": {
+              "type": "array"
+            },
+            "checklistItems": {
+              "type": "array",
+              "description": "A collection of checklistItems linked to a task."
+            },
+            "extensions": {
+              "type": "array",
+              "description": "The collection of open extensions defined for the task. Nullable."
+            },
+            "linkedResources": {
+              "type": "array",
+              "description": "A collection of resources linked to the task."
+            }
+          },
+          "additionalProperties": true
+        },
+        "todoTaskListId": {
+          "type": "string",
+          "description": "Value for the 'todoTaskListId' path segment. Pass it under the name 'todoTaskListId', not as 'id'. Use the 'id' field of the todo task list object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "todoTaskListId"
+      ]
+    },
+    "annotations": {
+      "title": "create-todo-task",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/todo/lists/{todoTaskList-id}/tasks",
+    "method": "POST",
+    "pathParams": [
+      "todoTaskList-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "update-todo-task",
+    "description": "Update the properties of a Microsoft To Do task (such as status: \"completed\" or \"notStarted\", title, body, dueDateTime, reminderDateTime, or importance). Requires todoTaskListId from list-todo-task-lists and todoTaskId from list-todo-tasks. Note: Graph rejects checklistItems in a task PATCH.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "object"
+            },
+            "bodyLastModifiedDateTime": {
+              "type": "string",
+              "description": "The date and time when the task body was last modified. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "categories": {
+              "type": "array",
+              "description": "The categories associated with the task. Each category corresponds to the displayName property of an outlookCategory that the user has defined."
+            },
+            "completedDateTime": {
+              "type": "object"
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "The date and time when the task was created. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "dueDateTime": {
+              "type": "object"
+            },
+            "hasAttachments": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Indicates whether the task has attachments."
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high"
+              ]
+            },
+            "isReminderOn": {
+              "type": "boolean",
+              "description": "Set to true if an alert is set to remind the user of the task."
+            },
+            "lastModifiedDateTime": {
+              "type": "string",
+              "description": "The date and time when the task was last modified. By default, it is in UTC. You can provide a custom time zone in the request header. The property value uses ISO 8601 format and is always in UTC time. For example, midnight UTC on Jan 1, 2020 would look like this: '2020-01-01T00:00:00Z'."
+            },
+            "recurrence": {
+              "type": "object"
+            },
+            "reminderDateTime": {
+              "type": "object"
+            },
+            "startDateTime": {
+              "type": "object"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "notStarted",
+                "inProgress",
+                "completed",
+                "waitingOnOthers",
+                "deferred"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A brief description of the task."
+            },
+            "extensions": {
+              "type": "array",
+              "description": "The collection of open extensions defined for the task. Nullable."
+            }
+          },
+          "additionalProperties": true
+        },
+        "todoTaskListId": {
+          "type": "string",
+          "description": "Value for the 'todoTaskListId' path segment. Pass it under the name 'todoTaskListId', not as 'id'. Use the 'id' field of the todo task list object as returned by Microsoft Graph."
+        },
+        "todoTaskId": {
+          "type": "string",
+          "description": "Value for the 'todoTaskId' path segment. Pass it under the name 'todoTaskId', not as 'id'. Use the 'id' field of the todo task object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "todoTaskListId",
+        "todoTaskId"
+      ]
+    },
+    "annotations": {
+      "title": "update-todo-task",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/me/todo/lists/{todoTaskList-id}/tasks/{todoTask-id}",
+    "method": "PATCH",
+    "pathParams": [
+      "todoTaskList-id",
+      "todoTask-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "search-query",
+    "description": "Runs the query specified in the request body. Search results are provided in the response.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": true
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body"
+      ]
+    },
+    "annotations": {
+      "title": "search-query",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/search/query",
+    "method": "POST",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-team",
+    "description": "Retrieve the properties and relationships of the specified team.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId"
+      ]
+    },
+    "annotations": {
+      "title": "get-team",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}",
+    "method": "GET",
+    "pathParams": [
+      "team-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-team-channels",
+    "description": "Retrieve the list of channels in this team.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId"
+      ]
+    },
+    "annotations": {
+      "title": "list-team-channels",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels",
+    "method": "GET",
+    "pathParams": [
+      "team-id"
+    ],
+    "queryParams": [
+      "filter",
+      "select"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-team-channel",
+    "description": "Retrieve the properties and relationships of a channel. This method supports federation. Only a user who is a member of the shared channel can retrieve channel information.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId",
+        "channelId"
+      ]
+    },
+    "annotations": {
+      "title": "get-team-channel",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}",
+    "method": "GET",
+    "pathParams": [
+      "team-id",
+      "channel-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-channel-messages",
+    "description": "Retrieve the list of messages (without the replies) in a channel of a team.  To get the replies for a message, call the list message replies or the get message reply API.  This method supports federation. To list channel messages in application context, the request must be made from the tenant that the channel owner belongs to (represented by the tenantId property on the channel).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId",
+        "channelId"
+      ]
+    },
+    "annotations": {
+      "title": "list-channel-messages",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}/messages",
+    "method": "GET",
+    "pathParams": [
+      "team-id",
+      "channel-id"
+    ],
+    "queryParams": [
+      "top",
+      "expand",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "send-channel-message",
+    "description": "Send a new chatMessage in the specified channel.\n\n\ud83d\udca1 TIP: To @mention someone, put <at user-id=\"<aad-user-id>\">Display Name</at> in the html content; the server numbers the tag and builds the mentions array. Use the userId field (not id) from list-team-members or list-chat-members. Use contentType 'html' in the body \u2014 plain text contentType gets mangled by Graph API. Alternatively, hand-build the raw form: put an <at id=\"0\">Name</at> tag in the html content and add a mentions array to the request body, as a sibling of the body property (not a separate top-level tool parameter): { body: { contentType: 'html', content: 'Hi <at id=\"0\">Name</at>' }, mentions: [{ id: 0, mentionText: 'Name', mentioned: { user: { id: '<aad-user-id>', displayName: 'Name', userIdentityType: 'aadUser' } } }] }. Each mention id must match its <at id> value; include userIdentityType: 'aadUser' or Graph returns 400 'value without a type name'.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "type": "array",
+              "description": "References to attached objects like files, tabs, meetings etc."
+            },
+            "body": {
+              "type": "object"
+            },
+            "channelIdentity": {
+              "type": "object"
+            },
+            "chatId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "If the message was sent in a chat, represents the identity of the chat."
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "Timestamp of when the chat message was created."
+            },
+            "eventDetail": {
+              "type": "object"
+            },
+            "from": {
+              "type": "object"
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "high",
+                "urgent",
+                "unknownFutureValue"
+              ],
+              "description": "The importance of the chat message: normal, high, or urgent."
+            },
+            "locale": {
+              "type": "string",
+              "description": "Locale of the chat message set by the client. Always set to en-us."
+            },
+            "mentions": {
+              "type": "array",
+              "description": "List of entities mentioned in the chat message. Supported entities are: user, bot, team, channel, chat, and tag."
+            },
+            "messageHistory": {
+              "type": "array",
+              "description": "List of activity history of a message item, including modification time and actions, such as reactionAdded, reactionRemoved, or reaction changes, on the message."
+            },
+            "messageType": {
+              "type": "string",
+              "enum": [
+                "message",
+                "chatEvent",
+                "typing",
+                "unknownFutureValue",
+                "systemEventMessage"
+              ],
+              "description": "The type of chat message. Default is message."
+            },
+            "policyViolation": {
+              "type": "object"
+            },
+            "reactions": {
+              "type": "array",
+              "description": "Reactions for this chat message (for example, Like)."
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The subject of the chat message, in plaintext."
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Summary text of the chat message that could be used for push notifications and summary views or fall back views. Only applies to channel chat messages, not chat messages in a chat."
+            },
+            "hostedContents": {
+              "type": "array",
+              "description": "Content in a message hosted by Microsoft Teams - for example, images or code snippets."
+            },
+            "replies": {
+              "type": "array",
+              "description": "Replies for a specified message. Supports $expand for channel messages."
+            }
+          },
+          "additionalProperties": true
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "teamId",
+        "channelId"
+      ]
+    },
+    "annotations": {
+      "title": "send-channel-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}/messages",
+    "method": "POST",
+    "pathParams": [
+      "team-id",
+      "channel-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-channel-message",
+    "description": "Retrieve a single message or a message reply in a channel or a chat.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Comma-separated list of properties to return (Graph $select)."
+        },
+        "expand": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Navigation properties to expand inline (Graph $expand)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "chatMessageId": {
+          "type": "string",
+          "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId",
+        "channelId",
+        "chatMessageId"
+      ]
+    },
+    "annotations": {
+      "title": "get-channel-message",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}/messages/{chatMessage-id}",
+    "method": "GET",
+    "pathParams": [
+      "team-id",
+      "channel-id",
+      "chatMessage-id"
+    ],
+    "queryParams": [
+      "select",
+      "expand"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-channel-message-replies",
+    "description": "List all the replies to a message in a channel of a team. This method lists only the replies of the specified message, if any. To get the message itself, call get channel message.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "chatMessageId": {
+          "type": "string",
+          "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "skiptoken": {
+          "type": "string",
+          "description": "Pagination token or @odata.nextLink URL from a previous response."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId",
+        "channelId",
+        "chatMessageId"
+      ]
+    },
+    "annotations": {
+      "title": "list-channel-message-replies",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}/messages/{chatMessage-id}/replies",
+    "method": "GET",
+    "pathParams": [
+      "team-id",
+      "channel-id",
+      "chatMessage-id"
+    ],
+    "queryParams": [
+      "top",
+      "skiptoken"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "reply-to-channel-message",
+    "description": "Create a new reply to a chatMessage in a specified channel.\n\n\ud83d\udca1 TIP: To @mention someone, put <at user-id=\"<aad-user-id>\">Display Name</at> in the html content; the server numbers the tag and builds the mentions array. Use the userId field (not id) from list-team-members or list-chat-members. Use contentType 'html' in the body \u2014 plain text contentType gets mangled by Graph API. Alternatively, hand-build the raw form: put an <at id=\"0\">Name</at> tag in the html content and add a mentions array to the request body, as a sibling of the body property (not a separate top-level tool parameter): { body: { contentType: 'html', content: 'Hi <at id=\"0\">Name</at>' }, mentions: [{ id: 0, mentionText: 'Name', mentioned: { user: { id: '<aad-user-id>', displayName: 'Name', userIdentityType: 'aadUser' } } }] }. Each mention id must match its <at id> value; include userIdentityType: 'aadUser' or Graph returns 400 'value without a type name'.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "type": "array",
+              "description": "References to attached objects like files, tabs, meetings etc."
+            },
+            "body": {
+              "type": "object"
+            },
+            "channelIdentity": {
+              "type": "object"
+            },
+            "chatId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "If the message was sent in a chat, represents the identity of the chat."
+            },
+            "createdDateTime": {
+              "type": "string",
+              "description": "Timestamp of when the chat message was created."
+            },
+            "eventDetail": {
+              "type": "object"
+            },
+            "from": {
+              "type": "object"
+            },
+            "importance": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "high",
+                "urgent",
+                "unknownFutureValue"
+              ],
+              "description": "The importance of the chat message: normal, high, or urgent."
+            },
+            "locale": {
+              "type": "string",
+              "description": "Locale of the chat message set by the client. Always set to en-us."
+            },
+            "mentions": {
+              "type": "array",
+              "description": "List of entities mentioned in the chat message. Supported entities are: user, bot, team, channel, chat, and tag."
+            },
+            "messageHistory": {
+              "type": "array",
+              "description": "List of activity history of a message item, including modification time and actions, such as reactionAdded, reactionRemoved, or reaction changes, on the message."
+            },
+            "messageType": {
+              "type": "string",
+              "enum": [
+                "message",
+                "chatEvent",
+                "typing",
+                "unknownFutureValue",
+                "systemEventMessage"
+              ],
+              "description": "The type of chat message. Default is message."
+            },
+            "policyViolation": {
+              "type": "object"
+            },
+            "reactions": {
+              "type": "array",
+              "description": "Reactions for this chat message (for example, Like)."
+            },
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The subject of the chat message, in plaintext."
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Summary text of the chat message that could be used for push notifications and summary views or fall back views. Only applies to channel chat messages, not chat messages in a chat."
+            },
+            "hostedContents": {
+              "type": "array",
+              "description": "Content in a message hosted by Microsoft Teams - for example, images or code snippets."
+            },
+            "replies": {
+              "type": "array",
+              "description": "Replies for a specified message. Supports $expand for channel messages."
+            }
+          },
+          "additionalProperties": true
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "channelId": {
+          "type": "string",
+          "description": "Value for the 'channelId' path segment. Pass it under the name 'channelId', not as 'id'. Use the 'id' field of the channel object as returned by Microsoft Graph."
+        },
+        "chatMessageId": {
+          "type": "string",
+          "description": "Value for the 'chatMessageId' path segment. Pass it under the name 'chatMessageId', not as 'id'. Use the 'id' field of the chat message object as returned by Microsoft Graph."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "body",
+        "teamId",
+        "channelId",
+        "chatMessageId"
+      ]
+    },
+    "annotations": {
+      "title": "reply-to-channel-message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/channels/{channel-id}/messages/{chatMessage-id}/replies",
+    "method": "POST",
+    "pathParams": [
+      "team-id",
+      "channel-id",
+      "chatMessage-id"
+    ],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [
+      "body"
+    ],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "list-team-members",
+    "description": "Get the conversationMember collection of a team. The membership IDs returned by the server must be treated as opaque strings. The client shouldn't try to parse or make assumptions about these resource IDs. In the future, membership results can include users from various tenants, as indicated in the response. Clients should avoid assuming that all members exclusively belong to the current tenant.\n\n\ud83d\udca1 TIP: Lists members of a team. Each member has displayName, email, roles and userId. Pass name to keep only members whose displayName or email contains that text (case-insensitive); use the returned userId in an @mention.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of items to return per page (Graph $top)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "OData $filter expression."
+        },
+        "teamId": {
+          "type": "string",
+          "description": "Value for the 'teamId' path segment. Pass it under the name 'teamId', not as 'id'. Use the 'id' field of the team object as returned by Microsoft Graph."
+        },
+        "fetchAllPages": {
+          "type": "boolean",
+          "description": "Follow @odata.nextLink across pages (up to 100 pages, 5,000 items, or 20 MiB total) and merge results into one response."
+        },
+        "name": {
+          "type": "string",
+          "description": "Case-insensitive substring filter matched client-side against each member's displayName and email."
+        },
+        "includeHeaders": {
+          "type": "boolean",
+          "description": "Include response headers (including ETag) in the response metadata"
+        },
+        "excludeResponse": {
+          "type": "boolean",
+          "description": "Exclude the full response body and only return success or failure indication"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "teamId"
+      ]
+    },
+    "annotations": {
+      "title": "list-team-members",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "pathPattern": "/teams/{team-id}/members",
+    "method": "GET",
+    "pathParams": [
+      "team-id"
+    ],
+    "queryParams": [
+      "top",
+      "filter"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "parse-teams-url",
+    "description": "Converts any Teams meeting URL format (short /meet/, full /meetup-join/, or recap ?threadId=) into a standard joinWebUrl and extracts meeting identifiers. Match the returned joinWebUrl against onlineMeeting/joinUrl in get-calendar-view results, or use threadId with get-chat / list-chat-messages.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Teams meeting URL in any format"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "url"
+      ]
+    },
+    "annotations": {
+      "title": "parse-teams-url",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "pathPattern": "",
+    "method": "",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "read-mail-text",
+    "description": "Read email messages as clean plain text with unwrapped tracking/SafeLinks URLs, stripped reply quotes, and expanded attachment metadata (id, name, contentType, size, isInline). Provide either messageIds (up to 20 message IDs) or folderId (e.g. 'inbox'). Each message body is truncated at maxChars runes (default 3000) within a 300,000-rune aggregate budget across the call (marking truncated: true and fullLength).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "messageIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "description": "Ids of the messages to read (max 20). Give messageIds or folderId, not both."
+        },
+        "folderId": {
+          "type": "string",
+          "description": "Folder to read from: a well-known name (inbox, sentitems, drafts, archive, deleteditems, junkemail) or a folder id."
+        },
+        "top": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "With folderId: how many messages, newest first (default and max 20)."
+        },
+        "filter": {
+          "type": "string",
+          "description": "With folderId: OData $filter, e.g. receivedDateTime ge 2026-10-01T00:00:00Z or from/emailAddress/address eq 'a@example.com'."
+        },
+        "search": {
+          "type": "string",
+          "description": "With folderId: KQL search, e.g. from:paul subject:\"quarterly report\" (quoting is normalised as for list-mail-messages). Graph cannot combine it with filter."
+        },
+        "maxChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000,
+          "description": "Maximum characters (UTF-8 runes) of body text to return per message (default 3000, subject to a 300,000-rune aggregate budget across the call)."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "title": "read-mail-text",
+      "readOnlyHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "",
+    "method": "",
+    "pathParams": [],
+    "queryParams": [
+      "top",
+      "filter",
+      "search"
+    ],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  },
+  {
+    "name": "get-download-url",
+    "description": "Mint a short-lived, single-use host-side download URL (/attachment?t=...) for Microsoft Graph binary content (such as /drives/{drive-id}/items/{driveItem-id}/content or /me/messages/{message-id}/attachments/{attachment-id}/$value). Pass the returned downloadUrl to download_url to save the file into your workspace. Returns { downloadUrl, expiresAt, singleUse, name?, size?, contentType? }.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Relative Microsoft Graph path starting with \"/\", such as /drives/{drive-id}/items/{driveItem-id}/content, /me/drive/items/{driveItem-id}/content, /sites/{site-id}/drive/items/{driveItem-id}, or /me/messages/{message-id}/attachments/{attachment-id}/$value. A trailing /content is optional for drive items."
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "target"
+      ]
+    },
+    "annotations": {
+      "title": "get-download-url",
+      "readOnlyHint": true,
+      "openWorldHint": true
+    },
+    "pathPattern": "",
+    "method": "",
+    "pathParams": [],
+    "queryParams": [],
+    "headerParams": [],
+    "bodyParams": [],
+    "contentType": "",
+    "supportsTimezone": false,
+    "returnDownloadUrl": false
+  }
+]

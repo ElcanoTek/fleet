@@ -337,6 +337,13 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `EMAIL_LAST_CHECK_FILE` | path | — | broker | Email MCP: state file of the last mailbox check. |
 | `SENDGRID_API_KEY` | string | — | broker | SendGrid key for outbound email. **Secret.** |
 | `SENDGRID_FROM_EMAIL` | string | — | broker | Sender address for outbound email. |
+| `MS365_MCP_CLIENT_ID` | string | — | server | Microsoft Entra application (client) ID for the built-in Microsoft 365 OAuth and Graph MCP surface; unset keeps the surface disabled. |
+| `MS365_MCP_TENANT_ID` | string | `common` | server | Microsoft Entra tenant ID for the built-in Microsoft 365 OAuth proxy. |
+| `MS365_MCP_CLIENT_SECRET` | string | — | server | Optional Microsoft Entra client secret for confidential-client token exchanges; empty uses public-client PKCE. **Secret.** |
+| `MS365_MCP_PUBLIC_URL` | url | (the public origin) | server | Public base URL advertised in Microsoft 365 OAuth/MCP discovery metadata and attachment download links, when it must differ from the public origin. |
+| `MS365_MCP_ALIASES` | csv | — | server | Comma-separated legacy base URLs whose Microsoft 365 OAuth/MCP requests are also routed in-process and admitted as callback origins. |
+| `MS365_MCP_ALLOWED_REDIRECT_URIS` | csv | (<public_url>/api/oauth/mcp/callback and each alias callback) | server | Additional comma-separated redirect URIs permitted by the Microsoft 365 /authorize endpoint. |
+| `MS365_MCP_ATTACHMENT_URL_TTL_S` | int | `300` | server | Lifetime in seconds of single-use attachment download tickets minted by Microsoft 365 mail and drive tools. *Validated at boot* (1–3600). |
 
 ## Notifications and Web Push
 
