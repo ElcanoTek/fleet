@@ -2121,15 +2121,14 @@ function ConnectionsPageInner() {
   const categories = categoriesOf(thirdParty);
   const activeCategoryFilter =
     dirFilter.mode === "category" ? dirFilter.slug : "";
-  const inlineCategories = showAllCategories
-    ? categories
-    : categories.filter(
-        (cat, idx) =>
-          idx < MAX_INLINE_CATEGORIES || cat.slug === activeCategoryFilter,
-      );
+  const collapsedCategories = categories.filter(
+    (cat, idx) =>
+      idx < MAX_INLINE_CATEGORIES || cat.slug === activeCategoryFilter,
+  );
+  const inlineCategories = showAllCategories ? categories : collapsedCategories;
   const hiddenCategoryCount = Math.max(
     0,
-    categories.length - MAX_INLINE_CATEGORIES,
+    categories.length - collapsedCategories.length,
   );
   const trimmedQuery = catalogQuery.trim();
   const categoryFilteredThirdParty = activeCategoryFilter

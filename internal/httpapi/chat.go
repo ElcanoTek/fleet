@@ -1245,7 +1245,7 @@ func (s *Server) runTurnAsync(
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	var availableOptional []agent.OptionalServerInfo
-	if !turnStager.isPatrolOrPatrolResume() {
+	if inputKind != agent.InputKindChatPatrol {
 		availableOptional = s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 		turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
 	}

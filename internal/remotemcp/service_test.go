@@ -1418,4 +1418,31 @@ func TestOverlayServersForUserIncludesLoginRequiredAndNeedsReauth(t *testing.T) 
 	if byID[connected.ID].NeedsReauth {
 		t.Errorf("connected github NeedsReauth = true, want false")
 	}
+
+	// When a teammate shares a connected seat with the same (name, account) as
+	// the user's own needs_reauth seat, OverlayServersForUser prefers the
+	// usable connected shared seat rather than shadowing it with the expired row.
+	sharedNotion, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: "owner@elcano.com", Name: "notion", URL: as.URL + "/mcp", AuthKind: "oauth", Status: store.RemoteMCPStatusConnected,
+	})
+	if err != nil {
+		t.Fatalf("create shared notion: %v", err)
+	}
+	if err := svc.ShareServer(ctx, "owner@elcano.com", sharedNotion.ID, email); err != nil {
+		t.Fatalf("share notion: %v", err)
+	}
+	allWithShared, err := svc.OverlayServersForUser(ctx, email)
+	if err != nil {
+		t.Fatalf("OverlayServersForUser with shared: %v", err)
+	}
+	byIDShared := map[string]agent.RemoteMCPConn{}
+	for _, c := range allWithShared {
+		byIDShared[c.ID] = c
+	}
+	if _, stillHasExpired := byIDShared[signedOut.ID]; stillHasExpired {
+		t.Errorf("expected expired owned notion seat %s to be replaced by connected shared seat", signedOut.ID)
+	}
+	if got, ok := byIDShared[sharedNotion.ID]; !ok || got.NeedsReauth || got.Owner != "owner@elcano.com" {
+		t.Errorf("shared notion seat = %+v (ok=%v), want connected shared seat from owner@elcano.com", got, ok)
+	}
 }

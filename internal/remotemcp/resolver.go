@@ -78,15 +78,18 @@ func (s *Service) serversForUser(ctx context.Context, email string, includeNeeds
 		return true
 	}
 	out := make([]agent.RemoteMCPConn, 0, len(servers)+len(shared))
-	seats := map[string]bool{} // registration name → taken
+	seatIdx := map[string]int{} // registration name → index in out
 	ownNames := map[string]bool{}
 	for _, srv := range servers {
 		ok, needsReauth := isOverlayStatus(srv.Status, includeNeedsReauth)
 		if !ok || !enabledForMe(srv.ID) {
 			continue
 		}
-		seats[agentcore.RegisteredMCPName(srv.Name, srv.Account)] = true
-		ownNames[srv.Name] = true
+		reg := agentcore.RegisteredMCPName(srv.Name, srv.Account)
+		seatIdx[reg] = len(out)
+		if !needsReauth {
+			ownNames[srv.Name] = true
+		}
 		conn := connFor(srv, "")
 		conn.NeedsReauth = needsReauth
 		out = append(out, conn)
@@ -97,11 +100,21 @@ func (s *Service) serversForUser(ctx context.Context, email string, includeNeeds
 			continue
 		}
 		reg := agentcore.RegisteredMCPName(srv.Name, srv.Account)
-		if seats[reg] {
+		if idx, taken := seatIdx[reg]; taken {
+			if out[idx].NeedsReauth && !needsReauth {
+				conn := connFor(srv, srv.UserEmail)
+				if ownNames[srv.Name] {
+					conn.Default = false
+				} else {
+					conn.Default = out[idx].Default || conn.Default
+				}
+				out[idx] = conn
+				continue
+			}
 			logging.From(ctx).Warn("remotemcp: shared seat shadowed by the user's own seat of the same name; skipping", "reg", reg, "owner", srv.UserEmail, "user", email)
 			continue
 		}
-		seats[reg] = true
+		seatIdx[reg] = len(out)
 		conn := connFor(srv, srv.UserEmail)
 		conn.NeedsReauth = needsReauth
 		// A shared seat never becomes the default under a name the user owns

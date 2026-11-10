@@ -724,7 +724,8 @@ filters with counts) and the **Explore by category** cards let you browse
 connectors by category or view the full directory grouped by category with
 **Show more** / **Show all** pagination. Search by name or keyword to find
 connectors across the directory (or within the selected category); clearing the
-search or clicking **Back to Popular** restores the popular picks. If the
+search restores the currently selected view (**Popular**, **All**, or the
+active category), and clicking **Back to Popular** returns to the popular picks. If the
 connector you want is missing, use **Contact Elcano** below the search to
 request it.
 

@@ -271,13 +271,24 @@ the connector directory by default:
   the catalog's endpoint, operator and setup requirements intact. When a
   workspace omits a pick, the remaining slots use its `featured` entries,
   then its catalog order, up to eight cards in total.
+- **Category browsing & grouped directory** — below the search field, a
+  category filter bar offers **Popular**, **All**, and category pills with icons
+  and connector counts (collapsing categories beyond the first six behind a
+  **+N more** / **Fewer categories** toggle). On the **Popular** view, an
+  **Explore by category** grid below the eight popular cards previews each
+  category with sample connector names and jumps to that category on click. The
+  **All** view renders the directory grouped under category headings with
+  **Show more** / **Show all** pagination (`24` connectors per page) rather than
+  an unpaginated infinite wall.
 - **Search** covers the full catalog by name, description, vendor, category
-  and tags. Clearing it restores the eight picks. Category filter chips and
-  grouped/duplicate featured listings are removed. Cards show only a
-  **Popular** tag on the eight named picks; fallback cards are not badged.
-  The directory explains that connected services can receive conversation
-  content when their tools are used. Operator details and the existing
-  non-official consent step still identify who handles calls.
+  and tags (or filters within the selected category, with an inline **Search all
+  categories** link when more matches exist outside the active category).
+  Clearing the search restores the currently selected view (**Popular**,
+  **All**, or the active category). Cards show a **Popular** tag on the eight
+  named picks and display their category label in the metadata row; fallback
+  cards are not badged. The directory explains that connected services can
+  receive conversation content when their tools are used. Operator details and
+  the existing non-official consent step still identify who handles calls.
 - **Connector requests** — the note below search links **Contact Elcano** to
   `hello@elcanotek.com` with a connector-request subject.
 - **Vet-it links** — every card links the vendor `docs` and, when present, the
