@@ -86,7 +86,7 @@ export function ConnPanel({
 export function ConnPanelHead({ title, children }: { title: ReactNode; children?: ReactNode }) {
   const Heading = useContext(InConnGroup) ? "h4" : "h3";
   return (
-    <div className="flex min-h-[1.8rem] items-center justify-between gap-4">
+    <div className="flex min-h-[1.8rem] flex-wrap items-center justify-between gap-x-4 gap-y-2">
       {/* A panel title names the block a reader is looking for, so it reads
           as a heading in the primary text color, not a faint overline. */}
       <Heading className="m-0 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">

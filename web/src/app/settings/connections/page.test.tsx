@@ -1088,3 +1088,121 @@ describe("ConnectionsPage manual OAuth client with a required secret", () => {
     expect(within(portalGroup).getByText("Browser automation · 1 tool")).toBeInTheDocument();
   });
 });
+
+describe("ConnectionsPage Microsoft 365 Entra app setup & mobile layout", () => {
+  const MS365_ENTRY = {
+    name: "microsoft-365",
+    display_name: "Microsoft 365 (Outlook, Teams & OneDrive)",
+    description: "Built-in Microsoft Graph connector.",
+    url: "https://fleet.elcanotek.com/api/mcp/ms365",
+    vendor: "Microsoft",
+    category: "productivity",
+    provenance: "official",
+    auth: "oauth",
+    featured: true,
+    trust: "third_party",
+  };
+
+  const MS365_SEAT = {
+    id: "ms1",
+    name: "microsoft-365",
+    url: "https://fleet.elcanotek.com/api/mcp/ms365",
+    transport: "http",
+    status: "login_required",
+    auth_kind: "oauth",
+    account: "",
+    is_default: true,
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  it("opens the portalled sheetOnPhone MS365SetupDialog directly from the microsoft-365 row in Your connections", async () => {
+    const catalogWithMS365 = {
+      ...CATALOG,
+      third_party: [MS365_ENTRY],
+      oauth_redirect_uri: "https://fleet.elcanotek.com/api/mcp/oauth/callback",
+      ms365_config: {
+        configured: true,
+        source: "db",
+        client_id: "68dad9d6-e1aa-4195-9bd5-2e94a0e4a073",
+        tenant_id: "5db5070c-2c68-449d-868f-2b0d3407f6d2",
+        authorize_redirect_uri:
+          "https://fleet.elcanotek.com/api/mcp/oauth/callback",
+        can_edit: true,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, catalogWithMS365, {
+        ...EMPTY_LIST,
+        servers: [MS365_SEAT],
+      }),
+    );
+    const { container } = visit("");
+
+    const group = await screen.findByTestId("remote-group-microsoft-365");
+    const rowConfigureBtn = within(group).getByTestId("row-configure-ms365");
+    expect(rowConfigureBtn).toHaveTextContent("Entra app");
+
+    fireEvent.click(rowConfigureBtn);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Set up Microsoft 365",
+    });
+    // Portalled to document.body outside the SetSection container so the
+    // entrance animation stacking context cannot trap it on mobile.
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+    // sheetOnPhone + rail layer + mobile full-height sheet classes
+    expect(dialog.className).toContain("max-sm:rounded-none");
+    expect(dialog.className).toContain("max-sm:h-[100dvh]");
+    expect(dialog.parentElement?.className).toContain("z-[420]");
+    expect(dialog.parentElement?.className).toContain("px-0 sm:px-4");
+
+    // Redirect URI wraps on mobile (break-all) and truncates on sm+
+    const redirectCode = within(dialog).getByTestId("ms365-redirect-uri");
+    expect(redirectCode).toHaveTextContent(
+      "https://fleet.elcanotek.com/api/mcp/oauth/callback",
+    );
+    expect(redirectCode.className).toContain("break-all");
+    expect(redirectCode.className).toContain("sm:truncate");
+
+    // Inputs are pre-populated with saved Entra IDs and Save is visible
+    expect(
+      (within(dialog).getByTestId("ms365-client-id-input") as HTMLInputElement)
+        .value,
+    ).toBe("68dad9d6-e1aa-4195-9bd5-2e94a0e4a073");
+    expect(
+      (within(dialog).getByTestId("ms365-tenant-id-input") as HTMLInputElement)
+        .value,
+    ).toBe("5db5070c-2c68-449d-868f-2b0d3407f6d2");
+    expect(
+      within(dialog).getByTestId("ms365-save-config-btn"),
+    ).toHaveTextContent("Save");
+  });
+
+  it("hides the row Entra app button for non-editors when not env-configured", async () => {
+    const catalogReadOnly = {
+      ...CATALOG,
+      third_party: [MS365_ENTRY],
+      ms365_config: {
+        configured: true,
+        source: "db",
+        client_id: "68dad9d6-e1aa-4195-9bd5-2e94a0e4a073",
+        tenant_id: "common",
+        can_edit: false,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, catalogReadOnly, {
+        ...EMPTY_LIST,
+        servers: [MS365_SEAT],
+      }),
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-microsoft-365");
+    expect(within(group).queryByTestId("row-configure-ms365")).toBeNull();
+  });
+});
