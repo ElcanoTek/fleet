@@ -147,3 +147,56 @@ func TestRemoteMCPServersListReportsCatalogDrift(t *testing.T) {
 		t.Fatalf("catalog_drift present on a matching row: %s", w.Body.String())
 	}
 }
+
+func TestRemoteMCPServersListAppliesMS365CatalogOverrideBeforeDrift(t *testing.T) {
+	t.Setenv("MS365_MCP_CLIENT_ID", "68dad9d6-e1aa-4195-9bd5-2e94a0e4a073")
+	t.Setenv("MS365_MCP_TENANT_ID", "5db5070c-2c68-449d-868f-2b0d3407f6d2")
+	t.Setenv("FLEET_PUBLIC_BASE_URL", "https://fleetdev.elcanotek.com")
+
+	srv, st, _, user := remoteMCPFixture(t)
+	msRow, err := st.CreateRemoteMCPServer(context.Background(), store.RemoteMCPServerInput{
+		UserEmail: user,
+		Name:      "microsoft-365",
+		URL:       "https://fleetdev.elcanotek.com/mcp",
+		Transport: store.RemoteMCPTransportStreamableHTTP,
+		AuthKind:  store.RemoteMCPAuthOAuth,
+		Status:    store.RemoteMCPStatusConnected,
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteMCPServer: %v", err)
+	}
+	// Bundle manifest lists the prod URL or placeholder, while ms365Cfg.MCPURL
+	// resolves to https://fleetdev.elcanotek.com/mcp for this box.
+	srv.clientConfig = &clientconfig.Bundle{RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
+		{Name: "microsoft-365", URL: "https://fleet.elcanotek.com/mcp", Auth: "oauth"},
+	}}
+
+	req := httptest.NewRequest("GET", "/remote-mcp-servers", nil)
+	req = req.WithContext(asUser(req.Context(), user))
+	w := httptest.NewRecorder()
+	srv.remoteMCPServers(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Servers []struct {
+			ID           string        `json:"id"`
+			CatalogDrift *catalogDrift `json:"catalog_drift"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range resp.Servers {
+		if s.ID == msRow.ID {
+			found = true
+			if s.CatalogDrift != nil {
+				t.Fatalf("expected nil catalog_drift for microsoft-365 matching ms365Cfg.MCPURL, got %+v", s.CatalogDrift)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("microsoft-365 row %s not found in response", msRow.ID)
+	}
+}

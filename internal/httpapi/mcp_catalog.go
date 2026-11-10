@@ -167,17 +167,27 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Trust:       "bundled",
 			})
 		}
-		for _, e := range s.clientConfig.RemoteMCPCatalog {
-			entry := thirdPartyCatalogEntry(e)
-			if entry.Name == "microsoft-365" && ms365Cfg.Configured && ms365Cfg.MCPURL != "" {
-				entry.URL = ms365Cfg.MCPURL
-				entry.Auth = "oauth"
-				entry.SetupHint = ""
-			}
-			resp.ThirdParty = append(resp.ThirdParty, entry)
+		for _, e := range applyMS365CatalogOverride(s.clientConfig.RemoteMCPCatalog, ms365Cfg) {
+			resp.ThirdParty = append(resp.ThirdParty, thirdPartyCatalogEntry(e))
 		}
 	}
 	writeJSON(w, r, resp)
+}
+
+func applyMS365CatalogOverride(catalog []clientconfig.RemoteMCPCatalogEntry, ms365Cfg ms365ConfigResponse) []clientconfig.RemoteMCPCatalogEntry {
+	if len(catalog) == 0 || !ms365Cfg.Configured || ms365Cfg.MCPURL == "" {
+		return catalog
+	}
+	out := make([]clientconfig.RemoteMCPCatalogEntry, len(catalog))
+	copy(out, catalog)
+	for i := range out {
+		if strings.TrimSpace(out[i].Name) == "microsoft-365" {
+			out[i].URL = ms365Cfg.MCPURL
+			out[i].Auth = "oauth"
+			out[i].SetupHint = ""
+		}
+	}
+	return out
 }
 
 // alwaysOnDirectoryRows lists the enabled always-on connectors for the
