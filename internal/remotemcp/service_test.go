@@ -1361,3 +1361,61 @@ func TestResourceIndicatorFallsBackToURL(t *testing.T) {
 		t.Errorf("declared = %q", got)
 	}
 }
+
+func TestOverlayServersForUserIncludesLoginRequiredAndNeedsReauth(t *testing.T) {
+	fs := newFakeStore()
+	as := oauthTestServer(t, "")
+	svc := newTestService(t, fs, as)
+	ctx := context.Background()
+	const email = "user@elcano.com"
+
+	ms365, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "microsoft-365", URL: as.URL + "/mcp", AuthKind: "oauth",
+	})
+	if err != nil {
+		t.Fatalf("create login_required: %v", err)
+	}
+	signedOut, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "notion", URL: as.URL + "/mcp", AuthKind: "oauth", Status: store.RemoteMCPStatusNeedsReauth,
+	})
+	if err != nil {
+		t.Fatalf("create needs_reauth: %v", err)
+	}
+	connected, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "github", URL: as.URL + "/mcp", AuthKind: "oauth", Status: store.RemoteMCPStatusConnected,
+	})
+	if err != nil {
+		t.Fatalf("create connected: %v", err)
+	}
+
+	// ConnectedServersForUser returns only connected seats.
+	ready, err := svc.ConnectedServersForUser(ctx, email)
+	if err != nil {
+		t.Fatalf("ConnectedServersForUser: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != connected.ID || ready[0].NeedsReauth {
+		t.Fatalf("ConnectedServersForUser = %+v, want only github (NeedsReauth=false)", ready)
+	}
+
+	// OverlayServersForUser returns connected seats plus login_required and needs_reauth seats marked NeedsReauth=true.
+	all, err := svc.OverlayServersForUser(ctx, email)
+	if err != nil {
+		t.Fatalf("OverlayServersForUser: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("OverlayServersForUser = %+v, want 3 entries", all)
+	}
+	byID := map[string]agent.RemoteMCPConn{}
+	for _, c := range all {
+		byID[c.ID] = c
+	}
+	if !byID[ms365.ID].NeedsReauth {
+		t.Errorf("login_required microsoft-365 NeedsReauth = false, want true")
+	}
+	if !byID[signedOut.ID].NeedsReauth {
+		t.Errorf("needs_reauth notion NeedsReauth = false, want true")
+	}
+	if byID[connected.ID].NeedsReauth {
+		t.Errorf("connected github NeedsReauth = true, want false")
+	}
+}

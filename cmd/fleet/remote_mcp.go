@@ -144,7 +144,7 @@ func hostedConnectionsLister(svc *remotemcp.Service) func(context.Context, strin
 	if svc == nil {
 		return nil
 	}
-	return svc.ConnectedServersForUser
+	return svc.OverlayServersForUser
 }
 
 // wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)

@@ -1854,7 +1854,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	turnTools := tools.NewTurnTools(sb, m.browserbaseKeyFunc(ctx, in.UserEmail, in.OptionalMCPServersEnabled))
 	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
-	enableConnectorsWired := tools.HasEnableMCPConnectorsHandler(ctx)
+	enableConnectorsWired := in.InputKind != InputKindChatPatrol && tools.HasEnableMCPConnectorsHandler(ctx)
 	if !enableConnectorsWired {
 		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
 	}

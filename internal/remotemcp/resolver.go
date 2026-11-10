@@ -26,6 +26,30 @@ import (
 // cannot coexist in one run; the shadowed shared seat is skipped with a log
 // line rather than silently.
 func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]agent.RemoteMCPConn, error) {
+	return s.serversForUser(ctx, email, false)
+}
+
+// OverlayServersForUser returns the user's enabled remote MCP seats for
+// BuildRemoteMCPOverlay and CheckTaskMCPSelection: connected seats first, plus
+// login_required / needs_reauth seats marked with NeedsReauth: true so a
+// scheduled task pinning an unauthenticated connection skips it gracefully
+// instead of dead-lettering as an unknown server.
+func (s *Service) OverlayServersForUser(ctx context.Context, email string) ([]agent.RemoteMCPConn, error) {
+	return s.serversForUser(ctx, email, true)
+}
+
+func isOverlayStatus(status string, includeNeedsReauth bool) (ok bool, needsReauth bool) {
+	switch status {
+	case store.RemoteMCPStatusConnected:
+		return true, false
+	case store.RemoteMCPStatusLoginRequired, store.RemoteMCPStatusNeedsReauth:
+		return includeNeedsReauth, true
+	default:
+		return false, false
+	}
+}
+
+func (s *Service) serversForUser(ctx context.Context, email string, includeNeedsReauth bool) ([]agent.RemoteMCPConn, error) {
 	servers, err := s.store.ListRemoteMCPServers(ctx, email)
 	if err != nil {
 		return nil, err
@@ -57,15 +81,19 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 	seats := map[string]bool{} // registration name → taken
 	ownNames := map[string]bool{}
 	for _, srv := range servers {
-		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
+		ok, needsReauth := isOverlayStatus(srv.Status, includeNeedsReauth)
+		if !ok || !enabledForMe(srv.ID) {
 			continue
 		}
 		seats[agentcore.RegisteredMCPName(srv.Name, srv.Account)] = true
 		ownNames[srv.Name] = true
-		out = append(out, connFor(srv, ""))
+		conn := connFor(srv, "")
+		conn.NeedsReauth = needsReauth
+		out = append(out, conn)
 	}
 	for _, srv := range shared {
-		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
+		ok, needsReauth := isOverlayStatus(srv.Status, includeNeedsReauth)
+		if !ok || !enabledForMe(srv.ID) {
 			continue
 		}
 		reg := agentcore.RegisteredMCPName(srv.Name, srv.Account)
@@ -75,6 +103,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 		}
 		seats[reg] = true
 		conn := connFor(srv, srv.UserEmail)
+		conn.NeedsReauth = needsReauth
 		// A shared seat never becomes the default under a name the user owns
 		// seats for: the owner of the run decides their own default.
 		if ownNames[srv.Name] {

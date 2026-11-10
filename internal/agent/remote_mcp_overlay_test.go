@@ -799,3 +799,55 @@ func TestBuildRemoteMCPOverlaySendsTheSchemePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRemoteMCPOverlayNeedsReauthConnSkippedOnlyWhenRequested(t *testing.T) {
+	ctx := context.Background()
+	r := &fakeResolver{
+		conns: []RemoteMCPConn{
+			{ID: "ms1", Name: "microsoft-365", URL: "https://fleet.example.com/api/mcp/ms365", Default: true, NeedsReauth: true},
+		},
+	}
+
+	// 1. Unpinned scheduled run (RemoteMCPAllConnected without a pin for microsoft-365):
+	// silently ignored so unrelated background tasks do not get a skip notice.
+	ovUnpinned, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, RemoteMCPAllConnected)
+	if err != nil {
+		t.Fatalf("unpinned BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ovUnpinned.Close()
+	if len(ovUnpinned.Skipped) != 0 {
+		t.Errorf("unpinned scheduled run Skipped = %v, want empty", ovUnpinned.Skipped)
+	}
+	if len(r.asked) != 0 {
+		t.Errorf("unpinned scheduled run asked for tokens %v, want none", r.asked)
+	}
+
+	// 2. Scheduled run that pins microsoft-365 in mcp_selection: recorded in Skipped
+	// with SkipReasonNeedsReauth so unresolvedPins does not dead-letter the task.
+	selPinned := RemoteMCPAllConnected
+	selPinned.Accounts = map[string]string{"microsoft-365": ""}
+	ovPinned, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, selPinned)
+	if err != nil {
+		t.Fatalf("pinned BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ovPinned.Close()
+	if len(ovPinned.Skipped) != 1 || ovPinned.Skipped[0] != "microsoft-365" {
+		t.Fatalf("pinned scheduled run Skipped = %v, want [microsoft-365]", ovPinned.Skipped)
+	}
+	if got := ovPinned.SkipReason("microsoft-365"); got != SkipReasonNeedsReauth {
+		t.Errorf("SkipReason(microsoft-365) = %q, want %q", got, SkipReasonNeedsReauth)
+	}
+	if seat := ovPinned.SkippedSeats["microsoft-365"]; seat.Server != "microsoft-365" {
+		t.Errorf("SkippedSeats[microsoft-365] = %+v, want Server=microsoft-365", seat)
+	}
+
+	// 3. Interactive chat that enabled microsoft-365: recorded in Skipped with SkipReasonNeedsReauth.
+	ovChat, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, RemoteMCPEnabledOnly([]string{"microsoft-365"}, nil))
+	if err != nil {
+		t.Fatalf("chat BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ovChat.Close()
+	if len(ovChat.Skipped) != 1 || ovChat.Skipped[0] != "microsoft-365" || ovChat.SkipReason("microsoft-365") != SkipReasonNeedsReauth {
+		t.Errorf("interactive chat Skipped = %v (%q), want [microsoft-365] (%q)", ovChat.Skipped, ovChat.SkipReason("microsoft-365"), SkipReasonNeedsReauth)
+	}
+}
