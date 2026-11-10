@@ -787,7 +787,6 @@ function OutliersAndFrictionTab() {
     const isFailed = (t: TaskOutlierRow) =>
       t.status === "error" ||
       t.status === "dead_lettered" ||
-      t.status === "cancelled" ||
       !!t.error_message;
     list.sort((a, b) => {
       const ta = a.prompt_tokens + a.completion_tokens;
@@ -911,7 +910,7 @@ function OutliersAndFrictionTab() {
                     >
                       <td className="max-w-[20rem] truncate">
                         <Link
-                          href={`/chat?id=${encodeURIComponent(c.conversation_id)}`}
+                          href={`/chat?c=${encodeURIComponent(c.conversation_id)}`}
                           className="font-medium text-[var(--color-accent)] hover:underline"
                         >
                           {c.title || `Chat ${c.conversation_id.slice(0, 8)}`}

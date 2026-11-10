@@ -355,10 +355,11 @@ func (a *approvalStager) isAutoApprove() bool {
 }
 
 // isSelfAddressedPatrolEmail reports whether an outbound email call during an
-// unattended in-chat patrol turn is addressed exclusively to the conversation
-// owner (with no cc/bcc and inline content that requires no staging-time file
-// materialization), so a user who opted into auto-approve on their patrol can
-// receive their own patrol digest email without a manual approval card.
+// unattended in-chat patrol/timer turn is addressed exclusively to the
+// conversation owner (with no cc/bcc and inline content that requires no
+// staging-time file materialization), so a user whose scheduled check-in or
+// patrol fires unattended can receive their own status/digest email without a
+// manual approval card (even when conversation-wide auto-approve is off).
 // Any inline_attachments such a call carries are checked and copied when it is
 // dispatched (agentcore.Deps.PrepareEmailAttachments), as for an approved card.
 func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) bool {
@@ -465,14 +466,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			return agentcore.PreApprovedSentinel, nil
 		}
 	}
-	// Per-conversation auto-approve (or an unattended in-chat patrol turn):
-	// executable critical tools run without parking on an approval card.
-	// Handler-only tools (schedule_task, manage_tasks, preview_email,
-	// suggest_advanced_model), outbound email (send_email, send_template_email),
-	// and bundle-declared critical_tool_no_session_approval tools still stage an
-	// explicit card.
-	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) &&
-		((!tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)) || a.isSelfAddressedPatrolEmail(toolName, rawInput)) {
+	// Per-conversation auto-approve (or a self-addressed status/digest email in
+	// an unattended in-chat patrol/timer turn): executable critical tools run
+	// without parking on an approval card. Handler-only tools (schedule_task,
+	// manage_tasks, preview_email, suggest_advanced_model), outbound email to
+	// other recipients (or with cc/bcc), and bundle-declared
+	// critical_tool_no_session_approval tools still stage an explicit card.
+	if !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) &&
+		((a.isAutoApprove() && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)) || a.isSelfAddressedPatrolEmail(toolName, rawInput)) {
 		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
