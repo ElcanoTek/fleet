@@ -473,6 +473,141 @@ func TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask(t *testing.T) {
 	}
 }
 
+// When a model attempts to emit its JSON object directly on an output-schema
+// task and introduces a bracket/syntax typo (production: task 8d0dee09, which
+// ended its 1,871-byte object with an extra `}]`), keepJudgedAnswer must still
+// treat that draft as structured output so the repair round replaces it rather
+// than appending a second object onto broken JSON and guaranteeing a 3-check
+// dead-letter.
+func TestScheduledVerifierRepairReplacesMalformedJSONDraftOnSchemaTask(t *testing.T) {
+	verifier := &recordingVerifier{replies: []string{
+		`{"missing_actions":["verify confirm_audit recorded the required reasoning"],"reasoning":"first check"}`,
+		`{"missing_actions":[],"reasoning":"one valid schema-compliant object"}`,
+	}}
+	a := newTestScheduledAgent(t, &itMockModel{})
+	a.verifierModel = verifier
+	a.outputSchema = json.RawMessage(`{"type":"object"}`)
+	p := &scheduledPolicy{
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 0, 0),
+		agent:  a,
+		task:   "Deep audit; answer with one JSON object.",
+		runCtx: context.Background(),
+	}
+
+	// Trailing `}]` makes the first round's JSON invalid (`Extra data`).
+	p.SetRoundFinalText(`{"schema_version":"2","action_items":[{"id":"a1"}]}]}`)
+	ok, msgs := p.CanFinish(1)
+	if ok {
+		t.Fatal("the first check must send the run back for repair")
+	}
+	if nudge := strings.Join(msgs, " "); !strings.Contains(nudge, reviewerRepairAnswerNote) || strings.Contains(nudge, repairAnswerNote) {
+		t.Fatalf("a malformed JSON draft on a schema task must still ask for a replacement answer, got %q", nudge)
+	}
+
+	repaired := `{"schema_version":"2","action_items":[{"id":"a1"}]}`
+	p.SetRoundFinalText(repaired)
+	if ok, _ := p.CanFinish(2); !ok {
+		t.Fatalf("the repaired JSON object must pass: %v", p.TerminalError())
+	}
+	if strings.Contains(verifier.prompts[1], `}]}]}`) {
+		t.Errorf("the re-check still kept the malformed draft in front of the repaired object: %s", verifier.prompts[1])
+	}
+	if got := p.RunAnswer(repaired); got != repaired {
+		t.Errorf("run answer = %q, want the repaired JSON object alone %q", got, repaired)
+	}
+}
+
+func TestIsStructuredAnswerDraft(t *testing.T) {
+	for text, want := range map[string]bool{
+		`{"a":1}`: true,
+		`{"schema_version":"2","items":[{"id":"a1"}]}]}`: true,
+		`{"a":`:                             true,
+		`{`:                                 true,
+		`{"a":1}{"b":2}`:                    true,
+		`{status:"draft"}`:                  true,
+		`{schema_version: "2"}`:             true,
+		`{status:`:                          true,
+		`{status`:                           true,
+		`{'a': 1}`:                          true,
+		`{{"a":1}}`:                         true,
+		"```json\n{\"a\":\n":                true,
+		"```json\n{\"a\":1}]}\n```":         true,
+		"```json\n":                         true,
+		"```\n{\"a\": 1":                    true,
+		"  [{\"id\":1},":                    true,
+		`['a', 'b']`:                        true,
+		`[True, False]`:                     true,
+		`[foo, bar]`:                        true,
+		`[draft,`:                           true,
+		`[foo bar]`:                         true,
+		`[foo]`:                             true,
+		`[1, 2,`:                            true,
+		`[1 2]`:                             true,
+		`[true false]`:                      true,
+		`[tru`:                              true,
+		`[tru]`:                             true,
+		`[-`:                                true,
+		`[-]`:                               true,
+		`[1]]`:                              true,
+		`[1][2]`:                            true,
+		`[1]}`:                              true,
+		`[1] // items`:                      true,
+		"// header\n{\"a\":1}":              true,
+		`"just a string"`:                   true,
+		`"complete" // status`:              true,
+		`"complete" /* status */`:           true,
+		`"partial`:                          true,
+		`"a""b"`:                            true,
+		`42`:                                true,
+		`42 // count`:                       true,
+		`42}`:                               true,
+		`-`:                                 true,
+		`12.`:                               true,
+		`1e+`:                               true,
+		`null`:                              true,
+		`tru`:                               true,
+		`fals`:                              true,
+		`nul`:                               true,
+		`True`:                              true,
+		`true}`:                             true,
+		`true /* ok */`:                     true,
+		`Refresh published.`:                false,
+		`Done`:                              false,
+		`true story.`:                       false,
+		`"Spring Promo" campaign refreshed`: false,
+		`- Updated seat mapping.`:           false,
+		`1. Updated seat mapping.`:          false,
+		`1. https://pages.example.com`:      false,
+		`3/4 seats updated.`:                false,
+		`3 seats updated.`:                  false,
+		`Report: {"a":1}`:                   false,
+		`[OK] Refresh published.`:           false,
+		`[ ] Pending seat mapping.`:         false,
+		`[False] Refresh published.`:        false,
+		`[2026-11-11] Refresh published.`:   false,
+		`[2026-11-11] 3 seats updated.`:     false,
+		`[2026-11-11 18:00Z] 5 synced.`:     false,
+		`[1] Updated seat mapping.`:         false,
+		`[1] 3 seats updated.`:              false,
+		`[true story] Refresh published.`:   false,
+		`[n/a] Nothing to update.`:          false,
+		`[f.y.i.] Completed.`:               false,
+		`[Dashboard](https://pages.example.com/report)`: false,
+		`[Q4, US](https://pages.example.com/report)`:    false,
+		`[true](https://pages.example.com/report)`:      false,
+		`{{placeholder}}`:              false,
+		`{placeholder}`:                false,
+		`{see note above}`:             false,
+		"```\nRefresh published.\n```": false,
+		"```\nRefresh published.":      false,
+		"":                             false,
+	} {
+		if got := isStructuredAnswerDraft(text); got != want {
+			t.Errorf("isStructuredAnswerDraft(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 func TestIsSingleJSONValue(t *testing.T) {
 	for text, want := range map[string]bool{
 		`{"a":1}`:                 true,

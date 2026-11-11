@@ -45,16 +45,29 @@ which concatenates every round, contained every requested item.
 - The verifier's repair nudge says the earlier text stays and the next is
   appended (write only what was missing). The reviewer's nudge says the next
   text replaces the answer (write the whole corrected answer).
-- **A JSON answer on a task with an output schema** (amended 2026-10-19):
-  when the judged answer is itself exactly one JSON value, a verifier repair
-  *replaces* it too, and its nudge is the reviewer's (write the whole
-  corrected answer). A supplement appended after that value made two values, and the verifier rejected the
-  composition as "not exactly one JSON object" on every remaining check until
-  the run dead-lettered. Manifest's deep-audit tasks hit this on most repaired
-  runs from 2026-10-05. A textless repair round still keeps the judged object,
-  and a prose answer on a schema task keeps the append (the schema constrains
-  only the terminal output `completeRun` generates afterwards).
+- **A JSON answer on a task with an output schema** (amended 2026-10-19 and
+  2026-11-11): when `isStructuredAnswerDraft` classifies the judged answer as a
+  JSON value or syntactically recognizable JSON draft (valid `isSingleJSONValue`
+  answers; explicit ```json / ```jsonc / ```jsonl blocks; `{...` or `[...`
+  drafts that are unclosed or carry JSON punctuation or `//` / `/*` comments;
+  and scalar drafts with unterminated quotes, numeric-only tokens, `true` /
+  `false` / `null` prefixes or variants, or adjacent JSON tokens or `//` / `/*`
+  comments), a verifier repair *replaces* it too, and its nudge is the
+  reviewer's (write the whole corrected answer). Appending after a valid or
+  broken JSON draft made two values (or kept broken JSON in front of the
+  repaired value), and the verifier rejected the composition on every remaining
+  check until the run dead-letters. A textless repair round still keeps the
+  judged draft. Because prose answers on schema tasks must keep supplement
+  composition (the schema constrains only the terminal output `completeRun`
+  generates afterwards), inputs indistinguishable from prose stay in append
+  mode: free-form prose, prose preambles before JSON (`Report: {...}`),
+  unquoted words other than boolean/null keywords (`Done`), quoted phrases
+  followed by prose (`"Promo" refreshed`), single-line brace placeholders
+  without colons or quotes (`{see note above}`, `{{placeholder}}`), and
+  single-line bracketed prose prefixes or Markdown links (`[OK] ...`,
+  `[2026-11-11] ...`, `[1] ...`, `[Label](url)`).
   `TestScheduledVerifierRepairReplacesStructuredAnswer`,
+  `TestScheduledVerifierRepairReplacesMalformedJSONDraftOnSchemaTask`,
   `TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask`.
 - The `(no final response text)` marker still stands in when the run has
   produced no text at all. Truncation is unchanged
