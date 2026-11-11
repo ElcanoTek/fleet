@@ -276,3 +276,23 @@ func TestManageTasksShowPassesTheGateAndWritesStillStage(t *testing.T) {
 		t.Fatalf("staged %d write calls, want 4: %v", len(sink.staged), sink.staged)
 	}
 }
+
+// A bundle that lists manage_tasks (or a suffix it matches) as critical must
+// not turn a read-only show into a generic card: the dedicated gate owns the
+// tool, and it still stages every write.
+func TestManageTasksShowIsNotStagedByABundleCriticalList(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{CriticalToolSuffixes: []string{"manage_tasks", "tasks"}})
+
+	sink := &stagerFake{}
+	p := NewInteractivePolicy(0, 0, sink, nil)
+	if blocked, msg := p.BeforeToolCall("manage_tasks", "tc-1", `{"action":"show","task_ids":["a"]}`); blocked {
+		t.Fatalf("show was blocked under a critical list: %s", msg)
+	}
+	if blocked, msg := p.BeforeToolCall("manage_tasks", "tc-2", `{"action":"update","task_ids":["a"],"prompt_append":"x"}`); !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
+		t.Fatalf("update: blocked=%v msg=%q, want it staged", blocked, msg)
+	}
+	if len(sink.staged) != 1 {
+		t.Fatalf("staged = %v, want exactly the update", sink.staged)
+	}
+}

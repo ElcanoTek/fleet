@@ -61,7 +61,7 @@ stage a card, and nothing is written until the user clicks Approve.
 - **No resolved before → after for a full replacement.** The card still
   renders the selector, not a resolved task list (see `summarizeManageTasksInput`),
   so it cannot show each task's current prompt next to a full replacement. It
-  shows the whole new text and says plainly that everything else is removed.
+  shows the new text (up to the 6,000-character card bound) and says plainly that everything else is removed.
   The steer toward `show` + edits is what keeps a "slight adjustment" from
   being a rewrite. A full replacement is still allowed, because sometimes a
   rewrite is what the user asked for.

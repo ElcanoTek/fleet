@@ -191,8 +191,11 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 		return false, "" // checkEmailSafety owns send_email end-to-end
 	}
 	switch toolName {
-	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameSuggestAdvancedModel:
-		return false, "" // dedicated gates own these
+	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameManageTasks, toolNameSuggestAdvancedModel:
+		// Dedicated gates own these. manage_tasks: checkManageTasksSafety
+		// stages every write itself, and a read-only show staged here would
+		// reach an executor that (rightly) refuses to approve a show.
+		return false, ""
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
