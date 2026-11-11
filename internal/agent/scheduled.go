@@ -658,16 +658,19 @@ func stripOptionalCodeFence(text string) (body string, jsonFence bool) {
 	}
 	nl := strings.IndexByte(rest, '\n')
 	if nl < 0 {
-		lang := strings.ToLower(strings.TrimSpace(rest))
-		return "", lang == "json" || strings.HasPrefix(lang, "json ")
+		return "", isJSONFenceTag(rest)
 	}
-	lang := strings.ToLower(strings.TrimSpace(rest[:nl]))
-	jsonFence = lang == "json" || strings.HasPrefix(lang, "json ")
+	jsonFence = isJSONFenceTag(rest[:nl])
 	inner := rest[nl+1:]
 	if trimmed, closed := strings.CutSuffix(strings.TrimSpace(inner), "```"); closed {
 		return strings.TrimSpace(trimmed), jsonFence
 	}
 	return strings.TrimSpace(inner), jsonFence
+}
+
+func isJSONFenceTag(tag string) bool {
+	lang := strings.ToLower(strings.TrimSpace(tag))
+	return lang == "json" || lang == "jsonc" || lang == "jsonl" || strings.HasPrefix(lang, "json ")
 }
 
 // isSingleJSONValue reports whether text is exactly one JSON value (object,
@@ -695,16 +698,23 @@ func isSingleJSONValue(text string) bool {
 	return errors.Is(err, io.EOF)
 }
 
-// isStructuredAnswerDraft reports whether text on an output-schema task is a
-// structured JSON answer or draft rather than prose. Every valid single JSON
-// value qualifies (isSingleJSONValue), and so does a malformed or truncated
-// JSON object, array, or scalar draft (such as a trailing bracket typo at the
-// end of an object, a missing comma inside an array, an unterminated string or
-// truncated keyword, or an explicit ```json code block): appending a repair
-// round to a broken JSON draft leaves the broken JSON in front of the repaired
-// value, so no later repair round can ever produce one valid JSON value. Prose
-// answers (including "[OK] ...", "[2026-11-11] ...", "[1] ...", and Markdown
-// links) return false and keep supplement composition.
+// isStructuredAnswerDraft reports whether text on an output-schema task looks
+// syntactically like a JSON answer or JSON draft rather than prose. Every valid
+// single JSON value qualifies (isSingleJSONValue), as do explicit ```json /
+// ```jsonc / ```jsonl fenced blocks and syntactically recognizable malformed or
+// truncated object, array, and scalar JSON drafts (including leading or
+// trailing // and /* */ comments): appending a repair round to a broken JSON
+// draft leaves the broken JSON in front of the repaired value, so no later
+// repair round can produce one valid JSON value.
+//
+// Because prose answers on output-schema tasks must still compose by appending
+// (completeRun generates the schema-compliant JSON afterward), inputs that
+// cannot be distinguished from prose stay false: prose with a trailing JSON
+// snippet ("Report: {...}"), unquoted words other than boolean/null keywords
+// ("Done"), quoted phrases followed by prose ("\"Promo\" refreshed"),
+// single-line brace placeholders without colons or quotes ("{see note above}",
+// "{{placeholder}}"), and single-line bracketed prose prefixes or Markdown
+// links ("[OK] ...", "[2026-11-11] ...", "[1] ...", "[Label](url)").
 func isStructuredAnswerDraft(text string) bool {
 	if isSingleJSONValue(text) {
 		return true
@@ -713,8 +723,12 @@ func isStructuredAnswerDraft(text string) bool {
 	if jsonFence {
 		return true
 	}
+	body, hadLeadingComment := stripLeadingJSONComments(body)
 	if body == "" {
-		return false
+		return hadLeadingComment
+	}
+	if hadLeadingComment && isSingleJSONValue(body) {
+		return true
 	}
 	switch body[0] {
 	case '{':
@@ -726,8 +740,38 @@ func isStructuredAnswerDraft(text string) bool {
 	}
 }
 
-// isJSONScalarDraft reports whether body looks like a malformed or truncated
-// scalar JSON value (string, number, boolean, or null) rather than prose.
+func stripLeadingJSONComments(s string) (rest string, hadComment bool) {
+	for {
+		s = strings.TrimSpace(s)
+		if strings.HasPrefix(s, "//") {
+			hadComment = true
+			nl := strings.IndexByte(s, '\n')
+			if nl < 0 {
+				return "", true
+			}
+			s = s[nl+1:]
+			continue
+		}
+		if strings.HasPrefix(s, "/*") {
+			hadComment = true
+			end := strings.Index(s[2:], "*/")
+			if end < 0 {
+				return "", true
+			}
+			s = s[2+end+2:]
+			continue
+		}
+		return s, hadComment
+	}
+}
+
+func hasJSONCommentPrefix(s string) bool {
+	return strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*")
+}
+
+// isJSONScalarDraft reports whether body looks syntactically like a malformed
+// or truncated scalar JSON value (string, number, boolean, or null) rather than
+// prose.
 func isJSONScalarDraft(body string) bool {
 	if body[0] == '"' {
 		dec := json.NewDecoder(strings.NewReader(body))
@@ -736,7 +780,7 @@ func isJSONScalarDraft(body string) bool {
 			return true
 		}
 		after := strings.TrimLeft(body[dec.InputOffset():], " \t\r\n")
-		if after == "" {
+		if after == "" || hasJSONCommentPrefix(after) {
 			return true
 		}
 		switch after[0] {
@@ -753,6 +797,14 @@ func isJSONScalarDraft(body string) bool {
 }
 
 func isMalformedJSONNumberDraft(body string) bool {
+	if idx := strings.Index(body, "//"); idx >= 0 {
+		body = strings.TrimSpace(body[:idx])
+	} else if idx := strings.Index(body, "/*"); idx >= 0 {
+		body = strings.TrimSpace(body[:idx])
+	}
+	if body == "" {
+		return false
+	}
 	if body == "-" {
 		return true
 	}
@@ -803,6 +855,9 @@ func isJSONKeywordDraft(body string) bool {
 	default:
 		return false
 	}
+	if hasJSONCommentPrefix(after) {
+		return true
+	}
 	switch after[0] {
 	case ',', '}', ']':
 		return true
@@ -835,6 +890,9 @@ func isJSONObjectDraft(body string) bool {
 	after := strings.TrimLeft(trimmedOpen[closeIdx+1:], "} \t\r\n")
 	if after == "" {
 		return false
+	}
+	if hasJSONCommentPrefix(after) {
+		return true
 	}
 	switch after[0] {
 	case ',', '{', '[', ':':
@@ -873,7 +931,7 @@ func isJSONArrayDraft(rest string) bool {
 		return true
 	}
 	after := strings.TrimLeft(rawAfter, " \t\r\n")
-	if after == "" {
+	if after == "" || hasJSONCommentPrefix(after) {
 		return true
 	}
 	switch after[0] {
