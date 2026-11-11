@@ -698,13 +698,13 @@ func isSingleJSONValue(text string) bool {
 // isStructuredAnswerDraft reports whether text on an output-schema task is a
 // structured JSON answer or draft rather than prose. Every valid single JSON
 // value qualifies (isSingleJSONValue), and so does a malformed or truncated
-// JSON object or array draft (such as a trailing bracket typo at the end of an
-// object, a missing comma inside an array, a truncated element, or an explicit
-// ```json code block): appending a repair round to a broken JSON draft leaves
-// the broken JSON in front of the repaired value, so no later repair round can
-// ever produce one valid JSON value. Prose answers (including "[OK] ...",
-// "[2026-11-11] ...", "[1] ...", and Markdown links) return false and keep
-// supplement composition.
+// JSON object, array, or scalar draft (such as a trailing bracket typo at the
+// end of an object, a missing comma inside an array, an unterminated string or
+// truncated keyword, or an explicit ```json code block): appending a repair
+// round to a broken JSON draft leaves the broken JSON in front of the repaired
+// value, so no later repair round can ever produce one valid JSON value. Prose
+// answers (including "[OK] ...", "[2026-11-11] ...", "[1] ...", and Markdown
+// links) return false and keep supplement composition.
 func isStructuredAnswerDraft(text string) bool {
 	if isSingleJSONValue(text) {
 		return true
@@ -721,6 +721,95 @@ func isStructuredAnswerDraft(text string) bool {
 		return isJSONObjectDraft(body)
 	case '[':
 		return isJSONArrayDraft(strings.TrimLeft(body[1:], " \t\r\n"))
+	default:
+		return isJSONScalarDraft(body)
+	}
+}
+
+// isJSONScalarDraft reports whether body looks like a malformed or truncated
+// scalar JSON value (string, number, boolean, or null) rather than prose.
+func isJSONScalarDraft(body string) bool {
+	if body[0] == '"' {
+		dec := json.NewDecoder(strings.NewReader(body))
+		var first string
+		if dec.Decode(&first) != nil {
+			return true
+		}
+		after := strings.TrimLeft(body[dec.InputOffset():], " \t\r\n")
+		if after == "" {
+			return true
+		}
+		switch after[0] {
+		case '"', ',', '}', ']', '[', '{', ':':
+			return true
+		default:
+			return false
+		}
+	}
+	if body[0] == '-' || (body[0] >= '0' && body[0] <= '9') {
+		return isMalformedJSONNumberDraft(body)
+	}
+	return isJSONKeywordDraft(body)
+}
+
+func isMalformedJSONNumberDraft(body string) bool {
+	if body == "-" {
+		return true
+	}
+	if body[0] == '-' && (len(body) < 2 || body[1] < '0' || body[1] > '9') {
+		return false
+	}
+	for i := 0; i < len(body); i++ {
+		b := body[i]
+		switch {
+		case b >= '0' && b <= '9':
+		case b == '+' || b == '-' || b == '.' || b == ' ' || b == '\t' || b == '\r' || b == '\n' || b == ',' || b == '}' || b == ']':
+		case b == 'e' || b == 'E':
+			if i == 0 || body[i-1] < '0' || body[i-1] > '9' {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isJSONKeywordDraft(body string) bool {
+	n := 0
+	for n < len(body) && ((body[n] >= 'a' && body[n] <= 'z') || (body[n] >= 'A' && body[n] <= 'Z')) {
+		n++
+	}
+	if n == 0 {
+		return false
+	}
+	word := body[:n]
+	after := strings.TrimLeft(body[n:], " \t\r\n")
+	if after == "" {
+		for _, kw := range [...]string{"true", "false", "null"} {
+			if strings.HasPrefix(kw, word) {
+				return true
+			}
+		}
+		switch word {
+		case "True", "False", "Null", "None", "TRUE", "FALSE", "NULL", "undefined", "NaN":
+			return true
+		default:
+			return false
+		}
+	}
+	switch word {
+	case "true", "false", "null", "True", "False", "Null", "None":
+	default:
+		return false
+	}
+	switch after[0] {
+	case ',', '}', ']':
+		return true
+	}
+	switch after {
+	case "true", "false", "null", "True", "False", "Null", "None":
+		return true
 	default:
 		return false
 	}

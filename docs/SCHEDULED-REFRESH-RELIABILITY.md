@@ -47,8 +47,9 @@ which concatenates every round, contained every requested item.
   text replaces the answer (write the whole corrected answer).
 - **A JSON answer on a task with an output schema** (amended 2026-10-19 and
   2026-11-11): when the judged answer is a structured JSON value or JSON draft
-  (including a malformed or truncated JSON object/array draft, such as a
-  trailing bracket typo at the end of an object, or a ```json code block), a
+  (including a malformed or truncated JSON object, array, or scalar draft, such
+  as a trailing bracket typo at the end of an object, an unterminated string or
+  truncated keyword, or a ```json code block), a
   verifier repair *replaces* it too, and its nudge is the reviewer's (write
   the whole corrected answer). Appending after a valid or broken JSON draft
   made two values (or kept broken JSON in front of the repaired object), and
