@@ -230,7 +230,9 @@ func TestTaskManagerProviderShow(t *testing.T) {
 	mine := &schedmodels.Task{ID: uuid.New(), Title: "Morning email", Prompt: "Morning email. Never pass a country filter.",
 		Status: schedmodels.TaskStatusScheduled, ScheduledFor: &future, Recurrence: "0 6 * * *", Timezone: "UTC",
 		Priority: schedmodels.PriorityNormal, CreatedAt: now, CreatedBy: &owner.ID}
-	theirs := &schedmodels.Task{ID: uuid.New(), Title: "Their email", Prompt: "Morning email for someone else.",
+	// No title or name: the report label would otherwise fall back to the
+	// prompt's first line, which must not leak through a skipped row.
+	theirs := &schedmodels.Task{ID: uuid.New(), Prompt: "Morning email for someone else.",
 		Status: schedmodels.TaskStatusScheduled, ScheduledFor: &future, Recurrence: "0 6 * * *", Timezone: "UTC",
 		Priority: schedmodels.PriorityNormal, CreatedAt: now, CreatedBy: &other.ID}
 	for _, task := range []*schedmodels.Task{mine, theirs} {
@@ -259,6 +261,9 @@ func TestTaskManagerProviderShow(t *testing.T) {
 	}
 	if len(res.Shown) != 0 || len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0].Detail, "did not create") {
 		t.Fatalf("show of someone else's task = %#v, want it skipped without its prompt", res)
+	}
+	if strings.Contains(res.Skipped[0].Label, "someone else") || res.Skipped[0].Label != notYourTaskLabel {
+		t.Fatalf("skipped label = %q, want no content of someone else's task", res.Skipped[0].Label)
 	}
 	for _, task := range []*schedmodels.Task{mine, theirs} {
 		if got, _ := store.GetTask(task.ID); got == nil || got.Prompt != task.Prompt {

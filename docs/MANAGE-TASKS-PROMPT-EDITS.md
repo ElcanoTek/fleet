@@ -22,7 +22,7 @@ the user could not see what would be lost before clicking Approve.
   only the first page, so a match past the first page is not silently dropped
   (this fixes `update` too). The model sees the prompts of exactly
   the tasks the same selector could change. A task the person did not create
-  is listed under `not_shown` with the reason and without its prompt. Each
+  is listed under `not_shown` by id with the reason and nothing of its content (no prompt, no title; this also applies to the `update` and `stop` reports). Each
   prompt is bounded at 20,000 characters (runes); a longer one is cut and
   flagged `prompt_truncated`. The interactive gate lets only `show` through
   (`tools.IsManageTasksShow`). The tool's `Run` serves that read and nothing

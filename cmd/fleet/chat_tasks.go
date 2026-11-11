@@ -44,16 +44,20 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 		}
 		res := &httpapi.TaskMutationResult{Matched: len(candidates)}
 		for _, t := range candidates {
-			label := taskMutationLabel(t)
 			// Ownership is re-checked per task, not just baked into the query,
 			// so an explicit task_ids list cannot reach somebody else's job.
+			// Nothing of that task's content is reported either — not its
+			// title, and not the prompt line taskMutationLabel falls back to —
+			// because a show reaches this without any approval: naming
+			// someone else's task id must not read any of it.
 			if t.CreatedBy == nil || *t.CreatedBy != *owner {
 				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
-					ID: t.ID.String(), Label: label,
+					ID: t.ID.String(), Label: notYourTaskLabel,
 					Detail: "you did not create this task; an admin can change it on the Background tasks page",
 				})
 				continue
 			}
+			label := taskMutationLabel(t)
 			if req.Action == tools.ManageTasksActionShow {
 				res.Shown = append(res.Shown, taskSnapshot(t, label))
 				continue
@@ -250,6 +254,10 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 	}
 	return strings.Join(changed, ", "), nil
 }
+
+// notYourTaskLabel stands in for the name of a task the requester did not
+// create, in every manage_tasks report.
+const notYourTaskLabel = "(a task you did not create)"
 
 // promptEditDetail names an applied prompt edit in the post-approval report.
 func promptEditDetail(req httpapi.TaskMutationRequest) string {
