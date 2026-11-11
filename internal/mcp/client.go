@@ -246,7 +246,7 @@ func (t *HTTPTransport) httpStatusResponse(ctx context.Context, resp *http.Respo
 	// at most that much more and restores the whole-first-line guarantee the
 	// pre-tee io.ReadAll(io.LimitReader(...)) gave.
 	_, _ = io.Copy(io.Discard, io.LimitReader(br, int64(httpStatusBodyCap)))
-	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))}
+	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: quoteStatusBody(head.buf)}
 }
 
 // noteStatusBodyMismatch logs — once per transport, so a chatty server does
@@ -304,6 +304,18 @@ func peekNonSpace(br *bufio.Reader) (byte, error) {
 			return b[0], nil
 		}
 	}
+}
+
+// quoteStatusBody turns a bounded non-2xx response head into a single-line
+// summary for HTTPStatusError.Body: plain-text bodies keep only their first
+// line, while pretty-printed JSON error objects (whose first line is bare "{")
+// have their whitespace collapsed first so fields like "message" survive.
+func quoteStatusBody(b []byte) string {
+	trimmed := bytes.TrimSpace(b)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		return firstLine([]byte(strings.Join(strings.Fields(string(trimmed)), " ")))
+	}
+	return firstLine(trimmed)
 }
 
 // firstLine returns the first line of b, whitespace-collapsed and bounded, for
@@ -1522,7 +1534,7 @@ func (t *HTTPTransport) Notify(ctx context.Context, method string, params interf
 		// IsTransientConnectError (and retried) and a 401 is Unauthorized. A
 		// plain error hid both: one vendor 503 on notifications/initialized
 		// failed a registration that a retry would have completed (#1683).
-		return fmt.Errorf("notification %s: %w", method, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))})
+		return fmt.Errorf("notification %s: %w", method, &HTTPStatusError{StatusCode: resp.StatusCode, Body: quoteStatusBody(head.buf)})
 	}
 	return nil
 }

@@ -60,10 +60,12 @@ func TestVendorOutageSeparatesOutagesFromRot(t *testing.T) {
 		{"connection refused", dial(os.NewSyscallError("connect", syscall.ECONNREFUSED)), true},
 		{"broken pipe mid-request", handshake(&url.Error{Op: "Post", URL: "https://mcp.vendor.example", Err: syscall.EPIPE}), true},
 		{"pre-header connection close (url.Error wrapping EOF)", handshake(&url.Error{Op: "Post", URL: "https://mcp.vendor.example", Err: io.EOF}), true},
-		{"truncated response body (unexpected EOF)", handshake(fmt.Errorf("SSE read error: %w", io.ErrUnexpectedEOF)), true},
+		{"mid-transfer HTTP body drop (url.Error wrapping unexpected EOF)", handshake(&url.Error{Op: "Post", URL: "https://mcp.vendor.example", Err: io.ErrUnexpectedEOF}), true},
+		{"truncated SSE stream (unexpected EOF)", handshake(fmt.Errorf("SSE read error: %w", io.ErrUnexpectedEOF)), true},
 		{"HTTP/2 stream reset", handshake(errors.New("stream error: stream ID 1; INTERNAL_ERROR; received from peer")), true},
 		{"HTTP/2 GOAWAY", handshake(errors.New("http2: server sent GOAWAY and closed the connection; LastStreamID=0")), true},
 		{"clean HTTP 200 with empty body (not an MCP server)", handshake(io.EOF), false},
+		{"malformed truncated JSON on HTTP 200 (not an MCP server)", handshake(io.ErrUnexpectedEOF), false},
 		{"temporary DNS failure", dial(&net.DNSError{Err: "temporary failure in name resolution", Name: "mcp.vendor.example", IsTemporary: true}), true},
 		{"host gone", dial(&net.DNSError{Err: "no such host", Name: "mcp.vendor.example", IsNotFound: true}), false},
 		{"404", handshake(&mcp.HTTPStatusError{StatusCode: 404}), false},
@@ -113,20 +115,21 @@ func TestFixtureKeyRefused(t *testing.T) {
 func TestProbeTimeoutBudgetCoversMultiStepHandshake(t *testing.T) {
 	const perReq = 30 * time.Second
 	openBudget := probeTimeoutBudget(perReq, "")
-	if want := 2*perReq + mcp.MaxConnectRetryBudget; openBudget != want {
+	if want := 3*perReq + mcp.MaxConnectRetryBudget; openBudget != want {
 		t.Errorf("unauthenticated probeTimeoutBudget = %s, want %s", openBudget, want)
 	}
 	keyBudget := probeTimeoutBudget(perReq, "secret-key")
-	if want := 6*perReq + mcp.MaxConnectRetryBudget; keyBudget != want {
+	if want := 8*perReq + mcp.MaxConnectRetryBudget; keyBudget != want {
 		t.Errorf("credentialed probeTimeoutBudget = %s, want %s", keyBudget, want)
 	}
 
-	// Regression test: when initialize and tools/list each finish within
-	// HTTPTimeout (80ms < 120ms) while their sum exceeds one HTTPTimeout
-	// (160ms > 120ms), both probeServer's inner handshake budget and
-	// probeForTest's outer budget must let the multi-step handshake finish.
+	// Regression test: when initialize, notifications/initialized, and
+	// tools/list each finish within HTTPTimeout (90ms < 120ms) while their sum
+	// exceeds 2 * HTTPTimeout (270ms > 240ms), both probeServer's inner
+	// handshake budget and probeForTest's outer budget must let the handshake
+	// finish.
 	const reqTimeout = 120 * time.Millisecond
-	const stepDelay = 80 * time.Millisecond
+	const stepDelay = 90 * time.Millisecond
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     int    `json:"id"`
@@ -147,6 +150,7 @@ func TestProbeTimeoutBudgetCoversMultiStepHandshake(t *testing.T) {
 				},
 			})
 		case "notifications/initialized":
+			time.Sleep(stepDelay)
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/list":
 			time.Sleep(stepDelay)

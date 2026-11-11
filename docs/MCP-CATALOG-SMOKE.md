@@ -38,9 +38,10 @@ bundle's merged view, so an entry the default bundle hides is still checked.
 
 `scripts/mcp-catalog-lint.sh` needs only bash, awk and curl. It groups links by
 host, runs hosts in parallel and each host's links one at a time with a delay,
-tries HEAD before GET (falling back to GET with a fresh retry allowance when
-HEAD is refused or throttled), follows up to five redirects, retries a 429/503
-honouring `Retry-After`, and re-checks any `DEAD` link once after
+tries HEAD before GET (sharing the retry budget across both methods so a
+throttled host stays bounded below the job timeout, with one final GET probe if
+only HEAD is throttled), follows up to five redirects, retries a 429/503
+honouring `Retry-After` (capped at 15 seconds), and re-checks any `DEAD` link once after
 `--confirm-delay` (default 30 seconds; 0 when `--delay 0`) so a docs deploy
 swap or brief resolver hiccup does not fail the run. Verdicts:
 
@@ -221,7 +222,7 @@ looks.
 
 The `strict_smoke` dispatch input (`FLEET_CATALOG_STRICT=1`) turns outage
 and refused-key warnings into failures for a deliberate sweep, as `strict_links` does for the
-link lint. What this costs: **a vendor that stays down every night only ever
+link lint. What this costs: **a vendor that stays down every week only ever
 warns.** It shows on each run's page and summary but files no issue. If that
 starts to matter, a consecutive-nights rule needs state the lane does not keep
 today.

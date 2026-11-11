@@ -224,3 +224,23 @@ func TestHTTPTransportNon2xxRESTErrorObjectIsStatusError(t *testing.T) {
 		t.Errorf("got %q, want the REST error text without an id-mismatch complaint", err.Error())
 	}
 }
+
+func TestHTTPTransportNon2xxPrettyPrintedRESTErrorQuotesFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"API rate limit exceeded for shared IP\"\n  }\n}\n"))
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	defer func() { _ = c.Close() }()
+	err := c.AddHTTPServerWithOptions(context.Background(), "s", srv.URL, HTTPServerOptions{})
+	var hs *HTTPStatusError
+	if !errors.As(err, &hs) {
+		t.Fatalf("error %v (%T) is not an *HTTPStatusError", err, err)
+	}
+	if !strings.Contains(hs.Body, "API rate limit exceeded for shared IP") {
+		t.Errorf("pretty-printed JSON error lost its message field: Body=%q", hs.Body)
+	}
+}

@@ -432,7 +432,7 @@ For bundle authors:
   it. The comparison is by name against the directory as shown, so an entry
   the operator hides or a release removes is not compared, and a server the
   user typed by hand under a directory name is compared like any other. The repository (not the running product) checks the
-  snapshot once a day: a dead-link lint over every `docs_url` and a
+  snapshot once a week: a dead-link lint over every `docs_url` and a
   credential-less handshake against every `open` entry
   ([`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md)); OAuth entries are verified
   by hand ([`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md)).

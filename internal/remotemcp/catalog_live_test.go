@@ -148,10 +148,11 @@ func rateLimitedMessage(message string) bool {
 }
 
 // droppedHTTPConnection reports whether err is a transport-level disconnect
-// mid-request or mid-response — truncated chunked/SSE stream, broken pipe,
-// pre-header EOF in net/http, or an HTTP/2 stream reset / GOAWAY — without
-// treating a clean HTTP 200 empty body (bare io.EOF from json.Decoder) as an
-// outage.
+// mid-request or mid-response — broken pipe, net/http *url.Error EOF or
+// unexpected EOF, truncated SSE stream, or an HTTP/2 stream reset / GOAWAY —
+// without treating a completed HTTP 200 carrying an empty or syntactically
+// truncated JSON body (bare io.EOF or io.ErrUnexpectedEOF from json.Decoder)
+// as an outage.
 func droppedHTTPConnection(err error) bool {
 	if err == nil {
 		return false
@@ -162,14 +163,17 @@ func droppedHTTPConnection(err error) bool {
 	if errors.As(err, &statusErr) || errors.As(err, &rpcErr) || errors.As(err, &unattributed) {
 		return false
 	}
-	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.EPIPE) {
+	if errors.Is(err, syscall.EPIPE) {
 		return true
 	}
 	var urlErr *url.Error
-	if errors.As(err, &urlErr) && errors.Is(urlErr.Err, io.EOF) {
+	if errors.As(err, &urlErr) && (errors.Is(urlErr.Err, io.EOF) || errors.Is(urlErr.Err, io.ErrUnexpectedEOF)) {
 		return true
 	}
 	lower := strings.ToLower(err.Error())
+	if errors.Is(err, io.ErrUnexpectedEOF) && strings.Contains(lower, "sse read error:") {
+		return true
+	}
 	return strings.Contains(lower, "stream error:") ||
 		strings.Contains(lower, "http2: server sent goaway") ||
 		strings.Contains(lower, "http2: client connection lost")

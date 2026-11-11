@@ -30,12 +30,13 @@
 #
 # Rate-limit aware: links are grouped by hostname; hosts run in parallel
 # (--concurrency) but each host's links run one at a time with --delay seconds
-# between them. A 429/503 is retried up to --retries times honouring
-# Retry-After (capped at 60 s) or an exponential backoff on --delay, and the
-# wait happens BEFORE any further request to that host. A resolver failure is
-# retried the same way before the link is called dead. Every link is tried
-# with HEAD first and falls back to GET when the server does not like HEAD, so
-# a page is never downloaded unless it has to be.
+# between them. A 429/503 is retried up to --retries times across HEAD and GET
+# honouring Retry-After (capped at 15 s so a multi-link host cannot overrun the
+# CI job timeout) or an exponential backoff on --delay, and the wait happens
+# BEFORE any further request to that host. A resolver failure is retried the
+# same way before the link is called dead. Every link is tried with HEAD first
+# and falls back to GET when the server does not like HEAD, so a page is never
+# downloaded unless it has to be.
 #
 # It needs only bash 4+, awk and curl — no YAML parser. The catalog's shape is
 # regular (one `- name:` per entry, one `<field>: "<url>"` line per link) and
@@ -249,11 +250,12 @@ classify() {
   esac
 }
 
-# backoff ATTEMPT RETRY_AFTER → seconds to wait: Retry-After when sane, else
-# --delay doubled per attempt.
+# backoff ATTEMPT RETRY_AFTER → seconds to wait: Retry-After when sane (capped
+# at 15s so a host with ~10 catalog links cannot blow the 30-minute job timeout),
+# else --delay doubled per attempt.
 backoff() {
   local attempt="$1" ra="$2"
-  if [[ "$ra" =~ ^[0-9]+$ ]] && (( ra <= 60 )); then
+  if [[ "$ra" =~ ^[0-9]+$ ]] && (( ra <= 15 )); then
     echo "$ra"
   else
     awk -v d="$DELAY" -v a="$attempt" 'BEGIN { printf "%.1f", d * (2 ^ a) }'
@@ -261,6 +263,10 @@ backoff() {
 }
 
 # check_url NAME FIELD URL [OUTFILE] — appends one result line.
+# Retry budgets are shared across HEAD and GET so a sustained 429/503 on a host
+# with many links stays bounded well below the workflow timeout; if HEAD alone
+# exhausts the retry budget on 429/503, one final GET probe runs after a polite
+# --delay pause in case only HEAD is throttled/refused.
 check_url() {
   local name="$1" field="$2" url="$3" out_file="${4:-$RESULTS}"
   local attempt=0 method=HEAD code rc ra eff verdict note line
@@ -274,12 +280,9 @@ check_url() {
         sleep "$(backoff "$attempt" "$ra")"
         continue
       fi
-      # Some origins/CDNs answer 503 or 429 only to HEAD; try GET once with its
-      # own retry allowance after waiting out the backoff.
       if [[ "$method" == "HEAD" ]]; then
-        sleep "$(backoff "$((attempt + 1))" "$ra")"
+        sleep "$DELAY"
         method=GET
-        attempt=0
         continue
       fi
       break
@@ -295,12 +298,11 @@ check_url() {
       break
     fi
     # HEAD refused, errored or answered anything but 2xx/3xx: ask again with
-    # GET, resetting the retry counter for GET. That includes a HEAD 404 — some
-    # servers only route GET — so a page is never called dead on the strength of
-    # HEAD alone.
+    # GET, sharing whatever retry allowance remains. That includes a HEAD 404 —
+    # some servers only route GET — so a page is never called dead on the
+    # strength of HEAD alone.
     if [[ "$method" == "HEAD" ]] && { (( rc != 0 )) || [[ ! "$code" =~ ^[23] ]]; }; then
       method=GET
-      attempt=0
       continue
     fi
     break

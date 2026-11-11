@@ -375,13 +375,12 @@ func truncateReason(s string) string {
 	return s
 }
 
-// handshakeSteps is the number of JSON-RPC request/response round-trips an MCP
-// handshake performs (initialize + tools/list; notifications/initialized
-// carries no response body). Each individual HTTP request is bounded at
-// HTTPTimeout by s.httpClient.Timeout; probeTimeout bounds the handshake as a
-// whole so both round-trips can complete within HTTPTimeout without the first
-// starving the second.
-const handshakeSteps = 2
+// handshakeSteps is the number of blocking HTTP round-trips an MCP handshake
+// performs (initialize + notifications/initialized + tools/list). Each
+// individual HTTP request is bounded at HTTPTimeout by s.httpClient.Timeout;
+// probeTimeout bounds the handshake as a whole so all three round-trips can
+// complete within HTTPTimeout without an earlier step starving tools/list.
+const handshakeSteps = 3
 
 // probeTimeout is the budget for one handshake (initialize + tools/list); the
 // verification call and the control probe each get their own budgets.
