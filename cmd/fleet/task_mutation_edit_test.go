@@ -141,11 +141,34 @@ func TestApplyTaskMutation_PromptEdits(t *testing.T) {
 			t.Fatalf("an edit touched more than the prompt: recurrence=%q status=%s", got.Recurrence, got.Status)
 		}
 
-		// An edit that empties the prompt is refused by the API's own bound.
+		// An edit that empties the prompt is refused for that task.
 		if _, err := applyTaskMutation(ctx, store, got, httpapi.TaskMutationRequest{
 			PromptEdits: []tools.PromptEdit{{Old: got.Prompt, New: ""}},
+		}); err == nil || !strings.Contains(err.Error(), "no prompt") {
+			t.Fatalf("emptying the prompt: err = %v, want the no-prompt refusal", err)
+		}
+		// One that leaves it under the API's minimum length is refused by
+		// that bound.
+		if _, err := applyTaskMutation(ctx, store, got, httpapi.TaskMutationRequest{
+			PromptEdits: []tools.PromptEdit{{Old: got.Prompt, New: "ok"}},
 		}); err == nil || !strings.Contains(err.Error(), "at least") {
-			t.Fatalf("emptying the prompt: err = %v, want the length bound", err)
+			t.Fatalf("a 2-byte prompt: err = %v, want the length bound", err)
+		}
+		if again, _ := store.GetTask(task.ID); again == nil || again.Prompt != want {
+			t.Fatalf("a refused edit reached the row: %+v", again)
+		}
+
+		// Edited down to whitespace passes a byte-length bound; it is refused
+		// as an empty prompt, and the row keeps its prompt.
+		var wipe []tools.PromptEdit
+		for _, l := range strings.Split(want, "\n") {
+			if l != "" {
+				wipe = append(wipe, tools.PromptEdit{Old: l, New: " "})
+			}
+		}
+		if _, err := applyTaskMutation(ctx, store, got, httpapi.TaskMutationRequest{PromptEdits: wipe}); err == nil ||
+			err.Error() != "the edits would leave this task with no prompt; nothing changed" {
+			t.Fatalf("whitespace-only result: err = %v, want the no-prompt refusal", err)
 		}
 		if again, _ := store.GetTask(task.ID); again == nil || again.Prompt != want {
 			t.Fatalf("a refused edit reached the row: %+v", again)

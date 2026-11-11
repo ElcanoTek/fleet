@@ -192,6 +192,12 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 		if err != nil {
 			return "", err
 		}
+		// The length bound below counts bytes, so a prompt edited down to
+		// whitespace would pass it. A scheduled task with no instructions is
+		// never what a small edit meant.
+		if strings.TrimSpace(next) == "" {
+			return "", errors.New("the edits would leave this task with no prompt; nothing changed")
+		}
 		if next != t.Prompt {
 			edit.Prompt = next
 			changed = append(changed, promptEditDetail(req))
