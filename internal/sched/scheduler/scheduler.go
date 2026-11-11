@@ -146,7 +146,8 @@ type Scheduler struct {
 	chatWorkers   sync.WaitGroup
 	chatPasses    atomic.Int64
 	nextChatDueAt func(ctx context.Context, after int64) (int64, bool, error)
-	// clock replaces time.Now for timing settles (tests; nil = time.Now).
+	// clock replaces time.Now for chat-schedule claims, settles and next-due
+	// lookups (tests; nil = time.Now).
 	clock func() time.Time
 
 	// promoteRetryArmed marks a pending promotion retry: a pass that passed

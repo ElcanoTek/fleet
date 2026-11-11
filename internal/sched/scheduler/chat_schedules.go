@@ -59,7 +59,7 @@ func (s *Scheduler) SetChatScheduleDeliverer(d ChatScheduleDeliverer) {
 // wake horizon (the larger of chatScheduleWakeHorizon and the tick interval)
 // is dropped: some tick runs before it is due and re-arms it then.
 func (s *Scheduler) WakeChatSchedulesAt(t time.Time) {
-	if s == nil || t.IsZero() || time.Until(t) > s.chatWakeHorizon() {
+	if s == nil || t.IsZero() || t.Sub(s.now()) > s.chatWakeHorizon() {
 		return
 	}
 	s.chatWakeMu.Lock()
@@ -111,7 +111,7 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	if s.chatDeliverer == nil {
 		return models.ChatScheduleDelivery{}, errNoChatDeliverer
 	}
-	now := time.Now()
+	now := s.now()
 	fire, err := s.storage.DB().ClaimChatScheduleNow(ctx, scheduleID, now, chatScheduleLease)
 	if err != nil {
 		return models.ChatScheduleDelivery{}, err
@@ -265,7 +265,7 @@ func (s *Scheduler) chatPass() int {
 			}
 			return true
 		}
-		now := time.Now()
+		now := s.now()
 		if claim("recover", func(limit int) ([]models.ChatScheduleFire, error) {
 			return s.storage.DB().RecoverChatScheduleFires(ctx, now, chatScheduleLease, limit)
 		}) {
@@ -384,7 +384,8 @@ func (s *Scheduler) armNextChatScheduleWake(ctx context.Context) {
 	if lookup == nil {
 		lookup = s.storage.DB().NextChatScheduleDueAt
 	}
-	next, ok, err := lookup(ctx, time.Now().Unix())
+	now := s.now()
+	next, ok, err := lookup(ctx, now.Unix())
 	if err != nil {
 		if s.ctx.Err() == nil {
 			logging.From(ctx).Error("scheduler: chat schedules: next due time lookup failed", "err", err, "retry_in", chatScheduleErrorRetry)
@@ -393,7 +394,7 @@ func (s *Scheduler) armNextChatScheduleWake(ctx context.Context) {
 		return
 	}
 	if ok {
-		if at := time.Unix(next, 0); time.Until(at) < s.tickInterval {
+		if at := time.Unix(next, 0); at.Sub(now) < s.tickInterval {
 			s.WakeChatSchedulesAt(at)
 		}
 	}

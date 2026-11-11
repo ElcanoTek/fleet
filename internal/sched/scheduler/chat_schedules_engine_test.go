@@ -108,11 +108,14 @@ func newEngineScheduler(t *testing.T) (*Scheduler, *fakeDeliverer) {
 
 func addChatSchedule(t *testing.T, s *Scheduler, id, status string, nextRunAt int64) {
 	t.Helper()
-	now := time.Now().Unix()
+	now := time.Now().UTC()
+	// Pick a daily slot >1h out so a multi-pass or real-clock test never
+	// crosses the settled next_run_at boundary mid-run.
+	cronExpr := fmt.Sprintf("0 %d * * *", (now.Hour()+2)%24)
 	if _, err := s.storage.DB().Conn().Exec(`INSERT INTO chat_schedules
 		(id, conversation_id, user_email, title, prompt, cron_expr, timezone, status, next_run_at, created_at, updated_at)
-		VALUES ($1, 'conv', 'u@x.com', 'T', 'P', '*/10 * * * *', 'UTC', $2, $3, $4, $4)`,
-		id, status, nextRunAt, now); err != nil {
+		VALUES ($1, 'conv', 'u@x.com', 'T', 'P', $2, 'UTC', $3, $4, $5, $5)`,
+		id, cronExpr, status, nextRunAt, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -900,13 +903,14 @@ func TestProcessScheduledTasks_LockedRowIsRetriedSoon(t *testing.T) {
 func TestChatSchedules_SettleIsTimedAfterDelivery(t *testing.T) {
 	t.Parallel()
 	s, d := newEngineScheduler(t)
+	base := time.Date(2026, 11, 11, 19, 35, 10, 0, time.UTC)
 	var offset atomic.Int64
-	s.clock = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	s.clock = func() time.Time { return base.Add(time.Duration(offset.Load())) }
 	d.after = func() { offset.Store(int64(3 * time.Minute)) } // the delivery "took" 3 minutes
 	if _, err := s.storage.DB().Conn().Exec(`INSERT INTO chat_schedules
 		(id, conversation_id, user_email, title, prompt, cron_expr, timezone, status, next_run_at, created_at, updated_at)
 		VALUES ('every-minute', 'conv', 'u@x.com', 'T', 'P', '* * * * *', 'UTC', 'active', $1, $1, $1)`,
-		time.Now().Add(-time.Second).Unix()); err != nil {
+		base.Add(-time.Second).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	s.runChatSchedulesAndWait()
@@ -915,7 +919,7 @@ func TestChatSchedules_SettleIsTimedAfterDelivery(t *testing.T) {
 	if err := s.storage.DB().Conn().QueryRow(`SELECT next_run_at FROM chat_schedules WHERE id = 'every-minute'`).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next <= finished.Add(-time.Second).Unix() {
+	if next <= finished.Unix() {
 		t.Fatalf("next slot %s is not after the delivery finished (%s): it would fire again at once",
 			time.Unix(next, 0).UTC().Format(time.RFC3339), finished.UTC().Format(time.RFC3339))
 	}

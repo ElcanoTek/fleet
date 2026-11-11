@@ -71,6 +71,11 @@ func newChatScheduleFleet(t *testing.T) (*Scheduler, *store.Store, *storeDeliver
 func TestChatSchedules_TickFiresDueSchedule(t *testing.T) {
 	t.Parallel()
 	s, chat, d, convID := newChatScheduleFleet(t)
+	// Pin one second before a 10-minute boundary so neither the post-settle
+	// NextRunAt check nor the follow-up pass races a wall-clock rollover into
+	// 19:40:00Z.
+	fixedNow := time.Date(2026, 11, 11, 19, 39, 59, 0, time.UTC)
+	s.clock = func() time.Time { return fixedNow }
 	ctx := context.Background()
 	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
 		ConversationID: convID, UserEmail: "owner@elcanotek.com", Title: "Sweep", Prompt: "Check.",
@@ -79,7 +84,7 @@ func TestChatSchedules_TickFiresDueSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET next_run_at = $1 WHERE id = $2`, time.Now().Add(-time.Minute).Unix(), sc.ID); err != nil {
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET next_run_at = $1 WHERE id = $2`, fixedNow.Add(-time.Minute).Unix(), sc.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,9 +96,10 @@ func TestChatSchedules_TickFiresDueSchedule(t *testing.T) {
 	if d.kicks < 1 {
 		t.Errorf("queued patrol turns were not kicked (kicks = %d)", d.kicks)
 	}
+	wantNext := time.Date(2026, 11, 11, 19, 40, 0, 0, time.UTC).Unix()
 	list, err := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, false)
-	if err != nil || len(list) != 1 || list[0].RunCount != 1 || list[0].NextRunAt <= time.Now().Unix() {
-		t.Fatalf("schedule after the tick = %+v, %v", list, err)
+	if err != nil || len(list) != 1 || list[0].RunCount != 1 || list[0].NextRunAt != wantNext {
+		t.Fatalf("schedule after the tick = %+v, %v (want next_run_at %d)", list, err, wantNext)
 	}
 	runs, err := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 10)
 	if err != nil || len(runs) != 1 || runs[0].InputID != d.settled[0].InputID {
@@ -404,6 +410,8 @@ func TestChatSchedules_RunNowOnFullQueueIsRefused(t *testing.T) {
 func TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot(t *testing.T) {
 	t.Parallel()
 	s, chat, _, convID := newChatScheduleFleet(t)
+	fixedNow := time.Date(2026, 11, 11, 8, 59, 59, 0, time.UTC)
+	s.clock = func() time.Time { return fixedNow }
 	ctx := context.Background()
 	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
 		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
@@ -411,13 +419,13 @@ func TestChatSchedules_ScheduledFireOnFullQueueSkipsItsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET next_run_at = $1 WHERE id = $2`, time.Now().Add(-time.Minute).Unix(), sc.ID); err != nil {
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET next_run_at = $1 WHERE id = $2`, fixedNow.Add(-time.Minute).Unix(), sc.ID); err != nil {
 		t.Fatal(err)
 	}
 	fillInputQueue(t, s, convID, 20)
 	s.runChatSchedulesAndWait()
 
-	next, _ := models.NextChatScheduleRun("0 9 * * *", "UTC", time.Now())
+	next, _ := models.NextChatScheduleRun("0 9 * * *", "UTC", fixedNow)
 	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
 	if len(all) != 1 || all[0].RunCount != 0 || all[0].NextRunAt != next.Unix() {
 		t.Fatalf("schedule = %+v; want no run counted and the slot moved to %d", all, next.Unix())
