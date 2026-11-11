@@ -601,15 +601,16 @@ func (p *scheduledPolicy) RunAnswer(roundText string) string {
 // keepJudgedAnswer records that a model finish gate judged the current answer
 // and sent the run back for repair: the repair round's text is composed with
 // it (composeRunAnswer) rather than replacing it — except when the task has an
-// output schema AND the judged answer is itself one JSON value. A supplement
-// appended to that value is a second value, which the verifier rejects as
-// "not exactly one JSON object" on every remaining check until the run
-// dead-letters, so there the repair round's text replaces the judged answer
-// (a textless repair round still keeps it). A prose answer on a schema task
-// keeps the append: its JSON is produced afterwards by completeRun.
+// output schema AND the judged answer is a structured JSON value or draft. A
+// supplement appended to JSON makes two values (or leaves broken JSON in front
+// of the corrected value), which the verifier rejects as "not exactly one JSON
+// object" on every remaining check until the run dead-letters, so there the
+// repair round's text replaces the judged answer (a textless repair round
+// still keeps it). A prose answer on a schema task keeps the append: its JSON
+// is produced afterwards by completeRun.
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
-	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isSingleJSONValue(p.judgedAnswer)
+	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isStructuredAnswerDraft(p.judgedAnswer)
 	p.answerBeforeAudit = false
 }
 
@@ -645,6 +646,32 @@ func (p *scheduledPolicy) keepAnswerBeforeAudit(msgs []string) []string {
 	return msgs
 }
 
+// stripOptionalCodeFence trims whitespace and unwraps at most one Markdown
+// code fence, reporting whether the opening fence explicitly declared a JSON
+// language tag (for example ```json). An unclosed ```json fence still unwraps
+// its body so a truncated fenced draft is recognized as structured output.
+func stripOptionalCodeFence(text string) (body string, jsonFence bool) {
+	text = strings.TrimSpace(text)
+	rest, ok := strings.CutPrefix(text, "```")
+	if !ok {
+		return text, false
+	}
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 {
+		return "", false
+	}
+	lang := strings.ToLower(strings.TrimSpace(rest[:nl]))
+	jsonFence = lang == "json" || strings.HasPrefix(lang, "json ")
+	inner := rest[nl+1:]
+	if trimmed, closed := strings.CutSuffix(strings.TrimSpace(inner), "```"); closed {
+		return strings.TrimSpace(trimmed), jsonFence
+	}
+	if jsonFence {
+		return strings.TrimSpace(inner), true
+	}
+	return text, false
+}
+
 // isSingleJSONValue reports whether text is exactly one JSON value (object,
 // array or scalar — a scalar output schema asks for one), optionally inside
 // one Markdown code fence.
@@ -668,6 +695,47 @@ func isSingleJSONValue(text string) bool {
 	}
 	_, err := dec.Token()
 	return errors.Is(err, io.EOF)
+}
+
+// isStructuredAnswerDraft reports whether text on an output-schema task is a
+// structured JSON answer or draft rather than prose. Every valid single JSON
+// value qualifies (isSingleJSONValue), and so does a malformed or truncated
+// JSON object or array draft (such as a trailing bracket typo at the end of an
+// object, or an explicit ```json code block): appending a repair round to a
+// broken JSON draft leaves the broken JSON in front of the repaired value, so
+// no later repair round can ever produce one valid JSON value. Prose answers
+// (including "[OK] ...", "[2026-11-11] ...", "[1] ...", and Markdown links)
+// return false and keep supplement composition.
+func isStructuredAnswerDraft(text string) bool {
+	if isSingleJSONValue(text) {
+		return true
+	}
+	body, jsonFence := stripOptionalCodeFence(text)
+	if body == "" {
+		return false
+	}
+	if jsonFence {
+		return true
+	}
+	switch body[0] {
+	case '{':
+		rest := strings.TrimLeft(body[1:], " \t\r\n")
+		return rest == "" || rest[0] == '"' || rest[0] == '}'
+	case '[':
+		rest := strings.TrimLeft(body[1:], " \t\r\n")
+		if rest == "" || rest[0] == '{' || rest[0] == '[' || rest[0] == '"' {
+			return true
+		}
+		dec := json.NewDecoder(strings.NewReader(rest))
+		var first json.RawMessage
+		if dec.Decode(&first) != nil {
+			return false
+		}
+		after := strings.TrimLeft(rest[dec.InputOffset():], " \t\r\n")
+		return after == "" || after[0] == ',' || strings.HasPrefix(after, "]]") || strings.HasPrefix(after, "][")
+	default:
+		return false
+	}
 }
 
 // verifierRepairAnswerNote is the note the verifier's repair nudge carries:

@@ -45,16 +45,20 @@ which concatenates every round, contained every requested item.
 - The verifier's repair nudge says the earlier text stays and the next is
   appended (write only what was missing). The reviewer's nudge says the next
   text replaces the answer (write the whole corrected answer).
-- **A JSON answer on a task with an output schema** (amended 2026-10-19):
-  when the judged answer is itself exactly one JSON value, a verifier repair
-  *replaces* it too, and its nudge is the reviewer's (write the whole
-  corrected answer). A supplement appended after that value made two values, and the verifier rejected the
-  composition as "not exactly one JSON object" on every remaining check until
-  the run dead-lettered. Manifest's deep-audit tasks hit this on most repaired
-  runs from 2026-10-05. A textless repair round still keeps the judged object,
-  and a prose answer on a schema task keeps the append (the schema constrains
-  only the terminal output `completeRun` generates afterwards).
+- **A JSON answer on a task with an output schema** (amended 2026-10-19 and
+  2026-11-11): when the judged answer is a structured JSON value or JSON draft
+  (including a malformed or truncated JSON object/array draft, such as a
+  trailing bracket typo at the end of an object, or a ```json code block), a
+  verifier repair *replaces* it too, and its nudge is the reviewer's (write
+  the whole corrected answer). Appending after a valid or broken JSON draft
+  made two values (or kept broken JSON in front of the repaired object), and
+  the verifier rejected the composition as "not exactly one JSON object" on
+  every remaining check until the run dead-letters. A textless repair round
+  still keeps the judged draft, and a prose answer on a schema task keeps the
+  append (the schema constrains only the terminal output `completeRun`
+  generates afterwards).
   `TestScheduledVerifierRepairReplacesStructuredAnswer`,
+  `TestScheduledVerifierRepairReplacesMalformedJSONDraftOnSchemaTask`,
   `TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask`.
 - The `(no final response text)` marker still stands in when the run has
   produced no text at all. Truncation is unchanged
