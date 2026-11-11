@@ -718,7 +718,7 @@ func isStructuredAnswerDraft(text string) bool {
 	}
 	switch body[0] {
 	case '{':
-		return isJSONObjectDraft(strings.TrimLeft(body[1:], " \t\r\n"))
+		return isJSONObjectDraft(body)
 	case '[':
 		return isJSONArrayDraft(strings.TrimLeft(body[1:], " \t\r\n"))
 	default:
@@ -726,103 +726,69 @@ func isStructuredAnswerDraft(text string) bool {
 	}
 }
 
-// isJSONObjectDraft reports whether rest (the bytes after a leading '{' and
-// whitespace) looks like a malformed or truncated JSON object (including
-// unquoted or single-quoted keys such as `{status:"draft"}`) rather than
-// brace-wrapped prose or template placeholders such as "{see note above}" or
+// isJSONObjectDraft reports whether body (starting with '{') looks like a
+// malformed or truncated JSON object rather than brace-wrapped prose or
+// template placeholders such as "{see note above}", "{placeholder}", or
 // "{{placeholder}}".
-func isJSONObjectDraft(rest string) bool {
-	if rest == "" {
+func isJSONObjectDraft(body string) bool {
+	trimmedOpen := strings.TrimLeft(body, "{ \t\r\n")
+	if trimmedOpen == "" {
 		return true
 	}
-	switch rest[0] {
-	case '"', '}', '\'', ',', ':':
+	closeIdx := strings.IndexByte(trimmedOpen, '}')
+	if closeIdx < 0 {
 		return true
-	case '{':
-		inner := strings.TrimLeft(rest[1:], " \t\r\n")
-		return inner != "" && (inner[0] == '"' || inner[0] == '\'')
 	}
-	n := 0
-	for n < len(rest) && isObjectKeyChar(rest[n]) {
-		n++
+	inside := strings.TrimSpace(trimmedOpen[:closeIdx])
+	if inside == "" || strings.ContainsAny(inside, ":\"',[{]\r\n") {
+		return true
 	}
-	if n == 0 {
+	after := strings.TrimLeft(trimmedOpen[closeIdx+1:], "} \t\r\n")
+	if after == "" {
 		return false
 	}
-	afterKey := strings.TrimLeft(rest[n:], " \t\r\n")
-	return afterKey == "" || afterKey[0] == ':'
-}
-
-func isObjectKeyChar(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '$' || b == '-'
+	switch after[0] {
+	case ',', '{', '[', ':':
+		return true
+	default:
+		return false
+	}
 }
 
 // isJSONArrayDraft reports whether rest (the bytes after a leading '[' and
-// whitespace) looks like a malformed or truncated JSON array rather than a
-// bracketed prose prefix such as "[OK] ...", "[2026-11-11] ...", "[1] ...", or
-// "[Label](url)".
+// whitespace) looks like a malformed or truncated JSON array (including
+// unquoted element drafts such as "[foo, bar]" or "[draft,") rather than a
+// bracketed prose prefix ("[OK] ...", "[2026-11-11] ...", "[1] ...", "[ ] ...")
+// or a Markdown link ("[Label](url)").
 func isJSONArrayDraft(rest string) bool {
 	if rest == "" {
 		return true
 	}
 	switch rest[0] {
-	case '{', '[', '"', '\'', ']', ',':
+	case '{', '[', '"', '\'', ',':
 		return true
-	}
-	if !startsJSONArrayPrimitive(rest) {
-		return false
 	}
 	closeIdx := strings.IndexByte(rest, ']')
 	if closeIdx < 0 {
 		return true
 	}
 	inside := rest[:closeIdx]
-	if strings.ContainsAny(inside, ",[{\"'") {
+	if strings.ContainsAny(inside, "\r\n{[") {
 		return true
 	}
-	after := strings.TrimLeft(rest[closeIdx+1:], " \t\r\n")
+	rawAfter := rest[closeIdx+1:]
+	if strings.HasPrefix(rawAfter, "(") && strings.Contains(rawAfter, ")") && !strings.ContainsAny(inside, "\"'") {
+		return false
+	}
+	if strings.ContainsAny(inside, ",\"'") {
+		return true
+	}
+	after := strings.TrimLeft(rawAfter, " \t\r\n")
 	if after == "" {
 		return true
 	}
 	switch after[0] {
 	case ',', ']', '[', '{', '}':
-		return true
-	default:
-		return false
-	}
-}
-
-func startsJSONArrayPrimitive(rest string) bool {
-	if rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9') {
-		return true
-	}
-	n := 0
-	for n < len(rest) && ((rest[n] >= 'a' && rest[n] <= 'z') || (rest[n] >= 'A' && rest[n] <= 'Z')) {
-		n++
-	}
-	if n == 0 {
-		return false
-	}
-	word := rest[:n]
-	if n < len(rest) && !isJSONTokenBoundary(rest[n]) {
-		return false
-	}
-	for _, kw := range [...]string{"true", "false", "null"} {
-		if strings.HasPrefix(kw, word) {
-			return true
-		}
-	}
-	switch word {
-	case "True", "False", "Null", "None":
-		return true
-	default:
-		return false
-	}
-}
-
-func isJSONTokenBoundary(b byte) bool {
-	switch b {
-	case ' ', '\t', '\r', '\n', ',', ']', '[', '{', '}':
 		return true
 	default:
 		return false
