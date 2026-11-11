@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The Share dialog (ADR-0057; docs/TEAM-SHARING.md "Share dialog").
 //
 // One team block, always first, and one public-link row below it. The team
@@ -110,14 +112,14 @@ function visibilityLabel(
   _team?: string,
 ): string {
   if (conversation.multiplayer) {
-    return conversation.share_token ? "Multiplayer and by link" : "Multiplayer";
+    return conversation.share_token ? tr("Multiplayer and by link") : tr("Multiplayer");
   }
   if (conversation.team_visible) {
     return conversation.share_token
-      ? "Shared with your team and by link"
-      : "Shared with your team";
+      ? tr("Shared with your team and by link")
+      : tr("Shared with your team");
   }
-  return conversation.share_token ? "Public link" : "Only you";
+  return conversation.share_token ? tr("Public link") : tr("Only you");
 }
 
 export type MultiplayerState = {
@@ -171,7 +173,7 @@ async function updateMultiplayerState(
   });
   if (!res.ok) {
     const text = (await res.text()).trim();
-    throw new Error(text || `Couldn't update multiplayer mode (HTTP ${res.status}).`);
+    throw new Error(text || tr("Couldn't update multiplayer mode (HTTP {0}).", [res.status]));
   }
   return (await res.json()) as MultiplayerState;
 }
@@ -273,7 +275,7 @@ export function ShareDialog({
   const token = conversation?.share_token ?? "";
   // The audience: the team the chat's project is shared with, else the
   // caller's own. "your team" is the honest fallback, never a guessed name.
-  const team = project?.team_id || myTeam || "your team";
+  const team = project?.team_id || myTeam || tr("your team");
 
   const moveTargets = (teamSharedProjects ?? []).filter(
     (p) =>
@@ -402,7 +404,7 @@ export function ShareDialog({
         setMpError(
           err instanceof Error
             ? err.message
-            : "Couldn't update multiplayer settings.",
+            : tr("Couldn't update multiplayer settings."),
         );
       }
     });
@@ -453,7 +455,7 @@ export function ShareDialog({
       setChooseOpen(false);
       setUnchecked(null);
       setOutputsTick((t) => t + 1);
-      confirmShared(c, result, project?.id ?? "", "your team");
+      confirmShared(c, result, project?.id ?? "", tr("your team"));
     });
 
   const moveAndShare = (c: ConversationSummary) =>
@@ -462,7 +464,7 @@ export function ShareDialog({
       const result = await onMoveAndShare(c, pickedId);
       if (!result) return;
       setOutputsTick((t) => t + 1);
-      confirmShared(c, result, pickedId, "your team");
+      confirmShared(c, result, pickedId, tr("your team"));
     });
 
   const stopSharing = (c: ConversationSummary) =>
@@ -476,14 +478,14 @@ export function ShareDialog({
     const url = teamLinkUrl(c.id);
     const done = () =>
       toast.notify({
-        message: "Link copied. Only members of your team can open it.",
+        message: tr("Link copied. Only members of your team can open it."),
       });
     // A blocked (or missing) clipboard is not a copied link — but the
     // owner clicked, so say so and hand them the link to copy themselves
     // rather than letting the click do nothing.
     const failed = () =>
       toast.notify({
-        message: `Couldn’t copy the link. Copy it from here: ${url}`,
+        message: tr("Couldn’t copy the link. Copy it from here: {0}", [url]),
       });
     void copyText(url).then((ok) => (ok ? done() : failed()));
   };
@@ -500,8 +502,7 @@ export function ShareDialog({
       >
         <Icon name="file-text" className="size-3.5 shrink-0" />
         <span>
-          Couldn’t list this chat’s files. Sharing shares the files it
-          presented; you can adjust them in Sources afterwards.
+          {tr("Couldn’t list this chat’s files. Sharing shares the files it presented; you can adjust them in Sources afterwards.")}
         </span>
       </p>
     ) : outputsStatus === "loading" ? (
@@ -510,7 +511,7 @@ export function ShareDialog({
         className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-muted)]"
       >
         <Icon name="file-text" className="size-3.5 shrink-0" />
-        <span>Listing this chat’s files…</span>
+        <span>{tr("Listing this chat’s files…")}</span>
       </p>
     ) : files ? (
       <div className="flex flex-col gap-2">
@@ -522,11 +523,10 @@ export function ShareDialog({
           {files.total > 0 ? (
             <>
               <span>
-                Includes{" "}
-                {filesLabel(
+        {rich("Includes {0}", filesLabel(
                   files.outputs.length - effectiveUnchecked.length,
-                )}
-              </span>
+                ))}
+      </span>
               <span
                 aria-hidden="true"
                 className="text-[var(--color-text-muted)]"
@@ -543,17 +543,17 @@ export function ShareDialog({
                   setChooseOpen(!chooseOpen);
                 }}
               >
-                {chooseOpen ? "Done" : "Choose…"}
+                {chooseOpen ? tr("Done") : tr("Choose…")}
               </button>
             </>
           ) : (
-            <span>Files it creates will be shared too.</span>
+            <span>{tr("Files it creates will be shared too.")}</span>
           )}
         </p>
         {chooseOpen && files.outputs.length > 0 ? (
           <div
             role="group"
-            aria-label="Files to share"
+            aria-label={tr("Files to share")}
             className="flex max-h-52 flex-col overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] p-1"
           >
             {files.outputs.map((f) => {
@@ -596,16 +596,16 @@ export function ShareDialog({
 
   return (
     <DialogShell
-      label="Share this chat"
-      scrimLabel="Close share dialog"
+      label={tr("Share this chat")}
+      scrimLabel={tr("Close share dialog")}
       onDismiss={onClose}
       className="max-w-[29rem] p-5"
     >
       <div className="mb-3.5 flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <h2 className="m-0 text-[1.0625rem] font-medium leading-[1.3] text-[var(--color-text-primary)] [text-wrap:pretty]">
-            Share {conversation ? `“${conversation.title}”` : "this chat"}
-          </h2>
+        {rich("Share {0}", conversation ? `“${conversation.title}”` : tr("this chat"))}
+      </h2>
           {conversation ? (
             <p
               data-testid="share-dialog-where"
@@ -614,7 +614,7 @@ export function ShareDialog({
               {project ? (
                 <Icon name="folder" className="size-3.5 shrink-0" />
               ) : null}
-              <span>{project ? `In ${project.name}` : "Not in a project"}</span>
+              <span>{project ? tr("In {0}", [project.name]) : tr("Not in a project")}</span>
               <span aria-hidden="true" className="text-[var(--color-text-muted)]">
                 ·
               </span>
@@ -622,11 +622,11 @@ export function ShareDialog({
             </p>
           ) : null}
         </div>
-        <CloseButton label="Close share dialog" onClick={onClose} />
+        <CloseButton label={tr("Close share dialog")} onClick={onClose} />
       </div>
 
       {!conversation || !state ? (
-        <p className={BODY}>This chat is no longer available.</p>
+        <p className={BODY}>{tr("This chat is no longer available.")}</p>
       ) : (
         <div className="flex flex-col gap-3.5">
           {error ? (
@@ -641,14 +641,14 @@ export function ShareDialog({
           {/* ── The team block: always first, always full contrast (owner only) ── */}
           {isOwnerForMp ? (
           <section
-            aria-label="Share with your team"
+            aria-label={tr("Share with your team")}
             data-testid="share-team-block"
             data-state={state}
             className="flex flex-col gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_9%,transparent)] p-3.5"
           >
             <h3 className="m-0 flex items-center gap-2 text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
               <TeamGlyph className="size-4 shrink-0" />
-              {state === "A5" ? "Shared with your team" : "Share with your team"}
+              {state === "A5" ? tr("Shared with your team") : tr("Share with your team")}
             </h3>
 
             {state === "A1" || state === "other-team" ? (
@@ -656,16 +656,11 @@ export function ShareDialog({
                 <p className={BODY}>
                   {state === "other-team" && project ? (
                     <>
-                      <strong className={STRONG}>{project.name}</strong> is
-                      shared with <strong className={STRONG}>{project.team_id}</strong>,
-                      and you’re not in that team. To share this chat with your
-                      team, move it to a project shared with your team.
+                      <strong className={STRONG}>{project.name}</strong> {tr("is shared with")}{" "}<strong className={STRONG}>{project.team_id}</strong>{tr(", and you’re not in that team. To share this chat with your team, move it to a project shared with your team.")}
                     </>
                   ) : (
                     <>
-                      To share a chat with your team, it needs to be in a
-                      project shared with your team. Pick one and this chat
-                      will move into it.
+                      {tr("To share a chat with your team, it needs to be in a project shared with your team. Pick one and this chat will move into it.")}
                     </>
                   )}
                 </p>
@@ -676,7 +671,7 @@ export function ShareDialog({
                         htmlFor={pickerId}
                         className="text-[0.75rem] text-[var(--color-text-muted)]"
                       >
-                        Project shared with your team
+                        {tr("Project shared with your team")}
                       </label>
                       <select
                         id={pickerId}
@@ -699,7 +694,7 @@ export function ShareDialog({
                         disabled={working || !pickedId}
                         onClick={() => void moveAndShare(conversation)}
                       >
-                        Move and share
+                        {tr("Move and share")}
                       </button>
                     </div>
                   </>
@@ -712,7 +707,7 @@ export function ShareDialog({
                       onClick={() => onCreateSharedProject(conversation)}
                     >
                       <Icon name="plus" className="size-3.5" />
-                      Create shared project
+                      {tr("Create shared project")}
                     </button>
                   </div>
                 )}
@@ -722,8 +717,7 @@ export function ShareDialog({
             {state === "A1b" ? (
               <>
                 <p className={BODY}>
-                  To share a chat with your team, it needs to be in a project
-                  shared with your team. Create one to move this chat into.
+                  {tr("To share a chat with your team, it needs to be in a project shared with your team. Create one to move this chat into.")}
                 </p>
                 <div>
                   <button
@@ -733,7 +727,7 @@ export function ShareDialog({
                     onClick={() => onCreateSharedProject(conversation)}
                   >
                     <Icon name="plus" className="size-3.5" />
-                    Create shared project
+                    {tr("Create shared project")}
                   </button>
                 </div>
               </>
@@ -742,10 +736,8 @@ export function ShareDialog({
             {state === "A2" && project ? (
               <>
                 <p className={BODY}>
-                  <strong className={STRONG}>{project.name}</strong> isn’t
-                  shared with your team, so its chats are private to you.
-                  Share the project first, then this chat.
-                </p>
+        {rich("{0} isn’t shared with your team, so its chats are private to you. Share the project first, then this chat.", <strong className={STRONG}>{project.name}</strong>)}
+      </p>
                 <div>
                   <button
                     type="button"
@@ -754,7 +746,7 @@ export function ShareDialog({
                     onClick={() => onShareProjectFirst(conversation, project.id)}
                   >
                     <Icon name="folder" className="size-3.5" />
-                    Share project first
+                    {tr("Share project first")}
                   </button>
                 </div>
               </>
@@ -763,21 +755,18 @@ export function ShareDialog({
             {state === "A3a" ? (
               <>
                 <p className={BODY}>
-                  You’re not on a team yet, so there’s no one to share with.
+                  {tr("You’re not on a team yet, so there’s no one to share with.")}
                 </p>
                 <ul className="m-0 flex list-disc flex-col gap-1 pl-[1.125rem] text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
                   {isAdmin !== false ? (
                     <li>
-                      <strong className={STRONG}>Admins:</strong> add yourself
-                      in Settings → Admin → Users, or create a team in Settings
-                      → Team.
-                    </li>
+        {rich("{0} add yourself in Settings → Admin → Users, or create a team in Settings → Team.", <strong className={STRONG}>{tr("Admins:")}</strong>)}
+      </li>
                   ) : null}
                   {isAdmin !== true ? (
                     <li>
-                      <strong className={STRONG}>Everyone else:</strong> ask an
-                      admin to add you to a team.
-                    </li>
+        {rich("{0} ask an admin to add you to a team.", <strong className={STRONG}>{tr("Everyone else:")}</strong>)}
+      </li>
                   ) : null}
                 </ul>
                 <div>
@@ -791,7 +780,7 @@ export function ShareDialog({
                     className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] bg-transparent px-4 text-[0.8125rem] font-semibold text-[var(--color-text-disabled)]"
                   >
                     <LockGlyph className="size-3.5" />
-                    Share with a team (unavailable)
+                    {tr("Share with a team (unavailable)")}
                   </button>
                 </div>
               </>
@@ -800,9 +789,8 @@ export function ShareDialog({
             {state === "A4" ? (
               <>
                 <p className={BODY}>
-                  Teammates find it on {project?.name}’s home, read it, and
-                  branch it into their own chat.
-                </p>
+        {rich("Teammates find it on {0}’s home, read it, and branch it into their own chat.", project?.name)}
+      </p>
                 {shareFileChooser}
                 <div>
                   <button
@@ -811,7 +799,7 @@ export function ShareDialog({
                     disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
-                    Share with your team
+                    {tr("Share with your team")}
                   </button>
                 </div>
               </>
@@ -820,8 +808,7 @@ export function ShareDialog({
             {state === "A5" && !confirmStop ? (
               <>
                 <p className={BODY}>
-                  Teammates can read it and branch it, but can’t edit it. Only
-                  members of your team can open the link.
+                  {tr("Teammates can read it and branch it, but can’t edit it. Only members of your team can open the link.")}
                 </p>
                 {files ? (
                   <p
@@ -832,9 +819,8 @@ export function ShareDialog({
                     {files.total > 0 ? (
                       <>
                         <span>
-                          {Math.min(files.shared_count, files.total)} of{" "}
-                          {filesLabel(files.total)} shared
-                        </span>
+        {rich("{0} of {1} shared", Math.min(files.shared_count, files.total), filesLabel(files.total))}
+      </span>
                         {project ? (
                           <>
                             <span
@@ -850,13 +836,13 @@ export function ShareDialog({
                                 onManageInSources(conversation, project.id)
                               }
                             >
-                              Manage in Sources
+                              {tr("Manage in Sources")}
                             </button>
                           </>
                         ) : null}
                       </>
                     ) : (
-                      <span>Files it creates will be shared too.</span>
+                      <span>{tr("Files it creates will be shared too.")}</span>
                     )}
                   </p>
                 ) : null}
@@ -868,7 +854,7 @@ export function ShareDialog({
                     onClick={() => copyTeamLink(conversation)}
                   >
                     <TeamGlyph className="size-3.5" />
-                    Copy link for your team
+                    {tr("Copy link for your team")}
                   </button>
                   <button
                     type="button"
@@ -876,7 +862,7 @@ export function ShareDialog({
                     disabled={working}
                     onClick={() => setConfirmStop(true)}
                   >
-                    Stop sharing
+                    {tr("Stop sharing")}
                   </button>
                 </div>
               </>
@@ -885,19 +871,18 @@ export function ShareDialog({
             {state === "A5" && confirmStop ? (
               <div
                 role="alertdialog"
-                aria-label="Stop sharing"
+                aria-label={tr("Stop sharing")}
                 className="flex flex-col gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3"
               >
                 <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
-                  Stop sharing with your team?{" "}
-                  {outputsStatus === "loading"
-                    ? "Counting shared files…"
+        {rich("Stop sharing with your team? {0}", outputsStatus === "loading"
+                    ? tr("Counting shared files…")
                     : outputsStatus === "failed" || !files
-                      ? "Its shared files will stop being shared too."
+                      ? tr("Its shared files will stop being shared too.")
                       : files.shared_count > 0
-                        ? `${plural(files.shared_count, "shared file", "shared files")} will stop being shared too.`
-                        : "Teammates lose access right away."}
-                </p>
+                        ? tr("{0} will stop being shared too.", [plural(files.shared_count, "shared file", "shared files")])
+                        : tr("Teammates lose access right away."))}
+      </p>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -908,7 +893,7 @@ export function ShareDialog({
                     onClick={() => void stopSharing(conversation)}
                     className={`inline-flex min-h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-danger)] bg-[var(--color-danger)] px-3.5 text-[0.78rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
                   >
-                    Stop sharing
+                    {tr("Stop sharing")}
                   </button>
                   <button
                     type="button"
@@ -916,7 +901,7 @@ export function ShareDialog({
                     onClick={() => setConfirmStop(false)}
                     className={`inline-flex min-h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-60 ${FOCUS}`}
                   >
-                    Keep sharing
+                    {tr("Keep sharing")}
                   </button>
                 </div>
               </div>
@@ -930,9 +915,8 @@ export function ShareDialog({
                     className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning-soft)]"
                   />
                   <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
-                    Teammates can’t branch from a link, and it won’t show on{" "}
-                    {project?.name}’s home.
-                  </p>
+        {rich("Teammates can’t branch from a link, and it won’t show on {0}’s home.", project?.name)}
+      </p>
                 </div>
                 {shareFileChooser}
                 <div>
@@ -942,7 +926,7 @@ export function ShareDialog({
                     disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
-                    Share with your team
+                    {tr("Share with your team")}
                   </button>
                 </div>
               </>
@@ -953,17 +937,17 @@ export function ShareDialog({
           {/* ── Multiplayer mode: live collaborative chat with add/remove people ── */}
           {!conversation.lockdown ? (
             <section
-              aria-label="Multiplayer mode"
+              aria-label={tr("Multiplayer mode")}
               data-testid="share-multiplayer-block"
               className="flex flex-col gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)] p-3.5"
             >
               <div className="flex items-center justify-between gap-2">
                 <h3 className="m-0 flex items-center gap-2 text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
                   <TeamGlyph className="size-4 shrink-0 text-[var(--color-accent)]" />
-                  Multiplayer mode
+                  {tr("Multiplayer mode")}
                   {isMultiplayer ? (
                     <span className="rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] px-2 py-0.5 text-[0.68rem] font-semibold text-[var(--color-accent)]">
-                      Active
+                      {tr("Active")}
                     </span>
                   ) : null}
                 </h3>
@@ -979,14 +963,14 @@ export function ShareDialog({
                     }
                     className={isMultiplayer ? DANGER_OUTLINE_BTN : PRIMARY_BTN}
                   >
-                    {isMultiplayer ? "Turn off" : "Turn on Multiplayer"}
+                    {isMultiplayer ? tr("Turn off") : tr("Turn on Multiplayer")}
                   </button>
                 ) : null}
               </div>
               <p className={BODY}>
                 {isMultiplayer
-                  ? "Anyone with access can jump into this chat and send messages directly using their own email and connected tools."
-                  : "Let teammates open this chat and send messages together in real time. Each person's turns use their own email and per-user MCP connections."}
+                  ? tr("Anyone with access can jump into this chat and send messages directly using their own email and connected tools.")
+                  : tr("Let teammates open this chat and send messages together in real time. Each person's turns use their own email and per-user MCP connections.")}
               </p>
               {mpError ? (
                 <p
@@ -999,8 +983,8 @@ export function ShareDialog({
               {isMultiplayer ? (
                 <div className="flex flex-col gap-2 pt-1">
                   <div className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
-                    People who can participate ({mpRoster.length || "whole team"})
-                  </div>
+        {rich("People who can participate ({0})", mpRoster.length || tr("whole team"))}
+      </div>
                   {mpRoster.length > 0 ? (
                     <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-1.5">
                       {mpRoster.map((email) => {
@@ -1017,7 +1001,7 @@ export function ShareDialog({
                               {email}
                               {isOwnerRow ? (
                                 <span className="ml-1.5 font-sans text-[0.68rem] text-[var(--color-text-muted)]">
-                                  (owner)
+                                  {tr("(owner)")}
                                 </span>
                               ) : null}
                             </span>
@@ -1032,7 +1016,7 @@ export function ShareDialog({
                                 }
                                 className="shrink-0 rounded px-1.5 py-0.5 text-[0.72rem] text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-strong)] disabled:opacity-50"
                               >
-                                Remove
+                                {tr("Remove")}
                               </button>
                             ) : null}
                           </div>
@@ -1042,7 +1026,7 @@ export function ShareDialog({
                   ) : null}
                   {mpExcluded.length > 0 ? (
                     <div className="flex flex-wrap items-center gap-1.5 text-[0.74rem] text-[var(--color-text-muted)]">
-                      <span>Removed:</span>
+                      <span>{tr("Removed:")}</span>
                       {mpExcluded.map((email) => (
                         <span
                           key={email}
@@ -1060,7 +1044,7 @@ export function ShareDialog({
                               }
                               className="ml-0.5 text-[var(--color-accent)] hover:underline"
                             >
-                              Add back
+                              {tr("Add back")}
                             </button>
                           ) : null}
                         </span>
@@ -1071,8 +1055,8 @@ export function ShareDialog({
                     <div className="flex items-center gap-2">
                       <input
                         type="email"
-                        aria-label="Add person by email"
-                        placeholder="Add person by email…"
+                        aria-label={tr("Add person by email")}
+                        placeholder={tr("Add person by email…")}
                         value={addEmailInput}
                         disabled={working}
                         onChange={(e) => setAddEmailInput(e.target.value)}
@@ -1102,7 +1086,7 @@ export function ShareDialog({
                         }}
                         className={SECONDARY_BTN}
                       >
-                        Add
+                        {tr("Add")}
                       </button>
                     </div>
                   ) : null}
@@ -1114,7 +1098,7 @@ export function ShareDialog({
           {/* ── Public link: one collapsed row, behavior unchanged (owner only) ── */}
           {isOwnerForMp ? (
           <section
-            aria-label="Share outside your team"
+            aria-label={tr("Share outside your team")}
             className="flex flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)]"
           >
             <button
@@ -1127,12 +1111,12 @@ export function ShareDialog({
               <ShareGlyph className="size-4 shrink-0 text-[var(--color-text-secondary)]" />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-[0.84rem] font-medium">
-                  Share outside your team
+                  {tr("Share outside your team")}
                 </span>
                 <span className="text-[0.75rem] text-[var(--color-text-muted)]">
                   {token
-                    ? "Link is on. Anyone with it can read the transcript, never files."
-                    : "Public link. Transcript only, never files."}
+                    ? tr("Link is on. Anyone with it can read the transcript, never files.")
+                    : tr("Public link. Transcript only, never files.")}
                 </span>
               </span>
               <Icon
@@ -1147,7 +1131,7 @@ export function ShareDialog({
                     <div className="flex items-center gap-2">
                       <input
                         readOnly
-                        aria-label="Share link URL"
+                        aria-label={tr("Share link URL")}
                         value={buildShareUrl(token)}
                         onFocus={(e) => e.currentTarget.select()}
                         className="h-8 min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
@@ -1157,7 +1141,7 @@ export function ShareDialog({
                         onClick={() => onCopyLink(buildShareUrl(token))}
                         className={`h-8 shrink-0 rounded-[var(--radius-md)] border border-[var(--color-accent)] px-3.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] ${FOCUS}`}
                       >
-                        {copied ? "Copied ✓" : "Copy link"}
+                        {copied ? tr("Copied ✓") : tr("Copy link")}
                       </button>
                     </div>
                     {/* Revoking is destructive for whoever holds the URL, so
@@ -1165,7 +1149,7 @@ export function ShareDialog({
                     {confirmStopLink ? (
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                          Anyone holding the link loses access at once.
+                          {tr("Anyone holding the link loses access at once.")}
                         </span>
                         <button
                           type="button"
@@ -1176,7 +1160,7 @@ export function ShareDialog({
                           }}
                           className={`rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                         >
-                          {busy ? "Stopping…" : "Stop the public link"}
+                          {busy ? tr("Stopping…") : tr("Stop the public link")}
                         </button>
                         <button
                           type="button"
@@ -1184,7 +1168,7 @@ export function ShareDialog({
                           onClick={() => setConfirmStopLink(false)}
                           className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50 ${FOCUS}`}
                         >
-                          Keep the link
+                          {tr("Keep the link")}
                         </button>
                       </div>
                     ) : (
@@ -1195,7 +1179,7 @@ export function ShareDialog({
                           onClick={() => setConfirmStopLink(true)}
                           className={`rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-3 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                         >
-                          Stop the public link
+                          {tr("Stop the public link")}
                         </button>
                       </div>
                     )}
@@ -1203,9 +1187,7 @@ export function ShareDialog({
                 ) : (
                   <>
                     <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                      Anyone with the link can read the transcript, including
-                      people outside your team. They can’t branch it, and files
-                      are never included.
+                      {tr("Anyone with the link can read the transcript, including people outside your team. They can’t branch it, and files are never included.")}
                     </p>
                     <div>
                       {/* `disabled` while a request is in flight: a second
@@ -1216,7 +1198,7 @@ export function ShareDialog({
                         onClick={() => onCreateLink(conversation)}
                         className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                       >
-                        {busy ? "Creating…" : "Create public link"}
+                        {busy ? tr("Creating…") : tr("Create public link")}
                       </button>
                     </div>
                   </>
@@ -1232,7 +1214,7 @@ export function ShareDialog({
               onClick={onClose}
               className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] ${FOCUS}`}
             >
-              Done
+              {tr("Done")}
             </button>
           </div>
         </div>
@@ -1294,15 +1276,15 @@ export function ChatShareControls({
   onOpen: () => void;
   hideShareButton?: boolean;
 }) {
-  const label = visibilityLabel(conversation, team || "your team");
+  const label = visibilityLabel(conversation, team || tr("your team"));
   const shared = Boolean(conversation.team_visible || conversation.multiplayer);
   return (
     <span className="ml-auto inline-flex shrink-0 items-center gap-2">
       <button
         type="button"
         data-testid="chat-header-visibility-chip"
-        aria-label={`${label} — open sharing`}
-        title={`${label}. Click to change sharing.`}
+        aria-label={tr("{0} — open sharing", [label])}
+        title={tr("{0}. Click to change sharing.", [label])}
         onClick={onOpen}
         className={`inline-flex h-[1.625rem] items-center gap-1.5 rounded-full border px-2.5 text-[0.75rem] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] ${FOCUS} ${
           shared
@@ -1326,7 +1308,7 @@ export function ChatShareControls({
           onClick={onOpen}
           className={`inline-flex h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
         >
-          Share
+          {tr("Share")}
         </button>
       ) : null}
     </span>

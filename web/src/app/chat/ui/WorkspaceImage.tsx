@@ -1,3 +1,4 @@
+import { rich } from "@/app/lib/i18n/rich";
 // WorkspaceImage renders an <img> from the chat workspace with the
 // settings that keep it from flickering when the user scrolls.
 //
@@ -35,7 +36,7 @@ export const WorkspaceImage = memo(function WorkspaceImage({
   if (errored) {
     return (
       <span className="my-2 inline-block rounded-md border border-dashed border-[var(--color-border-strong)] px-2 py-1 text-[0.72rem] text-[var(--color-text-muted)]">
-        couldn&rsquo;t load image: {alt || src}
+        {rich("couldn’t load image: {0}", alt || src)}
       </span>
     );
   }

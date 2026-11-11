@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
@@ -254,7 +256,7 @@ export function ProjectHome({
           if (!res.ok) {
             if (!cancelled) {
               setTeamChats([]);
-              setTeamChatsError(`Couldn’t load your team’s shared chats (HTTP ${res.status}).`);
+              setTeamChatsError(tr("Couldn’t load your team’s shared chats (HTTP {0}).", [res.status]));
             }
             return;
           }
@@ -266,7 +268,7 @@ export function ProjectHome({
         } catch {
           if (!cancelled) {
             setTeamChats([]);
-            setTeamChatsError("Couldn’t reach the server to list your team’s shared chats.");
+            setTeamChatsError(tr("Couldn’t reach the server to list your team’s shared chats."));
           }
         }
       })();
@@ -424,13 +426,11 @@ export function ProjectHome({
     async (id: string, title: string, team: string): Promise<boolean> => {
       try {
         const r = await shareChatWithTeam(id, true);
-        notify(sharedToast(title || "Untitled", team, r.shared_files, () => manage(id)));
+        notify(sharedToast(title || tr("Untitled"), team, r.shared_files, () => manage(id)));
         return true;
       } catch (err) {
         notify({
-          message: `Couldn’t share “${title || "Untitled"}” with ${team}. ${
-            errorMessage(err, "")
-          }`.trim(),
+          message: tr("Couldn’t share “{0}” with {1}. {2}", [title || tr("Untitled"), team, errorMessage(err, "")]).trim(),
         });
         return false;
       }
@@ -455,23 +455,19 @@ export function ProjectHome({
   };
 
   const unshareFromHere = async (chat: { id: string; title: string }) => {
-    const title = chat.title || "Untitled";
+    const title = chat.title || tr("Untitled");
     try {
       const r = await shareChatWithTeam(chat.id, false);
       const n = r.shared_files;
       notify({
-        message: `“${title}” is Only you again${
-          n > 0
-            ? `, and ${plural(n, "shared file", "shared files")} stopped being shared.`
-            : "."
-        }`,
+        message: tr("“{0}” is Only you again{1}", [title, n > 0
+            ? tr(", and {0} stopped being shared.", [plural(n, "shared file", "shared files")])
+            : "."]),
       });
       patchChatShared(chat.id, false);
     } catch (err) {
       notify({
-        message: `Couldn’t stop sharing “${title}”. ${
-          errorMessage(err, "")
-        }`.trim(),
+        message: tr("Couldn’t stop sharing “{0}”. {1}", [title, errorMessage(err, "")]).trim(),
       });
     }
   };
@@ -490,13 +486,11 @@ export function ProjectHome({
       try {
         await shareChatWithTeam(id, true);
         notify({
-          message: `New chat shared with ${team}. Files it creates will be shared too.`,
+          message: tr("New chat shared with {0}. Files it creates will be shared too.", [team]),
         });
       } catch (err) {
         notify({
-          message: `Couldn’t share the new chat with ${team}. ${
-            errorMessage(err, "")
-          }`.trim(),
+          message: tr("Couldn’t share the new chat with {0}. {1}", [team, errorMessage(err, "")]).trim(),
         });
       }
     });
@@ -511,11 +505,11 @@ export function ProjectHome({
       setReadyChat(thenReady);
       setCardHidden(false);
       notify({
-        message: `${project.name} is shared with ${shareTeam}. Now share your chat from the card.`,
+        message: tr("{0} is shared with {1}. Now share your chat from the card.", [project.name, shareTeam]),
       });
     } else {
       notify({
-        message: `${project.name} is shared with ${shareTeam}. Chats stay Only you.`,
+        message: tr("{0} is shared with {1}. Chats stay Only you.", [project.name, shareTeam]),
       });
     }
   };
@@ -527,10 +521,10 @@ export function ProjectHome({
       sources_open: s?.sources_open ?? {},
     }));
     notify({
-      message: `Got it. ${project.name} stays personal, and the card won’t come back.`,
+      message: tr("Got it. {0} stays personal, and the card won’t come back.", [project.name]),
     });
     void updateProjectMyState(project.id, { kept_personal: true }).catch(() => {
-      notify({ message: "Couldn’t save that choice. The card may come back next time." });
+      notify({ message: tr("Couldn’t save that choice. The card may come back next time.") });
     });
   };
 
@@ -663,7 +657,7 @@ export function ProjectHome({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <button
               type="button"
-              aria-label="Back to chat"
+              aria-label={tr("Back to chat")}
               className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={onBack}
             >
@@ -694,8 +688,8 @@ export function ProjectHome({
             {isOwner ? (
               <button
                 type="button"
-                aria-label="Project settings"
-                title="Project settings"
+                aria-label={tr("Project settings")}
+                title={tr("Project settings")}
                 className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 onClick={onOpenSettings}
               >
@@ -711,8 +705,8 @@ export function ProjectHome({
           {strandedFromTeam ? (
             <p className="mt-1.5 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
               {myTeam
-                ? `You’re no longer in ${project.team_id}. Share this project with ${myTeam} instead, or make it personal.`
-                : `You’re no longer in ${project.team_id}, and you aren’t in a team now. Make this project personal, or set a team in Settings → Team and share it with that.`}
+                ? tr("You’re no longer in {0}. Share this project with {1} instead, or make it personal.", [project.team_id, myTeam])
+                : tr("You’re no longer in {0}, and you aren’t in a team now. Make this project personal, or set a team in Settings → Team and share it with that.", [project.team_id])}
             </p>
           ) : null}
         </div>
@@ -739,14 +733,14 @@ export function ProjectHome({
                   id={searchInputId}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search chats in this project…"
-                  aria-label="Search chats in this project"
+                  placeholder={tr("Search chats in this project…")}
+                  aria-label={tr("Search chats in this project")}
                   className="min-w-0 flex-1 bg-transparent text-[0.83rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)]"
                 />
                 {query ? (
                   <button
                     type="button"
-                    aria-label="Clear search"
+                    aria-label={tr("Clear search")}
                     className="shrink-0 text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
                     onClick={() => setQuery("")}
                   >
@@ -790,7 +784,7 @@ export function ProjectHome({
             <div className={cardClass}>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
-                  Instructions
+                  {tr("Instructions")}
                 </h2>
                 {isOwner && dirty ? (
                   <button
@@ -799,7 +793,7 @@ export function ProjectHome({
                     className="rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
                     onClick={() => void saveInstructions()}
                   >
-                    {savingInstructions ? "Saving…" : "Save"}
+                    {savingInstructions ? tr("Saving…") : tr("Save")}
                   </button>
                 ) : null}
               </div>
@@ -810,13 +804,13 @@ export function ProjectHome({
                   onChange={(e) => setDraft(e.target.value)}
                   rows={8}
                   maxLength={8000}
-                  placeholder="Standing instructions for every chat in this project…"
-                  aria-label="Project instructions"
+                  placeholder={tr("Standing instructions for every chat in this project…")}
+                  aria-label={tr("Project instructions")}
                   className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-2.5 text-[0.83rem] leading-relaxed text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)]"
                 />
               ) : (
                 <p className="whitespace-pre-wrap text-[0.83rem] leading-relaxed text-[var(--color-text-secondary)]">
-                  {project.instructions?.trim() || "No instructions set."}
+                  {project.instructions?.trim() || tr("No instructions set.")}
                 </p>
               )}
               {/* The three layers, in the order buildSystemPrompt assembles
@@ -825,20 +819,14 @@ export function ProjectHome({
                   project's tagged [project] — so this says "then", not
                   "before personal memories", which named only two of three. */}
               <p className="mt-1.5 text-[0.7rem] leading-[1.5] text-[var(--color-text-muted)]">
-                Every chat here is fed by three layers:{" "}
-                <strong className="font-medium text-[var(--color-text-secondary)]">
-                  Instructions
-                </strong>{" "}
-                first (owner-only), then this project&rsquo;s{" "}
-                <strong className="font-medium text-[var(--color-text-secondary)]">
-                  Team learnings
-                </strong>{" "}
-                and each member&rsquo;s own{" "}
-                <strong className="font-medium text-[var(--color-text-secondary)]">
-                  My memory
-                </strong>
-                .
-              </p>
+        {rich("Every chat here is fed by three layers: {0} first (owner-only), then this project’s {1} and each member’s own {2}.", <strong className="font-medium text-[var(--color-text-secondary)]">
+                  {tr("Instructions")}
+                </strong>, <strong className="font-medium text-[var(--color-text-secondary)]">
+                  {tr("Team learnings")}
+                </strong>, <strong className="font-medium text-[var(--color-text-secondary)]">
+                  {tr("My memory")}
+                </strong>)}
+      </p>
             </div>
 
             <TeamLearningsPanel
@@ -865,8 +853,8 @@ export function ProjectHome({
           chat stays Only you until the card's one-click "Share it". */}
       {shareFirstConfirm ? (
         <ConfirmDialog
-          title={`Share ${project.name} with ${shareTeam || "your team"}?`}
-          confirmLabel="Share with your team"
+          title={tr("Share {0} with {1}?", [project.name, shareTeam || tr("your team")])}
+          confirmLabel={tr("Share with your team")}
           confirmTone="accent"
           busy={busy.shareProject}
           testId="share-project-first-confirm"
@@ -878,14 +866,11 @@ export function ProjectHome({
           }}
         >
           <p className="m-0">
-            {shareTeam || "Your team"} will see {project.name}&rsquo;s
-            instructions and Team learnings. Each chat stays Only you until you
-            share it.
-          </p>
+        {rich("{0} will see {1}’s instructions and Team learnings. Each chat stays Only you until you share it.", shareTeam || tr("Your team"), project.name)}
+      </p>
           <p className="m-0">
-            Next, you can share &ldquo;{shareFirstConfirm.title || "Untitled"}
-            &rdquo;.
-          </p>
+        {rich("Next, you can share “{0}”.", shareFirstConfirm.title || tr("Untitled"))}
+      </p>
         </ConfirmDialog>
       ) : null}
     </div>
@@ -941,9 +926,9 @@ export function TeamLearningsPanel({
           });
         } catch (err) {
           if (isAbortError(err)) throw err;
-          throw new Error("Couldn’t load team learnings.");
+          throw new Error(tr("Couldn’t load team learnings."));
         }
-        if (!res.ok) throw new Error("Couldn’t load team learnings.");
+        if (!res.ok) throw new Error(tr("Couldn’t load team learnings."));
         const data = (await res.json()) as { memories?: TeamLearning[] };
         return data.memories ?? [];
       },
@@ -984,11 +969,11 @@ export function TeamLearningsPanel({
           body: JSON.stringify({ content }),
         },
       );
-      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t save that learning"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Couldn’t save that learning")));
       setDraft("");
       await load();
     } catch (err) {
-      setError(errorMessage(err, "Couldn’t save that learning."));
+      setError(errorMessage(err, tr("Couldn’t save that learning.")));
     } finally {
       setBusy(false);
     }
@@ -1010,11 +995,11 @@ export function TeamLearningsPanel({
           body: JSON.stringify(body),
         },
       );
-      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t update that learning"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Couldn’t update that learning")));
       await load();
       return true;
     } catch (err) {
-      setError(errorMessage(err, "Couldn’t update that learning."));
+      setError(errorMessage(err, tr("Couldn’t update that learning.")));
       return false;
     }
   };
@@ -1027,10 +1012,10 @@ export function TeamLearningsPanel({
         `/api/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(id)}`,
         { method: "DELETE" },
       );
-      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t delete that learning"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Couldn’t delete that learning")));
       await load();
     } catch (err) {
-      setError(errorMessage(err, "Couldn’t delete that learning."));
+      setError(errorMessage(err, tr("Couldn’t delete that learning.")));
     }
   };
 
@@ -1055,19 +1040,18 @@ export function TeamLearningsPanel({
     <div className={cardClass} data-testid="team-learnings">
       <h2 className="mb-2 flex items-center gap-1.5 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
         <Icon name="brain" className="size-3.5 shrink-0" />
-        Team learnings
+        {tr("Team learnings")}
       </h2>
       {shownError ? (
         <p className="mb-2 text-[0.72rem] text-[var(--color-danger)]">{shownError}</p>
       ) : null}
       {entries === null ? (
         <p className="text-[0.8rem] text-[var(--color-text-muted)]">
-          {shownError ? "" : "Loading…"}
+          {shownError ? "" : tr("Loading…")}
         </p>
       ) : entries.length === 0 ? (
         <p className="text-[0.8rem] leading-[1.5] text-[var(--color-text-muted)]">
-          No team learnings yet. Save one from any chat in this project — every
-          chat here is told about them.
+          {tr("No team learnings yet. Save one from any chat in this project — every chat here is told about them.")}
         </p>
       ) : (
         <ul className="m-0 grid list-none gap-2 p-0">
@@ -1084,7 +1068,7 @@ export function TeamLearningsPanel({
                       value={editDraft}
                       onChange={(e) => setEditDraft(e.target.value)}
                       rows={3}
-                      aria-label="Edit team learning"
+                      aria-label={tr("Edit team learning")}
                       className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-2 text-[0.8rem] leading-relaxed text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
                     />
                     <div className="flex justify-end gap-2">
@@ -1093,8 +1077,7 @@ export function TeamLearningsPanel({
                         className={actionClass}
                         onClick={() => setEditingId(null)}
                       >
-                        Cancel
-                      </button>
+                        {tr("Cancel")}</button>
                       <button
                         type="button"
                         className={actionClass}
@@ -1117,7 +1100,7 @@ export function TeamLearningsPanel({
                           });
                         }}
                       >
-                        {savingEdit ? "Saving…" : "Save"}
+                        {savingEdit ? tr("Saving…") : tr("Save")}
                       </button>
                     </div>
                   </div>
@@ -1146,17 +1129,17 @@ export function TeamLearningsPanel({
                         // menu, and Icon renders aria-hidden.
                         <span
                           role="img"
-                          aria-label="Pinned"
-                          title="Pinned"
+                          aria-label={tr("Pinned")}
+                          title={tr("Pinned")}
                           className="flex shrink-0 items-center text-[var(--color-accent)]"
                         >
                           <Icon name="pin" className="size-3" />
                         </span>
                       ) : null}
                       <span>
-                        {m.user_email ? shortName(m.user_email) : "unknown"}
+                        {m.user_email ? shortName(m.user_email) : tr("unknown")}
                         {m.created_at ? ` · ${formatDay(m.created_at)}` : ""}
-                        {retired ? " · retired" : ""}
+                        {retired ? tr(" · retired") : ""}
                       </span>
                       {canManage(m) ? (
                         <span className="ml-auto flex items-center">
@@ -1191,8 +1174,8 @@ export function TeamLearningsPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") void add();
           }}
-          placeholder="Add a learning the whole project should know…"
-          aria-label="New team learning"
+          placeholder={tr("Add a learning the whole project should know…")}
+          aria-label={tr("New team learning")}
           className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 text-[0.78rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)]"
         />
         <button
@@ -1201,20 +1184,19 @@ export function TeamLearningsPanel({
           className="shrink-0 rounded-md border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
           onClick={() => void add()}
         >
-          Add
+          {tr("Add")}
         </button>
       </div>
       {!teamShared ? (
         <p className="mt-2 text-[0.68rem] leading-[1.5] text-[var(--color-text-muted)]">
-          This project isn&rsquo;t shared with a team yet, so these are yours
-          alone — they still reach every chat in the project.
+          {tr("This project isn’t shared with a team yet, so these are yours alone — they still reach every chat in the project.")}
         </p>
       ) : null}
       {pendingRemoval ? (
         <ConfirmDialog
-          title="Delete this team learning for good?"
-          confirmLabel="Delete for good"
-          cancelLabel="Keep"
+          title={tr("Delete this team learning for good?")}
+          confirmLabel={tr("Delete for good")}
+          cancelLabel={tr("Keep")}
           confirmTone="danger"
           layer="stacked"
           onCancel={() => setConfirmRemoveId(null)}
@@ -1224,12 +1206,10 @@ export function TeamLearningsPanel({
             {pendingRemoval.content}
           </p>
           <p className="m-0">
-            {pendingRemoval.user_email
-              ? `Written by ${shortName(pendingRemoval.user_email)}. `
-              : ""}
-            The record of what was learned goes with it. To stop it being
-            injected while keeping the record, retire it instead.
-          </p>
+        {rich("{0}The record of what was learned goes with it. To stop it being injected while keeping the record, retire it instead.", pendingRemoval.user_email
+              ? tr("Written by {0}. ", [shortName(pendingRemoval.user_email)])
+              : "")}
+      </p>
         </ConfirmDialog>
       ) : null}
     </div>
@@ -1270,8 +1250,8 @@ function LearningActions({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Actions for “${snippet}”`}
-        title="Actions"
+        aria-label={tr("Actions for “{0}”", [snippet])}
+        title={tr("Actions")}
         className={[
           "inline-flex size-[1.6rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
@@ -1287,7 +1267,7 @@ function LearningActions({
         onClose={close}
         anchorRef={anchorRef}
         placement="bottom-end"
-        label={`Actions for team learning “${snippet}”`}
+        label={tr("Actions for team learning “{0}”", [snippet])}
         className="min-w-[10rem]"
       >
         <MenuItem
@@ -1297,7 +1277,7 @@ function LearningActions({
             onPin();
           }}
         >
-          {entry.pinned ? "Unpin" : "Pin"}
+          {entry.pinned ? tr("Unpin") : tr("Pin")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="edit" className="size-4" />}
@@ -1306,21 +1286,21 @@ function LearningActions({
             onEdit();
           }}
         >
-          Edit
+          {tr("Edit")}
         </MenuItem>
         <MenuItem
           icon={<Icon name={retired ? "refresh" : "stop"} className="size-4" />}
           description={
             retired
-              ? "Use this learning again"
-              : "Stop using it; keep the record"
+              ? tr("Use this learning again")
+              : tr("Stop using it; keep the record")
           }
           onClick={() => {
             close();
             onRetire();
           }}
         >
-          {retired ? "Restore" : "Retire"}
+          {retired ? tr("Restore") : tr("Retire")}
         </MenuItem>
         <MenuSeparator />
         <MenuItem
@@ -1331,7 +1311,7 @@ function LearningActions({
             onDelete();
           }}
         >
-          Delete
+          {tr("Delete")}
         </MenuItem>
       </Menu>
     </>

@@ -1,3 +1,8 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { localizeServerMessage } from "@/app/lib/i18n/errors";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import type { CostForecast } from "@/app/shared/lib/orchestratorApi";
 
 // CostForecastPanel renders the pre-submission cost forecast inline below the
@@ -6,39 +11,35 @@ import type { CostForecast } from "@/app/shared/lib/orchestratorApi";
 // banner when the median would exceed the configured cost ceiling. Advisory
 // only — it never gates Submit.
 export function CostForecastPanel({ forecast }: { forecast: CostForecast }) {
-  const usd = (v: number) => `$${v.toFixed(4)}`;
+  const usd = (v: number) => `$${formatFixed(v, 4)}`;
   return (
     <div className="cost-forecast" role="status" aria-live="polite">
       {forecast.would_hit_ceiling ? (
         <div className="cost-forecast-warning" role="alert">
-          Estimated cost (~{usd(forecast.estimated_total_cost_usd ?? 0)}) exceeds the cost ceiling of $
-          {forecast.max_cost_ceiling_usd.toFixed(2)} — the run may stop early.
-        </div>
+        {rich("Estimated cost (~{0}) exceeds the cost ceiling of ${1} — the run may stop early.", usd(forecast.estimated_total_cost_usd ?? 0), formatFixed(forecast.max_cost_ceiling_usd, 2))}
+      </div>
       ) : null}
       <dl className="cost-forecast-grid">
-        <dt>Model</dt>
+        <dt>{tr("Model")}</dt>
         <dd>{forecast.model}</dd>
-        <dt>Estimated prompt</dt>
+        <dt>{tr("Estimated prompt")}</dt>
         <dd>
-          {forecast.estimated_prompt_tokens.toLocaleString()} tokens (system{" "}
-          {forecast.system_prompt_tokens.toLocaleString()} + tools{" "}
-          {forecast.tool_definitions_tokens.toLocaleString()})
+          {tr("{0} tokens (system {1} + tools {2})", [forecast.estimated_prompt_tokens.toLocaleString(getLanguage()), forecast.system_prompt_tokens.toLocaleString(getLanguage()), forecast.tool_definitions_tokens.toLocaleString(getLanguage())])}
         </dd>
-        <dt>Max iterations</dt>
+        <dt>{tr("Max iterations")}</dt>
         <dd>{forecast.max_iterations}</dd>
         {forecast.pricing_known &&
         forecast.estimated_total_cost_usd != null &&
         forecast.estimated_total_cost_range != null ? (
           <>
-            <dt>Estimated cost</dt>
+            <dt>{tr("Estimated cost")}</dt>
             <dd>
-              {usd(forecast.estimated_total_cost_usd)} (range {usd(forecast.estimated_total_cost_range.min)} –{" "}
-              {usd(forecast.estimated_total_cost_range.max)})
+              {tr("{0} (range {1} – {2})", [usd(forecast.estimated_total_cost_usd), usd(forecast.estimated_total_cost_range.min), usd(forecast.estimated_total_cost_range.max)])}
             </dd>
           </>
         ) : null}
       </dl>
-      <p className="cost-forecast-note">{forecast.note}</p>
+      <p className="cost-forecast-note">{localizeServerMessage(forecast.note)}</p>
     </div>
   );
 }

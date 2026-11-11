@@ -88,6 +88,13 @@ reply in, and emails its result to the recipients you give it (see the Chat
 guide's "Patrol Launchpad" section). The guides
 open from the account menu, beside **Settings**.
 
+**Settings → General → Language** changes the interface and these guides to
+**English**, **Español**, or **Português**. The choice belongs to this browser;
+before a choice is saved, a supported browser language is used, otherwise
+English. Changing it reloads the current page, preserving its path and section,
+and writes `lang` in the URL so the choice also works without browser storage.
+Your task prompts, reports, and other saved content are not translated.
+
 ### The tabs
 
 | Tab | What it shows |

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Shared schedule builder + parser for recurring patrols (Chat Composer Patrol
 // popover and Settings → Personas patrol editor). Mirrors the Operations
 // Center's simple schedule builder (TaskCreateModal) while also covering
@@ -31,13 +32,13 @@ export const PATROL_WEEKDAYS: ReadonlyArray<{
   short: string;
   long: string;
 }> = [
-  { dow: 1, short: "Mon", long: "Monday" },
-  { dow: 2, short: "Tue", long: "Tuesday" },
-  { dow: 3, short: "Wed", long: "Wednesday" },
-  { dow: 4, short: "Thu", long: "Thursday" },
-  { dow: 5, short: "Fri", long: "Friday" },
-  { dow: 6, short: "Sat", long: "Saturday" },
-  { dow: 0, short: "Sun", long: "Sunday" },
+  { dow: 1, short: tr("Mon"), long: tr("Monday") },
+  { dow: 2, short: tr("Tue"), long: tr("Tuesday") },
+  { dow: 3, short: tr("Wed"), long: tr("Wednesday") },
+  { dow: 4, short: tr("Thu"), long: tr("Thursday") },
+  { dow: 5, short: tr("Fri"), long: tr("Friday") },
+  { dow: 6, short: tr("Sat"), long: tr("Saturday") },
+  { dow: 0, short: tr("Sun"), long: tr("Sunday") },
 ];
 
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -209,23 +210,23 @@ export function parsePatrolCron(cron: string): PatrolScheduleState {
  */
 export function formatCompactCronCadence(cron: string): string {
   const c = (cron || "").trim();
-  if (!c) return "Recurring";
-  if (c === "0 * * * *" || c === "0 */1 * * *") return "Every hour";
+  if (!c) return tr("Recurring");
+  if (c === "0 * * * *" || c === "0 */1 * * *") return tr("Every hour");
   const everyNHours = /^0 \*\/(\d+) \* \* \*$/.exec(c);
-  if (everyNHours) return `Every ${everyNHours[1]}h`;
+  if (everyNHours) return tr("Every {0}h", [everyNHours[1]]);
   const everyNMinutes = /^\*\/(\d+) \* \* \* \*$/.exec(c);
-  if (everyNMinutes) return `Every ${everyNMinutes[1]}m`;
+  if (everyNMinutes) return tr("Every {0}m", [everyNMinutes[1]]);
   const daily = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(c);
   if (daily) {
     const m = pad2(Number(daily[1]));
     const h = pad2(Number(daily[2]));
-    return `Daily ${h}:${m}`;
+    return tr("Daily {0}:{1}", [h, m]);
   }
   const weekdays = /^(\d{1,2}) (\d{1,2}) \* \* (?:1-5|MON-FRI)$/i.exec(c);
   if (weekdays) {
     const m = pad2(Number(weekdays[1]));
     const h = pad2(Number(weekdays[2]));
-    return `Weekdays ${h}:${m}`;
+    return tr("Weekdays {0}:{1}", [h, m]);
   }
   return describeCronExpressionShort(c) || describeCronExpression(c) || c;
 }

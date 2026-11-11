@@ -358,7 +358,7 @@ func Load(dir string) (*Bundle, error) {
 	for _, p := range b.ValidateSkills() {
 		slog.Warn("clientconfig: warning: skill problem", "problem", p)
 	}
-	return b, nil
+	return loadBundleLocalizations(b)
 }
 
 // resolveSandbox turns the manifest's sandbox: block into a resolved Sandbox.

@@ -1,0 +1,315 @@
+{
+  "exact": [
+    "FLEET_TRUSTED_PROXIES includes Caddy's 127.0.0.1 — the API backends read the client IP it forwards",
+    "FLEET_TRUSTED_PROXIES is unset in the running process behind the fleet-managed Caddy front — every API caller looks like 127.0.0.1 (shared rate limits; the IP allow/deny filter judges Caddy)",
+    "OPENROUTER_API_KEY set",
+    "OPENROUTER_API_KEY unset",
+    "OPENROUTER_API_KEY unset but mock mode is on",
+    "Range is 0.25x-1x the median; actual cost depends on task complexity. Estimate is local arithmetic over a chars/4 token heuristic and advisory pricing — not a live model call.",
+    "`podman info` fails for the service user",
+    "caddy: API routing",
+    "caddy: trusted proxies",
+    "chat database",
+    "consider: sudo fleet cleanup (and confirm fleet-maintenance.timer is enabled)",
+    "fleet-backup.timer enabled and active, no failed run recorded",
+    "fleet-backup.timer installed but not enabled — it will never fire",
+    "fleet-backup.timer is enabled but not active — it will not fire until it is started",
+    "fleet-web.service (the retired Next.js web tier) is still installed — it holds the port fleet serves the web UI on",
+    "install it: scripts/bootstrap.sh --enable-service",
+    "merge the @fleet_api + @fleet_chat_webhooks blocks from deploy/Caddyfile into it, then: systemctl reload caddy",
+    "model API key",
+    "no fleet-backup.timer + fleet-backup.service pair installed — nothing on this box dumps the databases",
+    "no fleet-web.service — the web UI is served by fleet itself (ADR-0091)",
+    "no image ref resolved (FLEET_SANDBOX_IMAGE / bundle sandbox.tag)",
+    "no sched store wired",
+    "no store wired",
+    "path unresolved",
+    "podman not on PATH",
+    "reachable via the server pool",
+    "restart churn",
+    "retired web tier",
+    "rootless podman",
+    "run on the box: journalctl -u fleet-backup -n 50 (then retry: sudo systemctl start fleet-backup.service)",
+    "run on the box: sudo fleet cleanup (reclaims dangling podman layers + build caches); check `systemctl status fleet-maintenance.timer` — the hourly in-process sweep and this daily timer should be keeping ahead of this",
+    "run on the box: sudo fleet config set-openrouter-key",
+    "run on the box: sudo fleet doctor",
+    "run on the box: sudo fleet doctor   (adds 127.0.0.1,::1 when the key is absent, then restarts fleet; or: sudo fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1 \u0026\u0026 sudo fleet restart)",
+    "run on the box: sudo fleet doctor   (rewrites it from scripts/lib/caddyfile.sh, backup kept, reloads caddy; or: sudo fleet update --adopt-units)",
+    "run on the box: sudo fleet doctor (checks postgresql + DSNs)",
+    "run on the box: sudo fleet doctor (repairs the store dirs and containers.conf; a stale pause process it reports with the manual repair — see docs/OPERATORS.md, \"Stale podman pause process\")",
+    "run on the box: sudo fleet doctor (stops, disables and removes it; fleet then serves the web UI on 127.0.0.1:3000)",
+    "run on the box: sudo fleet timers install --backup (skip if you back up at the volume/hypervisor layer)",
+    "run on the box: sudo fleet update (rebuilds the bundle's sandbox image)",
+    "run on the box: sudo systemctl enable --now fleet-backup.timer",
+    "run on the box: sudo systemctl start fleet-backup.timer",
+    "sandbox image",
+    "sched database",
+    "scheduled backups",
+    "statfs reported zero size",
+    "systemctl not on PATH (no systemd)",
+    "systemd did not report NRestarts for this unit",
+    "systemd units"
+  ],
+  "formatted": [
+    {
+      "message": "{0} has a {1} range",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} has no range for {1} — rootless podman cannot map the userns",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} has restarted itself {1} time(s) since the last manual start{2}",
+      "fields": [
+        "%s",
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} has restarted itself {1} times — it is crash-looping, not serving steadily{2}",
+      "fields": [
+        "%s",
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} is {1}",
+      "fields": [
+        "%s",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0} last run failed (Result={1}) — no dump is being written",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}: {1}% used, {2} free",
+      "fields": [
+        "%s",
+        "%.1f",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} (fleet-managed) routes /v1 + the fixed API paths to the orchestrator at {1}, header-trust stripped",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} (operator-managed) routes /v1 to the orchestrator at {1}",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} absent (no Caddy front on this box)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} active",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} is {1}",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} is fleet-managed but predates the API routes — /v1/*, /api-info, the A2A agent card, /triggers/* and /webhooks/* reach the web tier and 404 there",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} is operator-managed and routes no /v1 to {1} — API clients get the web tier's 404 unless another front serves the API",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} is operator-managed — FLEET_TRUSTED_PROXIES should name the addresses that front connects from",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} missing from this user's rootless store",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} not installed",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} not installed (another supervisor?)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} not installed (optional tier)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} not readable from this process: {1}",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} not runnable: {1}",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} present (deep run skipped)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} present + runnable (deep smoke passed)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "{0} range",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "Caddy proxies to a non-loopback backend (chat {0}, orchestrator {1}), so it connects from an interface address this check cannot know — FLEET_TRUSTED_PROXIES must name that address",
+      "fields": [
+        "%v",
+        "%v"
+      ]
+    },
+    {
+      "message": "FLEET_TRUSTED_PROXIES={0} does not include Caddy's 127.0.0.1 — behind the fleet-managed front every API caller looks like 127.0.0.1 (shared rate limits; the IP allow/deny filter judges Caddy)",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "aborted: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "cannot read {0}: {1}",
+      "fields": [
+        "%s",
+        "%v"
+      ]
+    },
+    {
+      "message": "current user unresolved: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "no automatic restarts since the last manual start{0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "ping failed: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "podman {0} functional for this user",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "podman not on PATH — cannot verify {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "pricing for model {0} is unknown; cost fields are null. Add the slug to agentcore.KnownModelPricing to get a dollar estimate.",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "restarts: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "run on the box: journalctl -u {0} -n 100",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "run on the box: journalctl -u {0} -n 100 (the restarts are self-inflicted; is-active stays \"active\" throughout)",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "run on the box: sudo systemctl start {0} (then journalctl -u {1} -n 50 if it fails)",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "statfs {0}: {1}",
+      "fields": [
+        "%s",
+        "%v"
+      ]
+    },
+    {
+      "message": "unit {0}",
+      "fields": [
+        "%v"
+      ]
+    }
+  ]
+}

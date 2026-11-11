@@ -1,3 +1,5 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Restaurant-style price indicators for the model pickers ($ … $$$$).
 //
 // OpenRouter prices every model as two per-token numbers (prompt and
@@ -53,7 +55,7 @@ const TIER_LABELS: Readonly<Record<ModelCostTier, string>> = {
   1: "budget",
   2: "moderate",
   3: "premium",
-  4: "top tier",
+  4: tr("top tier"),
 };
 
 // finite accepts only a genuine non-negative number (or a numeric string, the
@@ -95,7 +97,7 @@ export function tierForBlendedPrice(perMillion: number): ModelCostTier {
 export function formatBlendedPrice(perMillion: number): string {
   if (perMillion === 0) return "free";
   const decimals = perMillion < 1 ? 3 : 2;
-  return `$${perMillion.toFixed(decimals)}/M tokens`;
+  return tr("${0}/M tokens", [formatFixed(perMillion, decimals)]);
 }
 
 // modelCostFor is the one entry point the UI calls. Returns null when the model
@@ -115,9 +117,9 @@ export function modelCostFor(prices: ModelPrices | null | undefined): ModelCost 
     label,
     description:
       perMillion === 0
-        ? `Free — no per-token charge (${"$".repeat(tier)} of ${"$".repeat(MAX_COST_TIER)})`
-        : `${label} cost — about ${priceText} blended (${"$".repeat(tier)} of ${"$".repeat(
+        ? tr("Free — no per-token charge ({0} of {1})", ["$".repeat(tier), "$".repeat(MAX_COST_TIER)])
+        : tr("{0} cost — about {1} blended ({2} of {3})", [label, priceText, "$".repeat(tier), "$".repeat(
             MAX_COST_TIER,
-          )})`,
+          )]),
   };
 }

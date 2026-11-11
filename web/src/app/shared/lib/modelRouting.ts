@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Public metadata only. A missing snapshot (older server / failed read) is
 // unknown, not an empty routing table. Execution remains the backend's authority.
 export type ModelProvider = {
@@ -26,7 +27,7 @@ export function modelIsAvailable(slug: string, providers: ModelRouting, catalog 
 }
 
 export function unavailableModelMessage(slug: string): string {
-  return `Model "${slug}" is not available through this workspace's configured providers. Choose a workspace model in the model picker, or ask an admin to configure its provider in Settings → Admin → Model providers.`;
+  return tr("Model \"{0}\" is not available through this workspace's configured providers. Choose a workspace model in the model picker, or ask an admin to configure its provider in Settings → Admin → Model providers.", [slug]);
 }
 
 // A native catch-all can shadow a later OpenRouter catch-all. Keep those models

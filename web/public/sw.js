@@ -17,6 +17,72 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// A display preference only. CacheStorage survives worker restarts, including
+// notifications received after every tab has closed. No API response is cached.
+const LANGUAGE_CACHE = "fleet-display-language";
+const LANGUAGE_URL = "/__fleet_display_language";
+const supportedLanguage = (value) => ["en", "es", "pt"].includes(value) ? value : null;
+let displayLanguage;
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "fleet-language") return;
+  const language = supportedLanguage(event.data.language);
+  if (!language) return;
+  displayLanguage = language;
+  event.waitUntil((async () => {
+    try {
+      const cache = await self.caches.open(LANGUAGE_CACHE);
+      await cache.put(LANGUAGE_URL, new Response(language));
+    } catch { /* Storage denial must not prevent notifications. */ }
+  })());
+});
+
+async function notificationLanguage() {
+  if (displayLanguage) return displayLanguage;
+  try {
+    const cache = await self.caches.open(LANGUAGE_CACHE);
+    const saved = await cache.match(LANGUAGE_URL);
+    displayLanguage = supportedLanguage(await saved?.text());
+  } catch { /* Fall back to the browser when storage is unavailable. */ }
+  return displayLanguage || supportedLanguage(self.navigator?.language?.split(/[-_]/)[0]) || "en";
+}
+
+// These are the fixed prefixes emitted by internal/webpush. The suffix can
+// contain a task name or tool identifier and is always retained verbatim.
+const notificationPrefixes = {
+  es: {
+    "✓ Task complete: ": "✓ Tarea completada: ",
+    "✗ Task failed: ": "✗ Tarea fallida: ",
+    "⚠ Blocked: ": "⚠ Bloqueada: ",
+    "⚠ Budget alert: ": "⚠ Alerta de presupuesto: ",
+    "✎ Progress note: ": "✎ Nota de progreso: ",
+    "⏸ Waiting for your answer: ": "⏸ Esperando tu respuesta: ",
+    "⚠ Approval needed: ": "⚠ Se necesita aprobación: ",
+    "✗ Not applied: ": "✗ No aplicado: ",
+    "✓ Done: ": "✓ Hecho: ",
+    "⏸ Waiting for you: the chat did not continue on its own": "⏸ Esperando tu respuesta: el chat no continuó automáticamente",
+  },
+  pt: {
+    "✓ Task complete: ": "✓ Tarefa concluída: ",
+    "✗ Task failed: ": "✗ Tarefa falhada: ",
+    "⚠ Blocked: ": "⚠ Bloqueada: ",
+    "⚠ Budget alert: ": "⚠ Alerta de orçamento: ",
+    "✎ Progress note: ": "✎ Nota de progresso: ",
+    "⏸ Waiting for your answer: ": "⏸ A aguardar a sua resposta: ",
+    "⚠ Approval needed: ": "⚠ É necessária aprovação: ",
+    "✗ Not applied: ": "✗ Não aplicado: ",
+    "✓ Done: ": "✓ Concluído: ",
+    "⏸ Waiting for you: the chat did not continue on its own": "⏸ A aguardar a sua resposta: a conversa não continuou automaticamente",
+  },
+};
+
+function notificationTitle(title, language) {
+  if (typeof title !== "string" || !title) return "Fleet";
+  for (const [prefix, translated] of Object.entries(notificationPrefixes[language] || {})) {
+    if (title.startsWith(prefix)) return translated + title.slice(prefix.length);
+  }
+  return title;
+}
+
 self.addEventListener("push", (event) => {
   let payload = { title: "Fleet", body: "" };
   try {
@@ -25,15 +91,16 @@ self.addEventListener("push", (event) => {
     // A malformed payload still surfaces a generic notification.
   }
   const { title, body, url } = payload;
-  event.waitUntil(
-    self.registration.showNotification(title || "Fleet", {
+  event.waitUntil((async () => {
+    const language = await notificationLanguage();
+    await self.registration.showNotification(notificationTitle(title, language), {
       body: body || "",
       icon: "/app-icons/icon-192.png",
       // No dedicated monochrome badge asset exists yet; the platform falls
       // back to a generic glyph when the field is omitted.
       data: { url: url || self.location.origin },
-    }),
-  );
+    });
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {

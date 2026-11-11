@@ -1,3 +1,5 @@
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Settings → Shared files — the cross-chat shared file library. Admins stage
 // files once; every conversation's agent can then read them (mounted read-only
 // into each sandbox at shared/<name>), and every member can browse/download
@@ -61,7 +63,7 @@ type Library = {
 };
 
 async function fetchLibrary(): Promise<Library | null> {
-  const data = await getGatedJson<Partial<Library>>("/api/shared-files", { label: "Shared files" });
+  const data = await getGatedJson<Partial<Library>>("/api/shared-files", { label: tr("Shared files") });
   if (!data) return null;
   return {
     files: data.files ?? [],
@@ -87,7 +89,7 @@ function groupByFolder(files: SharedFile[]): { folder: string; files: SharedFile
 }
 
 function formatDate(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+  return new Date(unixSeconds * 1000).toLocaleDateString(getLanguage(), {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -133,10 +135,10 @@ export default function SharedFilesPage() {
         redirectToLogin();
         return;
       }
-      if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Delete failed")));
       await refresh();
     } catch (err) {
-      setActionError(errorMessage(err, "Delete failed."));
+      setActionError(errorMessage(err, tr("Delete failed.")));
     } finally {
       setBusy(false);
     }
@@ -168,11 +170,11 @@ export default function SharedFilesPage() {
         redirectToLogin();
         return;
       }
-      if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Save failed")));
       setEditing(null);
       await refresh();
     } catch (err) {
-      setEditError(errorMessage(err, "Save failed."));
+      setEditError(errorMessage(err, tr("Save failed.")));
     } finally {
       setBusy(false);
     }
@@ -180,13 +182,12 @@ export default function SharedFilesPage() {
 
   return (
     <SetSection
-      title="Shared files"
+      title={tr("Shared files")}
       intro={
         <>
-          A file library every conversation shares: the agent can read each file at{" "}
-          <CodeChip>shared/&lt;name&gt;</CodeChip> (read-only) in every conversation&apos;s
-          sandbox, and any member can download it here.
-          {isAdmin ? " Only admins change the library." : " Admins manage the library."}
+          {tr("A file library every conversation shares: the agent can read each file at")}{" "}
+          <CodeChip>shared/&lt;name&gt;</CodeChip> {tr("(read-only) in every conversation's sandbox, and any member can download it here.")}
+          {isAdmin ? tr(" Only admins change the library.") : tr(" Admins manage the library.")}
         </>
       }
     >
@@ -207,11 +208,11 @@ export default function SharedFilesPage() {
               onClick={() => void reload()}
               className={btnClass({ sm: true, reveal: true })}
             >
-              Retry
+              {tr("Retry")}
             </button>
           </div>
         ) : loading || library === null ? (
-          <p className="text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+          <p className="text-[0.8rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
         ) : (
           <>
             <UsageMeter library={library} isAdmin={isAdmin} />
@@ -226,16 +227,16 @@ export default function SharedFilesPage() {
 
             {library.files.length === 0 ? (
               <ConnEmpty>
-                No shared files yet.{" "}
+                {tr("No shared files yet.")}{" "}
                 {isAdmin
-                  ? "Upload some above to make them readable in every conversation."
-                  : "An admin can add some from this page."}
+                  ? tr("Upload some above to make them readable in every conversation.")
+                  : tr("An admin can add some from this page.")}
               </ConnEmpty>
             ) : (
               groups.map((group) => (
                 <ConnGroup key={group.folder || "\u0000root"}>
                   <ConnGroupHead
-                    title={group.folder === "" ? "Library root" : group.folder}
+                    title={group.folder === "" ? tr("Library root") : group.folder}
                   />
                   <ConnPanel>
                     <ConnRows>
@@ -247,8 +248,8 @@ export default function SharedFilesPage() {
                             <>
                               {formatBytes(file.size_bytes)}
                               {file.description ? <> · {file.description}</> : null}
-                              {file.uploaded_by ? <> · uploaded by {file.uploaded_by}</> : null}
-                              {" · updated "}
+                              {file.uploaded_by ? <> {tr("· uploaded by")}{" "}{file.uploaded_by}</> : null}
+                              {tr(" · updated ")}
                               {formatDate(file.updated_at)}
                             </>
                           }
@@ -256,16 +257,16 @@ export default function SharedFilesPage() {
                             <>
                               <a
                                 href={`/api/shared-files/${encodeURIComponent(file.id)}/download`}
-                                aria-label={`Download ${file.name}`}
+                                aria-label={tr("Download {0}", [file.name])}
                                 className={btnClass({ sm: true, reveal: true })}
                               >
-                                Download
+                                {tr("Download")}
                               </a>
                               {isAdmin ? (
                                 <>
                                   <button
                                     type="button"
-                                    aria-label={`Edit ${file.name}`}
+                                    aria-label={tr("Edit {0}", [file.name])}
                                     aria-expanded={editing?.id === file.id}
                                     disabled={busy}
                                     data-testid={`edit-${file.id}`}
@@ -284,10 +285,10 @@ export default function SharedFilesPage() {
                                     }}
                                     className={btnClass({ sm: true })}
                                   >
-                                    Edit
+                                    {tr("Edit")}
                                   </button>
                                   <InlineConfirmButton
-                                    label="Delete"
+                                    label={tr("Delete")}
                                     onConfirm={() => void remove(file.id)}
                                     disabled={busy}
                                     testId={`delete-${file.id}`}
@@ -300,7 +301,7 @@ export default function SharedFilesPage() {
                             isAdmin && editing?.id === file.id ? (
                               <div className="mt-[0.55rem]">
                                 <ConnForm className="mb-0!">
-                                  <ConnField label="Name" grow>
+                                  <ConnField label={tr("Name")} grow>
                                     <input
                                       id={`editName-${file.id}`}
                                       type="text"
@@ -315,7 +316,7 @@ export default function SharedFilesPage() {
                                       className={SETTINGS_INPUT}
                                     />
                                   </ConnField>
-                                  <ConnField label="Folder (empty = library root)">
+                                  <ConnField label={tr("Folder (empty = library root)")}>
                                     <input
                                       id={`editFolder-${file.id}`}
                                       type="text"
@@ -331,7 +332,7 @@ export default function SharedFilesPage() {
                                       className={SETTINGS_INPUT}
                                     />
                                   </ConnField>
-                                  <ConnField label="Description (empty = clear)" grow>
+                                  <ConnField label={tr("Description (empty = clear)")} grow>
                                     <input
                                       id={`editDescription-${file.id}`}
                                       type="text"
@@ -353,16 +354,14 @@ export default function SharedFilesPage() {
                                     onClick={() => void saveEdit(file)}
                                     className={btnClass({ variant: "primary", sm: true })}
                                   >
-                                    Save
-                                  </button>
+                                    {tr("Save")}</button>
                                   <button
                                     type="button"
                                     disabled={busy}
                                     onClick={() => setEditing(null)}
                                     className={btnClass({ sm: true, reveal: true })}
                                   >
-                                    Cancel
-                                  </button>
+                                    {tr("Cancel")}</button>
                                 </ConnForm>
                                 {editError ? (
                                   <p
@@ -401,20 +400,19 @@ function UsageMeter({ library, isAdmin }: { library: Library; isAdmin: boolean }
   const capped = library.max_total_bytes > 0;
   return (
     <ConnPanel>
-      <ConnPanelHead title="Library usage">
+      <ConnPanelHead title={tr("Library usage")}>
         <span
           className="text-[0.78rem] text-[var(--color-text-secondary)] [font-variant-numeric:tabular-nums]"
           data-testid="usage-meter"
         >
           {capped
-            ? `${formatBytes(library.total_bytes)} of ${formatBytes(library.max_total_bytes)} used`
-            : `${formatBytes(library.total_bytes)} used — no limit`}
+            ? tr("{0} of {1} used", [formatBytes(library.total_bytes), formatBytes(library.max_total_bytes)])
+            : tr("{0} used — no limit", [formatBytes(library.total_bytes)])}
         </span>
       </ConnPanelHead>
       {isAdmin ? (
         <ConnPanelSub>
-          The cap is the <CodeChip>shared_files_max_total_mb</CodeChip> setting in Settings →
-          Admin → Features (0 = unlimited).
+          {tr("The cap is the")}{" "}<CodeChip>shared_files_max_total_mb</CodeChip> {tr("setting in Settings → Admin → Features (0 = unlimited).")}
         </ConnPanelSub>
       ) : null}
     </ConnPanel>
@@ -472,7 +470,7 @@ function UploadPanel({
         redirectToLogin();
         return;
       }
-      if (!res.ok) throw new Error(await responseErrorText(res, "Upload failed"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Upload failed")));
       setPicked([]);
       setPickError(null);
       setFolder("");
@@ -480,7 +478,7 @@ function UploadPanel({
       if (inputRef.current) inputRef.current.value = "";
       onUploaded();
     } catch (err) {
-      setUploadError(errorMessage(err, "Upload failed."));
+      setUploadError(errorMessage(err, tr("Upload failed.")));
     } finally {
       setBusy(false);
     }
@@ -488,13 +486,12 @@ function UploadPanel({
 
   return (
     <ConnPanel>
-      <ConnPanelHead title="Upload files" />
+      <ConnPanelHead title={tr("Upload files")} />
       <ConnPanelSub>
-        Each file lands in the chosen folder (one name segment, no slashes); the description,
-        if given, applies to every file in the batch.
+        {tr("Each file lands in the chosen folder (one name segment, no slashes); the description, if given, applies to every file in the batch.")}
       </ConnPanelSub>
       <ConnForm>
-        <ConnField label="Files" grow>
+        <ConnField label={tr("Files")} grow>
           <input
             id="uploadFiles"
             ref={inputRef}
@@ -503,26 +500,26 @@ function UploadPanel({
             disabled={busy}
             // ConnField already wraps this in a <label>, but the linter can't
             // see through the component boundary.
-            aria-label="Files to upload"
+            aria-label={tr("Files to upload")}
             data-testid="upload-files-input"
             onChange={(e) => onPick(Array.from(e.target.files ?? []))}
             className="text-[0.82rem] text-[var(--color-text-secondary)] file:mr-3 file:cursor-pointer file:rounded-[var(--radius-md)] file:border file:border-[var(--color-border)] file:bg-[var(--color-overlay-soft)] file:px-[0.7rem] file:py-[0.35rem] file:text-[0.78rem] file:font-medium file:text-[var(--color-text-primary)]"
           />
         </ConnField>
-        <ConnField label="Folder (optional)">
+        <ConnField label={tr("Folder (optional)")}>
           <input
             id="uploadFolder"
             type="text"
             value={folder}
             disabled={busy}
-            placeholder="reference"
+            placeholder={tr("reference")}
             list="shared-file-folders"
             data-testid="upload-folder-input"
             onChange={(e) => setFolder(e.target.value)}
             className={SETTINGS_INPUT}
           />
         </ConnField>
-        <ConnField label="Description (optional)" grow>
+        <ConnField label={tr("Description (optional)")} grow>
           <input
             id="uploadDescription"
             type="text"
@@ -540,7 +537,7 @@ function UploadPanel({
           onClick={() => void upload()}
           className={btnClass({ variant: "primary", sm: true })}
         >
-          {busy ? "Uploading…" : picked.length > 1 ? `Upload ${picked.length} files` : "Upload"}
+          {busy ? tr("Uploading…") : picked.length > 1 ? tr("Upload {0} files", [picked.length]) : tr("Upload")}
         </button>
       </ConnForm>
       {pickError ? (

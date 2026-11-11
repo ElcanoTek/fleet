@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // Conversation rail (#169 unified shell, #258/#279 organization). This renders
 // the chat surface's content inside the shared NavRail: the new-chat / sealed
 // affordances, the unified search, the projects tree, the organized
@@ -59,7 +61,7 @@ import { ChatReorderList } from "./ChatReorderList";
 // rail's transform/backdrop-filter would otherwise capture its fixed
 // positioning.
 const SEALED_TOOLTIP_TEXT =
-  "New sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.";
+  tr("New sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.");
 
 // PortalTipIconButton is a small icon button whose hover/focus tooltip
 // portals to <body> — the rail's overflow containers and transform would
@@ -131,7 +133,7 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
   return (
     <PortalTipIconButton
       tip={SEALED_TOOLTIP_TEXT}
-      ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
+      ariaLabel={tr("New sealed chat — sandboxed, vetted model, nothing leaves")}
       icon="lock"
       iconClassName="size-4"
       className="ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition motion-safe:hover:scale-110 hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -149,7 +151,7 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 // two keep actions — pinning and filing into a project both exempt a chat
 // from the sweep.
 const RECENT_INFO_TEXT =
-  "Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.";
+  tr("Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.");
 
 function RecentInfoButton() {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -171,7 +173,7 @@ function RecentInfoButton() {
     <span className="relative inline-flex">
       <button
         type="button"
-        aria-label="About temporary chats"
+        aria-label={tr("About temporary chats")}
         className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         onMouseEnter={show}
         onMouseLeave={hide}
@@ -212,7 +214,7 @@ function LabelChip({
       {removable ? (
         <button
           type="button"
-          aria-label={`Remove ${name}`}
+          aria-label={tr("Remove {0}", [name])}
           className="hit-area ml-0.5 inline-flex size-3.5 items-center justify-center rounded-full text-current opacity-70 transition hover:bg-white/20 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={(e) => {
             e.stopPropagation();
@@ -275,7 +277,7 @@ function ProjectPanel({
             icon={<Icon name="close" className="size-4" />}
             onClick={onRemove}
           >
-            Remove from project
+            {tr("Remove from project")}
           </MenuItem>
         </>
       ) : null}
@@ -321,7 +323,7 @@ function ProjectKebab({
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const close = () => setOpen(false);
-  const tip = usePortalTip("Options");
+  const tip = usePortalTip(tr("Options"));
   const item = (fn: () => void) => () => {
     close();
     fn();
@@ -333,7 +335,7 @@ function ProjectKebab({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Project options for ${projectName}`}
+        aria-label={tr("Project options for {0}", [projectName])}
         data-project-options={projectId}
         onMouseEnter={(e) => {
           if (!open) tip.show(e);
@@ -363,27 +365,27 @@ function ProjectKebab({
         onClose={close}
         anchorRef={anchorRef}
         placement="bottom-end"
-        label={`Options for project ${projectName}`}
+        label={tr("Options for project {0}", [projectName])}
         className="min-w-[11rem]"
       >
         <MenuItem
           icon={<Icon name="external-link" className="size-4" />}
           onClick={item(onOpen)}
         >
-          Open project
+          {tr("Open project")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="plus" className="size-4" />}
           onClick={item(onNewChat)}
         >
-          New chat
+          {tr("New chat")}
         </MenuItem>
         {onReorder ? (
           <MenuItem
             icon={<Icon name="selector" className="size-4" />}
             onClick={item(onReorder)}
           >
-            Reorder chats
+            {tr("Reorder chats")}
           </MenuItem>
         ) : null}
         {isOwner ? (
@@ -395,33 +397,33 @@ function ProjectKebab({
               icon={<TeamGlyph className="size-4" />}
               onClick={item(onShare)}
             >
-              Share…
+              {tr("Share…")}
             </MenuItem>
             <MenuItem
               icon={<Icon name="settings" className="size-4" />}
               onClick={item(onEdit)}
             >
-              Project settings…
+              {tr("Project settings…")}
             </MenuItem>
             <MenuSeparator />
             <MenuItem
               icon={<Icon name="pin" className="size-4" />}
               onClick={item(onPin)}
             >
-              {pinned ? "Unpin" : "Pin"}
+              {pinned ? tr("Unpin") : tr("Pin")}
             </MenuItem>
             <MenuItem
               icon={<Icon name="edit" className="size-4" />}
               onClick={item(onRename)}
             >
-              Rename
+              {tr("Rename")}
             </MenuItem>
             <MenuItem
               danger
               icon={<Icon name="trash" className="size-4" />}
               onClick={item(onDelete)}
             >
-              Delete project
+              {tr("Delete project")}
             </MenuItem>
           </>
         ) : null}
@@ -473,7 +475,7 @@ function LabelsPanel({
           asserts the field is still focused when the panel opens. */}
       <input
         className="rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
-        placeholder={atMax ? `Max ${MAX_LABELS} labels` : "Add a label…"}
+        placeholder={atMax ? tr("Max {0} labels", [MAX_LABELS]) : tr("Add a label…")}
         maxLength={MAX_LABEL_LEN}
         disabled={atMax}
         value={input}
@@ -488,7 +490,7 @@ function LabelsPanel({
       {fresh.length > 0 && !atMax ? (
         <div className="flex flex-col gap-1">
           <span className="text-[0.66rem] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Suggestions
+            {tr("Suggestions")}
           </span>
           <div className="flex flex-wrap gap-1.5">
             {fresh.map((s) => (
@@ -563,7 +565,7 @@ function ConversationKebab({
     setFlyout((cur) => (cur === which ? null : which));
   };
   const labels = conversation.labels ?? [];
-  const tip = usePortalTip("Options");
+  const tip = usePortalTip(tr("Options"));
   const caret = (
     <span
       aria-hidden="true"
@@ -602,7 +604,7 @@ function ConversationKebab({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Conversation options for ${conversation.title}`}
+        aria-label={tr("Conversation options for {0}", [conversation.title])}
         onMouseEnter={(e) => {
           if (!open) tip.show(e);
         }}
@@ -635,13 +637,13 @@ function ConversationKebab({
         onClose={close}
         anchorRef={anchorRef}
         placement="bottom-end"
-        label={`Options for ${conversation.title}`}
+        label={tr("Options for {0}", [conversation.title])}
         className="min-w-[12rem]"
         flyout={flyoutContent}
         flyoutOpen={flyout !== null}
         flyoutAnchorRef={flyoutAnchorRef}
         onFlyoutClose={() => setFlyout(null)}
-        flyoutLabel={flyout === "project" ? "Move to project" : "Labels"}
+        flyoutLabel={flyout === "project" ? tr("Move to project") : tr("Labels")}
       >
         {/* Pinning is meaningless for a project chat: it lives only under
             its project (never in Pinned) and is already retention-exempt —
@@ -654,7 +656,7 @@ function ConversationKebab({
               close();
             }}
           >
-            {conversation.pinned ? "Unpin" : "Pin"}
+            {conversation.pinned ? tr("Unpin") : tr("Pin")}
           </MenuItem>
         )}
         <MenuItem
@@ -664,7 +666,7 @@ function ConversationKebab({
             onRename();
           }}
         >
-          Rename
+          {tr("Rename")}
         </MenuItem>
         {projects.length > 0 || conversation.project_id ? (
           <MenuItem
@@ -674,7 +676,7 @@ function ConversationKebab({
             trailing={caret}
             onClick={(e) => toggleFlyout("project", e.currentTarget)}
           >
-            Move to project
+            {tr("Move to project")}
           </MenuItem>
         ) : null}
         <MenuItem
@@ -684,7 +686,7 @@ function ConversationKebab({
           trailing={caret}
           onClick={(e) => toggleFlyout("labels", e.currentTarget)}
         >
-          Labels
+          {tr("Labels")}
         </MenuItem>
         <MenuSeparator />
         {/* Was "Download as JSON" — a label that named a file format instead
@@ -697,7 +699,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Download chat…
+          {tr("Download chat…")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="clock" className="size-4" />}
@@ -706,7 +708,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Make recurring task…
+          {tr("Make recurring task…")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="book" className="size-4" />}
@@ -715,7 +717,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Save as workflow…
+          {tr("Save as workflow…")}
         </MenuItem>
         {/* One entry, one dialog, two audiences (ADR-0057). The menu used to
             fork into "Share" / "Share link… + Stop sharing" depending on
@@ -739,7 +741,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Share…
+          {tr("Share…")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="check-square" className="size-4" />}
@@ -748,7 +750,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Select…
+          {tr("Select…")}
         </MenuItem>
         <MenuSeparator />
         <MenuItem
@@ -773,7 +775,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Archive
+          {tr("Archive")}
         </MenuItem>
         <MenuItem
           danger
@@ -783,7 +785,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Delete
+          {tr("Delete")}
         </MenuItem>
       </Menu>
     </>
@@ -862,7 +864,7 @@ function ConvRow({
           // sync effect. The focus effect above + select-on-focus mirror the
           // prior behavior.
           ref={renameInputRef}
-          aria-label={`Rename ${conversation.title}`}
+          aria-label={tr("Rename {0}", [conversation.title])}
           className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
           defaultValue={conversation.title}
           onFocus={(e) => e.currentTarget.select()}
@@ -912,8 +914,8 @@ function ConvRow({
             ) : null}
             {streaming ? (
               <span
-                aria-label="Working"
-                title="Working…"
+                aria-label={tr("Working")}
+                title={tr("Working…")}
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
@@ -925,13 +927,13 @@ function ConvRow({
               <span
                 aria-label={
                   conversation.multiplayer
-                    ? "Multiplayer chat"
-                    : "Shared with your team"
+                    ? tr("Multiplayer chat")
+                    : tr("Shared with your team")
                 }
                 title={
                   conversation.multiplayer
-                    ? "Multiplayer — teammates can chat here"
-                    : "Shared with your team — teammates can read it"
+                    ? tr("Multiplayer — teammates can chat here")
+                    : tr("Shared with your team — teammates can read it")
                 }
               >
                 <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
@@ -939,8 +941,8 @@ function ConvRow({
             ) : null}
             {conversation.share_token ? (
               <span
-                aria-label="Shared by link — anyone with the link"
-                title="Shared by link — anyone with the link"
+                aria-label={tr("Shared by link — anyone with the link")}
+                title={tr("Shared by link — anyone with the link")}
               >
                 <ShareGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
               </span>
@@ -948,8 +950,8 @@ function ConvRow({
             <span className="block truncate">{conversation.title}</span>
             {conversation.lockdown ? (
               <span
-                aria-label="Sealed chat"
-                title="Sealed — private chat"
+                aria-label={tr("Sealed chat")}
+                title={tr("Sealed — private chat")}
                 className="ml-auto inline-flex shrink-0 pl-1"
               >
                 <Icon
@@ -1460,14 +1462,14 @@ export function ConversationSidebar({
         <div className="min-w-0 flex-1">
           <SectionToggle
             icon="briefcase"
-            label="Projects"
+            label={tr("Projects")}
             open={projectsSectionOpen}
             onToggle={() => setProjectsSectionOpen((o) => !o)}
           />
         </div>
         <PortalTipIconButton
           tip="Create project"
-          ariaLabel="Create project"
+          ariaLabel={tr("Create project")}
           icon="plus"
           iconClassName="size-4"
           className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -1478,7 +1480,7 @@ export function ConversationSidebar({
         visibleProjectTree.length === 0 ? (
           searching ? (
             <p className="px-2 py-1.5 text-[0.78rem] text-[var(--color-text-muted)]">
-              No matching projects.
+              {tr("No matching projects.")}
             </p>
           ) : (
             <button
@@ -1487,7 +1489,7 @@ export function ConversationSidebar({
               onClick={onCreateProject}
             >
               <Icon name="plus" className="size-3.5 shrink-0" />
-              New project…
+              {tr("New project…")}
             </button>
           )
         ) : (
@@ -1502,7 +1504,7 @@ export function ConversationSidebar({
             // labeled with its audience, never a bare "shared"
             // (docs/TEAM-SHARING.md vocabulary).
             const teamShared = Boolean(project.team_id);
-            const teamSharedLabel = `Shared with ${project.team_id}`;
+            const teamSharedLabel = tr("Shared with {0}", [project.team_id]);
             // undefined = the counts haven't loaded (or the read failed); a
             // loaded map omits projects with none, so a missing key is a real
             // zero. The difference decides whether the empty state may quote
@@ -1550,7 +1552,7 @@ export function ConversationSidebar({
                     // only while renaming, so defaultValue tracks the live
                     // name without a sync effect.
                     ref={projectRenameInputRef}
-                    aria-label={`Rename project ${project.name}`}
+                    aria-label={tr("Rename project {0}", [project.name])}
                     className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
                     defaultValue={project.name}
                     onFocus={(e) => e.currentTarget.select()}
@@ -1587,8 +1589,8 @@ export function ConversationSidebar({
                       <button
                         type="button"
                         aria-expanded={expanded}
-                        aria-label={`Project ${project.name} (${chats.length} chats)`}
-                        title={expanded ? "Collapse" : "Expand"}
+                        aria-label={tr("Project {0} ({1} chats)", [project.name, chats.length])}
+                        title={expanded ? tr("Collapse") : tr("Expand")}
                         className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                         onClick={() =>
                           setExpandedProjects((s) => {
@@ -1609,7 +1611,7 @@ export function ConversationSidebar({
                       </button>
                       <button
                         type="button"
-                        aria-label={`Open project ${project.name}`}
+                        aria-label={tr("Open project {0}", [project.name])}
                         className={[
                           "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-[0.875rem] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
                           dropReady
@@ -1698,27 +1700,25 @@ export function ConversationSidebar({
                           railProjectEmptyState. */}
                       {emptyState.kind === "team-has-chats" ? (
                         <>
-                          No chats of yours yet &middot;{" "}
+                          {tr("No chats of yours yet ·")}{" "}
                           <button
                             type="button"
-                            aria-label={`Open ${project.name} — ${emptyState.count} ${
-                              emptyState.count === 1 ? "chat" : "chats"
-                            } shared by your team`}
+                            aria-label={tr(emptyState.count === 1 ? "Open {0} — {1} chat shared by your team" : "Open {0} — {1} chats shared by your team", [project.name, emptyState.count])}
                             className="rounded text-left text-[var(--color-accent)] underline decoration-dotted underline-offset-2 transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                             onClick={openHome}
                           >
-                            {emptyState.count} shared by your team{" "}
+                            {emptyState.count} {tr("shared by your team")}{" "}
                             <span aria-hidden="true">&rarr;</span>
                           </button>
                         </>
                       ) : emptyState.kind === "team-count-unknown" ? (
                         // Teammates may have shared chats here that the rail
                         // can't count yet, so this says nothing about theirs.
-                        <>No chats of yours yet</>
+                        <>{tr("No chats of yours yet")}</>
                       ) : (
                         // Decision #23: the short line, replacing the
                         // filing-paths paragraph.
-                        <>No chats yet</>
+                        <>{tr("No chats yet")}</>
                       )}
                     </p>
                   ) : (
@@ -1726,8 +1726,8 @@ export function ConversationSidebar({
                       {reorderScope === projectOrderScope(project.id) && onReorderChats && reorderable(chats.length) ? (
                         <ChatReorderList
                           chats={chats.map((c) => ({ id: c.id, title: c.title }))}
-                          label={`Chats in ${project.name}, in order`}
-                          hint="Drag a chat, or use its arrows, to set the order. A chat added for the first time appears at the top."
+                          label={tr("Chats in {0}, in order", [project.name])}
+                          hint={tr("Drag a chat, or use its arrows, to set the order. A chat added for the first time appears at the top.")}
                           onReorder={(ids) => onReorderChats(projectOrderScope(project.id), ids)}
                           onDone={() =>
                             // By project ID: two projects may share a name.
@@ -1757,7 +1757,7 @@ export function ConversationSidebar({
       <div className="mb-1">
         <SectionToggle
           icon="tag"
-          label="Labels"
+          label={tr("Labels")}
           open={labelsOpen}
           onToggle={() => setLabelsOpen((o) => !o)}
         />
@@ -1810,10 +1810,10 @@ export function ConversationSidebar({
               // once, so it must not read like the rail's ordinary rows.
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.75rem] font-medium text-[var(--color-danger-text)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)]"
               onClick={() => setConfirmBulkDelete(true)}
-              title="Delete every chat in Temporary"
+              title={tr("Delete every chat in Temporary")}
             >
               <Icon name="trash" className="size-3.5 shrink-0" />
-              Delete temporary chats
+              {tr("Delete temporary chats")}
             </button>
           ) : null}
         </div>
@@ -1838,15 +1838,15 @@ export function ConversationSidebar({
           type="search"
           value={sidebarQuery}
           onChange={(e) => setSidebarQuery(e.target.value)}
-          placeholder={`Search… (${searchShortcut})`}
-          aria-label="Search"
+          placeholder={tr("Search… ({0})", [searchShortcut])}
+          aria-label={tr("Search")}
           data-testid="search-input"
           className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
         />
         {sidebarQuery ? (
           <button
             type="button"
-            aria-label="Clear search"
+            aria-label={tr("Clear search")}
             className="absolute right-[0.4rem] inline-flex size-6 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-muted)] transition before:absolute before:left-1/2 before:top-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setSidebarQuery("")}
           >
@@ -1891,7 +1891,7 @@ export function ConversationSidebar({
         <div className="min-w-0 flex-1">
           <SectionToggle
             icon="message"
-            label="Chats"
+            label={tr("Chats")}
             open={chatsSectionOpen}
             onToggle={() => setChatsSectionOpen((o) => !o)}
           />
@@ -1903,7 +1903,7 @@ export function ConversationSidebar({
         ) : null}
         <PortalTipIconButton
           tip="New chat"
-          ariaLabel="New chat"
+          ariaLabel={tr("New chat")}
           icon="plus"
           iconClassName="size-4"
           className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
@@ -1929,8 +1929,8 @@ export function ConversationSidebar({
           <button
             type="button"
             className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:mx-auto sm:flex sm:size-10 sm:justify-center sm:p-0"
-            title="New chat"
-            aria-label="New chat"
+            title={tr("New chat")}
+            aria-label={tr("New chat")}
             data-tip="New chat"
             onClick={() =>
               clearConversation(
@@ -1959,11 +1959,11 @@ export function ConversationSidebar({
                   key={l}
                   className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.78rem] text-[var(--color-text-primary)]"
                 >
-                  <span className="text-[var(--color-text-muted)]">Label:</span>{" "}
+                  <span className="text-[var(--color-text-muted)]">{tr("Label:")}</span>{" "}
                   {l}
                   <button
                     type="button"
-                    aria-label={`Remove label filter ${l}`}
+                    aria-label={tr("Remove label filter {0}", [l])}
                     className="hit-area inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => toggleLabelFilter(l)}
                   >
@@ -1977,8 +1977,7 @@ export function ConversationSidebar({
               className="shrink-0 rounded px-1.5 py-0.5 text-[0.78rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
               onClick={clearFilters}
             >
-              Clear
-            </button>
+              {tr("Clear")}</button>
           </div>
         ) : null}
 
@@ -1991,7 +1990,7 @@ export function ConversationSidebar({
         >
           {isLoadingHistory ? (
             <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
-              Loading…
+              {tr("Loading…")}
             </p>
           ) : filtering ? (
             <>
@@ -1999,8 +1998,8 @@ export function ConversationSidebar({
                 messageHits.length === 0 && matchingProjects.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                     {searching
-                      ? `Nothing matches “${sidebarQuery.trim()}”.`
-                      : "Nothing matches this filter."}
+                      ? tr("Nothing matches “{0}”.", [sidebarQuery.trim()])
+                      : tr("Nothing matches this filter.")}
                   </p>
                 ) : null
               ) : (
@@ -2013,7 +2012,7 @@ export function ConversationSidebar({
               {messageHits.length > 0 ? (
                 <div className="mt-2">
                   <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                    In messages
+                    {tr("In messages")}
                   </p>
                   {messageHits.map((r) => {
                     const conv = conversations.find((c) => c.id === r.conversation_id);
@@ -2032,10 +2031,10 @@ export function ConversationSidebar({
                           {proj ? (
                             <>
                               <span className="text-[var(--color-text-muted)]">{proj.name} › </span>
-                              {r.title || "Untitled"}
+                              {r.title || tr("Untitled")}
                             </>
                           ) : (
-                            r.title || "Untitled"
+                            r.title || tr("Untitled")
                           )}
                         </span>
                         <span
@@ -2058,27 +2057,27 @@ export function ConversationSidebar({
                       name="pin"
                       className="size-3 shrink-0 text-[var(--color-accent)]"
                     />
-                    Pinned
+                    {tr("Pinned")}
                     {canReorderPinned && reorderScope !== PINNED_ORDER_SCOPE && !selecting ? (
                       <button
                         type="button"
                         ref={reorderToggleRef}
                         data-testid="pinned-reorder-toggle"
-                        aria-label="Reorder pinned chats"
-                        title="Reorder pinned chats"
+                        aria-label={tr("Reorder pinned chats")}
+                        title={tr("Reorder pinned chats")}
                         onClick={() => setReorderScope(PINNED_ORDER_SCOPE)}
                         className="ml-auto inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
                       >
                         <Icon name="selector" className="size-3.5" />
-                        Reorder
+                        {tr("Reorder")}
                       </button>
                     ) : null}
                   </div>
                   {reorderScope === PINNED_ORDER_SCOPE && canReorderPinned && onReorderChats ? (
                     <ChatReorderList
                       chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
-                      label="Pinned chats, in order"
-                      hint="Drag a chat, or use its arrows, to set the order. A chat pinned for the first time appears at the top."
+                      label={tr("Pinned chats, in order")}
+                      hint={tr("Drag a chat, or use its arrows, to set the order. A chat pinned for the first time appears at the top.")}
                       onReorder={(ids) => onReorderChats(PINNED_ORDER_SCOPE, ids)}
                       onDone={() => endReorder(() => reorderToggleRef.current?.focus())}
                     />
@@ -2094,11 +2093,11 @@ export function ConversationSidebar({
                     name="clock"
                     className="size-3 shrink-0 text-[var(--color-accent)]"
                   />
-                  Temporary
+                  {tr("Temporary")}
                   <RecentInfoButton />
                   {onRecentSortChange && recent.length > 1 ? (
                     <select
-                      aria-label="Sort temporary chats"
+                      aria-label={tr("Sort temporary chats")}
                       data-testid="recent-sort"
                       value={recentSort}
                       onChange={(e) => {
@@ -2116,7 +2115,7 @@ export function ConversationSidebar({
                 </div>
                 {recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
-                    No saved chats yet.
+                    {tr("No saved chats yet.")}
                   </p>
                 ) : (
                   recent.map(renderRow)
@@ -2126,7 +2125,7 @@ export function ConversationSidebar({
                 <div className="mb-1 mt-2 border-t border-[var(--color-border)] pt-2">
                   <SectionToggle
                     icon="message"
-                    label={`Team chats (${teamSharedConversations.length})`}
+                    label={tr("Team chats ({0})", [teamSharedConversations.length])}
                     open={teamChatsOpen}
                     onToggle={() => setTeamChatsOpen((o) => !o)}
                   />
@@ -2167,7 +2166,7 @@ export function ConversationSidebar({
                             </span>
                             {c.multiplayer ? (
                               <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
-                                Live
+                                {tr("Live")}
                               </span>
                             ) : null}
                             {ownerShort ? (
@@ -2190,7 +2189,7 @@ export function ConversationSidebar({
               <button
                 type="button"
                 aria-expanded={showArchived}
-                aria-label={`Archived conversations (${archivedConversations.length})`}
+                aria-label={tr("Archived conversations ({0})", [archivedConversations.length])}
                 className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-secondary)]"
                 onClick={() => setShowArchived((v) => !v)}
               >
@@ -2198,7 +2197,7 @@ export function ConversationSidebar({
                   name={showArchived ? "chevron-down" : "chevron-right"}
                   className="size-3 shrink-0"
                 />
-                Archived ({archivedConversations.length})
+                {tr("Archived (")}{archivedConversations.length})
               </button>
               {showArchived
                 ? archivedConversations.map((conversation) => (
@@ -2223,7 +2222,7 @@ export function ConversationSidebar({
                       <div className="absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           type="button"
-                          aria-label={`Unarchive ${conversation.title}`}
+                          aria-label={tr("Unarchive {0}", [conversation.title])}
                           data-tip-top="Unarchive"
                           className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
                           onClick={() =>
@@ -2248,7 +2247,7 @@ export function ConversationSidebar({
                         </button>
                         <button
                           type="button"
-                          aria-label={`Delete ${conversation.title}`}
+                          aria-label={tr("Delete {0}", [conversation.title])}
                           data-tip-top="Delete"
                           className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
                           onClick={() =>
@@ -2281,12 +2280,12 @@ export function ConversationSidebar({
             ].join(" ")}
           >
             <span className="min-w-0 flex-1 text-[0.8rem] font-medium tabular-nums text-[var(--color-text-primary)]">
-              {selectedIds.size} selected
-            </span>
+        {rich("{0} selected", selectedIds.size)}
+      </span>
             <div className="flex items-center gap-[0.15rem]">
               <button
                 type="button"
-                aria-label="Pin selected"
+                aria-label={tr("Pin selected")}
                 data-tip-top="Pin"
                 disabled={selectedIds.size === 0}
                 className={BULK_BTN_CLASS}
@@ -2297,7 +2296,7 @@ export function ConversationSidebar({
               <button
                 ref={bulkLabelsRef}
                 type="button"
-                aria-label="Add label"
+                aria-label={tr("Add label")}
                 aria-haspopup="menu"
                 aria-expanded={bulkPanel === "labels"}
                 data-tip-top="Add label"
@@ -2311,7 +2310,7 @@ export function ConversationSidebar({
               </button>
               <button
                 type="button"
-                aria-label="Delete selected"
+                aria-label={tr("Delete selected")}
                 data-tip-top="Delete"
                 disabled={selectedIds.size === 0}
                 className={[
@@ -2324,7 +2323,7 @@ export function ConversationSidebar({
               </button>
               <button
                 type="button"
-                aria-label="Exit selection"
+                aria-label={tr("Exit selection")}
                 data-tip-top="Cancel"
                 className={BULK_BTN_CLASS}
                 onClick={onExitSelectMode}
@@ -2337,7 +2336,7 @@ export function ConversationSidebar({
               onClose={() => setBulkPanel("none")}
               anchorRef={bulkLabelsRef}
               placement="top-end"
-              label="Add label to selected"
+              label={tr("Add label to selected")}
             >
               <LabelsPanel
                 current={[]}
@@ -2356,9 +2355,8 @@ export function ConversationSidebar({
                 railCollapsed ? "sm:hidden" : "",
               ].join(" ")}
             >
-              Selecting {selectedIds.size} conversations — large bulk deletes
-              are permanent.
-            </p>
+        {rich("Selecting {0} conversations — large bulk deletes are permanent.", selectedIds.size)}
+      </p>
           ) : null}
         </>
       ) : null}

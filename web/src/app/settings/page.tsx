@@ -13,6 +13,8 @@ import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
 import { SetSection } from "./ui/panels";
 import { useTheme, type ThemePreference } from "@/app/shared/hooks/useTheme";
 import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
+import { t } from "@/app/lib/i18n";
+import { LanguageSelect } from "@/app/shared/ui/LanguageSelect";
 
 // The composer's send-key preference key (chat/ui/Composer.tsx keeps the
 // constant private to avoid pulling the composer into this bundle — the
@@ -20,9 +22,9 @@ import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
 // absent = "enter").
 
 const THEME_OPTIONS = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
+  { value: "system", label: t("System") },
+  { value: "light", label: t("Light") },
+  { value: "dark", label: t("Dark") },
 ] as const satisfies readonly { value: ThemePreference; label: string }[];
 
 function SendOnEnterRow() {
@@ -38,10 +40,10 @@ function SendOnEnterRow() {
 
   return (
     <SetRow
-      label="Send on Enter"
-      desc="On: Enter sends and Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter (⌘+Enter on a Mac) sends."
+      label={t("Send on Enter")}
+      desc={t("On: Enter sends and Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter (⌘+Enter on a Mac) sends.")}
     >
-      <SetSwitch on={sendOnEnter} onToggle={toggle} label="Send on Enter" />
+      <SetSwitch on={sendOnEnter} onToggle={toggle} label={t("Send on Enter")} />
     </SetRow>
   );
 }
@@ -51,19 +53,22 @@ export default function GeneralSettingsPage() {
 
   return (
     <SetSection
-      title="General"
-      intro="Your own preferences. They only change things for you."
+      title={t("General")}
+      intro={t("Your own preferences. They only change things for you.")}
     >
       <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] py-[0.3rem]">
+        <SetRow label={t("Language")} desc={t("Choose the language for this app. Changing it reloads the page.")}>
+          <LanguageSelect />
+        </SetRow>
         <SetRow
-          label="Theme"
-          desc="System follows your OS appearance. Also switchable from the account menu."
+          label={t("Theme")}
+          desc={t("System follows your OS appearance. Also switchable from the account menu.")}
         >
           <Segmented
             value={themePreference}
             options={THEME_OPTIONS}
             onChange={setTheme}
-            label="Theme"
+            label={t("Theme")}
           />
         </SetRow>
         <SendOnEnterRow />

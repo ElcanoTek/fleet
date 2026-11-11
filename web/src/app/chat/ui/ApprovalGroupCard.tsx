@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The grouped approval card (docs/GROUPED-APPROVALS.md). When one turn stages
 // two or more cards for tools the bundle lists in
 // agent_policy.critical_tool_group_approval, they render as this one card:
@@ -64,7 +66,7 @@ function RawArgs({ approval }: { approval: Approval }) {
       <div className="mb-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
         {server ? (
           <>
-            via <span className="font-mono">{server}</span>
+            {tr("via")}{" "}<span className="font-mono">{server}</span>
             <span className="mx-1">·</span>
           </>
         ) : null}
@@ -93,7 +95,7 @@ function RawArgs({ approval }: { approval: Approval }) {
 
 function rowTitle(approval: Approval, names: ReadonlyMap<string, string>): string {
   if (approval.card) return approval.card.title;
-  return `Run "${actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names).action}"`;
+  return tr("Run \"{0}\"", [actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names).action]);
 }
 
 export function ApprovalGroupCard({
@@ -177,7 +179,7 @@ export function ApprovalGroupCard({
       const url = conversationApiPath(conversationId, "approval-groups", groupId);
       if (!url) {
         // Both ids are server-minted UUIDs; anything else is never sent.
-        setSubmitError("This approval group has an invalid id and can't be sent.");
+        setSubmitError(tr("This approval group has an invalid id and can't be sent."));
         return;
       }
       const response = await fetch(url, {
@@ -209,7 +211,7 @@ export function ApprovalGroupCard({
           // group may no longer hold it and this card unmounts.
           if (r.error) {
             failures.push(`${rowTitle(approval, names)}: ${r.error}`);
-            onResolved({ ...approval, decisionError: `Couldn't submit your decision: ${r.error}` });
+            onResolved({ ...approval, decisionError: tr("Couldn't submit your decision: {0}", [r.error]) });
           }
           continue;
         }
@@ -241,12 +243,12 @@ export function ApprovalGroupCard({
       if (data.resume === true) onResumeExpected?.(anyExecuting);
       if (failures.length > 0) {
         setSubmitError(
-          `${failures.length === 1 ? "One action was" : `${failures.length} actions were`} not decided (${failures.join("; ")}).`,
+          tr("{0} not decided ({1}).", [failures.length === 1 ? tr("One action was") : tr("{0} actions were", [failures.length]), failures.join("; ")]),
         );
       }
     } catch (err) {
       setSubmitError(
-        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
+        tr("Couldn't reach the server ({0}).", [errorMessage(err, tr("request failed"))]),
       );
     } finally {
       setSubmitting(null);
@@ -265,8 +267,8 @@ export function ApprovalGroupCard({
       <div className="mb-2 flex min-w-0 items-center gap-2">
         <span aria-hidden>🛠️</span>
         <span data-testid="approval-group-title" className="min-w-0 break-words font-medium">
-          {approvals.length} actions to approve
-        </span>
+        {rich("{0} actions to approve", approvals.length)}
+      </span>
       </div>
 
       <ul className="grid min-w-0 gap-2">
@@ -339,7 +341,7 @@ export function ApprovalGroupCard({
             disabled={disabled || checkedIds.length === 0}
             onClick={() => void decide(checkedIds, uncheckedIds, narrow, narrowArgs)}
           >
-            {submitting === "approve" ? "Running…" : `Approve all (${checkedIds.length})`}
+            {submitting === "approve" ? tr("Running…") : tr("Approve all ({0})", [checkedIds.length])}
           </button>
           <button
             type="button"
@@ -348,7 +350,7 @@ export function ApprovalGroupCard({
             disabled={submitting !== null}
             onClick={onOneAtATime}
           >
-            One at a time
+            {tr("One at a time")}
           </button>
           <button
             type="button"
@@ -357,20 +359,19 @@ export function ApprovalGroupCard({
             disabled={disabled}
             onClick={() => void decide([], approvals.map((a) => a.id))}
           >
-            {submitting === "cancel" ? "Cancelling…" : "Cancel all"}
+            {submitting === "cancel" ? tr("Cancelling…") : tr("Cancel all")}
           </button>
         </div>
         {uncheckedIds.length > 0 && checkedIds.length > 0 ? (
           <p className="text-[0.72rem] text-[var(--color-card-text-muted)]" data-testid="approval-group-unchecked-note">
-            {uncheckedIds.length === 1 ? "The unchecked action is" : `The ${uncheckedIds.length} unchecked actions are`}{" "}
-            declined.
+            {tr(uncheckedIds.length === 1 ? "The unchecked action is declined." : "The {0} unchecked actions are declined.", [uncheckedIds.length])}
           </p>
         ) : null}
         <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         {countdown.expired ? (
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">
-              The earliest of these actions timed out. Use One at a time to see each one.
+              {tr("The earliest of these actions timed out. Use One at a time to see each one.")}
             </p>
             <button
               type="button"
@@ -379,7 +380,7 @@ export function ApprovalGroupCard({
               disabled={submitting !== null}
               onClick={onOneAtATime}
             >
-              Review one at a time
+              {tr("Review one at a time")}
             </button>
           </div>
         ) : null}

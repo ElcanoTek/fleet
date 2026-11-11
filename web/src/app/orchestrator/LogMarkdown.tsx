@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Markdown renderer for the task-log modal — the ONLY orchestrator module
 // that imports react-markdown. It is loaded lazily (React.lazy in
 // LogViewer.tsx) so the ReactMarkdown pipeline (micromark + remark-gfm,
@@ -122,7 +123,7 @@ const LogImage = memo(function LogImage({
   const [errored, setErrored] = useState(false);
 
   if (!src) {
-    return <span className="log-image-fallback">{alt || "image"}</span>;
+    return <span className="log-image-fallback">{alt || tr("image")}</span>;
   }
 
   if (errored) {
@@ -136,7 +137,7 @@ const LogImage = memo(function LogImage({
         title={title}
         {...(isWorkspaceFile ? { download: downloadFilename || "" } : {})}
       >
-        {alt || downloadFilename || "image (not available)"}
+        {alt || downloadFilename || tr("image (not available)")}
       </a>
     );
   }

@@ -57,8 +57,8 @@ func TestShortcutDocsOnlyNameRealChords(t *testing.T) {
 // chipsBlock matches one `chips: [...]` entry of the help-overlay catalog.
 var chipsBlock = regexp.MustCompile(`chips:\s*\[([^\]]*)\]`)
 
-// chipLabel matches a literal chip, e.g. `{ label: "K" }`.
-var chipLabel = regexp.MustCompile(`label:\s*"([^"]+)"`)
+// chipLabel reads the canonical English key, including a localized display label.
+var chipLabel = regexp.MustCompile(`label:\s*(?:(?:t|tr)\()?"([^"]+)"`)
 
 // wiredChords reads the help-overlay catalog and returns the normalized
 // modifier chords it lists.

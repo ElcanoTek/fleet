@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Orchestrator sign-in card. Cookie/OIDC is the only operator path: the
 // leftover moc username/password form is gone, and so is the backend's
 // POST /auth/login and its bearer (#2049 M4): programs use API keys.
@@ -14,12 +15,11 @@ export type OrchestratorLoginProps = {
 
 export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginProps) {
   return (
-    <div className="auth-section" role="region" aria-label="Authentication">
+    <div className="auth-section" role="region" aria-label={tr("Authentication")}>
       <div className="auth-fields stack-form">
-        <h2>Sign in</h2>
+        <h2>{tr("Sign in")}</h2>
         <p className="caption">
-          Sign in with the same account you use for Chat. Access to
-          background tasks is provisioned by an administrator.
+          {tr("Sign in with the same account you use for Chat. Access to background tasks is provisioned by an administrator.")}
         </p>
 
         {magicLinkLoginEnabled ? (
@@ -31,15 +31,15 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
           <a
             className="btn btn-primary"
             href="/api/orchestrator/auth/elcano-login"
-            aria-label="Sign in with your Elcano email"
+            aria-label={tr("Sign in with your Elcano email")}
           >
-            Use Elcano email
+            {tr("Use Elcano email")}
           </a>
         ) : (
           // /login IS a real page (app/login/page.tsx), so this is genuine
           // in-app navigation and belongs to the client router.
           <Link className="btn btn-primary" href="/login">
-            Sign in via Chat
+            {tr("Sign in via Chat")}
           </Link>
         )}
       </div>

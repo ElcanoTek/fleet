@@ -193,10 +193,11 @@ var pagePaths = map[string]bool{
 // Bootstrap is the JSON the SPA reads at boot from #fleet-bootstrap: the
 // per-request state the Next tier's server components computed.
 type Bootstrap struct {
-	BuildID  string       `json:"buildId"`
-	Branding Branding     `json:"branding"`
-	Session  *bootSession `json:"session"`
-	Login    bootLogin    `json:"login"`
+	BuildID       string                       `json:"buildId"`
+	Branding      Branding                     `json:"branding"`
+	Session       *bootSession                 `json:"session"`
+	Login         bootLogin                    `json:"login"`
+	Localizations map[string]map[string]string `json:"localizations,omitempty"`
 	// Shared is the /shared/{token} snapshot, verbatim from chat-server.
 	Shared   json.RawMessage `json:"shared,omitempty"`
 	NotFound bool            `json:"notFound,omitempty"`
@@ -262,13 +263,13 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 
 	switch {
 	case p == "/":
-		temporaryRedirect(w, g.redirectURL(r, "/chat"))
+		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
 		return
 	case p == "/admin" || p == "/settings/admin/notifications":
 		// /admin moved under the settings area, and /settings/admin/notifications
 		// was retired in favor of Settings → General → Browser notifications and
 		// env/API configuration; the alias keeps bookmarks working.
-		w.Header().Set("Location", g.redirectURL(r, "/settings/admin"))
+		w.Header().Set("Location", g.redirectURL(r, requestLanguagePath(r, "/settings/admin")))
 		w.WriteHeader(http.StatusPermanentRedirect)
 		return
 	case strings.HasPrefix(p, "/orchestrator/tasks/") && strings.Count(p, "/") == 3 && len(p) > len("/orchestrator/tasks/"):
@@ -285,12 +286,12 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		// no-access page, not a shell whose every call 403s. chat-server's
 		// membership middleware remains the real boundary.
 		if sess != nil && (sess.Source == websession.SourceElcano || sess.Source == websession.SourceOIDC) && g.notAMember(sessionPrincipal(sess)) {
-			temporaryRedirect(w, g.redirectURL(r, "/no-access"))
+			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/no-access")))
 			return
 		}
 	case p == "/login":
 		if shouldAutoStartLogin(r.URL.Query(), g.cfg.OIDC) {
-			temporaryRedirect(w, g.redirectURL(r, "/api/auth/oidc/start?silent=1"))
+			temporaryRedirect(w, g.redirectURL(r, "/api/auth/oidc/start?silent=1"+loginLanguageQuery(r)))
 			return
 		}
 		boot.Login.TeamLink = r.URL.Query().Get("team_link") == "1" || parkedTeamLink(r) != ""
@@ -323,6 +324,11 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 	boot.Branding = g.branding.get()
 	if sess != nil {
 		boot.Session = &bootSession{Email: sess.Email}
+		// Resolve private bundle copy through the same member gate as the SPA.
+		// It is request-local, never placed in the shared branding cache.
+		if boot.Branding.HasLocalizations {
+			boot.Localizations = g.memberLocalizations(sess)
+		}
 	}
 	boot.Login.PasswordLoginEnabled = !g.cfg.PasswordLoginDisabled
 	if g.cfg.AccountsManagedByAuth {
@@ -336,6 +342,22 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		boot.Login.OIDCLabel = "Sign in with SSO"
 	}
 	g.renderIndex(w, r, status, title, boot)
+}
+
+func (g *Gateway) memberLocalizations(sess *websession.Session) map[string]map[string]string {
+	status, _, body, ok := g.callCapture(g.chat, call{
+		method: http.MethodGet, target: "/client-config", header: http.Header{}, who: sessionPrincipal(sess),
+	})
+	if !ok || status != http.StatusOK {
+		return nil
+	}
+	var config struct {
+		Localizations map[string]map[string]string `json:"localizations"`
+	}
+	if json.Unmarshal(body, &config) != nil {
+		return nil
+	}
+	return config.Localizations
 }
 
 // notAMember asks chat-server whether a session minted elsewhere belongs to
@@ -371,7 +393,9 @@ func (g *Gateway) renderIndex(w http.ResponseWriter, r *http.Request, status int
 		}
 		head, mid, tail = tmp.indexHead, tmp.indexMid, tmp.indexTail
 	}
-	b := boot.Branding
+	locale := pageLanguage(r)
+	b := localizedBranding(boot.Branding, locale)
+	title = localizedPageTitle(title, locale)
 	pageTitle := b.AppName
 	if title != "" {
 		pageTitle = title
@@ -385,7 +409,7 @@ func (g *Gateway) renderIndex(w http.ResponseWriter, r *http.Request, status int
 		return
 	}
 	var out strings.Builder
-	out.WriteString(head)
+	out.WriteString(strings.Replace(head, `<html lang="en"`, `<html lang="`+locale+`"`, 1))
 	out.WriteString(g.headTags(pageTitle, b))
 	out.WriteString(mid)
 	out.WriteString(`<script type="application/json" id="fleet-bootstrap">`)

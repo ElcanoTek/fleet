@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -21,12 +22,12 @@ import { LockGlyph, TeamGlyph } from "./ShareGlyphs";
 // be worse than useless. undefined = the admin read hasn't landed; then both
 // paths are named.
 function noTeamGuidance(isAdmin: boolean | undefined): string {
-  const head = "You’re not on a team, so projects stay Only you.";
+  const head = tr("You’re not on a team, so projects stay Only you.");
   if (isAdmin === true)
-    return `${head} Add yourself in Settings → Admin → Users, or create a team in Settings → Team.`;
+    return tr("{0} Add yourself in Settings → Admin → Users, or create a team in Settings → Team.", [head]);
   if (isAdmin === false)
-    return `${head} Ask an admin to add you in Settings → Admin → Users.`;
-  return `${head} Admins: add yourself in Settings → Admin → Users, or create a team in Settings → Team. Everyone else: ask an admin.`;
+    return tr("{0} Ask an admin to add you in Settings → Admin → Users.", [head]);
+  return tr("{0} Admins: add yourself in Settings → Admin → Users, or create a team in Settings → Team. Everyone else: ask an admin.", [head]);
 }
 
 function Radio({ on }: { on: boolean }) {
@@ -128,18 +129,18 @@ export function ProjectVisibilityChoice({
   return (
     <div className="grid gap-1.5">
       <span className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
-        Who can see it
+        {tr("Who can see it")}
       </span>
       <div
         role="radiogroup"
-        aria-label="Who can see this project"
+        aria-label={tr("Who can see this project")}
         aria-describedby={noteId}
         className="flex flex-col gap-2 sm:flex-row"
       >
         <Option
           checked={!teamShared}
           icon={<LockGlyph className="size-4" />}
-          title="Only you"
+          title={tr("Only you")}
           sub="Private project"
           onPick={() => onChange(false)}
         />
@@ -153,13 +154,13 @@ export function ProjectVisibilityChoice({
               <TeamGlyph className="size-4" />
             )
           }
-          title={noTeam ? "Team (unavailable)" : team || "Team"}
+          title={noTeam ? tr("Team (unavailable)") : team || tr("Team")}
           sub={
             noTeam
-              ? "You’re not on a team"
+              ? tr("You’re not on a team")
               : typeof peopleCount === "number"
-                ? `${peopleCount} ${peopleCount === 1 ? "person" : "people"}`
-                : "Your team"
+                ? tr(peopleCount === 1 ? "{0} person" : "{0} people", [peopleCount])
+                : tr("Your team")
           }
           onPick={() => onChange(true)}
         />
@@ -220,7 +221,7 @@ export function NewProjectDialog({
   }, [showInstructions]);
   const nameId = useId();
   const instructionsId = useId();
-  const teamName = team || "your team";
+  const teamName = team || tr("your team");
   const shared = teamShared && team !== "";
   const canCreate = name.trim().length > 0 && !busy;
 
@@ -239,8 +240,8 @@ export function NewProjectDialog({
 
   return (
     <DialogShell
-      label="New project"
-      scrimLabel="Close new project"
+      label={tr("New project")}
+      scrimLabel={tr("Close new project")}
       onDismiss={onClose}
       initialFocusRef={nameRef}
       className="flex max-h-[88vh] max-w-[30rem] flex-col gap-4 overflow-y-auto p-5"
@@ -249,20 +250,20 @@ export function NewProjectDialog({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
-            New project
+            {tr("New project")}
           </h2>
           <p className="mt-0.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-            A home for related chats, with shared instructions and memory.
+            {tr("A home for related chats, with shared instructions and memory.")}
           </p>
         </div>
-        <CloseButton label="Close new project" onClick={onClose} />
+        <CloseButton label={tr("Close new project")} onClick={onClose} />
       </div>
 
       {moveChat ? (
         <p className="m-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
           {shared
-            ? `“${moveChat.title}” moves into the new project and is shared with ${teamName}.`
-            : `“${moveChat.title}” moves into the new project.`}
+            ? tr("“{0}” moves into the new project and is shared with {1}.", [moveChat.title, teamName])
+            : tr("“{0}” moves into the new project.", [moveChat.title])}
         </p>
       ) : null}
 
@@ -271,14 +272,14 @@ export function NewProjectDialog({
           htmlFor={nameId}
           className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
         >
-          Name
+          {tr("Name")}
         </label>
         <input
           id={nameId}
           ref={nameRef}
           value={name}
           maxLength={128}
-          placeholder="e.g. Knowertech: Q4 planning"
+          placeholder={tr("e.g. Knowertech: Q4 planning")}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -296,8 +297,8 @@ export function NewProjectDialog({
         isAdmin={isAdmin}
         note={
           shared
-            ? `${teamName} will see the instructions and Team learnings. Each chat stays Only you until its owner shares it.`
-            : `Only you can see it. You can share it with ${teamName} any time.`
+            ? tr("{0} will see the instructions and Team learnings. Each chat stays Only you until its owner shares it.", [teamName])
+            : tr("Only you can see it. You can share it with {0} any time.", [teamName])
         }
         onChange={setTeamShared}
       />
@@ -308,14 +309,14 @@ export function NewProjectDialog({
             htmlFor={instructionsId}
             className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
           >
-            Instructions (optional)
+            {tr("Instructions (optional)")}
           </label>
           <textarea
             id={instructionsId}
             ref={instructionsRef}
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
-            placeholder="Standing instructions every chat here follows…"
+            placeholder={tr("Standing instructions every chat here follows…")}
             className="min-h-24 w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
           />
         </div>
@@ -325,7 +326,7 @@ export function NewProjectDialog({
           className="self-start rounded-[var(--radius-md)] text-[0.82rem] font-medium text-[var(--color-accent)] transition hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={() => setShowInstructions(true)}
         >
-          + Add instructions (optional)
+          {tr("+ Add instructions (optional)")}
         </button>
       )}
 
@@ -341,15 +342,14 @@ export function NewProjectDialog({
           className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={onClose}
         >
-          Cancel
-        </button>
+          {tr("Cancel")}</button>
         <button
           type="button"
           disabled={!canCreate}
           className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
           onClick={() => void create()}
         >
-          {busy ? "Creating…" : "Create project"}
+          {busy ? tr("Creating…") : tr("Create project")}
         </button>
       </div>
     </DialogShell>

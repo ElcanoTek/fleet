@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The two banners that tie a teammate's branch to the chat it came from
 // (docs/TEAM-SHARING.md, frames B20 and B21).
 //
@@ -52,11 +54,9 @@ export function BranchOriginBanner({
     >
       <BranchGlyph className="size-3.5 shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1">
-        Branched from {origin.source_owner_email}’s chat on{" "}
-        {formatDay(origin.branched_at)}.{" "}
-        {origin.copied_files.length > 0
-          ? "Shared files came with it as your own copies."
-          : "No files came with it."}
+        {rich("Branched from {0}’s chat on {1}. {2}", origin.source_owner_email, formatDay(origin.branched_at), origin.copied_files.length > 0
+          ? tr("Shared files came with it as your own copies.")
+          : tr("No files came with it."))}
       </span>
       {origin.source_still_shared ? (
         <button
@@ -64,8 +64,8 @@ export function BranchOriginBanner({
           className={linkButton}
           onClick={() => onOpenSource(origin.source_conversation_id)}
         >
-          Open {ownerFirstName(origin.source_owner_email)}’s chat
-        </button>
+        {rich("Open {0}’s chat", ownerFirstName(origin.source_owner_email))}
+      </button>
       ) : null}
     </div>
   );
@@ -87,7 +87,9 @@ export function ViewerBranchBanner({
       className="flex flex-wrap items-center gap-2 rounded-[0.625rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] px-3 py-2 text-[0.78rem] text-[var(--color-text-secondary)]"
     >
       <BranchGlyph className="size-3.5 shrink-0 text-[var(--color-accent)]" />
-      <span>You branched this on {formatDay(branch.branched_at)}</span>
+      <span>
+        {rich("You branched this on {0}", formatDay(branch.branched_at))}
+      </span>
       <span aria-hidden="true" className="text-[var(--color-text-muted)]">
         ·
       </span>
@@ -96,12 +98,12 @@ export function ViewerBranchBanner({
         className={linkButton}
         onClick={() => onOpenBranch(branch.conversation_id)}
       >
-        Open your branch
+        {tr("Open your branch")}
       </button>
       {branch.changed_since ? (
         <span className="basis-full pl-[1.375rem] text-[var(--color-text-primary)]">
-          {ownerFirstName(ownerEmail)} has added messages since you branched.
-        </span>
+        {rich("{0} has added messages since you branched.", ownerFirstName(ownerEmail))}
+      </span>
       ) : null}
     </div>
   );

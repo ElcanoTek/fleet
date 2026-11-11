@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -50,20 +51,20 @@ const FORMATS: {
   {
     id: "html",
     icon: "globe",
-    label: "Web page",
-    hint: "Opens in any browser, looks like the chat. Print it to save a PDF.",
+    label: tr("Web page"),
+    hint: tr("Opens in any browser, looks like the chat. Print it to save a PDF."),
   },
   {
     id: "markdown",
     icon: "file-text",
-    label: "Text document",
-    hint: "Plain text you can paste into email, Word, Docs, or Notion.",
+    label: tr("Text document"),
+    hint: tr("Plain text you can paste into email, Word, Docs, or Notion."),
   },
   {
     id: "json",
     icon: "database",
-    label: "Raw data",
-    hint: "Every message, tool call and result exactly as stored. For developers.",
+    label: tr("Raw data"),
+    hint: tr("Every message, tool call and result exactly as stored. For developers."),
   },
 ];
 
@@ -90,7 +91,7 @@ export function DownloadChatDialog({
       onClose();
     } catch (err) {
       setError(
-        errorMessage(err, "Could not download this chat"),
+        errorMessage(err, tr("Could not download this chat")),
       );
       setBusy(false);
     }
@@ -101,7 +102,7 @@ export function DownloadChatDialog({
       className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-overlay-strong)] p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Download chat"
+      aria-label={tr("Download chat")}
     >
       <div
         ref={modalRef}
@@ -116,18 +117,18 @@ export function DownloadChatDialog({
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="m-0 truncate text-base font-semibold text-[var(--color-text-primary)]">
-              Download chat
+              {tr("Download chat")}
             </h2>
             <p className="m-0 truncate text-xs text-[var(--color-text-muted)]">
               “{conversationTitle}”
             </p>
           </div>
-          <CloseButton label="Close download dialog" onClick={onClose} />
+          <CloseButton label={tr("Close download dialog")} onClick={onClose} />
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           <fieldset className="m-0 grid gap-2 border-0 p-0">
-            <legend className="sr-only">File format</legend>
+            <legend className="sr-only">{tr("File format")}</legend>
             {FORMATS.map((option) => {
               const selected = format === option.id;
               return (
@@ -182,10 +183,9 @@ export function DownloadChatDialog({
                 onChange={(e) => setIncludeWork(e.target.checked)}
               />
               <span className="grid gap-0.5">
-                Include the agent&apos;s work
+                {tr("Include the agent's work")}
                 <span className="text-xs text-[var(--color-text-muted)]">
-                  Tool calls, their results, and the agent&apos;s thinking. Off
-                  by default so the file reads like a conversation.
+                  {tr("Tool calls, their results, and the agent's thinking. Off by default so the file reads like a conversation.")}
                 </span>
               </span>
             </label>
@@ -206,15 +206,14 @@ export function DownloadChatDialog({
 
         <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
           <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
           <button
             type="button"
             className="btn btn-primary"
             disabled={busy}
             onClick={() => void start()}
           >
-            {busy ? "Preparing…" : "Download"}
+            {busy ? tr("Preparing…") : tr("Download")}
           </button>
         </footer>
       </div>

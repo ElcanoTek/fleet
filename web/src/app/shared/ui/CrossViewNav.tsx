@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { Link } from "@/app/lib/Link";
 
 // CrossViewNav holds the links that move between the app's surfaces —
@@ -18,7 +19,7 @@ const NAV_TO_CHAT_TESTID = "nav-to-chat";
 
 export function NavToOrchestrator({
   className,
-  children = "Background tasks →",
+  children = tr("Background tasks →"),
   ariaCurrent,
   dataTip,
 }: {
@@ -44,7 +45,7 @@ export function NavToOrchestrator({
 
 export function NavToChat({
   className,
-  children = "Go to Chat",
+  children = tr("Go to Chat"),
   ariaCurrent,
   dataTip,
 }: {

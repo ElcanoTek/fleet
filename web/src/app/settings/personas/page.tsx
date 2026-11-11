@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 
 import { navigate } from "@/app/lib/navigation";
@@ -71,7 +73,7 @@ const CHOICE =
   "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-2 gap-y-[0.1rem] rounded-[var(--radius-md)] border border-[var(--color-border)] px-[0.7rem] py-[0.55rem] text-[0.78rem] text-[var(--color-text-secondary)] has-[:checked]:border-[var(--color-accent)] has-[:checked]:bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]";
 
 function titleCase(p: string): string {
-  return p.charAt(0).toUpperCase() + p.slice(1);
+  return tr(p.charAt(0).toUpperCase() + p.slice(1));
 }
 
 /** Choice renders one radio card of a two-way setting. */
@@ -123,7 +125,7 @@ export default function PersonasPage() {
   const reload = () =>
     fetch("/api/user-personas", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load your personas"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Failed to load your personas")));
         return (await res.json()) as ListResponse;
       })
       .then((data) => {
@@ -134,7 +136,7 @@ export default function PersonasPage() {
       })
       .catch((e: unknown) => {
         setPersonas((prev) => prev ?? []);
-        setError(errorMessage(e, "Failed to load your personas."));
+        setError(errorMessage(e, tr("Failed to load your personas.")));
       });
 
   useEffect(() => {
@@ -162,14 +164,14 @@ export default function PersonasPage() {
     try {
       await fn();
     } catch (e: unknown) {
-      setError(errorMessage(e, `${label} failed.`));
+      setError(errorMessage(e, tr("{0} failed.", [label])));
     } finally {
       setBusy(false);
     }
   };
 
   const save = () =>
-    run("Save", async () => {
+    run(tr("Save"), async () => {
       if (!draft) return;
       const isNew = draft.id === "";
       const res = await fetch(isNew ? "/api/user-personas" : `/api/user-personas/${encodeURIComponent(draft.id)}`, {
@@ -189,24 +191,24 @@ export default function PersonasPage() {
           })),
         }),
       });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
-      setNotice(isNew ? `Created “${draft.display_name.trim()}”. Pick it from the persona menu in a new chat.` : "Saved.");
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Save failed")));
+      setNotice(isNew ? tr("Created “{0}”. Pick it from the persona menu in a new chat.", [draft.display_name.trim()]) : tr("Saved."));
       setDraft(null);
       await reload();
     });
 
   const approve = (p: UserPersona) =>
-    run("Approve", async () => {
+    run(tr("Approve"), async () => {
       const res = await fetch(`/api/user-personas/${encodeURIComponent(p.id)}/approve`, { method: "POST" });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Approve failed"));
-      setNotice(p.replaces_name ? `Applied the edit to “${p.replaces_name}”.` : `“${p.display_name}” is ready to use.`);
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Approve failed")));
+      setNotice(p.replaces_name ? tr("Applied the edit to “{0}”.", [p.replaces_name]) : tr("“{0}” is ready to use.", [p.display_name]));
       await reload();
     });
 
   const remove = (p: UserPersona) =>
-    run("Delete", async () => {
+    run(tr("Delete"), async () => {
       const res = await fetch(`/api/user-personas/${encodeURIComponent(p.id)}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(await responseErrorText(res, "Delete failed"));
+      if (!res.ok && res.status !== 204) throw new Error(await responseErrorText(res, tr("Delete failed")));
       await reload();
     });
 
@@ -217,13 +219,13 @@ export default function PersonasPage() {
   // set to act on your behalf turns the chat's auto-approve on; one that
   // advises leaves approval cards in place.
   const startPatrol = (p: UserPersona, patrol: PersonaPatrol) =>
-    run("Start patrol", async () => {
+    run(tr("Start patrol"), async () => {
       const convRes = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ persona: p.ref, title: patrol.title, model: currentDefaultModel() }),
       });
-      if (!convRes.ok) throw new Error(await responseErrorText(convRes, "Could not create the patrol chat"));
+      if (!convRes.ok) throw new Error(await responseErrorText(convRes, tr("Could not create the patrol chat")));
       const conv = (await convRes.json()) as { id: string };
       const sched = await createSchedule(
         conv.id,
@@ -234,7 +236,7 @@ export default function PersonasPage() {
           timezone: patrol.timezone || "UTC",
           auto_approve: p.autonomy === "act",
         },
-        "Could not start the patrol",
+        tr("Could not start the patrol"),
       );
       if (sched.schedule?.id) {
         // The first check runs now so the chat shows the persona at work;
@@ -258,12 +260,10 @@ export default function PersonasPage() {
 
   return (
     <SetSection
-      title="Personas"
+      title={tr("Personas")}
       intro={
         <>
-          A persona sets how the assistant works and writes. Make one that works like you, or one
-          for a single job. Yours are private. Pick one from the persona menu when you start a
-          chat.
+          {tr("A persona sets how the assistant works and writes. Make one that works like you, or one for a single job. Yours are private. Pick one from the persona menu when you start a chat.")}
         </>
       }
     >
@@ -279,18 +279,16 @@ export default function PersonasPage() {
       ) : null}
 
       <ConnPanel>
-        <ConnPanelHead title="Build your digital twin" />
+        <ConnPanelHead title={tr("Build your digital twin")} />
         <ConnPanelSub>
-          Tell the assistant about yourself and it drafts a persona that thinks, prioritizes and
-          writes like you — with suggested patrols for the checks you repeat. Nothing is saved until
-          you approve the draft here.
+          {tr("Tell the assistant about yourself and it drafts a persona that thinks, prioritizes and writes like you — with suggested patrols for the checks you repeat. Nothing is saved until you approve the draft here.")}
         </ConnPanelSub>
         <div className="grid gap-[0.75rem]">
-          <ConnField label="About you — your role, what you watch, how you decide, how you like things written">
+          <ConnField label={tr("About you — your role, what you watch, how you decide, how you like things written")}>
             <textarea
               id="twinAbout"
               className={`${SETTINGS_INPUT} min-h-[5.5rem]! resize-y pt-[0.55rem]! text-[0.85rem]!`}
-              placeholder="I run programmatic deals for retail clients. I check pacing and margin every morning, flag anything under 80% of target, and like short bullet summaries with the number first."
+              placeholder={tr("I run programmatic deals for retail clients. I check pacing and margin every morning, flag anything under 80% of target, and like short bullet summaries with the number first.")}
               value={about}
               onChange={(e) => setAbout(e.target.value)}
             />
@@ -298,24 +296,23 @@ export default function PersonasPage() {
           <label className="flex cursor-pointer items-center gap-2 text-[0.78rem] text-[var(--color-text-secondary)]">
             <input type="checkbox" checked={useHistory} onChange={(e) => setUseHistory(e.target.checked)} />
             <span>
-              Learn from my recent chats — the assistant reads only the messages you typed (not its
-              replies, and never lockdown chats)
+              {tr("Learn from my recent chats — the assistant reads only the messages you typed (not its replies, and never lockdown chats)")}
             </span>
           </label>
-          <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What your twin may do">
+          <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={tr("What your twin may do")}>
             <Choice
               name="twinAutonomy"
               checked={twinAutonomy === "advise"}
               onChange={() => setTwinAutonomy("advise")}
-              title="Suggest actions"
-              hint="Analyzes and recommends; you approve anything it does."
+              title={tr("Suggest actions")}
+              hint={tr("Analyzes and recommends; you approve anything it does.")}
             />
             <Choice
               name="twinAutonomy"
               checked={twinAutonomy === "act"}
               onChange={() => setTwinAutonomy("act")}
-              title="Act on my behalf"
-              hint="Handles routine actions itself; patrols run with auto-approve on."
+              title={tr("Act on my behalf")}
+              hint={tr("Handles routine actions itself; patrols run with auto-approve on.")}
             />
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -328,32 +325,30 @@ export default function PersonasPage() {
                 openEditor({ ...EMPTY_PERSONA, ...t, name: slugify(t.display_name ?? ""), autonomy: twinAutonomy });
               }}
             >
-              Write it myself
+              {tr("Write it myself")}
             </button>
             <button type="button" className={btnClass({ variant: "primary" })} disabled={busy} onClick={buildTwin}>
-              Build with the assistant
+              {tr("Build with the assistant")}
             </button>
           </div>
           <p className={HINT}>
-            Opens a new chat with your request ready to send. The assistant asks a few questions,
-            then stages a draft persona below for you to approve.
+            {tr("Opens a new chat with your request ready to send. The assistant asks a few questions, then stages a draft persona below for you to approve.")}
           </p>
         </div>
       </ConnPanel>
 
       <ConnPanel>
-        <ConnPanelHead title="Your personas">
+        <ConnPanelHead title={tr("Your personas")}>
           <RevealButton
             open={draft !== null}
-            closedLabel="New persona"
+            closedLabel={tr("New persona")}
             disabled={busy}
             testId="new-persona"
             onClick={() => (draft ? setDraft(null) : openEditor({ ...EMPTY_PERSONA }))}
           />
         </ConnPanelHead>
         <ConnPanelSub>
-          Drafts the assistant proposes wait here for your review. Editing a persona changes every
-          chat that uses it from its next turn.
+          {tr("Drafts the assistant proposes wait here for your review. Editing a persona changes every chat that uses it from its next turn.")}
         </ConnPanelSub>
 
         {draft ? (
@@ -364,7 +359,7 @@ export default function PersonasPage() {
           >
             {draft.id === "" ? (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]">Start from</span>
+                <span className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]">{tr("Start from")}</span>
                 {PERSONA_TEMPLATES.map((t) => (
                   <button
                     key={t.id}
@@ -383,11 +378,11 @@ export default function PersonasPage() {
               </div>
             ) : null}
             <div className="flex flex-wrap gap-[0.75rem]">
-              <ConnField label="Display name" grow>
+              <ConnField label={tr("Display name")} grow>
                 <input
                   id="personaDisplayName"
                   className={SETTINGS_INPUT}
-                  placeholder="My Twin"
+                  placeholder={tr("My Twin")}
                   value={draft.display_name}
                   onChange={(e) =>
                     setDraft({
@@ -398,7 +393,7 @@ export default function PersonasPage() {
                   }
                 />
               </ConnField>
-              <ConnField label={draft.id === "" ? "Short name (lowercase-kebab)" : "Short name (fixed — chats refer to it)"}>
+              <ConnField label={draft.id === "" ? tr("Short name (lowercase-kebab)") : tr("Short name (fixed — chats refer to it)")}>
                 <input
                   id="personaName"
                   className={SETTINGS_INPUT}
@@ -412,55 +407,55 @@ export default function PersonasPage() {
                 />
               </ConnField>
             </div>
-            <ConnField label="One line — what it's for">
+            <ConnField label={tr("One line — what it's for")}>
               <input
                 id="personaDescription"
                 className={SETTINGS_INPUT}
-                placeholder="Watches my deals and drafts updates in my voice."
+                placeholder={tr("Watches my deals and drafts updates in my voice.")}
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               />
             </ConnField>
-            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Kind">
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={tr("Kind")}>
               <Choice
                 name="personaKind"
                 checked={draft.kind === "twin"}
                 onChange={() => setDraft({ ...draft, kind: "twin" })}
-                title="Digital twin"
-                hint="Thinks, prioritizes and writes the way you would."
+                title={tr("Digital twin")}
+                hint={tr("Thinks, prioritizes and writes the way you would.")}
               />
               <Choice
                 name="personaKind"
                 checked={draft.kind === "assistant"}
                 onChange={() => setDraft({ ...draft, kind: "assistant" })}
-                title="Specialist assistant"
-                hint="A helper set up for one kind of work."
+                title={tr("Specialist assistant")}
+                hint={tr("A helper set up for one kind of work.")}
               />
             </div>
-            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What it may do">
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={tr("What it may do")}>
               <Choice
                 name="personaAutonomy"
                 checked={draft.autonomy === "advise"}
                 onChange={() => setDraft({ ...draft, autonomy: "advise" })}
-                title="Suggest actions"
-                hint="Analyzes and recommends; you approve anything it does."
+                title={tr("Suggest actions")}
+                hint={tr("Analyzes and recommends; you approve anything it does.")}
               />
               <Choice
                 name="personaAutonomy"
                 checked={draft.autonomy === "act"}
                 onChange={() => setDraft({ ...draft, autonomy: "act" })}
-                title="Act on my behalf"
-                hint="Handles routine actions itself; patrols run with auto-approve on."
+                title={tr("Act on my behalf")}
+                hint={tr("Handles routine actions itself; patrols run with auto-approve on.")}
               />
             </div>
-            <ConnField label="Builds on (its expertise and tool access carry over)">
+            <ConnField label={tr("Builds on (its expertise and tool access carry over)")}>
               <select
                 id="personaBase"
                 className={SETTINGS_INPUT}
                 value={draft.base_persona}
                 onChange={(e) => setDraft({ ...draft, base_persona: e.target.value })}
               >
-                <option value="">Workspace default ({baseLabel("")})</option>
+                <option value="">{tr("Workspace default ({0})", [baseLabel("")])}</option>
                 {workspace.map((w) => (
                   <option key={w} value={w}>
                     {titleCase(w)}
@@ -468,11 +463,11 @@ export default function PersonasPage() {
                 ))}
               </select>
             </ConnField>
-            <ConnField label="Instructions (markdown — role, priorities, decision rules, voice, what never to do)">
+            <ConnField label={tr("Instructions (markdown — role, priorities, decision rules, voice, what never to do)")}>
               <textarea
                 id="personaInstructions"
                 className={`${SETTINGS_INPUT} min-h-[11rem]! resize-y pt-[0.55rem]! font-[family-name:var(--font-code)] text-[0.76rem]! leading-[1.6]`}
-                placeholder={"## Who I am\n- …\n\n## How I decide\n- …"}
+                placeholder={tr("## Who I am\n- …\n\n## How I decide\n- …")}
                 value={draft.instructions}
                 onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
               />
@@ -480,11 +475,10 @@ export default function PersonasPage() {
 
             <fieldset className="grid gap-[0.6rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] px-[0.8rem] pb-[0.8rem] pt-[0.4rem]">
               <legend className="px-1 text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
-                Suggested patrols
+                {tr("Suggested patrols")}
               </legend>
               <p className={HINT}>
-                Checks this persona can run on a schedule. Nothing runs until you press Start patrol on
-                the persona&apos;s card.
+                {tr("Checks this persona can run on a schedule. Nothing runs until you press Start patrol on the persona's card.")}
               </p>
               {draft.patrols.map((pt, i) => {
                 return (
@@ -493,17 +487,17 @@ export default function PersonasPage() {
                     data-testid={`patrol-row-${i}`}
                     className="grid gap-[0.55rem] border-t border-[var(--color-border-subtle)] pt-[0.65rem] first-of-type:border-t-0"
                   >
-                    <ConnField label="Title" grow>
+                    <ConnField label={tr("Title")} grow>
                       <input
                         className={SETTINGS_INPUT}
                         value={pt.title}
-                        placeholder="Morning pacing sweep"
+                        placeholder={tr("Morning pacing sweep")}
                         onChange={(e) => setPatrol(i, { title: e.target.value })}
                       />
                     </ConnField>
                     <div className="grid gap-1.5">
                       <span className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
-                        Quick presets
+                        {tr("Quick presets")}
                       </span>
                       <div className="flex flex-wrap gap-1">
                         {CADENCE_PRESETS.map((c) => {
@@ -533,11 +527,11 @@ export default function PersonasPage() {
                       onChangeTimezone={(nextTz) => setPatrol(i, { timezone: nextTz })}
                       testIdPrefix={`persona-patrol-schedule-${i}`}
                     />
-                    <ConnField label="What to do each time">
+                    <ConnField label={tr("What to do each time")}>
                       <textarea
                         className={`${SETTINGS_INPUT} min-h-[4rem]! resize-y pt-[0.55rem]! text-[0.82rem]!`}
                         value={pt.prompt}
-                        placeholder="Check pacing on my top deals and flag anything under 80% of target."
+                        placeholder={tr("Check pacing on my top deals and flag anything under 80% of target.")}
                         onChange={(e) => setPatrol(i, { prompt: e.target.value })}
                       />
                     </ConnField>
@@ -547,7 +541,7 @@ export default function PersonasPage() {
                         className={btnClass({ sm: true, danger: true })}
                         onClick={() => setDraft({ ...draft, patrols: draft.patrols.filter((_, j) => j !== i) })}
                       >
-                        Remove patrol
+                        {tr("Remove patrol")}
                       </button>
                     </div>
                   </div>
@@ -568,7 +562,7 @@ export default function PersonasPage() {
                       })
                     }
                   >
-                    Add a patrol
+                    {tr("Add a patrol")}
                   </button>
                 </div>
               ) : null}
@@ -581,15 +575,14 @@ export default function PersonasPage() {
                 disabled={busy}
                 onClick={() => setDraft(null)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 type="button"
                 className={btnClass({ variant: "primary" })}
                 disabled={busy || !draft.name.trim() || !draft.instructions.trim()}
                 onClick={() => void save()}
               >
-                {draft.id === "" ? "Create persona" : "Save changes"}
+                {draft.id === "" ? tr("Create persona") : tr("Save changes")}
               </button>
             </div>
           </div>
@@ -597,16 +590,15 @@ export default function PersonasPage() {
 
         {pending.length > 0 ? (
           <p className="mb-2 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {pending.length === 1 ? "1 draft is" : `${pending.length} drafts are`} waiting for your review.
-          </p>
+        {rich("{0} waiting for your review.", pending.length === 1 ? tr("1 draft is") : tr("{0} drafts are", [pending.length]))}
+      </p>
         ) : null}
 
         {personas === null ? (
-          <p className={LOADING}>Loading…</p>
+          <p className={LOADING}>{tr("Loading…")}</p>
         ) : personas.length === 0 && !draft ? (
           <ConnEmpty>
-            No personas yet — build your digital twin above, or start from a template with New
-            persona.
+            {tr("No personas yet — build your digital twin above, or start from a template with New persona.")}
           </ConnEmpty>
         ) : (
           <ConnRows>
@@ -624,12 +616,12 @@ export default function PersonasPage() {
                       {p.display_name}
                     </span>
                     <ConnBadge variant={p.kind === "twin" ? "overridden" : "neutral"}>
-                      {p.kind === "twin" ? "Digital twin" : "Assistant"}
+                      {p.kind === "twin" ? tr("Digital twin") : tr("Assistant")}
                     </ConnBadge>
-                    <ConnBadge variant="neutral">{p.autonomy === "act" ? "Acts for you" : "Suggests actions"}</ConnBadge>
+                    <ConnBadge variant="neutral">{p.autonomy === "act" ? tr("Acts for you") : tr("Suggests actions")}</ConnBadge>
                     {proposed ? (
                       <ConnBadge variant="warn">
-                        {p.replaces_name ? `Proposed edit to ${p.replaces_name}` : "Proposed — review it"}
+                        {p.replaces_name ? tr("Proposed edit to {0}", [p.replaces_name]) : tr("Proposed — review it")}
                       </ConnBadge>
                     ) : null}
                     <span className="ml-auto inline-flex flex-wrap gap-[0.35rem]">
@@ -640,7 +632,7 @@ export default function PersonasPage() {
                           disabled={busy}
                           onClick={() => void approve(p)}
                         >
-                          Approve
+                          {tr("Approve")}
                         </button>
                       ) : (
                         <>
@@ -650,7 +642,7 @@ export default function PersonasPage() {
                             disabled={busy}
                             onClick={() => startChat(p.ref)}
                           >
-                            Start chat
+                            {tr("Start chat")}
                           </button>
                           <button
                             type="button"
@@ -670,7 +662,7 @@ export default function PersonasPage() {
                               })
                             }
                           >
-                            Edit
+                            {tr("Edit")}
                           </button>
                         </>
                       )}
@@ -680,16 +672,18 @@ export default function PersonasPage() {
                         aria-expanded={open === p.id}
                         onClick={() => setOpen(open === p.id ? null : p.id)}
                       >
-                        {open === p.id ? "Hide" : "View"}
+                        {open === p.id ? tr("Hide") : tr("View")}
                       </button>
-                      <InlineConfirmButton label={proposed ? "Discard" : "Delete"} onConfirm={() => void remove(p)} disabled={busy} />
+                      <InlineConfirmButton label={proposed ? tr("Discard") : tr("Delete")} onConfirm={() => void remove(p)} disabled={busy} />
                     </span>
                   </div>
                   {p.description ? <ClampText text={p.description} className={DESC} /> : null}
-                  <p className={HINT}>Builds on {baseLabel(p.base_persona)}</p>
+                  <p className={HINT}>
+        {rich("Builds on {0}", baseLabel(p.base_persona))}
+      </p>
                   {open === p.id ? <pre className={MD}>{p.instructions}</pre> : null}
                   {p.patrols && p.patrols.length > 0 ? (
-                    <ul className="m-0 grid list-none gap-[0.35rem] p-0" aria-label={`Suggested patrols for ${p.display_name}`}>
+                    <ul className="m-0 grid list-none gap-[0.35rem] p-0" aria-label={tr("Suggested patrols for {0}", [p.display_name])}>
                       {p.patrols.map((pt, i) => (
                         <li
                           key={i}
@@ -705,10 +699,10 @@ export default function PersonasPage() {
                               type="button"
                               className={`ml-auto ${btnClass({ sm: true, reveal: true })}`}
                               disabled={busy}
-                              title="Opens a new chat with this persona, starts the patrol and runs the first check now"
+                              title={tr("Opens a new chat with this persona, starts the patrol and runs the first check now")}
                               onClick={() => void startPatrol(p, pt)}
                             >
-                              Start patrol
+                              {tr("Start patrol")}
                             </button>
                           ) : null}
                           {open === p.id ? (
@@ -726,20 +720,19 @@ export default function PersonasPage() {
       </ConnPanel>
 
       <ConnPanel>
-        <ConnPanelHead title="Workspace personas" />
+        <ConnPanelHead title={tr("Workspace personas")} />
         <ConnPanelSub>
-          Set up by your workspace for everyone. Customize one to start your own persona from it —
-          its expertise and tool access carry over.
+          {tr("Set up by your workspace for everyone. Customize one to start your own persona from it — its expertise and tool access carry over.")}
         </ConnPanelSub>
         {workspace.length === 0 ? (
-          <ConnEmpty>No workspace personas are installed.</ConnEmpty>
+          <ConnEmpty>{tr("No workspace personas are installed.")}</ConnEmpty>
         ) : (
           <ConnRows>
             {workspace.map((w) => (
               <div key={w} data-testid={`workspace-persona-${w}`} className={ROW}>
                 <div className={ROW_HEAD}>
                   <span className="text-[0.85rem] font-medium text-[var(--color-text-primary)]">{titleCase(w)}</span>
-                  {w === defaultPersona ? <ConnBadge variant="success">Default</ConnBadge> : null}
+                  {w === defaultPersona ? <ConnBadge variant="success">{tr("Default")}</ConnBadge> : null}
                   <span className="ml-auto inline-flex gap-[0.35rem]">
                     <button
                       type="button"
@@ -747,7 +740,7 @@ export default function PersonasPage() {
                       disabled={busy}
                       onClick={() => startChat(w)}
                     >
-                      Start chat
+                      {tr("Start chat")}
                     </button>
                     <button
                       type="button"
@@ -756,14 +749,14 @@ export default function PersonasPage() {
                       onClick={() =>
                         openEditor({
                           ...EMPTY_PERSONA,
-                          display_name: `My ${titleCase(w)}`,
+                          display_name: tr("My {0}", [titleCase(w)]),
                           name: slugify(`my ${w}`),
                           base_persona: w,
-                          instructions: `Build on the ${titleCase(w)} persona, and:\n\n- …`,
+                          instructions: tr("Build on the {0} persona, and:\n\n- …", [titleCase(w)]),
                         })
                       }
                     >
-                      Customize
+                      {tr("Customize")}
                     </button>
                   </span>
                 </div>

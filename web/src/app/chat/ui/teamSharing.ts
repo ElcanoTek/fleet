@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // Shared types and fetch helpers for team sharing with files (docs/TEAM-SHARING.md).
 //
 // One module so the share dialog, the project home, the sidebar confirms and
@@ -119,7 +121,7 @@ const enc = encodeURIComponent;
 // helper rejects instead, like any other failed request).
 function conversationUrl(conversationId: string, suffix: string): string {
   const url = conversationApiUrl(conversationId, suffix);
-  if (!url) throw new Error("Invalid conversation id.");
+  if (!url) throw new Error(tr("Invalid conversation id."));
   return url;
 }
 
@@ -133,7 +135,7 @@ export function teamLinkUrl(conversationId: string, origin?: string): string {
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text.trim() || `request failed (${res.status})`);
+    throw new Error(text.trim() || tr("request failed ({0})", [res.status]));
   }
   return (await res.json()) as T;
 }
@@ -258,7 +260,7 @@ export function filesLabel(n: number): string {
 export function formatDay(unixSeconds: number): string {
   if (!unixSeconds) return "";
   try {
-    return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+    return new Date(unixSeconds * 1000).toLocaleDateString(getLanguage(), {
       month: "short",
       day: "numeric",
     });
@@ -277,9 +279,9 @@ function sharedToastText(
   team: string,
   sharedFiles: number,
 ): string {
-  const head = `“${title}” is shared with ${team}`;
-  if (sharedFiles > 0) return `${head}, with ${filesLabel(sharedFiles)}.`;
-  return `${head}. Files it creates will be shared too.`;
+  const head = tr("“{0}” is shared with {1}", [title, team]);
+  if (sharedFiles > 0) return tr("{0}, with {1}.", [head, filesLabel(sharedFiles)]);
+  return tr("{0}. Files it creates will be shared too.", [head]);
 }
 
 /**
@@ -297,7 +299,7 @@ export function sharedToast(
   return {
     message: sharedToastText(title, team, sharedFiles),
     action:
-      onManage && sharedFiles > 0 ? { label: "Manage", onClick: onManage } : undefined,
+      onManage && sharedFiles > 0 ? { label: tr("Manage"), onClick: onManage } : undefined,
   };
 }
 

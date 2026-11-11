@@ -1,3 +1,6 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // Assistant markdown renderer, extracted verbatim from chat-experience.tsx
 // (final planned slice of the #169 decomposition). This module owns the
 // ReactMarkdown pipeline that turns an assistant/user message string into
@@ -226,7 +229,7 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
             </span>
             <CopyButton
               text={copyText}
-              title="Copy code to clipboard"
+              title={tr("Copy code to clipboard")}
               variant="compact"
             />
           </div>
@@ -681,21 +684,21 @@ function InlineHtmlPreview({
           <span className="thinking-dot" />
         </span>
         <span>
-          Building HTML preview ({html.length.toLocaleString()} chars so far)…
-        </span>
+        {rich("Building HTML preview ({0} chars so far)…", html.length.toLocaleString(getLanguage()))}
+      </span>
       </div>
     );
   }
   return (
     <div className="my-2 overflow-hidden rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)]">
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-2 py-1 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-        <span>HTML preview</span>
+        <span>{tr("HTML preview")}</span>
         <button
           type="button"
           onClick={() => setShowSource((v) => !v)}
           className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-2 py-0.5 text-[0.62rem] normal-case tracking-normal text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
         >
-          {showSource ? "Show preview" : "Show source"}
+          {showSource ? tr("Show preview") : tr("Show source")}
         </button>
       </div>
       {showSource ? (
@@ -709,7 +712,7 @@ function InlineHtmlPreview({
         <iframe
           srcDoc={processedHtml}
           sandbox=""
-          title="HTML preview"
+          title={tr("HTML preview")}
           className="w-full bg-white"
           style={{ minHeight: "20rem", height: "60vh", border: "none" }}
         />

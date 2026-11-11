@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { formatCompactCronCadence } from "@/app/shared/lib/patrolSchedule";
@@ -209,7 +210,7 @@ export function LaunchpadButton({
         }
         aria-expanded={menuOpen || undefined}
         data-tip={dataTip}
-        title={dataTip ? undefined : "Your patrols, and the Launchpad to set up a new one"}
+        title={dataTip ? undefined : tr("Your patrols, and the Launchpad to set up a new one")}
         onClick={() => void onClick()}
         className={className}
       >
@@ -222,7 +223,7 @@ export function LaunchpadButton({
             </span>
           ) : null}
         </span>
-        {label ?? <span>Patrols</span>}
+        {label ?? <span>{tr("Patrols")}</span>}
       </button>
 
       <Menu
@@ -233,7 +234,7 @@ export function LaunchpadButton({
         // (top-start is for the account button at the foot of the rail; near
         // the top it would run off the screen.)
         placement={collapsed ? "right-start" : "bottom-end"}
-        label="Patrols"
+        label={tr("Patrols")}
         // Up to 100 patrols can be listed: the menu is capped to the viewport
         // and scrolls, so the last rows and "New patrol" stay reachable.
         className={`max-h-[min(36rem,calc(100dvh-1rem))] overflow-y-auto ${collapsed ? "" : "min-w-[17rem]"}`}
@@ -241,7 +242,7 @@ export function LaunchpadButton({
         {loadFailed ? (
           <>
             <p role="alert" className="px-2 pb-1 pt-1.5 text-[0.75rem] leading-snug text-[var(--color-danger)]" data-testid="patrols-menu-error">
-              Couldn’t load your patrols. They are safe in Chat.
+              {tr("Couldn’t load your patrols. They are safe in Chat.")}
             </p>
             <MenuItem
               icon={<Icon name="refresh" className="size-4" />}
@@ -251,12 +252,12 @@ export function LaunchpadButton({
                 void onClick();
               }}
             >
-              Try again
+              {tr("Try again")}
             </MenuItem>
           </>
         ) : (
           <p className="px-2 pb-1 pt-1.5 text-[0.72rem] leading-snug text-[var(--color-text-secondary)]" data-testid="patrols-menu-hint">
-            Each patrol is a chat that wakes on its schedule. Pick one to open it in Chat.
+            {tr("Each patrol is a chat that wakes on its schedule. Pick one to open it in Chat.")}
           </p>
         )}
         {(patrols ?? []).map((p) => (
@@ -266,24 +267,24 @@ export function LaunchpadButton({
             description={[
               p.conversation_title && p.conversation_title !== p.title ? p.conversation_title : "",
               cadenceWithZone(p.cron ?? "", p.timezone ?? ""),
-              p.status === "paused" ? "Paused" : "",
+              p.status === "paused" ? tr("Paused") : "",
             ]
               .filter(Boolean)
               .join(" · ")}
             testId={`patrols-menu-item-${p.id}`}
             onClick={() => openChat(p.conversation_id)}
           >
-            {p.title || p.conversation_title || "Patrol"}
+            {p.title || p.conversation_title || tr("Patrol")}
           </MenuItem>
         ))}
         <MenuSeparator />
         <MenuItem
           icon={<Icon name="sparkles" className="size-4" />}
-          description="Set one up with the Patrol Launchpad"
+          description={tr("Set one up with the Patrol Launchpad")}
           testId="patrols-menu-new"
           onClick={openWizard}
         >
-          New patrol
+          {tr("New patrol")}
         </MenuItem>
       </Menu>
 
@@ -303,7 +304,7 @@ export function LaunchpadButton({
                     const anchor = anchorRef.current;
                     if (!anchor || document.activeElement !== anchor || onScreen(anchor)) return;
                     const opener = Array.from(
-                      document.querySelectorAll<HTMLButtonElement>('button[aria-label="Open sidebar"]'),
+                      document.querySelectorAll<HTMLButtonElement>('button[data-sidebar-toggle]'),
                     ).find(onScreen);
                     opener?.focus();
                   });

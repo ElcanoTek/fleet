@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { iconHref } from "@/app/shared/ui/iconHref";
@@ -112,11 +113,11 @@ export function ProtocolPillForm({
           <PillIcon name={pill.icon} className="size-4 text-[var(--color-accent)]" />
           {pill.title}
         </span>
-        <CloseButton label="Cancel" onClick={onCancel} />
+        <CloseButton label={tr("Cancel")} onClick={onCancel} />
       </div>
 
       <p className="text-[0.83rem] leading-snug text-[var(--color-text-muted)]">
-        A guide, not a gate — fill what you know and I’ll confirm the rest.
+        {tr("A guide, not a gate — fill what you know and I’ll confirm the rest.")}
       </p>
       {/* Shared with the Prompt Library's form prompts; see FormFields. */}
       <FormFields fields={pill.fields ?? []} values={values} onChange={set} />
@@ -133,7 +134,7 @@ export function ProtocolPillForm({
           }
           className="inline-flex items-center gap-1 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          Skip the form, start in Chat
+          {tr("Skip the form, start in Chat")}
           <PillIcon name="arrow-right" className="size-3.5" />
         </button>
         <div className="flex items-center gap-2">
@@ -142,8 +143,7 @@ export function ProtocolPillForm({
             onClick={onCancel}
             className="rounded-[var(--radius-md)] px-3 py-2 text-[0.85rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
           <button
             type="button"
             disabled={!ready}
@@ -164,7 +164,7 @@ function GeneratedPrompt({ text }: { text: string }) {
   return (
     <div className="grid gap-1 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--subtle-panel-bg)] px-3 py-2">
       <span className="text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-        Prompt preview
+        {tr("Prompt preview")}
       </span>
       <p className="whitespace-pre-wrap text-[0.8rem] leading-snug text-[var(--color-text-secondary)]">
         {text}

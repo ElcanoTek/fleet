@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Settings-area panels + composite pieces (fleet-unified settings design pass):
 // the design's .set-section/.set-head, .conn-group/.conn-panel family,
 // .conn-row list rows, .conn-form fields, the sticky .dir-bar search + category
@@ -240,7 +241,7 @@ export function DirSearch({
       {value ? (
         <button
           type="button"
-          aria-label="Clear search"
+          aria-label={tr("Clear search")}
           onClick={() => {
             onChange("");
             inputRef.current?.focus();
@@ -328,7 +329,7 @@ export function CopyChip({ name }: { name: string }) {
     <>
       <button
         type="button"
-        aria-label={`Copy /${name} to clipboard`}
+        aria-label={tr("Copy /{0} to clipboard", [name])}
         onClick={() => void copy()}
         className={[
           "inline-flex items-center gap-[0.4rem] rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium text-[var(--color-text-primary)] transition [overflow-wrap:anywhere]",
@@ -346,7 +347,7 @@ export function CopyChip({ name }: { name: string }) {
         />
       </button>
       <span role="status" aria-live="polite" className="sr-only">
-        {copied ? `Copied /${name} to clipboard` : ""}
+        {copied ? tr("Copied /{0} to clipboard", [name]) : ""}
       </span>
     </>
   );

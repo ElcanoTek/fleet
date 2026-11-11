@@ -1,3 +1,4 @@
+import { localizeError } from "@/app/lib/i18n/errors";
 // errorMessage — the one way a catch block turns what it caught into words
 // for a banner or toast (#2005).
 //
@@ -8,6 +9,6 @@
 // message when there is one and the caller's fallback otherwise.
 
 export function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
+  if (err instanceof Error && err.message) return localizeError(err.message);
   return fallback;
 }

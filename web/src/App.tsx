@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // The app shell: the root layout (what app/layout.tsx was) and the route table
 // (what the app/ directory structure was). URLs are unchanged; the Go server
 // renders index.html for each of them and does the server-side work first
@@ -53,8 +54,8 @@ const settingsPages: Record<string, () => ReactNode> = {
 };
 
 const GUIDE_TITLES: Record<string, string> = {
-  chat: "Chat guide",
-  "operations-center": "Background tasks guide",
+  chat: tr("Chat guide"),
+  "operations-center": tr("Background tasks guide"),
 };
 
 /** route resolves a pathname to its page and (for /help) its title. */
@@ -65,9 +66,9 @@ export function route(pathname: string): { page: ReactNode; title?: string } {
   if (path === "/login") return { page: <LoginPage /> };
   if (path === "/no-access") return { page: <NoAccessPage /> };
   if (path === "/orchestrator") return { page: <OrchestratorPage /> };
-  if (path === "/analytics") return { page: <AnalyticsPage />, title: "Analytics" };
+  if (path === "/analytics") return { page: <AnalyticsPage />, title: tr("Analytics") };
   if (path.startsWith("/shared/")) return { page: <SharedPage /> };
-  if (path === "/help") return { page: <HelpLayout><HelpIndex /></HelpLayout>, title: "Guides" };
+  if (path === "/help") return { page: <HelpLayout><HelpIndex /></HelpLayout>, title: tr("Guides") };
   const guide = /^\/help\/([^/]+)$/.exec(path);
   if (guide && GUIDE_TITLES[guide[1]]) {
     return { page: <HelpLayout><GuidePage slug={guide[1]} /></HelpLayout>, title: GUIDE_TITLES[guide[1]] };

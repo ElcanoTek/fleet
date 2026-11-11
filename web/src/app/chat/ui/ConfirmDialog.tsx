@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import type { ReactNode } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 
@@ -34,7 +35,7 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 export function ConfirmDialog({
   bodyId,
   busy,
-  cancelLabel = "Cancel",
+  cancelLabel = tr("Cancel"),
   cancelAriaLabel,
   children,
   confirmLabel,
@@ -81,7 +82,7 @@ export function ConfirmDialog({
     <DialogShell
       label={title}
       labelledBy={title ? undefined : bodyId}
-      scrimLabel={cancelAriaLabel ?? (title ? `Cancel: ${title}` : "Cancel")}
+      scrimLabel={cancelAriaLabel ?? (title ? tr("Cancel: {0}", [title]) : tr("Cancel"))}
       onDismiss={onCancel}
       layer={layer}
       className="max-w-[28rem] p-5"

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "@/app/lib/navigation";
 import {
@@ -70,7 +71,7 @@ export default function PromptsPage() {
       setItems(next);
     } catch (err) {
       setError(
-        errorMessage(err, "Could not load prompt library."),
+        errorMessage(err, tr("Could not load prompt library.")),
       );
       setItems((cur) => cur ?? []);
     }
@@ -143,8 +144,8 @@ export default function PromptsPage() {
       id: "",
       name:
         item.read_only || !item.owned_by_caller
-          ? `${item.name} (Custom)`
-          : `${item.name} (Copy)`,
+          ? tr("{0} (Custom)", [item.name])
+          : tr("{0} (Copy)", [item.name]),
       description: item.description ?? "",
       content: item.content,
       visibility: "private",
@@ -168,15 +169,15 @@ export default function PromptsPage() {
       };
       if (draft.id) {
         await orchestratorApi.updatePrompt(draft.id, payload);
-        setNotice(`Saved changes to “${payload.name}”.`);
+        setNotice(tr("Saved changes to “{0}”.", [payload.name]));
       } else {
         await orchestratorApi.createPrompt(payload);
-        setNotice(`Created prompt “${payload.name}”.`);
+        setNotice(tr("Created prompt “{0}”.", [payload.name]));
       }
       setDraft(null);
       await loadPrompts();
     } catch (err) {
-      setError(errorMessage(err, "Could not save prompt."));
+      setError(errorMessage(err, tr("Could not save prompt.")));
     } finally {
       setBusy(false);
     }
@@ -189,10 +190,10 @@ export default function PromptsPage() {
     try {
       await orchestratorApi.deletePrompt(item.id);
       if (draft?.id === item.id) setDraft(null);
-      setNotice(`Deleted “${item.name}”.`);
+      setNotice(tr("Deleted “{0}”.", [item.name]));
       await loadPrompts();
     } catch (err) {
-      setError(errorMessage(err, "Could not delete prompt."));
+      setError(errorMessage(err, tr("Could not delete prompt.")));
     }
   };
 
@@ -216,8 +217,8 @@ export default function PromptsPage() {
 
   return (
     <SetSection
-      title="Prompts"
-      intro="Reusable prompts and form templates shared between Chat and Background tasks. Create personal or workspace prompts, customize deployment templates, or open any prompt directly in a new chat."
+      title={tr("Prompts")}
+      intro={tr("Reusable prompts and form templates shared between Chat and Background tasks. Create personal or workspace prompts, customize deployment templates, or open any prompt directly in a new chat.")}
     >
       {error ? (
         <p
@@ -238,48 +239,48 @@ export default function PromptsPage() {
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <Segmented
-          label="Prompt filter"
+          label={tr("Prompt filter")}
           value={scope}
           options={[
-            { value: "all", label: "All" },
-            { value: "yours", label: "Yours" },
-            { value: "workspace", label: "Workspace" },
-            { value: "deployment", label: "Deployment" },
+            { value: "all", label: tr("All") },
+            { value: "yours", label: tr("Yours") },
+            { value: "workspace", label: tr("Workspace") },
+            { value: "deployment", label: tr("Deployment") },
           ]}
           onChange={setScope}
         />
       </div>
 
       <DirSearch
-        label="Search prompts"
+        label={tr("Search prompts")}
         value={query}
         onChange={setQuery}
-        placeholder="Search prompts by name, description, or content…"
+        placeholder={tr("Search prompts by name, description, or content…")}
       />
 
       {scope !== "deployment" || draft !== null ? (
         <ConnPanel>
           <div ref={editorRef}>
-            <ConnPanelHead title="Your & workspace prompts">
+            <ConnPanelHead title={tr("Your & workspace prompts")}>
               {!readOnlyViewer ? (
                 <RevealButton
                   open={draft !== null}
-                  closedLabel="New prompt"
+                  closedLabel={tr("New prompt")}
                   onClick={() => (draft ? setDraft(null) : startNew())}
                   testId="new-prompt-toggle"
                 />
               ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
-              Private prompts are visible only to you; workspace prompts are shared with everyone on this deployment.
+              {tr("Private prompts are visible only to you; workspace prompts are shared with everyone on this deployment.")}
             </ConnPanelSub>
 
             {draft ? (
               <div className="mb-4 grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3.5">
-                <ConnField label="Name">
+                <ConnField label={tr("Name")}>
                   <input
-                    aria-label="Prompt name"
-                    placeholder="e.g. Morning deal pacing check"
+                    aria-label={tr("Prompt name")}
+                    placeholder={tr("e.g. Morning deal pacing check")}
                     value={draft.name}
                     onChange={(e) =>
                       setDraft({ ...draft, name: e.target.value })
@@ -287,10 +288,10 @@ export default function PromptsPage() {
                     className={SETTINGS_INPUT}
                   />
                 </ConnField>
-                <ConnField label="Description (optional — helps teammates find it)">
+                <ConnField label={tr("Description (optional — helps teammates find it)")}>
                   <input
-                    aria-label="Prompt description"
-                    placeholder="Short summary of what this prompt produces"
+                    aria-label={tr("Prompt description")}
+                    placeholder={tr("Short summary of what this prompt produces")}
                     value={draft.description ?? ""}
                     onChange={(e) =>
                       setDraft({ ...draft, description: e.target.value })
@@ -298,11 +299,11 @@ export default function PromptsPage() {
                     className={SETTINGS_INPUT}
                   />
                 </ConnField>
-                <ConnField label="Prompt text">
+                <ConnField label={tr("Prompt text")}>
                   <textarea
-                    aria-label="Prompt text"
+                    aria-label={tr("Prompt text")}
                     rows={7}
-                    placeholder="Write the instructions or template…"
+                    placeholder={tr("Write the instructions or template…")}
                     value={draft.content}
                     onChange={(e) =>
                       setDraft({ ...draft, content: e.target.value })
@@ -322,7 +323,7 @@ export default function PromptsPage() {
                         })
                       }
                     />
-                    <span>Share with this workspace</span>
+                    <span>{tr("Share with this workspace")}</span>
                   </label>
                   <div className="flex items-center gap-2">
                     <button
@@ -330,8 +331,7 @@ export default function PromptsPage() {
                       className={btnClass({ sm: true, reveal: true })}
                       onClick={() => setDraft(null)}
                     >
-                      Cancel
-                    </button>
+                      {tr("Cancel")}</button>
                     <button
                       type="button"
                       disabled={
@@ -341,10 +341,10 @@ export default function PromptsPage() {
                       className={btnClass({ variant: "primary", sm: true })}
                     >
                       {busy
-                        ? "Saving…"
+                        ? tr("Saving…")
                         : draft.id
-                          ? "Save changes"
-                          : "Create prompt"}
+                          ? tr("Save changes")
+                          : tr("Create prompt")}
                     </button>
                   </div>
                 </div>
@@ -352,12 +352,12 @@ export default function PromptsPage() {
             ) : null}
 
             {items === null ? (
-              <p className={LOADING}>Loading prompts…</p>
+              <p className={LOADING}>{tr("Loading prompts…")}</p>
             ) : editablePrompts.length === 0 ? (
               <ConnEmpty>
                 {query
-                  ? "No personal or workspace prompts match your search."
-                  : "No personal or workspace prompts yet. Click New prompt above or save a workflow from any chat."}
+                  ? tr("No personal or workspace prompts match your search.")
+                  : tr("No personal or workspace prompts yet. Click New prompt above or save a workflow from any chat.")}
               </ConnEmpty>
             ) : (
               <ConnRows>
@@ -382,11 +382,11 @@ export default function PromptsPage() {
                             }
                           >
                             {p.visibility === "workspace"
-                              ? "Workspace"
-                              : "Private"}
+                              ? tr("Workspace")
+                              : tr("Private")}
                           </ConnBadge>
                           {isFormPrompt(p) ? (
-                            <ConnBadge variant="neutral">Form</ConnBadge>
+                            <ConnBadge variant="neutral">{tr("Form")}</ConnBadge>
                           ) : null}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -406,7 +406,7 @@ export default function PromptsPage() {
                               );
                             }}
                           >
-                            Open in chat
+                            {tr("Open in chat")}
                           </button>
                           <button
                             type="button"
@@ -415,7 +415,7 @@ export default function PromptsPage() {
                               setOpenId(isOpen ? null : p.id)
                             }
                           >
-                            {isOpen ? "Hide" : "View"}
+                            {isOpen ? tr("Hide") : tr("View")}
                           </button>
                           {!readOnlyViewer ? (
                             p.owned_by_caller ? (
@@ -425,17 +425,17 @@ export default function PromptsPage() {
                                   className={btnClass({ sm: true })}
                                   onClick={() => startEdit(p)}
                                 >
-                                  Edit
+                                  {tr("Edit")}
                                 </button>
                                 <button
                                   type="button"
                                   className={btnClass({ sm: true })}
                                   onClick={() => startClone(p)}
                                 >
-                                  Duplicate
+                                  {tr("Duplicate")}
                                 </button>
                                 <InlineConfirmButton
-                                  label="Delete"
+                                  label={tr("Delete")}
                                   onConfirm={() => void handleDelete(p)}
                                 />
                               </>
@@ -445,7 +445,7 @@ export default function PromptsPage() {
                                 className={btnClass({ sm: true })}
                                 onClick={() => startClone(p)}
                               >
-                                Clone & customize
+                                {tr("Clone & customize")}
                               </button>
                             )
                           ) : null}
@@ -462,8 +462,8 @@ export default function PromptsPage() {
                               prompt={p}
                               note={
                                 p.path
-                                  ? `Tracked in ${p.path}`
-                                  : "Fill out the form fields to open in chat"
+                                  ? tr("Tracked in {0}", [p.path])
+                                  : tr("Fill out the form fields to open in chat")
                               }
                               onUse={(text) =>
                                 navigate(
@@ -487,17 +487,17 @@ export default function PromptsPage() {
 
       {scope !== "yours" && scope !== "workspace" ? (
         <ConnPanel>
-          <ConnPanelHead title="Deployment prompts" />
+          <ConnPanelHead title={tr("Deployment prompts")} />
           <ConnPanelSub>
-            Read-only prompts shipped with your deployment bundle. Open any prompt in chat or clone it to customize your own version.
+            {tr("Read-only prompts shipped with your deployment bundle. Open any prompt in chat or clone it to customize your own version.")}
           </ConnPanelSub>
           {items === null ? (
-            <p className={LOADING}>Loading deployment prompts…</p>
+            <p className={LOADING}>{tr("Loading deployment prompts…")}</p>
           ) : deploymentPrompts.length === 0 ? (
             <ConnEmpty>
               {query
-                ? "No deployment prompts match your search."
-                : "No deployment prompts configured on this server."}
+                ? tr("No deployment prompts match your search.")
+                : tr("No deployment prompts configured on this server.")}
             </ConnEmpty>
           ) : (
             <ConnRows>
@@ -516,7 +516,7 @@ export default function PromptsPage() {
                         </span>
                         <ConnBadge variant="neutral">Git</ConnBadge>
                         {isFormPrompt(p) ? (
-                          <ConnBadge variant="neutral">Form</ConnBadge>
+                          <ConnBadge variant="neutral">{tr("Form")}</ConnBadge>
                         ) : null}
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -533,14 +533,14 @@ export default function PromptsPage() {
                             );
                           }}
                         >
-                          Open in chat
+                          {tr("Open in chat")}
                         </button>
                         <button
                           type="button"
                           className={btnClass({ sm: true })}
                           onClick={() => setOpenId(isOpen ? null : p.id)}
                         >
-                          {isOpen ? "Hide" : "View"}
+                          {isOpen ? tr("Hide") : tr("View")}
                         </button>
                         {!readOnlyViewer ? (
                           <button
@@ -548,7 +548,7 @@ export default function PromptsPage() {
                             className={btnClass({ sm: true })}
                             onClick={() => startClone(p)}
                           >
-                            Clone & customize
+                            {tr("Clone & customize")}
                           </button>
                         ) : null}
                       </div>
@@ -564,8 +564,8 @@ export default function PromptsPage() {
                             prompt={p}
                             note={
                               p.path
-                                ? `Tracked in ${p.path}`
-                                : "Fill out the form fields to open in chat"
+                                ? tr("Tracked in {0}", [p.path])
+                                : tr("Fill out the form fields to open in chat")
                             }
                             onUse={(text) =>
                               navigate(

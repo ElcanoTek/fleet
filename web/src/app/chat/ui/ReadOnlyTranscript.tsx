@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // The ONE read-only transcript renderer, shared by the two doors onto a
 // conversation the reader does not own: the public share link
 // (`/shared/[token]`, #226) and a teammate's team-shared chat
@@ -116,8 +118,8 @@ export function toBubbles(entries: RawEntry[]): Bubble[] {
 export type ReadOnlyAudience = "team" | "link";
 
 const IMAGE_NOT_SHARED: Record<ReadOnlyAudience, string> = {
-  team: "Image not shared with team views.",
-  link: "Image not shared with view-only links.",
+  team: tr("Image not shared with team views."),
+  link: tr("Image not shared with view-only links."),
 };
 
 // ReadOnlyTranscript renders the bubbles.
@@ -237,8 +239,8 @@ function ReadOnlyUserTextBubble({ text }: { text: string }) {
             onClick={() => setExpanded((prev) => !prev)}
           >
             {expanded
-              ? "Show less"
-              : `Show full message (${text.length.toLocaleString()} chars)`}
+              ? tr("Show less")
+              : tr("Show full message ({0} chars)", [text.length.toLocaleString(getLanguage())])}
           </button>
         </div>
       ) : null}

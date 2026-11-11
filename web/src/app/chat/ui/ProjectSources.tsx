@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";
@@ -158,7 +160,7 @@ export function ProjectSources({
           if (cancelled) return;
           setGroups([]);
           setLoadedFor(focusId);
-          setError("Couldn’t load this project’s files.");
+          setError(tr("Couldn’t load this project’s files."));
         }
       })();
     });
@@ -288,8 +290,8 @@ export function ProjectSources({
     } catch {
       setError(
         f.shared
-          ? `Couldn’t stop sharing “${f.name}”.`
-          : `Couldn’t share “${f.name}”.`,
+          ? tr("Couldn’t stop sharing “{0}”.", [f.name])
+          : tr("Couldn’t share “{0}”.", [f.name]),
       );
     } finally {
       setBusyPath(null);
@@ -318,11 +320,11 @@ export function ProjectSources({
     const showVis = g.mine && Boolean(teamName);
     const canToggle = g.mine && g.team_visible && Boolean(teamName);
     const count = g.mine
-      ? `${filesLabel(g.file_count)}${g.team_visible && teamName ? ` · ${g.shared_count} shared` : ""}`
+      ? `${filesLabel(g.file_count)}${g.team_visible && teamName ? tr(" · {0} shared", [g.shared_count]) : ""}`
       : filesLabel(files.length);
     const note =
       g.mine && teamName && !g.team_visible
-        ? "Share this chat and its files go with it."
+        ? tr("Share this chat and its files go with it.")
         : "";
     const bodyId = `src-body-${enc(g.conversation_id)}`;
     return (
@@ -357,7 +359,7 @@ export function ProjectSources({
           />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[0.8rem] font-medium text-[var(--color-text-primary)]">
-              {g.title || "Untitled"}
+              {g.title || tr("Untitled")}
             </span>
             <span className="mt-0.5 flex flex-wrap items-center gap-1 text-[0.68rem] text-[var(--color-text-muted)]">
               {showVis ? (
@@ -369,14 +371,16 @@ export function ProjectSources({
                 ) : (
                   <span className="inline-flex items-center gap-1">
                     <Icon name="lock" className="size-2.5" />
-                    Only you
+                    {tr("Only you")}
                   </span>
                 )
               ) : null}
               {!g.mine ? (
                 <span className="inline-flex min-w-0 max-w-full items-center gap-1 text-[var(--color-text-secondary)]">
                   <TeamGlyph className="size-3 shrink-0" />
-                  <span className="truncate">Shared by {g.owner_email}</span>
+                  <span className="truncate">
+        {rich("Shared by {0}", g.owner_email)}
+      </span>
                 </span>
               ) : null}
               {showVis || !g.mine ? <span aria-hidden="true">·</span> : null}
@@ -390,7 +394,7 @@ export function ProjectSources({
               const key = `${g.conversation_id}/${f.path}`;
               const sharedMark = canToggle && f.output && f.shared;
               const meta = [
-                f.your_copy ? "Your copy" : "",
+                f.your_copy ? tr("Your copy") : "",
                 formatBytes(f.size),
                 f.your_copy && g.branched_at
                   ? formatDay(g.branched_at)
@@ -414,7 +418,7 @@ export function ProjectSources({
                     <span className="block font-[family-name:var(--font-code)] text-[0.65rem] text-[var(--color-text-muted)]">
                       {meta}
                       {sharedMark ? (
-                        <span className="text-[var(--color-accent)]"> · Shared</span>
+                        <span className="text-[var(--color-accent)]"> {tr("· Shared")}</span>
                       ) : null}
                     </span>
                   </span>
@@ -429,13 +433,13 @@ export function ProjectSources({
                       aria-busy={busyPath === key || undefined}
                       title={
                         f.shared
-                          ? `Shared with ${teamName}. Click to stop sharing`
-                          : `Only you. Click to share with ${teamName}`
+                          ? tr("Shared with {0}. Click to stop sharing", [teamName])
+                          : tr("Only you. Click to share with {0}", [teamName])
                       }
                       aria-label={
                         f.shared
-                          ? `${f.name} is shared with ${teamName}. Stop sharing`
-                          : `${f.name} is only you. Share with ${teamName}`
+                          ? tr("{0} is shared with {1}. Stop sharing", [f.name, teamName])
+                          : tr("{0} is only you. Share with {1}", [f.name, teamName])
                       }
                       className={[
                         "inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50",
@@ -456,8 +460,8 @@ export function ProjectSources({
                     href={downloadHref(g, f)}
                     download={f.name}
                     rel="noreferrer noopener"
-                    aria-label={`Download ${f.name}`}
-                    title="Download"
+                    aria-label={tr("Download {0}", [f.name])}
+                    title={tr("Download")}
                     className="inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   >
                     <Icon name="download" className="size-3.5" />
@@ -484,13 +488,13 @@ export function ProjectSources({
 
   return (
     <section
-      aria-label="Sources"
+      aria-label={tr("Sources")}
       data-testid="project-sources"
       className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4"
     >
       <h2 className="mb-1 flex items-center gap-1.5 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
         <Icon name="paperclip" className="size-3.5 shrink-0" />
-        Sources
+        {tr("Sources")}
         {total > 0 ? (
           <span className="ml-auto font-[family-name:var(--font-code)] text-[0.68rem] font-normal text-[var(--color-text-muted)]">
             {filesLabel(total)}
@@ -499,8 +503,8 @@ export function ProjectSources({
       </h2>
       <p className="m-0 mb-2 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
         {teamName
-          ? "Your files and your team’s. Files in your shared chats are shared automatically. Adjust that here."
-          : "Files from your chats in this project appear here."}
+          ? tr("Your files and your team’s. Files in your shared chats are shared automatically. Adjust that here.")
+          : tr("Files from your chats in this project appear here.")}
       </p>
       {error ? (
         <p
@@ -511,18 +515,18 @@ export function ProjectSources({
         </p>
       ) : null}
       {groups === null ? (
-        <p className="m-0 text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+        <p className="m-0 text-[0.8rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
-          {ordered.theirs.length > 0 ? sectionLabel("From your team") : null}
+          {ordered.theirs.length > 0 ? sectionLabel(tr("From your team")) : null}
           {ordered.theirs.map(renderGroup)}
           {ordered.theirs.length > 0 && ordered.mine.length > 0
-            ? sectionLabel("Your chats")
+            ? sectionLabel(tr("Your chats"))
             : null}
           {ordered.mine.map(renderGroup)}
           {truncated ? (
             <p className="m-0 px-1.5 pt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-              Showing the newest files only.
+              {tr("Showing the newest files only.")}
             </p>
           ) : null}
         </div>

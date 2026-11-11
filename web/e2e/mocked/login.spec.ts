@@ -146,11 +146,11 @@ test("password login: an invalid credential stays on /login with an error", asyn
 });
 
 test('"Use Elcano email" bounces to the auth service magic-link flow', async ({ page }) => {
-  // The button is an <a href="/api/auth/elcano-login">. That route 303-redirects
+  // The link carries the selected display language. That route 303-redirects
   // to auth.elcanotek.com (unreachable in CI), so intercept the navigation and
   // assert it targets the auth service with a signed return_to.
   let bounceUrl = "";
-  await page.route("**/api/auth/elcano-login", (r: Route) => {
+  await page.route("**/api/auth/elcano-login?lang=en", (r: Route) => {
     bounceUrl = "https://auth.elcanotek.com/?return_to=" + encodeURIComponent("http://127.0.0.1/");
     return r.fulfill({ status: 303, headers: { location: bounceUrl } });
   });
@@ -160,7 +160,7 @@ test('"Use Elcano email" bounces to the auth service magic-link flow', async ({ 
   );
 
   await page.goto("/login");
-  const elcanoRequest = page.waitForRequest("**/api/auth/elcano-login");
+  const elcanoRequest = page.waitForRequest("**/api/auth/elcano-login?lang=en");
   await page.getByRole("link", { name: /use elcano email/i }).click();
   await elcanoRequest;
   expect(bounceUrl).toContain("auth.elcanotek.com");

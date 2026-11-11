@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { TeamChip } from "./MoveChatConfirmDialog";
@@ -110,12 +112,12 @@ export function BulkDeleteConfirmModal({
   // the confirm never fires over copy that is still missing its number.
   const ready = remaining <= 0 && sharedFiles !== undefined;
   // The heading is also the dialog's accessible name, so it is built once.
-  const heading = `Delete ${plural(count, "conversation")}?`;
+  const heading = tr("Delete {0}?", [plural(count, "conversation")]);
 
   return (
     <DialogShell
       label={heading}
-      scrimLabel="Close bulk delete confirmation"
+      scrimLabel={tr("Close bulk delete confirmation")}
       onDismiss={onCancel}
       className="max-w-[26rem] p-5"
     >
@@ -123,8 +125,7 @@ export function BulkDeleteConfirmModal({
         {heading}
       </h2>
       <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-        {count} conversation{count === 1 ? "" : "s"} will be removed. This cannot be
-        undone.
+        {tr(count === 1 ? "{0} conversation will be removed. This cannot be undone." : "{0} conversations will be removed. This cannot be undone.", [count])}
       </p>
       {sharedIds ? (
         <SharedLossCopy groups={groups} total={count} files={sharedFiles} />
@@ -135,8 +136,7 @@ export function BulkDeleteConfirmModal({
           className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
           onClick={onCancel}
         >
-          Cancel
-        </button>
+          {tr("Cancel")}</button>
         <button
           type="button"
           disabled={!ready}
@@ -154,7 +154,7 @@ export function BulkDeleteConfirmModal({
           ].join(" ")}
           onClick={onConfirm}
         >
-          {ready ? `Delete ${count}` : remaining > 0 ? `Wait ${remaining}s…` : "Checking…"}
+          {ready ? tr("Delete {0}", [count]) : remaining > 0 ? tr("Wait {0}s…", [remaining]) : tr("Checking…")}
         </button>
       </div>
     </DialogShell>
@@ -176,50 +176,46 @@ function SharedLossCopy({
   files: number | null | undefined;
 }) {
   const shared = groups.reduce((n, g) => n + g.conversationIds.length, 0);
-  const one = shared === 1;
-  const lead =
-    total === 1
-      ? "This conversation is shared with"
-      : `${shared} of these ${one ? "is" : "are"} shared with`;
-  const them = one ? "it" : "them";
-  const their = one ? "its" : "their";
-  const filesPart =
-    files === 0
-      ? ""
-      : typeof files === "number"
-        ? ` and ${their} ${plural(files, "shared file", "shared files")}`
-        : ` and ${their} shared files`;
-  if (groups.length > 1) {
-    const first = groups[0];
-    const firstCount = first.conversationIds.length;
-    return (
-      <p
-        data-testid="bulk-delete-shared-loss"
-        className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
-      >
-        {firstCount} of these {firstCount === 1 ? "is" : "are"} shared with{" "}
-        <TeamChip team={first.team} />
-        {groups.slice(1).map((g, i) => (
-          <span key={g.team ?? ""}>
-            {i === groups.length - 2 ? " and " : ", "}
-            {g.conversationIds.length} with{" "}
-            <TeamChip team={g.team} suffix={i === groups.length - 2 ? "." : undefined} />
-          </span>
-        ))}{" "}
-        They lose access to {them}
-        {filesPart}. Teammates who branched {them} keep their copies.
-      </p>
-    );
-  }
-  const team = groups[0]?.team;
+  const first = groups[0];
+  const firstCount = first.conversationIds.length;
+  const lead = total === 1
+    ? rich("This conversation is shared with {0}.", <TeamChip team={first.team} />)
+    : <>{rich(firstCount === 1 ? "{0} of these is shared with {1}" : "{0} of these are shared with {1}", firstCount, <TeamChip team={first.team} />)}{groups.slice(1).map((group, index) => (
+      <span key={group.team ?? ""}>
+        {index === groups.length - 2 ? tr(" and ") : ", "}
+        {rich("{0} with {1}", group.conversationIds.length, <TeamChip team={group.team} />)}
+      </span>
+    ))}.</>;
+  const lossMessages = {
+    "oneTeams": [
+        "They lose access to it. Teammates who branched it keep their copies.",
+        "They lose access to it and its {1}. Teammates who branched it keep their copies.",
+        "They lose access to it and its shared files. Teammates who branched it keep their copies."
+    ],
+    "oneTeam": [
+        "{0} loses access to it. Teammates who branched it keep their copies.",
+        "{0} loses access to it and its {1}. Teammates who branched it keep their copies.",
+        "{0} loses access to it and its shared files. Teammates who branched it keep their copies."
+    ],
+    "manyTeams": [
+        "They lose access to them. Teammates who branched them keep their copies.",
+        "They lose access to them and their {1}. Teammates who branched them keep their copies.",
+        "They lose access to them and their shared files. Teammates who branched them keep their copies."
+    ],
+    "manyTeam": [
+        "{0} loses access to them. Teammates who branched them keep their copies.",
+        "{0} loses access to them and their {1}. Teammates who branched them keep their copies.",
+        "{0} loses access to them and their shared files. Teammates who branched them keep their copies."
+    ]
+};
+  const loss = shared === 1
+    ? groups.length > 1 ? lossMessages.oneTeams : lossMessages.oneTeam
+    : groups.length > 1 ? lossMessages.manyTeams : lossMessages.manyTeam;
+  const fileMode = files === 0 ? 0 : typeof files === "number" ? 1 : 2;
   return (
-    <p
-      data-testid="bulk-delete-shared-loss"
-      className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
-    >
-      {lead} <TeamChip team={team} suffix="." /> <TeamChip team={team} /> loses
-      access to {them}
-      {filesPart}. Teammates who branched {them} keep their copies.
+    <p data-testid="bulk-delete-shared-loss" className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+      {lead}{" "}
+      {rich(loss[fileMode], <TeamChip team={first.team} />, typeof files === "number" ? plural(files, "shared file", "shared files") : "")}
     </p>
   );
 }

@@ -13,13 +13,23 @@ const ORIGIN = "https://fleet.example.com";
 
 type Listener = (event: unknown) => void;
 
-function loadWorker() {
+function loadWorker(language = "en", saved?: string, denyStorage = false) {
   const listeners: Record<string, Listener> = {};
   // Each call returns its own promise, so the test can check that exactly
   // that promise was handed to event.waitUntil.
   const showNotification = vi.fn(() => Promise.resolve());
   const scope = {
     location: new URL(`${ORIGIN}/sw.js`),
+    navigator: { language },
+    caches: {
+      open: vi.fn(async () => {
+        if (denyStorage) throw new Error("Storage denied");
+        return {
+          match: async () => saved ? { text: async () => saved } : undefined,
+          put: async (_url: string, response: Response) => { saved = await response.text(); },
+        };
+      }),
+    },
     clients: {},
     skipWaiting: vi.fn(),
     registration: { showNotification },
@@ -42,17 +52,45 @@ function loadWorker() {
 // display must be handed to event.waitUntil: without it the browser may stop
 // the worker first, and Chrome then shows its own "updated in the background"
 // notice instead.
-async function push(data: { json: () => unknown } | undefined) {
-  const worker = loadWorker();
+async function push(data: { json: () => unknown } | undefined, worker = loadWorker()) {
   const waitUntil = vi.fn();
   worker.listeners.push({ data, waitUntil });
-  expect(worker.showNotification).toHaveBeenCalledTimes(1);
-  expect(waitUntil).toHaveBeenCalledWith(worker.showNotification.mock.results[0].value);
+  expect(waitUntil).toHaveBeenCalledTimes(1);
   await waitUntil.mock.calls[0][0];
+  expect(worker.showNotification).toHaveBeenCalledTimes(1);
   return worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
 }
 
 describe("sw.js push", () => {
+  it("restores the saved language after worker restart and keeps user text literal", async () => {
+    const [title] = await push({ json: () => ({ title: "✓ Task complete: Save <b>{0}</b> (1m30s)" }) }, loadWorker("en", "es"));
+    expect(title).toBe("✓ Tarea completada: Save <b>{0}</b> (1m30s)");
+  });
+
+  it("accepts a supported page preference and preserves notification bodies", async () => {
+    const worker = loadWorker("es");
+    const waitUntil = vi.fn();
+    worker.listeners.message({ data: { type: "fleet-language", language: "pt" }, waitUntil });
+    await waitUntil.mock.calls[0][0];
+    const [title, options] = await push({ json: () => ({ title: "⚠ Approval needed: send_email", body: "Save" }) }, worker);
+    expect(title).toBe("⚠ É necessária aprovação: send_email");
+    expect(options.body).toBe("Save");
+  });
+
+  it("falls back to the browser if storage is denied and ignores unsupported preferences", async () => {
+    const worker = loadWorker("pt-BR", undefined, true);
+    const waitUntil = vi.fn();
+    worker.listeners.message({ data: { type: "fleet-language", language: "__proto__" }, waitUntil });
+    expect(waitUntil).not.toHaveBeenCalled();
+    const [title] = await push({ json: () => ({ title: "✓ Done: Save" }) }, worker);
+    expect(title).toBe("✓ Concluído: Save");
+  });
+
+  it("leaves unknown notification titles unchanged", async () => {
+    const [title] = await push({ json: () => ({ title: "Save" }) }, loadWorker("es"));
+    expect(title).toBe("Save");
+  });
+
   it("shows the payload's title and body, with the app icon and the link to open", async () => {
     const [title, options] = await push({
       json: () => ({

@@ -1,3 +1,5 @@
+import { localizeError } from "@/app/lib/i18n/errors";
+import { t as tr } from "@/app/lib/i18n";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -2201,7 +2203,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // more useful to the reader than a blanket error string.
             content:
               m.content ||
-              "The connection dropped before the response finished.",
+              tr("The connection dropped before the response finished."),
             state: "done",
             failed: true,
           }
@@ -2729,8 +2731,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // byte-identically to the reloaded one; the undo-hint synthesis stays
       // as the fallback for a server one release behind this client.
       const fallback = (p.undo_hint ?? "").trim()
-        ? `Ran without asking. ${(p.undo_hint ?? "").trim()}`
-        : "Ran without asking.";
+        ? tr("Ran without asking. {0}", [(p.undo_hint ?? "").trim()])
+        : tr("Ran without asking.");
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...m,
         approvals: [
@@ -2778,7 +2780,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               ? {
                   ...ap,
                   status: "rejected" as ApprovalStatus,
-                  resultText: "Superseded by a newer call.",
+                  resultText: tr("Superseded by a newer call."),
                 }
               : ap,
           );
@@ -2827,7 +2829,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const settled = settleNarration(clearRetryNotice(m));
         return {
           ...settled,
-          content: settled.content || p.message || "Something went wrong.",
+          content: settled.content || localizeError(p.message || tr("Something went wrong.")),
           state: "done",
           failed: true,
         };
@@ -2960,7 +2962,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // finalizer.
         content:
           m.content ||
-          (m.reasoning || ctx.gap || m.cancelled ? "" : "No response returned."),
+          (m.reasoning || ctx.gap || m.cancelled ? "" : tr("No response returned.")),
         state: "done",
         summary: {
           costUsd: p.cost_usd ?? 0,
@@ -2991,7 +2993,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     },
   ) => {
     if (!response.body) {
-      throw new Error("Empty response body from chat-server.");
+      throw new Error(tr("Empty response body from chat-server."));
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -3039,7 +3041,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           const rejectIdle = () => {
             cleanup();
             void reader.cancel("idle timeout");
-            reject(new Error("The chat server stopped responding."));
+            reject(new Error(tr("The chat server stopped responding.")));
           };
           const armTimeout = () => {
             if (settled) return;
@@ -3868,9 +3870,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (!response.ok || !response.body) {
       const errorText = await response.text();
       if (response.status === 429) {
-        const retry = response.headers.get("Retry-After") ?? "a moment";
+        const retry = response.headers.get("Retry-After") ?? tr("a moment");
         throw new Error(
-          `Rate limit reached. Try again in ${retry.replace(/\D/g, "")}s.`,
+          tr("Rate limit reached. Try again in {0}s.", [retry.replace(/\D/g, "")]),
         );
       }
       const refusal = parseLockdownModelRefusal(response.status, errorText);
@@ -3898,10 +3900,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
         }
         throw new Error(
-          refusal.message || "That model is not allowed in lockdown mode.",
+          localizeError(refusal.message || tr("That model is not allowed in lockdown mode.")),
         );
       }
-      throw new Error(errorText || "Unable to reach the chat server.");
+      throw new Error(errorText || tr("Unable to reach the chat server."));
     }
 
     // The mirror image of the stale-busy race (#824): we believed the
@@ -4006,7 +4008,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // reads Postgres, would not show.
       content:
         m.content ||
-        (m.reasoning || ctx.gap || m.cancelled ? "" : "No response returned."),
+        (m.reasoning || ctx.gap || m.cancelled ? "" : tr("No response returned.")),
       state: "done",
     }));
     // A replay gap (server-side sliding-window eviction on a long, chatty
@@ -4157,14 +4159,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
-        throw new Error(`Attachment upload failed: ${text || res.statusText}`);
+        throw new Error(tr("Attachment upload failed: {0}", [text || res.statusText]));
       }
       const data = (await res.json()) as {
         attachments?: UploadedAttachmentMeta[];
       };
       const attachments = data.attachments ?? [];
       if (attachments.length === 0) {
-        throw new Error("Server accepted upload but returned no attachments.");
+        throw new Error(tr("Server accepted upload but returned no attachments."));
       }
       return attachments;
     } finally {
@@ -4451,7 +4453,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       } catch (err) {
         setAttachmentErrorForKey(
           composerKey,
-          errorMessage(err, "Upload failed."),
+          errorMessage(err, tr("Upload failed.")),
         );
         return false;
       }
@@ -4479,9 +4481,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // different ways depending on whether you had refreshed.
     const attachmentReceipt =
       uploadedAttachments.length > 0
-        ? `\n\n---\n**Attached files:**\n${uploadedAttachments
+        ? tr("\n\n---\n**Attached files:**\n{0}", [uploadedAttachments
             .map((a) => `- ${a.name} (${formatBytes(a.size)})`)
-            .join("\n")}`
+            .join("\n")])
         : undefined;
 
     const nextMessages: Message[] = [
@@ -4819,10 +4821,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
                 // genuinely gone (not inflight, no buffer, nothing completed
                 // in the DB).
                 const rawMsg =
-                  errorMessage(error, "Something went wrong.");
+                  errorMessage(error, tr("Something went wrong."));
                 const msg =
                   rawMsg === "__stream_closed_before_turn_end__"
-                    ? "The connection dropped before the response finished."
+                    ? tr("The connection dropped before the response finished.")
                     : rawMsg;
                 // Re-check inside the patch: never downgrade a slot that
                 // reached a successful terminal state between our read and
