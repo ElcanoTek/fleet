@@ -169,6 +169,8 @@ func TestResolveManagedTasksModelPagesThroughAllRows(t *testing.T) {
 	add := func(model string, n int) {
 		for i := 0; i < n; i++ {
 			m := model
+			// One shared created_at, as a batch or an import produces: the
+			// pages must still partition the rows (created_at, id order).
 			task := &schedmodels.Task{ID: uuid.New(), Prompt: "a job", Status: schedmodels.TaskStatusPending,
 				Priority: schedmodels.PriorityNormal, CreatedAt: now, CreatedBy: &owner.ID, Model: &m}
 			if _, err := store.AddTask(task); err != nil {
