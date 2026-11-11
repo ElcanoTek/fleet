@@ -104,7 +104,11 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 	}
 	pctx := playwrightBrowserContextFrom(ctx)
 	targetURL := strings.TrimSpace(params.URL)
-	if targetURL == "" && strings.TrimSpace(params.SessionID) != "" {
+	if (targetURL == "" || action == "steps") && strings.TrimSpace(params.SessionID) != "" {
+		// On a live session (action "steps") credentials are resolved for the
+		// origin the session started on, the only origin the worker will use
+		// them on, never for params.URL: otherwise a secret confirmed for one
+		// site could be bound to a session started on another.
 		if sess, serr := playwrightrunner.DefaultSessionManager().GetSession(params.SessionID, pctx.UserEmail, ""); serr == nil && sess != nil {
 			targetURL = sess.BaseURL()
 		}
