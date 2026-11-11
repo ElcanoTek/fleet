@@ -86,8 +86,9 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		user := userFromCtx(r.Context())
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
+			catalog := s.effectiveRemoteCatalog(r.Context())
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, s.remoteCatalogEntry(g, true, ""))
+				servers = append(servers, s.remoteCatalogEntry(g, true, "", catalog))
 			}
 		} else {
 			logging.From(r.Context()).Error("mcp catalog: remote server lookup failed", "user", user, "err", err)
@@ -245,13 +246,13 @@ func (s *Server) needsSetupCatalogEntries(listed []map[string]any) []map[string]
 	return out
 }
 
-// remoteConnectionCategory groups a hosted connection under the directory
-// category of the catalog entry it was added from (matched by endpoint), so
-// it shows under the same heading the Connections directory uses. A URL the
-// directory does not list, or a slug outside the picker's list, is Misc Tools.
-func (s *Server) remoteConnectionCategory(url string) string {
+// remoteCatalogMatch returns the directory entry a hosted connection was
+// added from, matched by endpoint (the entry's URL or one of its regional
+// variants, compared as canonical resource URIs). nil when the directory does
+// not list the URL — a server the user typed in by hand.
+func (s *Server) remoteCatalogMatch(url string) *clientconfig.RemoteMCPCatalogEntry {
 	if s.clientConfig == nil {
-		return clientconfig.MiscConnectorCategory
+		return nil
 	}
 	canon := func(u string) string {
 		u = strings.TrimSpace(u)
@@ -261,16 +262,69 @@ func (s *Server) remoteConnectionCategory(url string) string {
 		return u
 	}
 	want := canon(url)
-	for _, e := range s.clientConfig.RemoteMCPCatalog {
+	for i := range s.clientConfig.RemoteMCPCatalog {
+		e := &s.clientConfig.RemoteMCPCatalog[i]
 		match := canon(e.URL) == want
 		for _, v := range e.URLVariants {
 			match = match || canon(v.URL) == want
 		}
 		if match {
-			return clientconfig.ConnectorCategoryOr(e.Category)
+			return e
 		}
 	}
+	return nil
+}
+
+// remoteConnectionCategory groups a hosted connection under the directory
+// category of the catalog entry it was added from (matched by endpoint), so
+// it shows under the same heading the Connections directory uses. A URL the
+// directory does not list, or a slug outside the picker's list, is Misc Tools.
+func (s *Server) remoteConnectionCategory(url string) string {
+	if e := s.remoteCatalogMatch(url); e != nil {
+		return clientconfig.ConnectorCategoryOr(e.Category)
+	}
 	return clientconfig.MiscConnectorCategory
+}
+
+// effectiveRemoteCatalog is the directory as Settings -> Connections serves
+// it: the bundle's remote catalog with the box's Microsoft 365 endpoint
+// applied, so a connection added from any card can be matched back to it.
+func (s *Server) effectiveRemoteCatalog(ctx context.Context) []clientconfig.RemoteMCPCatalogEntry {
+	if s.clientConfig == nil {
+		return nil
+	}
+	return applyMS365CatalogOverride(s.clientConfig.RemoteMCPCatalog, s.resolveMS365Config(ctx))
+}
+
+// catalogCopyFor is the directory entry's display name and description for a
+// hosted connection added from it, so the Tools picker and Settings ->
+// Connections show the label and sentence the directory card shows instead of
+// the connection's id and a generic line. The join is the one the add flow
+// uses (operatorOAuthClientFor): the entry's name — the directory add form
+// saves it as the row's — and an endpoint the entry allows, its URL, a
+// concrete instantiation of its {placeholder} template, or a listed regional
+// variant (catalogEntryMatchesURL). A server the user added by hand under a
+// name of their own keeps that name. Empty strings when nothing matches or
+// the entry leaves a field blank: the caller keeps its own fallback. A custom
+// connector (Connector Studio's http_tools or playwright transport) is the
+// user's own work even at a directory endpoint under a directory name, so it
+// never takes card copy.
+func catalogCopyFor(catalog []clientconfig.RemoteMCPCatalogEntry, transport, name, rawURL string) (displayName, description string) {
+	if transport == store.RemoteMCPTransportHTTPTools || transport == store.RemoteMCPTransportPlaywright {
+		return "", ""
+	}
+	canonURL, err := mcpoauth.CanonicalResourceURI(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", ""
+	}
+	for i := range catalog {
+		e := catalog[i]
+		if strings.TrimSpace(e.Name) != name || !catalogEntryMatchesURL(e, canonURL) {
+			continue
+		}
+		return strings.TrimSpace(e.DisplayName), strings.TrimSpace(e.Description)
+	}
+	return "", ""
 }
 
 // alwaysOnMCPServerCatalogProvider is deliberately narrower than turnEngine.
@@ -325,8 +379,13 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 // (#988): its labeled seats, the default seat, and — on the per-conversation
 // route — this conversation's override. Seats carry labels only, never
 // credentials.
-func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
+func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string, catalog []clientconfig.RemoteMCPCatalogEntry) map[string]any {
 	desc := "Remote MCP server you connected (" + g.URL + ")."
+	display := g.Name
+	// catalogCopy marks a label and description that came from the bundle's
+	// directory entry, not from the user: the web localizes those through the
+	// bundle catalogs like any other connector copy.
+	catalogCopy := false
 	tools := []string{}
 	toolCount := 0
 	switch g.Transport {
@@ -342,11 +401,25 @@ func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, ac
 			tools = g.Tools
 			toolCount = g.ToolCount
 		}
+	default:
+		// A connection added from the directory reads the way its card does.
+		// Custom connectors (above) are synthesized by the user, so they keep
+		// their own name and the connector-kind sentence.
+		if dn, d := catalogCopyFor(catalog, g.Transport, g.Name, g.URL); dn != "" || d != "" {
+			if dn != "" {
+				display = dn
+			}
+			if d != "" {
+				desc = d
+			}
+			catalogCopy = true
+		}
 	}
 	return map[string]any{
 		"name":               g.Name,
-		"display_name":       g.Name,
+		"display_name":       display,
 		"description":        desc,
+		"catalog_copy":       catalogCopy,
 		"tools":              tools,
 		"tool_count":         toolCount,
 		"enabled":            enabled,
@@ -593,8 +666,9 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	// — a lookup error never breaks the catalog.
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
+			catalog := s.effectiveRemoteCatalog(r.Context())
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, s.remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
+				servers = append(servers, s.remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)], catalog))
 			}
 		} else {
 			logging.From(r.Context()).Error("mcp catalog: remote server lookup failed", "user", user, "err", err)

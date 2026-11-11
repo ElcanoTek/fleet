@@ -174,6 +174,95 @@ func TestRemoteConnectionCategoryFromDirectory(t *testing.T) {
 	}
 }
 
+// A hosted connection added from the directory is labeled and described the
+// way its directory card is; a hand-added one (another name at the same
+// endpoint, or an endpoint the directory does not list) and a custom
+// connector keep their own name and the generic sentence.
+func TestRemoteCatalogEntryUsesDirectoryCopy(t *testing.T) {
+	t.Parallel()
+
+	catalog := []clientconfig.RemoteMCPCatalogEntry{
+		{Name: "optable-audience-agent", DisplayName: " Optable Audiences ", Description: "Find and build audiences.",
+			URL: "https://raptive-hub.cloud.us.optable.co/admin/mcp", Category: "data-analytics"},
+		{Name: "label-only", DisplayName: "Label Only", URL: "https://label.example.com/mcp"},
+		// A tenant template: the saved row holds the concrete URL.
+		{Name: "azure-devops", DisplayName: "Azure DevOps", Description: "Work items and repos.",
+			URL: "https://mcp.dev.azure.com/{organization}"},
+		// A regional variant.
+		{Name: "regional", DisplayName: "Regional", Description: "Either region.", URL: "https://us.example.com/mcp",
+			URLVariants: []clientconfig.RemoteMCPURLVariant{{ID: "eu", URL: "https://eu.example.com/mcp"}}},
+	}
+	srv := &Server{clientConfig: &clientconfig.Bundle{RemoteMCPCatalog: catalog}}
+	cases := []struct {
+		name, url, transport  string
+		wantDisplay, wantDesc string
+		wantCatalogCopy       bool
+	}{
+		{"optable-audience-agent", "https://raptive-hub.cloud.us.optable.co/admin/mcp", "streamable_http",
+			"Optable Audiences", "Find and build audiences.", true},
+		{"my-optable", "https://raptive-hub.cloud.us.optable.co/admin/mcp", "streamable_http",
+			"my-optable", "Remote MCP server you connected (https://raptive-hub.cloud.us.optable.co/admin/mcp).", false},
+		{"optable-audience-agent", "https://other.example.com/mcp", "streamable_http",
+			"optable-audience-agent", "Remote MCP server you connected (https://other.example.com/mcp).", false},
+		{"label-only", "https://label.example.com/mcp", "sse",
+			"Label Only", "Remote MCP server you connected (https://label.example.com/mcp).", true},
+		{"azure-devops", "https://mcp.dev.azure.com/contoso", "streamable_http",
+			"Azure DevOps", "Work items and repos.", true},
+		{"regional", "https://EU.example.com:443/mcp", "streamable_http",
+			"Regional", "Either region.", true},
+		{"optable-audience-agent", "https://raptive-hub.cloud.us.optable.co/admin/mcp", store.RemoteMCPTransportHTTPTools,
+			"optable-audience-agent", "Custom API connector (https://raptive-hub.cloud.us.optable.co/admin/mcp).", false},
+	}
+	for _, c := range cases {
+		got := srv.remoteCatalogEntry(agent.RemoteMCPSeatGroup{Name: c.name, URL: c.url, Transport: c.transport}, true, "", catalog)
+		if got["display_name"] != c.wantDisplay || got["description"] != c.wantDesc || got["catalog_copy"] != c.wantCatalogCopy {
+			t.Errorf("%s @ %s (%s): display_name=%q description=%q catalog_copy=%v; want %q, %q, %v",
+				c.name, c.url, c.transport, got["display_name"], got["description"], got["catalog_copy"],
+				c.wantDisplay, c.wantDesc, c.wantCatalogCopy)
+		}
+		if got["name"] != c.name {
+			t.Errorf("%s: name = %q; the id must not change", c.name, got["name"])
+		}
+	}
+}
+
+// A Microsoft 365 connection is saved with the box's own endpoint, which only
+// the effective directory (applyMS365CatalogOverride) lists; matched against
+// it, the row reads as its card does.
+func TestCatalogCopyForUsesEffectiveMS365Endpoint(t *testing.T) {
+	t.Parallel()
+
+	bundle := []clientconfig.RemoteMCPCatalogEntry{{Name: "microsoft-365", DisplayName: "Microsoft 365",
+		Description: "Mail, calendar and files.", URL: "https://placeholder.invalid/mcp"}}
+	boxURL := "https://fleet.example.com/api/ms365/mcp"
+	if dn, _ := catalogCopyFor(bundle, "streamable_http", "microsoft-365", boxURL); dn != "" {
+		t.Fatalf("bundle catalog matched the box endpoint: %q", dn)
+	}
+	effective := applyMS365CatalogOverride(bundle, ms365ConfigResponse{Configured: true, MCPURL: boxURL})
+	dn, d := catalogCopyFor(effective, "streamable_http", "microsoft-365", boxURL)
+	if dn != "Microsoft 365" || d != "Mail, calendar and files." {
+		t.Fatalf("effective catalog copy = %q, %q", dn, d)
+	}
+}
+
+// Settings rows go through catalogCopyFor directly: a Connector Studio
+// connector at a directory endpoint under a directory name keeps its own
+// identity there too, not just in the Tools picker.
+func TestCatalogCopyForSkipsCustomTransports(t *testing.T) {
+	t.Parallel()
+
+	catalog := []clientconfig.RemoteMCPCatalogEntry{{Name: "gamma", DisplayName: "Gamma", Description: "Decks.",
+		URL: "https://mcp.gamma.app/mcp"}}
+	for _, transport := range []string{store.RemoteMCPTransportHTTPTools, store.RemoteMCPTransportPlaywright} {
+		if dn, d := catalogCopyFor(catalog, transport, "gamma", "https://mcp.gamma.app/mcp"); dn != "" || d != "" {
+			t.Errorf("%s: got card copy %q, %q", transport, dn, d)
+		}
+	}
+	if dn, _ := catalogCopyFor(catalog, "streamable_http", "gamma", "https://mcp.gamma.app/mcp"); dn != "Gamma" {
+		t.Errorf("standard transport: display_name = %q, want Gamma", dn)
+	}
+}
+
 // metaEngine adds the Manager's reload-fresh connector metadata to the fake.
 type metaEngine struct {
 	*catalogEngine

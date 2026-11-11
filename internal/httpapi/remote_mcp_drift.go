@@ -51,6 +51,10 @@ type catalogDrift struct {
 type remoteServerView struct {
 	store.RemoteMCPServer
 	CatalogDrift *catalogDrift `json:"catalog_drift,omitempty"`
+	// The directory card's label and sentence for a connection added from it
+	// (catalogCopyFor); absent for a server added by hand.
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // driftFromCatalog compares one saved row with the directory entry of its

@@ -17,6 +17,10 @@ it("translates bundle presentation while preserving form values and connector id
   expect(localizeConnector(connector)).toEqual({ ...connector, display_name: "Herramienta de ejemplo" });
   const custom = { ...connector, remote: true };
   expect(localizeConnector(custom)).toBe(custom);
+  // A hosted connection whose label came from the bundle's directory entry is
+  // bundle copy, so it translates; the id stays the user's.
+  const fromDirectory = { ...connector, remote: true, catalog_copy: true };
+  expect(localizeConnector(fromDirectory)).toEqual({ ...fromDirectory, display_name: "Herramienta de ejemplo" });
 });
 
 it("keeps user content and raw Git prompt files unchanged, including colliding source text", () => {

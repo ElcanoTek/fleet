@@ -679,6 +679,21 @@ describe("ConnectionsPage multi-login seats", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels a directory-added row with its card's name and description, keeping the URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [{ ...GAMMA_PRIMARY, display_name: "Gamma Decks", description: "Make and edit Gamma decks." }],
+      }),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).getByText("Gamma Decks")).toBeInTheDocument();
+    expect(within(group).getByText(/Make and edit Gamma decks\./)).toBeInTheDocument();
+    expect(within(group).getByText(/https:\/\/mcp\.gamma\.app\/mcp/)).toBeInTheDocument();
+  });
+
   it("words a key-placement-only change on its own", async () => {
     vi.stubGlobal(
       "fetch",

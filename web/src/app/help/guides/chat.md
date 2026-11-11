@@ -716,6 +716,12 @@ Center.
 
 **Settings → Connections** shows four connections under **Included with your
 workspace** at first, and the ones you added yourself under **Added by you**.
+A connection you added from **Find more connections** carries the name and
+description of its directory card here and in the **Tools** menu; one you
+added by URL under a name of your own keeps that name. If the directory now
+lists a different address for a connection (it is marked **Directory
+changed**), the connection keeps its own name until you remove it and add it
+again from the directory.
 A connection that needs you to sign in has an amber outline and shows **Sign in**
 (**Sign in again** while it is connected, to refresh the sign-in). **Show all**
 opens a popup with every workspace connector and the same availability,

@@ -107,6 +107,11 @@ type RemoteServer = {
   // connection. Absent when the row matches its entry, or no directory entry
   // has its name — the join is the name, not where the row came from.
   catalog_drift?: { url?: string; auth?: string; key_sent_as?: string };
+  // The directory card's label and sentence when the connection was added
+  // from it (matched on name and endpoint server-side); absent for a server
+  // added by hand, which keeps its own name.
+  display_name?: string;
+  description?: string;
   // Custom HTTP API or Playwright browser tools synthesized by connector_studio.
   custom_tools?: Array<{ name: string; description?: string }>;
 };
@@ -254,6 +259,13 @@ function errMessage(err: unknown): string {
 // seatLabel renders a seat's account label; the unlabeled seat is "primary".
 function seatLabel(s: { account?: string }): string {
   return s.account || tr("primary");
+}
+
+// remoteLabel is what a saved connection's row is called: the directory
+// card's name (bundle copy, so localized) for a connection added from the
+// directory, else the name the user gave it.
+function remoteLabel(s: { name: string; display_name?: string }): string {
+  return s.display_name ? bundleText(s.display_name) : s.name;
 }
 
 // groupSeats buckets the caller's own rows by connection name, first
@@ -2392,7 +2404,7 @@ function ConnectionsPageInner() {
                           key={s.id}
                           name={
                             <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
-                              <span className="text-[0.95rem] font-semibold">{s.name}</span>
+                              <span className="text-[0.95rem] font-semibold">{remoteLabel(s)}</span>
                               <ConnBadge title="Account label for this login">
                                 {seatLabel(s)}
                               </ConnBadge>
@@ -2418,15 +2430,21 @@ function ConnectionsPageInner() {
                             </span>
                           }
                           sub={
-                            s.catalog_drift ? (
-                              <>
-                                {s.url}
-                                <br />
-                                {driftSummary(s.catalog_drift)}
-                              </>
-                            ) : (
-                              s.url
-                            )
+                            <>
+                              {s.description ? (
+                                <>
+                                  {bundleText(s.description)}
+                                  <br />
+                                </>
+                              ) : null}
+                              {s.url}
+                              {s.catalog_drift ? (
+                                <>
+                                  <br />
+                                  {driftSummary(s.catalog_drift)}
+                                </>
+                              ) : null}
+                            </>
                           }
                           actions={
                             <>
@@ -2435,7 +2453,7 @@ function ConnectionsPageInner() {
                                   on={enabledForMe}
                                   onLabel={tr("On for me")}
                                   offLabel={tr("Off for me")}
-                                  ariaLabel={tr("Enable {0} ({1}) for me", [s.name, seatLabel(s)])}
+                                  ariaLabel={tr("Enable {0} ({1}) for me", [remoteLabel(s), seatLabel(s)])}
                                   onToggle={() =>
                                     setConnectorPref({
                                       kind: "remote",
@@ -2577,7 +2595,7 @@ function ConnectionsPageInner() {
                                     }
                                   }}
                                   placeholder={tr("account label — e.g. work")}
-                                  aria-label={tr("New account label for {0} ({1})", [s.name, seatLabel(s)])}
+                                  aria-label={tr("New account label for {0} ({1})", [remoteLabel(s), seatLabel(s)])}
                                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                                 />
                                 <button
@@ -2868,7 +2886,7 @@ function ConnectionsPageInner() {
                     key={s.id}
                     name={
                       <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
-                        {s.name}
+                        {remoteLabel(s)}
                         <ConnBadge title="The owner's account label for this login">
                           {seatLabel(s)}
                         </ConnBadge>
@@ -2882,7 +2900,17 @@ function ConnectionsPageInner() {
                         </ConnBadge>
                       </span>
                     }
-                    sub={s.url}
+                    sub={
+                      s.description ? (
+                        <>
+                          {bundleText(s.description)}
+                          <br />
+                          {s.url}
+                        </>
+                      ) : (
+                        s.url
+                      )
+                    }
                     actions={
                       <>
                         <span className="text-[0.72rem] text-[var(--color-text-muted)]">
@@ -2893,7 +2921,7 @@ function ConnectionsPageInner() {
                             on={on}
                             onLabel={tr("On for me")}
                             offLabel={tr("Off for me")}
-                            ariaLabel={tr("Enable {0} ({1}) for me", [s.name, seatLabel(s)])}
+                            ariaLabel={tr("Enable {0} ({1}) for me", [remoteLabel(s), seatLabel(s)])}
                             onToggle={() =>
                               setConnectorPref({
                                 kind: "remote",
