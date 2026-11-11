@@ -97,20 +97,18 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			s.remoteMCPError(w, err)
 			return
 		}
+		// The directory as it is served (effectiveRemoteCatalog): own rows
+		// carry its drift (F13) — a shared row carries none, since only the
+		// owner can act on it — and both carry its card copy.
+		catalog := s.effectiveRemoteCatalog(r.Context())
 		sharedWithMe := make([]sharedServerView, 0, len(sharedRows))
 		for _, m := range sharedRows {
-			dn, d := s.remoteCatalogCopy(m.Name, m.URL)
+			dn, d := catalogCopyFor(catalog, m.Name, m.URL)
 			sharedWithMe = append(sharedWithMe, sharedServerView{RemoteMCPServer: m, Owner: m.UserEmail, DisplayName: dn, Description: d})
-		}
-		// Own rows carry the directory drift (F13); a shared row carries
-		// none, since only the owner can act on it.
-		var catalog []clientconfig.RemoteMCPCatalogEntry
-		if s.clientConfig != nil {
-			catalog = applyMS365CatalogOverride(s.clientConfig.RemoteMCPCatalog, s.resolveMS365Config(r.Context()))
 		}
 		views := make([]remoteServerView, 0, len(servers))
 		for _, row := range servers {
-			dn, d := s.remoteCatalogCopy(row.Name, row.URL)
+			dn, d := catalogCopyFor(catalog, row.Name, row.URL)
 			views = append(views, remoteServerView{RemoteMCPServer: row, CatalogDrift: driftFromCatalog(row, catalog), DisplayName: dn, Description: d})
 		}
 		writeJSON(w, r, map[string]any{
@@ -283,7 +281,7 @@ type shareRequest struct {
 type sharedServerView struct {
 	store.RemoteMCPServer
 	Owner string `json:"owner"`
-	// The directory card's label and sentence (remoteCatalogCopy), as on the
+	// The directory card's label and sentence (catalogCopyFor), as on the
 	// owner's own rows; absent for a server added by hand.
 	DisplayName string `json:"display_name,omitempty"`
 	Description string `json:"description,omitempty"`

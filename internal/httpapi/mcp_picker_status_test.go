@@ -181,11 +181,18 @@ func TestRemoteConnectionCategoryFromDirectory(t *testing.T) {
 func TestRemoteCatalogEntryUsesDirectoryCopy(t *testing.T) {
 	t.Parallel()
 
-	srv := &Server{clientConfig: &clientconfig.Bundle{RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
+	catalog := []clientconfig.RemoteMCPCatalogEntry{
 		{Name: "optable-audience-agent", DisplayName: " Optable Audiences ", Description: "Find and build audiences.",
 			URL: "https://raptive-hub.cloud.us.optable.co/admin/mcp", Category: "data-analytics"},
 		{Name: "label-only", DisplayName: "Label Only", URL: "https://label.example.com/mcp"},
-	}}}
+		// A tenant template: the saved row holds the concrete URL.
+		{Name: "azure-devops", DisplayName: "Azure DevOps", Description: "Work items and repos.",
+			URL: "https://mcp.dev.azure.com/{organization}"},
+		// A regional variant.
+		{Name: "regional", DisplayName: "Regional", Description: "Either region.", URL: "https://us.example.com/mcp",
+			URLVariants: []clientconfig.RemoteMCPURLVariant{{ID: "eu", URL: "https://eu.example.com/mcp"}}},
+	}
+	srv := &Server{clientConfig: &clientconfig.Bundle{RemoteMCPCatalog: catalog}}
 	cases := []struct {
 		name, url, transport  string
 		wantDisplay, wantDesc string
@@ -199,11 +206,15 @@ func TestRemoteCatalogEntryUsesDirectoryCopy(t *testing.T) {
 			"optable-audience-agent", "Remote MCP server you connected (https://other.example.com/mcp).", false},
 		{"label-only", "https://label.example.com/mcp", "sse",
 			"Label Only", "Remote MCP server you connected (https://label.example.com/mcp).", true},
+		{"azure-devops", "https://mcp.dev.azure.com/contoso", "streamable_http",
+			"Azure DevOps", "Work items and repos.", true},
+		{"regional", "https://EU.example.com:443/mcp", "streamable_http",
+			"Regional", "Either region.", true},
 		{"optable-audience-agent", "https://raptive-hub.cloud.us.optable.co/admin/mcp", store.RemoteMCPTransportHTTPTools,
 			"optable-audience-agent", "Custom API connector (https://raptive-hub.cloud.us.optable.co/admin/mcp).", false},
 	}
 	for _, c := range cases {
-		got := srv.remoteCatalogEntry(agent.RemoteMCPSeatGroup{Name: c.name, URL: c.url, Transport: c.transport}, true, "")
+		got := srv.remoteCatalogEntry(agent.RemoteMCPSeatGroup{Name: c.name, URL: c.url, Transport: c.transport}, true, "", catalog)
 		if got["display_name"] != c.wantDisplay || got["description"] != c.wantDesc || got["catalog_copy"] != c.wantCatalogCopy {
 			t.Errorf("%s @ %s (%s): display_name=%q description=%q catalog_copy=%v; want %q, %q, %v",
 				c.name, c.url, c.transport, got["display_name"], got["description"], got["catalog_copy"],
@@ -212,6 +223,25 @@ func TestRemoteCatalogEntryUsesDirectoryCopy(t *testing.T) {
 		if got["name"] != c.name {
 			t.Errorf("%s: name = %q; the id must not change", c.name, got["name"])
 		}
+	}
+}
+
+// A Microsoft 365 connection is saved with the box's own endpoint, which only
+// the effective directory (applyMS365CatalogOverride) lists; matched against
+// it, the row reads as its card does.
+func TestCatalogCopyForUsesEffectiveMS365Endpoint(t *testing.T) {
+	t.Parallel()
+
+	bundle := []clientconfig.RemoteMCPCatalogEntry{{Name: "microsoft-365", DisplayName: "Microsoft 365",
+		Description: "Mail, calendar and files.", URL: "https://placeholder.invalid/mcp"}}
+	boxURL := "https://fleet.example.com/api/ms365/mcp"
+	if dn, _ := catalogCopyFor(bundle, "microsoft-365", boxURL); dn != "" {
+		t.Fatalf("bundle catalog matched the box endpoint: %q", dn)
+	}
+	effective := applyMS365CatalogOverride(bundle, ms365ConfigResponse{Configured: true, MCPURL: boxURL})
+	dn, d := catalogCopyFor(effective, "microsoft-365", boxURL)
+	if dn != "Microsoft 365" || d != "Mail, calendar and files." {
+		t.Fatalf("effective catalog copy = %q, %q", dn, d)
 	}
 }
 

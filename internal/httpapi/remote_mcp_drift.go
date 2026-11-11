@@ -52,7 +52,7 @@ type remoteServerView struct {
 	store.RemoteMCPServer
 	CatalogDrift *catalogDrift `json:"catalog_drift,omitempty"`
 	// The directory card's label and sentence for a connection added from it
-	// (remoteCatalogCopy); absent for a server added by hand.
+	// (catalogCopyFor); absent for a server added by hand.
 	DisplayName string `json:"display_name,omitempty"`
 	Description string `json:"description,omitempty"`
 }
