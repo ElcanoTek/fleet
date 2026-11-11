@@ -718,13 +718,43 @@ func isStructuredAnswerDraft(text string) bool {
 	}
 	switch body[0] {
 	case '{':
-		rest := strings.TrimLeft(body[1:], " \t\r\n")
-		return rest == "" || rest[0] == '"' || rest[0] == '}' || rest[0] == '\'' || rest[0] == ','
+		return isJSONObjectDraft(strings.TrimLeft(body[1:], " \t\r\n"))
 	case '[':
 		return isJSONArrayDraft(strings.TrimLeft(body[1:], " \t\r\n"))
 	default:
 		return false
 	}
+}
+
+// isJSONObjectDraft reports whether rest (the bytes after a leading '{' and
+// whitespace) looks like a malformed or truncated JSON object (including
+// unquoted or single-quoted keys such as `{status:"draft"}`) rather than
+// brace-wrapped prose or template placeholders such as "{see note above}" or
+// "{{placeholder}}".
+func isJSONObjectDraft(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	case '"', '}', '\'', ',', ':':
+		return true
+	case '{':
+		inner := strings.TrimLeft(rest[1:], " \t\r\n")
+		return inner != "" && (inner[0] == '"' || inner[0] == '\'')
+	}
+	n := 0
+	for n < len(rest) && isObjectKeyChar(rest[n]) {
+		n++
+	}
+	if n == 0 {
+		return false
+	}
+	afterKey := strings.TrimLeft(rest[n:], " \t\r\n")
+	return afterKey == "" || afterKey[0] == ':'
+}
+
+func isObjectKeyChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '$' || b == '-'
 }
 
 // isJSONArrayDraft reports whether rest (the bytes after a leading '[' and
@@ -736,7 +766,7 @@ func isJSONArrayDraft(rest string) bool {
 		return true
 	}
 	switch rest[0] {
-	case '{', '[', '"', ']', ',':
+	case '{', '[', '"', '\'', ']', ',':
 		return true
 	}
 	if !startsJSONArrayPrimitive(rest) {
@@ -767,7 +797,7 @@ func startsJSONArrayPrimitive(rest string) bool {
 		return true
 	}
 	n := 0
-	for n < len(rest) && rest[n] >= 'a' && rest[n] <= 'z' {
+	for n < len(rest) && ((rest[n] >= 'a' && rest[n] <= 'z') || (rest[n] >= 'A' && rest[n] <= 'Z')) {
 		n++
 	}
 	if n == 0 {
@@ -782,7 +812,12 @@ func startsJSONArrayPrimitive(rest string) bool {
 			return true
 		}
 	}
-	return false
+	switch word {
+	case "True", "False", "Null", "None":
+		return true
+	default:
+		return false
+	}
 }
 
 func isJSONTokenBoundary(b byte) bool {
