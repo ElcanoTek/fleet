@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -104,7 +106,142 @@ func summarizeBrowserInput(toolName, rawInput string) map[string]any {
 	if also := browserCallExtras(toolName, kind, args); also != "" {
 		add("Also", also)
 	}
-	return map[string]any{"tool": toolName, "args": rows}
+	out := map[string]any{"tool": toolName, "args": rows}
+	if raw := browserRawArgs(toolName, rawInput, hidden); len(raw) > 0 {
+		out["raw_args"] = raw
+	}
+	return out
+}
+
+// browserRawArgs is the call's own arguments for the card's Details, as the
+// tool will run them: decoded into the tool's own parameters (so key case,
+// duplicate keys and unknown keys resolve exactly as at execution) and shown
+// as rows with sorted keys, one row per step. The values the readable rows
+// hide are hidden here too, and so is every other string that carries a plain
+// credential. All of it is hidden in the decoded values, whole, before any
+// row is rendered or shortened, so Details never shows more of a credential
+// than the card does: not a prefix, not an escaped form.
+func browserRawArgs(toolName, rawInput string, hidden []string) []map[string]string {
+	var params any
+	switch toolName {
+	case tools.ConnectorStudioToolName:
+		var p tools.ConnectorStudioParams
+		if json.Unmarshal([]byte(rawInput), &p) != nil {
+			return nil
+		}
+		params = p
+	case tools.PlaywrightBrowserToolName:
+		var p tools.PlaywrightBrowserParams
+		if json.Unmarshal([]byte(rawInput), &p) != nil {
+			return nil
+		}
+		params = p
+	default:
+		return nil
+	}
+	b, err := json.Marshal(params)
+	if err != nil {
+		return nil
+	}
+	var args map[string]any
+	if json.Unmarshal(b, &args) != nil {
+		return nil
+	}
+	steps, _ := args["steps"].([]any)
+	delete(args, "steps")
+	for _, k := range []string{"password_ref", "secret_ref"} {
+		if v, ok := args[k].(string); ok && strings.TrimSpace(v) != "" && !strings.HasPrefix(strings.TrimSpace(v), "$secret:") {
+			args[k] = "given in the chat (not shown here)"
+		}
+	}
+	// Request material and connector definitions the browser actions do not
+	// use, but a call may carry.
+	for _, k := range []string{"headers", "body", "tool_args", "custom_tools"} {
+		if _, ok := args[k]; ok {
+			args[k] = "(not shown here)"
+		}
+	}
+	if v, ok := args["url"].(string); ok {
+		args["url"] = hideCredentialInURL(v, hidden)
+	}
+	masked, _ := hideCredentialValues(args, hidden).(map[string]any)
+	keys := make([]string, 0, len(masked))
+	for k := range masked {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	rows := make([]map[string]string, 0, len(keys))
+	for _, k := range keys {
+		rows = append(rows, map[string]string{"key": k, "value": rawArgValue(masked[k])})
+	}
+	for i, st := range steps {
+		if m, ok := st.(map[string]any); ok {
+			maskRawStep(m, hidden)
+		}
+		rows = append(rows, map[string]string{"key": fmt.Sprintf("steps[%d]", i+1), "value": rawArgValue(hideCredentialValues(st, hidden))})
+	}
+	return rows
+}
+
+// maskRawStep hides a step's value by the readable rows' rules, and a value
+// the runner does not use (a click's, say) by the rule for typed values.
+func maskRawStep(m map[string]any, hidden []string) {
+	action, _ := m["action"].(string)
+	sel, _ := m["selector"].(string)
+	v, _ := m["value"].(string)
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "goto":
+		// The runner takes a goto's target from its selector when it has
+		// no value.
+		if v != "" {
+			m["value"] = hideCredentialInURL(v, hidden)
+		}
+		if sel != "" {
+			m["selector"] = hideCredentialInURL(sel, hidden)
+		}
+	case "wait_for":
+		// With a selector the runner waits for it and ignores the value.
+		if v != "" && sel == "" {
+			m["value"] = hideCredentialInURL(v, hidden)
+		} else if v != "" && stepValueHidden(sel, v, hidden) {
+			m["value"] = hiddenValue
+		}
+	case "press":
+		// A key name, shown as on the card ("Press Enter in #password");
+		// a plain credential is hidden by hideCredentialStrings.
+	case "fill", "select", "click", "extract", "sleep":
+		if v != "" && stepValueHidden(sel, v, hidden) {
+			m["value"] = hiddenValue
+		}
+	default:
+		// An unknown step is named without its value on the card.
+		if v != "" {
+			m["value"] = hiddenValue
+		}
+	}
+}
+
+// rawArgValue renders one Details value: strings as themselves, anything
+// else as compact JSON without HTML escaping (selectors use > and URLs &),
+// truncated by runes like the generic card's rows.
+func rawArgValue(v any) string {
+	var out string
+	if s, ok := v.(string); ok {
+		out = s
+	} else {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(v) != nil {
+			out = fmt.Sprintf("%v", v)
+		} else {
+			out = strings.TrimRight(buf.String(), "\n")
+		}
+	}
+	if r := []rune(out); len(r) > genericArgValueMax {
+		out = string(r[:genericArgValueMax]) + "…"
+	}
+	return out
 }
 
 // browserCallExtras says what else the call reports, as the handlers decide
@@ -211,6 +348,18 @@ func selectorLooksSecret(sel string) bool {
 
 const hiddenValue = "a value hidden here"
 
+// stepValueHidden reports whether a step's typed value is hidden on the card:
+// it carries one of the call's plain credentials, or it is a literal (not a
+// placeholder) going into a field whose selector names a secret.
+func stepValueHidden(sel, v string, hidden []string) bool {
+	for _, h := range hidden {
+		if strings.Contains(v, h) {
+			return true
+		}
+	}
+	return selectorLooksSecret(sel) && !strings.Contains(v, "{{")
+}
+
 // describeBrowserStep renders one declarative step in words. Credential
 // placeholders are named, never resolved; a literal value that is one of the
 // call's plain credentials, or goes into a password-like field, is hidden.
@@ -221,16 +370,10 @@ func describeBrowserStep(st playwrightrunner.Step, hidden []string) string {
 		optional = " (if it is there)"
 	}
 	value := func() string {
-		v := st.Value
-		for _, h := range hidden {
-			if strings.Contains(v, h) {
-				return hiddenValue
-			}
-		}
-		if selectorLooksSecret(sel) && !strings.Contains(v, "{{") {
+		if stepValueHidden(sel, st.Value, hidden) {
 			return hiddenValue
 		}
-		return describeStepValue(v)
+		return describeStepValue(st.Value)
 	}
 	switch strings.ToLower(strings.TrimSpace(st.Action)) {
 	case "goto":
@@ -434,6 +577,17 @@ func credentialLeaves(v any) []string {
 // and object key that contains one of hidden replaced by hiddenValue, whole,
 // so neither display truncation nor JSON escaping can leave part of it.
 func hideCredentialStrings(v any, hidden []string) any {
+	return hideCredentials(v, hidden, true)
+}
+
+// hideCredentialValues is hideCredentialStrings for a value whose object keys
+// are the tool's own parameter names, fixed and unable to carry a credential,
+// so they stay readable however short a credential is.
+func hideCredentialValues(v any, hidden []string) any {
+	return hideCredentials(v, hidden, false)
+}
+
+func hideCredentials(v any, hidden []string, keys bool) any {
 	if len(hidden) == 0 {
 		return v
 	}
@@ -455,17 +609,17 @@ func hideCredentialStrings(v any, hidden []string) any {
 		out := make(map[string]any, len(t))
 		n := 0
 		for k, c := range t {
-			if contains(k) {
+			if keys && contains(k) {
 				n++
 				k = fmt.Sprintf("%s (%d)", hiddenValue, n)
 			}
-			out[k] = hideCredentialStrings(c, hidden)
+			out[k] = hideCredentials(c, hidden, keys)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, c := range t {
-			out[i] = hideCredentialStrings(c, hidden)
+			out[i] = hideCredentials(c, hidden, keys)
 		}
 		return out
 	}

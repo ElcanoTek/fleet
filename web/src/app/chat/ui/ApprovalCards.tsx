@@ -218,6 +218,22 @@ function AskAgainButton({ approval, onAskAgain }: {
   );
 }
 
+// ApprovalRawCallArgs renders summary.raw_args (the call's own arguments,
+// credentials hidden, on a card whose summary.args describe the call in words).
+export function ApprovalRawCallArgs({ rows }: { rows: { key: string; value: string }[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div data-testid="approval-raw-args" className="grid gap-0.5 break-words text-[0.75rem] text-[var(--color-text-secondary)]">
+      {rows.map((row) => (
+        <div key={row.key} className="min-w-0">
+          <span className="font-mono text-[var(--color-card-text-muted)]">{row.key}: </span>
+          <span className="break-all font-mono">{row.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ApprovalCountdown renders the inline "Auto-denying in m:ss" line (or the
 // timed-out notice once the deadline passes). Renders nothing when the approval
 // has no deadline (remaining === null), preserving the prior no-timeout UI.
@@ -1167,6 +1183,16 @@ function GenericActionCard({
       </pre>
     ) : null;
 
+  // A card whose rows describe the call in words (the browser tools) keeps
+  // the call's own arguments, credentials hidden, under Details.
+  const rawCallArgs = Array.isArray(approval.summary.raw_args) ? approval.summary.raw_args : [];
+  const rawCallBlock =
+    rawCallArgs.length > 0 ? (
+      <ApprovalCardDetails>
+        <ApprovalRawCallArgs rows={rawCallArgs} />
+      </ApprovalCardDetails>
+    ) : null;
+
   // A settled success whose result carried an outcome card (a tool in
   // critical_tool_result_cards, docs/APPROVAL-RESULT-CARDS.md): the completed
   // card reads it. It keeps the approved card's title in view and its
@@ -1185,6 +1211,11 @@ function GenericActionCard({
           <div className="mt-1 min-w-0">
             {toolHeader}
             {argsBlock}
+            {rawCallArgs.length > 0 ? (
+              <div className="mt-1.5">
+                <ApprovalRawCallArgs rows={rawCallArgs} />
+              </div>
+            ) : null}
           </div>
         }
         onRetryFailed={onRetryFailed}
@@ -1342,6 +1373,7 @@ function GenericActionCard({
         <>
           {toolHeader}
           {argsBlock}
+          {rawCallBlock}
         </>
       )}
 
