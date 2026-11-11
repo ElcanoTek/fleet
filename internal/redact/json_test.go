@@ -71,20 +71,25 @@ func TestJSONRedactionCustomPatternsAndNumericSecrets(t *testing.T) {
 func TestRedactJSONKeepsVaultReferences(t *testing.T) {
 	r := NewRedactor(nil)
 	r.RegisterSecrets("test", false, "Hunter2Registered9")
-	in := `{"password_ref":"$secret:password","secret_ref":"$secret:api_token","username_ref":"$secret:creds[0].user-name",` +
+	// The deepest kind of path a card produces: a 64-character repeater ID,
+	// an item index and a 64-character field ID.
+	deepRef := "r" + strings.Repeat("x", 63) + "[12]." + "p" + strings.Repeat("w", 63)
+	in := `{"password_ref":"$secret:password","secret_ref":"$secret:api_token","username_ref":"$secret:creds[0].user_name",` +
 		`"api_key":"literal-key-value-1928","token":"$secret:password","note":"$secret:not-a-ref-key",` +
 		`"api_key_ref":"$secret:sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",` +
 		`"login":{"password_ref":"$secret:Hunter2Registered9"},` +
 		`"header":"Authorization: Bearer abcdefgh12345678","Secret_Ref_3":"$secret:abcdefgh12345678",` + // gitleaks:allow (made-up test values)
 		`"basic":"Authorization: Basic dXNlcjpwYXNzd29yZA==","token_ref":"$secret:dXNlcjpwYXNzd29yZA",` + // gitleaks:allow (made-up test values)
-		`"long_ref":"$secret:` + strings.Repeat("a1", 33) + `"}` // gitleaks:allow (made-up test values)
+		`"long_ref":"$secret:` + strings.Repeat("a1", 33) + `","dash_ref":"$secret:api-token-1928",` +
+		`"jwt_ref":"$secret:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",` + // gitleaks:allow (made-up JWT: {"sub":"1234567890"}, hand-typed signature)
+		`"nested_ref":"$secret:` + deepRef + `"}` // gitleaks:allow (made-up test values)
 	got := r.Redact(in)
-	for _, keep := range []string{`"password_ref":"$secret:password"`, `"secret_ref":"$secret:api_token"`, `"username_ref":"$secret:creds[0].user-name"`} {
+	for _, keep := range []string{`"password_ref":"$secret:password"`, `"secret_ref":"$secret:api_token"`, `"username_ref":"$secret:creds[0].user_name"`, `"nested_ref":"$secret:` + deepRef + `"`} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("Redact = %s, want it to keep %s", got, keep)
 		}
 	}
-	for _, gone := range []string{"literal-key-value-1928", `"token":"$secret:password"`, "sk-ant-api03", "Hunter2Registered9", "$secret:abcdefgh12345678", "$secret:dXNlcjpwYXNzd29yZA", strings.Repeat("a1", 33)} { // gitleaks:allow (made-up test values)
+	for _, gone := range []string{"literal-key-value-1928", `"token":"$secret:password"`, "sk-ant-api03", "Hunter2Registered9", "$secret:abcdefgh12345678", "$secret:dXNlcjpwYXNzd29yZA", strings.Repeat("a1", 33), "api-token-1928", "eyJhbGciOiJIUzI1NiJ9"} { // gitleaks:allow (made-up test values)
 		if strings.Contains(got, gone) {
 			t.Errorf("Redact = %s, want %q redacted", got, gone)
 		}

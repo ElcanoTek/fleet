@@ -10,12 +10,18 @@ var authorizationValue = regexp.MustCompile(`(?i)authorization:\s*(?:bearer|basi
 
 // vaultReference is a show_ui credential reference ("$secret:<field_id>",
 // docs/CONNECTOR-BUILDER.md §1.2): what a tool call carries in its *_ref
-// arguments in place of a vaulted credential, resolved host-side. Field IDs
-// include a repeater's "creds[0].password"; one is at most 64 characters, so
-// a long token wrapped in the syntax is not taken for one. Redacted, a
-// reference would hide from the model, on later turns, which credential its
-// own earlier call used, so keepVaultReference keeps one; see there for when.
-var vaultReference = regexp.MustCompile(`^\$secret:[A-Za-z0-9_.\[\]-]{1,64}$`)
+// arguments in place of a vaulted credential, resolved host-side. A field ID
+// follows the form spec's id grammar (internal/genui: a letter or underscore,
+// then up to 63 letters, digits or underscores); a nested field's reference
+// is its path, joined with "." and with a repeater item's index in brackets
+// ("creds[0].password"). Each segment is capped, not the path, so a long
+// token wrapped in the syntax is not taken for one, while the deepest path a
+// card can produce is. Redacted, a reference would hide from the model, on
+// later turns, which credential its own earlier call used, so
+// keepVaultReference keeps one; see there for when.
+var vaultReference = regexp.MustCompile(`^\$secret:` + vaultSegment + `(?:\.` + vaultSegment + `){0,7}$`)
+
+const vaultSegment = `[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[[0-9]{1,6}\])?`
 
 // refKey is the argument a reference is passed in (password_ref, secret_ref,
 // username_ref).
@@ -129,6 +135,13 @@ func (r *Redactor) keepVaultReference(key, value string, credentials []string) b
 		return false
 	}
 	id := strings.TrimPrefix(value, "$secret:")
+	// Every JWT starts "eyJ" ({"); one fits the field ID grammar but is no
+	// field ID.
+	for _, seg := range strings.Split(id, ".") {
+		if strings.HasPrefix(seg, "eyJ") {
+			return false
+		}
+	}
 	for _, c := range credentials {
 		// A Basic credential is collected with its "=" padding, which a
 		// field ID cannot hold.
