@@ -1504,6 +1504,7 @@
   "Failed to update tags: {0}": "Não foi possível atualizar as etiquetas: {0}",
   "Failed to update task": "Não foi possível atualizar a tarefa",
   "Failed to validate model.": "Não foi possível validar o modelo.",
+  "Failed to verify budget principal": "Não foi possível verificar o titular do orçamento",
   "Failed to wake task": "Não foi possível reativar a tarefa",
   "Failures & Dead Letters": "Falhas e tarefas sem mais tentativas",
   "Fallback": "Alternativo",

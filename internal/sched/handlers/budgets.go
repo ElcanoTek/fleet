@@ -118,7 +118,11 @@ func (h *Handlers) ListBudgets(w http.ResponseWriter, r *http.Request) {
 
 // UpsertBudget handles POST /admin/budgets: create or replace the budget for
 // (scope, principal_id, window). An upsert resets the soft-alert marker so an
-// edited budget re-arms its once-per-window alert.
+// edited budget re-arms its once-per-window alert. The principal must be one
+// a budget can bind to (budget.ResolvePrincipal): an unknown account email or
+// key_id, or a key
+// that is revoked, expired or cannot create tasks, is a 400, and a user
+// principal is saved as the account's stored email.
 func (h *Handlers) UpsertBudget(w http.ResponseWriter, r *http.Request) {
 	if !h.principalFromRequest(r).hasPermission(models.PermissionAdmin) {
 		writeError(w, http.StatusForbidden, "Admin access required")
@@ -131,6 +135,22 @@ func (h *Handlers) UpsertBudget(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := bc.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// A budget naming no account, or a key that cannot create tasks, can never
+	// match a create, so it would list as "ok" while bounding nothing: refuse
+	// it rather than save it. No key store wired fails closed (500).
+	var keys budget.KeyLookup
+	if h.apiKeys != nil {
+		keys = h.apiKeys
+	}
+	if err := budget.ResolvePrincipal(r.Context(), &bc, h.storage, keys); err != nil {
+		var invalid *budget.InvalidPrincipalError
+		if errors.As(err, &invalid) {
+			writeError(w, http.StatusBadRequest, invalid.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to verify budget principal")
 		return
 	}
 	b, err := h.storage.UpsertBudget(r.Context(), bc)

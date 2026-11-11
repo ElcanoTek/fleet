@@ -171,8 +171,9 @@ curl -X POST "$FLEET/admin/budgets" -H "X-API-Key: $ADMIN_KEY" \
 - Spend is **never accumulated on the budget row**. Every check recomputes the
   principal's current-window spend from the part-1 aggregations
   (`Storage.TaskUsage` + the chat `turn_metrics` seam) — no second accounting
-  path exists to drift. Budget principals are the part-1 bucket keys: sched
-  username (user), API key id (key), chat project id (project).
+  path exists to drift. Budget principals are the part-1 bucket keys: the
+  account's email (user) and the API key id (key); there is no project scope
+  (see the honest scope below).
 
 ### Enforcement — one gate, every create path
 
@@ -215,7 +216,23 @@ mirroring the `priorityCapError` shared-helper discipline:
 - `GET /admin/budgets` — every budget with its live evaluation (current window
   `[start, end)`, spend in both measures, the effective clamped hard bounds,
   whether this window's soft alert fired).
-- `POST /admin/budgets` — upsert on `(scope, principal_id, window)`.
+- `POST /admin/budgets` — upsert on `(scope, principal_id, window)`. The
+  principal must be one a budget can bind to: a user budget names an
+  existing account by email (matched case-insensitively and saved as the
+  account's own email; a disabled account is accepted, since it can be
+  re-enabled), a key budget an existing `key_id` that can create tasks — not
+  revoked or expired (revocation is final) and holding `create_task`
+  (readonly, webhook and chat-only `user` keys never reach a create path).
+  Anything else is a 400 that names the principal and the reason, and
+  nothing is saved — such a budget can never match a create, so it used to
+  list as `ok` while bounding nothing (#2105). `fleet sched budget create`
+  runs the same check, against the key store `fleet sched apikey` uses: an
+  unknown principal exits 2, an unusable key 1, and an empty key store (the
+  CLI run off the box, or with `FLEET_DATA_DIR` unset away from the unit) is
+  reported as such rather than as an unknown key. Budgets saved before the
+  check are not re-validated: one whose account or key no longer exists, or
+  a user budget saved with a mixed-case email, still lists and can be
+  deleted.
 - `DELETE /admin/budgets/{budget_id}`.
 - All documented in `docs/openapi.yaml` (schemas `Budget`, `BudgetCreate`,
   `BudgetStatus`; bound in the route/schema parity tests), registered like

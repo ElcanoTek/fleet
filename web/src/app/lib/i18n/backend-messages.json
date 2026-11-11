@@ -39,6 +39,7 @@
     "Failed to set task owner",
     "Failed to update task",
     "Failed to validate model.",
+    "Failed to verify budget principal",
     "Failed to wake task",
     "File not found",
     "Insufficient permissions",
