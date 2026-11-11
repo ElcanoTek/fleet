@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "./CloseButton";
@@ -85,7 +86,7 @@ export function PromptLibrary({
       );
     } catch (err) {
       setError(
-        errorMessage(err, "Could not load prompt library"),
+        errorMessage(err, tr("Could not load prompt library")),
       );
     } finally {
       setLoading(false);
@@ -128,8 +129,8 @@ export function PromptLibrary({
     setDraft({
       name:
         selected.read_only || !selected.owned_by_caller
-          ? `${selected.name} (Custom)`
-          : `${selected.name} (Copy)`,
+          ? tr("{0} (Custom)", [selected.name])
+          : tr("{0} (Copy)", [selected.name]),
       description: selected.description ?? "",
       content: selected.content,
       visibility: selected.visibility === "workspace" ? "workspace" : "private",
@@ -148,7 +149,7 @@ export function PromptLibrary({
       setEditing(false);
       await load();
     } catch (err) {
-      setError(errorMessage(err, "Could not save prompt"));
+      setError(errorMessage(err, tr("Could not save prompt")));
     } finally {
       setSaving(false);
     }
@@ -172,7 +173,7 @@ export function PromptLibrary({
       await load();
     } catch (err) {
       setConfirmDelete(null);
-      setError(errorMessage(err, "Could not delete prompt"));
+      setError(errorMessage(err, tr("Could not delete prompt")));
     } finally {
       setDeleting(false);
     }
@@ -203,7 +204,7 @@ export function PromptLibrary({
       ) : (
         <button
           type="button"
-          aria-label="Open prompt library"
+          aria-label={tr("Open prompt library")}
           // Styled hover/focus tooltip (the app's data-tip system) instead of a
           // native title, matching the composer's other tool buttons. Only in
           // compact (icon-only) mode — the full button already shows the label.
@@ -217,7 +218,7 @@ export function PromptLibrary({
         >
           <Icon name="book" className="size-4" />
           {!compact ? (
-            <span style={{ marginLeft: 6 }}>Prompt library</span>
+            <span style={{ marginLeft: 6 }}>{tr("Prompt library")}</span>
           ) : null}
         </button>
       )}
@@ -231,7 +232,7 @@ export function PromptLibrary({
               className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-overlay-strong)] p-0 sm:p-4"
               role="dialog"
               aria-modal="true"
-              aria-label="Prompt library"
+              aria-label={tr("Prompt library")}
             >
               <div
                 ref={modalRef}
@@ -245,13 +246,13 @@ export function PromptLibrary({
                     <Icon name="book" className="size-4.5" />
                   </span>
                   <h2 className="m-0 min-w-0 flex-1 truncate text-base font-semibold text-[var(--color-text-primary)]">
-                    Prompt library
+                    {tr("Prompt library")}
                   </h2>
                   {/* The close stays pinned to the title row (top-right) even when
                   the action buttons wrap to a second row on phones. */}
                   <CloseButton
                     className="order-3"
-                    label="Close prompt library"
+                    label={tr("Close prompt library")}
                     onClick={() => setOpen(false)}
                   />
                   <div className="order-4 flex w-full items-center gap-2 sm:order-2 sm:w-auto">
@@ -261,14 +262,14 @@ export function PromptLibrary({
                       disabled={items.length === 0}
                       onClick={exportLibrary}
                     >
-                      Back up JSON
+                      {tr("Back up JSON")}
                     </button>
                     <button
                       type="button"
                       className="btn btn-primary btn-small"
                       onClick={beginNew}
                     >
-                      New prompt
+                      {tr("New prompt")}
                     </button>
                   </div>
                 </header>
@@ -284,8 +285,8 @@ export function PromptLibrary({
                     <input
                       ref={searchRef}
                       type="search"
-                      aria-label="Search prompts"
-                      placeholder="Search prompts…"
+                      aria-label={tr("Search prompts")}
+                      placeholder={tr("Search prompts…")}
                       className={`${FIELD} mb-2`}
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
@@ -293,12 +294,12 @@ export function PromptLibrary({
                     <div className="min-h-0 flex-1 overflow-y-auto">
                       {loading ? (
                         <p className="p-2 text-sm text-[var(--color-text-muted)]">
-                          Loading…
+                          {tr("Loading…")}
                         </p>
                       ) : null}
                       {!loading && visible.length === 0 ? (
                         <p className="p-2 text-sm text-[var(--color-text-muted)]">
-                          No matching prompts.
+                          {tr("No matching prompts.")}
                         </p>
                       ) : null}
                       {visible.map((p) => {
@@ -347,10 +348,10 @@ export function PromptLibrary({
                                   {kind === "git"
                                     ? "Git"
                                     : kind === "workspace"
-                                      ? "Workspace"
-                                      : "Private"}
+                                      ? tr("Workspace")
+                                      : tr("Private")}
                                 </span>
-                                {isFormPrompt(p) ? <span>· Form</span> : null}
+                                {isFormPrompt(p) ? <span>{tr("· Form")}</span> : null}
                                 {p.path ? (
                                   <span className="truncate normal-case tracking-normal">
                                     {p.path}
@@ -368,7 +369,7 @@ export function PromptLibrary({
                     {editing ? (
                       <div className="grid gap-3">
                         <label className="grid gap-1 text-sm">
-                          Name
+                          {tr("Name")}
                           <input
                             className={FIELD}
                             maxLength={120}
@@ -379,9 +380,9 @@ export function PromptLibrary({
                           />
                         </label>
                         <label className="grid gap-1 text-sm">
-                          Description{" "}
+                          {tr("Description")}{" "}
                           <span className="text-xs text-[var(--color-text-muted)]">
-                            Optional — helps teammates find it.
+                            {tr("Optional — helps teammates find it.")}
                           </span>
                           <input
                             className={FIELD}
@@ -396,7 +397,7 @@ export function PromptLibrary({
                           />
                         </label>
                         <label className="grid gap-1 text-sm">
-                          Prompt
+                          {tr("Prompt")}
                           <textarea
                             className={`${FIELD} min-h-64 font-mono text-xs`}
                             value={draft.content}
@@ -418,7 +419,7 @@ export function PromptLibrary({
                               })
                             }
                           />{" "}
-                          Share with this workspace
+                          {tr("Share with this workspace")}
                         </label>
                         <div className="flex justify-end gap-2">
                           <button
@@ -426,8 +427,7 @@ export function PromptLibrary({
                             className="btn btn-secondary"
                             onClick={() => setEditing(false)}
                           >
-                            Cancel
-                          </button>
+                            {tr("Cancel")}</button>
                           <button
                             type="button"
                             className="btn btn-primary"
@@ -438,7 +438,7 @@ export function PromptLibrary({
                             }
                             onClick={() => void save()}
                           >
-                            {saving ? "Saving…" : "Save prompt"}
+                            {saving ? tr("Saving…") : tr("Save prompt")}
                           </button>
                         </div>
                       </div>
@@ -450,7 +450,7 @@ export function PromptLibrary({
                               {selected.name}
                             </h3>
                             <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-                              {selected.description || "No description"}
+                              {selected.description || tr("No description")}
                             </p>
                           </div>
                           <div className="flex gap-2">
@@ -460,8 +460,8 @@ export function PromptLibrary({
                               onClick={beginClone}
                             >
                               {selected.read_only || !selected.owned_by_caller
-                                ? "Clone & edit"
-                                : "Duplicate"}
+                                ? tr("Clone & edit")
+                                : tr("Duplicate")}
                             </button>
                             {!selected.read_only && selected.owned_by_caller ? (
                               <button
@@ -469,7 +469,7 @@ export function PromptLibrary({
                                 className="btn btn-secondary btn-small"
                                 onClick={beginEdit}
                               >
-                                Edit
+                                {tr("Edit")}
                               </button>
                             ) : null}
                             {!selected.read_only && selected.owned_by_caller ? (
@@ -478,7 +478,7 @@ export function PromptLibrary({
                                 className="btn btn-danger btn-small"
                                 onClick={remove}
                               >
-                                Delete
+                                {tr("Delete")}
                               </button>
                             ) : null}
                           </div>
@@ -490,7 +490,7 @@ export function PromptLibrary({
                           <PromptLibraryForm
                             key={selected.id}
                             prompt={selected}
-                            note={`Tracked in ${selected.path}`}
+                            note={tr("Tracked in {0}", [selected.path])}
                             onUse={(text) => {
                               onInsert(text, selected.name);
                               setOpen(false);
@@ -504,10 +504,10 @@ export function PromptLibrary({
                             <div className="mt-3 flex items-center justify-between gap-3">
                               <span className="text-xs text-[var(--color-text-muted)]">
                                 {selected.read_only
-                                  ? `Tracked in ${selected.path}`
+                                  ? tr("Tracked in {0}", [selected.path])
                                   : selected.visibility === "workspace"
-                                    ? `Shared by ${selected.owner_username}`
-                                    : "Only you can see this prompt"}
+                                    ? tr("Shared by {0}", [selected.owner_username])
+                                    : tr("Only you can see this prompt")}
                               </span>
                               <button
                                 type="button"
@@ -521,7 +521,7 @@ export function PromptLibrary({
                                   name="arrow-up"
                                   className="mr-1.5 size-3.5 rotate-90"
                                 />
-                                Use prompt
+                                {tr("Use prompt")}
                               </button>
                             </div>
                           </>
@@ -530,13 +530,13 @@ export function PromptLibrary({
                     ) : (
                       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-[var(--color-text-muted)]">
                         <Icon name="book" className="size-8 opacity-40" />
-                        <span>Choose a prompt on the left, or create one.</span>
+                        <span>{tr("Choose a prompt on the left, or create one.")}</span>
                         <button
                           type="button"
                           className="btn btn-secondary btn-small"
                           onClick={beginNew}
                         >
-                          New prompt
+                          {tr("New prompt")}
                         </button>
                       </div>
                     )}
@@ -545,9 +545,9 @@ export function PromptLibrary({
               </div>
               <ConfirmDialog
                 open={confirmDelete !== null}
-                title="Delete prompt"
-                message={`Delete “${confirmDelete?.name ?? ""}”?`}
-                confirmLabel={deleting ? "Deleting…" : "Delete"}
+                title={tr("Delete prompt")}
+                message={tr("Delete “{0}”?", [confirmDelete?.name ?? ""])}
+                confirmLabel={deleting ? tr("Deleting…") : tr("Delete")}
                 busy={deleting}
                 onConfirm={() => void confirmRemove()}
                 onCancel={() => setConfirmDelete(null)}

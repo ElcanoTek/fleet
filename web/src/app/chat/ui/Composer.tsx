@@ -1,3 +1,5 @@
+import { skillDescription } from "@/app/lib/i18n/bundle";
+import { t as tr } from "@/app/lib/i18n";
 // Composer — the chat message-input form extracted from ChatExperience
 // (issue #169 decomposition, slice 7). This is a *presentational* component:
 // it owns no turn/send state machine of its own. Every value, setter, ref,
@@ -554,7 +556,7 @@ export function Composer({
         {isDraggingOver && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-xl)] bg-[var(--color-accent)]/10">
             <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">
-              Drop to attach
+              {tr("Drop to attach")}
             </span>
           </div>
         )}
@@ -569,8 +571,7 @@ export function Composer({
               className="size-[0.8rem] shrink-0 text-[var(--color-accent)]"
             />
             <span>
-              Sealed — your data and an approved model stay in this sandbox.
-              Nothing leaves.
+              {tr("Sealed — your data and an approved model stay in this sandbox. Nothing leaves.")}
             </span>
           </div>
         ) : null}
@@ -583,7 +584,7 @@ export function Composer({
         {skillPopoverOpen ? (
           <div
             role="listbox"
-            aria-label="Skills"
+            aria-label={tr("Skills")}
             className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
           >
             <div className="max-h-72 overflow-y-auto py-1">
@@ -614,7 +615,7 @@ export function Composer({
                     </span>
                     {skill.description ? (
                       <span className="line-clamp-2 text-[0.7rem] leading-snug text-[var(--color-text-muted)]">
-                        {skill.description}
+                        {skillDescription(skill)}
                       </span>
                     ) : null}
                   </button>
@@ -622,12 +623,12 @@ export function Composer({
               })}
             </div>
             <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[0.65rem] text-[var(--color-text-muted)]">
-              ↑↓ to navigate · Enter/Tab to insert · Esc to dismiss
+              {tr("↑↓ to navigate · Enter/Tab to insert · Esc to dismiss")}
             </div>
           </div>
         ) : null}
         <label className="sr-only" htmlFor="promptInput">
-          Message
+          {tr("Message")}
         </label>
         <textarea
           id="promptInput"
@@ -635,7 +636,7 @@ export function Composer({
           className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
           placeholder={
             pendingAttachments.length > 0
-              ? "Add a message to send your attachments…"
+              ? tr("Add a message to send your attachments…")
               : promptPlaceholder
           }
           rows={1}
@@ -751,7 +752,7 @@ export function Composer({
         {showCodeNudge ? (
           <div className="mx-[1.05rem] mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
             <span>
-              Pasted code? Wrap in triple backticks for better formatting.
+              {tr("Pasted code? Wrap in triple backticks for better formatting.")}
             </span>
             <button
               type="button"
@@ -763,11 +764,11 @@ export function Composer({
                 setShowCodeNudge(false);
               }}
             >
-              Format as code
+              {tr("Format as code")}
             </button>
             <button
               type="button"
-              aria-label="Dismiss code-format suggestion"
+              aria-label={tr("Dismiss code-format suggestion")}
               className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
               onClick={() => setShowCodeNudge(false)}
             >
@@ -812,7 +813,7 @@ export function Composer({
             className="mx-[1.05rem] mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
           >
             <span>
-              Spreadsheets analyze better on{" "}
+              {tr("Spreadsheets analyze better on")}{" "}
               <span className="font-medium text-[var(--color-text-primary)]">
                 {currentAdvancedModelLabel()}
               </span>
@@ -829,11 +830,11 @@ export function Composer({
                   setSpreadsheetNudgeDismissed(true);
                 }}
               >
-                Switch
+                {tr("Switch")}
               </button>
               <button
                 type="button"
-                aria-label="Dismiss model suggestion"
+                aria-label={tr("Dismiss model suggestion")}
                 className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
                 onClick={() => setSpreadsheetNudgeDismissed(true)}
               >
@@ -897,7 +898,7 @@ export function Composer({
                 title={
                   modelError
                     ? modelError.message
-                    : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (fallback)`
+                    : tr("OpenRouter model slug — e.g. {0} (recommended) or {1} (fallback)", [currentDefaultModel(), currentAdvancedModel()])
                 }
                 className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
                   modelError
@@ -964,8 +965,8 @@ export function Composer({
                     spellCheck={false}
                     autoCapitalize="off"
                     autoCorrect="off"
-                    placeholder="Search models…"
-                    aria-label="Model"
+                    placeholder={tr("Search models…")}
+                    aria-label={tr("Model")}
                     role="combobox"
                     aria-expanded="true"
                     aria-controls="composer-model-listbox"
@@ -1022,17 +1023,17 @@ export function Composer({
                   <div
                     id="composer-model-listbox"
                     role="listbox"
-                    aria-label="Model options"
+                    aria-label={tr("Model options")}
                     className="grid max-h-72 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto"
                   >
                     {isLoadingRankedModels ||
                     (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
                       <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
-                        Loading...
+                        {tr("Loading...")}
                       </div>
                     ) : filteredRankedModels.length === 0 ? (
                       <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
-                        No matches
+                        {tr("No matches")}
                       </div>
                     ) : (
                       filteredRankedModels.map((model, i) => {
@@ -1059,7 +1060,7 @@ export function Composer({
                           // badges — green is the only differentiator.
                           pill = (
                             <StatusChip tone="success" className="shrink-0 tabular-nums">
-                              recommended
+                              {tr("recommended")}
                             </StatusChip>
                           );
                         } else if (model.pinTag) {
@@ -1071,7 +1072,7 @@ export function Composer({
                         } else if (model.workspace) {
                           pill = (
                             <StatusChip tone="accent" className="shrink-0 tabular-nums">
-                              workspace
+                              {tr("workspace")}
                             </StatusChip>
                           );
                         } else if (tier === "tested") {
@@ -1097,7 +1098,7 @@ export function Composer({
                             aria-selected={isSelected}
                             title={
                               !model.slug
-                                ? "Use the server-configured default model"
+                                ? tr("Use the server-configured default model")
                                 : model.relabelled
                                   ? model.name
                                   : `${model.name} (${model.slug})`
@@ -1148,7 +1149,7 @@ export function Composer({
             />
             <button
               type="button"
-              aria-label="Attach files"
+              aria-label={tr("Attach files")}
               data-tip-top="Attach files"
               className={TOOL_BTN}
               disabled={isStreaming || isUploadingAttachments || shareBusy}
@@ -1177,7 +1178,7 @@ export function Composer({
                 <button
                   ref={mcpButtonRef}
                   type="button"
-                  aria-label="Tools"
+                  aria-label={tr("Tools")}
                   aria-haspopup="true"
                   aria-expanded={mcpPickerOpen}
                   disabled={isStreaming || shareBusy}
@@ -1317,21 +1318,21 @@ export function Composer({
               // A public link can sit beside team or multiplayer sharing; it
               // is never hidden behind them (anyone with the URL can read).
               const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
-              const linkSuffix = alsoLink ? " and by public link" : "";
+              const linkSuffix = alsoLink ? tr(" and by public link") : "";
               const shareAriaLabel = isMultiplayer
-                ? `Multiplayer${linkSuffix} — open sharing`
+                ? tr("Multiplayer{0} — open sharing", [linkSuffix])
                 : isTeamShared
-                  ? `Shared with your team${linkSuffix} — open sharing`
+                  ? tr("Shared with your team{0} — open sharing", [linkSuffix])
                   : isLinkShared
-                    ? "Public link — open sharing"
-                    : "Share this chat";
+                    ? tr("Public link — open sharing")
+                    : tr("Share this chat");
               const shareTipText = isMultiplayer
-                ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
+                ? tr("Multiplayer chat is on{0} — click to manage participants or sharing", [alsoLink ? tr(", plus a public link") : ""])
                 : isTeamShared
-                  ? `Shared with your team${linkSuffix} — click to manage sharing`
+                  ? tr("Shared with your team{0} — click to manage sharing", [linkSuffix])
                   : isLinkShared
-                    ? "Public link active — click to manage sharing"
-                    : "Share this chat or start multiplayer";
+                    ? tr("Public link active — click to manage sharing")
+                    : tr("Share this chat or start multiplayer");
               const shareDisabled =
                 shareBusy ||
                 isStreaming ||
@@ -1414,7 +1415,7 @@ export function Composer({
                       ref={moreButtonRef}
                       type="button"
                       data-testid="composer-more-button"
-                      aria-label="More options"
+                      aria-label={tr("More options")}
                       aria-haspopup="true"
                       aria-expanded={moreMenuOpen}
                       disabled={shareBusy}
@@ -1442,20 +1443,20 @@ export function Composer({
                         aria-live="polite"
                         className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[var(--color-surface-3)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] shadow-[var(--shadow-lg)] motion-safe:animate-[message-in_var(--motion-fast)_ease_both]"
                       >
-                        Chat is full. Summarize to continue.
+                        {tr("Chat is full. Summarize to continue.")}
                       </div>
                     ) : null}
                     {moreMenuOpen && !shareBusy ? (
                       <div
                         data-testid="composer-more-popover"
                         role="menu"
-                        aria-label="More composer options"
+                        aria-label={tr("More composer options")}
                         className={`${COMPOSER_POP_WIDE} max-h-[min(75vh,30rem)] overflow-y-auto sm:w-[20.5rem]`}
                       >
                         <button
                           type="button"
                           role="menuitem"
-                          aria-label="Open prompt library"
+                          aria-label={tr("Open prompt library")}
                           className={POP_ROW}
                           onClick={() => {
                             setMoreMenuOpen(false);
@@ -1468,9 +1469,9 @@ export function Composer({
                               <Icon name="book" className="size-3.5" />
                             </span>
                             <span className="grid min-w-0">
-                              <span className={POP_TITLE}>Prompt library</span>
+                              <span className={POP_TITLE}>{tr("Prompt library")}</span>
                               <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                Browse and insert reusable prompts
+                                {tr("Browse and insert reusable prompts")}
                               </span>
                             </span>
                           </span>
@@ -1483,13 +1484,13 @@ export function Composer({
                           disabled={personaLocked}
                           title={
                             personaLocked
-                              ? "Personas can only be changed in a new chat"
+                              ? tr("Personas can only be changed in a new chat")
                               : undefined
                           }
                           aria-label={
                             personaLocked
-                              ? `Persona — ${currentPersonaLabel} (personas can only be changed in a new chat)`
-                              : `Persona — ${currentPersonaLabel}`
+                              ? tr("Persona — {0} (personas can only be changed in a new chat)", [currentPersonaLabel])
+                              : tr("Persona — {0}", [currentPersonaLabel])
                           }
                           className={`${POP_ROW} disabled:cursor-not-allowed disabled:opacity-45`}
                           onClick={() => {
@@ -1503,11 +1504,11 @@ export function Composer({
                               <Icon name="persona" className="size-3.5" />
                             </span>
                             <span className="grid min-w-0">
-                              <span className={POP_TITLE}>Persona</span>
+                              <span className={POP_TITLE}>{tr("Persona")}</span>
                               <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                 {personaLocked
-                                  ? "Personas can only be changed in a new chat"
-                                  : "Voice and instructions for this chat"}
+                                  ? tr("Personas can only be changed in a new chat")
+                                  : tr("Voice and instructions for this chat")}
                               </span>
                             </span>
                           </span>
@@ -1524,7 +1525,7 @@ export function Composer({
                             type="button"
                             role="menuitem"
                             data-testid="composer-memories-button"
-                            aria-label="Manage memories"
+                            aria-label={tr("Manage memories")}
                             className={POP_ROW}
                             onClick={() => {
                               setMoreMenuOpen(false);
@@ -1537,9 +1538,9 @@ export function Composer({
                                 <Icon name="brain" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Memories</span>
+                                <span className={POP_TITLE}>{tr("Memories")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  Saved facts and team learnings
+                                  {tr("Saved facts and team learnings")}
                                 </span>
                               </span>
                             </span>
@@ -1578,15 +1579,15 @@ export function Composer({
                                 )}
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Share this chat</span>
+                                <span className={POP_TITLE}>{tr("Share this chat")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                   {isMultiplayer
-                                    ? `Multiplayer active${alsoLink ? " · public link on" : ""}`
+                                    ? tr("Multiplayer active{0}", [alsoLink ? tr(" · public link on") : ""])
                                     : isTeamShared
-                                      ? `Shared with your team${alsoLink ? " · public link on" : ""}`
+                                      ? tr("Shared with your team{0}", [alsoLink ? tr(" · public link on") : ""])
                                       : isLinkShared
-                                        ? "Public link active — anyone with the link can read"
-                                        : "Share with your team, by link, or start multiplayer"}
+                                        ? tr("Public link active — anyone with the link can read")
+                                        : tr("Share with your team, by link, or start multiplayer")}
                                 </span>
                               </span>
                             </span>
@@ -1598,14 +1599,14 @@ export function Composer({
                               }`}
                             >
                               {isMultiplayer ? (
-                                "Multiplayer"
+                                tr("Multiplayer")
                               ) : isTeamShared ? (
-                                "Shared"
+                                tr("Shared")
                               ) : isLinkShared ? (
-                                "Link on"
+                                tr("Link on")
                               ) : (
                                 <>
-                                  <span>Only you</span>
+                                  <span>{tr("Only you")}</span>
                                   <Icon name="chevron-right" className="size-3" />
                                 </>
                               )}
@@ -1618,7 +1619,7 @@ export function Composer({
                             type="button"
                             role="menuitem"
                             data-testid="chat-patrol-button"
-                            aria-label="Patrol & recurring schedule"
+                            aria-label={tr("Patrol & recurring schedule")}
                             className={POP_ROW}
                             onClick={() => {
                               setMoreMenuOpen(false);
@@ -1631,16 +1632,16 @@ export function Composer({
                                 <Icon name="clock" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Patrol & schedule</span>
+                                <span className={POP_TITLE}>{tr("Patrol & schedule")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                   {activePatrolCount > 0
-                                    ? `${activePatrolCount} recurring schedule active`
-                                    : "Run this chat on a recurring schedule"}
+                                    ? tr("{0} recurring schedule active", [activePatrolCount])
+                                    : tr("Run this chat on a recurring schedule")}
                                 </span>
                               </span>
                             </span>
                             <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                              {activePatrolCount > 0 ? `${activePatrolCount} active` : "Set up"}
+                              {activePatrolCount > 0 ? tr("{0} active", [activePatrolCount]) : tr("Set up")}
                               <Icon name="chevron-right" className="size-3.5" />
                             </span>
                           </button>
@@ -1653,8 +1654,8 @@ export function Composer({
                             aria-checked={isAutoApprove}
                             aria-label={
                               isAutoApprove
-                                ? "Auto-approve tools in this chat is on (click to turn off)"
-                                : "Auto-approve tools in this chat (click to turn on)"
+                                ? tr("Auto-approve tools in this chat is on (click to turn off)")
+                                : tr("Auto-approve tools in this chat (click to turn on)")
                             }
                             className={POP_ROW}
                             onClick={() => toggleAutoApprove()}
@@ -1670,9 +1671,9 @@ export function Composer({
                                 <Icon name="zap" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Auto-approve tools</span>
+                                <span className={POP_TITLE}>{tr("Auto-approve tools")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  Skip approval cards for routine actions
+                                  {tr("Skip approval cards for routine actions")}
                                 </span>
                               </span>
                             </span>
@@ -1683,7 +1684,7 @@ export function Composer({
                                   : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
                               }`}
                             >
-                              {isAutoApprove ? "On" : "Off"}
+                              {isAutoApprove ? tr("On") : tr("Off")}
                             </span>
                           </button>
                         ) : null}
@@ -1695,10 +1696,10 @@ export function Composer({
                             disabled={isStreaming || isSummarizing}
                             aria-label={
                               isSummarizing
-                                ? "Summarizing earlier messages…"
+                                ? tr("Summarizing earlier messages…")
                                 : usagePct !== null
-                                  ? `Summarize earlier messages (${usagePct}% full)`
-                                  : "Summarize earlier messages"
+                                  ? tr("Summarize earlier messages ({0}% full)", [usagePct])
+                                  : tr("Summarize earlier messages")
                             }
                             className={`${POP_ROW} disabled:opacity-40`}
                             onClick={() => {
@@ -1712,13 +1713,13 @@ export function Composer({
                                 <Icon name="compress" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Summarize earlier messages</span>
+                                <span className={POP_TITLE}>{tr("Summarize earlier messages")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                   {isSummarizing
-                                    ? "Summarizing…"
+                                    ? tr("Summarizing…")
                                     : usagePct !== null
-                                      ? `This chat is ${usagePct}% full`
-                                      : "Make room to keep chatting"}
+                                      ? tr("This chat is {0}% full", [usagePct])
+                                      : tr("Make room to keep chatting")}
                                 </span>
                               </span>
                             </span>
@@ -1736,8 +1737,8 @@ export function Composer({
                             data-testid="composer-details-toggle"
                             aria-label={
                               showDetails
-                                ? "Hide details (thinking, stats, tool calls)"
-                                : "Show details (thinking, stats, tool calls)"
+                                ? tr("Hide details (thinking, stats, tool calls)")
+                                : tr("Show details (thinking, stats, tool calls)")
                             }
                             className={POP_ROW}
                             onClick={() => onToggleShowDetails()}
@@ -1753,9 +1754,9 @@ export function Composer({
                                 <Icon name={showDetails ? "info" : "sparkles"} className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Show details</span>
+                                <span className={POP_TITLE}>{tr("Show details")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  Thinking, tool calls, and turn stats
+                                  {tr("Thinking, tool calls, and turn stats")}
                                 </span>
                               </span>
                             </span>
@@ -1766,7 +1767,7 @@ export function Composer({
                                   : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
                               }`}
                             >
-                              {showDetails ? "On" : "Off"}
+                              {showDetails ? tr("On") : tr("Off")}
                             </span>
                           </button>
                         ) : null}
@@ -1788,9 +1789,9 @@ export function Composer({
                                 <Icon name="grid" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Dashboard view</span>
+                                <span className={POP_TITLE}>{tr("Dashboard view")}</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  Live panels beside the chat · press D
+                                  {tr("Live panels beside the chat · press D")}
                                 </span>
                               </span>
                             </span>
@@ -1801,7 +1802,7 @@ export function Composer({
                                   : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
                               }`}
                             >
-                              {dashboardView ? "On" : "Off"}
+                              {dashboardView ? tr("On") : tr("Off")}
                             </span>
                           </button>
                         ) : null}
@@ -1812,8 +1813,8 @@ export function Composer({
                           aria-checked={sendOnEnter}
                           aria-label={
                             sendOnEnter
-                              ? "Send on Enter (click to switch to Ctrl+Enter)"
-                              : "Send on Ctrl+Enter (click to switch to Enter)"
+                              ? tr("Send on Enter (click to switch to Ctrl+Enter)")
+                              : tr("Send on Ctrl+Enter (click to switch to Enter)")
                           }
                           className={POP_ROW}
                           onClick={() => setSendOnEnter((v) => !v)}
@@ -1823,11 +1824,11 @@ export function Composer({
                               <Icon name="return-key" className="size-3.5" />
                             </span>
                             <span className="grid min-w-0">
-                              <span className={POP_TITLE}>Send on Enter</span>
+                              <span className={POP_TITLE}>{tr("Send on Enter")}</span>
                               <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
                                 {sendOnEnter
-                                  ? "Enter sends · Shift+Enter adds a line"
-                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                                  ? tr("Enter sends · Shift+Enter adds a line")
+                                  : tr("Ctrl/⌘+Enter sends · Enter adds a line")}
                               </span>
                             </span>
                           </span>
@@ -1838,7 +1839,7 @@ export function Composer({
                                 : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
                             }`}
                           >
-                            {sendOnEnter ? "On" : "Off"}
+                            {sendOnEnter ? tr("On") : tr("Off")}
                           </span>
                         </button>
                       </div>
@@ -1873,7 +1874,7 @@ export function Composer({
                         aria-haspopup="listbox"
                         aria-expanded={personaPickerOpen}
                         disabled={isStreaming || shareBusy}
-                        aria-label={`Persona — ${currentPersonaLabel}`}
+                        aria-label={tr("Persona — {0}", [currentPersonaLabel])}
                         data-tip-top={`Persona — ${currentPersonaLabel}`}
                         className={`${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
                         onClick={() => setPersonaPickerOpen((open) => !open)}
@@ -1882,7 +1883,7 @@ export function Composer({
                       </button>
                       {personaPickerOpen && !shareBusy ? (
                         <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
-                          <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
+                          <div role="listbox" aria-label={tr("Persona")} className="grid gap-[0.1rem]">
                             {(() => {
                               const pick = (p: string) => {
                                 const nextIsNonDefault =
@@ -1928,26 +1929,26 @@ export function Composer({
                                 "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.66rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]";
                               return userPersonas.length > 0 ? (
                                 <>
-                                  <div role="group" aria-label="Your personas" className="grid gap-[0.1rem]">
+                                  <div role="group" aria-label={tr("Your personas")} className="grid gap-[0.1rem]">
                                     <div aria-hidden="true" className={groupHead}>
-                                      Yours
+                                      {tr("Yours")}
                                     </div>
                                     {userPersonas.map((p) =>
                                       option(
                                         p.ref,
                                         p.display_name || p.name,
                                         [
-                                          p.kind === "twin" ? "Digital twin" : null,
-                                          p.autonomy === "act" ? "acts for you" : "suggests actions",
+                                          p.kind === "twin" ? tr("Digital twin") : null,
+                                          p.autonomy === "act" ? tr("acts for you") : tr("suggests actions"),
                                         ]
                                           .filter(Boolean)
                                           .join(" · "),
                                       ),
                                     )}
                                   </div>
-                                  <div role="group" aria-label="Workspace personas" className="grid gap-[0.1rem]">
+                                  <div role="group" aria-label={tr("Workspace personas")} className="grid gap-[0.1rem]">
                                     <div aria-hidden="true" className={groupHead}>
-                                      Workspace
+                                      {tr("Workspace")}
                                     </div>
                                     {workspaceOptions.map((p) => option(p, formatBundlePersona(p)))}
                                   </div>
@@ -1962,7 +1963,7 @@ export function Composer({
                             className="mt-[0.2rem] flex items-center gap-[0.4rem] rounded-[0.5rem] border-t border-[var(--color-border-subtle)] px-[0.6rem] py-[0.45rem] text-[0.76rem] text-[var(--color-text-secondary)] no-underline transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                           >
                             <Icon name="plus" className="size-3" />
-                            {userPersonas.length > 0 ? "Manage your personas" : "Create your own persona"}
+                            {userPersonas.length > 0 ? tr("Manage your personas") : tr("Create your own persona")}
                           </Link>
                         </div>
                       ) : null}
@@ -1982,7 +1983,7 @@ export function Composer({
                       <button
                         ref={patrolButtonRef}
                         type="button"
-                        aria-label="Patrol & recurring schedule"
+                        aria-label={tr("Patrol & recurring schedule")}
                         aria-haspopup="true"
                         aria-expanded={patrolPopoverOpen}
                         disabled={shareBusy}
@@ -2039,14 +2040,14 @@ export function Composer({
                     <button
                       type="button"
                       disabled={shareBusy}
-                      aria-label="Auto-approve tools in this chat is on (click to turn off)"
+                      aria-label={tr("Auto-approve tools in this chat is on (click to turn off)")}
                       data-tip-top="Auto-approve on for this chat"
                       aria-pressed={true}
                       className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
                       onClick={toggleAutoApprove}
                     >
                       <Icon name="zap" className="size-3.5" />
-                      <span className="sr-only">Auto-approve on</span>
+                      <span className="sr-only">{tr("Auto-approve on")}</span>
                     </button>
                   ) : null}
 
@@ -2099,7 +2100,7 @@ export function Composer({
           <div className="flex shrink-0 items-center gap-[0.35rem]">
             {isStreaming ? (
               <button
-                aria-label="Stop generating"
+                aria-label={tr("Stop generating")}
                 data-tip-top="Stop generating"
                 className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 type="button"
@@ -2123,11 +2124,11 @@ export function Composer({
                 }}
               >
                 <Icon name="stop" className="size-[1.125rem]" />
-                <span className="sr-only">Stop</span>
+                <span className="sr-only">{tr("Stop")}</span>
               </button>
             ) : null}
             <button
-              aria-label="Send message"
+              aria-label={tr("Send message")}
               className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
                 prompt.trim() &&
                 !isStreaming &&
@@ -2148,12 +2149,12 @@ export function Composer({
                 modelError
                   ? modelError.message
                   : isUploadingAttachments
-                    ? "Uploading attachments…"
+                    ? tr("Uploading attachments…")
                     : !prompt.trim() && pendingAttachments.length > 0
-                      ? "Type a message to send your attachments"
+                      ? tr("Type a message to send your attachments")
                       : isStreaming
-                        ? "Queue message (runs after the current turn)"
-                        : "Send message"
+                        ? tr("Queue message (runs after the current turn)")
+                        : tr("Send message")
               }
             >
               {isUploadingAttachments ? (
@@ -2179,24 +2180,24 @@ export function Composer({
         {sendOnEnter ? (
           <>
             <b className="font-semibold text-[var(--color-text-secondary)]">
-              Enter
+              {tr("Enter")}
             </b>{" "}
-            to send ·{" "}
+            {tr("to send ·")}{" "}
             <b className="font-semibold text-[var(--color-text-secondary)]">
-              Shift+Enter
+              {tr("Shift+Enter")}
             </b>{" "}
-            for a new line
+            {tr("for a new line")}
           </>
         ) : (
           <>
             <b className="font-semibold text-[var(--color-text-secondary)]">
-              Ctrl+Enter
+              {tr("Ctrl+Enter")}
             </b>{" "}
-            to send ·{" "}
+            {tr("to send ·")}{" "}
             <b className="font-semibold text-[var(--color-text-secondary)]">
-              Enter
+              {tr("Enter")}
             </b>{" "}
-            for a new line
+            {tr("for a new line")}
           </>
         )}
       </p>

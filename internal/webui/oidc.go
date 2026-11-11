@@ -293,17 +293,17 @@ func shouldAutoStartLogin(q url.Values, cfg *OIDCConfig) bool {
 func (g *Gateway) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	cfg := g.cfg.OIDC
 	if cfg == nil {
-		seeOther(w, g.redirectURL(r, "/login?e=oidc_unavailable"))
+		seeOther(w, g.redirectURL(r, requestLanguagePath(r, "/login?e=oidc_unavailable")))
 		return
 	}
 	doc, err := g.oidc.discover(cfg.Issuer)
 	if err != nil {
-		seeOther(w, g.redirectURL(r, "/login?e=oidc_error"))
+		seeOther(w, g.redirectURL(r, requestLanguagePath(r, "/login?e=oidc_error")))
 		return
 	}
 	authURL, err := url.Parse(doc.AuthorizationEndpoint)
 	if err != nil {
-		seeOther(w, g.redirectURL(r, "/login?e=oidc_error"))
+		seeOther(w, g.redirectURL(r, requestLanguagePath(r, "/login?e=oidc_error")))
 		return
 	}
 	state, nonce, verifier := randomURLSafe(32), randomURLSafe(32), randomURLSafe(64)
@@ -316,6 +316,9 @@ func (g *Gateway) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("nonce", nonce)
 	q.Set("code_challenge", pkceChallenge(verifier))
 	q.Set("code_challenge_method", "S256")
+	if language := requestLanguage(r); language != "" {
+		q.Set("ui_locales", language)
+	}
 	if r.URL.Query().Get("silent") == "1" {
 		q.Set("prompt", "none")
 	}
@@ -324,11 +327,12 @@ func (g *Gateway) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	setCookie(w, oidcStateCookie, state, oidcTempCookieMaxAge, secure, "")
 	setCookie(w, oidcNonceCookie, nonce, oidcTempCookieMaxAge, secure, "")
 	setCookie(w, oidcVerifierCookie, verifier, oidcTempCookieMaxAge, secure, "")
+	setCookie(w, oidcLanguageCookie, requestLanguage(r), oidcTempCookieMaxAge, secure, "")
 	seeOther(w, authURL.String())
 }
 
 func clearOIDCTempCookies(w http.ResponseWriter, secure bool) {
-	for _, c := range []string{oidcStateCookie, oidcNonceCookie, oidcVerifierCookie} {
+	for _, c := range []string{oidcStateCookie, oidcNonceCookie, oidcVerifierCookie, oidcLanguageCookie} {
 		setCookie(w, c, "", 0, secure, "")
 	}
 }
@@ -342,13 +346,13 @@ func clearOIDCTempCookies(w http.ResponseWriter, secure bool) {
 func (g *Gateway) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	cfg := g.cfg.OIDC
 	if cfg == nil {
-		seeOther(w, g.redirectURL(r, "/login?e=oidc_unavailable"))
+		seeOther(w, g.redirectURL(r, oidcLanguagePath(r, "/login?e=oidc_unavailable")))
 		return
 	}
 	secure := g.secureRequest(r)
 	fail := func(code string) {
 		clearOIDCTempCookies(w, secure)
-		seeOther(w, g.redirectURL(r, "/login?e="+code))
+		seeOther(w, g.redirectURL(r, oidcLanguagePath(r, "/login?e="+code)))
 	}
 	q := r.URL.Query()
 	switch idpErr := q.Get("error"); {
@@ -356,7 +360,7 @@ func (g *Gateway) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// A silent attempt found no usable central session: show the login
 		// page with both options and no banner, and do not auto-start again.
 		clearOIDCTempCookies(w, secure)
-		seeOther(w, g.redirectURL(r, "/login?"+silentSSOResult))
+		seeOther(w, g.redirectURL(r, oidcLanguagePath(r, "/login?"+silentSSOResult)))
 		return
 	case idpErr != "":
 		fail("oidc_denied")
@@ -404,7 +408,7 @@ func (g *Gateway) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	setCookie(w, websession.CookieName, tok, websession.AbsoluteSeconds, secure, "")
 	clearOIDCTempCookies(w, secure)
-	seeOther(w, g.redirectURL(r, "/"))
+	seeOther(w, g.redirectURL(r, oidcLanguagePath(r, "/")))
 }
 
 // exchangeCode POSTs the authorization code to the token endpoint. The client

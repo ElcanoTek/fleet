@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
 import { Link } from "@/app/lib/Link";
 import { GUIDES } from "./guideContent";
 import { GuideNav } from "./ui/GuideNav";
@@ -9,7 +11,7 @@ import { GuideNav } from "./ui/GuideNav";
 
 // The loop both guides open with, drawn once here: a conversation becomes a
 // saved prompt, the prompt becomes a scheduled task, the task delivers itself.
-const LOOP = ["conversation", "saved prompt", "scheduled task", "your inbox"];
+const LOOP = [tr("conversation"), tr("saved prompt"), tr("scheduled task"), tr("your inbox")];
 
 export default function HelpIndex() {
   return (
@@ -18,18 +20,16 @@ export default function HelpIndex() {
       <div className="w-full min-w-0 max-w-[46rem] flex-1 motion-safe:animate-set-fade">
         <header className="mb-7">
           <h1 className="font-heading text-[1.6rem] font-bold leading-tight text-[var(--color-text-primary)]">
-            Guides
-          </h1>
+            {tr("Guides")}</h1>
           <p className="mt-2 text-[0.92rem] leading-[1.6] text-[var(--color-text-secondary)]">
-            How this platform works, written for the people using it. Two guides,
-            one for each surface.
+            {tr("How this platform works, written for the people using it. Two guides, one for each surface.")}
           </p>
         </header>
 
         <div
           className="mb-8 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3"
           role="img"
-          aria-label="The loop: a conversation becomes a saved prompt, which becomes a scheduled task, which delivers to your inbox."
+          aria-label={tr("The loop: a conversation becomes a saved prompt, which becomes a scheduled task, which delivers to your inbox.")}
         >
           {LOOP.map((step, i) => (
             <span key={step} className="flex items-center gap-2">
@@ -77,17 +77,12 @@ export default function HelpIndex() {
             be a claim this page cannot check. */}
         <p className="mt-8 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-5 py-4 text-[0.85rem] leading-[1.6] text-[var(--color-text-secondary)]">
           <strong className="font-semibold text-[var(--color-text-primary)]">
-            You can also just ask.
+            {tr("You can also just ask.")}
           </strong>{" "}
-          These guides ship to the assistant as well, so on most deployments
-          &ldquo;how do I make this run every Monday?&rdquo; is a fair question to
-          put to it in{" "}
-          <Link href="/chat" className="underline underline-offset-2">
-            Chat
-          </Link>
-          : it will tell you where the control is, and often offer to do it. If it
-          says it doesn&rsquo;t know, the answer is on these pages — that part is
-          always here.
+          {rich(
+            "These guides ship to the assistant as well, so on most deployments “how do I make this run every Monday?” is a fair question to put to it in {0}: it will tell you where the control is, and often offer to do it. If it says it doesn’t know, the answer is on these pages — that part is always here.",
+            <Link href="/chat" className="underline underline-offset-2">{tr("Chat")}</Link>,
+          )}
         </p>
       </div>
     </>

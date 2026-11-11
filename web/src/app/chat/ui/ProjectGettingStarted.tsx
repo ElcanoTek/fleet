@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { Icon } from "./Icon";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
@@ -60,33 +62,33 @@ export type GettingStartedInput = {
   busy?: { shareProject?: boolean; shareReadyChat?: boolean };
 };
 
-const INSTRUCTIONS_SUB = "Optional. Every chat here follows them.";
+const INSTRUCTIONS_SUB = tr("Optional. Every chat here follows them.");
 
 export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel {
   const addInstructions: GettingStartedStep = {
-    label: "Add instructions",
+    label: tr("Add instructions"),
     done: i.hasInstructions,
     sub: i.hasInstructions ? undefined : INSTRUCTIONS_SUB,
     action: i.hasInstructions
       ? undefined
-      : { label: "Add", tone: "secondary", kind: "add-instructions" },
+      : { label: tr("Add"), tone: "secondary", kind: "add-instructions" },
   };
 
   // B25: no team, so there is nobody to share with — no share step at all.
   if (!i.myTeam && !i.projectTeam) {
     return {
       variant: "no-team",
-      title: `Get started in ${i.projectName}`,
-      lead: "Sharing needs a team. Admins: add yourself in Settings → Admin → Users, or create a team in Settings → Team. Everyone else: ask an admin.",
+      title: tr("Get started in {0}", [i.projectName]),
+      lead: tr("Sharing needs a team. Admins: add yourself in Settings → Admin → Users, or create a team in Settings → Team. Everyone else: ask an admin."),
       steps: [
         addInstructions,
         {
-          label: "Start a chat",
+          label: tr("Start a chat"),
           done: i.myChatCount > 0,
           action:
             i.myChatCount > 0
               ? undefined
-              : { label: "New chat", tone: "primary", kind: "new-chat" },
+              : { label: tr("New chat"), tone: "primary", kind: "new-chat" },
         },
       ],
       canKeepPersonal: false,
@@ -94,27 +96,27 @@ export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel
   }
 
   const team = i.projectTeam || i.myTeam;
-  const lead = `Chats start as Only you. Share the ones ${team} should read and build on.`;
+  const lead = tr("Chats start as Only you. Share the ones {0} should read and build on.", [team]);
 
   // B12: the owner's personal project — share the project first.
   if (!i.projectTeam) {
     return {
       variant: "owner-personal",
-      title: `Work on this with ${team}`,
-      lead: "Share the project first. Each chat stays Only you until you share it.",
+      title: tr("Work on this with {0}", [team]),
+      lead: tr("Share the project first. Each chat stays Only you until you share it."),
       steps: [
         {
-          label: `Share ${i.projectName} with ${team}`,
-          sub: `${team} sees the instructions and Team learnings. Chats stay Only you.`,
+          label: tr("Share {0} with {1}", [i.projectName, team]),
+          sub: tr("{0} sees the instructions and Team learnings. Chats stay Only you.", [team]),
           action: {
-            label: "Share project",
+            label: tr("Share project"),
             tone: "primary",
             kind: "share-project",
             busy: i.busy?.shareProject,
           },
         },
         addInstructions,
-        { label: `Share a chat with ${team}`, sub: "Available after step 1" },
+        { label: tr("Share a chat with {0}", [team]), sub: tr("Available after step 1") },
       ],
       canKeepPersonal: true,
     };
@@ -125,10 +127,10 @@ export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel
     let share: GettingStartedStep;
     if (i.readyChat) {
       share = {
-        label: `Share a chat with ${team}`,
-        sub: `“${i.readyChat.title}” is ready to share.`,
+        label: tr("Share a chat with {0}", [team]),
+        sub: tr("“{0}” is ready to share.", [i.readyChat.title]),
         action: {
-          label: "Share it",
+          label: tr("Share it"),
           tone: "primary",
           kind: "share-ready-chat",
           busy: i.busy?.shareReadyChat,
@@ -136,21 +138,21 @@ export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel
       };
     } else if (i.myPrivateChatCount > 0) {
       share = {
-        label: `Share a chat with ${team}`,
-        sub: `Switch any chat below from Only you to ${team}.`,
+        label: tr("Share a chat with {0}", [team]),
+        sub: tr("Switch any chat below from Only you to {0}.", [team]),
       };
     } else {
       share = {
-        label: `Share a chat with ${team}`,
-        sub: `Start one, then switch it to ${team}.`,
-        action: { label: "New chat", tone: "primary", kind: "new-chat" },
+        label: tr("Share a chat with {0}", [team]),
+        sub: tr("Start one, then switch it to {0}.", [team]),
+        action: { label: tr("New chat"), tone: "primary", kind: "new-chat" },
       };
     }
     return {
       variant: "owner-shared",
-      title: `Get ${team} working here`,
+      title: tr("Get {0} working here", [team]),
       lead,
-      steps: [{ label: `Project shared with ${team}`, done: true }, addInstructions, share],
+      steps: [{ label: tr("Project shared with {0}", [team]), done: true }, addInstructions, share],
       canKeepPersonal: false,
     };
   }
@@ -159,34 +161,34 @@ export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel
   const started = i.myChatCount > 0;
   return {
     variant: "member-shared",
-    title: `Get started in ${i.projectName}`,
+    title: tr("Get started in {0}", [i.projectName]),
     lead,
     steps: [
       {
-        label: "Start a chat here, or branch one",
+        label: tr("Start a chat here, or branch one"),
         done: started,
-        sub: started ? undefined : "You can also move a chat in from the sidebar.",
+        sub: started ? undefined : tr("You can also move a chat in from the sidebar."),
         action: started
           ? undefined
-          : { label: "New chat", tone: "primary", kind: "new-chat" },
+          : { label: tr("New chat"), tone: "primary", kind: "new-chat" },
       },
       i.readyChat
         ? {
-            label: `Share it with ${team}`,
-            sub: `“${i.readyChat.title}” is ready to share.`,
+            label: tr("Share it with {0}", [team]),
+            sub: tr("“{0}” is ready to share.", [i.readyChat.title]),
             action: {
-              label: "Share it",
+              label: tr("Share it"),
               tone: "primary",
               kind: "share-ready-chat",
               busy: i.busy?.shareReadyChat,
             },
           }
         : {
-            label: `Share it with ${team}`,
+            label: tr("Share it with {0}", [team]),
             sub:
               i.myPrivateChatCount > 0
-                ? `Switch any chat below from Only you to ${team}.`
-                : "Available after step 1",
+                ? tr("Switch any chat below from Only you to {0}.", [team])
+                : tr("Available after step 1"),
           },
     ],
     canKeepPersonal: false,
@@ -213,20 +215,20 @@ export function ProjectGettingStarted({
   const done = model.steps.filter((s) => s.done).length;
   return (
     <section
-      aria-label="Getting started"
+      aria-label={tr("Getting started")}
       data-testid="getting-started"
       data-variant={model.variant}
       className="mb-4 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-4"
     >
       <div className="mb-1 flex items-center gap-2">
         <span className="font-[family-name:var(--font-code)] text-[0.68rem] font-semibold tracking-[0.08em] text-[var(--color-accent)]">
-          GET STARTED
+          {tr("GET STARTED")}
         </span>
         <span className="font-[family-name:var(--font-code)] text-[0.68rem] text-[var(--color-text-muted)]">
-          {done} of {model.steps.length}
-        </span>
+        {rich("{0} of {1}", done, model.steps.length)}
+      </span>
         <span className="flex-1" />
-        <CloseButton label="Dismiss getting started" onClick={onDismiss} />
+        <CloseButton label={tr("Dismiss getting started")} onClick={onDismiss} />
       </div>
       <h2 className="m-0 text-[1rem] font-semibold text-[var(--color-text-primary)]">
         {model.title}
@@ -244,7 +246,7 @@ export function ProjectGettingStarted({
             {s.done ? (
               <span
                 role="img"
-                aria-label="Done"
+                aria-label={tr("Done")}
                 className="grid size-5 shrink-0 place-items-center rounded-full bg-[color-mix(in_srgb,var(--color-success-strong)_18%,transparent)] text-[var(--color-success-soft)]"
               >
                 <Icon name="check" className="size-3" />
@@ -295,7 +297,7 @@ export function ProjectGettingStarted({
             className="rounded-[var(--radius-md)] px-2 py-1 text-[0.75rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={onKeepPersonal}
           >
-            Keep personal
+            {tr("Keep personal")}
           </button>
         </div>
       ) : null}

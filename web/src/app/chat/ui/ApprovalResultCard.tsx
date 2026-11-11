@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // The completed card read from the call's own result
 // (docs/APPROVAL-RESULT-CARDS.md). A bundle that lists a critical tool in
 // agent_policy.critical_tool_result_cards returns a `result_card` next to
@@ -50,13 +51,13 @@ const OUTCOME_TONE: Record<ApprovalResultOutcome, Tone> = {
 
 // The words fleet puts on a record's status chip, and the lead-in of its note.
 export const RESULT_STATUS_LABEL: Record<ApprovalResultItemStatus, string> = {
-  done: "Done",
-  failed: "Not applied",
-  mismatch: "Check didn't match",
-  needs_check: "Needs a check",
-  unclear: "Outcome unclear",
-  skipped: "Already done",
-  not_run: "Not run",
+  done: tr("Done"),
+  failed: tr("Not applied"),
+  mismatch: tr("Check didn't match"),
+  needs_check: tr("Needs a check"),
+  unclear: tr("Outcome unclear"),
+  skipped: tr("Already done"),
+  not_run: tr("Not run"),
 };
 
 // The icon each status shows (the bundled sprite, web/public/icons); a
@@ -123,11 +124,11 @@ export function retryFailedPrompt(approval: Approval, keys: string[]): string {
     // A call the person stopped part way (docs/APPROVAL-STOP.md): the keys
     // are the items it never reached.
     const list = keys.map((k) => JSON.stringify(k)).join(", ");
-    return `Run the remaining ${plural(n, "item")} of the approved ${approval.tool} call (approval_id=${approval.id}) that were not run because I stopped it: ${list}. Run only ${n === 1 ? "this one" : "these"}, and stage the run for my approval.`;
+    return tr("Run the remaining {0} of the approved {1} call (approval_id={2}) that were not run because I stopped it: {3}. Run only {4}, and stage the run for my approval.", [plural(n, "item"), approval.tool, approval.id, list, n === 1 ? tr("this one") : tr("these")]);
   }
   const what = plural(n, "failed item");
   const list = keys.map((k) => JSON.stringify(k)).join(", ");
-  return `Retry the ${what} from the approved ${approval.tool} call (approval_id=${approval.id}): ${list}. Retry only ${n === 1 ? "this one" : "these"}, and stage the retry for my approval.`;
+  return tr("Retry the {0} from the approved {1} call (approval_id={2}): {3}. Retry only {4}, and stage the retry for my approval.", [what, approval.tool, approval.id, list, n === 1 ? tr("this one") : tr("these")]);
 }
 
 // remainingAfterStop reports whether a retry of `keys` is "the rest of a
@@ -172,9 +173,9 @@ function ResultStatusChip({ status }: { status: ApprovalResultItemStatus }) {
 // on every bundle. needs_check is a record that WAS applied but needs a
 // person's look (a follow-up step of it failed); the note says what.
 const NOTE_LEAD: Partial<Record<ApprovalResultItemStatus, string>> = {
-  failed: "Not applied:",
-  mismatch: "Applied, but the read-back didn't match:",
-  needs_check: "Applied, but needs a check:",
+  failed: tr("Not applied:"),
+  mismatch: tr("Applied, but the read-back didn't match:"),
+  needs_check: tr("Applied, but needs a check:"),
 };
 
 // Note renders a record's note, led by fleet's words for a failure so the
@@ -205,7 +206,7 @@ function Ids({ item }: { item: ApprovalResultCardItem }) {
       ) : null}
       {item.internalId ? (
         <span data-testid="approval-result-internal-id" className="break-all text-[0.72rem] text-[var(--color-card-text-muted)]">
-          internal <span className="font-mono">{item.internalId}</span>
+          {tr("internal")}{" "}<span className="font-mono">{item.internalId}</span>
         </span>
       ) : null}
       {item.link ? <RecordLink link={item.link} linkLabel={item.linkLabel} /> : null}
@@ -280,9 +281,9 @@ function ResultRecords({ items }: { items: ApprovalResultCardItem[] }) {
               <Icon name="check" className="size-3.5" />
             </span>
             <span className="font-semibold text-[var(--color-text-primary)]">
-              {done.length} {done.length === 1 ? "record" : "records"}
+              {tr(done.length === 1 ? "{0} record" : "{0} records", [done.length])}
             </span>{" "}
-            <span className="text-[var(--color-text-secondary)]">done</span>
+            <span className="text-[var(--color-text-secondary)]">{tr("done")}</span>
           </span>
           <button
             type="button"
@@ -290,7 +291,7 @@ function ResultRecords({ items }: { items: ApprovalResultCardItem[] }) {
             className="shrink-0 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
             onClick={() => setShowDone(true)}
           >
-            View all
+            {tr("View all")}
           </button>
         </div>
       ) : null}
@@ -343,7 +344,7 @@ export function ApprovalResultCardView({
   // so "Retry failed" would ask for a call that runs straight away (the
   // server leaves the retry out of a record's card too).
   const retryKeys = recorded ? [] : (result.retryKeys ?? []);
-  const title = recorded ? `${result.title} · ran without asking` : result.title;
+  const title = recorded ? tr("{0} · ran without asking", [result.title]) : result.title;
   return (
     <div
       data-approval-id={approval.id}
@@ -370,7 +371,7 @@ export function ApprovalResultCardView({
             </div>
             {approvedTitle ? (
               <div data-testid="approval-result-approved" className="min-w-0 break-words text-[0.75rem] text-[var(--color-card-text-muted)]">
-                {recorded ? approvedTitle : `Approved: ${approvedTitle}`}
+                {recorded ? approvedTitle : tr("Approved: {0}", [approvedTitle])}
               </div>
             ) : null}
             {approvedNote && !recorded ? (
@@ -411,12 +412,12 @@ export function ApprovalResultCardView({
               }}
             >
               {retry === "sent"
-                ? "Retry asked"
+                ? tr("Retry asked")
                 : retry === "sending"
-                  ? "Asking…"
+                  ? tr("Asking…")
                   : remainingAfterStop(approval, retryKeys)
-                    ? `Run the remaining ${retryKeys.length}`
-                    : `Retry failed (${retryKeys.length})`}
+                    ? tr("Run the remaining {0}", [retryKeys.length])
+                    : tr("Retry failed ({0})", [retryKeys.length])}
             </button>
           ) : null}
           <DetailsToggle open={detailsOpen} onToggle={() => setDetailsOpen((v) => !v)} controls={detailsId} />

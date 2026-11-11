@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useRef } from "react";
 import { useDialogA11y } from "./useDialogA11y";
 
@@ -46,10 +47,10 @@ export type ConfirmDialogProps = {
 
 export function ConfirmDialog({
   open,
-  title = "Confirm",
+  title = tr("Confirm"),
   message,
   confirmLabel = "OK",
-  cancelLabel = "Cancel",
+  cancelLabel = tr("Cancel"),
   onConfirm,
   onCancel,
   busy = false,

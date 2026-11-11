@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { modelCostFor, MAX_COST_TIER, type ModelPrices } from "@/app/shared/lib/modelCost";
 
 // ModelCostIndicator — the restaurant-style "$ … $$$$" price glyphs shown next
@@ -27,11 +28,11 @@ export function ModelCostIndicator({
     return (
       <span
         className={`model-cost model-cost-free${className ? ` ${className}` : ""}`}
-        title="Free"
-        aria-label="Free"
+        title={tr("Free")}
+        aria-label={tr("Free")}
         data-cost-tier="free"
       >
-        Free
+        {tr("Free")}
       </span>
     );
   }

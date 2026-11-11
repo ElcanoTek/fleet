@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // SessionApprovalPolicy is a per-conversation pre-decision a user set during the
@@ -143,10 +145,15 @@ func (r *SessionApprovalRegistry) MatchForUser(convID, userEmail, toolName, rawI
 	}
 	var args map[string]any
 	_ = json.Unmarshal([]byte(rawInput), &args)
+	if args != nil && browserActionNormalizer(toolName) != nil {
+		if action, ok := browserCallAction(rawInput); ok {
+			args["action"] = action
+		}
+	}
 	// Deny wins: scan denies first, then approves.
 	for _, want := range [...]string{"deny", "approve"} {
 		for _, p := range policies {
-			if p.Mode == want && policyMatches(p, args) {
+			if p.Mode == want && policyMatches(p, args, toolName) {
 				return p, true
 			}
 		}
@@ -155,7 +162,11 @@ func (r *SessionApprovalRegistry) MatchForUser(convID, userEmail, toolName, rawI
 }
 
 // policyMatches reports whether a policy applies to the given parsed args.
-func policyMatches(p SessionApprovalPolicy, args map[string]any) bool {
+// For the browser tools, whose actions have aliases ("live" runs
+// "start_session"), an action pattern also matches the call's canonical
+// action, and an alias in the pattern stands for its canonical action, so a
+// session deny of start_session catches every spelling of it.
+func policyMatches(p SessionApprovalPolicy, args map[string]any, toolName string) bool {
 	if p.Pattern == "" {
 		return true
 	}
@@ -172,6 +183,53 @@ func policyMatches(p SessionApprovalPolicy, args map[string]any) bool {
 	if !ok {
 		return false
 	}
-	matched, err := filepath.Match(glob, s)
+	if matched, err := filepath.Match(glob, s); err == nil && matched {
+		return true
+	}
+	if argName != "action" {
+		return false
+	}
+	normalize := browserActionNormalizer(toolName)
+	if normalize == nil {
+		return false
+	}
+	canonical := normalize(s)
+	if canonical == "" {
+		return false
+	}
+	if c := normalize(glob); c != "" {
+		glob = c
+	}
+	matched, err := filepath.Match(glob, canonical)
 	return err == nil && matched
+}
+
+// browserCallAction is a browser tool call's action as the tool reads it:
+// decoded into a struct field, so any key case matches and the last
+// duplicate wins, and a missing or null action is "" (playwright_browser's
+// default, run). ok is false when the input does not decode, and the tool
+// refuses the call too.
+func browserCallAction(rawInput string) (string, bool) {
+	var p struct {
+		Action *string `json:"action"`
+	}
+	if json.Unmarshal([]byte(rawInput), &p) != nil {
+		return "", false
+	}
+	if p.Action == nil {
+		return "", true
+	}
+	return *p.Action, true
+}
+
+// browserActionNormalizer returns the action normalizer of a browser tool,
+// or nil for any other tool.
+func browserActionNormalizer(toolName string) func(string) string {
+	switch toolName {
+	case tools.PlaywrightBrowserToolName:
+		return tools.NormalizePlaywrightBrowserAction
+	case tools.ConnectorStudioToolName:
+		return tools.NormalizeConnectorStudioAction
+	}
+	return nil
 }

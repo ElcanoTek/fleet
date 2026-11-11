@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useId, useRef, useState } from "react";
 import {
   filterModels,
@@ -128,10 +129,10 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
       {open ? (
         <div id={listboxId} className="model-picker-dropdown" role="listbox">
           {loading ? (
-            <div className="model-picker-loading">Loading workspace models…</div>
+            <div className="model-picker-loading">{tr("Loading workspace models…")}</div>
           ) : visible.length === 0 ? (
             <div className="model-picker-empty">
-              No matching models — type a custom slug to use it.
+              {tr("No matching models — type a custom slug to use it.")}
             </div>
           ) : (
             visible.map((model, index) => (
@@ -150,11 +151,11 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
                   {/* recommended > operator pin tag > workspace, the same
                       precedence as the chat picker's pill. */}
                   {model.recommended ? (
-                    <StatusChip tone="success" className="model-picker-badge">recommended</StatusChip>
+                    <StatusChip tone="success" className="model-picker-badge">{tr("recommended")}</StatusChip>
                   ) : model.pinTag ? (
                     <StatusChip tone="warning" className="model-picker-badge">{model.pinTag}</StatusChip>
                   ) : model.workspace ? (
-                    <StatusChip tone="accent" className="model-picker-badge">workspace</StatusChip>
+                    <StatusChip tone="accent" className="model-picker-badge">{tr("workspace")}</StatusChip>
                   ) : null}
                   {/* Cost tier last so the row's leading edge stays the name;
                       absent for models with no catalog pricing. */}

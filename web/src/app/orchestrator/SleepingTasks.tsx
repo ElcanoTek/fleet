@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
@@ -36,14 +38,14 @@ export function SleepingTasks({ onOpen, refreshKey }: SleepingTasksProps) {
   const total = data?.total ?? tasks.length;
   if (tasks.length === 0) return null;
   return (
-    <div className="sleeping-tasks" data-testid="sleeping-tasks" role="region" aria-label="Sleeping tasks">
+    <div className="sleeping-tasks" data-testid="sleeping-tasks" role="region" aria-label={tr("Sleeping tasks")}>
       <div className="sleeping-tasks-head">
-        <h3>Sleeping</h3>
+        <h3>{tr("Sleeping")}</h3>
         <span className="sleeping-tasks-count" data-testid="sleeping-tasks-count">{total}</span>
         {total > tasks.length ? (
           <span className="sleeping-tasks-note" data-testid="sleeping-tasks-truncated">
-            showing the first {tasks.length} — filter the table by status to see them all
-          </span>
+        {rich("showing the first {0} — filter the table by status to see them all", tasks.length)}
+      </span>
         ) : null}
       </div>
       <ul className="sleeping-tasks-list">
@@ -58,9 +60,9 @@ export function SleepingTasks({ onOpen, refreshKey }: SleepingTasksProps) {
               <span className="sleeping-task-title">{taskRunLabel(t, 60)}</span>
               <span className="sleeping-task-meta">
                 {t.wake_event_key
-                  ? `waiting for “${t.wake_event_key}”`
+                  ? tr("waiting for “{0}”", [t.wake_event_key])
                   : "timer"}
-                {t.wake_at ? ` · wakes ${formatTimeFirst(t.wake_at)}` : ""}
+                {t.wake_at ? tr(" · wakes {0}", [formatTimeFirst(t.wake_at)]) : ""}
               </span>
             </button>
           </li>

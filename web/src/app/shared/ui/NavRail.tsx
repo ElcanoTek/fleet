@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // NavRail — the shared left rail that unifies Chat and the Operations Center
 // into one experience (#169). It owns the frame both surfaces render: brand,
 // the Chat / Operations Center / Guides navigation (router links with active
@@ -151,7 +152,7 @@ export function NavRail({
   // arrives here as the proxied /api/brand/logo path. Callers pass
   // `branding.logo_url || undefined` so an unset bundle falls back here.
   brandLogoSrc = "/logos/fleet-mark.svg",
-  eyebrow = "Internal",
+  eyebrow = tr("Internal"),
   opsCount,
   sidebarOpen,
   setSidebarOpen,
@@ -224,7 +225,7 @@ export function NavRail({
     <>
       {/* Mobile backdrop — taps outside the drawer dismiss it. */}
       <button
-        aria-label="Close navigation"
+        aria-label={tr("Close navigation")}
         className={[
           "fixed inset-0 z-20 bg-[var(--color-overlay-strong)] backdrop-blur-[2px] transition sm:hidden",
           sidebarOpen ? "block" : "hidden",
@@ -237,7 +238,7 @@ export function NavRail({
           expanded overlay rail at 640–900px; click to dismiss. */}
       {overlay ? (
         <button
-          aria-label="Close navigation"
+          aria-label={tr("Close navigation")}
           type="button"
           className="fixed inset-0 z-[380] hidden bg-[var(--color-overlay-strong)] sm:block"
           onClick={() => setCollapsed(true)}
@@ -246,7 +247,7 @@ export function NavRail({
 
       <aside
         ref={asideRef}
-        aria-label="Primary navigation"
+        aria-label={tr("Primary navigation")}
         className={[
           // <sm: the off-canvas drawer (full rail content, translate toggled).
           // --sidebar-surface is a gradient, so it must land in
@@ -303,7 +304,7 @@ export function NavRail({
           </div>
           <button
             ref={collapseToggleRef}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? tr("Expand sidebar") : tr("Collapse sidebar")}
             aria-expanded={!collapsed}
             data-tip={collapsed ? "Expand" : "Collapse"}
             className={[
@@ -317,14 +318,14 @@ export function NavRail({
           </button>
           <CloseButton
             className="sm:hidden"
-            label="Close sidebar"
+            label={tr("Close sidebar")}
             onClick={() => setSidebarOpen(false)}
           />
         </div>
 
         {/* Primary navigation */}
         <nav
-          aria-label="Switch surface"
+          aria-label={tr("Switch surface")}
           className={["grid gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
         >
           {/* The three ways of working, each with a subtitle that says what
@@ -335,12 +336,12 @@ export function NavRail({
           <NavToChat
             className={navItemClass(activeView === "chat", collapsed)}
             ariaCurrent={activeView === "chat" ? "page" : undefined}
-            dataTip={collapsed ? "Chat — talk it through" : undefined}
+            dataTip={collapsed ? tr("Chat — talk it through") : undefined}
           >
             <span className={navTileClass(activeView === "chat")} aria-hidden="true">
               <Icon name="message" className="size-[1rem]" />
             </span>
-            <RailLabel title="Chat" subtitle="Talk it through" collapsed={collapsed} />
+            <RailLabel title={tr("Chat")} subtitle={tr("Talk it through")} collapsed={collapsed} />
           </NavToChat>
           {/* Patrols (docs/PATROL-LAUNCHPAD.md): patrols live in Chat; this item
               is their index (a menu of your patrol chats) and, with none yet,
@@ -348,8 +349,8 @@ export function NavRail({
           <LaunchpadButton
             className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
             tileClassName={navTileClass(false)}
-            label={<RailLabel title="Patrols" subtitle="Chats that check in on a schedule" collapsed={collapsed} />}
-            dataTip={collapsed ? "Patrols — chats that check in on a schedule" : undefined}
+            label={<RailLabel title={tr("Patrols")} subtitle={tr("Chats that check in on a schedule")} collapsed={collapsed} />}
+            dataTip={collapsed ? tr("Patrols — chats that check in on a schedule") : undefined}
             collapsed={collapsed}
             onOpen={() => setSidebarOpen(false)}
           />
@@ -359,15 +360,15 @@ export function NavRail({
             dataTip={
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
-                  ? `Background tasks · ${opsCount} running`
-                  : "Background tasks · Runs without a chat"
+                  ? tr("Background tasks · {0} running", [opsCount])
+                  : tr("Background tasks · Runs without a chat")
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
-            <RailLabel title="Background tasks" subtitle="Runs without a chat" collapsed={collapsed} />
+            <RailLabel title={tr("Background tasks")} subtitle={tr("Runs without a chat")} collapsed={collapsed} />
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
                 className={[

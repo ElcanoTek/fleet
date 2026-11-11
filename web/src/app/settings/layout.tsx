@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Settings shell (fleet-unified settings pass): every /settings/* page renders
 // inside the SAME NavRail + PageTopBar chrome as Chat and the Operations
 // Center — settings is a third surface of the one app, not a separate island.
@@ -46,7 +47,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
           silently clip everything below the fold); the <main> then owns the
           scroll, so the topbar stays put — the design's .main/.view split. */}
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <PageTopBar title="Settings" onMenu={() => setSidebarOpen(true)} />
+        <PageTopBar title={tr("Settings")} onMenu={() => setSidebarOpen(true)} />
         {/* scrollbar-gutter:stable — sections differ in height (General/Admin
             fit the viewport; Connections/Skills overflow), so on classic-
             scrollbar platforms the scrollbar would otherwise appear and

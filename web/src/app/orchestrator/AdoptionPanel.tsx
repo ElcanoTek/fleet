@@ -1,3 +1,6 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useState } from "react";
 import { orchestratorApi, type AdoptionReport, type AdoptionUser } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -24,20 +27,20 @@ import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
-const usd = new Intl.NumberFormat("en-US", {
+const usd = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const usdFine = new Intl.NumberFormat("en-US", {
+const usdFine = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
-const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
-const plain = new Intl.NumberFormat("en-US");
+const compact = new Intl.NumberFormat(getLanguage(), { notation: "compact", maximumFractionDigits: 1 });
+const plain = new Intl.NumberFormat(getLanguage());
 
 function fmtUSD(v: number): string {
   return v > 0 && v < 0.01 ? usdFine.format(v) : usd.format(v);
@@ -64,15 +67,15 @@ function DeltaChip({ cur, prev, what }: { cur: number; prev: number; what: strin
   if (prev <= 0 && cur <= 0) return null;
   if (prev <= 0) {
     return (
-      <span className="adoption-delta adoption-delta-new" title={`No ${what} in the previous period`}>
-        new
+      <span className="adoption-delta adoption-delta-new" title={tr("No {0} in the previous period", [what])}>
+        {tr("new")}
       </span>
     );
   }
   const pct = Math.round(((cur - prev) / prev) * 100);
   if (pct === 0) {
     return (
-      <span className="adoption-delta" title={`Unchanged vs the previous period`}>
+      <span className="adoption-delta" title={tr("Unchanged vs the previous period")}>
         ±0%
       </span>
     );
@@ -81,7 +84,7 @@ function DeltaChip({ cur, prev, what }: { cur: number; prev: number; what: strin
   return (
     <span
       className={`adoption-delta ${up ? "adoption-delta-up" : "adoption-delta-down"}`}
-      title={`${up ? "Up" : "Down"} ${Math.abs(pct)}% vs the previous period (${what})`}
+      title={tr("{0} {1}% vs the previous period ({2})", [up ? tr("Up") : tr("Down"), Math.abs(pct), what])}
     >
       {up ? "▲" : "▼"} {Math.abs(pct)}%
     </span>
@@ -112,25 +115,25 @@ export function AdoptionPanel() {
   return (
     <div className="section" role="region" aria-labelledby="adoptionHeading">
       <div className="section-header">
-        <h2 id="adoptionHeading">AI Adoption</h2>
+        <h2 id="adoptionHeading">{tr("AI Adoption")}</h2>
         <div className="usage-controls">
-          <label htmlFor="adoptionRange">Range</label>
+          <label htmlFor="adoptionRange">{tr("Range")}</label>
           <select
             id="adoptionRange"
-            aria-label="Adoption window in days"
+            aria-label={tr("Adoption window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
             {RANGE_OPTIONS.map((d) => (
               <option key={d} value={d}>
-                Last {d} days
+                {tr("Last")}{" "}{d} {tr("days")}
               </option>
             ))}
           </select>
           <button
             type="button"
             className="btn"
-            aria-label="Download the per-user adoption report as CSV"
+            aria-label={tr("Download the per-user adoption report as CSV")}
             data-testid="adoption-download-csv"
             onClick={() => {
               const from = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000)
@@ -140,25 +143,27 @@ export function AdoptionPanel() {
               // Fetch-then-save (downloadFile) instead of navigating: a 401/500
               // used to replace the dashboard with the server's error body.
               void downloadFile(`/api/orchestrator/admin/usage/adoption?${qs.toString()}`, `adoption-${from}.csv`).catch(
-                (err: unknown) => setDownloadError(errorMessage(err, "download failed")),
+                (err: unknown) => setDownloadError(errorMessage(err, tr("download failed"))),
               );
             }}
           >
-            Download CSV
+            {tr("Download CSV")}
           </button>
         </div>
       </div>
 
       {downloadError ? (
         <div className="table-error" role="alert" data-testid="adoption-download-error">
-          Couldn&apos;t download the CSV: {downloadError}
-        </div>
+        {rich("Couldn't download the CSV: {0}", downloadError)}
+      </div>
       ) : null}
       {error ? (
-        <div className="table-error">Failed to load adoption report: {error}</div>
+        <div className="table-error">
+        {rich("Failed to load adoption report: {0}", error)}
+      </div>
       ) : !report && loading ? (
         <div className="loading">
-          <p>Loading adoption report…</p>
+          <p>{tr("Loading adoption report…")}</p>
         </div>
       ) : !report ? null : (
         <div className={loading ? "usage-refetching" : undefined}>
@@ -167,7 +172,7 @@ export function AdoptionPanel() {
             {report.note}
           </p>
           {report.users.length === 0 ? (
-            <div className="table-empty">No recorded activity in this window.</div>
+            <div className="table-empty">{tr("No recorded activity in this window.")}</div>
           ) : (
             <>
               <AdoptionTrends report={report} />
@@ -176,10 +181,8 @@ export function AdoptionPanel() {
           )}
           <InactiveSeats report={report} />
           <p className="refresh-note">
-            {report.from.slice(0, 10)} → {report.to.slice(0, 10)} · compared with{" "}
-            {report.prev_from.slice(0, 10)} → {report.from.slice(0, 10)} · sources:{" "}
-            {report.sources.join(" + ")}
-          </p>
+        {rich("{0} → {1} · compared with {2} → {3} · sources: {4}", report.from.slice(0, 10), report.to.slice(0, 10), report.prev_from.slice(0, 10), report.from.slice(0, 10), report.sources.join(" + "))}
+      </p>
         </div>
       )}
     </div>
@@ -195,38 +198,39 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
   return (
     <div className="usage-tiles" data-testid="adoption-totals">
       <div className="usage-tile">
-        <span className="usage-tile-label">Active users</span>
+        <span className="usage-tile-label">{tr("Active users")}</span>
         <span className="usage-tile-value">
           {plain.format(t.active_users)}{" "}
           <DeltaChip cur={t.active_users} prev={t.prev_active_users} what="active users" />
         </span>
         <span className="usage-tile-sub">
           {seatsKnown
-            ? `of ${plain.format(t.registered_users)} seats · ${adoptionPct}% adoption`
-            : "seat roster unavailable"}
+            ? tr("of {0} seats · {1}% adoption", [plain.format(t.registered_users), adoptionPct])
+            : tr("seat roster unavailable")}
         </span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">New this period</span>
+        <span className="usage-tile-label">{tr("New this period")}</span>
         <span className="usage-tile-value">{plain.format(t.new_active_users)}</span>
-        <span className="usage-tile-sub">active now, not in the previous period</span>
+        <span className="usage-tile-sub">{tr("active now, not in the previous period")}</span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">Tokens</span>
+        <span className="usage-tile-label">{tr("Tokens")}</span>
         <span className="usage-tile-value">
           {compact.format(t.tokens)} <DeltaChip cur={t.tokens} prev={t.prev_tokens} what="tokens" />
         </span>
-        <span className="usage-tile-sub">{compact.format(t.cached_tokens)} cached (chat)</span>
+        <span className="usage-tile-sub">
+        {rich("{0} cached (chat)", compact.format(t.cached_tokens))}
+      </span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">Spend</span>
+        <span className="usage-tile-label">{tr("Spend")}</span>
         <span className="usage-tile-value">
           {fmtUSD(t.cost_usd)} <DeltaChip cur={t.cost_usd} prev={t.prev_cost_usd} what="spend" />
         </span>
         <span className="usage-tile-sub">
-          {compact.format(t.task_iterations)} task iterations · {compact.format(t.chat_turns)} chat
-          turns
-        </span>
+        {rich("{0} task iterations · {1} chat turns", compact.format(t.task_iterations), compact.format(t.chat_turns))}
+      </span>
       </div>
     </div>
   );
@@ -239,13 +243,13 @@ function AdoptionTrends({ report }: { report: AdoptionReport }) {
   return (
     <div className="adoption-trends">
       <TrendColumns
-        title="Tokens per day"
+        title={tr("Tokens per day")}
         days={report.days}
         values={report.daily.map((d) => d.tokens)}
         fmt={(v) => compact.format(v)}
       />
       <TrendColumns
-        title="Active users per day"
+        title={tr("Active users per day")}
         days={report.days}
         values={report.daily.map((d) => d.active_users)}
         fmt={(v) => plain.format(v)}
@@ -288,7 +292,7 @@ function TrendColumns({
       <svg
         className="adoption-trend-svg"
         role="img"
-        aria-label={`${title}, ${days.length} days, peak ${fmt(max)}`}
+        aria-label={tr("{0}, {1} days, peak {2}", [title, days.length, fmt(max)])}
         viewBox={`0 0 ${W} ${H}`}
       >
         {gridValues.map((v) => (
@@ -342,7 +346,7 @@ function Sparkline({ user, days }: { user: AdoptionUser; days: string[] }) {
     <svg
       className="adoption-spark"
       role="img"
-      aria-label={`Daily tokens for ${user.user || "(unattributed)"}: active ${user.active_days} of ${days.length} days`}
+      aria-label={tr("Daily tokens for {0}: active {1} of {2} days", [user.user || tr("(unattributed)"), user.active_days, days.length])}
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
     >
@@ -368,22 +372,22 @@ function AdoptionLeaderboard({ report }: { report: AdoptionReport }) {
   const windowDays = report.days.length;
   return (
     <>
-      <h3 className="usage-subheading">Usage by user</h3>
+      <h3 className="usage-subheading">{tr("Usage by user")}</h3>
       <div className="table-wrapper">
         <table data-testid="adoption-table">
           <thead>
             <tr>
               <th scope="col">#</th>
-              <th scope="col">User</th>
-              <th scope="col">Trend</th>
-              <th scope="col">Tokens</th>
-              <th scope="col">vs prev</th>
-              <th scope="col">Active days</th>
-              <th scope="col">Engagement</th>
-              <th scope="col">Cost</th>
-              <th scope="col">Chat turns</th>
-              <th scope="col">Task iterations</th>
-              <th scope="col">Last active</th>
+              <th scope="col">{tr("User")}</th>
+              <th scope="col">{tr("Trend")}</th>
+              <th scope="col">{tr("Tokens")}</th>
+              <th scope="col">{tr("vs prev")}</th>
+              <th scope="col">{tr("Active days")}</th>
+              <th scope="col">{tr("Engagement")}</th>
+              <th scope="col">{tr("Cost")}</th>
+              <th scope="col">{tr("Chat turns")}</th>
+              <th scope="col">{tr("Task iterations")}</th>
+              <th scope="col">{tr("Last active")}</th>
             </tr>
           </thead>
           <tbody>
@@ -392,8 +396,8 @@ function AdoptionLeaderboard({ report }: { report: AdoptionReport }) {
               return (
                 <tr key={u.user || "(unattributed)"} data-testid="adoption-row">
                   <td className="usage-num">{i + 1}</td>
-                  <td className="prompt-cell" title={u.user || "(unattributed)"}>
-                    {u.user || "(unattributed)"}
+                  <td className="prompt-cell" title={u.user || tr("(unattributed)")}>
+                    {u.user || tr("(unattributed)")}
                   </td>
                   <td>
                     <Sparkline user={u} days={report.days} />
@@ -419,8 +423,7 @@ function AdoptionLeaderboard({ report }: { report: AdoptionReport }) {
         </table>
       </div>
       <p className="usage-note">
-        Engagement buckets by share of days active: power ≥ 50%, regular ≥ 20%, light below.
-        Tokens count prompt + completion across chat and scheduled tasks.
+        {tr("Engagement buckets by share of days active: power ≥ 50%, regular ≥ 20%, light below. Tokens count prompt + completion across chat and scheduled tasks.")}
       </p>
     </>
   );
@@ -434,16 +437,18 @@ function InactiveSeats({ report }: { report: AdoptionReport }) {
   const seats = report.inactive_users;
   return (
     <div data-testid="adoption-inactive">
-      <h3 className="usage-subheading">Not yet active ({seats.length})</h3>
+      <h3 className="usage-subheading">
+        {rich("Not yet active ({0})", seats.length)}
+      </h3>
       {seats.length === 0 ? (
-        <p className="usage-note">Every provisioned account was active in this window.</p>
+        <p className="usage-note">{tr("Every provisioned account was active in this window.")}</p>
       ) : (
         <ul className="adoption-seats">
           {seats.map((s) => (
             <li
               key={s.email}
               className="adoption-seat"
-              title={`Provisioned ${s.created_at.slice(0, 10)}, no activity in this window`}
+              title={tr("Provisioned {0}, no activity in this window", [s.created_at.slice(0, 10)])}
             >
               {s.email}
             </li>

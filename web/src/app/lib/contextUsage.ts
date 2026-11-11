@@ -1,3 +1,5 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Context-usage display helper.
 //
 // Drives the "180k / 1M (18%)" indicator that appears next to total
@@ -65,13 +67,13 @@ export function computeContextUsage(input: ContextUsageInputs): ContextUsage | n
 // the same `k`/`M` rounding rules that `formatTokens` uses elsewhere.
 function formatTokens(n: number): string {
   if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n < 1_000_000) return `${formatFixed((n / 1000), n < 10_000 ? 1 : 0)}k`;
+  return `${formatFixed((n / 1_000_000), 2)}M`;
 }
 
 export function formatContextUsage(usage: ContextUsage): string {
   if (usage.capacity === undefined || usage.fraction === undefined) {
-    return `${formatTokens(usage.used)} ctx`;
+    return tr("{0} ctx", [formatTokens(usage.used)]);
   }
   // Defensive clamp at 100%. fraction > 1 is an impossible state for a
   // turn that succeeded — if we see one it means either (a) the
@@ -86,7 +88,7 @@ export function formatContextUsage(usage: ContextUsage): string {
     usage.fraction > 1
       ? "100%+"
       : `${Math.max(0, Math.round(usage.fraction * 100))}%`;
-  return `${formatTokens(usage.used)} / ${formatTokens(usage.capacity)} ctx (${pct})`;
+  return tr("{0} / {1} ctx ({2})", [formatTokens(usage.used), formatTokens(usage.capacity), pct]);
 }
 
 // shouldShowDegradationCaption returns true once we cross into the

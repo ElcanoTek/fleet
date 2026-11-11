@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // AccountMenu — the rail footer's account control (#169, settings pass). A
 // single button shows the avatar + email; opening it reveals the account menu
 // built on the shared Menu surface, so it is the same component family as the
@@ -49,9 +51,9 @@ function Avatar({ email, className }: { email: string; className?: string }) {
 }
 
 const THEME_OPTIONS = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
+  { value: "system", label: tr("System") },
+  { value: "light", label: tr("Light") },
+  { value: "dark", label: tr("Dark") },
 ] as const;
 
 const MENU_GROUP_HEADING =
@@ -102,7 +104,7 @@ export function AccountMenu({
     current && (pathname === "/settings/admin" || pathname.startsWith("/settings/admin/"));
   const isWorkspaceSettings = current && !isContextSettings && !isAdminSettings;
   const close = () => setOpen(false);
-  const shown = email || "Loading…";
+  const shown = email || tr("Loading…");
 
   // Collapsing the rail dismisses the menu (the design's setCollapsed
   // behavior) — the strip has no room for an anchored stretch menu.
@@ -142,7 +144,7 @@ export function AccountMenu({
         </span>
         {/* The name is the button's own text (WCAG 2.5.3 Label in Name): the
             visible email, then what the button does, for screen readers. */}
-        <span className="sr-only">, account menu</span>
+        <span className="sr-only">{tr(", account menu")}</span>
         <Icon
           name="selector"
           className={[
@@ -157,7 +159,7 @@ export function AccountMenu({
         onClose={close}
         anchorRef={anchorRef}
         placement={railCollapsed ? "top-start" : "top-stretch"}
-        label="Account"
+        label={tr("Account")}
       >
         <div className="flex items-center gap-2.5 px-2 py-1.5">
           <Avatar email={email} />
@@ -166,10 +168,10 @@ export function AccountMenu({
           </span>
         </div>
         <MenuSeparator />
-        <div className={MENU_GROUP_HEADING}>Workspace</div>
+        <div className={MENU_GROUP_HEADING}>{tr("Workspace")}</div>
         <MenuItem
           icon={<Icon name="settings" className="size-4" />}
-          description="General preferences & team settings"
+          description={tr("General preferences & team settings")}
           className={isWorkspaceSettings ? "menu-item-current" : ""}
           current={isWorkspaceSettings}
           testId="nav-to-settings"
@@ -178,11 +180,11 @@ export function AccountMenu({
             window.location.assign("/settings");
           }}
         >
-          Settings
+          {tr("Settings")}
         </MenuItem>
         <MenuItem
           icon={<Icon name="book" className="size-4" />}
-          description="How chat, patrols & background tasks work"
+          description={tr("How chat, patrols & background tasks work")}
           className={guidesCurrent ? "menu-item-current" : ""}
           current={guidesCurrent}
           testId="nav-to-help"
@@ -191,12 +193,11 @@ export function AccountMenu({
             window.location.assign("/help");
           }}
         >
-          Guides
-        </MenuItem>
-        <div className={MENU_GROUP_HEADING}>Model Context &amp; Tools</div>
+          {tr("Guides")}</MenuItem>
+        <div className={MENU_GROUP_HEADING}>{tr("Model Context & Tools")}</div>
         <MenuItem
           icon={<Icon name="plug" className="size-4" />}
-          description="Connections, memories, skills, personas & files"
+          description={tr("Connections, memories, skills, personas & files")}
           className={isContextSettings ? "menu-item-current" : ""}
           current={isContextSettings}
           testId="nav-to-context-settings"
@@ -205,14 +206,14 @@ export function AccountMenu({
             window.location.assign("/settings/connections");
           }}
         >
-          Context &amp; Connections
+          {tr("Context & Connections")}
         </MenuItem>
         {showAdmin ? (
           <>
-            <div className={MENU_GROUP_HEADING}>Administration</div>
+            <div className={MENU_GROUP_HEADING}>{tr("Administration")}</div>
             <MenuItem
               icon={<Icon name="shield" className="size-4" />}
-              description="Server, users, features, providers & checks"
+              description={tr("Server, users, features, providers & checks")}
               className={isAdminSettings ? "menu-item-current" : ""}
               current={isAdminSettings}
               testId="nav-to-admin-settings"
@@ -221,11 +222,11 @@ export function AccountMenu({
                 window.location.assign("/settings/admin");
               }}
             >
-              Admin Settings
+              {tr("Admin Settings")}
             </MenuItem>
             <MenuItem
               icon={<Icon name="bar-chart" className="size-4" />}
-              description="Spend, model mix, live agents & adoption"
+              description={tr("Spend, model mix, live agents & adoption")}
               className={analyticsCurrent ? "menu-item-current" : ""}
               current={analyticsCurrent}
               testId="nav-to-analytics"
@@ -234,16 +235,15 @@ export function AccountMenu({
                 window.location.assign("/analytics");
               }}
             >
-              Analytics
-            </MenuItem>
+              {tr("Analytics")}</MenuItem>
           </>
         ) : null}
         <MenuSeparator />
         <div className="flex items-center gap-2 px-2 py-1.5 text-[0.82rem] text-[var(--color-text-secondary)]">
           <Icon name="moon" className="size-4 shrink-0 text-[var(--color-text-muted)]" />
-          <span className="min-w-0 flex-1">Theme</span>
+          <span className="min-w-0 flex-1">{tr("Theme")}</span>
           <Segmented
-            label="Theme"
+            label={tr("Theme")}
             value={themePreference}
             options={THEME_OPTIONS}
             onChange={setTheme}
@@ -260,15 +260,15 @@ export function AccountMenu({
             setConfirmingSignOut(true);
           }}
         >
-          Sign out
+          {tr("Sign out")}
         </MenuItem>
       </Menu>
 
       {confirmingSignOut && typeof document !== "undefined"
         ? createPortal(
             <ConfirmDialog
-              title="Sign out?"
-              confirmLabel="Sign out"
+              title={tr("Sign out?")}
+              confirmLabel={tr("Sign out")}
               layer="rail"
               testId="sign-out-confirm"
               onCancel={() => setConfirmingSignOut(false)}
@@ -277,7 +277,9 @@ export function AccountMenu({
                 onSignOut();
               }}
             >
-              <p>This signs you out of {appName} and of every app that shares your sign-in.</p>
+              <p>
+        {rich("This signs you out of {0} and of every app that shares your sign-in.", appName)}
+      </p>
             </ConfirmDialog>,
             document.body,
           )

@@ -1,3 +1,5 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Pure model behind the task-log timeline (LogTimeline.tsx). A stored
 // transcript is a flat list of messages — the task prompt, assistant turns,
 // one tool-role message per result, and runtime breadcrumbs the engine writes
@@ -41,16 +43,16 @@ export type ToolMeta = {
 const CATEGORY_LABEL: Record<ToolCategory, string> = {
   python: "Python",
   shell: "Shell",
-  files: "Files",
-  plan: "Plan",
-  audit: "Audit",
-  email: "Email",
-  send: "Outbound",
-  web: "Web",
+  files: tr("Files"),
+  plan: tr("Plan"),
+  audit: tr("Audit"),
+  email: tr("Email"),
+  send: tr("Outbound"),
+  web: tr("Web"),
   pages: "Pages",
-  delegate: "Delegation",
+  delegate: tr("Delegation"),
   mcp: "MCP",
-  other: "Tool",
+  other: tr("Tool"),
 };
 
 const CATEGORY_ICON: Record<ToolCategory, string> = {
@@ -161,7 +163,7 @@ export function unwrapDeferredCall(name: string | undefined, input: string | und
 
 export function readableToolError(raw: string): string {
   if (/cannot unmarshal array into Go value of type map\[string\]interface/i.test(raw)) {
-    return "Invalid tool arguments: Fleet expected a JSON object but received an array.";
+    return tr("Invalid tool arguments: Fleet expected a JSON object but received an array.");
   }
   return raw;
 }
@@ -220,18 +222,18 @@ export function toolCallSummary(name: string, args: Record<string, unknown> | nu
     const lines = code.split("\n").map((l) => l.trim()).filter(Boolean);
     const first = lines[0] ?? "";
     const head = first.startsWith("#") ? first.replace(/^#+\s*/, "") : first;
-    return truncate(head, 140) + (lines.length > 1 ? `  ·  ${lines.length} lines` : "");
+    return truncate(head, 140) + (lines.length > 1 ? tr("  ·  {0} lines", [lines.length]) : "");
   }
   if (name === "bash") return truncate(`$ ${str(args.command).split("\n")[0]}`, 140);
   if (name === "task_tracker") {
-    const cmd = str(args.command) || "update";
+    const cmd = str(args.command) || tr("update");
     const list = Array.isArray(args.task_list) ? (args.task_list as Array<Record<string, unknown>>) : [];
     if (list.length === 0) return cmd;
     const done = list.filter((t) => t && t.status === "done").length;
-    return `${cmd} · ${list.length} items · ${done} done`;
+    return tr("{0} · {1} items · {2} done", [cmd, list.length, done]);
   }
   if (name === "confirm_audit") {
-    const verdict = args.success === false ? "abort" : "pass";
+    const verdict = args.success === false ? tr("abort") : tr("pass");
     const why = str(args.user_visible_summary) || str(args.reasoning);
     return truncate(why ? `${verdict} — ${why}` : verdict, 160);
   }
@@ -246,7 +248,7 @@ export function toolCallSummary(name: string, args: Record<string, unknown> | nu
   const subject = str(args.subject_contains) || str(args.subject);
   if (subject) bits.push(`“${subject}”`);
   const sender = str(args.sender_contains);
-  if (sender) bits.push(`from ${sender}`);
+  if (sender) bits.push(tr("from {0}", [sender]));
   const from = str(args.date_from);
   const to = str(args.date_to);
   if (from || to) bits.push(from && to && from !== to ? `${from} → ${to}` : from || to);
@@ -255,7 +257,7 @@ export function toolCallSummary(name: string, args: Record<string, unknown> | nu
   const filename = str(args.filename);
   if (filename) bits.push(filename);
   const toAddr = scalarText(args.to) ?? (Array.isArray(args.to) ? (args.to as unknown[]).join(", ") : "");
-  if (toAddr) bits.push(`to ${toAddr}`);
+  if (toAddr) bits.push(tr("to {0}", [toAddr]));
   if (bits.length > 0) return truncate(bits.join(" · "), 160);
 
   for (const [k, v] of Object.entries(args)) {
@@ -335,16 +337,16 @@ function jsonHeadline(obj: Record<string, unknown>): string {
   if (typeof obj.valid === "boolean") {
     const errors = Array.isArray(obj.errors) ? obj.errors.length : 0;
     const warnings = Array.isArray(obj.warnings) ? obj.warnings.length : 0;
-    bits.push(obj.valid ? "valid" : "invalid");
+    bits.push(obj.valid ? tr("valid") : tr("invalid"));
     if (errors) bits.push(plural(errors, "error"));
     if (warnings) bits.push(plural(warnings, "warning"));
   }
-  if (typeof obj.matches_found === "number") bits.push(`${obj.matches_found} match${obj.matches_found === 1 ? "" : "es"}`);
-  else if (typeof obj.match_count === "number") bits.push(`${obj.match_count} match${obj.match_count === 1 ? "" : "es"}`);
-  if (typeof obj.emails_scanned === "number") bits.push(`${obj.emails_scanned} scanned`);
-  if (typeof obj.saved_to === "string") bits.push(`saved ${obj.saved_to.split("/").pop()}`);
+  if (typeof obj.matches_found === "number") bits.push(tr(obj.matches_found === 1 ? "{0} match" : "{0} matches", [obj.matches_found]));
+  else if (typeof obj.match_count === "number") bits.push(tr(obj.match_count === 1 ? "{0} match" : "{0} matches", [obj.match_count]));
+  if (typeof obj.emails_scanned === "number") bits.push(tr("{0} scanned", [obj.emails_scanned]));
+  if (typeof obj.saved_to === "string") bits.push(tr("saved {0}", [obj.saved_to.split("/").pop()]));
   if (typeof obj.size_bytes === "number" && bits.length > 0) bits.push(formatBytes(obj.size_bytes));
-  if (typeof obj.message_id === "string" && bits.length === 0) bits.push(`sent · ${truncate(obj.message_id, 40)}`);
+  if (typeof obj.message_id === "string" && bits.length === 0) bits.push(tr("sent · {0}", [truncate(obj.message_id, 40)]));
   if (bits.length === 0 && typeof obj.status === "string") bits.push(obj.status);
   const err = str(obj.error) || str(obj.message);
   if (err && (obj.status === "error" || obj.error)) bits.push(truncate(err, 100));
@@ -352,9 +354,9 @@ function jsonHeadline(obj: Record<string, unknown>): string {
 }
 
 export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n < 1024) return tr("{0} B", [n]);
+  if (n < 1024 * 1024) return tr("{0} KB", [formatFixed((n / 1024), n < 10 * 1024 ? 1 : 0)]);
+  return tr("{0} MB", [formatFixed((n / 1024 / 1024), 1)]);
 }
 
 export function formatDuration(seconds: number): string {
@@ -363,9 +365,9 @@ export function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
-  if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+  if (m < 60) return s ? tr("{0}m {1}s", [m, s]) : `${m}m`;
   const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  return tr("{0}h {1}m", [h, m % 60]);
 }
 
 /** Language for a file path, by extension, among the grammars the highlighter registers. */
@@ -392,15 +394,15 @@ export type RuntimeEvent = {
 };
 
 const EVENT_TITLES: Record<string, { title: string; tone: RuntimeEvent["tone"] }> = {
-  context_checkpoint_floor: { title: "Context budget floor set", tone: "info" },
-  context_checkpoint: { title: "Context checkpoint", tone: "info" },
-  context_compacted: { title: "History compacted", tone: "info" },
-  context_elided: { title: "Older tool results trimmed", tone: "info" },
-  context_budget_raised: { title: "Context budget raised", tone: "info" },
-  context_pressure: { title: "Context pressure", tone: "warn" },
-  fatal: { title: "Run aborted", tone: "danger" },
-  "plan state after compaction": { title: "Plan re-announced", tone: "info" },
-  "context compaction": { title: "Compaction summary", tone: "info" },
+  context_checkpoint_floor: { title: tr("Context budget floor set"), tone: "info" },
+  context_checkpoint: { title: tr("Context checkpoint"), tone: "info" },
+  context_compacted: { title: tr("History compacted"), tone: "info" },
+  context_elided: { title: tr("Older tool results trimmed"), tone: "info" },
+  context_budget_raised: { title: tr("Context budget raised"), tone: "info" },
+  context_pressure: { title: tr("Context pressure"), tone: "warn" },
+  fatal: { title: tr("Run aborted"), tone: "danger" },
+  "plan state after compaction": { title: tr("Plan re-announced"), tone: "info" },
+  "context compaction": { title: tr("Compaction summary"), tone: "info" },
 };
 
 // A bracketed tag at the very start, not followed by "(" — a message that
@@ -427,7 +429,7 @@ export function parseRuntimeEvent(content: string): RuntimeEvent | null {
   const tone = known?.tone ?? (/error|fail|fatal/i.test(tag) ? "danger" : "info");
   let title = known?.title ?? humanizeTag(tag);
   const checkpoint = /\(checkpoint (\d+)\)/.exec(rest);
-  if (tag === "context_checkpoint" && checkpoint) title = `Context checkpoint ${checkpoint[1]}`;
+  if (tag === "context_checkpoint" && checkpoint) title = tr("Context checkpoint {0}", [checkpoint[1]]);
   // A breadcrumb without key=value fields is prose: keep all of it.
   const detail = fields.length > 0 ? tail.trim() : rest.trim();
   return { tag, title, tone, fields, detail };

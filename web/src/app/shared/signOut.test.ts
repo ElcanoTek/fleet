@@ -63,6 +63,7 @@ describe("signOut", () => {
     expect(new URL(form!.action, "https://fleet.example").pathname).toBe(
       "/api/auth/logout",
     );
+    expect(new URL(form!.action).searchParams.get("lang")).toBe("en");
     expect(submit).toHaveBeenCalledTimes(1);
   });
 

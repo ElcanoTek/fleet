@@ -117,9 +117,21 @@ type RemoteMCPResolver interface {
 	// lock if needed. A needs-reauth/expired connection returns an error so the
 	// caller skips the server gracefully.
 	AcquireTokenByID(ctx context.Context, email, serverID string) (string, error)
-	// SafeHTTPClient is the SSRF-safe client used to dial user-supplied servers.
+	// SafeHTTPClient is the SSRF-safe control-plane client, bounded by a fixed
+	// timeout. The overlay uses it for custom http_tools connectors.
 	SafeHTTPClient() *http.Client
+	// MCPDataPlaneHTTPClient is the SSRF-safe client for MCP JSON-RPC to a
+	// remote server. It carries no fixed timeout: the mount is bounded by
+	// remoteMCPMountTimeout and each tool call by its own per-call budget.
+	MCPDataPlaneHTTPClient() *http.Client
 }
+
+// remoteMCPMountTimeout bounds one attempt at mounting a remote MCP server
+// (initialize, notifications/initialized and tools/list). The data-plane
+// client has no timeout of its own (its tool calls run for their whole
+// per-call budget), so the handshake gets an explicit bound here. Var, not
+// const: tests shorten it.
+var remoteMCPMountTimeout = 60 * time.Second
 
 // RemoteMCPStatusMarker is the optional resolver seam the overlay uses to
 // record a credential rejection on the connection row. A server that answers
@@ -929,6 +941,10 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 
 	client := mcp.NewClient()
 	httpClient := resolver.SafeHTTPClient()
+	dataPlane := resolver.MCPDataPlaneHTTPClient()
+	if dataPlane == nil {
+		dataPlane = httpClient
+	}
 	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}, Seats: map[string]agentcore.MCPChoice{}, OpenCtx: ctx}
 	chosen, missing := selectRemoteSeats(conns, sel)
 	for _, name := range missing {
@@ -997,14 +1013,14 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			registered++
 			continue
 		}
-		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
+		opts := mcp.HTTPServerOptions{HTTPClient: dataPlane}
 		if bearer != "" {
 			switch {
 			case conn.AuthQuery != "":
 				// Query-authenticated vendor: attach the key in the transport so
 				// the registered URL (and every log/error that embeds it) stays
 				// credential-free.
-				opts.HTTPClient = mcp.WithQueryParam(httpClient, conn.AuthQuery, bearer)
+				opts.HTTPClient = mcp.WithQueryParam(dataPlane, conn.AuthQuery, bearer)
 			case conn.AuthHeader != "":
 				// api_key connection with a vendor-specific header: the key
 				// under that header, behind the entry's scheme prefix when it
@@ -1019,7 +1035,9 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		// budget, before skipping the connection; an interactive turn attempts
 		// it once.
 		if aerr := mcp.RetryTransientConnect(ctx, regName, func(attemptCtx context.Context) error {
-			return client.AddHTTPServerWithOptions(attemptCtx, regName, conn.URL, opts)
+			mountCtx, cancel := context.WithTimeout(attemptCtx, remoteMCPMountTimeout)
+			defer cancel()
+			return client.AddHTTPServerWithOptions(mountCtx, regName, conn.URL, opts)
 		}); aerr != nil {
 			// The reason matters: a 401 from the vendor (dead token, revoked
 			// grant, org approval pending), a TLS or DNS failure and a handshake

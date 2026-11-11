@@ -27,7 +27,15 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, userEmail, viewToken)
 	if err != nil {
-		writeJSONStatus(w, r, http.StatusNotFound, map[string]string{"error": err.Error()})
+		// One answer whatever the reason (gone, closed, someone else's), so a
+		// session id does not tell anyone whether that session is still live.
+		// The view is the link a person opens from chat, so it gets a page;
+		// the endpoints its script calls get the same answer as JSON.
+		if action == "view" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			serveBrowserSessionUnavailable(w)
+			return
+		}
+		writeJSONStatus(w, r, http.StatusNotFound, map[string]string{"error": "this live browser session is no longer available"})
 		return
 	}
 
@@ -132,6 +140,51 @@ func (s *Server) serveBrowserSessionStream(w http.ResponseWriter, r *http.Reques
 		}
 	}
 }
+
+// serveBrowserSessionUnavailable answers a live-view link whose session is
+// gone or is not the caller's, with one page for every case.
+func serveBrowserSessionUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(browserSessionUnavailablePage))
+}
+
+const browserSessionUnavailablePage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live browser session unavailable — Fleet</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0e14;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 32rem; padding: 24px; line-height: 1.5; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  p { color: #8b949e; margin: 0 0 16px; }
+  a { color: #3b82f6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>This live browser session is no longer available</h1>
+  <p>It has ended, it was closed after a while without activity, or it belongs to someone else.</p>
+  <p>Go back to your chat and ask the assistant to open a new live browser session if you still need one.</p>
+  <p><a href="/chat">Back to chat</a></p>
+</main>
+</body>
+</html>
+`
 
 func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request, sess *playwrightrunner.LiveSession, viewToken string) {
 	info := sess.Info(nil)
@@ -272,6 +325,7 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
     text-align: center;
   }
   main {
+    position: relative;
     flex: 1;
     display: flex;
     align-items: center;
@@ -302,6 +356,27 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
     user-select: none;
     -webkit-user-drag: none;
     cursor: crosshair;
+  }
+  #notice {
+    position: absolute;
+    top: 8px;
+    left: 50%%;
+    transform: translateX(-50%%);
+    z-index: 2;
+    max-width: calc(100%% - 32px);
+    background: rgba(48, 16, 18, 0.96);
+    border: 1px solid rgba(239, 68, 68, 0.6);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 12px;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+  }
+  #notice:empty {
+    padding: 0;
+    border: 0;
+    background: none;
   }
   #empty-hint {
     position: absolute;
@@ -339,6 +414,7 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
   <strong>Session ready!</strong> Your login &amp; cookies are active in this Co-Pilot session. Switch back to your Fleet Chat tab and reply (e.g. <em>"Done, I'm logged in"</em>) so the assistant can continue or save the connector.
 </div>
 <main>
+  <div id="notice" role="status" aria-live="polite"></div>
   <div id="stage-wrap" tabindex="0" aria-label="Live Chromium viewport">
     <div id="empty-hint">Connecting to live Chromium session…</div>
     <img id="screen" alt="Live browser stream" />
@@ -365,24 +441,96 @@ const browserCopilotScript = `(() => {
   const statusDot = document.getElementById("status-dot");
   const banner = document.getElementById("banner");
   const pasteInput = document.getElementById("paste-input");
+  const noticeEl = document.getElementById("notice");
 
   const VIEW_W = 1280;
   const VIEW_H = 720;
 
+  // The notice line stays rendered (empty when there is nothing to say), so
+  // a screen reader announces a message when its text appears. The same
+  // message again only restarts its timer, so it is not re-announced.
+  let noticeTimer = 0;
+  let sessionEnded = false;
+  let signedOut = false;
+  function showNotice(message, sticky) {
+    // Once the session has ended, its notice stays: a late reply to input
+    // sent before it ended must not replace it.
+    if (sessionEnded && !sticky) return;
+    clearTimeout(noticeTimer);
+    if (noticeEl.textContent !== message) noticeEl.textContent = message;
+    if (!sticky) noticeTimer = setTimeout(() => { noticeEl.textContent = ""; }, 8000);
+  }
+
+  const ENDED = "This live browser session has ended. Go back to your chat and ask the assistant to open a new one.";
+  let es = null;
+  function endSession(message) {
+    if (sessionEnded) return;
+    showNotice(message, true);
+    sessionEnded = true;
+    statusText.textContent = "Session Ended";
+    statusDot.style.background = "#ef4444";
+    if (es) es.close();
+  }
+
+  // Pointer motion is sent many times a second; a refusal of one is noise, so
+  // only an ended session or a lost connection is worth a notice.
+  const quietInputs = { mousemove: true, wheel: true };
+
+  // sendInput forwards one event to the live browser. A refused event is
+  // shown in the notice line rather than dropped silently: the reason an
+  // address was refused, an ended session (after which nothing more is
+  // sent), a signed-out or refused request, or a lost connection.
   async function sendInput(payload) {
+    if (sessionEnded) return;
+    let resp;
     try {
-      const resp = await fetch(basePath + "/input" + qs, {
+      resp = await fetch(basePath + "/input" + qs, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (resp.ok) {
+    } catch (_) {
+      showNotice("Couldn't reach Fleet. Check your connection and try again.");
+      return;
+    }
+    if (sessionEnded) return;
+    if (resp.ok) {
+      if (signedOut) {
+        signedOut = false;
+        noticeEl.textContent = "";
+      }
+      try {
         const data = await resp.json();
         if (data.current_url && document.activeElement !== urlBar) {
           urlBar.value = data.current_url;
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+      return;
+    }
+    if (resp.status === 404) {
+      endSession(ENDED);
+      return;
+    }
+    if (resp.status === 401) {
+      signedOut = true;
+      showNotice("You're signed out of Fleet. Sign in again, then reload this page.", true);
+      return;
+    }
+    if (quietInputs[payload.type]) return;
+    if (resp.status === 403) {
+      showNotice("Fleet didn't allow that action.");
+      return;
+    }
+    if (payload.type === "navigate") {
+      let detail = "";
+      try {
+        const data = await resp.json();
+        detail = (data && data.error) || "";
+      } catch (_) {}
+      showNotice(detail ? "Couldn't open " + payload.url + ": " + detail : "Couldn't open " + payload.url + ".");
+      return;
+    }
+    showNotice("The browser didn't take that action. Try again.");
   }
 
   function mapCoords(ev) {
@@ -475,13 +623,17 @@ const browserCopilotScript = `(() => {
   });
 
   document.getElementById("btn-close").addEventListener("click", async () => {
-    await fetch(basePath + "/close" + qs, { method: "POST" });
-    statusText.textContent = "Session Closed";
-    statusDot.style.background = "#ef4444";
+    try {
+      await fetch(basePath + "/close" + qs, { method: "POST" });
+    } catch (_) {
+      showNotice("Couldn't reach Fleet, so the session is still open. Try again.");
+      return;
+    }
+    endSession("You ended this live browser session.");
     window.close();
   });
 
-  const es = new EventSource(basePath + "/stream" + qs);
+  es = new EventSource(basePath + "/stream" + qs);
   es.addEventListener("frame", (ev) => {
     try {
       const f = JSON.parse(ev.data);
@@ -497,13 +649,17 @@ const browserCopilotScript = `(() => {
       }
     } catch (_) {}
   });
-  es.addEventListener("closed", () => {
-    statusText.textContent = "Session Ended";
-    statusDot.style.background = "#ef4444";
-    es.close();
-  });
+  es.addEventListener("closed", () => endSession(ENDED));
   es.onerror = () => {
+    if (sessionEnded) return;
     statusText.textContent = "Reconnecting…";
+    // The stream stops retrying once the session is gone (its URL answers
+    // 404); check, so the view says so without waiting for the next input.
+    if (es.readyState === EventSource.CLOSED) {
+      fetch(basePath + "/copilot.js" + qs, { method: "HEAD" })
+        .then((r) => { if (r.status === 404) endSession(ENDED); })
+        .catch(() => {});
+    }
   };
 })();
 `

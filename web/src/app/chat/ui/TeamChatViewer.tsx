@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // What a teammate sees when they open a chat someone shared with the team
 // (Item C4, ADR-0057).
 //
@@ -78,9 +80,9 @@ type TeamChatSnapshot = {
 // saying "shared files came with it" then would send the reader looking for
 // files that do not exist.
 function branchedToast(copiedFiles: number): string {
-  if (copiedFiles <= 0) return "Branched into your own chat. No files came with it.";
-  if (copiedFiles === 1) return "Branched into your own chat. 1 shared file came with it.";
-  return `Branched into your own chat. ${copiedFiles} shared files came with it.`;
+  if (copiedFiles <= 0) return tr("Branched into your own chat. No files came with it.");
+  if (copiedFiles === 1) return tr("Branched into your own chat. 1 shared file came with it.");
+  return tr("Branched into your own chat. {0} shared files came with it.", [copiedFiles]);
 }
 
 export function TeamChatViewer({
@@ -137,7 +139,7 @@ export function TeamChatViewer({
       try {
         const url = conversationApiUrl(conversationId, "/team-view");
         if (!url) {
-          if (!stale()) setLoadError("This chat link has an invalid id.");
+          if (!stale()) setLoadError(tr("This chat link has an invalid id."));
           return;
         }
         const etag = etagRef.current;
@@ -157,9 +159,9 @@ export function TeamChatViewer({
             etagRef.current = null;
             hasSnapshot.current = false;
             setSnapshot(null);
-            setLoadError("This chat isn’t shared with your team anymore.");
+            setLoadError(tr("This chat isn’t shared with your team anymore."));
           } else if (!quiet || !hasSnapshot.current) {
-            setLoadError(`Couldn’t load this chat (HTTP ${res.status}).`);
+            setLoadError(tr("Couldn’t load this chat (HTTP {0}).", [res.status]));
           }
           return;
         }
@@ -174,7 +176,7 @@ export function TeamChatViewer({
           etagRef.current = res.headers.get("ETag");
         }
       } catch {
-        if ((!quiet || !hasSnapshot.current) && !stale()) setLoadError("Couldn’t reach the server.");
+        if ((!quiet || !hasSnapshot.current) && !stale()) setLoadError(tr("Couldn’t reach the server."));
       }
     },
     [conversationId],
@@ -236,11 +238,11 @@ export function TeamChatViewer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           branch_point_message_id: branchPoint,
-          title: `${snapshot.title || "Shared chat"} (branch)`,
+          title: tr("{0} (branch)", [snapshot.title || tr("Shared chat")]),
         }),
       });
       if (!res.ok) {
-        setError(`Couldn’t branch this chat (HTTP ${res.status}).`);
+        setError(tr("Couldn’t branch this chat (HTTP {0}).", [res.status]));
         return;
       }
       const created = (await res.json()) as {
@@ -256,7 +258,7 @@ export function TeamChatViewer({
         onBranched(created.id);
       }
     } catch {
-      setError("Couldn’t branch this chat — network error.");
+      setError(tr("Couldn’t branch this chat — network error."));
     } finally {
       setBranching(false);
     }
@@ -275,7 +277,7 @@ export function TeamChatViewer({
         <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <button
             type="button"
-            aria-label="Back"
+            aria-label={tr("Back")}
             className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={onBack}
           >
@@ -296,7 +298,7 @@ export function TeamChatViewer({
             </>
           ) : null}
           <h1 className="min-w-0 flex-1 truncate text-[1.2rem] font-semibold text-[var(--color-text-primary)]">
-            {snapshot?.title || "Shared chat"}
+            {snapshot?.title || tr("Shared chat")}
           </h1>
           {snapshot ? (
             <span
@@ -304,7 +306,9 @@ export function TeamChatViewer({
               className="inline-flex h-[1.625rem] max-w-full shrink-0 items-center gap-1.5 truncate rounded-full border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] px-2.5 text-[0.75rem] text-[var(--color-text-primary)]"
             >
               <TeamGlyph className="size-3 shrink-0" />
-              <span className="truncate">Shared by {owner}</span>
+              <span className="truncate">
+        {rich("Shared by {0}", owner)}
+      </span>
             </span>
           ) : null}
         </div>
@@ -330,7 +334,7 @@ export function TeamChatViewer({
         ) : null}
 
         {!snapshot && !loadError ? (
-          <p className="text-[0.875rem] text-[var(--color-text-muted)]">Loading…</p>
+          <p className="text-[0.875rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
         ) : null}
 
         <ReadOnlyTranscript
@@ -347,7 +351,7 @@ export function TeamChatViewer({
 
         {snapshot && bubbles.length === 0 ? (
           <p className="text-[0.875rem] text-[var(--color-text-muted)]">
-            This conversation has no messages to show.
+            {tr("This conversation has no messages to show.")}
           </p>
         ) : null}
 
@@ -386,7 +390,9 @@ export function TeamChatViewer({
             <div className="relative flex flex-wrap items-center gap-3 rounded-[var(--radius-xl)] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-1)] py-2.5 pl-4 pr-2.5 shadow-[var(--shadow-md)]">
               <span className="flex min-w-[13rem] flex-1 items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
                 <LockGlyph className="size-3.5 shrink-0" />
-                <span>Read-only. This is {ownerFirstName(owner)}’s chat.</span>
+                <span>
+        {rich("Read-only. This is {0}’s chat.", ownerFirstName(owner))}
+      </span>
               </span>
               <button
                 type="button"
@@ -395,10 +401,10 @@ export function TeamChatViewer({
                 onClick={() => void branch()}
               >
                 {branching
-                  ? "Branching…"
+                  ? tr("Branching…")
                   : snapshot.viewer_branch
-                    ? "Branch again"
-                    : "Branch to continue in your own chat"}
+                    ? tr("Branch again")
+                    : tr("Branch to continue in your own chat")}
               </button>
             </div>
           </div>

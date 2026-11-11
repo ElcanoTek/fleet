@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 
 	"charm.land/fantasy"
@@ -121,7 +122,7 @@ func NewConnectorStudioTool() fantasy.AgentTool {
 		ConnectorStudioToolName,
 		connectorStudioDescription,
 		func(ctx context.Context, params ConnectorStudioParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			action := normalizeConnectorStudioAction(params.Action)
+			action := NormalizeConnectorStudioAction(params.Action)
 			if action == "" {
 				return fantasy.NewTextErrorResponse(
 					"invalid action: must be one of 'search_catalog', 'probe_http', 'probe_browser', 'start_copilot_session', 'connect_mcp', 'create_custom_connector', or 'test_custom_tool'",
@@ -144,23 +145,34 @@ func NewConnectorStudioTool() fantasy.AgentTool {
 	)
 }
 
-func normalizeConnectorStudioAction(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "search_catalog", "search", "catalog", "discover", "find":
-		return ConnectorStudioActionSearchCatalog
-	case "probe_http", "test_http", "http_probe":
-		return ConnectorStudioActionProbeHTTP
-	case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe":
-		return ConnectorStudioActionProbeBrowser
-	case "start_copilot_session", "start_session", "copilot_session", "live_view", "live_browser", "open_live_browser":
-		return ConnectorStudioActionStartCopilotSession
-	case "connect_mcp", "add_mcp", "register_mcp":
-		return ConnectorStudioActionConnectMCP
-	case "create_custom_connector", "create_connector", "save_connector", "create_custom":
-		return ConnectorStudioActionCreateCustom
-	case "test_custom_tool", "test_tool", "verify_tool":
-		return ConnectorStudioActionTestCustomTool
-	default:
-		return ""
-	}
+// connectorStudioActions maps every action name connector_studio accepts,
+// aliases included, to its canonical action.
+var connectorStudioActions = map[string]string{
+	"search_catalog": ConnectorStudioActionSearchCatalog, "search": ConnectorStudioActionSearchCatalog, "catalog": ConnectorStudioActionSearchCatalog,
+	"discover": ConnectorStudioActionSearchCatalog, "find": ConnectorStudioActionSearchCatalog,
+	"probe_http": ConnectorStudioActionProbeHTTP, "test_http": ConnectorStudioActionProbeHTTP, "http_probe": ConnectorStudioActionProbeHTTP,
+	"probe_browser": ConnectorStudioActionProbeBrowser, "browser_probe": ConnectorStudioActionProbeBrowser,
+	"inspect_browser": ConnectorStudioActionProbeBrowser, "playwright_probe": ConnectorStudioActionProbeBrowser,
+	"start_copilot_session": ConnectorStudioActionStartCopilotSession, "start_session": ConnectorStudioActionStartCopilotSession,
+	"copilot_session": ConnectorStudioActionStartCopilotSession, "live_view": ConnectorStudioActionStartCopilotSession,
+	"live_browser": ConnectorStudioActionStartCopilotSession, "open_live_browser": ConnectorStudioActionStartCopilotSession,
+	"connect_mcp": ConnectorStudioActionConnectMCP, "add_mcp": ConnectorStudioActionConnectMCP, "register_mcp": ConnectorStudioActionConnectMCP,
+	"create_custom_connector": ConnectorStudioActionCreateCustom, "create_connector": ConnectorStudioActionCreateCustom,
+	"save_connector": ConnectorStudioActionCreateCustom, "create_custom": ConnectorStudioActionCreateCustom,
+	"test_custom_tool": ConnectorStudioActionTestCustomTool, "test_tool": ConnectorStudioActionTestCustomTool, "verify_tool": ConnectorStudioActionTestCustomTool,
+}
+
+// NormalizeConnectorStudioAction maps an action name or one of its aliases
+// (trimmed, any case) to the canonical action, or "" when it is none. The tool
+// and the handler both apply it, so an approved call (which reaches the
+// handler directly) accepts the same aliases as a direct one.
+func NormalizeConnectorStudioAction(raw string) string {
+	return connectorStudioActions[strings.ToLower(strings.TrimSpace(raw))]
+}
+
+// ConnectorStudioActions returns a copy of every action name the tool
+// accepts, mapped to its canonical action, so the approval gate's tests can
+// check that each one that runs browser steps is staged.
+func ConnectorStudioActions() map[string]string {
+	return maps.Clone(connectorStudioActions)
 }

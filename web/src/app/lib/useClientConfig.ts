@@ -1,4 +1,6 @@
+import { localizeField } from "@/app/lib/i18n/bundle";
 import { useEffect, useState } from "react";
+import { setBundleLocalizations, bundleText } from "@/app/lib/i18n";
 import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
 import {
   currentAdvancedModel,
@@ -54,7 +56,7 @@ export type ClientBranding = {
 
 // Neutral, client-agnostic branding. Mirrors config/default/manifest.yaml's
 // `branding` block so the bare fleet experience matches the generic bundle.
-export const DEFAULT_BRANDING: ClientBranding = {
+const DEFAULT_BRANDING_SOURCE: ClientBranding = {
   app_name: APP_NAME,
   login_title: "Welcome aboard.",
   login_tagline: "Sign in to your workspace and pick up where you left off.",
@@ -82,11 +84,48 @@ export type UseClientConfig = {
 };
 
 type ClientConfigResponse = {
+  localizations?: Record<string, Record<string, string>>;
   branding?: Partial<ClientBranding>;
   empty_state?: { cards?: ProtocolPill[] };
   models?: ModelTiersConfig;
   team_chats_shared_by_default?: boolean;
 };
+
+/** Translate only the bundle's presentation fields; option values and form
+ * keys stay stable, including when the resulting prompt uses those values. */
+export function localizeBundlePill(pill: ProtocolPill): ProtocolPill {
+  return {
+    ...pill,
+    section: bundleText(pill.section),
+    title: bundleText(pill.title),
+    desc: bundleText(pill.desc),
+    cta: bundleText(pill.cta),
+    ...(pill.promptTemplate ? { promptTemplate: bundleText(pill.promptTemplate) } : {}),
+    ...(pill.starterPrompt ? { starterPrompt: bundleText(pill.starterPrompt) } : {}),
+    ...(pill.fields ? { fields: pill.fields.map(localizeField) } : {}),
+  };
+}
+
+export function localizeBranding(branding: ClientBranding): ClientBranding {
+  const support = branding.support;
+  return {
+    ...branding,
+    login_title: bundleText(branding.login_title),
+    login_tagline: bundleText(branding.login_tagline),
+    share_title: bundleText(branding.share_title),
+    share_description: bundleText(branding.share_description),
+    ...(support ? { support: {
+      ...support,
+      label: bundleText(support.label),
+      ...(support.mobile_label ? { mobile_label: bundleText(support.mobile_label) } : {}),
+      ...(support.title ? { title: bundleText(support.title) } : {}),
+      ...(support.message ? { message: bundleText(support.message) } : {}),
+      ...(support.subject ? { subject: bundleText(support.subject) } : {}),
+    } } : {}),
+  };
+}
+
+export const DEFAULT_BRANDING = localizeBranding(DEFAULT_BRANDING_SOURCE);
 
 // The last successful /api/client-config payload, cached at module scope.
 // Chat ⇄ Operations Center is ordinary route navigation (two routes, one
@@ -157,14 +196,15 @@ export async function refreshClientConfig(): Promise<boolean> {
     // A newer response already won; this one is history.
     if (seq <= configAppliedSeq) return false;
     configAppliedSeq = seq;
+    setBundleLocalizations(data.localizations);
     // Merge over neutral defaults so a partial branding block still renders.
     const cards = data.empty_state?.cards;
     // Install the workspace tier pair module-wide BEFORE any state update,
     // so the re-render this triggers already reads the live slugs.
     setModelTiers(data.models);
     cachedConfig = {
-      branding: { ...DEFAULT_BRANDING, ...(data.branding ?? {}) },
-      pills: Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS,
+      branding: localizeBranding({ ...DEFAULT_BRANDING_SOURCE, ...(data.branding ?? {}) }),
+      pills: Array.isArray(cards) && cards.length > 0 ? cards.map(localizeBundlePill) : DEFAULT_PILLS,
       models: {
         defaultModel: currentDefaultModel(),
         advancedModel: currentAdvancedModel(),

@@ -1,3 +1,8 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { localizeServerMessage } from "@/app/lib/i18n/errors";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // Settings → Admin → Doctor — the box-health report. Renders the read-only
 // /api/admin/doctor checks (DBs, disk headroom, rootless-podman prerequisites,
 // sandbox image, systemd units) with the on-box repair command next to every
@@ -40,14 +45,14 @@ type DoctorReport = {
 function formatGeneratedAt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString(getLanguage(), { dateStyle: "medium", timeStyle: "short" });
 }
 
 const STATUS_META: Record<DoctorStatus, { icon: string; className: string; label: string }> = {
-  ok: { icon: "check", className: "text-[var(--color-success)]", label: "ok" },
-  warn: { icon: "alert-triangle", className: "text-[var(--color-warning)]", label: "warning" },
-  fail: { icon: "alert-triangle", className: "text-[var(--color-danger)]", label: "failing" },
-  skip: { icon: "info", className: "text-[var(--color-text-muted)]", label: "skipped" },
+  ok: { icon: "check", className: "text-[var(--color-success)]", label: tr("ok") },
+  warn: { icon: "alert-triangle", className: "text-[var(--color-warning)]", label: tr("warning") },
+  fail: { icon: "alert-triangle", className: "text-[var(--color-danger)]", label: tr("failing") },
+  skip: { icon: "info", className: "text-[var(--color-text-muted)]", label: tr("skipped") },
 };
 
 export default function AdminDoctorPage() {
@@ -68,7 +73,7 @@ export default function AdminDoctorPage() {
   const runFetch = useCallback((mode: "quick" | "deep") => {
     fetch(mode === "deep" ? "/api/admin/doctor?deep=1" : "/api/admin/doctor", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`doctor request failed: ${res.status}`);
+        if (!res.ok) throw new Error(tr("doctor request failed: {0}", [res.status]));
         return (await res.json()) as DoctorReport;
       })
       .then((next) => {
@@ -77,7 +82,7 @@ export default function AdminDoctorPage() {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!staleRef.current) setError(errorMessage(err, "doctor report unavailable"));
+        if (!staleRef.current) setError(errorMessage(err, tr("doctor report unavailable")));
       })
       .finally(() => {
         if (!staleRef.current) setRunning(null);
@@ -107,51 +112,50 @@ export default function AdminDoctorPage() {
 
   return (
     <SetSection
-      title="System checks"
-      intro="Checks the health of the server this workspace runs on: database, disk space, and the services Fleet needs. These checks only look; any fix is run on the server itself."
+      title={tr("System checks")}
+      intro={tr("Checks the health of the server this workspace runs on: database, disk space, and the services Fleet needs. These checks only look; any fix is run on the server itself.")}
     >
       <ConnGroup>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">Server health</h3>
+          <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">{tr("Server health")}</h3>
           {report ? (
-            <ConnBadge variant={report.healthy ? "success" : "warn"} title={`${report.summary.fail} failing / ${report.summary.warn} warnings`}>
-              {report.healthy ? "healthy" : `${report.summary.fail} failing`}
+            <ConnBadge variant={report.healthy ? "success" : "warn"} title={tr("{0} failing / {1} warnings", [report.summary.fail, report.summary.warn])}>
+              {report.healthy ? tr("healthy") : tr("{0} failing", [report.summary.fail])}
             </ConnBadge>
           ) : null}
           {report ? (
             <span className="text-xs text-[var(--color-text-muted)]">
-              {report.deep ? "deep run" : "quick run"} · {(report.duration_ms / 1000).toFixed(1)}s
-              {report.generated_at ? (
+        {rich("{0} · {1}s{2}", report.deep ? tr("deep run") : tr("quick run"), formatFixed((report.duration_ms / 1000), 1), report.generated_at ? (
                 <>
                   {" · "}
                   <time dateTime={report.generated_at} data-testid="doctor-generated-at">
                     {formatGeneratedAt(report.generated_at)}
                   </time>
                 </>
-              ) : null}
-            </span>
+              ) : null)}
+      </span>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
               disabled={running !== null}
               onClick={() => run("quick")}
-              aria-label="Re-run checks"
+              aria-label={tr("Re-run checks")}
               className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
             >
               <Icon name="refresh" className={`size-[0.85rem]${running === "quick" ? " animate-spin" : ""}`} />
-              Re-run checks
+              {tr("Re-run checks")}
             </button>
             <button
               type="button"
               disabled={running !== null}
               onClick={() => run("deep")}
               data-testid="doctor-run-deep"
-              title="Also launches a throwaway sandbox container — the definitive smoke, but it can take a minute or two."
+              title={tr("Also launches a throwaway sandbox container — the definitive smoke, but it can take a minute or two.")}
               className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
             >
               <Icon name="activity" className={`size-[0.85rem]${running === "deep" ? " animate-pulse" : ""}`} />
-              {running === "deep" ? "Running deep checks…" : "Run deep checks"}
+              {running === "deep" ? tr("Running deep checks…") : tr("Run deep checks")}
             </button>
           </div>
         </div>
@@ -161,21 +165,21 @@ export default function AdminDoctorPage() {
             replacing the whole panel with the banner. */}
         {error ? (
           <NoticeBanner tone="danger" data-testid="doctor-error" className={report ? "mb-3" : undefined}>
-            System checks unavailable: {error}
-            {report ? " — showing the last completed report." : ""}
+            {tr("System checks unavailable:")}{" "}{error}
+            {report ? tr(" — showing the last completed report.") : ""}
           </NoticeBanner>
         ) : null}
         {!report ? (
           error ? null : (
-            <p className="text-sm text-[var(--color-text-muted)]" data-testid="doctor-loading">Running box checks…</p>
+            <p className="text-sm text-[var(--color-text-muted)]" data-testid="doctor-loading">{tr("Running box checks…")}</p>
           )
         ) : (
           <div data-testid="doctor-panel">
             {attention.length > 0 ? (
               <NoticeBanner tone={report.healthy ? "warning" : "danger"} data-testid="doctor-attention">
                 {report.summary.fail > 0
-                  ? `${report.summary.fail} check(s) failing — run “sudo fleet doctor” on the box to repair.`
-                  : `${report.summary.warn} warning(s) — review below.`}
+                  ? tr("{0} check(s) failing — run “sudo fleet doctor” on the box to repair.", [report.summary.fail])
+                  : tr("{0} warning(s) — review below.", [report.summary.warn])}
               </NoticeBanner>
             ) : null}
             <ul className="m-0 mt-2 grid list-none gap-0 p-0">
@@ -189,17 +193,16 @@ export default function AdminDoctorPage() {
                     <Icon name={meta.icon} className={`mt-0.5 size-[0.95rem] shrink-0 ${meta.className}`} />
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-sm font-medium text-[var(--color-text-primary)]">{c.name}</span>
+                        <span className="text-sm font-medium text-[var(--color-text-primary)]">{localizeServerMessage(c.name)}</span>
                         <span className={`text-[0.68rem] font-semibold uppercase tracking-[0.05em] ${meta.className}`}>{meta.label}</span>
                       </div>
-                      <p className="m-0 mt-0.5 break-words text-[0.8rem] text-[var(--color-text-secondary)]">{c.detail}</p>
+                      <p className="m-0 mt-0.5 break-words text-[0.8rem] text-[var(--color-text-secondary)]">{localizeServerMessage(c.detail)}</p>
                       {c.fix ? (
                         <p className="m-0 mt-1 text-[0.75rem] text-[var(--color-text-muted)]">
-                          Fix:{" "}
-                          <code className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[0.72rem] text-[var(--color-text-primary)]">
-                            {c.fix}
-                          </code>
-                        </p>
+        {rich("Fix: {0}", <code className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[0.72rem] text-[var(--color-text-primary)]">
+                            {localizeServerMessage(c.fix)}
+                          </code>)}
+      </p>
                       ) : null}
                     </div>
                   </li>
@@ -207,11 +210,8 @@ export default function AdminDoctorPage() {
               })}
             </ul>
             <p className="m-0 mt-3 text-xs text-[var(--color-text-muted)]">
-              This report is read-only. To diagnose <em>and repair</em> box-level drift (packages, unit drift, podman
-              prerequisites), run{" "}
-              <code className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[0.72rem]">sudo fleet doctor</code>{" "}
-              on the box.
-            </p>
+        {rich("This report is read-only. To diagnose {0} box-level drift (packages, unit drift, podman prerequisites), run {1} on the box.", <em>{tr("and repair")}</em>, <code className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[0.72rem]">sudo fleet doctor</code>)}
+      </p>
           </div>
         )}
       </ConnGroup>

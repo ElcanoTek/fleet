@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Guides shell (/help). Same chrome as Chat, the Operations Center and
 // Settings — one NavRail, one PageTopBar — because the guides are a surface of
 // the app, not a link out to a docs site. That is the whole point of putting
@@ -35,7 +36,7 @@ export default function HelpLayout({ children }: { children: ReactNode }) {
           <main> owns the scroll and the topbar stays put — the same main/view
           split every other surface uses. */}
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <PageTopBar title="Guides" onMenu={() => setSidebarOpen(true)} />
+        <PageTopBar title={tr("Guides")} onMenu={() => setSidebarOpen(true)} />
         <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="mx-auto flex w-full max-w-[74rem] items-start gap-9 px-6 pb-16 pt-7 max-[900px]:flex-col max-[900px]:gap-5">
             {children}

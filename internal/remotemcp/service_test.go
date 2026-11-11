@@ -1446,3 +1446,34 @@ func TestOverlayServersForUserIncludesLoginRequiredAndNeedsReauth(t *testing.T) 
 		t.Errorf("shared notion seat = %+v (ok=%v), want connected shared seat from owner@elcano.com", got, ok)
 	}
 }
+
+// TestNewServiceSplitsControlAndDataPlaneClients: the control plane (OAuth,
+// discovery, connect-time probes) keeps Config.HTTPTimeout, while the client
+// the per-run overlay mounts and calls remote MCP servers with has no fixed
+// timeout — each call's own budget bounds it. One shared 30s client cut every
+// remote tool call off at 30s ("Client.Timeout exceeded while awaiting
+// headers"), however long the call was allowed to run.
+func TestNewServiceSplitsControlAndDataPlaneClients(t *testing.T) {
+	t.Parallel()
+	svc := NewService(newFakeStore(), Config{PublicBaseURL: "https://fleet.example.com"})
+	if got := svc.SafeHTTPClient().Timeout; got != 30*time.Second {
+		t.Errorf("control-plane Timeout = %v, want the 30s default", got)
+	}
+	dp := svc.MCPDataPlaneHTTPClient()
+	if dp == nil || dp == svc.SafeHTTPClient() {
+		t.Fatal("data plane must have its own client")
+	}
+	if dp.Timeout != 0 {
+		t.Errorf("data-plane Timeout = %v, want none", dp.Timeout)
+	}
+
+	// A test-injected HTTPClient serves both planes unless one is given.
+	hc := &http.Client{}
+	if got := NewService(newFakeStore(), Config{HTTPClient: hc}).MCPDataPlaneHTTPClient(); got != hc {
+		t.Error("an injected HTTPClient should also serve the data plane")
+	}
+	dp2 := &http.Client{}
+	if got := NewService(newFakeStore(), Config{HTTPClient: hc, DataPlaneHTTPClient: dp2}).MCPDataPlaneHTTPClient(); got != dp2 {
+		t.Error("an injected DataPlaneHTTPClient should win")
+	}
+}

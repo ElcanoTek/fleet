@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -30,7 +32,7 @@ const RESYNC_MS = 60 * 60 * 1000;
 function formatServerTime(instant: Date, timeZone: string | undefined, fallbackOffsetMin: number) {
   if (timeZone) {
     try {
-      return new Intl.DateTimeFormat(undefined, {
+      return new Intl.DateTimeFormat(getLanguage(), {
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",
@@ -44,7 +46,7 @@ function formatServerTime(instant: Date, timeZone: string | undefined, fallbackO
   // Fixed-offset rendering: shift the instant and format as UTC, so the digits
   // are the server's wall clock even with no zone database entry to consult.
   const shifted = new Date(instant.getTime() + fallbackOffsetMin * 60_000);
-  const hhmmss = new Intl.DateTimeFormat(undefined, {
+  const hhmmss = new Intl.DateTimeFormat(getLanguage(), {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
@@ -104,8 +106,8 @@ export function ServerClock() {
   // the one a cron actually fires in, and a mismatch is exactly the trap this
   // readout exists to expose.
   const title = [
-    zone ? `Server timezone: ${zone}` : "Server time",
-    taskZone && taskZone !== zone ? `New tasks default to: ${taskZone}` : null,
+    zone ? tr("Server timezone: {0}", [zone]) : tr("Server time"),
+    taskZone && taskZone !== zone ? tr("New tasks default to: {0}", [taskZone]) : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -113,7 +115,7 @@ export function ServerClock() {
   return (
     <div className="server-clock" data-testid="server-clock" title={title}>
       <Icon name="clock" className="server-clock-icon" />
-      <span className="server-clock-label">Server time</span>
+      <span className="server-clock-label">{tr("Server time")}</span>
       {/* aria-live is deliberately off: a clock announcing itself every second
           would make a screen reader unusable. The dateTime attribute carries the
           machine-readable instant for anyone who asks for it. */}

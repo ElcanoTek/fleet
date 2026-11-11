@@ -62,12 +62,19 @@ const minLiteralLen = 8
 // failure text then travels through retries, backoff, masked-error logging and
 // an audit write before anyone reads it.
 //
-// Fifteen minutes is ~2 orders of magnitude above every request timeout on the
-// paths that carry these secrets (remotemcp Config.HTTPTimeout 30s,
-// RefreshTimeout 10s) and still bounds retention to about two generations for
-// the hourly-expiry tokens that motivated #1274. Never shorten it to save
-// memory: the memory is bounded by the generation swap, not by this number.
-const literalRetireGrace = 15 * time.Minute
+// The longest request that can carry one of these secrets is a remote MCP
+// tool call: the overlay's data-plane client has no fixed timeout, so a call
+// runs for its per-call budget — at most the 30-minute ceiling on any one MCP
+// call plus the 5-minute queue backstop agentcore adds around it (the
+// control-plane paths are far shorter: remotemcp Config.HTTPTimeout 30s,
+// RefreshTimeout 10s). A bearer minted just before a rotation can ride such a
+// call for that long and come back quoted in its failure. Forty-five minutes
+// covers that with room for the retries and logging after it, and still
+// bounds retention to about two generations for the hourly-expiry tokens that
+// motivated #1274. Never shorten it to save memory: the memory is bounded by
+// the generation swap, not by this number; and never set it below the longest
+// MCP call budget.
+const literalRetireGrace = 45 * time.Minute
 
 // There is deliberately NO count cap on a scope's generations. Every
 // superseded generation stays scanned for the full literalRetireGrace, however

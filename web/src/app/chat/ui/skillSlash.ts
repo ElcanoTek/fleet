@@ -12,6 +12,7 @@
 export type SkillInfo = {
   name: string;
   description: string;
+  source?: string;
 };
 
 /**

@@ -161,7 +161,7 @@ func TestRedactor_FastRotationKeepsEveryGenerationForTheGrace(t *testing.T) {
 	for gen := 1; gen <= rotations; gen++ {
 		access, refresh = rotationFixtures(gen)
 		r.RegisterSecrets(scope, true, access, refresh)
-		clock.advance(time.Second) // 900x faster than literalRetireGrace
+		clock.advance(time.Second) // far faster than literalRetireGrace
 	}
 	for gen := 1; gen <= rotations; gen++ {
 		a, f := rotationFixtures(gen)

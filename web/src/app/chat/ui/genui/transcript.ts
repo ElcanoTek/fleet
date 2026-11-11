@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Transcript-derived generative-UI state. A card has no server row of its
 // own: its spec IS the show_ui tool call's input (persisted with the turn),
 // or, for a card shown by reference to a tool's result, the validated spec
@@ -253,13 +254,13 @@ const clip = (s: string) => (s.length > SUMMARY_VALUE_CHARS ? `${s.slice(0, SUMM
 /** One-line rendering of a submitted value for the sent bubble. */
 export function summarizeValue(v: unknown): string {
   if (v === null || v === undefined || v === "") return "—";
-  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "boolean") return v ? tr("Yes") : tr("No");
   if (typeof v === "number" || typeof v === "string") return clip(String(v));
   if (Array.isArray(v)) {
     if (v.every((x) => typeof x !== "object" || x === null)) {
       if (v.length === 0) return "—";
       const shown = v.slice(0, 8).map((x) => clip(String(x)));
-      return v.length > 8 ? `${shown.join(", ")} +${v.length - 8} more` : shown.join(", ");
+      return v.length > 8 ? tr("{0} +{1} more", [shown.join(", "), v.length - 8]) : shown.join(", ");
     }
     return plural(v.length, "item");
   }
@@ -268,7 +269,7 @@ export function summarizeValue(v: unknown): string {
     if (Array.isArray(o.include) || Array.isArray(o.exclude)) {
       const inc = Array.isArray(o.include) ? o.include.length : 0;
       const exc = Array.isArray(o.exclude) ? o.exclude.length : 0;
-      return `${inc} included · ${exc} excluded`;
+      return tr("{0} included · {1} excluded", [inc, exc]);
     }
   }
   return "…";

@@ -66,7 +66,10 @@ automation; direct terminal output remains escaped.
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.
 Patterns use original string argument names, such as `name`, `cron`, or
-`to_email` (not the summary label `to`). Spaces are allowed in globs, and a
+`to_email` (not the summary label `to`). For the built-in browser tools, an
+`action=` pattern also matches the action's usual name, and another name for
+the same action in a pattern stands for it (for `playwright_browser`,
+`action=start_session` also covers `live`). Spaces are allowed in globs, and a
 matching deny takes precedence over approvals. `/approvals` shows the available
 handler-only pattern arguments; this requires a server that supplies them.
 Executable-tool policies reset on server restart. Scheduled-task and other
@@ -329,6 +332,14 @@ and **System** appearance and opens **Settings** and **Guides** (these user
 guides). Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
+
+**Settings → General → Language** selects **English**, **Español**, or
+**Português** for the interface and these guides. Your choice is saved in this
+browser. Before you choose, the platform uses your browser's language when it
+is supported, otherwise English. Changing the language reloads the current
+page and keeps its path and section; the URL's `lang` parameter also preserves
+the choice when browser storage is unavailable. Conversations, files, prompts
+you saved, and other content you wrote stay in their original language.
 
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one
@@ -808,11 +819,17 @@ a web portal — click **Build a connection in chat** in **Settings →
 Connections** (or type `/connector-builder` in Chat) to open a guided
 Connector Studio chat. The assistant checks for an official MCP server first,
 falls back to a custom HTTP API connector (badged **Custom API**) or a headless
-Chromium automation connector (badged **Playwright Browser**, with an optional
+Chromium automation connector (badged **Browser automation**, with an optional
 live Co-Pilot browser view when you need to complete SSO, 2FA, or a CAPTCHA
 yourself), collects any API key or password through a masked password field so
 the secret stays on the host, and saves the connection for you alone or for the
-whole workspace.
+whole workspace. A live browser view ends when you click **End Session**, when
+the assistant closes it, after 10 minutes without activity, when Fleet restarts,
+or when Fleet needs its place for a newer session; its link then opens a page
+saying the session is no longer available, and the assistant can open a new one.
+
+When the live browser view can't do something you ask, a short note at its top
+says so, and for an address it won't open (one that isn't a web page, say), why.
 
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
@@ -841,6 +858,7 @@ about the first kind.
 | Send this email? | The assistant has drafted a message and wants to send it. The card shows the sender, the subject, and the To, Cc, and Bcc recipients each on their own line, lists every file that goes out with it by name, inline images included (visible even with the body collapsed), and shows the body (for HTML emails that exceed the preview height — or on a phone, where the collapsed preview lets vertical scrolling pass through — press **Expand full email** / **Collapse email preview** to view or interact with the full message). | **Send** · **Cancel** |
 | Email preview | The assistant wants to show you a draft without sending it (with the same **Light** / **Dark** inbox toggle, **Mobile** / **Desktop** size toggle on wide screens, **Show source**, and **Expand full email** / **Collapse email preview** controls). | **Dismiss** — display-only by design |
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
+| Run "Connector studio"? · Run "Playwright browser"? | The assistant wants its built-in browser to type, click, press a key or choose an option on a page, usually while building a connection. The card lists each step in words, names where a password comes from (the form field you filled in) instead of showing it, and when the steps run in a live browser session shows the site the session started on and the site its page is on now, with a note when they differ. | **Approve & run** · **Cancel** |
 | Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
 | Change a task | The assistant wants to stop or update an existing scheduled task. | **Approve & stop** or **Approve & update** · **Cancel** |
 | Enable MCP connector? | The assistant needs one or more connected bundled optional MCP connectors that are not yet turned on in this conversation. Approving turns them on for this conversation and continues the reply with their tools mounted (unless the conversation's hourly auto-resume cap or input queue limit has been reached, in which case a notice is posted and the newly enabled tools take effect on your next message); when **Auto-approve** is active in the conversation, the assistant enables connected bundled optional connectors without stopping on a card and continues automatically when within those limits. | **Approve & continue** · **Decline** |

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // DiffBlock renders a unified diff from an assistant message as a coloured,
 // line-by-line diff view. The chat `pre` interceptor (AssistantContent) mounts
 // it for ```diff / ```patch fences and for bare code blocks that match the
@@ -48,12 +49,12 @@ export function DiffBlock({ raw }: { raw: string }) {
   return (
     <div className="diff-block-wrapper" data-testid="diff-block">
       <div className="diff-block-toolbar assistant-markdown-pre-toolbar">
-        <span className="assistant-markdown-pre-lang">diff</span>
+        <span className="assistant-markdown-pre-lang">{tr("diff")}</span>
         <span className="diff-block-actions">
-          <CopyButton text={copyText} title="Copy diff to clipboard" variant="compact" />
+          <CopyButton text={copyText} title={tr("Copy diff to clipboard")} variant="compact" />
         </span>
       </div>
-      <div className="diff-block-body" role="group" aria-label="Unified diff">
+      <div className="diff-block-body" role="group" aria-label={tr("Unified diff")}>
         {lines.map((line, index) => {
           if (line.type === "file-header") {
             return <FileHeaderRow key={index} line={line} />;
@@ -72,9 +73,9 @@ export function DiffBlock({ raw }: { raw: string }) {
           // gutter glyph alone is ambiguous when read aloud.
           const srLabel =
             line.type === "addition"
-              ? "added line"
+              ? tr("added line")
               : line.type === "deletion"
-                ? "removed line"
+                ? tr("removed line")
                 : undefined;
           return (
             <div key={index} className={`diff-line ${cls}`} data-diff-line-type={line.type}>

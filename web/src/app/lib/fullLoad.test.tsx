@@ -36,7 +36,7 @@ describe("/no-access Try again", () => {
     window.removeEventListener("click", onClick);
     expect(prevented).toBe(false);
     expect(push).not.toHaveBeenCalled();
-    expect(link.getAttribute("href")).toBe("/chat");
+    expect(link.getAttribute("href")).toBe("/chat?lang=en");
   });
 
   it("a shell route still soft-navigates (control)", async () => {

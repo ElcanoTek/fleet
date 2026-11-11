@@ -1,3 +1,5 @@
+import { skillDescription } from "@/app/lib/i18n/bundle";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -121,18 +123,18 @@ export default function SkillsPage() {
     let stale = false;
     fetch("/api/skills", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
+        if (!res.ok) throw new Error(tr("Failed to load skills: {0}", [res.status]));
         return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
       })
       .then((data) => {
         if (!stale) setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
       })
       .catch((e: unknown) => {
-        if (!stale) setError(errorMessage(e, "Failed to load skills."));
+        if (!stale) setError(errorMessage(e, tr("Failed to load skills.")));
       });
     fetch("/api/user-skills", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load your skills: ${res.status}`);
+        if (!res.ok) throw new Error(tr("Failed to load your skills: {0}", [res.status]));
         return (await res.json()) as { skills: UserSkill[] };
       })
       .then((data) => {
@@ -145,7 +147,7 @@ export default function SkillsPage() {
         // An empty list under an error line: the rows are unknown, not absent,
         // and the panel must leave "Loading…" so Retry has somewhere to live.
         setMine([]);
-        setMineError(errorMessage(e, "Failed to load your skills."));
+        setMineError(errorMessage(e, tr("Failed to load your skills.")));
       });
     return () => {
       stale = true;
@@ -155,7 +157,7 @@ export default function SkillsPage() {
   const reloadWorkspacePack = () =>
     fetch("/api/skills", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
+        if (!res.ok) throw new Error(tr("Failed to load skills: {0}", [res.status]));
         return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
       })
       .then((data) => {
@@ -168,7 +170,7 @@ export default function SkillsPage() {
   const reloadMine = () =>
     fetch("/api/user-skills", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load your skills: ${res.status}`);
+        if (!res.ok) throw new Error(tr("Failed to load your skills: {0}", [res.status]));
         return (await res.json()) as { skills: UserSkill[] };
       })
       .then((data) => {
@@ -177,7 +179,7 @@ export default function SkillsPage() {
       })
       .catch((e: unknown) => {
         setMine((prev) => prev ?? []);
-        setMineError(errorMessage(e, "Failed to load your skills."));
+        setMineError(errorMessage(e, tr("Failed to load your skills.")));
       });
 
   const saveDraft = () => {
@@ -198,12 +200,12 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Save failed")));
         setDraft(null);
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Save failed.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Save failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -223,11 +225,11 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Share update failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Share update failed")));
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Share update failed.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Share update failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -246,11 +248,11 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Update failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Update failed")));
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Update failed.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Update failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -279,11 +281,11 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Approve failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Approve failed")));
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Approve failed.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Approve failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -295,12 +297,12 @@ export default function SkillsPage() {
     fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, { method: "DELETE" })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Delete failed"));
+          throw new Error(await responseErrorText(res, tr("Delete failed")));
         }
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Delete failed.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Delete failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -309,7 +311,7 @@ export default function SkillsPage() {
     setError(null);
     fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load skill"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Failed to load skill")));
         return (await res.json()) as SkillDetail;
       })
       .then(async (d) => {
@@ -324,10 +326,10 @@ export default function SkillsPage() {
             visibility: "private",
           }),
         });
-        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to add skill"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Failed to add skill")));
         await reloadMine();
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Failed to add skill.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Failed to add skill."))))
       .finally(() => setBusy(false));
   };
 
@@ -339,7 +341,7 @@ export default function SkillsPage() {
     setError(null);
     fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load skill"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Failed to load skill")));
         return (await res.json()) as SkillDetail;
       })
       .then((d) => {
@@ -362,7 +364,7 @@ export default function SkillsPage() {
           editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
         }, 0);
       })
-      .catch((e: unknown) => setError(errorMessage(e, "Failed to load skill.")))
+      .catch((e: unknown) => setError(errorMessage(e, tr("Failed to load skill."))))
       .finally(() => setBusy(false));
   };
 
@@ -374,7 +376,7 @@ export default function SkillsPage() {
     setDetail(null);
     fetch(`/api/skills/${encodeURIComponent(name)}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load skill: ${res.status}`);
+        if (!res.ok) throw new Error(tr("Failed to load skill: {0}", [res.status]));
         return (await res.json()) as SkillDetail;
       })
       .then((d) => {
@@ -383,7 +385,7 @@ export default function SkillsPage() {
       .catch((e: unknown) => {
         // A superseded request's failure is about a skill no longer open.
         if (seq !== viewSeq.current) return;
-        setViewError({ name, message: errorMessage(e, "Failed to load skill.") });
+        setViewError({ name, message: errorMessage(e, tr("Failed to load skill.")) });
       });
   };
 
@@ -412,29 +414,27 @@ export default function SkillsPage() {
 
   return (
     <SetSection
-      title="Skills"
+      title={tr("Skills")}
       intro={
         <>
-          Skills are saved instructions for jobs you repeat. The assistant uses one when it fits
-          the request, or you can ask for one by starting a message with{" "}
-          <CodeChip>/skill-name</CodeChip>. Click a name below to copy it.
+          {tr("Skills are saved instructions for jobs you repeat. The assistant uses one when it fits the request, or you can ask for one by starting a message with")}{" "}
+          <CodeChip>/skill-name</CodeChip>{tr(". Click a name below to copy it.")}
         </>
       }
     >
       {error ? <p className="mb-4 text-[0.78rem] text-[var(--color-danger)]">{error}</p> : null}
 
       <ConnPanel>
-        <ConnPanelHead title="Your skills">
+        <ConnPanelHead title={tr("Your skills")}>
           <RevealButton
             open={draft !== null}
-            closedLabel="New skill"
+            closedLabel={tr("New skill")}
             disabled={busy}
             onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
           />
         </ConnPanelHead>
         <ConnPanelSub>
-          Skills you write work in your chats. Keep one private or share it with your
-          workspace.
+          {tr("Skills you write work in your chats. Keep one private or share it with your workspace.")}
         </ConnPanelSub>
 
         {draft ? (
@@ -444,7 +444,7 @@ export default function SkillsPage() {
             ref={editorRef}
             className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4"
           >
-            <ConnField label="Name (lowercase-kebab, e.g. deal-check)">
+            <ConnField label={tr("Name (lowercase-kebab, e.g. deal-check)")}>
               <input
                 id="skillName"
                 className={SETTINGS_INPUT}
@@ -453,20 +453,20 @@ export default function SkillsPage() {
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               />
             </ConnField>
-            <ConnField label="Description — one line: what it does and when to use it (this is how the agent decides the skill applies)">
+            <ConnField label={tr("Description — one line: what it does and when to use it (this is how the agent decides the skill applies)")}>
               <input
                 id="skillDescription"
                 className={SETTINGS_INPUT}
-                placeholder="Verify a deal sheet before it goes to a client — use when asked to review or send a deal sheet."
+                placeholder={tr("Verify a deal sheet before it goes to a client — use when asked to review or send a deal sheet.")}
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               />
             </ConnField>
-            <ConnField label="Instructions (markdown — concrete steps the agent follows)">
+            <ConnField label={tr("Instructions (markdown — concrete steps the agent follows)")}>
               <textarea
                 id="skillBody"
                 className={`${SETTINGS_INPUT} min-h-[9rem]! resize-y pt-[0.55rem]! font-[family-name:var(--font-code)] text-[0.76rem]! leading-[1.6]`}
-                placeholder={"1. Read the attached sheet.\n2. Check…"}
+                placeholder={tr("1. Read the attached sheet.\n2. Check…")}
                 value={draft.body}
                 onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               />
@@ -480,8 +480,8 @@ export default function SkillsPage() {
                 }
               />
               <span>
-                Share with your workspace so teammates can see{" "}
-                <CodeChip>/{draft.name || "name"}</CodeChip> and add it to their own skills
+                {tr("Share with your workspace so teammates can see")}{" "}
+                <CodeChip>/{draft.name || "name"}</CodeChip> {tr("and add it to their own skills")}
               </span>
             </label>
             {/* The design tightens .conn-form-actions' top margin inside
@@ -493,15 +493,14 @@ export default function SkillsPage() {
                 disabled={busy}
                 onClick={() => setDraft(null)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 type="button"
                 className={btnClass({ variant: "primary" })}
                 disabled={busy || !draft.name.trim()}
                 onClick={saveDraft}
               >
-                {draft.id === "" ? "Create skill" : "Save changes"}
+                {draft.id === "" ? tr("Create skill") : tr("Save changes")}
               </button>
             </div>
           </div>
@@ -520,16 +519,15 @@ export default function SkillsPage() {
               disabled={busy}
               onClick={() => void reloadMine()}
             >
-              Retry
+              {tr("Retry")}
             </button>
           </p>
         ) : null}
         {mine === null ? (
-          <p className={LOADING}>Loading…</p>
+          <p className={LOADING}>{tr("Loading…")}</p>
         ) : mine.length === 0 && mineError ? null : mine.length === 0 && !draft ? (
           <ConnEmpty>
-            No skills yet. Write down a job you repeat and the assistant will use it when it
-            fits.
+            {tr("No skills yet. Write down a job you repeat and the assistant will use it when it fits.")}
           </ConnEmpty>
         ) : (
           <ConnRows>
@@ -547,14 +545,14 @@ export default function SkillsPage() {
                     }
                   >
                     {sk.status === "active"
-                      ? "Active"
+                      ? tr("Active")
                       : sk.status === "proposed"
-                        ? "Proposed by agent"
-                        : "Disabled"}
+                        ? tr("Proposed by agent")
+                        : tr("Disabled")}
                   </ConnBadge>
                   {sk.visibility === "workspace" ? (
                     <ConnBadge variant="neutral">
-                      {sk.status === "active" ? "Shared with workspace" : "Shared (when enabled)"}
+                      {sk.status === "active" ? tr("Shared with workspace") : tr("Shared (when enabled)")}
                     </ConnBadge>
                   ) : null}
                   <span className="ml-auto inline-flex gap-[0.35rem]">
@@ -566,7 +564,7 @@ export default function SkillsPage() {
                           disabled={busy}
                           onClick={() => approveMine(sk)}
                         >
-                          Approve
+                          {tr("Approve")}
                         </button>
                         <button
                           type="button"
@@ -574,7 +572,7 @@ export default function SkillsPage() {
                           disabled={busy}
                           onClick={() => approveMine(sk, true)}
                         >
-                          Approve & share
+                          {tr("Approve & share")}
                         </button>
                       </>
                     ) : (
@@ -584,7 +582,7 @@ export default function SkillsPage() {
                         disabled={busy}
                         onClick={() => toggleShareMine(sk)}
                       >
-                        {sk.visibility === "workspace" ? "Unshare" : "Share with workspace"}
+                        {sk.visibility === "workspace" ? tr("Unshare") : tr("Share with workspace")}
                       </button>
                     )}
                     <button
@@ -601,7 +599,7 @@ export default function SkillsPage() {
                         })
                       }
                     >
-                      Edit
+                      {tr("Edit")}
                     </button>
                     {sk.status !== "proposed" ? (
                       <button
@@ -610,7 +608,7 @@ export default function SkillsPage() {
                         disabled={busy}
                         onClick={() => toggleMine(sk)}
                       >
-                        {sk.status === "active" ? "Disable" : "Enable"}
+                        {sk.status === "active" ? tr("Disable") : tr("Enable")}
                       </button>
                     ) : null}
                     <button
@@ -619,10 +617,10 @@ export default function SkillsPage() {
                       aria-expanded={openMine === sk.id}
                       onClick={() => setOpenMine(openMine === sk.id ? null : sk.id)}
                     >
-                      {openMine === sk.id ? "Hide" : "View"}
+                      {openMine === sk.id ? tr("Hide") : tr("View")}
                     </button>
                     <InlineConfirmButton
-                      label="Delete"
+                      label={tr("Delete")}
                       onConfirm={() => deleteMine(sk)}
                       disabled={busy}
                     />
@@ -637,24 +635,24 @@ export default function SkillsPage() {
       </ConnPanel>
 
       <ConnPanel>
-        <ConnPanelHead title="Workspace skills" />
+        <ConnPanelHead title={tr("Workspace skills")} />
         <ConnPanelSub>
-          Available to everyone in your workspace, including the skills that come with Fleet.
+          {tr("Available to everyone in your workspace, including the skills that come with Fleet.")}
         </ConnPanelSub>
         <DirSearch
           className="mb-[0.35rem]"
           value={query}
           onChange={setQuery}
-          placeholder={`Search ${skills?.length ?? 0} skills…`}
-          label="Search workspace skills"
+          placeholder={tr("Search {0} skills…", [skills?.length ?? 0])}
+          label={tr("Search workspace skills")}
         />
         {skills === null ? (
-          <p className={LOADING}>Loading…</p>
+          <p className={LOADING}>{tr("Loading…")}</p>
         ) : filtered.length === 0 ? (
           q ? (
-            <ConnEmpty>No skills match “{query}”.</ConnEmpty>
+            <ConnEmpty>{tr("No skills match “")}{query}”.</ConnEmpty>
           ) : (
-            <ConnEmpty>No skills are installed on this deployment.</ConnEmpty>
+            <ConnEmpty>{tr("No skills are installed on this deployment.")}</ConnEmpty>
           )
         ) : (
           <ConnRows>
@@ -668,12 +666,12 @@ export default function SkillsPage() {
                     }
                   >
                     {s.source === "bundle"
-                      ? "Workspace"
+                      ? tr("Workspace")
                       : s.source === "workspace"
-                        ? `Shared${s.shared_by ? `: ${s.shared_by}` : ""}`
+                        ? tr("Shared{0}", [s.shared_by ? `: ${s.shared_by}` : ""])
                         : s.source === "plugin"
-                          ? `Plugin${s.plugin ? `: ${s.plugin}` : ""}`
-                          : "Built-in"}
+                          ? tr("Plugin{0}", [s.plugin ? `: ${s.plugin}` : ""])
+                          : tr("Built-in")}
                   </ConnBadge>
                   <span className="ml-auto inline-flex gap-[0.35rem]">
                     {s.source === "workspace" && !mine?.some((m) => m.name === s.name) ? (
@@ -683,7 +681,7 @@ export default function SkillsPage() {
                         disabled={busy}
                         onClick={() => addSharedToMine(s)}
                       >
-                        Add to my skills
+                        {tr("Add to my skills")}
                       </button>
                     ) : null}
                     <button
@@ -692,7 +690,7 @@ export default function SkillsPage() {
                       disabled={busy}
                       onClick={() => cloneToDraft(s)}
                     >
-                      Clone & edit
+                      {tr("Clone & edit")}
                     </button>
                     <button
                       type="button"
@@ -700,17 +698,17 @@ export default function SkillsPage() {
                       aria-expanded={openSkill === s.name}
                       onClick={() => view(s.name)}
                     >
-                      {openSkill === s.name ? "Hide" : "View"}
+                      {openSkill === s.name ? tr("Hide") : tr("View")}
                     </button>
                   </span>
                 </div>
-                <ClampText text={s.description} className={SKILL_DESC} />
+                <ClampText text={skillDescription(s)} className={SKILL_DESC} />
                 {s.declared_allowed_tools && s.declared_allowed_tools.length > 0 ? (
                   <p className="mb-0 mt-[0.15rem] text-[0.6875rem] text-[var(--color-text-muted)]">
-                    <span className="uppercase tracking-wide">Declared tools</span>{" "}
+                    <span className="uppercase tracking-wide">{tr("Declared tools")}</span>{" "}
                     {s.declared_allowed_tools.join(", ")}{" "}
-                    <span title="Declared for review only — fleet does not enforce a skill's allowed-tools. The real limits are the sandbox, MCP allowlist, and approval gate.">
-                      (advisory)
+                    <span title={tr("Declared for review only — fleet does not enforce a skill's allowed-tools. The real limits are the sandbox, MCP allowlist, and approval gate.")}>
+                      {tr("(advisory)")}
                     </span>
                   </p>
                 ) : null}
@@ -727,11 +725,11 @@ export default function SkillsPage() {
                         className={btnClass({ sm: true, reveal: true })}
                         onClick={() => loadDetail(s.name)}
                       >
-                        Retry
+                        {tr("Retry")}
                       </button>
                     </p>
                   ) : (
-                    <p className="m-0 text-[0.74rem] text-[var(--color-text-muted)]">Loading…</p>
+                    <p className="m-0 text-[0.74rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
                   )
                 ) : null}
               </div>
