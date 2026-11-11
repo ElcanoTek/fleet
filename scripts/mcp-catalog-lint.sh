@@ -262,13 +262,13 @@ backoff() {
   fi
 }
 
-# check_url NAME FIELD URL [OUTFILE] — appends one result line.
+# check_url NAME FIELD URL — appends one result line.
 # Retry budgets are shared across HEAD and GET so a sustained 429/503 on a host
 # with many links stays bounded well below the workflow timeout; if HEAD alone
 # exhausts the retry budget on 429/503, one final GET probe runs after a polite
 # --delay pause in case only HEAD is throttled/refused.
 check_url() {
-  local name="$1" field="$2" url="$3" out_file="${4:-$RESULTS}"
+  local name="$1" field="$2" url="$3"
   local attempt=0 method=HEAD code rc ra eff verdict note line
   while :; do
     IFS="$US" read -r code rc ra eff < <(fetch "$url" "$method")
@@ -309,7 +309,7 @@ check_url() {
   done
   IFS="$US" read -r verdict note < <(classify "$code" "$rc" "$url" "$eff")
   line="$(printf '%s%s%s%s%s%s%s%s%s%s%s%s%s' "$verdict" "$US" "$code" "$US" "$name" "$US" "$field" "$US" "$url" "$US" "$eff" "$US" "$note")"
-  echo "$line" >> "$out_file"
+  echo "$line" >> "$RESULTS"
 }
 
 # process_host FILE — one host's links, sequentially, --delay apart.
@@ -351,12 +351,16 @@ if (( xargs_rc == 0 )) && awk -v d="$CONFIRM_DELAY" 'BEGIN { exit !(d > 0) }'; t
   if (( dead_first_count > 0 )); then
     echo "re-checking $dead_first_count dead link(s) after ${CONFIRM_DELAY}s to confirm..."
     sleep "$CONFIRM_DELAY"
+    mkdir -p "$WORK/confirm_hosts"
+    while IFS=$'\t' read -r name field url; do
+      host="${url#*://}"; host="${host%%/*}"; host="${host%%:*}"
+      host="${host//[^A-Za-z0-9.-]/_}"
+      printf '%s\t%s\t%s\n' "$name" "$field" "$url" >> "$WORK/confirm_hosts/$host"
+    done < "$DEAD_FIRST"
     KEEP="$WORK/results.keep.tsv"
     awk -F "$US" '$1 != "DEAD"' "$RESULTS" > "$KEEP"
-    while IFS=$'\t' read -r name field url; do
-      check_url "$name" "$field" "$url" "$KEEP"
-    done < "$DEAD_FIRST"
     mv "$KEEP" "$RESULTS"
+    find "$WORK/confirm_hosts" -type f -print0 | xargs -0 -P "$CONCURRENCY" -I{} bash -c 'process_host "$1"' _ {} || xargs_rc=$?
   fi
 fi
 
