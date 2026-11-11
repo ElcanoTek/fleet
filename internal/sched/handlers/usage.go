@@ -165,10 +165,9 @@ func (h *Handlers) GetUsageReport(w http.ResponseWriter, r *http.Request) {
 // UsageReport.Note is not repeated here (the header names the token columns,
 // which are the coverage-independent signal).
 func writeUsageCSV(w http.ResponseWriter, out *models.UsageReport) {
-	stamp := time.Now().UTC().Format("20060102")
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("fleet-usage-%s-%s.csv", out.GroupBy, stamp)))
+		fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("fleet-usage-%s-%s.csv", out.GroupBy, csvWindowStamp(out.From, out.To))))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
 		out.GroupBy, "label", "cost_usd", "task_cost_usd", "chat_cost_usd",
@@ -197,6 +196,15 @@ func writeUsageCSV(w http.ResponseWriter, out *models.UsageReport) {
 	totals.Label = ""
 	_ = cw.Write(row(totals))
 	cw.Flush()
+}
+
+// csvWindowStamp names a report's window in its CSV filename as
+// FIRSTDAY-LASTDAY (YYYYMMDD, UTC; `to` is exclusive, so the last day is the
+// one holding the instant before it), so exports over different windows get
+// different names and the file says which window it covers (#2105 QA). The
+// handlers reject from >= to before writing, so `from` <= the last instant.
+func csvWindowStamp(from, to time.Time) string {
+	return from.UTC().Format("20060102") + "-" + to.Add(-time.Nanosecond).UTC().Format("20060102")
 }
 
 // mergeUsage folds the two meters' rows into one bucket list keyed on the

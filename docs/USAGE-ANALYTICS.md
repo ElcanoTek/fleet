@@ -116,7 +116,9 @@ reduced opacity.
 ## CSV export
 
 `GET /admin/usage?format=csv` returns the current report as a `text/csv`
-attachment (`fleet-usage-<group_by>-<YYYYMMDD>.csv`): one row per bucket with
+attachment named for its window, `fleet-usage-<group_by>-<first>-<last>.csv`
+(the first and last UTC day the report covers, `YYYYMMDD`; `to` is
+exclusive, so a midnight `to` ends on the day before): one row per bucket with
 the group key, cost columns, and token/iteration/turn counts, plus a trailing
 `TOTAL` row. Same admin gate + `group_by`/`from`/`to` params as the JSON form
 (`?format=json` is the default). The Operations Center Usage panel has a
@@ -345,7 +347,8 @@ documented in `docs/openapi.yaml` (schemas `AdoptionReport`, `AdoptionUser`,
 drift tests). Same parameter contract and admin posture as `/admin/usage`:
 trailing-30-day default, `to` exclusive, 366-day clamp, registered behind
 `AdminOrUserAuthMiddleware` with `PermissionAdmin` enforced in-handler.
-`format=csv` downloads the per-user leaderboard with a TOTAL row.
+`format=csv` downloads the per-user leaderboard with a TOTAL row, as
+`fleet-adoption-<first>-<last>.csv`.
 
 ### The Operations Center panel
 

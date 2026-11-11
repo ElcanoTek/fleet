@@ -340,10 +340,9 @@ func buildAdoptionReport(
 // the daily series stay JSON-only (a per-day matrix doesn't belong in a
 // per-user CSV).
 func writeAdoptionCSV(w http.ResponseWriter, out *models.AdoptionReport) {
-	stamp := time.Now().UTC().Format("20060102")
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("fleet-adoption-%s.csv", stamp)))
+		fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("fleet-adoption-%s.csv", csvWindowStamp(out.From, out.To))))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
 		"user", "tokens", "prompt_tokens", "completion_tokens", "cached_tokens",
