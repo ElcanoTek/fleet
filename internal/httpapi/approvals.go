@@ -1155,19 +1155,30 @@ func handlerOnlyApproval(tool string) bool {
 // display aliases or synthetic summary fields. These tools' arguments contain
 // user-authored task/email/model data, not broker credentials. Executable tools
 // continue to match their arguments exclusively in the server registry.
+//
+// An argument the call writes more than once, in any letter case, is left
+// out: the handler decodes the last spelling (encoding/json ignores case),
+// which a terminal pattern on another spelling would not see, so no terminal
+// pattern can settle that card and it waits for the user.
 func handlerApprovalPatternArgs(tool, raw string) map[string]string {
 	if !handlerOnlyApproval(tool) {
 		return nil
 	}
-	var args map[string]any
-	if json.Unmarshal([]byte(raw), &args) != nil {
+	in := parseCallInput(raw)
+	if !in.object {
 		return nil
 	}
+	spellings := make(map[string]int, len(in.args))
+	for _, a := range in.args {
+		spellings[foldName(a.name)]++
+	}
 	result := make(map[string]string)
-	for k, v := range args {
-		if s, ok := v.(string); ok {
-			result[k] = s
+	for _, a := range in.args {
+		s, ok := a.value.(string)
+		if !ok || spellings[foldName(a.name)] > 1 {
+			continue
 		}
+		result[a.name] = s
 	}
 	return result
 }

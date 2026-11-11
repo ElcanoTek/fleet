@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -122,8 +123,9 @@ func (r *SessionApprovalRegistry) ForgetUser(userEmail string) {
 
 // Match returns the first policy covering (convID, toolName, rawInput), or
 // ok=false when none applies. A "" pattern matches every call; "argName=glob"
-// matches when the call's args[argName] matches glob (filepath.Match). DENY
-// policies are evaluated before APPROVE so an explicit pre-denial always wins.
+// matches when the call's argName argument matches glob (filepath.Match), the
+// name read ignoring case (policyMatches). DENY policies are evaluated before
+// APPROVE so an explicit pre-denial always wins.
 func (r *SessionApprovalRegistry) Match(convID, toolName, rawInput string) (SessionApprovalPolicy, bool) {
 	return r.MatchForUser(convID, "", toolName, rawInput)
 }
@@ -143,17 +145,11 @@ func (r *SessionApprovalRegistry) MatchForUser(convID, userEmail, toolName, rawI
 	if len(policies) == 0 {
 		return SessionApprovalPolicy{}, false
 	}
-	var args map[string]any
-	_ = json.Unmarshal([]byte(rawInput), &args)
-	if args != nil && browserActionNormalizer(toolName) != nil {
-		if action, ok := browserCallAction(rawInput); ok {
-			args["action"] = action
-		}
-	}
+	in := parseCallInput(rawInput)
 	// Deny wins: scan denies first, then approves.
 	for _, want := range [...]string{"deny", "approve"} {
 		for _, p := range policies {
-			if p.Mode == want && policyMatches(p, args, toolName) {
+			if p.Mode == want && policyMatches(p, in, toolName) {
 				return p, true
 			}
 		}
@@ -161,12 +157,67 @@ func (r *SessionApprovalRegistry) MatchForUser(convID, userEmail, toolName, rawI
 	return SessionApprovalPolicy{}, false
 }
 
-// policyMatches reports whether a policy applies to the given parsed args.
+// callArg is one top-level argument of a tool call, as written.
+type callArg struct {
+	name  string
+	value any
+}
+
+// callInput is a tool call's top-level arguments in the order written, every
+// duplicate kept (a map decode keeps only the last of an exact name). object
+// is false when the input is not a valid JSON object. Such a call has no
+// argument a pattern could name (a tool's decode refuses it or, for null,
+// reads none), so only an all-calls policy covers it.
+type callInput struct {
+	object bool
+	args   []callArg
+}
+
+// parseCallInput reads rawInput's top-level arguments. Numbers stay
+// json.Number, so a number no float64 holds (1e400), which a tool's struct
+// decode skips in a field it does not have, does not hide the other
+// arguments.
+func parseCallInput(rawInput string) callInput {
+	if !json.Valid([]byte(rawInput)) {
+		return callInput{}
+	}
+	dec := json.NewDecoder(strings.NewReader(rawInput))
+	dec.UseNumber()
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return callInput{}
+	}
+	in := callInput{object: true}
+	for dec.More() {
+		tok, err := dec.Token()
+		name, isName := tok.(string)
+		if err != nil || !isName {
+			return callInput{}
+		}
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return callInput{}
+		}
+		in.args = append(in.args, callArg{name: name, value: v})
+	}
+	return in
+}
+
+// policyMatches reports whether a policy applies to a call.
+//
+// A pattern names an argument the way the tools read it. A Go tool decodes
+// its arguments with encoding/json, which matches a name ignoring case (with
+// Unicode case folding, as strings.EqualFold does) and keeps the last
+// spelling; a tool that reads names exactly, such as an MCP server, reads
+// its own one of them. So the pattern is checked against every spelling of
+// the name in the call: a deny matches when any of them matches, an approve
+// only when all of them do. Whichever spelling the tool reads, a deny that
+// names it applies, and an approve covers only a value it was given for.
+//
 // For the browser tools, whose actions have aliases ("live" runs
 // "start_session"), an action pattern also matches the call's canonical
 // action, and an alias in the pattern stands for its canonical action, so a
 // session deny of start_session catches every spelling of it.
-func policyMatches(p SessionApprovalPolicy, args map[string]any, toolName string) bool {
+func policyMatches(p SessionApprovalPolicy, in callInput, toolName string) bool {
 	if p.Pattern == "" {
 		return true
 	}
@@ -175,18 +226,78 @@ func policyMatches(p SessionApprovalPolicy, args map[string]any, toolName string
 		return false
 	}
 	argName, glob := p.Pattern[:eq], p.Pattern[eq+1:]
-	val, ok := args[argName]
-	if !ok {
+	values := patternValues(in, argName, toolName)
+	if len(values) == 0 {
 		return false
 	}
-	s, ok := val.(string)
+	deny := p.Mode == "deny"
+	for _, v := range values {
+		matched := valueMatches(v, argName, glob, toolName)
+		if deny && matched {
+			return true
+		}
+		if !deny && !matched {
+			return false
+		}
+	}
+	return !deny
+}
+
+// patternValues are the values of every top-level argument whose name equals
+// argName ignoring case, in the order written. A browser tool reads its
+// action into a string field, which a null leaves as it is and which stays
+// "" when nothing sets it (playwright_browser's default, run): for the
+// action, a null is skipped, and a call with no other spelling counts as "".
+func patternValues(in callInput, argName, toolName string) []any {
+	if !in.object {
+		return nil
+	}
+	browserAction := strings.EqualFold(argName, "action") && browserActionNormalizer(toolName) != nil
+	var values []any
+	for _, a := range in.args {
+		if !strings.EqualFold(a.name, argName) || (browserAction && a.value == nil) {
+			continue
+		}
+		values = append(values, a.value)
+	}
+	if browserAction && len(values) == 0 {
+		return []any{""}
+	}
+	return values
+}
+
+// foldName is name with each rune replaced by the smallest rune of its case
+// folding orbit, so two names are equal ignoring case (strings.EqualFold)
+// exactly when their foldNames are equal. encoding/json folds names the same
+// way.
+func foldName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		for {
+			f := unicode.SimpleFold(r)
+			if f <= r {
+				r = f
+				break
+			}
+			r = f
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// valueMatches reports whether one spelling's value matches glob. Only a
+// string can: any other value fails an approve and never matches a deny.
+func valueMatches(v any, argName, glob, toolName string) bool {
+	s, ok := v.(string)
 	if !ok {
 		return false
 	}
 	if matched, err := filepath.Match(glob, s); err == nil && matched {
 		return true
 	}
-	if argName != "action" {
+	if !strings.EqualFold(argName, "action") {
 		return false
 	}
 	normalize := browserActionNormalizer(toolName)
@@ -202,24 +313,6 @@ func policyMatches(p SessionApprovalPolicy, args map[string]any, toolName string
 	}
 	matched, err := filepath.Match(glob, canonical)
 	return err == nil && matched
-}
-
-// browserCallAction is a browser tool call's action as the tool reads it:
-// decoded into a struct field, so any key case matches and the last
-// duplicate wins, and a missing or null action is "" (playwright_browser's
-// default, run). ok is false when the input does not decode, and the tool
-// refuses the call too.
-func browserCallAction(rawInput string) (string, bool) {
-	var p struct {
-		Action *string `json:"action"`
-	}
-	if json.Unmarshal([]byte(rawInput), &p) != nil {
-		return "", false
-	}
-	if p.Action == nil {
-		return "", true
-	}
-	return *p.Action, true
 }
 
 // browserActionNormalizer returns the action normalizer of a browser tool,
