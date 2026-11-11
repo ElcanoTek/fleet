@@ -228,6 +228,8 @@ Se o serviço de que precisa não estiver no diretório, ou só oferecer uma API
 
 Quando a vista de navegador em direto não consegue fazer algo que pediu, uma nota breve no topo indica-o e, para um endereço que não abre (por exemplo, um que não seja uma página Web), explica porquê.
 
+As credenciais ocultas enviadas num formulário da conversa permanecem no cofre temporário dessa conversa como uma referência `$secret:`. Se uma chamada de conector ou de navegador incluir um marcador `[REDACTED]`, ou passar uma referência `$secret:` para uma tarefa agendada ou para um conector personalizado guardado (que usam antes as credenciais guardadas na própria ligação), o Fleet recusa a chamada em vez de enviar o marcador ou o texto da referência — volte a enviar a credencial num novo formulário ou atualize a ligação guardada em **Definições → Ligações**.
+
 Cada chamada a um conector aparece como uma etiqueta no registo de execução. Se um número parecer incorreto, abra a etiqueta e leia o que o conector devolveu antes de questionar o cálculo.
 
 > **As credenciais nunca saem da plataforma.** O assistente usa uma ligação, mas nunca vê as credenciais que estão por trás. As chaves e os tokens permanecem no anfitrião, são incorporados numa chamada apenas no momento de a realizar e nunca entram no ambiente isolado, na conversa nem no contexto do modelo.
@@ -504,6 +506,7 @@ A maioria dos problemas manifesta-se na transcrição. Procure na tabela seguint
 | Modelo indisponível | O aviso oferece **Escolher outro modelo**. Escolha um e volte a enviar; a conversa mantém o histórico. |
 | Ficheiro recusado | Se um anexo ultrapassar o limite de tamanho, é recusado ao selecioná-lo e o limite é apresentado. Divida o ficheiro ou limite-o às colunas e datas de que precisa. |
 | Conector indisponível | O seletor mostra **Indisponível** junto a um conector, ou o registo de execução mostra uma chamada que devolveu um erro. Verifique em **Definições → Ligações** se o início de sessão caducou; caso contrário, informe o administrador e junte uma exportação de **Descarregar chat** no formato **Dados em bruto**: inclui sempre o registo completo, pelo que não apresenta opções para assinalar. |
+| Chamada de conector ou navegador recusada (`[REDACTED]` ou `$secret:`) | Uma chamada tentou reutilizar um marcador oculto anterior da conversa, passar uma referência de credencial exclusiva da conversa para uma execução agendada ou para um conector personalizado guardado, ou executar um conector personalizado cuja definição guardada registou o marcador. Peça ao assistente um novo formulário de credenciais e volte a enviar o segredo, ou atualize ou recrie a ligação guardada em **Definições → Ligações** com credenciais reais. |
 | A conversa está cheia | Um aviso indica a percentagem. **Resumir mensagens anteriores**, ou inicie uma nova se tiver mudado de assunto. |
 | A resposta está errada | Abra os indicadores do registo de execução e leia o que cada fonte devolveu realmente. Depois, peça: «mostre-me as linhas de onde vem esse valor». A maioria das respostas erradas deve-se a uma fonte errada ou a um identificador mal interpretado; ambos são visíveis no registo de execução. |
 

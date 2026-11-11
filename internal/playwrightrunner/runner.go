@@ -175,6 +175,9 @@ func ValidateStep(st Step) error {
 				return errors.New("goto step URL must not contain secret placeholders")
 			}
 		}
+		if strings.Contains(target, redact.VaultReferencePrefix) {
+			return errors.New(`goto step URL must not contain a "$secret:..." vault reference`)
+		}
 		probeTarget := strings.NewReplacer("{", "_", "}", "_").Replace(target)
 		if _, err := ValidateTargetURL(probeTarget, false); err != nil {
 			return fmt.Errorf("goto step: %w", err)
@@ -217,6 +220,9 @@ func ValidateTargetURL(rawURL string, allowInsecureHTTP bool) (string, error) {
 		if strings.Contains(strings.ToUpper(rawURL), ph) {
 			return "", errors.New("URL must not contain secret placeholders; pass secrets via steps or headers")
 		}
+	}
+	if strings.Contains(rawURL, redact.VaultReferencePrefix) {
+		return "", errors.New(`URL must not contain a "$secret:..." vault reference; pass credentials via password_ref, username_ref or secret_ref`)
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Hostname() == "" {

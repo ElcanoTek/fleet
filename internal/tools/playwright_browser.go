@@ -130,6 +130,9 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 	}
 	action := NormalizePlaywrightBrowserAction(params.Action)
 	pctx := playwrightBrowserContextFrom(ctx)
+	if pctx.ResolveSecret == nil && ArgsCarryVaultReference(params) {
+		return nil, ErrNoVaultForSecretReference
+	}
 	targetURL := strings.TrimSpace(params.URL)
 	if (targetURL == "" || action == "steps") && strings.TrimSpace(params.SessionID) != "" {
 		// On a live session (action "steps") credentials are resolved for the
@@ -258,8 +261,12 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 // redacted call, which would be typed or sent as "[REDACTED]".
 var ErrRedactionMarkerArgument = errors.New(redact.MarkerArgumentRefusal)
 
-// ArgsCarryRedactionMarker reports whether any string in params (any tool's
-// parameter struct) carries a redaction marker.
+// ErrNoVaultForSecretReference refuses a "$secret:" reference when there is no
+// interactive chat vault to resolve it (for example in a scheduled run).
+var ErrNoVaultForSecretReference = errors.New("a $secret reference can only be resolved in an interactive chat, where the user submitted the credential")
+
+// ArgsCarryRedactionMarker reports whether any string or map key in params
+// (any tool's parameter struct) carries a redaction marker.
 func ArgsCarryRedactionMarker(params any) bool {
 	b, err := json.Marshal(params)
 	if err != nil {
@@ -270,6 +277,20 @@ func ArgsCarryRedactionMarker(params any) bool {
 		return false
 	}
 	return redact.ContainsMarker(v)
+}
+
+// ArgsCarryVaultReference reports whether any string or map key in params
+// (any tool's parameter struct) carries a "$secret:" vault reference.
+func ArgsCarryVaultReference(params any) bool {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return false
+	}
+	var v any
+	if json.Unmarshal(b, &v) != nil {
+		return false
+	}
+	return redact.ContainsVaultReference(v)
 }
 
 // resolvePlaywrightCredential turns a username_ref/password_ref into the value
@@ -283,7 +304,7 @@ func resolvePlaywrightCredential(ctx context.Context, pctx PlaywrightBrowserCont
 	}
 	if pctx.ResolveSecret == nil {
 		if strings.HasPrefix(val, "$secret:") {
-			return "", errors.New("a $secret reference can only be resolved in an interactive chat, where the user submitted the credential")
+			return "", ErrNoVaultForSecretReference
 		}
 		return val, nil
 	}

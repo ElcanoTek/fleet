@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
@@ -25,8 +24,14 @@ func TestPlaywrightBrowserRefusesRedactedAndUnresolvableArguments(t *testing.T) 
 			t.Errorf("%+v: err = %v, want ErrRedactionMarkerArgument", p, err)
 		}
 	}
-	_, err := RunPlaywrightBrowserForApproval(ctx, PlaywrightBrowserContext{}, PlaywrightBrowserParams{Action: "run", URL: "https://a.example.com/", PasswordRef: "$secret:password"})
-	if err == nil || !strings.Contains(err.Error(), "only be resolved in an interactive chat") {
-		t.Errorf("a $secret reference with no vault: err = %v", err)
+	for _, p := range []PlaywrightBrowserParams{
+		{Action: "run", URL: "https://a.example.com/", PasswordRef: "$secret:password"},
+		{Action: "run", URL: "https://a.example.com/$secret:password"},
+		{Action: "run", URL: "https://a.example.com/", Steps: []playwrightrunner.Step{{Action: "goto", Value: "https://a.example.com/$secret:password"}}},
+	} {
+		_, err := RunPlaywrightBrowserForApproval(ctx, PlaywrightBrowserContext{}, p)
+		if !errors.Is(err, ErrNoVaultForSecretReference) {
+			t.Errorf("%+v: err = %v, want ErrNoVaultForSecretReference", p, err)
+		}
 	}
 }

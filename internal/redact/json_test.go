@@ -82,9 +82,10 @@ func TestRedactJSONKeepsVaultReferences(t *testing.T) {
 		`"basic":"Authorization: Basic dXNlcjpwYXNzd29yZA==","token_ref":"$secret:dXNlcjpwYXNzd29yZA",` + // gitleaks:allow (made-up test values)
 		`"long_ref":"$secret:` + strings.Repeat("a1", 33) + `","dash_ref":"$secret:api-token-1928",` +
 		`"jwt_ref":"$secret:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",` + // gitleaks:allow (made-up JWT: {"sub":"1234567890"}, hand-typed signature)
+		`"eyj_field_ref":"$secret:eyJ_password","eyj_nested_ref":"$secret:creds[0].eyJ_password",` +
 		`"nested_ref":"$secret:` + deepRef + `"}` // gitleaks:allow (made-up test values)
 	got := r.Redact(in)
-	for _, keep := range []string{`"password_ref":"$secret:password"`, `"secret_ref":"$secret:api_token"`, `"username_ref":"$secret:creds[0].user_name"`, `"nested_ref":"$secret:` + deepRef + `"`} {
+	for _, keep := range []string{`"password_ref":"$secret:password"`, `"secret_ref":"$secret:api_token"`, `"username_ref":"$secret:creds[0].user_name"`, `"eyj_field_ref":"$secret:eyJ_password"`, `"eyj_nested_ref":"$secret:creds[0].eyJ_password"`, `"nested_ref":"$secret:` + deepRef + `"`} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("Redact = %s, want it to keep %s", got, keep)
 		}
@@ -118,5 +119,11 @@ func TestRedactJSONScrubsLiteralMatchingVaultReference(t *testing.T) {
 		if got := r.Redact(msg); got != msg {
 			t.Errorf("Redact altered refusal message:\n got: %s\nwant: %s", got, msg)
 		}
+	}
+	if !ContainsMarker(map[string]any{"nested": map[string]any{"[REDACTED]": "ok"}}) {
+		t.Error("ContainsMarker missed map key carrying [REDACTED]")
+	}
+	if !ContainsVaultReference(map[string]any{"nested": map[string]any{"$secret:password": "ok"}}) {
+		t.Error("ContainsVaultReference missed map key carrying $secret:")
 	}
 }

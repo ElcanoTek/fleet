@@ -142,12 +142,8 @@ func (r *Redactor) keepVaultReference(key, value string, credentials []string) b
 		return false
 	}
 	id := strings.TrimPrefix(value, VaultReferencePrefix)
-	// Every JWT starts "eyJ" ({"); one fits the field ID grammar but is no
-	// field ID.
-	for _, seg := range strings.Split(id, ".") {
-		if strings.HasPrefix(seg, "eyJ") {
-			return false
-		}
+	if looksLikeJWT(id) {
+		return false
 	}
 	for _, c := range credentials {
 		// A Basic credential is collected with its "=" padding, which a
@@ -157,6 +153,26 @@ func (r *Redactor) keepVaultReference(key, value string, credentials []string) b
 		}
 	}
 	return r.redactPlain(id) == id
+}
+
+// looksLikeJWT reports whether id has the compact JWT/JWE shape: three
+// dot-separated base64url segments whose header and payload both start "eyJ"
+// (base64url for `{"`), or five dot-separated segments starting "eyJ", with no
+// repeater "[index]" brackets. Plain field IDs such as "eyJ_password" or
+// "creds[0].eyJ_password" are preserved.
+func looksLikeJWT(id string) bool {
+	if strings.Contains(id, "[") {
+		return false
+	}
+	segs := strings.Split(id, ".")
+	switch len(segs) {
+	case 3:
+		return strings.HasPrefix(segs[0], "eyJ") && strings.HasPrefix(segs[1], "eyJ")
+	case 5:
+		return strings.HasPrefix(segs[0], "eyJ")
+	default:
+		return false
+	}
 }
 
 // matchesLiteralOrShape reports whether s matches a registered literal, a
@@ -206,16 +222,17 @@ const VaultReferenceArgumentRefusal = `an argument contains a "$secret:..." vaul
 // vault reference in place of a secret or template value.
 const SavedConnectorMarkerRefusal = `this saved connector's stored definition or credentials contain "[REDACTED]" or an unresolved "$secret:..." reference instead of the real value; update or recreate the connector with real credentials before calling it`
 
-// ContainsMarker reports whether any string in v (a decoded JSON value:
-// strings, maps, slices) carries a redaction marker: a value the model copied
-// out of an earlier, redacted tool call, which must not be used as written.
+// ContainsMarker reports whether any string or map key in v (a decoded JSON
+// value: strings, maps, slices) carries a redaction marker: a value the model
+// copied out of an earlier, redacted tool call, which must not be used as
+// written.
 func ContainsMarker(v any) bool {
 	switch x := v.(type) {
 	case string:
 		return strings.Contains(x, MarkerPrefix)
 	case map[string]any:
-		for _, c := range x {
-			if ContainsMarker(c) {
+		for k, c := range x {
+			if strings.Contains(k, MarkerPrefix) || ContainsMarker(c) {
 				return true
 			}
 		}
@@ -229,15 +246,15 @@ func ContainsMarker(v any) bool {
 	return false
 }
 
-// ContainsVaultReference reports whether any string in v (a decoded JSON
-// value: strings, maps, slices) carries a "$secret:" vault reference.
+// ContainsVaultReference reports whether any string or map key in v (a decoded
+// JSON value: strings, maps, slices) carries a "$secret:" vault reference.
 func ContainsVaultReference(v any) bool {
 	switch x := v.(type) {
 	case string:
 		return strings.Contains(x, VaultReferencePrefix)
 	case map[string]any:
-		for _, c := range x {
-			if ContainsVaultReference(c) {
+		for k, c := range x {
+			if strings.Contains(k, VaultReferencePrefix) || ContainsVaultReference(c) {
 				return true
 			}
 		}
