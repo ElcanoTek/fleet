@@ -57,7 +57,7 @@ function literals(node, seen = new Set()) {
 for (const file of files) {
   const sourceFile = program.getSourceFile(file);
   function visit(node) {
-    if (ts.isCallExpression(node) && /^(?:t|tr|rich)$/.test(node.expression.getText(sourceFile))) {
+    if (ts.isCallExpression(node) && /^(?:t|tr|rich|bundleText)$/.test(node.expression.getText(sourceFile))) {
       for (const source of literals(node.arguments[0])) {
         if (!source.trim()) continue;
         messages.add(source);

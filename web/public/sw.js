@@ -24,6 +24,7 @@ const LANGUAGE_URL = "/__fleet_display_language";
 const supportedLanguage = (value) => ["en", "es", "pt"].includes(value) ? value : null;
 let displayLanguage;
 self.addEventListener("message", (event) => {
+  if (event.origin !== self.location.origin) return;
   if (event.data?.type !== "fleet-language") return;
   const language = supportedLanguage(event.data.language);
   if (!language) return;

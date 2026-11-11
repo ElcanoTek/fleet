@@ -1,4 +1,4 @@
-import { t as tr } from "@/app/lib/i18n";
+import { t as tr, bundleText } from "@/app/lib/i18n";
 // The per-request state the Go server renders into index.html
 // (<script type="application/json" id="fleet-bootstrap">, see
 // internal/webui/spa.go Bootstrap). It replaces what the Next.js server
@@ -51,10 +51,10 @@ export const DEFAULT_BOOTSTRAP: Bootstrap = {
   buildId: "dev",
   branding: {
     appName: "Fleet",
-    loginTitle: tr("Welcome aboard."),
-    loginTagline: tr("Sign in to your workspace and pick up where you left off."),
+    loginTitle: bundleText("Welcome aboard."),
+    loginTagline: bundleText("Sign in to your workspace and pick up where you left off."),
     shareTitle: "",
-    shareDescription: tr("An AI workspace with real tool use."),
+    shareDescription: bundleText("An AI workspace with real tool use."),
   },
   session: null,
   login: {

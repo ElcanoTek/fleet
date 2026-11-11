@@ -1,3 +1,4 @@
+import { formatBundlePersona } from "@/app/chat/ui/userPersonas";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
@@ -73,7 +74,7 @@ const CHOICE =
   "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-2 gap-y-[0.1rem] rounded-[var(--radius-md)] border border-[var(--color-border)] px-[0.7rem] py-[0.55rem] text-[0.78rem] text-[var(--color-text-secondary)] has-[:checked]:border-[var(--color-accent)] has-[:checked]:bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]";
 
 function titleCase(p: string): string {
-  return tr(p.charAt(0).toUpperCase() + p.slice(1));
+  return formatBundlePersona(p);
 }
 
 /** Choice renders one radio card of a two-way setting. */

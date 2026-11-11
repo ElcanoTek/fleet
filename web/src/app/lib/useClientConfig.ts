@@ -1,7 +1,6 @@
 import { localizeField } from "@/app/lib/i18n/bundle";
-import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
-import { setBundleLocalizations, t } from "@/app/lib/i18n";
+import { setBundleLocalizations, bundleText } from "@/app/lib/i18n";
 import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
 import {
   currentAdvancedModel,
@@ -57,13 +56,13 @@ export type ClientBranding = {
 
 // Neutral, client-agnostic branding. Mirrors config/default/manifest.yaml's
 // `branding` block so the bare fleet experience matches the generic bundle.
-export const DEFAULT_BRANDING: ClientBranding = {
+const DEFAULT_BRANDING_SOURCE: ClientBranding = {
   app_name: APP_NAME,
-  login_title: tr("Welcome aboard."),
-  login_tagline: tr("Sign in to your workspace and pick up where you left off."),
-  share_title: tr("{0} — your team's AI workspace", [APP_NAME]),
+  login_title: "Welcome aboard.",
+  login_tagline: "Sign in to your workspace and pick up where you left off.",
+  share_title: `${APP_NAME} — your team's AI workspace`,
   share_description:
-    tr("Persistent multi-turn conversations with real tool use across files, data, and the web."),
+    "Persistent multi-turn conversations with real tool use across files, data, and the web.",
 };
 
 export type UseClientConfig = {
@@ -97,34 +96,36 @@ type ClientConfigResponse = {
 export function localizeBundlePill(pill: ProtocolPill): ProtocolPill {
   return {
     ...pill,
-    section: t(pill.section),
-    title: t(pill.title),
-    desc: t(pill.desc),
-    cta: t(pill.cta),
-    ...(pill.promptTemplate ? { promptTemplate: t(pill.promptTemplate) } : {}),
-    ...(pill.starterPrompt ? { starterPrompt: t(pill.starterPrompt) } : {}),
+    section: bundleText(pill.section),
+    title: bundleText(pill.title),
+    desc: bundleText(pill.desc),
+    cta: bundleText(pill.cta),
+    ...(pill.promptTemplate ? { promptTemplate: bundleText(pill.promptTemplate) } : {}),
+    ...(pill.starterPrompt ? { starterPrompt: bundleText(pill.starterPrompt) } : {}),
     ...(pill.fields ? { fields: pill.fields.map(localizeField) } : {}),
   };
 }
 
-function localizeBranding(branding: ClientBranding): ClientBranding {
+export function localizeBranding(branding: ClientBranding): ClientBranding {
   const support = branding.support;
   return {
     ...branding,
-    login_title: t(branding.login_title),
-    login_tagline: t(branding.login_tagline),
-    share_title: t(branding.share_title),
-    share_description: t(branding.share_description),
+    login_title: bundleText(branding.login_title),
+    login_tagline: bundleText(branding.login_tagline),
+    share_title: bundleText(branding.share_title),
+    share_description: bundleText(branding.share_description),
     ...(support ? { support: {
       ...support,
-      label: t(support.label),
-      ...(support.mobile_label ? { mobile_label: t(support.mobile_label) } : {}),
-      ...(support.title ? { title: t(support.title) } : {}),
-      ...(support.message ? { message: t(support.message) } : {}),
-      ...(support.subject ? { subject: t(support.subject) } : {}),
+      label: bundleText(support.label),
+      ...(support.mobile_label ? { mobile_label: bundleText(support.mobile_label) } : {}),
+      ...(support.title ? { title: bundleText(support.title) } : {}),
+      ...(support.message ? { message: bundleText(support.message) } : {}),
+      ...(support.subject ? { subject: bundleText(support.subject) } : {}),
     } } : {}),
   };
 }
+
+export const DEFAULT_BRANDING = localizeBranding(DEFAULT_BRANDING_SOURCE);
 
 // The last successful /api/client-config payload, cached at module scope.
 // Chat ⇄ Operations Center is ordinary route navigation (two routes, one
@@ -202,8 +203,8 @@ export async function refreshClientConfig(): Promise<boolean> {
     // so the re-render this triggers already reads the live slugs.
     setModelTiers(data.models);
     cachedConfig = {
-      branding: localizeBranding({ ...DEFAULT_BRANDING, ...(data.branding ?? {}) }),
-      pills: (Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS).map(localizeBundlePill),
+      branding: localizeBranding({ ...DEFAULT_BRANDING_SOURCE, ...(data.branding ?? {}) }),
+      pills: Array.isArray(cards) && cards.length > 0 ? cards.map(localizeBundlePill) : DEFAULT_PILLS,
       models: {
         defaultModel: currentDefaultModel(),
         advancedModel: currentAdvancedModel(),

@@ -1,18 +1,18 @@
-import { t } from "./index";
+import { bundleText } from "./index";
 import type { PillField } from "@/app/chat/ui/protocolPills";
 import type { PromptLibraryItem, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 
 export function localizeField(field: PillField): PillField {
   return {
     ...field,
-    label: t(field.label),
-    ...(field.placeholder ? { placeholder: t(field.placeholder) } : {}),
-    ...(field.hint ? { hint: t(field.hint) } : {}),
-    ...(field.options ? { optionLabels: Object.fromEntries(field.options.map((option) => [option, t(option)])) } : {}),
+    label: bundleText(field.label),
+    ...(field.placeholder ? { placeholder: bundleText(field.placeholder) } : {}),
+    ...(field.hint ? { hint: bundleText(field.hint) } : {}),
+    ...(field.options ? { optionLabels: Object.fromEntries(field.options.map((option) => [option, bundleText(option)])) } : {}),
     // Text defaults are draft prose. Select values, dates, numbers and boolean
     // defaults retain their exact machine meaning.
     ...((field.type === "text" || field.type === "textarea") && typeof field.default === "string"
-      ? { default: t(field.default) } : {}),
+      ? { default: bundleText(field.default) } : {}),
   };
 }
 
@@ -20,22 +20,22 @@ export function localizeConnector<T extends { remote?: boolean; display_name?: s
   if (entry.remote) return entry; // User-created connection names and metadata.
   return {
     ...entry,
-    ...(entry.display_name ? { display_name: t(entry.display_name) } : {}),
-    ...(entry.description ? { description: t(entry.description) } : {}),
-    ...(entry.setup_hint ? { setup_hint: t(entry.setup_hint) } : {}),
+    ...(entry.display_name ? { display_name: bundleText(entry.display_name) } : {}),
+    ...(entry.description ? { description: bundleText(entry.description) } : {}),
+    ...(entry.setup_hint ? { setup_hint: bundleText(entry.setup_hint) } : {}),
   };
 }
 
 export function localizeTaskTemplate(template: TaskTemplate): TaskTemplate {
   return {
     ...template,
-    name: t(template.name),
-    ...(template.description ? { description: t(template.description) } : {}),
+    name: bundleText(template.name),
+    ...(template.description ? { description: bundleText(template.description) } : {}),
     task: {
       ...template.task,
-      ...(template.task.title ? { title: t(template.task.title) } : {}),
-      ...(template.task.description ? { description: t(template.task.description) } : {}),
-      ...(template.task.prompt ? { prompt: t(template.task.prompt) } : {}),
+      ...(template.task.title ? { title: bundleText(template.task.title) } : {}),
+      ...(template.task.description ? { description: bundleText(template.task.description) } : {}),
+      ...(template.task.prompt ? { prompt: bundleText(template.task.prompt) } : {}),
     },
   };
 }
@@ -44,14 +44,14 @@ export function localizePrompt(prompt: PromptLibraryItem): PromptLibraryItem {
   if (prompt.source !== "git") return prompt;
   return {
     ...prompt,
-    name: t(prompt.name),
-    ...(prompt.description ? { description: t(prompt.description) } : {}),
+    name: bundleText(prompt.name),
+    ...(prompt.description ? { description: bundleText(prompt.description) } : {}),
     ...(prompt.fields ? { fields: prompt.fields.map(localizeField) } : {}),
-    ...(prompt.prompt_template ? { prompt_template: t(prompt.prompt_template) } : {}),
+    ...(prompt.prompt_template ? { prompt_template: bundleText(prompt.prompt_template) } : {}),
     // Content is the versioned source file, used verbatim for export/backup.
   };
 }
 
 export function skillDescription(skill: { source?: string; description: string }): string {
-  return ["bundle", "builtin", "plugin"].includes(skill.source ?? "") ? t(skill.description) : skill.description;
+  return ["bundle", "builtin", "plugin"].includes(skill.source ?? "") ? bundleText(skill.description) : skill.description;
 }

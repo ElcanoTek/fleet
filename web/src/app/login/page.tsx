@@ -1,6 +1,6 @@
 import { getBootstrap } from "@/app/lib/bootstrap";
 import LoginCard from "./login-card";
-import { t } from "@/app/lib/i18n";
+import { t, bundleText } from "@/app/lib/i18n";
 
 // /login. What used to be resolved by a server component at request time now
 // arrives in the server-rendered bootstrap (internal/webui/spa.go): whether the
@@ -19,8 +19,8 @@ export default function LoginPage() {
       magicLinkLoginEnabled={login.magicLinkLoginEnabled}
       oidcEnabled={login.oidcEnabled}
       oidcLabel={t(login.oidcLabel)}
-      title={t(branding.loginTitle)}
-      tagline={t(branding.loginTagline)}
+      title={bundleText(branding.loginTitle)}
+      tagline={bundleText(branding.loginTagline)}
       appName={branding.appName}
     />
   );

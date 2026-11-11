@@ -269,7 +269,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		// /admin moved under the settings area, and /settings/admin/notifications
 		// was retired in favor of Settings → General → Browser notifications and
 		// env/API configuration; the alias keeps bookmarks working.
-		w.Header().Set("Location", g.redirectURL(r, requestLanguagePath(r, "/settings/admin")))
+		w.Header().Set("Location", g.adminAliasURL(r))
 		w.WriteHeader(http.StatusPermanentRedirect)
 		return
 	case strings.HasPrefix(p, "/orchestrator/tasks/") && strings.Count(p, "/") == 3 && len(p) > len("/orchestrator/tasks/"):
@@ -422,6 +422,19 @@ func (g *Gateway) renderIndex(w http.ResponseWriter, r *http.Request, status int
 		return
 	}
 	_, _ = io.WriteString(w, out.String())
+}
+
+// adminAliasURL keeps the local alias relative without a configured origin:
+// Host and forwarded headers must not choose a permanent redirect destination.
+func (g *Gateway) adminAliasURL(r *http.Request) string {
+	location := &url.URL{Path: "/settings/admin"}
+	if language := requestLanguage(r); language != "" {
+		location.RawQuery = "lang=" + language // supported enum only
+	}
+	if g.cfg.PublicOrigin != nil {
+		location = g.cfg.PublicOrigin.ResolveReference(location)
+	}
+	return location.String()
 }
 
 // publicOriginForMeta is metadataBase: the origin unfurl scrapers resolve

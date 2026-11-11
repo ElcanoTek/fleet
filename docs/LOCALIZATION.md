@@ -59,7 +59,9 @@ Bundle catalogs supply branding, support copy, prompt cards, form labels,
 option display labels, prepared prompt drafts, task templates, connector
 metadata, bundle persona labels and skill descriptions. The persona picker
 uses capitalized filenames; YAML persona prose remains model context. A missing entry
-falls back to the original text. The loader rejects blank messages, invalid
+falls back to the engine translation, then the original text. A bundle
+translation wins for its own metadata even when the English source also occurs
+in engine UI; it never replaces the engine UI translation. The loader rejects blank messages, invalid
 JSON objects and changes to named or numeric interpolation fields. Preserve
 such fields, URLs, Markdown links, identifiers and code in translations.
 
@@ -75,6 +77,12 @@ complete sentence containing React elements. Pass a whole sentence, including
 its plural form, so translations can change word order. Values are
 interpolated once and React still escapes them. Do not translate arbitrary
 API strings or user records merely because their text matches a catalog key.
+
+Use `bundleText(source, values)` only at a known bundle-owned display boundary:
+branding, configured fields, connectors, shipped prompt/task templates, house
+categories and bundle persona labels. It checks the active bundle catalog first,
+then the engine catalog. `t` and `rich` consult only the engine catalog. Keep raw
+option values, connector IDs and user-created content outside these lookups.
 
 Add both translations to `web/src/app/lib/i18n/es.json` and `pt.json`.
 `npm run check:localizations` (also part of web lint) checks source coverage,

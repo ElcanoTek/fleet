@@ -77,7 +77,7 @@ function bundleMessages(): Readonly<Record<string, string>> {
 let bundleCatalog = bundleMessages();
 
 export function setBundleLocalizations(localizations?: Record<string, Record<string, string>>): void {
-  if (localizations?.[language]) bundleCatalog = localizations[language];
+  bundleCatalog = localizations?.[language] ?? {};
 }
 
 function lookup(catalog: Readonly<Record<string, string>>, source: string): string | undefined {
@@ -86,14 +86,24 @@ function lookup(catalog: Readonly<Record<string, string>>, source: string): stri
   return typeof value === "string" ? value : undefined;
 }
 
-/** Translate owned UI copy, then interpolate values without interpreting HTML. */
+/** Engine-owned UI copy never consults the deployment bundle catalog. */
 export function t(source: string, values: readonly unknown[] = []): string {
   return translate(language, source, values);
 }
 
 export function translate(locale: Language, source: string, values: readonly unknown[] = []): string {
   if (typeof source !== "string") return "";
-  const message = lookup(catalogs[locale], source) ?? (locale === language ? lookup(bundleCatalog, source) : undefined) ?? source;
+  return interpolate(lookup(catalogs[locale], source) ?? source, values);
+}
+
+/** Only for bundle-owned branding and metadata, never engine UI or user records.
+ * A deployment's wording wins over the engine's translation of the same key. */
+export function bundleText(source: string, values: readonly unknown[] = []): string {
+  if (typeof source !== "string") return "";
+  return interpolate(lookup(bundleCatalog, source) ?? lookup(catalogs[language], source) ?? source, values);
+}
+
+function interpolate(message: string, values: readonly unknown[]): string {
   return message.replace(/\{(\d+)\}/g, (whole, index: string) => {
     return Number(index) < values.length ? String(values[Number(index)]) : whole;
   });

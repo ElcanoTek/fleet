@@ -1,3 +1,4 @@
+import { bundleText } from "@/app/lib/i18n";
 import { t as tr } from "@/app/lib/i18n";
 // The Tools picker's rules, shared by the composer popover (ToolsPopover) and
 // the library modal (ToolsLibrary): what status a connection is in, what
@@ -89,13 +90,17 @@ export function categoryOf(c: PickerConnector, cats: readonly PickerCategory[]):
   return cats.some((cat) => cat.id === id) ? id : MISC_CATEGORY;
 }
 
+/** Categories reach the picker through orderedCategories; their labels are
+ * already translated. A translated value may itself match another source key. */
 export function categoryName(id: string, cats: readonly PickerCategory[]): string {
-  return tr(cats.find((c) => c.id === id)?.name ?? "Misc Tools");
+  return cats.find((category) => category.id === id)?.name ?? tr("Misc Tools");
 }
 
 /** The category list with Misc Tools forced last, whatever order it came in. */
 export function orderedCategories(cats: readonly PickerCategory[] | undefined): PickerCategory[] {
-  const list = (cats && cats.length > 0 ? cats : FALLBACK_CATEGORIES).map((category) => ({ ...category, name: tr(category.name) }));
+  const list = cats && cats.length > 0
+    ? cats.map((category) => ({ ...category, name: bundleText(category.name) }))
+    : FALLBACK_CATEGORIES;
   const misc = list.find((c) => c.id === MISC_CATEGORY) ?? { id: MISC_CATEGORY, name: tr("Misc Tools") };
   return [...list.filter((c) => c.id !== MISC_CATEGORY), misc];
 }

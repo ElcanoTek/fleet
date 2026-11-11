@@ -1,4 +1,4 @@
-import { t as tr } from "@/app/lib/i18n";
+import { getLanguage, t as tr } from "@/app/lib/i18n";
 import { Link } from "@/app/lib/Link";
 import { SignOutForm } from "./sign-out-form";
 // Shown when a user has a valid session minted elsewhere (the shared
@@ -21,7 +21,7 @@ export default function NoAccessPage() {
         </p>
 
         <Link
-          href="/chat"
+          href={`/chat?lang=${getLanguage()}`}
           className="mt-6 block w-full rounded-xl bg-[var(--color-primary-fill)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
         >
           {tr("Try again")}

@@ -1,4 +1,4 @@
-import { t as tr } from "@/app/lib/i18n";
+import { getLanguage, t as tr } from "@/app/lib/i18n";
 import { signOut } from "@/app/shared/signOut";
 
 // The no-access page's way out, through the one signOut every other surface
@@ -14,7 +14,7 @@ import { signOut } from "@/app/shared/signOut";
 export function SignOutForm() {
   return (
     <form
-      action="/api/auth/logout"
+      action={`/api/auth/logout?lang=${getLanguage()}`}
       method="post"
       className="mt-3"
       onSubmit={(event) => {

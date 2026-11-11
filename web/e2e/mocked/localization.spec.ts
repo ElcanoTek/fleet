@@ -40,6 +40,24 @@ test("settings selector persists across reloads and ordinary navigation", async 
   await expect(page.getByRole("heading", { name: "Definições", exact: true })).toBeVisible();
 });
 
+test("language changes reach an existing service worker through same-origin messages", async ({ page }) => {
+  await page.goto("/login?lang=en");
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+  });
+  await page.getByRole("combobox", { name: "Language" }).selectOption("pt");
+  await expect(page.getByRole("button", { name: "Iniciar sessão", exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => {
+    const cache = await caches.open("fleet-display-language");
+    return (await cache.match("/__fleet_display_language"))?.text();
+  })).toBe("pt");
+  await page.evaluate(async () => {
+    await (await navigator.serviceWorker.getRegistration("/sw.js"))?.unregister();
+    await caches.delete("fleet-display-language");
+  });
+});
+
 test("language selection works with denied localStorage and leaves user titles unchanged", async ({ page, context }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Denied", "SecurityError"); } });
@@ -59,24 +77,41 @@ for (const language of [
   { code: "es", title: "Flujo personalizado", field: "Canal del paquete", option: "Opción propia", unit: "unidad", unavailable: "podman no está en PATH" },
   { code: "pt", title: "Fluxo personalizado", field: "Canal do pacote", option: "Opção própria", unit: "unidade", unavailable: "podman não está no PATH" },
 ]) {
+  test(`${language.code}: logout preserves the language when preference storage is blocked`, async ({ page, context }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Denied", "SecurityError"); } });
+      Object.defineProperty(document, "cookie", { get() { return ""; }, set() {} });
+    });
+    await loginViaCookie(context);
+    await mockShellBasics(page);
+    await page.goto(`/settings?lang=${language.code}`);
+    const signOut = language.code === "es" ? "Cerrar sesión" : "Terminar sessão";
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: signOut }).click();
+    await page.getByRole("dialog").getByRole("button", { name: signOut }).click();
+    await expect(page).toHaveURL((url) => url.pathname === "/login" && url.searchParams.get("manual") === "1" && url.searchParams.get("lang") === language.code);
+    await expect(page.locator("html")).toHaveAttribute("lang", language.code);
+    await expect(page.getByRole("button", { name: language.code === "es" ? "Iniciar sesión" : "Iniciar sessão", exact: true })).toBeVisible();
+  });
+
   test(`${language.code}: bundle forms translate display labels and preserve option values`, async ({ page, context }) => {
     await loginViaCookie(context);
     await mockChatBoot(page, { personaDefault: "victoria" });
     await page.route("**/api/client-config", (route) => route.fulfill({ json: {
       localizations: { [language.code]: {
-        "Custom bundle workflow": language.title,
-        "Bundle channel": language.field,
-        "Unique option": language.option,
+        "Save": language.title,
+        "Name": language.field,
+        "Daily": language.option,
         "Prepare custom audit": language.code === "es" ? "Preparar auditoría" : "Preparar auditoria",
         "Custom workspace audit": language.code === "es" ? "Auditoría del espacio" : "Auditoria do espaço",
         "Audit {channel}": language.code === "es" ? "Audita {channel}" : "Audite {channel}",
       } },
-      empty_state: { cards: [{ id: "custom-workflow", section: "", type: "form", icon: "search", title: "Custom bundle workflow", desc: "Custom workspace audit", cta: "Prepare custom audit", promptTemplate: "Audit {channel}", fields: [{ key: "channel", type: "select", label: "Bundle channel", options: ["Unique option"], default: "Unique option" }] }] },
+      empty_state: { cards: [{ id: "custom-workflow", section: "", type: "form", icon: "search", title: "Save", desc: "Custom workspace audit", cta: "Prepare custom audit", promptTemplate: "Audit {channel}", fields: [{ key: "channel", type: "select", label: "Name", options: ["Daily"], default: "Daily" }] }] },
     } }));
     await page.goto(`/chat?lang=${language.code}`);
     await page.getByRole("button", { name: new RegExp(language.title) }).click();
     const select = page.getByRole("combobox", { name: language.field });
-    await expect(select).toHaveValue("Unique option");
+    await expect(select).toHaveValue("Daily");
     await expect(select.locator("option:checked")).toHaveText(language.option);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

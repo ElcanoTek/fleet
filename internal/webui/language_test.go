@@ -196,6 +196,52 @@ func TestInvalidLanguageCannotChangeNavigation(t *testing.T) {
 	}
 }
 
+func TestLocalizedAdminAliasesDoNotTrustRequestHosts(t *testing.T) {
+	for _, origin := range []string{"", testOrigin} {
+		for _, path := range []string{"/admin", "/settings/admin/notifications"} {
+			for _, tc := range []struct{ language, want string }{
+				{"", ""}, {"es-MX", "es"}, {"pt-BR", "pt"},
+				{"//evil.example", ""}, {"es?next=//evil.example", ""},
+			} {
+				t.Run(origin+path+"/"+tc.language, func(t *testing.T) {
+					e := newTestEnv(t, withOrigin(origin))
+					r := signedIn(t, req("GET", path+"?lang="+url.QueryEscape(tc.language), "",
+						"X-Forwarded-Host", "evil.example", "X-Forwarded-Proto", "https"))
+					r.Host = "attacker.example"
+					res := e.do(r)
+					want := origin + "/settings/admin"
+					if tc.want != "" {
+						want += "?lang=" + tc.want
+					}
+					if res.StatusCode != http.StatusPermanentRedirect || res.Header.Get("Location") != want {
+						t.Fatalf("redirect: %d %q, want 308 %q", res.StatusCode, res.Header.Get("Location"), want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLogoutCarriesURLLanguageWithoutPreferenceCookie(t *testing.T) {
+	for _, language := range []string{"es", "pt"} {
+		for _, central := range []bool{false, true} {
+			e := newTestEnv(t, withOrigin(testOrigin))
+			want := testOrigin + "/login?lang=" + language + "&manual=1"
+			if central {
+				e.g.cfg.OIDC = &OIDCConfig{Issuer: "https://auth.example.com", ClientID: "fleet app"}
+				want = "https://auth.example.com/logout?client_id=fleet+app&lang=" + language
+			}
+			res := e.do(req("POST", "/api/auth/logout?lang="+language, "", "Origin", testOrigin))
+			if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != want {
+				t.Fatalf("central=%v language=%s: %d %q, want 303 %q", central, language, res.StatusCode, res.Header.Get("Location"), want)
+			}
+			if !strings.Contains(setCookies(res), "elcano_session=;") {
+				t.Fatal("logout did not clear the session")
+			}
+		}
+	}
+}
+
 func forwardLocaleTransaction(t *testing.T, start *response, callback *http.Request, q url.Values) map[string]string {
 	t.Helper()
 

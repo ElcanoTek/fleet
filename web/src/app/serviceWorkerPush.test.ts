@@ -70,7 +70,7 @@ describe("sw.js push", () => {
   it("accepts a supported page preference and preserves notification bodies", async () => {
     const worker = loadWorker("es");
     const waitUntil = vi.fn();
-    worker.listeners.message({ data: { type: "fleet-language", language: "pt" }, waitUntil });
+    worker.listeners.message({ origin: ORIGIN, data: { type: "fleet-language", language: "pt" }, waitUntil });
     await waitUntil.mock.calls[0][0];
     const [title, options] = await push({ json: () => ({ title: "⚠ Approval needed: send_email", body: "Save" }) }, worker);
     expect(title).toBe("⚠ É necessária aprovação: send_email");
@@ -80,11 +80,23 @@ describe("sw.js push", () => {
   it("falls back to the browser if storage is denied and ignores unsupported preferences", async () => {
     const worker = loadWorker("pt-BR", undefined, true);
     const waitUntil = vi.fn();
-    worker.listeners.message({ data: { type: "fleet-language", language: "__proto__" }, waitUntil });
+    worker.listeners.message({ origin: ORIGIN, data: { type: "fleet-language", language: "__proto__" }, waitUntil });
     expect(waitUntil).not.toHaveBeenCalled();
     const [title] = await push({ json: () => ({ title: "✓ Done: Save" }) }, worker);
     expect(title).toBe("✓ Concluído: Save");
   });
+
+  it.each(["https://untrusted.example", "https://fleet.example.com.untrusted.example", "null", "", undefined])(
+    "ignores a language message from untrusted origin %s",
+    async (origin) => {
+      const worker = loadWorker("en", "es");
+      const waitUntil = vi.fn();
+      worker.listeners.message({ origin, data: { type: "fleet-language", language: "pt" }, waitUntil });
+      expect(waitUntil).not.toHaveBeenCalled();
+      const [title] = await push({ json: () => ({ title: "✓ Done: Save" }) }, worker);
+      expect(title).toBe("✓ Hecho: Save");
+    },
+  );
 
   it("leaves unknown notification titles unchanged", async () => {
     const [title] = await push({ json: () => ({ title: "Save" }) }, loadWorker("es"));

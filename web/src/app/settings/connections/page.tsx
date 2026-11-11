@@ -1,3 +1,4 @@
+import { bundleText } from "@/app/lib/i18n";
 import { localizeConnector } from "@/app/lib/i18n/bundle";
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
@@ -319,7 +320,7 @@ async function fetchCatalog(): Promise<CatalogResponse | null> {
     bundled: (catalog.bundled ?? []).map(localizeConnector),
     third_party: (catalog.third_party ?? []).map((entry) => ({
       ...localizeConnector(entry),
-      ...(entry.url_variants ? { url_variants: entry.url_variants.map((variant) => ({ ...variant, label: tr(variant.label) })) } : {}),
+      ...(entry.url_variants ? { url_variants: entry.url_variants.map((variant) => ({ ...variant, label: bundleText(variant.label) })) } : {}),
     })),
   };
 }
