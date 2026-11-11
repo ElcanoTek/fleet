@@ -16,8 +16,11 @@ export function localizeField(field: PillField): PillField {
   };
 }
 
-export function localizeConnector<T extends { remote?: boolean; display_name?: string; description?: string; setup_hint?: string }>(entry: T): T {
-  if (entry.remote) return entry; // User-created connection names and metadata.
+export function localizeConnector<T extends { remote?: boolean; catalog_copy?: boolean; display_name?: string; description?: string; setup_hint?: string }>(entry: T): T {
+  // A hosted connection's name and metadata are the user's own, except when
+  // the server took its label and sentence from the bundle's directory entry
+  // (catalog_copy): those are bundle copy and translate like any connector's.
+  if (entry.remote && !entry.catalog_copy) return entry;
   return {
     ...entry,
     ...(entry.display_name ? { display_name: bundleText(entry.display_name) } : {}),

@@ -174,6 +174,47 @@ func TestRemoteConnectionCategoryFromDirectory(t *testing.T) {
 	}
 }
 
+// A hosted connection added from the directory is labeled and described the
+// way its directory card is; a hand-added one (another name at the same
+// endpoint, or an endpoint the directory does not list) and a custom
+// connector keep their own name and the generic sentence.
+func TestRemoteCatalogEntryUsesDirectoryCopy(t *testing.T) {
+	t.Parallel()
+
+	srv := &Server{clientConfig: &clientconfig.Bundle{RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
+		{Name: "optable-audience-agent", DisplayName: " Optable Audiences ", Description: "Find and build audiences.",
+			URL: "https://raptive-hub.cloud.us.optable.co/admin/mcp", Category: "data-analytics"},
+		{Name: "label-only", DisplayName: "Label Only", URL: "https://label.example.com/mcp"},
+	}}}
+	cases := []struct {
+		name, url, transport  string
+		wantDisplay, wantDesc string
+		wantCatalogCopy       bool
+	}{
+		{"optable-audience-agent", "https://raptive-hub.cloud.us.optable.co/admin/mcp", "streamable_http",
+			"Optable Audiences", "Find and build audiences.", true},
+		{"my-optable", "https://raptive-hub.cloud.us.optable.co/admin/mcp", "streamable_http",
+			"my-optable", "Remote MCP server you connected (https://raptive-hub.cloud.us.optable.co/admin/mcp).", false},
+		{"optable-audience-agent", "https://other.example.com/mcp", "streamable_http",
+			"optable-audience-agent", "Remote MCP server you connected (https://other.example.com/mcp).", false},
+		{"label-only", "https://label.example.com/mcp", "sse",
+			"Label Only", "Remote MCP server you connected (https://label.example.com/mcp).", true},
+		{"optable-audience-agent", "https://raptive-hub.cloud.us.optable.co/admin/mcp", store.RemoteMCPTransportHTTPTools,
+			"optable-audience-agent", "Custom API connector (https://raptive-hub.cloud.us.optable.co/admin/mcp).", false},
+	}
+	for _, c := range cases {
+		got := srv.remoteCatalogEntry(agent.RemoteMCPSeatGroup{Name: c.name, URL: c.url, Transport: c.transport}, true, "")
+		if got["display_name"] != c.wantDisplay || got["description"] != c.wantDesc || got["catalog_copy"] != c.wantCatalogCopy {
+			t.Errorf("%s @ %s (%s): display_name=%q description=%q catalog_copy=%v; want %q, %q, %v",
+				c.name, c.url, c.transport, got["display_name"], got["description"], got["catalog_copy"],
+				c.wantDisplay, c.wantDesc, c.wantCatalogCopy)
+		}
+		if got["name"] != c.name {
+			t.Errorf("%s: name = %q; the id must not change", c.name, got["name"])
+		}
+	}
+}
+
 // metaEngine adds the Manager's reload-fresh connector metadata to the fake.
 type metaEngine struct {
 	*catalogEngine

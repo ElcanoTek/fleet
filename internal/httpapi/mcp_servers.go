@@ -245,13 +245,13 @@ func (s *Server) needsSetupCatalogEntries(listed []map[string]any) []map[string]
 	return out
 }
 
-// remoteConnectionCategory groups a hosted connection under the directory
-// category of the catalog entry it was added from (matched by endpoint), so
-// it shows under the same heading the Connections directory uses. A URL the
-// directory does not list, or a slug outside the picker's list, is Misc Tools.
-func (s *Server) remoteConnectionCategory(url string) string {
+// remoteCatalogMatch returns the directory entry a hosted connection was
+// added from, matched by endpoint (the entry's URL or one of its regional
+// variants, compared as canonical resource URIs). nil when the directory does
+// not list the URL — a server the user typed in by hand.
+func (s *Server) remoteCatalogMatch(url string) *clientconfig.RemoteMCPCatalogEntry {
 	if s.clientConfig == nil {
-		return clientconfig.MiscConnectorCategory
+		return nil
 	}
 	canon := func(u string) string {
 		u = strings.TrimSpace(u)
@@ -261,16 +261,44 @@ func (s *Server) remoteConnectionCategory(url string) string {
 		return u
 	}
 	want := canon(url)
-	for _, e := range s.clientConfig.RemoteMCPCatalog {
+	for i := range s.clientConfig.RemoteMCPCatalog {
+		e := &s.clientConfig.RemoteMCPCatalog[i]
 		match := canon(e.URL) == want
 		for _, v := range e.URLVariants {
 			match = match || canon(v.URL) == want
 		}
 		if match {
-			return clientconfig.ConnectorCategoryOr(e.Category)
+			return e
 		}
 	}
+	return nil
+}
+
+// remoteConnectionCategory groups a hosted connection under the directory
+// category of the catalog entry it was added from (matched by endpoint), so
+// it shows under the same heading the Connections directory uses. A URL the
+// directory does not list, or a slug outside the picker's list, is Misc Tools.
+func (s *Server) remoteConnectionCategory(url string) string {
+	if e := s.remoteCatalogMatch(url); e != nil {
+		return clientconfig.ConnectorCategoryOr(e.Category)
+	}
 	return clientconfig.MiscConnectorCategory
+}
+
+// remoteCatalogCopy is the directory entry's display name and description
+// for a hosted connection added from it, so the Tools picker and Settings ->
+// Connections show the label and sentence the directory card shows instead of
+// the connection's id and a generic line. The connection must match the
+// entry on endpoint (like the category) AND on name — the directory add form
+// saves the entry's name as the row's — so a server the user added by hand
+// under a name of their own keeps that name. Empty strings when nothing
+// matches or the entry leaves a field blank: the caller keeps its fallback.
+func (s *Server) remoteCatalogCopy(name, url string) (displayName, description string) {
+	e := s.remoteCatalogMatch(url)
+	if e == nil || strings.TrimSpace(e.Name) != name {
+		return "", ""
+	}
+	return strings.TrimSpace(e.DisplayName), strings.TrimSpace(e.Description)
 }
 
 // alwaysOnMCPServerCatalogProvider is deliberately narrower than turnEngine.
@@ -327,6 +355,11 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 // credentials.
 func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
 	desc := "Remote MCP server you connected (" + g.URL + ")."
+	display := g.Name
+	// catalogCopy marks a label and description that came from the bundle's
+	// directory entry, not from the user: the web localizes those through the
+	// bundle catalogs like any other connector copy.
+	catalogCopy := false
 	tools := []string{}
 	toolCount := 0
 	switch g.Transport {
@@ -342,11 +375,25 @@ func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, ac
 			tools = g.Tools
 			toolCount = g.ToolCount
 		}
+	default:
+		// A connection added from the directory reads the way its card does.
+		// Custom connectors (above) are synthesized by the user, so they keep
+		// their own name and the connector-kind sentence.
+		if dn, d := s.remoteCatalogCopy(g.Name, g.URL); dn != "" || d != "" {
+			if dn != "" {
+				display = dn
+			}
+			if d != "" {
+				desc = d
+			}
+			catalogCopy = true
+		}
 	}
 	return map[string]any{
 		"name":               g.Name,
-		"display_name":       g.Name,
+		"display_name":       display,
 		"description":        desc,
+		"catalog_copy":       catalogCopy,
 		"tools":              tools,
 		"tool_count":         toolCount,
 		"enabled":            enabled,
