@@ -1,8 +1,14 @@
 package mcpoauth
 
 import (
+	"context"
+	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
 )
@@ -64,5 +70,69 @@ func TestSafeHTTPClientBlocksLoopback(t *testing.T) {
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("SafeHTTPClient connected to loopback")
+	}
+}
+
+// TestSafeMCPDataPlaneHTTPClientIsBoundedByTheCallNotAClock: the remote MCP
+// data-plane client must let a slow tool run for its whole per-call budget.
+// A remote vendor that answered tools/call only after 30s was cut off by the
+// control-plane client's fixed Timeout ("Client.Timeout exceeded while
+// awaiting headers") whatever the call was allowed. The request context is
+// the only bound: a slow answer inside it succeeds, one past it fails.
+func TestSafeMCPDataPlaneHTTPClientIsBoundedByTheCallNotAClock(t *testing.T) {
+	// Global registry: not parallel.
+	const host = "slow-vendor.dataplane.test"
+	netguard.RegisterInProcessHandler("dataplane-test", func(u *url.URL) bool { return u.Host == host },
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-time.After(200 * time.Millisecond): // headers only after the "control" timeout
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write([]byte("ok"))
+		}))
+	t.Cleanup(func() { netguard.RegisterInProcessHandler("dataplane-test", nil, nil) })
+
+	get := func(c *http.Client, budget time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/mcp", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, err = io.ReadAll(resp.Body)
+		return err
+	}
+
+	// The control plane keeps its clock: the same slow answer is refused.
+	if err := get(SafeHTTPClient(50*time.Millisecond), 5*time.Second); err == nil {
+		t.Fatal("control-plane client waited past its own timeout")
+	}
+	dp := SafeMCPDataPlaneHTTPClient()
+	if dp.Timeout != 0 {
+		t.Fatalf("data-plane client Timeout = %v, want none (the call's context bounds it)", dp.Timeout)
+	}
+	if err := get(dp, 5*time.Second); err != nil {
+		t.Fatalf("data-plane client gave up on a slow answer inside the call budget: %v", err)
+	}
+	if err := get(dp, 50*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("data-plane client past the call budget: err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestSafeMCPDataPlaneHTTPClientKeepsTheGuards(t *testing.T) {
+	c := SafeMCPDataPlaneHTTPClient()
+	resp, err := c.Get("http://127.0.0.1:1/")
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("data-plane client connected to loopback")
+	}
+	if c.CheckRedirect == nil || c.CheckRedirect(nil, nil) == nil {
+		t.Fatal("data-plane client must refuse every redirect")
 	}
 }

@@ -111,8 +111,14 @@ type Config struct {
 	HTTPTimeout time.Duration
 	// RefreshTimeout bounds the token refresh held under the DB row lock. Default 10s.
 	RefreshTimeout time.Duration
-	// HTTPClient overrides the default SSRF-safe HTTP client (tests only).
+	// HTTPClient overrides the default SSRF-safe HTTP client (tests only). It
+	// then serves the MCP data plane too (DataPlaneHTTPClient is ignored when
+	// only this is set).
 	HTTPClient *http.Client
+	// DataPlaneHTTPClient overrides the client the per-run overlay mounts and
+	// calls remote MCP servers with (tests only). nil = an SSRF-safe client
+	// bounded by each call's context, not by HTTPTimeout.
+	DataPlaneHTTPClient *http.Client
 }
 
 func (c *Config) withDefaults() {
@@ -141,6 +147,10 @@ type Service struct {
 	store      tokenStore
 	cfg        Config
 	httpClient *http.Client // SSRF-safe; used for all control-plane OAuth requests
+	// dataPlaneClient is SSRF-safe too, but carries no fixed timeout: the
+	// overlay's MCP JSON-RPC calls are bounded by each call's context (the
+	// per-call budget), never by the control plane's HTTPTimeout.
+	dataPlaneClient *http.Client
 
 	// observeSecret, when set (SetSecretObserver), receives every
 	// runtime-acquired credential so the host process can register it for
@@ -183,10 +193,16 @@ func secretScope(serverID string) string {
 func NewService(st TokenStore, cfg Config) *Service {
 	cfg.withDefaults()
 	hc := cfg.HTTPClient
+	dp := cfg.DataPlaneHTTPClient
 	if hc == nil {
 		hc = mcpoauth.SafeHTTPClient(cfg.HTTPTimeout)
+		if dp == nil {
+			dp = mcpoauth.SafeMCPDataPlaneHTTPClient()
+		}
+	} else if dp == nil {
+		dp = hc
 	}
-	return &Service{store: st, cfg: cfg, httpClient: hc}
+	return &Service{store: st, cfg: cfg, httpClient: hc, dataPlaneClient: dp}
 }
 
 // SetSecretObserver registers fn to receive every credential this service

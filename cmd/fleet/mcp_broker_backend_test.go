@@ -170,7 +170,8 @@ func (r *brokerRemoteResolver) AcquireTokenByID(_ context.Context, _, id string)
 	return r.token, r.tokenErr
 }
 
-func (*brokerRemoteResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
+func (*brokerRemoteResolver) SafeHTTPClient() *http.Client         { return http.DefaultClient }
+func (*brokerRemoteResolver) MCPDataPlaneHTTPClient() *http.Client { return http.DefaultClient }
 
 func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
 	t.Parallel()
