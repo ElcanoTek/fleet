@@ -231,6 +231,8 @@ func TestBudgetCRUDEndpoints(t *testing.T) {
 		}
 	}
 
+	// A user budget names an existing account (TestBudgetUpsertRequiresExistingPrincipal).
+	seedOpsUser(t, env.store, uuid.New(), "alice@example.com", "client", "")
 	b := env.putBudget(t, `{"scope":"user","principal_id":"alice@example.com","window":"month","soft_usd":5,"hard_usd":10,"soft_tokens":1000,"hard_tokens":2000}`)
 	if b.Scope != models.BudgetScopeUser || b.Window != models.BudgetWindowMonth || b.HardUSD == nil || *b.HardUSD != 10 {
 		t.Fatalf("unexpected budget: %+v", b)
@@ -263,6 +265,105 @@ func TestBudgetCRUDEndpoints(t *testing.T) {
 	}
 	if w := env.do(t, "DELETE", "/admin/budgets/"+b.ID.String(), "", "test-admin-key"); w.Code != http.StatusNotFound {
 		t.Errorf("delete missing: got %d, want 404", w.Code)
+	}
+}
+
+// TestBudgetUpsertRequiresExistingPrincipal pins the #2105 QA finding: a
+// budget whose principal_id names no account or key used to save and list as
+// "ok" with $0 spend while bounding nothing (a mistyped email, a key id from
+// the wrong box). It is now a 400 that names the principal, nothing is saved,
+// and an account email in any case is stored as the account's own email so
+// the budget actually binds. A key that can never create a task again
+// (revoked) or at all (no create_task) is refused for the same reason; a
+// disabled account is not, because it can be re-enabled.
+func TestBudgetUpsertRequiresExistingPrincipal(t *testing.T) {
+	t.Parallel()
+
+	env, cleanup := setupBudgetEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	keyID, _ := env.createKey(t)
+	revokedID, _ := env.createKey(t)
+	if err := env.keyMgr.RevokeKey(ctx, revokedID); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+	readonly, _, err := env.keyMgr.CreateKey(ctx, "viewer", []models.Permission{models.PermissionViewTasks}, nil, 0, nil, "")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	seedOpsUser(t, env.store, uuid.New(), "alice@example.com", "client", "")
+	// A chat-only account (no Operations Center access) is a valid principal:
+	// its chat schedule_task creates run through the same gate.
+	seedOpsUser(t, env.store, uuid.New(), "carol@example.com", "", "")
+	seedOpsUser(t, env.store, uuid.New(), "frank@example.com", "client", "")
+	if _, err := env.store.DB().Conn().ExecContext(ctx, `UPDATE core.users SET enabled = false WHERE email = $1`, "frank@example.com"); err != nil {
+		t.Fatalf("disable frank: %v", err)
+	}
+
+	for _, tc := range []struct{ body, wantInMsg string }{
+		{`{"scope":"user","principal_id":"alcie@example.com","window":"day","hard_usd":1}`, `no account with email \"alcie@example.com\"`},
+		{`{"scope":"key","principal_id":"key_doesnotexist","window":"day","hard_usd":1}`, `no API key with key_id \"key_doesnotexist\"`},
+		{`{"scope":"key","principal_id":"` + revokedID + `","window":"day","hard_usd":1}`, `is revoked or expired`},
+		{`{"scope":"key","principal_id":"` + readonly.KeyID + `","window":"day","hard_usd":1}`, `cannot create tasks`},
+	} {
+		w := env.do(t, "POST", "/admin/budgets", tc.body, "test-admin-key")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: got %d, want 400 (%s)", tc.body, w.Code, w.Body.String())
+			continue
+		}
+		if !strings.Contains(w.Body.String(), tc.wantInMsg) {
+			t.Errorf("%s: body %s should contain %s", tc.body, w.Body.String(), tc.wantInMsg)
+		}
+	}
+	if got, err := env.store.ListBudgets(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("refused budgets must not be saved: got %d rows (err %v)", len(got), err)
+	}
+
+	// Mixed case resolves to the stored email.
+	b := env.putBudget(t, `{"scope":"user","principal_id":"  Alice@Example.COM ","window":"day","hard_usd":1}`)
+	if b.PrincipalID != "alice@example.com" {
+		t.Errorf("principal_id = %q, want the account's stored email alice@example.com", b.PrincipalID)
+	}
+	env.putBudget(t, `{"scope":"user","principal_id":"carol@example.com","window":"day","hard_usd":1}`)
+	env.putBudget(t, `{"scope":"user","principal_id":"frank@example.com","window":"day","hard_usd":1}`)
+	env.putBudget(t, `{"scope":"key","principal_id":"`+keyID+`","window":"day","hard_usd":10}`)
+
+	// And the canonicalised user budget binds: alice's create is refused once
+	// her window spend reaches the bound — before the fix a budget saved as
+	// "Alice@Example.COM" never matched her lowercase username.
+	seedOpsUser(t, env.store, uuid.New(), "dana@example.com", "client", "tok-budget-dana")
+	env.putBudget(t, `{"scope":"user","principal_id":"DANA@example.com","window":"day","hard_tokens":0}`)
+	req := httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(`{"prompt":"dana over a zero-token bound"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok-budget-dana")
+	rec := httptest.NewRecorder()
+	env.r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("dana's create under a canonicalised zero-token budget: got %d, want 402 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBudgetUpsertFailsClosedWithoutKeyStore: with no key store wired a key
+// budget cannot be checked, so it is a 500 and nothing is saved — never a
+// budget accepted unverified. (Production always wires one; this pins the
+// fallback.)
+func TestBudgetUpsertFailsClosedWithoutKeyStore(t *testing.T) {
+	t.Parallel()
+
+	env, cleanup := setupBudgetEnv(t)
+	defer cleanup()
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, nil)
+	req := httptest.NewRequest("POST", "/admin/budgets",
+		bytes.NewBufferString(`{"scope":"key","principal_id":"key_anything","window":"day","hard_usd":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-admin-key")
+	w := httptest.NewRecorder()
+	h.UpsertBudget(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("key budget with no key store: got %d, want 500 (%s)", w.Code, w.Body.String())
+	}
+	if got, err := env.store.ListBudgets(context.Background()); err != nil || len(got) != 0 {
+		t.Fatalf("an unverified budget must not be saved: got %d rows (err %v)", len(got), err)
 	}
 }
 

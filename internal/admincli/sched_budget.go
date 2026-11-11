@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -103,6 +105,38 @@ func schedBudgetCreate(argv []string) int {
 		return code
 	}
 	defer st.Close()
+	// The same principal check POST /admin/budgets runs: a budget naming no
+	// account, or a key that cannot create tasks, would save and then bound
+	// nothing. Key budgets are checked against the key store the server reads
+	// (openKeyManager), opened only for scope key so a user budget prints no
+	// key-store note.
+	var keys budget.KeyLookup
+	if bc.Scope == models.BudgetScopeKey {
+		mgr, ks, code := openKeyManager()
+		if mgr == nil {
+			return code
+		}
+		// A missing api_keys.json opens as an empty store, so off the box (or
+		// from a directory with no unit and no FLEET_DATA_DIR) every real key
+		// would read as unknown. Say which store was empty instead.
+		if len(mgr.ListKeys()) == 0 {
+			return errf(1, "the key store %s holds no API keys, so key %q cannot be checked: run this on the "+
+				"fleet box, or set FLEET_DATA_DIR to the directory holding the server's api_keys.json",
+				ks.Path(), bc.PrincipalID)
+		}
+		keys = mgr
+	}
+	if err := budget.ResolvePrincipal(context.Background(), &bc, st, keys); err != nil {
+		var invalid *budget.InvalidPrincipalError
+		if errors.As(err, &invalid) {
+			// Exit codes follow the sched verbs: 2 not found, 1 unusable input.
+			if invalid.Reason == budget.PrincipalNotFound {
+				return errf(2, "%v", err)
+			}
+			return errf(1, "%v", err)
+		}
+		return errf(5, "verify budget principal: %v", err)
+	}
 	b, err := st.UpsertBudget(context.Background(), bc)
 	if err != nil {
 		return errf(5, "save budget: %v", err)
