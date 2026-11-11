@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // PlaywrightBrowserToolName is the canonical name of the built-in local
@@ -124,8 +125,14 @@ func PlaywrightBrowserActions() map[string]string {
 }
 
 func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserParams) (any, error) {
+	if ArgsCarryRedactionMarker(params) {
+		return nil, ErrRedactionMarkerArgument
+	}
 	action := NormalizePlaywrightBrowserAction(params.Action)
 	pctx := playwrightBrowserContextFrom(ctx)
+	if pctx.ResolveSecret == nil && ArgsCarryVaultReference(params) {
+		return nil, ErrNoVaultForSecretReference
+	}
 	targetURL := strings.TrimSpace(params.URL)
 	if (targetURL == "" || action == "steps") && strings.TrimSpace(params.SessionID) != "" {
 		// On a live session (action "steps") credentials are resolved for the
@@ -141,22 +148,7 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 			targetURL = strings.TrimSpace(st.Value)
 		}
 	}
-	resolve := func(val string) (string, error) {
-		val = strings.TrimSpace(val)
-		if val == "" {
-			return "", nil
-		}
-		if pctx.ResolveSecret != nil {
-			resolved, err := pctx.ResolveSecret(ctx, val, targetURL)
-			if err != nil {
-				return "", err
-			}
-			if resolved != "" {
-				return resolved, nil
-			}
-		}
-		return val, nil
-	}
+	resolve := func(val string) (string, error) { return resolvePlaywrightCredential(ctx, pctx, val, targetURL) }
 	username, err := resolve(params.UsernameRef)
 	if err != nil {
 		return nil, err
@@ -262,4 +254,66 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 	default:
 		return nil, fmt.Errorf("unsupported playwright_browser action %q (expected 'run', 'start_session', 'snapshot', 'steps', or 'close_session')", params.Action)
 	}
+}
+
+// ErrRedactionMarkerArgument refuses a browser or connector call that carries
+// the redactor's placeholder: a value the model copied out of an earlier,
+// redacted call, which would be typed or sent as "[REDACTED]".
+var ErrRedactionMarkerArgument = errors.New(redact.MarkerArgumentRefusal)
+
+// ErrNoVaultForSecretReference refuses a "$secret:" reference when there is no
+// interactive chat vault to resolve it (for example in a scheduled run).
+var ErrNoVaultForSecretReference = errors.New("a $secret reference can only be resolved in an interactive chat, where the user submitted the credential")
+
+// ArgsCarryRedactionMarker reports whether any string or map key in params
+// (any tool's parameter struct) carries a redaction marker.
+func ArgsCarryRedactionMarker(params any) bool {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return false
+	}
+	var v any
+	if json.Unmarshal(b, &v) != nil {
+		return false
+	}
+	return redact.ContainsMarker(v)
+}
+
+// ArgsCarryVaultReference reports whether any string or map key in params
+// (any tool's parameter struct) carries a "$secret:" vault reference.
+func ArgsCarryVaultReference(params any) bool {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return false
+	}
+	var v any
+	if json.Unmarshal(b, &v) != nil {
+		return false
+	}
+	return redact.ContainsVaultReference(v)
+}
+
+// resolvePlaywrightCredential turns a username_ref/password_ref into the value
+// to type: a vaulted "$secret:" reference through the chat's vault, which also
+// checks the target host; a plain value as given. Without a vault (a
+// scheduled run) a reference is refused rather than typed as written.
+func resolvePlaywrightCredential(ctx context.Context, pctx PlaywrightBrowserContext, val, targetURL string) (string, error) {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "", nil
+	}
+	if pctx.ResolveSecret == nil {
+		if strings.HasPrefix(val, "$secret:") {
+			return "", ErrNoVaultForSecretReference
+		}
+		return val, nil
+	}
+	resolved, err := pctx.ResolveSecret(ctx, val, targetURL)
+	if err != nil {
+		return "", err
+	}
+	if resolved != "" {
+		return resolved, nil
+	}
+	return val, nil
 }

@@ -4190,6 +4190,7 @@
   "a calendar, email or task connector": "um conector de calendário, email ou tarefas",
   "a campaign, DSP or reporting connector": "um conector de campanhas, DSP ou relatórios",
   "a campaign, deal or analytics connector": "um conector de campanhas, negócios ou análise",
+  "a credential argument contains \"[REDACTED]\", the placeholder the conversation shows in place of a secret, not a credential; ask the user to submit the credential again with show_ui and pass the reference that submission gives you": "Um argumento de credencial contém \"[REDACTED]\", o marcador que a conversa mostra em vez de um segredo, e não uma credencial; peça ao utilizador que volte a enviar a credencial com show_ui e passe a referência devolvida por esse envio",
   "a database, warehouse or analytics connector": "um conector de base de dados, armazém de dados ou análise",
   "a deal or SSP/DSP connector": "um conector de negócios ou de SSP/DSP",
   "a different task came back": "foi devolvida outra tarefa",

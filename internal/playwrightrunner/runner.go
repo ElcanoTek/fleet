@@ -24,6 +24,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 const (
@@ -114,8 +115,52 @@ type RunResult struct {
 	StorageState map[string]any `json:"storage_state,omitempty"`
 }
 
+// refuseRedactedValue refuses a typed step (fill, select, press) whose value
+// carries the redactor's placeholder or an unresolved "$secret:" vault
+// reference: either would be typed into the page as written.
+func refuseRedactedValue(st Step) error {
+	switch action := strings.ToLower(strings.TrimSpace(st.Action)); action {
+	case "fill", "select", "press":
+		if strings.Contains(st.Value, redact.MarkerPrefix) {
+			return fmt.Errorf(`%s step value contains "[REDACTED]", the placeholder the conversation shows in place of a secret; use {{PASSWORD}}, {{USERNAME}} or {{SECRET}} with a credential reference instead`, action)
+		}
+		if strings.Contains(st.Value, redact.VaultReferencePrefix) {
+			return fmt.Errorf(`%s step value contains a "$secret:..." vault reference, which would be typed literally; use {{PASSWORD}}, {{USERNAME}} or {{SECRET}} in the step value and pass the reference in password_ref, username_ref or secret_ref instead`, action)
+		}
+	}
+	return nil
+}
+
+// CredentialsCarryMarkerOrVaultRef reports whether any credential value,
+// header or storage_state entry carries a redaction marker or an unresolved
+// "$secret:" vault reference.
+func CredentialsCarryMarkerOrVaultRef(c Credentials) bool {
+	has := func(s string) bool {
+		return strings.Contains(s, redact.MarkerPrefix) || strings.Contains(s, redact.VaultReferencePrefix)
+	}
+	if has(c.Username) || has(c.Password) || has(c.Secret) {
+		return true
+	}
+	for k, v := range c.Headers {
+		if has(k) || has(v) {
+			return true
+		}
+	}
+	if len(c.StorageState) > 0 {
+		if b, err := json.Marshal(c.StorageState); err == nil {
+			if bytes.Contains(b, []byte(redact.MarkerPrefix)) || bytes.Contains(b, []byte(redact.VaultReferencePrefix)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ValidateStep validates a single declarative Playwright step.
 func ValidateStep(st Step) error {
+	if err := refuseRedactedValue(st); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(st.Action)) {
 	case "goto":
 		target := strings.TrimSpace(st.Value)
@@ -129,6 +174,9 @@ func ValidateStep(st Step) error {
 			if strings.Contains(strings.ToUpper(target), ph) {
 				return errors.New("goto step URL must not contain secret placeholders")
 			}
+		}
+		if strings.Contains(target, redact.VaultReferencePrefix) {
+			return errors.New(`goto step URL must not contain a "$secret:..." vault reference`)
 		}
 		probeTarget := strings.NewReplacer("{", "_", "}", "_").Replace(target)
 		if _, err := ValidateTargetURL(probeTarget, false); err != nil {
@@ -172,6 +220,9 @@ func ValidateTargetURL(rawURL string, allowInsecureHTTP bool) (string, error) {
 		if strings.Contains(strings.ToUpper(rawURL), ph) {
 			return "", errors.New("URL must not contain secret placeholders; pass secrets via steps or headers")
 		}
+	}
+	if strings.Contains(rawURL, redact.VaultReferencePrefix) {
+		return "", errors.New(`URL must not contain a "$secret:..." vault reference; pass credentials via password_ref, username_ref or secret_ref`)
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Hostname() == "" {
@@ -261,6 +312,10 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if CredentialsCarryMarkerOrVaultRef(req.Credentials) {
+		return nil, errors.New(redact.SavedConnectorMarkerRefusal)
+	}
+
 	targetURL := substituteURLArgs(strings.TrimSpace(req.URL), req.Args)
 	if targetURL == "" {
 		return nil, errors.New("playwright runner: url is required")
@@ -287,6 +342,11 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		} else {
 			st.Selector = substituteArgs(st.Selector, req.Args)
 			st.Value = substituteArgs(st.Value, req.Args)
+		}
+		// A saved connector's {arg} can bring in a value copied from an
+		// earlier, redacted call; check the step as it will be typed.
+		if err := refuseRedactedValue(st); err != nil {
+			return nil, err
 		}
 		if err := validateStepNavigationOrigin(targetURL, req.Credentials, st); err != nil {
 			return nil, err

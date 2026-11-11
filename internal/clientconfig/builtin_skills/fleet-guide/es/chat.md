@@ -228,6 +228,8 @@ Si el servicio que necesitas no está en el directorio, o solo ofrece una API HT
 
 Cuando la vista de navegador en directo no puede hacer algo que le pides, una nota breve en la parte superior lo indica y, si se trata de una dirección que no abrirá (por ejemplo, una que no sea una página web), explica el motivo.
 
+Las credenciales ocultas enviadas en un formulario del chat permanecen en el almacén temporal de esa conversación como una referencia `$secret:`. Si una llamada de conector o de navegador incluye un marcador `[REDACTED]`, o pasa una referencia `$secret:` a una tarea programada o a un conector personalizado guardado (que usan en su lugar las credenciales guardadas en la propia conexión), Fleet rechaza la llamada en vez de enviar el marcador o el texto de la referencia: vuelve a enviar la credencial en un formulario nuevo o actualiza la conexión guardada en **Configuración → Conexiones**.
+
 Cada llamada a un conector aparece como una etiqueta en el registro de ejecución. Si una cifra parece incorrecta, abre la etiqueta y lee lo que devolvió realmente el conector antes de cuestionar el cálculo.
 
 > **Las credenciales nunca salen de la plataforma.** El asistente usa una conexión, pero nunca ve las credenciales que hay detrás. Las claves y los tokens permanecen en el anfitrión, se incorporan a una llamada solo en el momento de realizarla y nunca entran en el entorno aislado, la conversación ni el contexto del modelo.
@@ -504,6 +506,7 @@ La mayoría de los problemas se manifiestan en la transcripción. Busca en la ta
 | Modelo no disponible | El aviso ofrece **Elegir otro modelo**. Elige uno y vuelve a enviar; la conversación conserva su historial. |
 | Archivo rechazado | Si un archivo adjunto supera el límite de tamaño, se rechaza al seleccionarlo y se muestra el límite. Divide el archivo o limítalo a las columnas y fechas que necesitas. |
 | Conector no disponible | El selector muestra **No disponible** junto a un conector, o el registro de ejecución muestra una llamada que devolvió un error. Comprueba en **Configuración → Conexiones** si ha caducado el inicio de sesión; en caso contrario, informa al administrador y adjunta una exportación de **Descargar chat** en formato **Datos sin procesar**: siempre incluye el registro completo, así que no ofrece opciones que marcar. |
+| Llamada de conector o navegador rechazada (`[REDACTED]` o `$secret:`) | Una llamada intentó reutilizar un marcador oculto anterior del chat, pasar una referencia de credencial exclusiva del chat a una ejecución programada o a un conector personalizado guardado, o ejecutar un conector personalizado cuya definición guardada registró el marcador. Pide al asistente un formulario de credenciales nuevo y vuelve a enviar el secreto, o actualiza o recrea la conexión guardada en **Configuración → Conexiones** con credenciales reales. |
 | La conversación está llena | Un aviso indica el porcentaje. **Resumir mensajes anteriores**, o inicia una nueva si has cambiado de tema. |
 | La respuesta es incorrecta | Abre las etiquetas del registro de ejecución y lee lo que devolvió realmente cada fuente. Después, pide: «muéstrame las filas de las que sale esa cifra». La mayoría de las respuestas incorrectas se deben a una fuente equivocada o a un identificador mal interpretado; ambos se ven en el registro de ejecución. |
 

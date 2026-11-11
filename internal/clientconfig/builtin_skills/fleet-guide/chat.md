@@ -831,6 +831,14 @@ saying the session is no longer available, and the assistant can open a new one.
 When the live browser view can't do something you ask, a short note at its top
 says so, and for an address it won't open (one that isn't a web page, say), why.
 
+Masked credentials submitted on a chat form stay in that conversation's
+temporary vault as a `$secret:` reference. If a connector or browser call ever
+carries a `[REDACTED]` placeholder, or passes a `$secret:` reference into a
+scheduled task or saved custom connector (which use the connection's own stored
+credentials instead), Fleet refuses the call rather than sending the
+placeholder or reference text — submit the credential again on a fresh form or
+update the saved connection in **Settings → Connections**.
+
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
 questioning the arithmetic.
@@ -1538,6 +1546,7 @@ row below.
 | Model unavailable | The banner offers **Pick a different model**. Choose one and resend; the conversation keeps its history. |
 | File refused | An attachment over the size limit is refused when you pick it, with the limit shown. Split the file, or trim it to the columns and dates you need. |
 | Connector unavailable | The picker shows **Unavailable** against a connector, or the trail shows a call that returned an error. Check **Settings → Connections** for a sign-in that has lapsed; otherwise bring it to your administrator along with a **Download chat** export in **Raw data** format — that one always carries the full record, so it offers no options to tick. |
+| Connector or browser call refused (`[REDACTED]` or `$secret:`) | A call tried to reuse a masked placeholder from earlier in the chat, pass a chat-only credential reference into a scheduled run or saved custom connector, or run a saved custom connector whose stored definition recorded the placeholder. Ask the assistant for a new credential form and submit the secret again, or update/recreate the saved connection in **Settings → Connections** with real credentials. |
 | Conversation is full | A banner reports the percentage. **Summarize earlier messages**, or start a new one if the topic has moved on. |
 | The answer is wrong | Open the chips in the execution trail and read what actually came back from each source. Then ask: "show me the rows behind that number". Most wrong answers are a wrong source or a misread identifier, and both are visible in the trail. |
 

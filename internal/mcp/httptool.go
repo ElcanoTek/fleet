@@ -16,6 +16,7 @@ import (
 	"github.com/itchyny/gojq"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // Inline HTTP tools — lightweight REST API tools a client-config bundle declares
@@ -180,6 +181,12 @@ type httpToolTransport struct {
 	// on the same synthetic server must not race to assign it.
 	clientOnce sync.Once
 	client     *http.Client
+	// refuseRedactedArgs is set on a custom connector's tools (the model
+	// fills in their arguments, credentials included): an argument carrying
+	// the redaction placeholder is refused rather than sent. A bundle's
+	// _http tools take their credentials from host env headers and may
+	// legitimately send text that quotes redacted output.
+	refuseRedactedArgs bool
 }
 
 // Call handles the one method the registration path drives at runtime: tools/call.
@@ -202,12 +209,46 @@ func (t *httpToolTransport) Call(ctx context.Context, method string, params inte
 		return nil, fmt.Errorf("http tool not found: %s", name)
 	}
 	args, _ := p["arguments"].(map[string]interface{})
+	if t.refuseRedactedArgs {
+		switch {
+		case httpSpecCarriesMarkerOrVaultRef(spec):
+			return json.Marshal(&ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: redact.SavedConnectorMarkerRefusal}},
+				IsError: true,
+			})
+		case redact.ContainsMarker(args):
+			return json.Marshal(&ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: redact.MarkerArgumentRefusal}},
+				IsError: true,
+			})
+		case redact.ContainsVaultReference(args):
+			return json.Marshal(&ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: redact.VaultReferenceArgumentRefusal}},
+				IsError: true,
+			})
+		}
+	}
 
 	result, err := executeHTTPTool(ctx, t.httpClient(), spec, args)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(result)
+}
+
+func httpSpecCarriesMarkerOrVaultRef(spec HTTPToolSpec) bool {
+	has := func(s string) bool {
+		return strings.Contains(s, redact.MarkerPrefix) || strings.Contains(s, redact.VaultReferencePrefix)
+	}
+	if has(spec.URL) || has(spec.BodyTemplate) {
+		return true
+	}
+	for k, v := range spec.Headers {
+		if has(k) || has(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // Notify is a no-op: inline HTTP tools have no JSON-RPC lifecycle.

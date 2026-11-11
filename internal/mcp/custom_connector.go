@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // AddHTTPToolsOnServer registers inline HTTP tools under a named server (for
@@ -31,7 +32,7 @@ func (c *Client) AddHTTPToolsOnServer(serverName string, specs []HTTPToolSpec, h
 		_ = existing.transport.Close()
 	}
 
-	tr := &httpToolTransport{tools: make(map[string]HTTPToolSpec, len(specs))}
+	tr := &httpToolTransport{tools: make(map[string]HTTPToolSpec, len(specs)), refuseRedactedArgs: true}
 	if len(httpClient) > 0 && httpClient[0] != nil {
 		// Preserve newHTTPToolClient's redirect policy (follow redirects while
 		// stripping credential headers on cross-origin hops) even when the caller
@@ -170,6 +171,23 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 		return nil, fmt.Errorf("playwright tool not found: %s", name)
 	}
 	args, _ := p["arguments"].(map[string]interface{})
+	switch {
+	case playwrightSpecCarriesMarkerOrVaultRef(spec):
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.SavedConnectorMarkerRefusal}},
+			IsError: true,
+		})
+	case redact.ContainsMarker(args):
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.MarkerArgumentRefusal}},
+			IsError: true,
+		})
+	case redact.ContainsVaultReference(args):
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.VaultReferenceArgumentRefusal}},
+			IsError: true,
+		})
+	}
 
 	runRes, err := playwrightrunner.Run(ctx, playwrightrunner.RunRequest{
 		URL:         spec.URL,
@@ -194,3 +212,18 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 
 func (t *playwrightToolTransport) Notify(context.Context, string, interface{}) error { return nil }
 func (t *playwrightToolTransport) Close() error                                      { return nil }
+
+func playwrightSpecCarriesMarkerOrVaultRef(spec PlaywrightToolSpec) bool {
+	has := func(s string) bool {
+		return strings.Contains(s, redact.MarkerPrefix) || strings.Contains(s, redact.VaultReferencePrefix)
+	}
+	if has(spec.URL) || playwrightrunner.CredentialsCarryMarkerOrVaultRef(spec.Credentials) {
+		return true
+	}
+	for _, st := range spec.Steps {
+		if has(st.Selector) || has(st.Value) || has(st.Attribute) {
+			return true
+		}
+	}
+	return false
+}

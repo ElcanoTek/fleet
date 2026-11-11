@@ -111,6 +111,7 @@
     "Workspace files are private to the task creator",
     "Workspace is only available for completed tasks",
     "a Stop in this conversation cancelled this message before it started",
+    "a credential argument contains \"[REDACTED]\", the placeholder the conversation shows in place of a secret, not a credential; ask the user to submit the credential again with show_ui and pass the reference that submission gives you",
     "a draft is already being written; wait for it to finish",
     "a field is null; no card field is nullable",
     "a narrowed approval covers this call only; use scope once",
