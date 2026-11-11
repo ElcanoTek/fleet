@@ -1,4 +1,4 @@
-# Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
+# Weekly MCP catalog smoke — dead links and live handshakes for the built-in directory
 
 The built-in remote MCP directory
 (`internal/clientconfig/builtin_remote_catalog.yaml`, ~290 entries) is a static
@@ -12,15 +12,19 @@ account per vendor — is [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md).
 
 ## What runs, and when
 
-`.github/workflows/mcp-catalog-smoke.yml` runs daily at 06:30 UTC and on
-manual dispatch. It is **never a PR gate**: nothing in `CI gate` depends on
-it, and a red scheduled run files an issue (via `scan-cron-alarm.yml`, the
-watcher every scheduled lane uses) instead of blocking a merge. Two jobs:
+`.github/workflows/mcp-catalog-smoke.yml` runs weekly on Mondays at 06:30 UTC
+and on manual dispatch. Running weekly rather than nightly matches the repo's
+other upstream-drift sweeps (`grype-scheduled.yml`, `pins-update.yml`,
+`flag-drift.yml`): third-party catalog curation moves on weeks, not hours, and
+hitting ~300 external hosts every single night multiplied vendor weather without
+catching anything faster. It is **never a PR gate**: nothing in `CI gate`
+depends on it, and a red scheduled run files an issue (via `scan-cron-alarm.yml`,
+the watcher every scheduled lane uses) instead of blocking a merge. Two jobs:
 
 | job | what it does | fails when |
 |---|---|---|
-| `links` | `scripts/mcp-catalog-lint.sh` fetches every entry's `docs_url` (other link fields on dispatch) | a link answers 404/410 or its host does not resolve |
-| `smoke` | `go test -run TestCatalogLive ./internal/remotemcp/` with `FLEET_CATALOG_LIVE=1` | an `open` entry fails fleet's handshake or lists no tools; an armed api_key fixture fails — but a vendor outage only warns (see [Outages warn, rot fails](#outages-warn-rot-fails)) |
+| `links` | `scripts/mcp-catalog-lint.sh` fetches every entry's `docs_url` (other link fields on dispatch) | a link answers 404/410 or its host does not resolve, and still fails a confirmation re-check 30 seconds later |
+| `smoke` | `go test -run TestCatalogLive ./internal/remotemcp/` with `FLEET_CATALOG_LIVE=1` | an `open` entry fails fleet's handshake or lists no tools; an armed api_key fixture fails — but a vendor outage or a lapsed fixture account only warns (see [Outages warn, rot fails](#outages-warn-rot-fails)) |
 
 Both checks are read-only against the vendors and carry no credential unless
 a fixture secret is configured. The smoke runs the same handshake a user's
@@ -34,13 +38,17 @@ bundle's merged view, so an entry the default bundle hides is still checked.
 
 `scripts/mcp-catalog-lint.sh` needs only bash, awk and curl. It groups links by
 host, runs hosts in parallel and each host's links one at a time with a delay,
-tries HEAD before GET, follows up to five redirects, and retries a 429/503
-honouring `Retry-After`. Verdicts:
+tries HEAD before GET (sharing the retry budget across both methods so a
+throttled host stays bounded below the job timeout, with one final GET probe if
+only HEAD is throttled), follows up to five redirects, retries a 429/503
+honouring `Retry-After` (capped at 15 seconds), and re-checks any `DEAD` link once after
+`--confirm-delay` (default 30 seconds; 0 when `--delay 0`) so a docs deploy
+swap or brief resolver hiccup does not fail the run. Verdicts:
 
 - **OK** — final status 2xx/3xx.
 - **DEAD** — 404 or 410 at the URL itself, or a hostname that still does
-  not resolve after retries. These fail the run, because they are the one
-  thing a documentation link cannot legitimately do.
+  not resolve after retries, confirmed on the second pass. These fail the run,
+  because they are the one thing a documentation link cannot legitimately do.
 - **WARN** — everything else: 401/403/405/406/429 (help-centre platforms
   routinely refuse a non-browser client), 5xx, TLS or timeout errors, and a
   404/410 reached only after a redirect. Reported, not failing: a curl-shaped
@@ -82,9 +90,9 @@ awk shows up in the PR gate, not as a silently smaller nightly.
 `FLEET_CATALOG_LIVE=1`:
 
 - **`TestCatalogLiveOpenEntries`** — every `auth: open` entry whose URL has
-  no `{placeholder}` (12 as of 2026-09-16) must complete an unauthenticated
-  handshake and list at least one tool. One subtest per entry, so a single
-  dead vendor names itself.
+  no `{placeholder}` (11 after `zerodha-kite` moved to `auth: oauth` in #2118)
+  must complete an unauthenticated handshake and list at least one tool. One
+  subtest per entry, so a single dead vendor names itself.
 - **`TestCatalogLiveAPIKeyFixtures`** — a table of five fixtures over five
   `api_key` entries (an entry with `url_variants` can get one row per
   endpoint), each armed by its own repository secret: `FLEET_CATALOG_KEY_<ENTRY>`
@@ -139,14 +147,16 @@ overrides the wait for a local run; `0` turns confirmation off.
 
 A failure that survives confirmation is then sorted:
 
-- **Outage → warning.** An HTTP 429 or any 5xx except 501, whatever the
+- **Outage → warning.** An HTTP 408, 429 or any 5xx except 501, whatever the
   body (plain text or a JSON-RPC error, attributed to the request or not),
   including a CDN's nonstandard ones such as Cloudflare's 520–524 and 530; a
-  timeout, a refused or reset connection, a
-  temporary DNS failure, or a JSON-RPC error that says it is temporary
-  (`mcp.IsTransientConnectError`). A JSON-RPC error whose message says the
-  caller is rate-limited ("rate limit", "too many requests") is an outage on
-  any status, including a 200. That rule is the smoke's own, not the
+  timeout, a refused, reset or mid-flight dropped HTTP/HTTP2 connection
+  (unexpected EOF, broken pipe, pre-header EOF, or HTTP/2 stream reset /
+  GOAWAY), a temporary DNS failure, or a JSON-RPC error that says it is
+  temporary (`mcp.IsTransientConnectError`). A JSON-RPC error or non-JSON-RPC
+  HTTP gateway body whose wording says the caller is rate-limited or throttled
+  ("rate limit", "too many requests", "throttl", "quota exceeded") is an outage
+  on any status, including a 200 or 403. That rule is the smoke's own, not the
   run-time classifier's: a user's run does not retry on it. The same applies to an api_key fixture's
   invalid-key control probe: an outage there means the key shape was not
   checked, so it is not counted as the vendor refusing the key. The entry's subtest is skipped
@@ -155,9 +165,10 @@ A failure that survives confirmation is then sorted:
   issue is filed.
 - **Rot → failure.** Everything else: a host that no longer resolves (the
   link lint fails an unresolvable docs host for the same reason), a 501 (the
-  endpoint does not implement the protocol), a 4xx (an
-  `open` entry answering 401/403 may now need auth), a reply that is not MCP,
-  an empty tool list, or an invalid tool schema.
+  endpoint does not implement the protocol), a non-rate-limit 4xx (an
+  `open` entry answering 401/403 may now need auth, as `zerodha-kite` did when
+  it upgraded to MCP OAuth 2.1 in #2118), a reply that is not MCP (including an
+  empty HTTP 200 body), an empty tool list, or an invalid tool schema.
 
 **At least one open entry must succeed.** If every open probe fails or is
 skipped as an outage, `TestCatalogLiveOpenEntries` fails anyway: twelve vendors
@@ -184,12 +195,13 @@ workflow in between; a made-up token got the identical answer. The account
 was not being kept, so that fixture was removed (the `pagerduty` entry and
 its `eu` endpoint stay listed; the US fixture stays, unarmed).
 
-So when the vendor refuses a fixture's **real** key (HTTP 401 or 403 in any
-error form, or a key rejected at the read-only verification call), the
-subtest is skipped with a `FIXTURE KEY REFUSED` message instead of failing.
-The workflow annotates the run and lists it in the job summary under
-"Fixture keys refused". The fix is to rotate that repository secret, or to
-delete it, which skips the fixture.
+So when the vendor refuses a fixture's **real** key or reports that its account
+credits/plan are exhausted (HTTP 401, 402 or 403 in any error form, a credit or
+plan-limit refusal message, or a key rejected at the read-only verification
+call), the subtest is skipped with a `FIXTURE KEY REFUSED` message instead of
+failing. The workflow annotates the run and lists it in the job summary under
+"Fixture keys refused". The fix is to rotate or top up that repository secret,
+or to delete it, which skips the fixture.
 
 What still fails:
 
@@ -210,7 +222,7 @@ looks.
 
 The `strict_smoke` dispatch input (`FLEET_CATALOG_STRICT=1`) turns outage
 and refused-key warnings into failures for a deliberate sweep, as `strict_links` does for the
-link lint. What this costs: **a vendor that stays down every night only ever
+link lint. What this costs: **a vendor that stays down every week only ever
 warns.** It shows on each run's page and summary but files no issue. If that
 starts to matter, a consecutive-nights rule needs state the lane does not keep
 today.
@@ -245,7 +257,7 @@ FLEET_CATALOG_LIVE=1 FLEET_CATALOG_KEY_TAVILY=tvly-… go test -tags fleet_host_
   server that will talk to fleet, not that its tools work.
 - **No tenant entries.** 40 entries carry a `{placeholder}` only a customer
   can fill.
-- **Not a health monitor.** It runs once a day against fleet's *shipped
+- **Not a health monitor.** It runs once a week against fleet's *shipped
   listing*; it does not watch third-party services for operators (out of scope
   in #986, and [`MCP-CATALOG.md`](MCP-CATALOG.md)'s honest-scope section still
   holds: the running product does not health-check endpoints).

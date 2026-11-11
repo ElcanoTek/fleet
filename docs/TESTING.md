@@ -60,7 +60,7 @@ test has to meet to be able to fail are in
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
 | Playwright (canary) | `canary` (nightly) | Fleet default OpenRouter model, drift detection | `npm run test:e2e:canary` |
-| MCP catalog smoke | `links` + `smoke` (nightly) | Built-in directory: dead `docs_url` links; open entries still answer fleet's handshake | `make lint-catalog-links`; `FLEET_CATALOG_LIVE=1 go test -run TestCatalogLive ./internal/remotemcp/` |
+| MCP catalog smoke | `links` + `smoke` (weekly) | Built-in directory: dead `docs_url` links; open entries still answer fleet's handshake | `make lint-catalog-links`; `FLEET_CATALOG_LIVE=1 go test -run TestCatalogLive ./internal/remotemcp/` |
 
 The fast PR-gate subset (everything except the browser/sandbox e2e lanes) is one
 command: `make ci-local`.
@@ -765,9 +765,9 @@ scripts/mcp-catalog-lint.sh --report links.tsv            # machine-readable
 server that plays every verdict, and pins that the extraction yields exactly
 one `docs_url` per catalog entry.
 
-## Nightly MCP catalog smoke — `mcp-catalog-smoke.yml`
+## Weekly MCP catalog smoke — `mcp-catalog-smoke.yml`
 
-A second **non-blocking** nightly lane, for the built-in remote MCP directory
+A **non-blocking** weekly lane, for the built-in remote MCP directory
 rather than the product. It runs the catalog link lint above over every
 entry's `docs_url`, and the live catalog tests in `internal/remotemcp`, which
 run fleet's own add-time handshake against every `open` entry plus any

@@ -3271,13 +3271,9 @@ servers:
     display_name: Zerodha Kite
     description: >-
       Official hosted MCP for Zerodha brokerage accounts: market quotes,
-      historical data, instrument search, holdings, positions, margins and read-
-      only order/GTT data. The hosted instance deliberately excludes
-      place/modify/cancel order tools. No OAuth at the transport: the server
-      answers unauthenticated and user sign-in runs through its `login` tool,
-      which returns a Kite browser link; sign-in via the `login` tool works
-      within the turn that calls it, but the login does not persist across
-      turns and the connector cannot authenticate in scheduled runs.
+      historical data, instrument search, holdings, positions, margins and
+      read-only order/GTT data. The hosted instance deliberately excludes
+      place/modify/cancel order tools; sign in with your Zerodha Kite account.
     url: "https://mcp.kite.trade/mcp"
     vendor: Zerodha Broking Ltd.
     docs_url: "https://zerodha.com/products/mcp/"
@@ -3285,12 +3281,7 @@ servers:
     category: finance
     tags: [trading, brokerage, portfolio, market-data, india]
     provenance: official
-    auth: open
-    setup_hint: >-
-      Nothing to enter: add the server, then ask the assistant to call the
-      Kite `login` tool and open the link it returns. Sign-in via the `login`
-      tool works within the turn that calls it; the login does not persist across
-      turns and the connector cannot authenticate in scheduled runs.
+    auth: oauth
 
   # ── design-media ────────────────────────────────────────────────
   - name: adobe-creativity

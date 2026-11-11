@@ -1,14 +1,14 @@
-# Nightly MCP catalog smoke — NON-BLOCKING (#986, Phase 2).
+# Weekly MCP catalog smoke — NON-BLOCKING (#986, Phase 2).
 #
 # The built-in remote MCP directory (internal/clientconfig/builtin_remote_catalog.yaml)
 # is a static snapshot of ~290 vendor endpoints and documentation links, and it
 # rots: vendors move docs pages, sunset betas and rename endpoints, and the
 # only way a fleet operator finds out today is a user hitting "failed to
-# connect". This lane checks what CAN be checked without a human once a day:
+# connect". This lane checks what CAN be checked without a human once a week:
 #
 #   links  — scripts/mcp-catalog-lint.sh fetches every docs_url and fails on
-#            an obviously dead one (404/410/unresolvable). Bot walls and rate
-#            limits are warnings, not failures.
+#            an obviously dead one (404/410/unresolvable, confirmed on a second
+#            pass). Bot walls and rate limits are warnings, not failures.
 #   smoke  — internal/remotemcp's live catalog tests run fleet's own add-time
 #            handshake (initialize + tools/list over the SSRF-safe client)
 #            against every `open` entry, and against a handful of `api_key`
@@ -18,19 +18,20 @@
 #            fixture, it never fails). OAuth entries need a browser consent step and are
 #            verified by hand — see docs/MCP-CATALOG-STATUS.md.
 #
-# It is NEVER a PR gate: it runs on a schedule and on manual dispatch only, and
+# It is NEVER a PR gate: it runs weekly and on manual dispatch only, and
 # a red run files an issue (same alarm as the other scheduled lanes) instead of
-# blocking anyone. It is also not a production health-check of third-party
-# services — it checks that fleet's shipped listing still points at something
-# real, which is the catalog's curation contract (docs/MCP-CATALOG.md).
+# blocking anyone. Running weekly rather than daily matches the other upstream
+# drift lanes (Grype, pins-update, Flag drift) — third-party catalog curation
+# moves on weeks, not hours, and hitting ~300 external hosts every night mostly
+# multiplied vendor weather (#1640, #1683, #1776, #1844).
 # Design note: docs/MCP-CATALOG-SMOKE.md.
-name: Nightly MCP catalog smoke
+name: Weekly MCP catalog smoke
 
 on:
   schedule:
-    # 06:30 UTC daily — offset from the 07:00 canary, the 08:00 govulncheck
+    # 06:30 UTC Mondays — offset from the 07:00 canary, the 08:00 govulncheck
     # scan and the Monday 09:00 Grype scan so the lanes don't contend.
-    - cron: '30 6 * * *'
+    - cron: '30 6 * * 1'
   workflow_dispatch:
     inputs:
       fields:
@@ -43,7 +44,7 @@ on:
         type: boolean
         default: false
       strict_smoke:
-        description: 'Fail the smoke job on a vendor outage (5xx but 501, 429, timeout) or a refused fixture key too'
+        description: 'Fail the smoke job on a vendor outage (5xx but 501, 408/429, timeout/drop) or a refused fixture key too'
         required: false
         type: boolean
         default: false

@@ -252,3 +252,91 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 		}
 	})
 }
+
+func TestMCPCatalogLintConfirmationAndHeadThrottleFallback(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required by the link lint")
+	}
+	var deployFlapHits, bothThrottleHits atomic.Int32
+	mux := http.NewServeMux()
+	// Simulates a docs site mid-deploy swap: the first check (HEAD + GET)
+	// answers 404, and by the confirmation pass it answers 200.
+	mux.HandleFunc("/deploy-flap", func(w http.ResponseWriter, _ *http.Request) {
+		if deployFlapHits.Add(1) <= 2 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	// Simulates a CDN/origin that answers 503 to every HEAD request (across all
+	// retries) while serving GET normally.
+	mux.HandleFunc("/head-503", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	// Simulates a host that answers 503 to both HEAD and GET: the shared retry
+	// budget must cap total attempts at (RETRIES+1) HEAD + 1 final GET = 4, not
+	// reset a second full retry loop on GET.
+	mux.HandleFunc("/both-503", func(w http.ResponseWriter, _ *http.Request) {
+		bothThrottleHits.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("/still-gone", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	catalog := filepath.Join(t.TempDir(), "catalog.yaml")
+	body := fmt.Sprintf("servers:\n"+
+		"  - name: flap\n    display_name: flap\n    url: \"https://example.invalid/1\"\n    docs_url: %q\n    auth: open\n"+
+		"  - name: head503\n    display_name: head503\n    url: \"https://example.invalid/2\"\n    docs_url: %q\n    auth: open\n"+
+		"  - name: both503\n    display_name: both503\n    url: \"https://example.invalid/3\"\n    docs_url: %q\n    auth: open\n"+
+		"  - name: gone\n    display_name: gone\n    url: \"https://example.invalid/4\"\n    docs_url: %q\n    auth: open\n",
+		srv.URL+"/deploy-flap", srv.URL+"/head-503", srv.URL+"/both-503", srv.URL+"/still-gone")
+	if err := os.WriteFile(catalog, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "GITHUB_STEP_SUMMARY=", "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost")
+
+	t.Run("transient 404 clears on confirmation and HEAD 503 falls back to GET", func(t *testing.T) {
+		cmd := exec.Command("./mcp-catalog-lint.sh", "--catalog", catalog, "--delay", "0", "--confirm-delay", "0.05", "--only", "flap,head503,both503")
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("expected exit 0 after confirmation, got %v:\n%s", err, out)
+		}
+		for _, want := range []string{
+			"re-checking 1 dead link(s) after 0.05s to confirm...",
+			"OK   200  flap  docs_url",
+			"OK   200  head503  docs_url",
+			"WARN 503  both503  docs_url",
+			"links: 3  ok: 2  warn: 1  dead: 0",
+		} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("output lacks %q:\n%s", want, out)
+			}
+		}
+		if got := bothThrottleHits.Load(); got != 4 {
+			t.Errorf("both503 received %d requests, want 4 (3 HEAD + 1 final GET without resetting retry budget)", got)
+		}
+	})
+
+	t.Run("persistent 404 still fails after confirmation", func(t *testing.T) {
+		cmd := exec.Command("./mcp-catalog-lint.sh", "--catalog", catalog, "--delay", "0", "--confirm-delay", "0.05", "--only", "gone")
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			t.Fatalf("expected exit 1 for persistent 404, got %v:\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "DEAD 404  gone  docs_url") {
+			t.Errorf("output lacks DEAD verdict:\n%s", out)
+		}
+	})
+}

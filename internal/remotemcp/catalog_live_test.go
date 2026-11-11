@@ -7,11 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,7 +29,7 @@ import (
 // initialize + tools/list over the SSRF-safe client that Connect runs after
 // it has validated the entry — against the built-in catalog's live vendor
 // endpoints. They hit the network, so they are gated on FLEET_CATALOG_LIVE=1
-// and never run in the PR gate; the nightly workflow
+// and never run in the PR gate; the weekly workflow
 // .github/workflows/mcp-catalog-smoke.yml runs them against main.
 //
 // What they prove is deliberately narrow. For an `open` entry: the endpoint
@@ -52,19 +55,27 @@ const vendorOutageMarker = "VENDOR OUTAGE"
 // vendorOutage reports whether a probe failure — after the connect retry —
 // says the vendor is down right now rather than that the listing is wrong:
 //
-//   - an HTTP 429 or any 5xx but 501, whatever the body: plain text
+//   - an HTTP 408, 429 or any 5xx but 501, whatever the body: plain text
 //     (HTTPStatusError), a JSON-RPC error (RPCError) or a JSON-RPC error not
 //     attributed to the request (UnattributedResponseError). The run
 //     classifier retries only 500/502/503/504/429 and reads a JSON-RPC
-//     body's wording; the smoke goes by the status, and also counts the
-//     nonstandard ones a CDN answers for a down origin (Cloudflare's 520–524
-//     and 530). 501 Not Implemented stays rot: the endpoint answered and does
-//     not speak the protocol;
-//   - a JSON-RPC error whose message says the caller is rate-limited
-//     (rpcMessageSaysRateLimited), on any status: some vendors answer a
-//     throttled request with HTTP 200 and a JSON-RPC error, so the 429 never
-//     reaches the transport (#1844: Parallel Search's free tier, shared by
-//     every GitHub runner on the same egress IP);
+//     body's wording; the smoke goes by the status, and also counts 408
+//     (upstream gateway request timeout) plus the nonstandard 5xx statuses a
+//     CDN answers for a down origin (Cloudflare's 520–524 and 530). 501 Not
+//     Implemented stays rot: the endpoint answered and does not speak the
+//     protocol;
+//   - a JSON-RPC error or non-JSON-RPC HTTP error body whose wording says the
+//     caller is rate-limited or throttled (rateLimitedMessage), on any status:
+//     some vendors answer a throttled request with HTTP 200 and a JSON-RPC
+//     error (#1844: Parallel Search's free tier, shared by every GitHub runner
+//     on the same egress IP), while API gateways in front of MCP servers often
+//     reject shared runner IPs with HTTP 403 and a REST/plain-text rate-limit
+//     body;
+//   - a mid-flight HTTP or HTTP/2 connection drop (unexpected EOF while
+//     streaming the body or SSE events, broken pipe, server closing the
+//     connection before response headers, or an HTTP/2 stream reset / GOAWAY),
+//     whereas a clean HTTP 200 with an empty body (bare io.EOF from the JSON
+//     decoder) stays rot because the endpoint answered something non-MCP;
 //   - otherwise whatever mcp.IsTransientConnectError calls transient: a
 //     timeout, a refused or reset connection, a temporary DNS failure, a
 //     JSON-RPC error that says it is temporary.
@@ -79,12 +90,15 @@ func vendorOutage(err error) bool {
 		return false
 	}
 	switch status := httpStatusOf(err); {
-	case status == http.StatusTooManyRequests:
+	case status == http.StatusRequestTimeout, status == http.StatusTooManyRequests:
 		return true
 	case status >= 500 && status <= 599:
 		return status != http.StatusNotImplemented
 	}
-	if rpcMessageSaysRateLimited(rpcMessageOf(err)) {
+	if rateLimitedMessage(rpcMessageOf(err)) || rateLimitedMessage(httpStatusBodyOf(err)) {
+		return true
+	}
+	if droppedHTTPConnection(err) {
 		return true
 	}
 	return mcp.IsTransientConnectError(err)
@@ -104,19 +118,65 @@ func rpcMessageOf(err error) string {
 	return ""
 }
 
-// rpcMessageSaysRateLimited reports whether a JSON-RPC error message says
-// the caller hit a rate limit. That is the vendor's capacity tonight, not the
-// listing: an open entry that rate-limits anonymous callers still works for
-// a user within its limits. It is the smoke's rule only — mcp's run-time
-// classifier does not retry on it, since a quota rarely clears in seconds.
-func rpcMessageSaysRateLimited(message string) bool {
+// httpStatusBodyOf is the bounded first-line body carried by a non-JSON-RPC
+// HTTP error response; "" when err is not an HTTPStatusError.
+func httpStatusBodyOf(err error) string {
+	var statusErr *mcp.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.Body
+	}
+	return ""
+}
+
+// rateLimitedMessage reports whether an error message or gateway body says the
+// caller hit a rate limit, throttle, or shared-IP quota. That is the vendor's
+// capacity for the runner IP right now, not the listing: an open entry that
+// rate-limits anonymous callers still works for a user within its limits. It
+// is the smoke's rule only — mcp's run-time classifier does not retry on it,
+// since a quota rarely clears in seconds.
+func rateLimitedMessage(message string) bool {
+	if message == "" {
+		return false
+	}
 	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
-	for _, phrase := range []string{"rate limit", "rate-limit", "ratelimit", "too many requests"} {
+	for _, phrase := range []string{"rate limit", "rate-limit", "ratelimit", "too many requests", "throttl", "quota exceeded"} {
 		if strings.Contains(m, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// droppedHTTPConnection reports whether err is a transport-level disconnect
+// mid-request or mid-response — broken pipe, net/http *url.Error EOF or
+// unexpected EOF, truncated SSE stream, or an HTTP/2 stream reset / GOAWAY —
+// without treating a completed HTTP 200 carrying an empty or syntactically
+// truncated JSON body (bare io.EOF or io.ErrUnexpectedEOF from json.Decoder)
+// as an outage.
+func droppedHTTPConnection(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *mcp.HTTPStatusError
+	var rpcErr *mcp.RPCError
+	var unattributed *mcp.UnattributedResponseError
+	if errors.As(err, &statusErr) || errors.As(err, &rpcErr) || errors.As(err, &unattributed) {
+		return false
+	}
+	if errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && (errors.Is(urlErr.Err, io.EOF) || errors.Is(urlErr.Err, io.ErrUnexpectedEOF)) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	if errors.Is(err, io.ErrUnexpectedEOF) && strings.Contains(lower, "sse read error:") {
+		return true
+	}
+	return strings.Contains(lower, "stream error:") ||
+		strings.Contains(lower, "http2: server sent goaway") ||
+		strings.Contains(lower, "http2: client connection lost")
 }
 
 // httpStatusOf is the non-2xx HTTP status a probe failure arrived under, in
@@ -159,22 +219,40 @@ func failUnlessOutagef(t *testing.T, err error, format string, args ...any) {
 const fixtureKeyRefusedMarker = "FIXTURE KEY REFUSED"
 
 // fixtureKeyRefused reports whether a probe with a fixture's real key failed
-// because the vendor refused that key: an HTTP 401 or 403 in any of the
-// transport's error forms, or a key rejected at the read-only verification
-// call. Outages are sorted out first (vendorOutage), so a 5xx never lands here.
+// because the vendor refused that key or its account exhausted its plan: an
+// HTTP 401, 402 or 403 in any of the transport's error forms, a JSON-RPC / HTTP
+// body reporting exhausted account credits or plan limits, or a key rejected at
+// the read-only verification call. Outages are sorted out first (vendorOutage),
+// so a 5xx or shared-IP rate limit never lands here.
 //
-// The secret lives in a third-party account fleet does not control: trials
-// lapse, plans drop the permission a token needs, someone revokes the token.
-// None of that is the listing being wrong, and #1776 (the PagerDuty EU key
-// refused two nights running, no fleet change in between) showed a red lane
-// for it reads as a fleet regression.
+// The secret lives in a third-party account fleet does not control: trials and
+// free-tier credits lapse, plans drop the permission a token needs, someone
+// revokes the token. None of that is the listing being wrong, and #1776 (the
+// PagerDuty EU key refused two nights running, no fleet change in between)
+// showed a red lane for it reads as a fleet regression.
 func fixtureKeyRefused(err error) bool {
 	switch httpStatusOf(err) {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden:
+		return true
+	}
+	if fixtureAccountExhausted(rpcMessageOf(err)) || fixtureAccountExhausted(httpStatusBodyOf(err)) {
 		return true
 	}
 	var kr *keyRejectedError
 	return errors.As(err, &kr)
+}
+
+func fixtureAccountExhausted(message string) bool {
+	if message == "" {
+		return false
+	}
+	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	for _, phrase := range []string{"insufficient credits", "out of credits", "credit balance", "payment required", "plan limit"} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // failFixturef fails an api_key fixture's real-key probe on err, except that
@@ -222,8 +300,21 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // must not file the nightly alarm either (#1683). What still fails is what a
 // run would also fail on — an outage outlasting the retries, a refusal, a
 // dead host — and the last attempt's error is the one reported.
+// probeTimeoutBudget is the outer context deadline for one probeForTest call:
+// an unauthenticated probe runs one handshake (handshakeSteps * HTTPTimeout),
+// and a credentialed probe runs the real handshake + blindCall + the control
+// handshake + control blindCall, plus the shared MaxConnectRetryBudget for
+// transient connect retries.
+func probeTimeoutBudget(httpTimeout time.Duration, credential string) time.Duration {
+	steps := handshakeSteps
+	if credential != "" {
+		steps = 2*handshakeSteps + 2
+	}
+	return time.Duration(steps)*httpTimeout + mcp.MaxConnectRetryBudget
+}
+
 func (s *Service) probeForTest(url, header, query, prefix, credential string) (ProbeReport, error) {
-	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), s.cfg.HTTPTimeout+mcp.MaxConnectRetryBudget)
+	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), probeTimeoutBudget(s.cfg.HTTPTimeout, credential))
 	defer cancel()
 	var report ProbeReport
 	err := mcp.RetryTransientConnect(ctx, url, func(attemptCtx context.Context) error {

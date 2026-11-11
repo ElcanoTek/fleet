@@ -4,13 +4,16 @@
 package scripts
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-yaml"
 )
 
-// TestCatalogSmokeFixturesMatchWorkflow — an api_key fixture in the nightly
+// TestCatalogSmokeFixturesMatchWorkflow — an api_key fixture in the weekly
 // catalog smoke has two halves: a row in catalogKeyFixtures
 // (internal/remotemcp/catalog_live_test.go), which reads
 // FLEET_CATALOG_KEY_<ENTRY> from the environment, and a line in the `env:`
@@ -62,6 +65,64 @@ func TestCatalogSmokeFixturesMatchWorkflow(t *testing.T) {
 	for name := range forwarded {
 		if !fixtures[name] {
 			t.Errorf("mcp-catalog-smoke.yml forwards %s but no catalogKeyFixtures row reads it", name)
+		}
+	}
+}
+
+// TestScanCronAlarmWatchesScheduledWorkflows pins scan-cron-alarm.yml's
+// workflow_run.workflows display-name list against .github/workflows/*.yml:
+// GitHub matches workflow_run triggers by display `name:`, so renaming a
+// watched workflow without updating scan-cron-alarm.yml silently disarms its
+// alarm with no error from GitHub or actionlint.
+func TestScanCronAlarmWatchesScheduledWorkflows(t *testing.T) {
+	root := repoRoot(t)
+	alarmRaw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "scan-cron-alarm.yml"))
+	if err != nil {
+		t.Fatalf("read scan-cron-alarm.yml: %v", err)
+	}
+	var alarm struct {
+		On struct {
+			WorkflowRun struct {
+				Workflows []string `yaml:"workflows"`
+			} `yaml:"workflow_run"`
+		} `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(alarmRaw, &alarm); err != nil {
+		t.Fatalf("parse scan-cron-alarm.yml: %v", err)
+	}
+	if len(alarm.On.WorkflowRun.Workflows) == 0 {
+		t.Fatal("scan-cron-alarm.yml watches no workflows")
+	}
+
+	dir := filepath.Join(root, ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read workflows dir: %v", err)
+	}
+	scheduledByName := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		var wf struct {
+			Name string         `yaml:"name"`
+			On   map[string]any `yaml:"on"`
+		}
+		if err := yaml.Unmarshal(raw, &wf); err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+		if _, hasSchedule := wf.On["schedule"]; hasSchedule && wf.Name != "" {
+			scheduledByName[wf.Name] = e.Name()
+		}
+	}
+
+	for _, watched := range alarm.On.WorkflowRun.Workflows {
+		if _, ok := scheduledByName[watched]; !ok {
+			t.Errorf("scan-cron-alarm.yml watches %q, which matches no scheduled workflow's `name:` in .github/workflows/", watched)
 		}
 	}
 }

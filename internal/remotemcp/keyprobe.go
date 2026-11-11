@@ -350,21 +350,21 @@ func (s *Service) blindCall(ctx context.Context, client *mcp.Client, serverName,
 
 // controlProbe repeats the handshake and, if the vendor lets it through, the
 // blind call, with invalidProbeKey attached exactly as the real key was, and
-// reports whether the vendor told the two keys apart. It runs under its own
-// timeout so a slow vendor cannot eat the real probe's budget, and one
-// invalid attempt per add or rotation is all it ever sends.
+// reports whether the vendor told the two keys apart. The handshake and the
+// blind call each get their own budget so a slow handshake does not starve the
+// blind call, and one invalid attempt per add or rotation is all it ever sends.
 func (s *Service) controlProbe(ctx context.Context, url, headerName, queryName, prefix, tool string, actual callOutcome) bool {
-	cctx, cancel := context.WithTimeout(ctx, s.cfg.HTTPTimeout)
+	hctx, cancel := probeTimeout(ctx, s.cfg.HTTPTimeout)
 	defer cancel()
 	client := mcp.NewClient()
 	defer func() { _ = client.Close() }()
-	if err := client.AddHTTPServerWithOptions(cctx, "control", url, s.keyClientOptions(headerName, queryName, prefix, invalidProbeKey)); err != nil {
+	if err := client.AddHTTPServerWithOptions(hctx, "control", url, s.keyClientOptions(headerName, queryName, prefix, invalidProbeKey)); err != nil {
 		return handshakeRefused(err)
 	}
 	if tool == "" {
 		return false
 	}
-	return outcomesDiffer(actual, s.blindCall(cctx, client, "control", tool))
+	return outcomesDiffer(actual, s.blindCall(ctx, client, "control", tool))
 }
 
 func truncateReason(s string) string {
@@ -375,8 +375,15 @@ func truncateReason(s string) string {
 	return s
 }
 
-// probeTimeout is the budget for the real handshake alone; the verification
-// call and the control probe each get their own s.cfg.HTTPTimeout.
-func probeTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, d)
+// handshakeSteps is the number of blocking HTTP round-trips an MCP handshake
+// performs (initialize + notifications/initialized + tools/list). Each
+// individual HTTP request is bounded at HTTPTimeout by s.httpClient.Timeout;
+// probeTimeout bounds the handshake as a whole so all three round-trips can
+// complete within HTTPTimeout without an earlier step starving tools/list.
+const handshakeSteps = 3
+
+// probeTimeout is the budget for one handshake (initialize + tools/list); the
+// verification call and the control probe each get their own budgets.
+func probeTimeout(parent context.Context, perRequest time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, handshakeSteps*perRequest)
 }

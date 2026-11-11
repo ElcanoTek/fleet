@@ -121,7 +121,7 @@ The running server keeps its own record, filled as turns build tool lists:
 `fleet doctor` advises on each finding, and
 `fleet_mcp_tool_schema_issues_total{server,status}` on `/metrics` counts new
 findings. Each new finding is also logged once. A connector that ships a fixed
-schema clears from the record on its next turn. The nightly catalog smoke
+schema clears from the record on its next turn. The weekly catalog smoke
 (`.github/workflows/mcp-catalog-smoke.yml`) fails a built-in directory entry
 whose tools include an invalid schema.
 
