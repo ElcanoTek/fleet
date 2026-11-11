@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 import {
@@ -133,8 +134,8 @@ export function ToolsPopover({
   const scopeOn = scopeRows.filter((s) => s.enabled).length;
   const n = scope.length;
   const bulkTitle = q
-    ? `Applies to ${n} ${n === 1 ? "connection" : "connections"} shown`
-    : `Applies to ${n} ${n === 1 ? "connection" : "connections"}`;
+    ? tr(n === 1 ? "Applies to {0} connection shown" : "Applies to {0} connections shown", [n])
+    : tr(n === 1 ? "Applies to {0} connection" : "Applies to {0} connections", [n]);
 
   // Keep the active row in view as the arrows move it.
   useEffect(() => {
@@ -215,14 +216,14 @@ export function ToolsPopover({
               setNav(false);
             }}
             onKeyDown={onKey}
-            placeholder="Search tools…"
-            aria-label="Search tools"
+            placeholder={tr("Search tools…")}
+            aria-label={tr("Search tools")}
             className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] any-pointer-coarse:h-11 any-pointer-coarse:pr-11 text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
           />
           {query ? (
             <button
               type="button"
-              aria-label="Clear search"
+              aria-label={tr("Clear search")}
               onClick={clearQuery}
               className="absolute right-1.5 inline-flex size-[1.375rem] items-center any-pointer-coarse:right-0 any-pointer-coarse:size-11 justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
@@ -232,8 +233,8 @@ export function ToolsPopover({
         </div>
         <button
           type="button"
-          title="Open tool library"
-          aria-label="Open tool library"
+          title={tr("Open tool library")}
+          aria-label={tr("Open tool library")}
           onClick={() => onOpenLibrary()}
           className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] any-pointer-coarse:size-11 text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
@@ -246,7 +247,7 @@ export function ToolsPopover({
         data-testid="chat-mcp-all-actions"
       >
         <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">
-          {q ? `${resultCount} ${resultCount === 1 ? "result" : "results"} · ${onCount} on` : `${onCount} on`}
+          {q ? tr(resultCount === 1 ? "{0} result · {1} on" : "{0} results · {1} on", [resultCount, onCount]) : tr("{0} on", [onCount])}
         </span>
         {n > 0 ? (
           <>
@@ -259,7 +260,7 @@ export function ToolsPopover({
                 if (scopeOn !== n) onSetEnabled(scope, true);
               }}
             >
-              {q ? `All ${n} on` : "All on"}
+              {q ? tr("All {0} on", [n]) : tr("All on")}
             </button>
             <button
               type="button"
@@ -270,7 +271,7 @@ export function ToolsPopover({
                 if (scopeOn !== 0) onSetEnabled(scope, false);
               }}
             >
-              {q ? `All ${n} off` : "All off"}
+              {q ? tr("All {0} off", [n]) : tr("All off")}
             </button>
           </>
         ) : null}
@@ -281,7 +282,7 @@ export function ToolsPopover({
         className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1.5 pl-1.5 pr-1 pt-1 [scrollbar-gutter:stable] [scrollbar-width:thin]"
       >
         {loading && servers.length === 0 ? (
-          <div className="px-2.5 py-2 text-[0.75rem] text-[var(--color-text-subtle)]">Loading…</div>
+          <div className="px-2.5 py-2 text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Loading…")}</div>
         ) : null}
         {sections.map((section, si) => (
           <div key={section.key} className="flex flex-col" role="group" aria-label={section.label}>
@@ -324,10 +325,10 @@ export function ToolsPopover({
         {!loading && flat.length === 0 ? (
           <div className="flex flex-col items-center gap-2.5 px-5 pb-10 pt-9 text-center">
             <div className="text-[0.875rem] text-[var(--color-text-primary)]">
-              {q ? `No tools match ‘${q}’` : "No tools in this chat"}
+              {q ? tr("No tools match ‘{0}’", [q]) : tr("No tools in this chat")}
             </div>
             <div className="max-w-60 text-[0.78rem] text-[var(--color-text-subtle)]">
-              Try another word, or browse everything in the library.
+              {tr("Try another word, or browse everything in the library.")}
             </div>
             <div className="flex gap-3.5 text-[0.8rem]">
               <button
@@ -335,7 +336,7 @@ export function ToolsPopover({
                 onClick={() => onOpenLibrary()}
                 className="hit-area-touch text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
-                Open the full library
+                {tr("Open the full library")}
               </button>
               {q ? (
                 <button
@@ -343,7 +344,7 @@ export function ToolsPopover({
                   onClick={clearQuery}
                   className="hit-area-touch text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
-                  Clear search
+                  {tr("Clear search")}
                 </button>
               ) : null}
             </div>
@@ -359,7 +360,7 @@ export function ToolsPopover({
           onClick={() => onOpenLibrary()}
           className="hit-area-touch inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          Open library
+          {tr("Open library")}
           <Icon name="maximize" className="size-[0.7rem]" />
         </button>
       </div>
@@ -428,9 +429,9 @@ function PopoverRow({
           {c.beta ? (
             <span
               className="shrink-0 rounded-sm border border-[var(--color-pill-border)] px-1 font-[family-name:var(--font-code)] text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-subtle)]"
-              title="This connector is in beta — it works but still has rough edges."
+              title={tr("This connector is in beta — it works but still has rough edges.")}
             >
-              beta
+              {tr("beta")}
             </span>
           ) : null}
         </div>
@@ -460,7 +461,7 @@ function PopoverRow({
         ) : null}
         {status === "always" ? (
           <span
-            title="Always on in every chat."
+            title={tr("Always on in every chat.")}
             className="flex h-[1.125rem] w-[1.875rem] items-center justify-center text-[var(--color-text-subtle)]"
             data-testid={`chat-mcp-always-on-${c.name}`}
           >
@@ -476,15 +477,15 @@ function PopoverRow({
             }}
             className="hit-area-touch inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
-            Set up
+            {tr("Set up")}
             <Icon name="chevron-right" className="size-3" />
           </button>
         ) : null}
         {status === "setup" && !isAdmin ? (
-          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">Needs admin setup</span>
+          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Needs admin setup")}</span>
         ) : null}
         {status === "unavailable" ? (
-          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">Unavailable</span>
+          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Unavailable")}</span>
         ) : null}
       </div>
     </div>

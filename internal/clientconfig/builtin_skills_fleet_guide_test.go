@@ -34,13 +34,22 @@ func TestBuiltinSkillFleetGuideReferencesResolve(t *testing.T) {
 	// Every `skills/fleet-guide/<file>` the instructions cite must exist. The
 	// path form matters as much as the file: skills/ is what the sandbox mounts
 	// and what the agent's workspace-relative reads resolve against.
-	refs := regexp.MustCompile(`skills/fleet-guide/([A-Za-z0-9._-]+)`).FindAllStringSubmatch(body, -1)
+	refs := regexp.MustCompile(`skills/fleet-guide/([A-Za-z0-9._/-]+\.md)`).FindAllStringSubmatch(body, -1)
 	if len(refs) < 2 {
 		t.Fatalf("SKILL.md cites %d guide paths; it must send the agent to both guides by path", len(refs))
 	}
 	for _, ref := range refs {
 		if _, err := os.Stat(filepath.Join(packDir, ref[1])); err != nil {
 			t.Errorf("SKILL.md cites skills/fleet-guide/%s, which is not in the pack: %v", ref[1], err)
+		}
+	}
+
+	for _, locale := range []string{"es", "pt"} {
+		for _, name := range []string{"chat.md", "operations-center.md"} {
+			ref := "skills/fleet-guide/" + locale + "/" + name
+			if !strings.Contains(body, ref) {
+				t.Errorf("SKILL.md does not direct users to localized guide %s", ref)
+			}
 		}
 	}
 

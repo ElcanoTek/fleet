@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";
@@ -58,7 +60,7 @@ export function ProjectVisibilityPill({
         className={`${pillBase} border-[var(--color-border)] text-[var(--color-text-secondary)]`}
       >
         <Icon name="lock" className="size-3" />
-        Only you
+        {tr("Only you")}
       </span>
     );
   }
@@ -71,30 +73,29 @@ export function ProjectVisibilityPill({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? popoverId : undefined}
-        title={`Shared with ${teamName}`}
+        title={tr("Shared with {0}", [teamName])}
         className={`${pillBase} border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] text-[var(--color-text-primary)] transition hover:bg-[color-mix(in_srgb,var(--color-primary)_22%,transparent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]`}
         onClick={() => setOpen((o) => !o)}
       >
         <TeamGlyph className="size-3" />
-        Shared with {teamName}
+        {tr("Shared with")}{" "}{teamName}
         <Icon name="chevron-down" className="size-3" />
       </button>
       {open ? (
         <div
           id={popoverId}
           role="dialog"
-          aria-label="Who sees this project"
+          aria-label={tr("Who sees this project")}
           className="absolute left-0 top-full z-40 mt-1.5 w-[19rem] max-w-[calc(100vw-2rem)] rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-3.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)] shadow-[var(--shadow-md)]"
         >
           <p className="m-0 mb-2 text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
-            Shared with {teamName}
-          </p>
+        {rich("Shared with {0}", teamName)}
+      </p>
           <p className="m-0 mb-1.5 flex gap-2">
             <TeamGlyph className="mt-[0.2rem] size-3.5 shrink-0 text-[var(--color-accent)]" />
             <span>
-              {teamName} sees the instructions, Team learnings, and any chat
-              shared with them.
-            </span>
+        {rich("{0} sees the instructions, Team learnings, and any chat shared with them.", teamName)}
+      </span>
           </p>
           <p className="m-0 mb-1.5 flex gap-2">
             <Icon
@@ -102,8 +103,7 @@ export function ProjectVisibilityPill({
               className="mt-[0.2rem] size-3.5 shrink-0 text-[var(--color-accent)]"
             />
             <span>
-              Each chat stays Only you until its owner shares it. Its files go
-              with it.
+              {tr("Each chat stays Only you until its owner shares it. Its files go with it.")}
             </span>
           </p>
           <p className="m-0 flex gap-2">
@@ -112,8 +112,7 @@ export function ProjectVisibilityPill({
               className="mt-[0.2rem] size-3.5 shrink-0 text-[var(--color-accent)]"
             />
             <span>
-              Chats here use the instructions, then Team learnings, then each
-              person&rsquo;s own memory. They don&rsquo;t expire.
+              {tr("Chats here use the instructions, then Team learnings, then each person’s own memory. They don’t expire.")}
             </span>
           </p>
           {isOwner ? (
@@ -125,7 +124,7 @@ export function ProjectVisibilityPill({
                 onOpenSettings();
               }}
             >
-              Project settings
+              {tr("Project settings")}
             </button>
           ) : null}
         </div>

@@ -294,12 +294,15 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if !g.verifyOrigin(w, r) {
 		return
 	}
-	landing := g.redirectURL(r, "/login?manual=1")
+	landing := g.redirectURL(r, requestLanguagePath(r, "/login?manual=1"))
 	if o := g.cfg.OIDC; o != nil {
 		if u, err := url.Parse(o.Issuer); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
 			end := u.ResolveReference(&url.URL{Path: "/logout"})
 			q := url.Values{}
 			q.Set("client_id", o.ClientID)
+			if language := requestLanguage(r); language != "" {
+				q.Set("lang", language)
+			}
 			end.RawQuery = q.Encode()
 			landing = end.String()
 		}
@@ -312,9 +315,7 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 		setCookie(w, name, "", 0, secure, d)
 	}
 	setCookie(w, name, "", 0, secure, "")
-	for _, c := range []string{oidcStateCookie, oidcNonceCookie, oidcVerifierCookie} {
-		setCookie(w, c, "", 0, secure, "")
-	}
+	clearOIDCTempCookies(w, secure)
 	seeOther(w, landing)
 }
 
@@ -325,11 +326,15 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 // bounce to the password login with a message instead. Keep that guard.
 func (g *Gateway) elcanoLoginRedirect(w http.ResponseWriter, r *http.Request, returnToPath string) {
 	if g.cfg.ElcanoPubKeyB64 == "" {
-		seeOther(w, g.redirectURL(r, "/login?e=elcano_unavailable"))
+		seeOther(w, g.redirectURL(r, requestLanguagePath(r, "/login?e=elcano_unavailable")))
 		return
 	}
-	returnTo := g.redirectURL(r, returnToPath)
-	seeOther(w, g.cfg.authLoginURL()+"/?return_to="+encodeURIComponent(returnTo))
+	returnTo := g.redirectURL(r, requestLanguagePath(r, returnToPath))
+	loginURL := g.cfg.authLoginURL() + "/?return_to=" + encodeURIComponent(returnTo)
+	if language := requestLanguage(r); language != "" {
+		loginURL += "&lang=" + language
+	}
+	seeOther(w, loginURL)
 }
 
 // handleMCPOAuthCallback completes a per-user remote MCP OAuth flow (#443):

@@ -1,3 +1,7 @@
+import { localizeError } from "@/app/lib/i18n/errors";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // ChatTranscript — the scrollable conversation transcript extracted from
 // ChatExperience (issue #169 decomposition, slice 8). This is a *presentational*
 // component: it owns no turn/send/SSE state machine of its own. Every value,
@@ -553,7 +557,7 @@ export function ChatTranscript({
             // accessible name), so `role="region"` was redundant. Removing it
             // keeps getByRole("region", { name: "Conversation" }) — used by the
             // mocked/live/canary Playwright specs — resolving to this element.
-            aria-label="Conversation"
+            aria-label={tr("Conversation")}
             // overflow-x-hidden: belt-and-suspenders against a stray wide
             // child (long unbreakable token, syntax-highlighted long line)
             // creating a horizontal scroll inside the chat column on mobile.
@@ -583,19 +587,17 @@ export function ChatTranscript({
             <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6">
               {isLoadingHistory ? (
                 <div className="flex min-h-full items-center justify-center pb-8 text-[0.875rem] text-[var(--color-text-muted)]">
-                  Loading conversation...
+                  {tr("Loading conversation...")}
                 </div>
               ) : messages.length === 0 ? (
                 <div className="flex min-h-full flex-col items-center justify-start gap-6 pb-6 pt-10 sm:gap-8 sm:pb-8">
                   <div className="text-center">
                     <h2 className="font-heading text-[1.4rem] font-semibold text-[var(--color-text-primary)] sm:text-[1.75rem]">
-                      {isLockdown ? "Lockdown chat" : dashboard ? "What should we watch?" : "What can I help with?"}
+                      {isLockdown ? tr("Lockdown chat") : dashboard ? tr("What should we watch?") : tr("What can I help with?")}
                     </h2>
                     {isLockdown ? (
                       <p className="mt-2 max-w-md text-[0.8125rem] text-[var(--color-text-muted)] sm:text-[0.875rem]">
-                        Sealed and private. Your data and an approved model
-                        stay inside this sandbox — nothing leaves. Open a
-                        standard chat when you need full web access.
+                        {tr("Sealed and private. Your data and an approved model stay inside this sandbox — nothing leaves. Open a standard chat when you need full web access.")}
                       </p>
                     ) : null}
                   </div>
@@ -697,7 +699,7 @@ export function ChatTranscript({
                                   onClick={() => setSummaryExpanded(true)}
                                 >
                                   <Icon name="chevron-down" className="size-3" />
-                                  Show {summaryIndex} earlier message{summaryIndex === 1 ? "" : "s"}, summarized below
+                                  {tr(summaryIndex === 1 ? "Show {0} earlier message, summarized below" : "Show {0} earlier messages, summarized below", [summaryIndex])}
                                 </button>
                               );
                             }
@@ -885,7 +887,7 @@ export function ChatTranscript({
                               ) : null}
 
                               {showStats && message.narration ? (
-                                <ReasoningBlock label="Working notes" text={message.narration} />
+                                <ReasoningBlock label={tr("Working notes")} text={message.narration} />
                               ) : null}
 
                               {(working || crossfadingMessageIds.includes(message.id)) && !displayContent ? (
@@ -926,7 +928,7 @@ export function ChatTranscript({
                                       </span>
                                     ) : null}
                                     {!activeTaskTitle && !activeToolName ? (
-                                      <span className="thinking-shimmer shrink-0">Thinking</span>
+                                      <span className="thinking-shimmer shrink-0">{tr("Thinking")}</span>
                                     ) : null}
                                   </span>
                                 </div>
@@ -970,7 +972,7 @@ export function ChatTranscript({
                                           <Icon name="grid" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
                                           <span className="min-w-0 flex-1 truncate">
                                             <span className="font-medium text-[var(--color-text-primary)]">{spec.title}</span>
-                                            {current ? " · on the board" : " · earlier version, updated on the board"}
+                                            {current ? tr(" · on the board") : tr(" · earlier version, updated on the board")}
                                           </span>
                                           <Icon name="arrow-right" className="size-3.5 shrink-0" />
                                         </button>
@@ -1010,7 +1012,7 @@ export function ChatTranscript({
                                             onClick={() => dashboard.pinCard(tc.id, genUi.occurrences.get(tc) ?? 0, spec.panel)}
                                           >
                                             <Icon name="pin" className="size-3.5" />
-                                            Pin to board
+                                            {tr("Pin to board")}
                                           </button>
                                         ) : null}
                                       </Suspense>
@@ -1022,17 +1024,17 @@ export function ChatTranscript({
                               {message.retrying ? (
                                 <div
                                   className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]"
-                                  title={message.retrying.message || undefined}
+                                  title={message.retrying.message ? localizeError(message.retrying.message) : undefined}
                                 >
                                   <span className="inline-block size-1.5 animate-pulse rounded-full bg-[var(--color-text-muted)]" />
-                                  Retrying
+                                  {tr("Retrying")}
                                   {message.retrying.statusCode
-                                    ? ` (HTTP ${message.retrying.statusCode})…`
+                                    ? tr(" (HTTP {0})…", [message.retrying.statusCode])
                                     : "…"}
                                   {message.retrying.delayMs > 0 ? (
                                     <span className="text-[var(--color-text-muted)]">
-                                      next attempt in {Math.max(1, Math.round(message.retrying.delayMs / 1000))}s
-                                    </span>
+        {rich("next attempt in {0}s", Math.max(1, Math.round(message.retrying.delayMs / 1000)))}
+      </span>
                                   ) : null}
                                 </div>
                               ) : null}
@@ -1040,12 +1042,11 @@ export function ChatTranscript({
                               {message.contextPressure ? (
                                 <div
                                   className="flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-warning-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]"
-                                  title={`${message.contextPressure.usedTokens.toLocaleString()} of ${message.contextPressure.windowSize.toLocaleString()} tokens`}
+                                  title={tr("{0} of {1} tokens", [message.contextPressure.usedTokens.toLocaleString(getLanguage()), message.contextPressure.windowSize.toLocaleString(getLanguage())])}
                                 >
                                   <span className="inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-warning)]" />
                                   <span>
-                                    Conversation is {Math.round(message.contextPressure.pct * 100)}% full —{" "}
-                                    {isConversationOwner ? (
+        {rich("Conversation is {0}% full — {1}", Math.round(message.contextPressure.pct * 100), isConversationOwner ? (
                                       <>
                                         <button
                                           type="button"
@@ -1053,25 +1054,23 @@ export function ChatTranscript({
                                           className="font-medium underline hover:text-[var(--color-text-primary)] disabled:opacity-50"
                                           onClick={() => setConfirmSummarize(true)}
                                         >
-                                          summarize earlier messages
+                                          {tr("summarize earlier messages")}
                                         </button>{" "}
-                                        or start a new session for complex tasks.
+                                        {tr("or start a new session for complex tasks.")}
                                       </>
                                     ) : (
-                                      "consider starting a new session for complex tasks."
-                                    )}
-                                  </span>
+                                      tr("consider starting a new session for complex tasks.")
+                                    ))}
+      </span>
                                 </div>
                               ) : null}
 
                               {message.contextCompacted ? (
                                 <div className="flex items-center gap-2 rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]">
                                   <span className="inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]" />
-                                  Older context was summarized to make room
+                                  {tr("Older context was summarized to make room")}
                                   {message.contextCompacted.removedTurns > 0
-                                    ? ` (${message.contextCompacted.removedTurns} earlier ${
-                                        message.contextCompacted.removedTurns === 1 ? "message" : "messages"
-                                      }).`
+                                    ? tr(message.contextCompacted.removedTurns === 1 ? " ({0} earlier message)." : " ({0} earlier messages).", [message.contextCompacted.removedTurns])
                                     : "."}
                                 </div>
                               ) : null}
@@ -1079,14 +1078,14 @@ export function ChatTranscript({
                               {message.cancelled ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-text-muted)]" />
-                                  Turn stopped.{" "}
+                                  {tr("Turn stopped.")}{" "}
                                   {canRetry ? (
                                     <button
                                       type="button"
                                       className="underline hover:text-[var(--color-text-primary)]"
                                       onClick={() => void retryLastUserMessage()}
                                     >
-                                      Retry
+                                      {tr("Retry")}
                                     </button>
                                   ) : null}
                                 </div>
@@ -1108,10 +1107,10 @@ export function ChatTranscript({
                                     <span className="inline-block size-1.5 rounded-full bg-[var(--color-danger)]" />
                                     <span className="font-medium text-[var(--color-text-primary)]">
                                       {creditsExhausted
-                                        ? "Out of credits"
+                                        ? tr("Out of credits")
                                         : mustSwap
-                                          ? "Pick a different model"
-                                          : "Turn failed"}
+                                          ? tr("Pick a different model")
+                                          : tr("Turn failed")}
                                     </span>
                                     {message.modelRequired.failedModel ? (
                                       <span className="truncate text-[var(--color-text-muted)]">
@@ -1128,15 +1127,15 @@ export function ChatTranscript({
                                           href="mailto:licensing@elcanotek.com?subject=Fleet%20Credits"
                                           className="font-medium text-[var(--color-text-primary)] underline hover:text-[var(--color-accent)]"
                                         >
-                                          Contact licensing@elcanotek.com
+                                          {tr("Contact licensing@elcanotek.com")}
                                         </a>
                                         <button
                                           type="button"
                                           className="underline hover:text-[var(--color-text-primary)]"
                                           onClick={() => void retryLastUserMessage()}
                                         >
-                                          Retry with {shortModelName(selectedModel)}
-                                        </button>
+        {rich("Retry with {0}", shortModelName(selectedModel))}
+      </button>
                                       </>
                                     ) : mustSwap ? (
                                       <>
@@ -1150,15 +1149,15 @@ export function ChatTranscript({
                                             void loadCatalogModels();
                                           }}
                                         >
-                                          Open model picker
+                                          {tr("Open model picker")}
                                         </button>
                                         <button
                                           type="button"
                                           className="underline hover:text-[var(--color-text-primary)]"
                                           onClick={() => void retryLastUserMessage()}
                                         >
-                                          Retry with {shortModelName(selectedModel)}
-                                        </button>
+        {rich("Retry with {0}", shortModelName(selectedModel))}
+      </button>
                                       </>
                                     ) : (
                                       <>
@@ -1167,8 +1166,8 @@ export function ChatTranscript({
                                           className="font-medium text-[var(--color-text-primary)] underline hover:text-[var(--color-accent)]"
                                           onClick={() => void retryLastUserMessage()}
                                         >
-                                          Retry with {shortModelName(selectedModel)}
-                                        </button>
+        {rich("Retry with {0}", shortModelName(selectedModel))}
+      </button>
                                         <button
                                           type="button"
                                           className="underline hover:text-[var(--color-text-primary)]"
@@ -1179,7 +1178,7 @@ export function ChatTranscript({
                                             void loadCatalogModels();
                                           }}
                                         >
-                                          or pick a different model
+                                          {tr("or pick a different model")}
                                         </button>
                                       </>
                                     )}
@@ -1190,14 +1189,14 @@ export function ChatTranscript({
                               })() : message.failed ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-danger)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-danger)]" />
-                                  Turn failed.{" "}
+                                  {tr("Turn failed.")}{" "}
                                   {canRetry ? (
                                     <button
                                       type="button"
                                       className="underline hover:text-[var(--color-text-primary)]"
                                       onClick={() => void retryLastUserMessage()}
                                     >
-                                      Retry
+                                      {tr("Retry")}
                                     </button>
                                   ) : null}
                                 </div>
@@ -1222,14 +1221,14 @@ export function ChatTranscript({
                               {showsEmptyReplyNotice(message) ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-text-muted)]" />
-                                  The assistant finished without a written reply.{" "}
+                                  {tr("The assistant finished without a written reply.")}{" "}
                                   {canRetry ? (
                                     <button
                                       type="button"
                                       className="underline hover:text-[var(--color-text-primary)]"
                                       onClick={() => void retryLastUserMessage()}
                                     >
-                                      Retry
+                                      {tr("Retry")}
                                     </button>
                                   ) : null}
                                 </div>
@@ -1341,7 +1340,7 @@ export function ChatTranscript({
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                                       onClick={() => void regenerateLastAssistant()}
                                     >
-                                      Regenerate
+                                      {tr("Regenerate")}
                                     </button>
                                   ) : null}
                                   {/* One click from "that's wrong" to a stronger answer
@@ -1355,7 +1354,7 @@ export function ChatTranscript({
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                                      title="Run your last message again on the fallback model, and keep it for this chat"
+                                      title={tr("Run your last message again on the fallback model, and keep it for this chat")}
                                       data-testid="retry-with-advanced"
                                       onClick={() => {
                                         const advanced = currentAdvancedModel();
@@ -1363,8 +1362,8 @@ export function ChatTranscript({
                                         void retryLastUserMessage({ model: advanced });
                                       }}
                                     >
-                                      Retry with {shortModelName(currentAdvancedModel())}
-                                    </button>
+        {rich("Retry with {0}", shortModelName(currentAdvancedModel()))}
+      </button>
                                   ) : null}
                                   {/* Fork the conversation at this (persisted) message into a
                                       new thread (#454). Only persisted messages carry a dbId;
@@ -1375,7 +1374,7 @@ export function ChatTranscript({
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                                       onClick={() => void branchFromMessage(message)}
                                     >
-                                      Branch
+                                      {tr("Branch")}
                                     </button>
                                   ) : null}
                                   {/* The capture point for a session worth keeping. It sits
@@ -1388,10 +1387,10 @@ export function ChatTranscript({
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                                      title="Save this whole chat as a reusable workflow"
+                                      title={tr("Save this whole chat as a reusable workflow")}
                                       onClick={() => savePromptFromMessage()}
                                     >
-                                      Save as workflow
+                                      {tr("Save as workflow")}
                                     </button>
                                   ) : null}
                                   {/* Capture what the agent just said, without
@@ -1659,24 +1658,23 @@ function UserBubble({
           {/* Keyboard hint — desktop only; phones don't have these  */}
           {/* keys and the row is tight on width.                    */}
           <span className="hidden text-[0.65rem] text-[var(--color-text-muted)] sm:inline">
-            <kbd className="font-mono">↵</kbd> to send
+            <kbd className="font-mono">↵</kbd> {tr("to send")}
             <span className="opacity-60"> · </span>
-            <kbd className="font-mono">Esc</kbd> to cancel
+            <kbd className="font-mono">{tr("Esc")}</kbd> {tr("to cancel")}
           </span>
           <button
             type="button"
             className="text-[0.72rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
             onClick={cancelEdit}
           >
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1 text-[0.72rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30"
             disabled={!draft.trim() || draft === message.content}
             onClick={saveEdit}
           >
-            Resend
+            {tr("Resend")}
           </button>
         </div>
       </div>
@@ -1736,19 +1734,19 @@ function UserBubble({
               onClick={() => setExpanded((prev) => !prev)}
             >
               {expanded
-                ? "Show less"
-                : `Show full message (${message.content.length.toLocaleString()} chars)`}
+                ? tr("Show less")
+                : tr("Show full message ({0} chars)", [message.content.length.toLocaleString(getLanguage())])}
             </button>
           ) : null}
           {isLastUser && !isStreaming ? (
             <button
               type="button"
-              aria-label="Edit"
-              title="Edit message"
+              aria-label={tr("Edit")}
+              title={tr("Edit message")}
               className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
               onClick={startEdit}
             >
-              Edit
+              {tr("Edit")}
             </button>
           ) : null}
         </div>
@@ -1765,7 +1763,7 @@ function UserBubble({
 // the thinking, and we default to expanded. Users can still click the
 // header to collapse a noisy block manually.
 
-function ReasoningBlock({ text, label = "Thinking" }: { text: string; label?: string }) {
+function ReasoningBlock({ text, label = tr("Thinking") }: { text: string; label?: string }) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -1780,7 +1778,7 @@ function ReasoningBlock({ text, label = "Thinking" }: { text: string; label?: st
           {label}
         </span>
         <span className="text-[0.68rem] text-[var(--color-text-muted)]">
-          {expanded ? "Hide" : "Show"}
+          {expanded ? tr("Hide") : tr("Show")}
         </span>
       </button>
       {expanded ? (
@@ -1827,19 +1825,18 @@ function SummarizeProgressCard({
         <LoadingLogo size={22} />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-[0.78rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Summarizing earlier messages
+            {tr("Summarizing earlier messages")}
           </span>
           <span className="text-[0.72rem] text-[var(--color-text-muted)]">
-            Replacing earlier messages with a short summary so the chat can keep
-            going.
+            {tr("Replacing earlier messages with a short summary so the chat can keep going.")}
           </span>
         </div>
         <span
           className="shrink-0 rounded-full bg-[var(--color-overlay-strong)] px-2 py-0.5 text-[0.7rem] tabular-nums text-[var(--color-text-secondary)]"
           aria-live="polite"
         >
-          {elapsedSeconds}s
-        </span>
+        {rich("{0}s", elapsedSeconds)}
+      </span>
       </div>
       {streamingText ? (
         <div className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 text-[0.85rem] leading-[1.55] text-[var(--color-text-primary)]">
@@ -1919,7 +1916,7 @@ export function SaveToMemoryAction({
 
   if (state === "saved") {
     return (
-      <span className="text-[var(--color-text-muted)]">Saved ✓</span>
+      <span className="text-[var(--color-text-muted)]">{tr("Saved ✓")}</span>
     );
   }
 
@@ -1928,10 +1925,10 @@ export function SaveToMemoryAction({
       <button
         type="button"
         className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-        title="Save this answer to your memory"
+        title={tr("Save this answer to your memory")}
         onClick={() => void save("personal")}
       >
-        {state === "saving" ? "Saving…" : state === "error" ? "Save failed" : "Save"}
+        {state === "saving" ? tr("Saving…") : state === "error" ? tr("Save failed") : tr("Save")}
       </button>
     );
   }
@@ -1942,10 +1939,10 @@ export function SaveToMemoryAction({
         type="button"
         aria-expanded={open}
         className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-        title="Save this answer as a memory"
+        title={tr("Save this answer as a memory")}
         onClick={() => setOpen((o) => !o)}
       >
-        {state === "error" ? "Save failed — retry" : "Save"}
+        {state === "error" ? tr("Save failed — retry") : tr("Save")}
       </button>
       {open ? (
         <span className="inline-flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-border)] px-2 py-1">
@@ -1964,7 +1961,7 @@ export function SaveToMemoryAction({
             disabled={state === "saving"}
             onClick={() => void save(destination)}
           >
-            {state === "saving" ? "Saving…" : "Save"}
+            {state === "saving" ? tr("Saving…") : tr("Save")}
           </button>
         </span>
       ) : null}

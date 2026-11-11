@@ -63,6 +63,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   the same text, and the one-source-two-copies rule `make sync-guides` and
   `scripts/check_guides_sync_test.go` enforce):
   [`docs/USER-GUIDES.md`](USER-GUIDES.md)
+- **Interface languages** (English, Spanish and Portuguese; language selection,
+  Auth handoff, bundle catalogs and translation coverage):
+  [`docs/LOCALIZATION.md`](LOCALIZATION.md)
 - **Testing strategy** (which layer a new test belongs in, the recorded
   chat-stream contract every consumer replays, and the rules a test must meet
   to be able to fail): [`docs/TESTING-STRATEGY.md`](TESTING-STRATEGY.md); the

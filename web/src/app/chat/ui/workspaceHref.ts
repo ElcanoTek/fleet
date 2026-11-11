@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Pure helpers for rewriting agent-emitted relative paths in markdown
 // to a per-run workspace file API. Used by both the <img> and <a>
 // interceptors in the chat transcript (chat-experience.tsx) AND the
@@ -230,7 +231,7 @@ const OWNER_SCOPED_FILE_ROUTE =
   /^\/api\/(?:conversations|orchestrator\/tasks)\/[^/]+\/workspace\/(?=[^/])/i;
 
 /** The marker a withheld file reference renders as, after its filename. */
-const NOT_SHARED_SUFFIX = " (file not shared)";
+const NOT_SHARED_SUFFIX = tr(" (file not shared)");
 
 /**
  * unsharedFileName returns the filename an href promises when that href points
@@ -372,7 +373,7 @@ export function redactUnsharedFiles(
 // belt-and-braces pre-pass, because public links never expose files.
 
 /** The marker a locked output renders with, after its filename (B19). */
-export const LOCKED_SUFFIX = " (not shared)";
+export const LOCKED_SUFFIX = tr(" (not shared)");
 
 /** The marker a withheld file renders with on a public link (and as before). */
 export const WITHHELD_SUFFIX = NOT_SHARED_SUFFIX;

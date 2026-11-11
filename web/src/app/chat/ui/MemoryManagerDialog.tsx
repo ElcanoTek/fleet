@@ -1,3 +1,7 @@
+import { memoryKindLabel } from "@/app/lib/i18n/ownedLabels";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // MemoryManagerDialog — chat's "Memories" modal (personal list and
 // the open project's team learnings) and the project picker for "Move to
 // team learnings", built on the standard .picker-modal sheet/dialog shell.
@@ -24,10 +28,10 @@ export type MemoryProject = { id: string; name: string; teamShared: boolean };
 type MemoryFilter = "all" | "pinned" | "active" | "retired";
 
 const MEMORY_FILTERS: { id: MemoryFilter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "pinned", label: "Pinned" },
-  { id: "active", label: "Active" },
-  { id: "retired", label: "Retired" },
+  { id: "all", label: tr("All") },
+  { id: "pinned", label: tr("Pinned") },
+  { id: "active", label: tr("Active") },
+  { id: "retired", label: tr("Retired") },
 ];
 
 export function MemoryManagerDialog({
@@ -118,7 +122,7 @@ export function MemoryManagerDialog({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label="Memories"
+        aria-label={tr("Memories")}
         data-testid="memory-manager-dialog"
         className="picker-modal relative z-10 outline-none sm:max-w-[40rem]"
       >
@@ -128,12 +132,11 @@ export function MemoryManagerDialog({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-              <h2 className="picker-modal__title">Memories</h2>
+              <h2 className="picker-modal__title">{tr("Memories")}</h2>
               {!isTeamView ? (
                 <span className="text-[0.78rem] tabular-nums text-[var(--color-text-subtle)]">
-                  {activeCount} active
-                  {pinnedCount > 0 ? ` · ${pinnedCount} pinned` : ""}
-                </span>
+        {rich("{0} active{1}", activeCount, pinnedCount > 0 ? tr(" · {0} pinned", [pinnedCount]) : "")}
+      </span>
               ) : null}
             </div>
             <p className="m-0 text-[0.75rem] leading-[1.35] text-[var(--color-text-subtle)]">
@@ -144,7 +147,7 @@ export function MemoryManagerDialog({
             </p>
           </div>
           <CloseButton
-            label="Close memories"
+            label={tr("Close memories")}
             onClick={() => setMemoryManagerOpen(false)}
             className="any-pointer-coarse:size-11"
           />
@@ -154,11 +157,11 @@ export function MemoryManagerDialog({
           {activeProjectForMemory ? (
             <div className="flex items-center">
               <Segmented
-                label="Memory view"
+                label={tr("Memory view")}
                 value={activeMemoryView}
                 options={[
-                  { value: "list", label: "My memory" },
-                  { value: "team" as const, label: "Team learnings" },
+                  { value: "list", label: tr("My memory") },
+                  { value: "team" as const, label: tr("Team learnings") },
                 ]}
                 onChange={setMemoryView}
               />
@@ -173,8 +176,8 @@ export function MemoryManagerDialog({
                 />
                 <input
                   type="search"
-                  aria-label="Search memories"
-                  placeholder="Search memories…"
+                  aria-label={tr("Search memories")}
+                  placeholder={tr("Search memories…")}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="h-8 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] pl-8 pr-2.5 text-[0.78rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
@@ -183,7 +186,7 @@ export function MemoryManagerDialog({
               <div
                 className="flex flex-wrap items-center gap-1"
                 role="group"
-                aria-label="Filter memories"
+                aria-label={tr("Filter memories")}
               >
                 {MEMORY_FILTERS.map((f) => (
                   <button
@@ -217,7 +220,7 @@ export function MemoryManagerDialog({
                 ref={textareaRef}
                 rows={3}
                 className="min-h-[4.5rem] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.84rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-                placeholder="Remember that deal names may contain intentional typos."
+                placeholder={tr("Remember that deal names may contain intentional typos.")}
                 value={memoryDraft}
                 onChange={(event) => setMemoryDraft(event.target.value)}
               />
@@ -227,7 +230,7 @@ export function MemoryManagerDialog({
                     className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--color-text-subtle)]"
                     htmlFor="memory-kind"
                   >
-                    Kind
+                    {tr("Kind")}
                   </label>
                   <select
                     id="memory-kind"
@@ -239,7 +242,7 @@ export function MemoryManagerDialog({
                   >
                     {MEMORY_KINDS.map((k) => (
                       <option key={k} value={k}>
-                        {k}
+                        {memoryKindLabel(k)}
                       </option>
                     ))}
                   </select>
@@ -251,7 +254,7 @@ export function MemoryManagerDialog({
                       className="btn btn-ghost btn-sm"
                       onClick={cancelEdit}
                     >
-                      Cancel edit
+                      {tr("Cancel edit")}
                     </button>
                   ) : null}
                   <button
@@ -261,10 +264,10 @@ export function MemoryManagerDialog({
                     onClick={() => void saveMemory()}
                   >
                     {isSavingMemory
-                      ? "Saving..."
+                      ? tr("Saving...")
                       : editingMemoryId
-                        ? "Save changes"
-                        : "Add memory"}
+                        ? tr("Save changes")
+                        : tr("Add memory")}
                   </button>
                 </div>
               </div>
@@ -281,16 +284,15 @@ export function MemoryManagerDialog({
 
             {isLoadingMemories ? (
               <p className="py-4 text-center text-[0.8125rem] text-[var(--color-text-muted)]">
-                Loading memories...
+                {tr("Loading memories...")}
               </p>
             ) : memories.length === 0 ? (
               <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-3.5 py-5 text-center text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                No memories yet. Add one manually or tell chat “remember
-                this: ...”.
+                {tr("No memories yet. Add one manually or tell chat “remember this: ...”.")}
               </p>
             ) : filteredMemories.length === 0 ? (
               <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-3.5 py-5 text-center text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                No memories match your filter.
+                {tr("No memories match your filter.")}
               </p>
             ) : (
               <div className="grid gap-2">
@@ -299,15 +301,15 @@ export function MemoryManagerDialog({
                   const sourceLabel =
                     memory.source === "chat"
                       ? memory.origin === "auto"
-                        ? "Auto-extracted from chat"
-                        : "Saved from chat"
+                        ? tr("Auto-extracted from chat")
+                        : tr("Saved from chat")
                       : memory.source === "proposed"
-                        ? "Proposed"
-                        : "Manual";
+                        ? tr("Proposed")
+                        : tr("Manual");
                   const learned = memory.learned_at
                     ? new Date(
                         memory.learned_at * 1000,
-                      ).toLocaleDateString()
+                      ).toLocaleDateString(getLanguage())
                     : null;
                   return (
                     <div
@@ -320,7 +322,7 @@ export function MemoryManagerDialog({
                     >
                       <p className="whitespace-pre-wrap text-[0.85rem] leading-[1.5] text-[var(--color-text-primary)]">
                         {memory.pinned ? (
-                          <span title="Pinned">📌 </span>
+                          <span title={tr("Pinned")}>📌 </span>
                         ) : null}
                         {memory.content}
                       </p>
@@ -328,13 +330,13 @@ export function MemoryManagerDialog({
                         <span className="flex flex-wrap items-center gap-1.5">
                           {memory.kind && memory.kind !== "fact" ? (
                             <StatusChip tone="neutral">
-                              {memory.kind}
+                              {memoryKindLabel(memory.kind)}
                             </StatusChip>
                           ) : null}
                           <span>
                             {sourceLabel}
-                            {learned ? ` · learned ${learned}` : ""}
-                            {retired ? " · retired" : ""}
+                            {learned ? tr(" · learned {0}", [learned]) : ""}
+                            {retired ? tr(" · retired") : ""}
                           </span>
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -348,7 +350,7 @@ export function MemoryManagerDialog({
                                 })
                               }
                             >
-                              Restore
+                              {tr("Restore")}
                             </button>
                           ) : (
                             <>
@@ -361,33 +363,33 @@ export function MemoryManagerDialog({
                                   })
                                 }
                               >
-                                {memory.pinned ? "Unpin" : "Pin"}
+                                {memory.pinned ? tr("Unpin") : tr("Pin")}
                               </button>
                               <button
                                 type="button"
                                 className="pill-btn hit-area-touch"
                                 onClick={() => editMemory(memory)}
                               >
-                                Edit
+                                {tr("Edit")}
                               </button>
                               <button
                                 type="button"
                                 className="pill-btn hit-area-touch"
-                                title="Keep for audit, stop injecting into chats"
+                                title={tr("Keep for audit, stop injecting into chats")}
                                 onClick={() =>
                                   void patchMemory(memory.id, {
                                     retired: true,
                                   })
                                 }
                               >
-                                Retire
+                                {tr("Retire")}
                               </button>
                               {memory.source !== "proposed" &&
                               teamSharedProjects.length > 0 ? (
                                 <button
                                   type="button"
                                   className="pill-btn hit-area-touch"
-                                  title="Move this memory into a project's team learnings"
+                                  title={tr("Move this memory into a project's team learnings")}
                                   onClick={() => {
                                     if (teamSharedProjects.length === 1)
                                       void promoteMemoryToProject(
@@ -397,7 +399,7 @@ export function MemoryManagerDialog({
                                     else setPromoteMemoryId(memory.id);
                                   }}
                                 >
-                                  Move to team learnings
+                                  {tr("Move to team learnings")}
                                 </button>
                               ) : null}
                             </>
@@ -407,7 +409,7 @@ export function MemoryManagerDialog({
                             className="pill-btn hit-area-touch hover:text-[var(--color-danger)]!"
                             onClick={() => void deleteMemory(memory.id)}
                           >
-                            Delete
+                            {tr("Delete")}
                           </button>
                         </div>
                       </div>
@@ -421,10 +423,10 @@ export function MemoryManagerDialog({
 
         <footer className="picker-modal__foot">
           <span className="min-w-0 truncate text-[0.75rem] text-[var(--color-text-subtle)]">
-            {memories.length} {memories.length === 1 ? "memory" : "memories"} saved
+            {tr(memories.length === 1 ? "{0} memory saved" : "{0} memories saved", [memories.length])}
           </span>
           <a href="/settings/memory">
-            Manage in Settings
+            {tr("Manage in Settings")}
             <Icon name="external-link" className="size-3" />
           </a>
         </footer>
@@ -467,7 +469,7 @@ export function MemoryPromoteDialog({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label="Move to team learnings"
+        aria-label={tr("Move to team learnings")}
         className="picker-modal relative z-10 outline-none sm:max-w-[26rem]"
       >
         <header className="picker-modal__head">
@@ -475,13 +477,13 @@ export function MemoryPromoteDialog({
             <Icon name="folder" className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="picker-modal__title">Move to team learnings</h2>
+            <h2 className="picker-modal__title">{tr("Move to team learnings")}</h2>
             <p className="m-0 text-[0.75rem] leading-[1.35] text-[var(--color-text-subtle)]">
-              Pick the project this belongs to. It leaves your personal memory and every member of that project sees it.
+              {tr("Pick the project this belongs to. It leaves your personal memory and every member of that project sees it.")}
             </p>
           </div>
           <CloseButton
-            label="Cancel moving the memory"
+            label={tr("Cancel moving the memory")}
             onClick={onCancel}
             className="any-pointer-coarse:size-11"
           />
@@ -509,8 +511,7 @@ export function MemoryPromoteDialog({
             className="btn btn-ghost btn-sm"
             onClick={onCancel}
           >
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
         </footer>
       </div>
     </div>

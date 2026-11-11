@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Validation helpers for the orchestrator task form. Ported from moc's
 // assets/js/validation.js to TypeScript. Pure functions — no DOM, no DOMPurify
 // (React escapes by default, so the moc `sanitizeHtml` shim is dropped).
@@ -19,7 +20,7 @@ export function validateCronExpression(cron: unknown): ValidationResult {
   if (parts.length < 5 || parts.length > 6) {
     return {
       valid: false,
-      message: `Cron needs 5 fields — got ${parts.length}. Format: min · hour · day · month · weekday.`,
+      message: tr("Cron needs 5 fields — got {0}. Format: min · hour · day · month · weekday.", [parts.length]),
     };
   }
   const cronRegex = /^[0-9*\-,/]+$/;
@@ -27,7 +28,7 @@ export function validateCronExpression(cron: unknown): ValidationResult {
     if (!cronRegex.test(part)) {
       return {
         valid: false,
-        message: "Cron has invalid characters — use numbers, *, commas, dashes, and slashes.",
+        message: tr("Cron has invalid characters — use numbers, *, commas, dashes, and slashes."),
       };
     }
   }
@@ -40,21 +41,21 @@ export function describeEmailError(email: string): string {
   const trimmed = email.trim();
   let reason = "";
   const at = trimmed.indexOf("@");
-  if (at < 0) reason = " — missing @.";
-  else if (at === 0) reason = " — missing the part before @.";
-  else if (!/\.[^\s@.]+$/.test(trimmed.slice(at + 1))) reason = " — missing domain.";
-  return `Not a valid email: "${trimmed}"${reason ? reason : "."}`;
+  if (at < 0) reason = tr(" — missing @.");
+  else if (at === 0) reason = tr(" — missing the part before @.");
+  else if (!/\.[^\s@.]+$/.test(trimmed.slice(at + 1))) reason = tr(" — missing domain.");
+  return tr("Not a valid email: \"{0}\"{1}", [trimmed, reason ? reason : "."]);
 }
 
 export function validatePrompt(prompt: unknown): ValidationResult {
   if (!prompt || typeof prompt !== "string") {
-    return { valid: false, message: "Prompt is required" };
+    return { valid: false, message: tr("Prompt is required") };
   }
   const trimmed = prompt.trim();
-  if (trimmed.length === 0) return { valid: false, message: "Prompt cannot be empty" };
-  if (trimmed.length < 3) return { valid: false, message: "Prompt must be at least 3 characters" };
+  if (trimmed.length === 0) return { valid: false, message: tr("Prompt cannot be empty") };
+  if (trimmed.length < 3) return { valid: false, message: tr("Prompt must be at least 3 characters") };
   if (new TextEncoder().encode(trimmed).length > 250000) {
-    return { valid: false, message: "Prompt is too long (max 250,000 bytes)" };
+    return { valid: false, message: tr("Prompt is too long (max 250,000 bytes)") };
   }
   return { valid: true, message: "" };
 }
@@ -63,8 +64,8 @@ export function validateModel(model: unknown): ValidationResult {
   if (!model || typeof model !== "string") return { valid: true, message: "" };
   const trimmed = model.trim();
   if (trimmed === "") return { valid: true, message: "" };
-  if (trimmed.length > 200) return { valid: false, message: "Model is too long (max 200 characters)" };
-  if (/[\r\n]/.test(trimmed)) return { valid: false, message: "Model must be a single line" };
+  if (trimmed.length > 200) return { valid: false, message: tr("Model is too long (max 200 characters)") };
+  if (/[\r\n]/.test(trimmed)) return { valid: false, message: tr("Model must be a single line") };
   return { valid: true, message: "" };
 }
 
@@ -77,11 +78,11 @@ export function validateMaxCostUSD(value: unknown): ValidationResult {
   const trimmed = String(value).trim();
   if (trimmed === "") return { valid: true, message: "" };
   if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
-    return { valid: false, message: "Max cost must be a dollar amount (up to cents)" };
+    return { valid: false, message: tr("Max cost must be a dollar amount (up to cents)") };
   }
   const parsed = Number.parseFloat(trimmed);
   if (!(parsed > 0) || parsed > 100000) {
-    return { valid: false, message: "Max cost must be above 0 and at most 100000" };
+    return { valid: false, message: tr("Max cost must be above 0 and at most 100000") };
   }
   return { valid: true, message: "" };
 }
@@ -91,11 +92,11 @@ export function validateMaxIterations(value: unknown): ValidationResult {
   const trimmed = String(value).trim();
   if (trimmed === "") return { valid: true, message: "" };
   if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, message: "Max iterations must be a whole number" };
+    return { valid: false, message: tr("Max iterations must be a whole number") };
   }
   const parsed = Number.parseInt(trimmed, 10);
   if (parsed < 1 || parsed > 10000) {
-    return { valid: false, message: "Max iterations must be between 1 and 10000" };
+    return { valid: false, message: tr("Max iterations must be between 1 and 10000") };
   }
   return { valid: true, message: "" };
 }
@@ -120,18 +121,18 @@ export function validateFile(file: FileLike | null | undefined, options: FileOpt
   if (typeof file.size === "number" && file.size > opts.maxSize) {
     return {
       valid: false,
-      message: `File size exceeds maximum allowed size (${opts.maxSize / 1024 / 1024} MB)`,
+      message: tr("File size exceeds maximum allowed size ({0} MB)", [opts.maxSize / 1024 / 1024]),
     };
   }
   if (opts.allowedTypes && file.type && !opts.allowedTypes.includes(file.type)) {
-    return { valid: false, message: `File type not allowed. Allowed types: ${opts.allowedTypes.join(", ")}` };
+    return { valid: false, message: tr("File type not allowed. Allowed types: {0}", [opts.allowedTypes.join(", ")]) };
   }
   if (opts.allowedExtensions) {
     const ext = (file.name.split(".").pop() ?? "").toLowerCase();
     if (!opts.allowedExtensions.includes(ext)) {
       return {
         valid: false,
-        message: `File extension not allowed. Allowed extensions: ${opts.allowedExtensions.join(", ")}`,
+        message: tr("File extension not allowed. Allowed extensions: {0}", [opts.allowedExtensions.join(", ")]),
       };
     }
   }
@@ -145,15 +146,15 @@ export function validateScheduledTime(datetime: unknown): ValidationResult {
 
   try {
     const date = new Date(trimmed);
-    if (isNaN(date.getTime())) return { valid: false, message: "Invalid date/time format" };
+    if (isNaN(date.getTime())) return { valid: false, message: tr("Invalid date/time format") };
     const now = new Date();
-    if (date < now) return { valid: false, message: "Scheduled time cannot be in the past" };
+    if (date < now) return { valid: false, message: tr("Scheduled time cannot be in the past") };
     const fiveYearsFromNow = new Date();
     fiveYearsFromNow.setFullYear(fiveYearsFromNow.getFullYear() + 5);
-    if (date > fiveYearsFromNow) return { valid: false, message: "Scheduled time is too far in the future" };
+    if (date > fiveYearsFromNow) return { valid: false, message: tr("Scheduled time is too far in the future") };
     return { valid: true, message: "" };
   } catch {
-    return { valid: false, message: "Invalid date/time" };
+    return { valid: false, message: tr("Invalid date/time") };
   }
 }
 

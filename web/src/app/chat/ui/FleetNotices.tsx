@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Rows fleet writes itself, rendered as notices — never as the user's words.
 //
 // AutoContinueNotice is the input of a turn fleet started on its own after an
@@ -33,11 +34,11 @@ export function AutoContinueNotice({ text }: { text: string }) {
         <span className="flex min-w-0 items-center gap-1.5">
           <Icon name="info" className="size-3 shrink-0 text-[var(--color-text-muted)]" />
           <span className="min-w-0 truncate text-[0.68rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Continued automatically after an approval — not typed by you
+            {tr("Continued automatically after an approval — not typed by you")}
           </span>
         </span>
         <span className="shrink-0 text-[0.68rem] text-[var(--color-text-muted)]">
-          {expanded ? "Hide" : "Show"}
+          {expanded ? tr("Hide") : tr("Show")}
         </span>
       </button>
       <div id={panelId} hidden={!expanded}>
@@ -56,7 +57,7 @@ export function PatrolTurnNotice({ text }: { text: string }) {
   const headerMatch = text.match(/^\[Scheduled (?:Patrol|Timer)[^\]]*\]/i);
   const badgeText = headerMatch
     ? headerMatch[0].slice(1, -1)
-    : "Scheduled patrol run — triggered automatically in this chat";
+    : tr("Scheduled patrol run — triggered automatically in this chat");
   return (
     <div
       data-testid="patrol-turn-notice"
@@ -77,7 +78,7 @@ export function PatrolTurnNotice({ text }: { text: string }) {
           </span>
         </span>
         <span className="shrink-0 text-[0.68rem] text-[var(--color-text-muted)]">
-          {expanded ? "Hide prompt" : "Show prompt"}
+          {expanded ? tr("Hide prompt") : tr("Show prompt")}
         </span>
       </button>
       <div id={panelId} hidden={!expanded}>

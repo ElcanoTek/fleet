@@ -1,3 +1,6 @@
+import { localizeError } from "@/app/lib/i18n/errors";
+import { localizePrompt, localizeTaskTemplate } from "@/app/lib/i18n/bundle";
+import { t as tr } from "@/app/lib/i18n";
 // Browser-side client for the orchestrator. Every call goes through the
 // /api/orchestrator/* proxy, which resolves the caller's identity from the
 // httpOnly chat/elcano session cookie (#1115). Relative URLs only — no
@@ -457,7 +460,7 @@ export type UpcomingRun = {
 class OrchestratorError extends Error {
   status: number;
   constructor(message: string, status: number) {
-    super(message);
+    super(localizeError(message));
     this.status = status;
   }
 }
@@ -470,10 +473,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
   if (!res.ok) {
-    let detail = `Request failed (${res.status})`;
+    let detail = tr("Request failed ({0})", [res.status]);
     try {
       const body = await res.json();
-      detail = body.detail || body.error || detail;
+      const reason = body.detail || body.error;
+      if (typeof reason === "string" && reason.trim()) detail = reason;
     } catch {
       /* non-JSON body */
     }
@@ -610,7 +614,7 @@ export const orchestratorApi = {
       signal,
     });
     if (!res.ok || !res.body) {
-      throw new OrchestratorError(`stream failed (${res.status})`, res.status);
+      throw new OrchestratorError(tr("stream failed ({0})", [res.status]), res.status);
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -672,10 +676,10 @@ export const orchestratorApi = {
     }),
 
   // Read-only task-template catalog for "new task from a template" (#262).
-  taskTemplates: () => request<TaskTemplate[]>("/task-templates"),
+  taskTemplates: async () => (await request<TaskTemplate[]>("/task-templates")).map(localizeTaskTemplate),
 
   // Hybrid prompt library shared by chat + Operations Center.
-  prompts: () => request<PromptLibraryItem[]>("/prompts"),
+  prompts: async () => (await request<PromptLibraryItem[]>("/prompts")).map(localizePrompt),
   createPrompt: (body: PromptLibraryWrite) =>
     request<PromptLibraryItem>("/prompts", { method: "POST", body: JSON.stringify(body) }),
   updatePrompt: (id: string, body: PromptLibraryWrite) =>
@@ -699,7 +703,7 @@ export const orchestratorApi = {
       credentials: "same-origin",
       body: form,
     });
-    if (!res.ok) throw new OrchestratorError(`Upload failed (${res.status})`, res.status);
+    if (!res.ok) throw new OrchestratorError(tr("Upload failed ({0})", [res.status]), res.status);
     return res.json();
   },
 };

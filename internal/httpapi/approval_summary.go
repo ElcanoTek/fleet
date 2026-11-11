@@ -70,6 +70,9 @@ func resumesAfterApproval(toolName string) bool {
 
 func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) map[string]any {
 	ev := approvalClientFields(approval.ToolName, rawInput, convID)
+	if summary, ok := ev["summary"].(map[string]any); ok {
+		ev["summary"] = withBrowserSessionSite(summary, approval.ToolName, rawInput, approval.UserEmail)
+	}
 	ev["approval_id"] = approval.ID
 	ev["tool"] = approval.ToolName
 	ev["expires_at"] = approval.ExpiresAt
@@ -113,6 +116,12 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	// "Email sent ✓" — for a page publish), which is exactly the wrong copy on
 	// the one card class whose entire job is telling the user what is about to
 	// happen.
+	if toolName == tools.ConnectorStudioToolName || toolName == tools.PlaywrightBrowserToolName {
+		if browser := summarizeBrowserInput(toolName, rawInput); browser != nil {
+			return browser
+		}
+		return summarizeBrowserFallback(toolName, rawInput)
+	}
 	return summarizeGenericToolInput(toolName, rawInput)
 }
 

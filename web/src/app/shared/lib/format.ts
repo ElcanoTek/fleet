@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { formatNumber, getLanguage } from "@/app/lib/i18n";
 // Pure formatting helpers for the orchestrator view. Ported from moc's
 // assets/js/utils.js. The HTML-escaping helpers are intentionally dropped:
 // React escapes text content by default, so there is no innerHTML path to
@@ -11,7 +13,7 @@ export function formatDate(dateStr: string | null | undefined): string {
     if (isNaN(d.getTime())) return "-";
     // Minutes are enough visually ("7/14/2026, 3:32 PM") — the backend keeps
     // the exact timestamp; seconds were display bloat.
-    return d.toLocaleString(undefined, {
+    return d.toLocaleString(getLanguage(), {
       year: "numeric",
       month: "numeric",
       day: "numeric",
@@ -30,8 +32,8 @@ export function formatTimeFirst(dateStr: string | null | undefined): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "-";
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${time} · ${d.toLocaleDateString()}`;
+  const time = d.toLocaleTimeString(getLanguage(), { hour: "numeric", minute: "2-digit" });
+  return `${time} · ${d.toLocaleDateString(getLanguage())}`;
 }
 
 export function truncate(str: string | null | undefined, maxLength = 60): string {
@@ -45,12 +47,12 @@ export function isValidEmail(email: unknown): boolean {
 }
 
 export function formatFileSize(bytes: number, decimals = 2): string {
-  if (bytes === 0) return "0 Bytes";
+  if (bytes === 0) return `0 ${tr("Bytes")}`;
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+  const sizes = [tr("Bytes"), "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+  return formatNumber(bytes / Math.pow(k, i), { maximumFractionDigits: dm, useGrouping: false }) + " " + sizes[i];
 }
 
 // Matching the ESC control char (U+001B) is the whole point of an ANSI
@@ -88,5 +90,5 @@ export function truncateFilename(name: string, maxLen = 35): string {
 // (confirms, toasts, panel counts). `many` defaults to `one` + "s"; pass it
 // for irregular nouns.
 export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
+  return tr(`{0} ${n === 1 ? one : many}`, [n.toLocaleString(getLanguage())]);
 }

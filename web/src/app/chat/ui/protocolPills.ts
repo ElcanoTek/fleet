@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Protocol pills — the empty-state "quick start" catalog.
 //
 // A pill COLLECTS the inputs a workflow would otherwise ask for (its "Step 0
@@ -38,6 +39,8 @@ export interface PillField {
   default?: PillFieldValue;
   /** Options for `select`. */
   options?: string[];
+  /** Translated display labels supplied by a client bundle; values stay stable. */
+  optionLabels?: Record<string, string>;
   /** Tuck the field under the "Advanced" disclosure. */
   advanced?: boolean;
   /** Block the Run button until this field is filled. */
@@ -247,52 +250,52 @@ export function pillToPrompt(
 export const DEFAULT_PILLS: ProtocolPill[] = [
   {
     id: "summarize",
-    section: "Get started",
+    section: tr("Get started"),
     type: "form",
     icon: "file-text",
-    title: "Summarize a document",
-    desc: "Paste or attach a document and get a concise summary.",
-    cta: "Summarize",
+    title: tr("Summarize a document"),
+    desc: tr("Paste or attach a document and get a concise summary."),
+    cta: tr("Summarize"),
     fields: [
       {
         key: "focus",
-        label: "What should the summary focus on?",
+        label: tr("What should the summary focus on?"),
         type: "text",
-        placeholder: "key decisions, action items, risks…",
+        placeholder: tr("key decisions, action items, risks…"),
       },
     ],
-    promptTemplate: "Summarize the attached/pasted document.",
+    promptTemplate: tr("Summarize the attached/pasted document."),
   },
   {
     id: "analyze-data",
-    section: "Get started",
+    section: tr("Get started"),
     type: "conversation",
     optionalForm: true,
     icon: "bar-chart",
-    title: "Analyze a dataset",
-    desc: "Attach a CSV and ask questions — I'll run Python to dig in.",
-    cta: "Start analysis",
+    title: tr("Analyze a dataset"),
+    desc: tr("Attach a CSV and ask questions — I'll run Python to dig in."),
+    cta: tr("Start analysis"),
     starterPrompt:
-      "I'd like to analyze a dataset. Ask me what you need to know, then load it with " +
-      "Python and walk me through what stands out.",
+      tr("I'd like to analyze a dataset. Ask me what you need to know, then load it with ") +
+      tr("Python and walk me through what stands out."),
   },
   {
     id: "draft",
-    section: "Get started",
+    section: tr("Get started"),
     type: "form",
     icon: "edit",
-    title: "Draft something",
-    desc: "An email, a plan, a snippet of code — describe it and I'll draft it.",
-    cta: "Draft it",
+    title: tr("Draft something"),
+    desc: tr("An email, a plan, a snippet of code — describe it and I'll draft it."),
+    cta: tr("Draft it"),
     fields: [
       {
         key: "what",
-        label: "What should I draft?",
+        label: tr("What should I draft?"),
         type: "text",
         required: true,
-        placeholder: "a follow-up email to a client about…",
+        placeholder: tr("a follow-up email to a client about…"),
       },
     ],
-    promptTemplate: "Draft the following for me, and ask me anything you need first.",
+    promptTemplate: tr("Draft the following for me, and ask me anything you need first."),
   },
 ];

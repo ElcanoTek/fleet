@@ -1,3 +1,7 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Small presentational chips and badges extracted from chat-experience.tsx
 // (slice 4 of #169). These are the glanceable, self-contained bits of chrome
 // the chat surface scatters around the transcript and composer — model-row
@@ -71,16 +75,16 @@ export function NewModelBadge() {
     <StatusChip
       tone="success"
       className="shrink-0 tabular-nums"
-      title="Listed on OpenRouter within the last two weeks"
+      title={tr("Listed on OpenRouter within the last two weeks")}
     >
-      ✨ new
+      {tr("✨ new")}
     </StatusChip>
   );
 }
 
 export function CopyButton({
   text,
-  title = "Copy reply to clipboard",
+  title = tr("Copy reply to clipboard"),
   variant = "default",
 }: {
   text: string;
@@ -112,7 +116,7 @@ export function CopyButton({
       }
       title={title}
     >
-      {state === "idle" ? "Copy" : state === "ok" ? "Copied" : "Copy failed"}
+      {state === "idle" ? tr("Copy") : state === "ok" ? tr("Copied") : tr("Copy failed")}
     </button>
   );
 }
@@ -147,15 +151,19 @@ export function TurnSummaryChip({
     );
   }
   const tokens = summary.promptTokens + summary.completionTokens;
-  if (tokens > 0) parts.push(<span key="tokens">{formatTokens(tokens)} tokens</span>);
+  if (tokens > 0) parts.push(<span key="tokens">
+        {rich("{0} tokens", formatTokens(tokens))}
+      </span>);
   const pct = cachedPercent(summary);
-  if (pct !== null) parts.push(<span key="cached">{pct}% cached</span>);
+  if (pct !== null) parts.push(<span key="cached">
+        {rich("{0}% cached", pct)}
+      </span>);
   const modelLabel = shortModelName(summary.model);
   if (modelLabel) parts.push(<span key="model">{modelLabel}</span>);
 
   return (
     <p className="text-[0.7rem] text-[var(--color-text-muted)] tabular-nums self-start break-words">
-      {summary.cancelled ? "stopped · " : ""}
+      {summary.cancelled ? tr("stopped · ") : ""}
       {parts.map((part, index) => (
         <span key={index}>
           {index > 0 ? " · " : null}
@@ -182,14 +190,12 @@ export function OtherUserTurnDetailsPill({
   return (
     <p
       data-testid="other-user-turn-details-pill"
-      title="Tool calls, reasoning, and token/cost details are only visible to the user who ran this turn."
+      title={tr("Tool calls, reasoning, and token/cost details are only visible to the user who ran this turn.")}
       className="inline-flex items-center gap-1.5 self-start rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-muted)]"
     >
       <Icon name="lock" className="size-3 shrink-0 opacity-75" aria-hidden="true" />
       <span>
-        {cancelled ? "stopped · " : ""}
-        Turn details hidden for other users&apos; turns
-        {modelLabel ? ` · ${modelLabel}` : ""}
+        {rich("{0}Turn details hidden for other users' turns{1}", cancelled ? tr("stopped · ") : "", modelLabel ? ` · ${modelLabel}` : "")}
       </span>
     </p>
   );
@@ -233,7 +239,7 @@ export function SummaryBanner({
       <div className="flex items-center justify-between gap-2 pb-2">
         <span className="inline-flex items-center gap-1.5 text-[0.72rem] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
           <Icon name="summarize" className="size-3.5" aria-hidden="true" />
-          Conversation summary
+          {tr("Conversation summary")}
         </span>
         <span className="flex items-center gap-1">
           {collapsedRangeCount > 0 ? (
@@ -243,7 +249,7 @@ export function SummaryBanner({
               onClick={onToggleExpand}
               aria-expanded={summaryExpanded}
             >
-              {summaryExpanded ? `Collapse earlier ${plural(collapsedRangeCount, "turn")}` : `Show earlier ${plural(collapsedRangeCount, "turn")}`}
+              {summaryExpanded ? tr("Collapse earlier {0}", [plural(collapsedRangeCount, "turn")]) : tr("Show earlier {0}", [plural(collapsedRangeCount, "turn")])}
             </button>
           ) : null}
           {onResummarize ? (
@@ -252,9 +258,9 @@ export function SummaryBanner({
               className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={onResummarize}
               disabled={isSummarizing}
-              title="Write a fresh summary of the conversation so far. It replaces this one."
+              title={tr("Write a fresh summary of the conversation so far. It replaces this one.")}
             >
-              {isSummarizing ? "Summarizing…" : "Summarize again"}
+              {isSummarizing ? tr("Summarizing…") : tr("Summarize again")}
             </button>
           ) : null}
         </span>
@@ -264,9 +270,9 @@ export function SummaryBanner({
       </div>
       {meta?.model || (meta?.costUsd ?? 0) > 0 ? (
         <p className="mt-2 text-[0.65rem] text-[var(--color-text-muted)] tabular-nums">
-          {meta?.model ? <>Summarized by <span className="font-medium">{shortModelName(meta.model)}</span></> : null}
-          {meta?.costUsd && meta.costUsd > 0 ? <> · {meta.costUsd < 0.01 ? `$${meta.costUsd.toFixed(4)}` : `$${meta.costUsd.toFixed(2)}`}</> : null}
-          {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString()} prompt tokens condensed</> : null}
+          {meta?.model ? <>{tr("Summarized by")}{" "}<span className="font-medium">{shortModelName(meta.model)}</span></> : null}
+          {meta?.costUsd && meta.costUsd > 0 ? <> · {meta.costUsd < 0.01 ? `$${formatFixed(meta.costUsd, 4)}` : `$${formatFixed(meta.costUsd, 2)}`}</> : null}
+          {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString(getLanguage())} {tr("prompt tokens condensed")}</> : null}
         </p>
       ) : null}
     </div>
@@ -313,7 +319,7 @@ export function ConversationTotalsChip({
 
   const parts: string[] = [];
   parts.push(`Σ ${formatUsd(totals.costUsd)}`);
-  if (totals.cachedPercent !== null) parts.push(`${totals.cachedPercent}% cached`);
+  if (totals.cachedPercent !== null) parts.push(tr("{0}% cached", [totals.cachedPercent]));
   parts.push(plural(totals.turns, "turn"));
   if (usage) parts.push(formatContextUsage(usage));
 
@@ -330,8 +336,8 @@ export function ConversationTotalsChip({
     <div className="flex flex-col items-end gap-0.5">
       <p
         className="text-[0.7rem] text-[var(--color-text-muted)] tabular-nums text-right"
-        aria-label="Conversation totals"
-        title="Cumulative cost, token-weighted cache-hit rate, and context-window usage across this chat."
+        aria-label={tr("Conversation totals")}
+        title={tr("Cumulative cost, token-weighted cache-hit rate, and context-window usage across this chat.")}
       >
         {parts.slice(0, -1).join(" · ")}
         {usage ? (
@@ -348,7 +354,7 @@ export function ConversationTotalsChip({
           className="text-[0.65rem] text-[var(--color-text-muted)] text-right italic"
           role="note"
         >
-          Long chats may produce shallower analysis — context fills, recall fades.
+          {tr("Long chats may produce shallower analysis — context fills, recall fades.")}
         </p>
       ) : null}
     </div>
@@ -411,7 +417,7 @@ export function PendingAttachmentChip({
       </span>
       <button
         type="button"
-        aria-label={`Remove ${attachment.name}`}
+        aria-label={tr("Remove {0}", [attachment.name])}
         className="hit-area touch-target-hit text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         disabled={removalDisabled}
         onClick={onRemove}

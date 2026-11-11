@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Pure helpers for the connector directory on the connections page (#538 +
 // the directory expansion): category labels/ordering, search filtering, and
 // provenance/auth presentation. Kept out of the page component so vitest can
@@ -143,26 +144,26 @@ export type CatalogResponse = {
 // An unknown slug (a bundle can invent its own) falls back to title-case, so
 // nothing breaks when a bundle adds e.g. `ad-tech`.
 const CATEGORY_LABELS: Record<string, string> = {
-  development: "Developer Tools",
-  "cloud-infrastructure": "Cloud & Infrastructure",
-  databases: "Databases",
-  "data-analytics": "Data & Analytics",
-  "web-search": "Web Search & Scraping",
-  productivity: "Productivity & Projects",
-  communication: "Communication & Meetings",
-  "crm-sales": "CRM & Sales",
-  "customer-support": "Customer Support",
-  "commerce-payments": "Commerce & Payments",
-  finance: "Finance",
-  "design-media": "Design & Media",
-  observability: "Observability",
-  security: "Security",
-  "ai-ml": "AI & ML",
-  automation: "Automation & Integrations",
-  "marketing-social": "Marketing & Social",
-  "knowledge-docs": "Docs & Knowledge",
-  "travel-local": "Travel & Local",
-  other: "Other",
+  development: tr("Developer Tools"),
+  "cloud-infrastructure": tr("Cloud & Infrastructure"),
+  databases: tr("Databases"),
+  "data-analytics": tr("Data & Analytics"),
+  "web-search": tr("Web Search & Scraping"),
+  productivity: tr("Productivity & Projects"),
+  communication: tr("Communication & Meetings"),
+  "crm-sales": tr("CRM & Sales"),
+  "customer-support": tr("Customer Support"),
+  "commerce-payments": tr("Commerce & Payments"),
+  finance: tr("Finance"),
+  "design-media": tr("Design & Media"),
+  observability: tr("Observability"),
+  security: tr("Security"),
+  "ai-ml": tr("AI & ML"),
+  automation: tr("Automation & Integrations"),
+  "marketing-social": tr("Marketing & Social"),
+  "knowledge-docs": tr("Docs & Knowledge"),
+  "travel-local": tr("Travel & Local"),
+  other: tr("Other"),
 };
 
 // Icon (core-icons sprite symbol id) for each curated category slug, shown
@@ -289,11 +290,11 @@ export function provenanceBadge(provenance: string): {
 } {
   switch (provenance) {
     case "official":
-      return { label: "Official", tone: "success" };
+      return { label: tr("Official"), tone: "success" };
     case "third_party":
-      return { label: "Aggregator", tone: "warning" };
+      return { label: tr("Aggregator"), tone: "warning" };
     default:
-      return { label: "Community", tone: "warning" };
+      return { label: tr("Community"), tone: "warning" };
   }
 }
 
@@ -350,7 +351,7 @@ export function placeholderValueOK(v: string): boolean {
 // absent or zero (it is decorative, never blocking).
 export function toolCountSuffix(count: number | undefined): string {
   if (!count || count <= 0) return "";
-  return ` — ${count} ${count === 1 ? "tool" : "tools"} available`;
+  return tr(count === 1 ? " — {0} tool available" : " — {0} tools available", [count]);
 }
 
 // keyVerifiedSuffix words the api_key confirmation honestly. The add-time
@@ -363,7 +364,7 @@ export function toolCountSuffix(count: number | undefined): string {
 // the user's first real call. Undefined (an open or OAuth add) says nothing.
 export function keyVerifiedSuffix(verified: boolean | undefined): string {
   if (verified === undefined) return "";
-  return verified ? "; key verified" : "; the key could not be verified now — it is checked on your first call";
+  return verified ? tr("; key verified") : tr("; the key could not be verified now — it is checked on your first call");
 }
 
 // setupLink is the best "how do I connect this?" destination: the explicit
@@ -375,12 +376,12 @@ export function setupLink(e: CatalogThirdParty): string | null {
 // authHint is the small secondary label describing what connecting takes.
 // OAuth is the default expectation and renders no hint.
 export function authHint(e: CatalogThirdParty): string | null {
-  if (needsTenantURL(e)) return "Needs your URL";
+  if (needsTenantURL(e)) return tr("Needs your URL");
   switch (e.auth) {
     case "open":
-      return "No sign-in needed";
+      return tr("No sign-in needed");
     case "api_key":
-      return "Needs an API key";
+      return tr("Needs an API key");
     default:
       return null;
   }
@@ -430,21 +431,21 @@ export function connectorBuilderMessage(opts?: {
   const goal = (opts?.goal ?? "").trim();
   const scope =
     opts?.shareScope === "everyone"
-      ? "everyone on this Fleet box (share_scope='everyone')"
-      : "just for me (share_scope='personal')";
+      ? tr("everyone on this Fleet box (share_scope='everyone')")
+      : tr("just for me (share_scope='personal')");
   const lines = [
-    "/connector-builder Help me build and configure a connection in Fleet the best way possible.",
+    tr("/connector-builder Help me build and configure a connection in Fleet the best way possible."),
   ];
   if (target) {
-    lines.push("", `Target website, portal, or service: ${target}`);
+    lines.push("", tr("Target website, portal, or service: {0}", [target]));
   }
   if (goal) {
-    lines.push(`What I want to do with it: ${goal}`);
+    lines.push(tr("What I want to do with it: {0}", [goal]));
   }
   lines.push(
     "",
-    `Access scope: ${scope}.`,
-    "Please check the official MCP catalog first with connector_studio, otherwise probe for an API or use local Playwright + Co-Pilot Live Browser View, collect any credentials via show_ui (format='password'), create the connector, and test it end-to-end.",
+    tr("Access scope: {0}.", [scope]),
+    tr("Please check the official MCP catalog first with connector_studio, otherwise probe for an API or use local Playwright + Co-Pilot Live Browser View, collect any credentials via show_ui (format='password'), create the connector, and test it end-to-end."),
   );
   return lines.join("\n");
 }
@@ -457,13 +458,13 @@ export function customTransportBadge(
 ): string | null {
   const suffix =
     typeof toolCount === "number" && toolCount > 0
-      ? ` · ${toolCount} ${toolCount === 1 ? "tool" : "tools"}`
+      ? ` · ${tr(toolCount === 1 ? "{0} tool" : "{0} tools", [toolCount])}`
       : "";
   switch ((transport ?? "").trim().toLowerCase()) {
     case "http_tools":
-      return `Custom API${suffix}`;
+      return tr("Custom API{0}", [suffix]);
     case "playwright":
-      return `Browser automation${suffix}`;
+      return tr("Browser automation{0}", [suffix]);
     default:
       return null;
   }

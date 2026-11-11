@@ -1,3 +1,4 @@
+import { localizeError } from "@/app/lib/i18n/errors";
 // responseErrorText — the one way the UI turns a failed fetch Response into a
 // message for an error banner (#1956).
 //
@@ -30,6 +31,7 @@ export async function responseErrorText(res: Response, fallback: string): Promis
     text = "";
   }
   if (!text || isHTML(res, text)) return `${fallback} (${res.status})`;
+  text = localizeError(text);
   if (text.length > RESPONSE_ERROR_MAX_CHARS) {
     return `${text.slice(0, RESPONSE_ERROR_MAX_CHARS).trimEnd()}…`;
   }

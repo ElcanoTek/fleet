@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 
@@ -123,7 +124,7 @@ export function useTheme(): UseTheme {
     });
   }, []);
 
-  const themeLabel = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  const themeLabel = theme === "dark" ? tr("Switch to light mode") : tr("Switch to dark mode");
 
   return { theme, themePreference, toggleTheme, setTheme, themeLabel };
 }

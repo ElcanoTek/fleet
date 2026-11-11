@@ -23,6 +23,20 @@ Read the one that covers the question, then answer from it:
 | `skills/fleet-guide/chat.md` | The chat surface: the rail, transcript and composer; asking well; picking a model; getting data in (attachments, connectors, shared files); approval cards; memory and projects; sharing, branching, compacting; the prompt library; turning a conversation into a scheduled task; what to do when a turn goes wrong; keyboard shortcuts. |
 | `skills/fleet-guide/operations-center.md` | The background-tasks surface (formerly the Operations Center): reading the board and its counters; the anatomy of a task (prompt, schedule, recipients, tools, context); every run state including `DEAD_LETTERED` and the two paused states; running, editing, answering and rating a run; the five-step path when a run goes wrong. |
 
+The interface and guides are available in English, Spanish and Portuguese.
+Use the version matching the user's interface language so control labels match
+what they see. If that language is not known, use the language of their question:
+
+| Language | Chat | Background tasks |
+| --- | --- | --- |
+| English | `skills/fleet-guide/chat.md` | `skills/fleet-guide/operations-center.md` |
+| Español | `skills/fleet-guide/es/chat.md` | `skills/fleet-guide/es/operations-center.md` |
+| Português | `skills/fleet-guide/pt/chat.md` | `skills/fleet-guide/pt/operations-center.md` |
+
+The user can choose the interface language under **Settings → General → Language**.
+This browser preference does not translate their conversations, files or saved
+prompts. Preserve exact command names, paths and status identifiers when answering.
+
 Both are plain Markdown. `view_file` one of them — do not guess at their contents
 from this page, and do not read both when one will do.
 

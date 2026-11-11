@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { Icon } from "./Icon";
 import { useTheme } from "@/app/shared/hooks/useTheme";
 
@@ -22,7 +23,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label={themeLabel}
       aria-pressed={theme === "dark"}
       className={className ?? DEFAULT_BUTTON_CLASS}
-      title="Toggle theme"
+      title={tr("Toggle theme")}
       type="button"
       onClick={toggleTheme}
     >

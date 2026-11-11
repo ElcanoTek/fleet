@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { movePinned } from "./conversationOrganization";
@@ -75,8 +76,8 @@ export function ChatReorderList({
   const move = (from: number, to: number) => {
     if (from === to || to < 0 || to >= ids.length) return;
     onReorder(movePinned(ids, from, to));
-    const title = chats[from]?.title || "Chat";
-    setAnnouncement(`${title} moved to position ${to + 1} of ${ids.length}.`);
+    const title = chats[from]?.title || tr("Chat");
+    setAnnouncement(tr("{0} moved to position {1} of {2}.", [title, to + 1, ids.length]));
   };
 
   const endDrag = () => {
@@ -91,7 +92,7 @@ export function ChatReorderList({
       </p>
       <ol aria-label={label} className="flex flex-col gap-0.5" data-testid="chat-reorder-list">
         {chats.map((chat, index) => {
-          const title = chat.title || "Untitled chat";
+          const title = chat.title || tr("Untitled chat");
           const dropHere = dragId !== null && overIndex === index && dragId !== chat.id;
           return (
             <li key={chat.id} data-testid={`chat-reorder-item-${chat.id}`}>
@@ -126,7 +127,7 @@ export function ChatReorderList({
                 <span className="min-w-0 flex-1 truncate">{title}</span>
                 <button
                   type="button"
-                  aria-label={`Move ${title} up`}
+                  aria-label={tr("Move {0} up", [title])}
                   data-testid={`chat-reorder-up-${chat.id}`}
                   disabled={index === 0}
                   onClick={() => {
@@ -139,7 +140,7 @@ export function ChatReorderList({
                 </button>
                 <button
                   type="button"
-                  aria-label={`Move ${title} down`}
+                  aria-label={tr("Move {0} down", [title])}
                   data-testid={`chat-reorder-down-${chat.id}`}
                   disabled={index === chats.length - 1}
                   onClick={() => {
@@ -163,7 +164,7 @@ export function ChatReorderList({
           className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[var(--color-primary-fill)] px-3 text-[0.8rem] font-semibold text-[var(--color-on-primary-fill)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:min-h-11"
         >
           <Icon name="check" className="size-3.5" />
-          Done
+          {tr("Done")}
         </button>
       </div>
       <p className="sr-only" role="status" aria-live="polite">

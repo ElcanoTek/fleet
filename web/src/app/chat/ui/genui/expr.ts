@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // The generative-UI card expression language — the browser half of a pinned
 // pair with internal/genui/expr.go (which only parses; this file parses AND
 // evaluates). Both run the shared fixture internal/genui/testdata/expressions.json.
@@ -47,7 +48,7 @@ function lex(src: string): Tok[] {
       const lit = rs.slice(start, i).join("");
       // A literal too large for a double would read as Infinity: refused on
       // both sides (internal/genui/expr.go lex).
-      if (!Number.isFinite(Number(lit))) throw new ExprError(`number ${lit.slice(0, 20)} at ${start} is too large`);
+      if (!Number.isFinite(Number(lit))) throw new ExprError(tr("number {0} at {1} is too large", [lit.slice(0, 20), start]));
       toks.push({ kind: "num", text: lit, pos: start });
     } else if (c === "'" || c === '"') {
       const start = i;
@@ -68,7 +69,7 @@ function lex(src: string): Tok[] {
         out += rs[i];
         i++;
       }
-      if (!closed) throw new ExprError(`unterminated string starting at ${start}`);
+      if (!closed) throw new ExprError(tr("unterminated string starting at {0}", [start]));
       toks.push({ kind: "str", text: out, pos: start });
     } else if (isIdentStart(c)) {
       const start = i;
@@ -83,7 +84,7 @@ function lex(src: string): Tok[] {
         toks.push({ kind: "op", text: c, pos: i });
         i++;
       } else {
-        throw new ExprError(`unexpected character ${JSON.stringify(c)} at ${i}`);
+        throw new ExprError(tr("unexpected character {0} at {1}", [JSON.stringify(c), i]));
       }
     }
   }
@@ -147,19 +148,19 @@ class Parser {
   }
   private fail(msg: string): never {
     const t = this.peek();
-    throw new ExprError(`${msg} (near ${t.kind === "eof" ? "end of expression" : `"${t.text}" at ${t.pos}`})`);
+    throw new ExprError(tr("{0} (near {1})", [msg, t.kind === "eof" ? tr("end of expression") : tr("\"{0}\" at {1}", [t.text, t.pos])]));
   }
   private expect(s: string) {
-    if (!this.isOp(s)) this.fail(`expected "${s}"`);
+    if (!this.isOp(s)) this.fail(tr("expected \"{0}\"", [s]));
     this.next();
   }
   private enter() {
-    if (++this.depth > MAX_DEPTH) this.fail("expression nested too deeply");
+    if (++this.depth > MAX_DEPTH) this.fail(tr("expression nested too deeply"));
   }
 
   parseAll(): Node {
     const n = this.expr();
-    if (this.peek().kind !== "eof") this.fail("unexpected trailing input");
+    if (this.peek().kind !== "eof") this.fail(tr("unexpected trailing input"));
     return n;
   }
 
@@ -206,7 +207,7 @@ class Parser {
     while (this.isOp(".")) {
       this.next();
       const t = this.peek();
-      if (t.kind !== "ident") this.fail("expected a field name after '.'");
+      if (t.kind !== "ident") this.fail(tr("expected a field name after '.'"));
       this.next();
       n = { t: "member", obj: n, name: t.text };
     }
@@ -230,7 +231,7 @@ class Parser {
       if (t.text === "null") return { t: "lit", v: null };
       if (this.isOp("(")) {
         const arity = Object.prototype.hasOwnProperty.call(ARITY, t.text) ? ARITY[t.text] : undefined;
-        if (!arity) throw new ExprError(`unknown function "${t.text}"`);
+        if (!arity) throw new ExprError(tr("unknown function \"{0}\"", [t.text]));
         this.next();
         const args: Node[] = [];
         if (!this.isOp(")")) {
@@ -245,7 +246,7 @@ class Parser {
         }
         this.expect(")");
         if (args.length < arity[0] || (arity[1] >= 0 && args.length > arity[1])) {
-          throw new ExprError(`${t.text}() takes ${arity[0]}${arity[1] < 0 ? "+" : arity[1] !== arity[0] ? `-${arity[1]}` : ""} argument(s), got ${args.length}`);
+          throw new ExprError(tr("{0}() takes {1}{2} argument(s), got {3}", [t.text, arity[0], arity[1] < 0 ? "+" : arity[1] !== arity[0] ? `-${arity[1]}` : "", args.length]));
         }
         return { t: "call", fn: t.text, args };
       }
@@ -257,7 +258,7 @@ class Parser {
       this.expect(")");
       return n;
     }
-    this.fail("expected a value");
+    this.fail(tr("expected a value"));
   }
 }
 
@@ -269,8 +270,8 @@ export function parseExpr(src: string): Node {
   if (hit instanceof ExprError) throw hit;
   if (hit) return hit;
   try {
-    if (!src.trim()) throw new ExprError("empty expression");
-    if (src.length > MAX_EXPR_LEN) throw new ExprError(`expression longer than ${MAX_EXPR_LEN} characters`);
+    if (!src.trim()) throw new ExprError(tr("empty expression"));
+    if (src.length > MAX_EXPR_LEN) throw new ExprError(tr("expression longer than {0} characters", [MAX_EXPR_LEN]));
     const node = new Parser(lex(src)).parseAll();
     if (cache.size > 2000) cache.clear();
     cache.set(src, node);

@@ -38,9 +38,10 @@ type Bundle struct {
 	scrubbedConnectorMeta []ConnectorMeta
 	connectorMetaPinned   bool
 
-	Branding   Branding
-	Models     Models
-	EmptyState EmptyState
+	Branding      Branding
+	Models        Models
+	EmptyState    EmptyState
+	Localizations Localizations
 
 	// BrandLogoPath is the absolute, symlink-resolved file backing
 	// Branding.Logo, or "" when the bundle declares none. Set at load by

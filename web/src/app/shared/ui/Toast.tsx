@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { createContext, useCallback, useContext, useState } from "react";
 import { CloseButton } from "./CloseButton";
 
@@ -55,7 +56,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <span className="min-w-0 flex-1">{t.message}</span>
             <CloseButton
               className="-my-1.5 -mr-2"
-              label="Dismiss notification"
+              label={tr("Dismiss notification")}
               onClick={() => dismiss(t.id)}
             />
           </div>

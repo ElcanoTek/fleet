@@ -553,6 +553,16 @@ Recorded here so nobody discovers them in production:
   generic bundle ships no servers, so the walkthrough's image works until you
   substitute a real bundle, and then the servers fail at spawn with a
   per-server error in the log rather than a boot failure.
+- **The built-in browser tools are expected to fail in the control-plane
+  pod.** The image ships chromium-headless, but fleet launches Chromium with
+  its own sandbox on, and the chart's container security context (all
+  capabilities dropped, `RuntimeDefault` seccomp) is expected to stop that
+  sandbox from starting. In a podman container with the same settings the sandbox's
+  `chroot(2)` is refused for lack of `CAP_SYS_CHROOT` and the launch exits at
+  startup; this was checked with podman, not on a cluster, and the refused
+  call may differ by runtime. Expect connector studio's browser probes, the
+  Co-Pilot live view, `playwright_browser` and saved `playwright` connectors
+  to return a launch error; see [CONNECTOR-BUILDER.md](CONNECTOR-BUILDER.md) §2.
 - **No per-sandbox resource telemetry (#263).** `podman stats` has no
   in-process counterpart here; task resource summaries are absent. Use your
   cluster's metrics stack on the `fleet-sandbox` pods.

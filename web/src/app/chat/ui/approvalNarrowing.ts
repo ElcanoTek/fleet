@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Approval narrowing (docs/APPROVAL-NARROWING.md): on a pending card whose
 // tool declares a narrowable list argument, the readable card's rows that name
 // a staged value get a checkbox, and the person approves only the ticked ones.
@@ -31,19 +32,19 @@ export function approvedValuesFor(n: ApprovalNarrowable, leftOut: ReadonlySet<st
 }
 
 /** The approve button's words: "Approve" for the whole call, "Approve 3 of 5" when narrowed. */
-export function narrowedApproveLabel(approved: number, total: number, whole = "Approve"): string {
-  return approved >= total ? whole : `Approve ${approved} of ${total}`;
+export function narrowedApproveLabel(approved: number, total: number, whole = tr("Approve")): string {
+  return approved >= total ? whole : tr("Approve {0} of {1}", [approved, total]);
 }
 
 /** "3 of 5 selected": the live count shown above the rows. */
 export function selectedCountText(approved: number, total: number): string {
-  return `${approved} of ${total} selected`;
+  return tr("{0} of {1} selected", [approved, total]);
 }
 
 /** A settled card's line for a narrowed approval: "Approved 3 of 5 · 2 left out". */
 export function narrowedSummary(n: ApprovalNarrowed): string {
   const left = n.staged.length - n.approved.length;
-  return `Approved ${n.approved.length} of ${n.staged.length} · ${left} left out`;
+  return tr("Approved {0} of {1} · {2} left out", [n.approved.length, n.staged.length, left]);
 }
 
 /** The staged values a narrowed approval left out, as a set (for "Left out" rows). */

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // getGatedJson — the Settings pages' one way to load a session-gated JSON
 // resource (#2007).
 //
@@ -33,7 +34,7 @@ export function redirectToLogin(): void {
 export async function gatedFailure(res: Response, opts: GatedOptions): Promise<Error> {
   const own = opts.statusText?.[res.status];
   if (own) return new Error(own);
-  return new Error(await responseErrorText(res, `${opts.label} request failed`));
+  return new Error(await responseErrorText(res, tr("{0} request failed", [opts.label])));
 }
 
 export async function getGatedJson<T>(url: string, opts: GatedOptions): Promise<T | null> {

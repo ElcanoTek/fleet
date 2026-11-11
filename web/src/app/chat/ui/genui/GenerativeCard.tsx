@@ -1,3 +1,6 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // GenerativeCard — renders a show_ui card (docs/GENERATIVE-UI.md) from the
 // tool call's own arguments. The spec is model-authored and therefore
 // untrusted: only the catalog below renders (anything else is skipped), every
@@ -83,7 +86,7 @@ const ItemContext = createContext<ItemCtx | null>(null);
 
 function useCard(): CardCtx {
   const c = useContext(Ctx);
-  if (!c) throw new Error("GenerativeCard context missing");
+  if (!c) throw new Error(tr("GenerativeCard context missing"));
   return c;
 }
 
@@ -623,10 +626,10 @@ export default function GenerativeCard(props: GenerativeCardProps) {
       >
         <span aria-hidden>◧</span>
         <span className="min-w-0 flex-1 truncate">
-          {spec.title} · replaced by an updated card below
-        </span>
+        {rich("{0} · replaced by an updated card below", spec.title)}
+      </span>
         <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setExpanded(true)}>
-          Show
+          {tr("Show")}
         </button>
       </div>
     );
@@ -844,7 +847,7 @@ function CardBody({
     const onUnsent = (e: Event) => {
       if ((e as CustomEvent<string>).detail !== storeId) return;
       setAwaitingState(null);
-      setNotice("Not sent. Try again.");
+      setNotice(tr("Not sent. Try again."));
     };
     window.addEventListener(UNSENT_EVENT, onUnsent);
     return () => window.removeEventListener(UNSENT_EVENT, onUnsent);
@@ -1006,7 +1009,7 @@ function CardBody({
       const bytes = submissionBytes(message);
       if (bytes > MAX_SUBMISSION_BYTES) {
         setNotice(
-          `Too large to send (${Math.ceil(bytes / 1024).toLocaleString()} KB; the chat takes up to ${(MAX_SUBMISSION_BYTES / 1024).toLocaleString()} KB). Shorten the longest list.`,
+          tr("Too large to send ({0} KB; the chat takes up to {1} KB). Shorten the longest list.", [Math.ceil(bytes / 1024).toLocaleString(getLanguage()), (MAX_SUBMISSION_BYTES / 1024).toLocaleString(getLanguage())]),
         );
         return;
       }
@@ -1018,7 +1021,7 @@ function CardBody({
       await deliver(message, action.id, keyAtClick);
     } catch {
       if (!readOnly) markDraftSent(storeId, "");
-      setNotice("Could not send. Try again.");
+      setNotice(tr("Could not send. Try again."));
     } finally {
       setSending(null);
     }
@@ -1054,7 +1057,7 @@ function CardBody({
       if (accepted === false) {
         release();
         if (!readOnly) markDraftSent(storeId, "");
-        setNotice("Not sent. Try again.");
+        setNotice(tr("Not sent. Try again."));
       } else if (submissionKeyRef.current === keyAtClick) {
         // Hold the actions until the message reaches the transcript (a
         // queued message is accepted long before it is echoed), so a second
@@ -1083,7 +1086,7 @@ function CardBody({
       if (!d || d.handled || d.cardId !== cardId) return;
       d.handled = true;
       d.done = deliverRef.current(d.message, d.actionId, submissionKeyRef.current, d.model).catch(() => {
-        setNotice("Could not send. Try again.");
+        setNotice(tr("Could not send. Try again."));
       });
     };
     window.addEventListener(RESEND_EVENT, onResend);
@@ -1112,7 +1115,7 @@ function CardBody({
       const paths = blockingPaths();
       if (paths.length > 0) {
         setShowErrors(true);
-        setNotice(paths.length === 1 ? "Fix 1 field to continue." : `Fix ${paths.length} fields to continue.`);
+        setNotice(paths.length === 1 ? tr("Fix 1 field to continue.") : tr("Fix {0} fields to continue.", [paths.length]));
         focusField(paths[0]);
         return false;
       }
@@ -1132,7 +1135,7 @@ function CardBody({
       if (bytes > MAX_SUBMISSION_BYTES) {
         setCopiedId(null);
         setNotice(
-          `Too large to copy (${Math.ceil(bytes / 1024).toLocaleString()} KB; max ${(MAX_SUBMISSION_BYTES / 1024).toLocaleString()} KB). Shorten the longest list.`,
+          tr("Too large to copy ({0} KB; max {1} KB). Shorten the longest list.", [Math.ceil(bytes / 1024).toLocaleString(getLanguage()), (MAX_SUBMISSION_BYTES / 1024).toLocaleString(getLanguage())]),
         );
         return;
       }
@@ -1140,7 +1143,7 @@ function CardBody({
       void copyText(text).then((ok) => {
         if (!ok) {
           setCopiedId(null);
-          setNotice("Could not copy. Try again.");
+          setNotice(tr("Could not copy. Try again."));
           return;
         }
         setCopiedId(action.id);
@@ -1266,7 +1269,7 @@ function CardBody({
                   onClick={resetCard}
                   className="shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[0.72rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
                 >
-                  Reset
+                  {tr("Reset")}
                 </button>
               ) : null}
             </div>
@@ -1286,7 +1289,7 @@ function CardBody({
                 onClick={resetCard}
                 className="shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[0.72rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
               >
-                Reset
+                {tr("Reset")}
               </button>
             ) : null}
           </div>
@@ -1301,15 +1304,17 @@ function CardBody({
           <div className="flex flex-col gap-2 border-t border-[var(--color-border)] px-3.5 py-2.5">
             {retired && !readOnly && !superseded && !sentLabel ? (
               <div data-testid="genui-retired" className="text-[0.75rem] text-[var(--color-text-muted)]">
-                From before this conversation was summarized — ask the assistant to show it again to answer it.
+                {tr("From before this conversation was summarized — ask the assistant to show it again to answer it.")}
               </div>
             ) : null}
             {locked && sentLabel && !superseded ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                <span data-testid="genui-submitted">Sent · {sentLabel}</span>
+                <span data-testid="genui-submitted">
+        {rich("Sent · {0}", sentLabel)}
+      </span>
                 {!readOnly && !retired && onSubmit && submission && (spec.actions ?? []).some((a) => !a.kind || a.kind === "submit") ? (
                   <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setEditing(true)}>
-                    Edit and resend
+                    {tr("Edit and resend")}
                   </button>
                 ) : null}
               </div>
@@ -1317,19 +1322,15 @@ function CardBody({
             {!locked && awaiting ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]" role="status">
                 <span data-testid="genui-awaiting">
-                  {/* Queued behind a running reply, or sent while the
-                      connection dropped: either way it has not reached the
-                      transcript yet. */}
-                  Sent · {(spec.actions ?? []).find((a) => a.id === awaiting)?.label ?? awaiting} — waiting to reach the
-                  assistant
-                </span>
+        {rich("Sent · {0} — waiting to reach the assistant", (spec.actions ?? []).find((a) => a.id === awaiting)?.label ?? awaiting)}
+      </span>
                 <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setAwaiting(null)}>
-                  Unlock
+                  {tr("Unlock")}
                 </button>
               </div>
             ) : null}
             {!locked && confirmingVisible ? (
-              <div className="flex flex-wrap items-center gap-2" role="alertdialog" aria-label="Confirm">
+              <div className="flex flex-wrap items-center gap-2" role="alertdialog" aria-label={tr("Confirm")}>
                 <span className="text-[0.78rem]">{confirmingVisible.confirm}</span>
                 <button
                   ref={confirmYesRef}
@@ -1337,10 +1338,10 @@ function CardBody({
                   className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
                   onClick={() => onConfirm(confirmingVisible)}
                 >
-                  Yes, {confirmingVisible.label.toLowerCase()}
-                </button>
+        {rich("Yes, {0}", confirmingVisible.label.toLowerCase())}
+      </button>
                 <button type="button" className={actionButton} onClick={backOut}>
-                  Back
+                  {tr("Back")}
                 </button>
               </div>
             ) : null}
@@ -1369,7 +1370,7 @@ function CardBody({
                             : actionButton + " py-1.5"
                       }
                     >
-                      {sending === a.id ? "Sending…" : copiedId === a.id ? "Copied" : a.label}
+                      {sending === a.id ? tr("Sending…") : copiedId === a.id ? tr("Copied") : a.label}
                     </button>
                   );
                 })}
@@ -1385,7 +1386,7 @@ function CardBody({
                       clearedRef.current = new Set();
                       setClearedServerErrors(clearedRef.current);
                     }}>
-                    Cancel edit
+                    {tr("Cancel edit")}
                   </button>
                 ) : null}
               </div>
@@ -1478,7 +1479,7 @@ function Section({ c }: { c: Component }) {
   const [open, setOpen] = useState(!(collapsible && c.collapsed === true));
   // A collapsible section always has a toggle; the validator requires a
   // title, and the renderer still never strands content behind no header.
-  const title = str(c.title).trim() || (collapsible ? "Details" : "");
+  const title = str(c.title).trim() || (collapsible ? tr("Details") : "");
   const ref = useRef<HTMLElement | null>(null);
   const owned = useMemo(() => idsUnder(children(c)), [c]);
   const item = useContext(ItemContext);
@@ -1614,7 +1615,7 @@ function Tabs({ c }: { c: Component }) {
               {n > 0 ? (
                 <span
                   className="rounded-full bg-[color-mix(in_srgb,var(--color-danger-strong)_15%,transparent)] px-1.5 text-[0.65rem] text-[var(--color-danger-soft)]"
-                  aria-label={`${n} to fix`}
+                  aria-label={tr("{0} to fix", [n])}
                 >
                   {n}
                 </span>
@@ -1766,8 +1767,8 @@ function Facts({ c }: { c: Component }) {
 
 function cellText(v: unknown, scope?: Scope): string {
   if (v === null || v === undefined) return "—";
-  if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString() : toText(v);
-  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString(getLanguage()) : toText(v);
+  if (typeof v === "boolean") return v ? tr("Yes") : tr("No");
   if (typeof v === "string") return scope ? renderTemplate(v, scope) : v;
   return String(v);
 }
@@ -1814,11 +1815,11 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         <table
           className="w-full border-collapse text-[0.78rem]"
           // Named by the field's label when it is an input, else by its own.
-          {...(wrapped && inputId ? { "aria-labelledby": `${inputId}-label` } : { "aria-label": str(c.label).trim() || "Table" })}
+          {...(wrapped && inputId ? { "aria-labelledby": `${inputId}-label` } : { "aria-label": str(c.label).trim() || tr("Table") })}
         >
           <thead className="sticky top-0 bg-[var(--color-bg)]">
             <tr>
-              {mode !== "none" ? <th className="w-8 border-b border-[var(--color-border)]" aria-label="Select" /> : null}
+              {mode !== "none" ? <th className="w-8 border-b border-[var(--color-border)]" aria-label={tr("Select")} /> : null}
               {cols.map((col) => (
                 <th
                   key={col.key}
@@ -1848,7 +1849,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                         type={mode === "single" ? "radio" : "checkbox"}
                         name={mode === "single" ? groupName : undefined}
                         checked={on}
-                        aria-label={`Select ${k}`}
+                        aria-label={tr("Select {0}", [k])}
                         onChange={() => toggle(k)}
                         onClick={(e) => e.stopPropagation()}
                         className="accent-[var(--color-primary)]"
@@ -1873,14 +1874,14 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
       {mode !== "none" ? (
         <div className="flex flex-wrap items-center gap-2 text-[0.72rem] text-[var(--color-text-muted)]">
           <span>
-            {mode === "multi" ? `${Array.isArray(selected) ? selected.length : 0} of ${rows.length} selected` : selected ? `Selected: ${String(selected)}` : "Select a row"}
+            {mode === "multi" ? tr("{0} of {1} selected", [Array.isArray(selected) ? selected.length : 0, rows.length]) : selected ? tr("Selected: {0}", [String(selected)]) : tr("Select a row")}
           </span>
           {/* A checked native radio cannot be unchecked from the keyboard, and
               the row itself is not focusable: an optional single choice
               needs an explicit way back to "none". */}
           {mode === "single" && selected && c.required !== true && !locked && c.disabled !== true && item?.disabled !== true ? (
             <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => onChange?.("")}>
-              Clear selection
+              {tr("Clear selection")}
             </button>
           ) : null}
         </div>
@@ -1890,11 +1891,11 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
 }
 
 const STATUS_GLYPH: Record<string, { glyph: string; color: string; label: string }> = {
-  pass: { glyph: "✓", color: "var(--color-success)", label: "Pass" },
-  fail: { glyph: "✗", color: "var(--color-danger)", label: "Fail" },
-  warn: { glyph: "!", color: "var(--color-warning-strong)", label: "Warning" },
-  info: { glyph: "i", color: "var(--color-accent)", label: "Info" },
-  pending: { glyph: "…", color: "var(--color-text-muted)", label: "Pending" },
+  pass: { glyph: "✓", color: "var(--color-success)", label: tr("Pass") },
+  fail: { glyph: "✗", color: "var(--color-danger)", label: tr("Fail") },
+  warn: { glyph: "!", color: "var(--color-warning-strong)", label: tr("Warning") },
+  info: { glyph: "i", color: "var(--color-accent)", label: tr("Info") },
+  pending: { glyph: "…", color: "var(--color-text-muted)", label: tr("Pending") },
 };
 
 function StatusList({ c }: { c: Component }) {
@@ -1922,7 +1923,7 @@ function StatusList({ c }: { c: Component }) {
                 disabled, or in a removed repeater item cannot be focused. */}
             {field && !locked && visible.has(field) ? (
               <button type="button" className="shrink-0 text-[0.72rem] text-[var(--color-accent)] underline" onClick={() => focusField(field)}>
-                Fix
+                {tr("Fix")}
               </button>
             ) : null}
           </li>
@@ -1954,7 +1955,7 @@ function Progress({ c }: { c: Component }) {
         aria-valuemax={max}
         // The bar and its ARIA value stay in range; the label shows the raw value.
         aria-valuenow={max > 0 ? Math.max(0, Math.min(max, v)) : 0}
-        aria-label={str(c.label).trim() || "Progress"}
+        aria-label={str(c.label).trim() || tr("Progress")}
       >
         <div className="h-full rounded-full transition-[width] duration-150" style={{ width: `${pct}%`, background: t }} />
       </div>
@@ -1977,7 +1978,7 @@ function Chart({ c }: { c: Component }) {
   const scope = useScope();
   const labels = Array.isArray(c.labels) ? c.labels.map((l) => String(l)) : [];
   const series = objs(c.series).map((s, si) => ({
-    name: str(s.name).trim() || `Series ${si + 1}`,
+    name: str(s.name).trim() || tr("Series {0}", [si + 1]),
     values: Array.isArray(s.values)
       ? s.values.map((v) => {
           if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -2086,10 +2087,10 @@ function Chart({ c }: { c: Component }) {
             })}
       </svg>
       <table className="sr-only">
-        <caption>{str(c.title).trim() || "Chart"}</caption>
+        <caption>{str(c.title).trim() || tr("Chart")}</caption>
         <thead>
           <tr>
-            <th scope="col">Label</th>
+            <th scope="col">{tr("Label")}</th>
             {series.map((s, si) => (
               <th key={si} scope="col">
                 {s.name}
@@ -2102,7 +2103,7 @@ function Chart({ c }: { c: Component }) {
             <tr key={i}>
               <th scope="row">{l}</th>
               {series.map((s, si) => (
-                <td key={si}>{s.values[i] == null ? "No value" : fmt(s.values[i] as number)}</td>
+                <td key={si}>{s.values[i] == null ? tr("No value") : fmt(s.values[i] as number)}</td>
               ))}
             </tr>
           ))}
@@ -2152,7 +2153,7 @@ function Diff({ c }: { c: Component }) {
   const empty = (
     <>
       <span aria-hidden>—</span>
-      <span className="sr-only">none</span>
+      <span className="sr-only">{tr("none")}</span>
     </>
   );
   const title = str(c.title).trim();
@@ -2160,12 +2161,12 @@ function Diff({ c }: { c: Component }) {
     <div className="grid min-w-0 gap-1">
       {title ? <div className="text-[0.78rem] font-medium">{title}</div> : null}
       <div className="overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
-        <table className="w-full border-collapse text-[0.78rem]" aria-label={title || "Changes"}>
+        <table className="w-full border-collapse text-[0.78rem]" aria-label={title || tr("Changes")}>
           <thead className="sr-only">
             <tr>
-              <th scope="col">Field</th>
-              <th scope="col">Before</th>
-              <th scope="col">After</th>
+              <th scope="col">{tr("Field")}</th>
+              <th scope="col">{tr("Before")}</th>
+              <th scope="col">{tr("After")}</th>
             </tr>
           </thead>
           <tbody>
@@ -2234,7 +2235,7 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
         // assistive technology (the validator allows label-less inputs).
         <label id={`${inputId}-label`} htmlFor={inputId} className="sr-only">
           {id}
-          {c.required === true ? " (required)" : null}
+          {c.required === true ? tr(" (required)") : null}
         </label>
       ) : null}
       {label && c.type !== "toggle" ? (
@@ -2248,7 +2249,7 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
               {/* The asterisk is visual only. Every control and group is named
                   by this label, so this is how a screen reader hears that the
                   field is required, whatever the control type. */}
-              <span className="sr-only"> (required)</span>
+              <span className="sr-only"> {tr("(required)")}</span>
             </>
           ) : null}
         </label>
@@ -2300,10 +2301,10 @@ function TextInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
           <button
             type="button"
             className={actionButton + " shrink-0"}
-            aria-label={revealed ? "Hide secret" : "Show secret"}
+            aria-label={revealed ? tr("Hide secret") : tr("Show secret")}
             onClick={() => setRevealed((r) => !r)}
           >
-            {revealed ? "Hide" : "Show"}
+            {revealed ? tr("Hide") : tr("Show")}
           </button>
         ) : null}
       </div>
@@ -2379,19 +2380,19 @@ function Slider({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         />
         <span className="shrink-0 font-medium tabular-nums text-[var(--color-text-primary)]" data-testid="genui-slider-value">
           {prefix}
-          {v.toLocaleString()}
+          {v.toLocaleString(getLanguage())}
           {suffix}
         </span>
       </div>
       <div className="flex items-center justify-between text-[0.68rem] tabular-nums text-[var(--color-text-muted)]" aria-hidden="true">
         <span>
           {prefix}
-          {min.toLocaleString()}
+          {min.toLocaleString(getLanguage())}
           {suffix}
         </span>
         <span>
           {prefix}
-          {max.toLocaleString()}
+          {max.toLocaleString(getLanguage())}
           {suffix}
         </span>
       </div>
@@ -2404,7 +2405,7 @@ function Filter({ value, onChange, label }: { value: string; onChange: (s: strin
     <input
       type="search"
       aria-label={label}
-      placeholder="Filter…"
+      placeholder={tr("Filter…")}
       className={inputClass + " mb-1"}
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -2428,9 +2429,9 @@ function Select({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const desc = opts.find((o) => o.value === v)?.description;
   return (
     <div className="grid min-w-0 gap-0.5">
-      {opts.length > FILTER_AT ? <Filter value={q} onChange={setQ} label={`Filter ${str(c.label).trim() || "options"}`} /> : null}
+      {opts.length > FILTER_AT ? <Filter value={q} onChange={setQ} label={tr("Filter {0}", [str(c.label).trim() || tr("options")])} /> : null}
       <select id={inputId} className={inputClass} value={v} onChange={(e) => onChange?.(e.target.value)}>
-        <option value="">{str(c.placeholder) || "Choose…"}</option>
+        <option value="">{str(c.placeholder) || tr("Choose…")}</option>
         {shown.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
@@ -2453,7 +2454,7 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   // visible label (InputField gives it this id), or the id as a fallback.
   const groupLabel = str(c.label).trim()
     ? { "aria-labelledby": `${inputId}-label` }
-    : { "aria-label": str(c.id) || "Choice" };
+    : { "aria-label": str(c.id) || tr("Choice") };
   if (c.variant === "radio") {
     return (
       <div className="grid gap-1">
@@ -2482,7 +2483,7 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
           className="justify-self-start text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
           onClick={() => onChange?.("")}
         >
-          Clear choice
+          {tr("Clear choice")}
         </button>
       ) : null}
       </div>
@@ -2541,7 +2542,7 @@ function Chip({ text, onRemove, extra }: { text: string; onRemove?: () => void; 
       <span className="truncate">{text}</span>
       {extra}
       {onRemove ? (
-        <button type="button" aria-label={`Remove ${text}`} onClick={onRemove} className="rounded-full px-1 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]">
+        <button type="button" aria-label={tr("Remove {0}", [text])} onClick={onRemove} className="rounded-full px-1 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]">
           ×
         </button>
       ) : null}
@@ -2585,7 +2586,7 @@ function Adder({
         aria-labelledby={labelledBy}
         type="text"
         className={inputClass}
-        placeholder={str(c.placeholder) || (custom ? "Type and press Enter…" : "Search options…")}
+        placeholder={str(c.placeholder) || (custom ? tr("Type and press Enter…") : tr("Search options…"))}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => {
@@ -2602,7 +2603,7 @@ function Adder({
               + {o.label}
             </button>
           ))}
-          {shown.length === 0 && !custom ? <span className="text-[0.72rem] text-[var(--color-text-muted)]">No match</span> : null}
+          {shown.length === 0 && !custom ? <span className="text-[0.72rem] text-[var(--color-text-muted)]">{tr("No match")}</span> : null}
         </div>
       ) : null}
     </div>
@@ -2652,7 +2653,7 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={`${str(c.label).trim() || str(c.id) || "Toggle"}${c.required === true ? " (required)" : ""}`}
+        aria-label={`${str(c.label).trim() || str(c.id) || tr("Toggle")}${c.required === true ? tr(" (required)") : ""}`}
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",
@@ -2710,7 +2711,7 @@ function ListInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         id={inputId}
         rows={4}
         className={inputClass + " font-mono text-[0.75rem]"}
-        placeholder={str(c.placeholder) || "One per line"}
+        placeholder={str(c.placeholder) || tr("One per line")}
         value={text}
         onChange={(e) => {
           // Keep only the text the entries came from: a paste far past
@@ -2721,9 +2722,9 @@ function ListInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         }}
       />
       <div className="text-[0.72rem] text-[var(--color-text-muted)]">
-        {parsed.length.toLocaleString()} item{parsed.length === 1 ? "" : "s"}
-        {dedupe && raw > parsed.length ? ` · ${raw - parsed.length} duplicate${raw - parsed.length === 1 ? "" : "s"} removed` : ""}
-        {max !== undefined ? ` · max ${max.toLocaleString()}` : ""}
+        {tr(parsed.length === 1 ? "{0} item" : "{0} items", [parsed.length.toLocaleString(getLanguage())])}
+        {dedupe && raw > parsed.length ? tr(raw - parsed.length === 1 ? " · {0} duplicate removed" : " · {0} duplicates removed", [raw - parsed.length]) : ""}
+        {max !== undefined ? tr(" · max {0}", [max.toLocaleString(getLanguage())]) : ""}
       </div>
     </div>
   );
@@ -2739,7 +2740,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
       : { include: [], exclude: [] };
   const [side, setSide] = useState<"include" | "exclude">("include");
   const { locked } = useCard();
-  const names = { include: str(c.include_label).trim() || "Include", exclude: str(c.exclude_label).trim() || "Exclude" };
+  const names = { include: str(c.include_label).trim() || tr("Include"), exclude: str(c.exclude_label).trim() || tr("Exclude") };
   // The adder is gone once the card locks, so the field's id, label, help
   // and error state live on this always-rendered group (as for multi_select).
   const labelId = inputId ? `${inputId}-label` : undefined;
@@ -2753,7 +2754,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
           {names[k]} ({v[k].length})
         </div>
         <div className="flex flex-wrap gap-1">
-          {v[k].length === 0 ? <span className="text-[0.72rem] text-[var(--color-text-muted)]">None</span> : null}
+          {v[k].length === 0 ? <span className="text-[0.72rem] text-[var(--color-text-muted)]">{tr("None")}</span> : null}
           {v[k].map((x) => (
             <Chip
               key={x}
@@ -2763,8 +2764,8 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
                 locked ? undefined : (
                   <button
                     type="button"
-                    title={`Move to ${names[other]}`}
-                    aria-label={`Move ${x} to ${names[other]}`}
+                    title={tr("Move to {0}", [names[other]])}
+                    aria-label={tr("Move {0} to {1}", [x, names[other]])}
                     className="rounded-full px-1 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                     onClick={() => set({ ...v, [k]: v[k].filter((y) => y !== x), [other]: [...v[other], x] })}
                   >
@@ -2787,7 +2788,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
       {!locked && taken.size < MAX_CHOICE_ITEMS ? (
         <div className="grid min-w-0 gap-1">
           <div className="flex items-center gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
-            Add to
+            {tr("Add to")}
             {(["include", "exclude"] as const).map((k) => (
               <button
                 key={k}
@@ -2884,7 +2885,7 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         const scope = scopeFor(values, item, i);
         // A template can render blank (an empty field it reads): fall back
         // so the expand button keeps a name.
-        const label = (labelTpl ? renderTemplate(labelTpl, scope).trim() : "") || `Item ${i + 1}`;
+        const label = (labelTpl ? renderTemplate(labelTpl, scope).trim() : "") || tr("Item {0}", [i + 1]);
         const open = openKeys.has(k);
         return (
           <div key={k} className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)]" data-repeater-item={i}>
@@ -2910,7 +2911,7 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                         );
                       }}
                     >
-                      Duplicate
+                      {tr("Duplicate")}
                     </button>
                   ) : null}
                   {items.length > min ? (
@@ -2924,7 +2925,7 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                         )
                       }
                     >
-                      Remove
+                      {tr("Remove")}
                     </button>
                   ) : null}
                 </>
@@ -2950,7 +2951,7 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
               update([...items, newItem(fields)], [...itemKeys, added], added);
             }}
           >
-            + {str(c.add_label).trim() || "Add"}
+            + {str(c.add_label).trim() || tr("Add")}
           </button>
         </div>
       ) : null}

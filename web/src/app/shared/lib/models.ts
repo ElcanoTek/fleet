@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Model catalog logic for the orchestrator task form's model picker. Pure
 // functions ported from moc's assets/js/model-picker.js — the DOM/positioning
 // machinery is rebuilt as a React component (ModelPicker.tsx); this module is
@@ -206,7 +207,7 @@ async function fetchCatalogModels(): Promise<PickerModel[]> {
       signal: controller.signal,
       cache: "no-store",
     });
-    if (!response.ok) throw new Error(`status ${response.status}`);
+    if (!response.ok) throw new Error(tr("status {0}", [response.status]));
     const payload = await response.json();
     const data: RawCatalogModel[] = Array.isArray(payload?.models) ? payload.models : [];
     return data.map(normaliseCatalogModel).filter((m): m is PickerModel => m !== null);

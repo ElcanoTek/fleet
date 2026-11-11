@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The user-side bubble for a card submission. The message itself is the
 // machine-readable "[UI submission] card=… action=…" + JSON the model reads;
 // people get the card's title, the button they pressed, and their answers by
@@ -14,7 +16,7 @@ import { fieldLabels, GenUiContext, passwordFields, summarizeValue } from "./tra
 function NotSentNote() {
   return (
     <div role="status" data-testid="genui-not-sent" className="mt-1 text-[0.72rem] text-[var(--color-danger)]">
-      Not sent. The card is still open to try again.
+      {tr("Not sent. The card is still open to try again.")}
     </div>
   );
 }
@@ -76,7 +78,7 @@ export function SubmissionBubble({
     >
       <div className="flex items-center gap-1.5 font-medium">
         <span aria-hidden>◧</span>
-        <span>{spec?.title ?? "Card"}</span>
+        <span>{spec?.title ?? tr("Card")}</span>
         <span className="text-[var(--color-text-muted)]">· {action}</span>
       </div>
       {entries.length > 0 ? (
@@ -90,7 +92,9 @@ export function SubmissionBubble({
         </dl>
       ) : null}
       {entries.length > 12 ? (
-        <div className="mt-1 text-[0.72rem] text-[var(--color-text-muted)]">+{entries.length - 12} more field(s)</div>
+        <div className="mt-1 text-[0.72rem] text-[var(--color-text-muted)]">
+        {rich("+{0} more field(s)", entries.length - 12)}
+      </div>
       ) : null}
       <button
         type="button"
@@ -98,7 +102,7 @@ export function SubmissionBubble({
         aria-expanded={showRaw}
         onClick={() => setShowRaw((s) => !s)}
       >
-        {showRaw ? "Hide what was sent" : "Show what was sent"}
+        {showRaw ? tr("Hide what was sent") : tr("Show what was sent")}
       </button>
       {notSent ? <NotSentNote /> : null}
       {showRaw ? (
@@ -132,7 +136,7 @@ export function ReplyBubble({ reply, notSent, message }: { reply: Reply; notSent
       <div className="mt-1 flex items-center gap-1.5 text-[0.7rem] text-[var(--color-text-muted)]">
         <span aria-hidden>◧</span>
         <span>
-          {spec?.title ?? "Card"} · {action}
+          {spec?.title ?? tr("Card")} · {action}
         </span>
       </div>
       {notSent ? <NotSentNote /> : null}

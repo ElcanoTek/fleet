@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 import type { McpServer } from "@/app/shared/lib/orchestratorApi";
 import { Icon } from "@/app/shared/ui/Icon";
@@ -32,7 +34,7 @@ export function CredentialAccountAdmin({ servers }: CredentialAccountAdminProps)
   return (
     <div data-testid="credential-account-admin">
       <ConnPanel>
-        <ConnPanelHead title="Accounts" />
+        <ConnPanelHead title={tr("Accounts")} />
 
         {/* Existing accounts: names ONLY, never secret values. */}
         {accountRows.length > 0 ? (
@@ -51,7 +53,7 @@ export function CredentialAccountAdmin({ servers }: CredentialAccountAdminProps)
             </ConnRows>
           </div>
         ) : (
-          <ConnEmpty>No accounts yet.</ConnEmpty>
+          <ConnEmpty>{tr("No accounts yet.")}</ConnEmpty>
         )}
 
         {accountRows.length > 4 ? (
@@ -62,7 +64,7 @@ export function CredentialAccountAdmin({ servers }: CredentialAccountAdminProps)
             onClick={() => setAccountsExpanded((expanded) => !expanded)}
             className={`${btnClass({ sm: true })} mt-3`}
           >
-            {accountsExpanded ? "Show less" : `Show all (${accountRows.length})`}
+            {accountsExpanded ? tr("Show less") : tr("Show all ({0})", [accountRows.length])}
             <Icon name="chevron-down" className={`size-3.5 transition-transform ${accountsExpanded ? "rotate-180" : ""}`} />
           </button>
         ) : null}
@@ -71,10 +73,8 @@ export function CredentialAccountAdmin({ servers }: CredentialAccountAdminProps)
           className="mt-3 mb-0 text-[0.85rem] text-[var(--color-text-muted)]"
           data-testid="credential-account-howto"
         >
-          Your administrator adds and removes accounts on the fleet server — for
-          example <code>fleet mcp account set &lt;server&gt; &lt;account&gt; --secret KEY=-</code>,
-          then a restart. Secrets stay on the server and are never shown here.
-        </p>
+        {rich("Your administrator adds and removes accounts on the fleet server — for example {0}, then a restart. Secrets stay on the server and are never shown here.", <code>fleet mcp account set &lt;server&gt; &lt;account&gt; --secret KEY=-</code>)}
+      </p>
       </ConnPanel>
     </div>
   );

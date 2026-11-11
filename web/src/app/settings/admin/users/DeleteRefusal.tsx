@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The delete-refusal notice for Settings → Admin → Users.
 //
 // `DELETE /admin/users/{email}` fails closed with a 409 when the account still
@@ -99,9 +101,8 @@ export function DeleteRefusal({
         </div>
       ) : namesOnly.length > 0 ? (
         <p className="m-0 text-[var(--color-text-muted)] [overflow-wrap:anywhere]">
-          Transfer {namesOnly.join(", ")} from the project&rsquo;s settings
-          dialog, then delete the account.
-        </p>
+        {rich("Transfer {0} from the project’s settings dialog, then delete the account.", namesOnly.join(", "))}
+      </p>
       ) : null}
     </NoticeBanner>
   );
@@ -137,14 +138,14 @@ function TransferProject({
       );
       if (!res.ok) {
         setMembers([]);
-        setError(`Couldn't load candidates (${res.status}).`);
+        setError(tr("Couldn't load candidates ({0}).", [res.status]));
         return;
       }
       const body = (await res.json()) as { members?: string[] };
       setMembers(body.members ?? []);
     } catch {
       setMembers([]);
-      setError("Couldn't load candidates — network error.");
+      setError(tr("Couldn't load candidates — network error."));
     }
   }, [project.id]);
 
@@ -171,12 +172,12 @@ function TransferProject({
       );
       if (!res.ok) {
         const text = (await res.text()).trim();
-        setError(text.length > 0 && text.length <= 300 ? text : `Transfer failed (${res.status}).`);
+        setError(text.length > 0 && text.length <= 300 ? text : tr("Transfer failed ({0}).", [res.status]));
         return;
       }
       onTransferred?.(project);
     } catch {
-      setError("Transfer failed — network error.");
+      setError(tr("Transfer failed — network error."));
     } finally {
       setBusy(false);
     }
@@ -195,7 +196,7 @@ function TransferProject({
           if (members === null) void load();
         }}
       >
-        Transfer {project.name}
+        {rich("Transfer {0}", project.name)}
       </button>
     );
   }
@@ -203,8 +204,8 @@ function TransferProject({
     <div className="grid gap-[0.25rem]">
       <label className="grid gap-[0.2rem]" htmlFor={`transferOwner-${project.id}`}>
         <span className="[overflow-wrap:anywhere]">
-          Hand {project.name} to
-        </span>
+        {rich("Hand {0} to", project.name)}
+      </span>
         <select
           id={`transferOwner-${project.id}`}
           className="w-full max-w-[18rem] rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-[0.4rem] py-[0.25rem] text-[0.72rem]"
@@ -213,7 +214,7 @@ function TransferProject({
           onChange={(e) => setChoice(e.target.value)}
         >
           <option value="">
-            {members === null ? "Loading…" : "Choose a member…"}
+            {members === null ? tr("Loading…") : tr("Choose a member…")}
           </option>
           {candidates.map((m) => (
             <option key={m} value={m}>
@@ -229,20 +230,18 @@ function TransferProject({
           disabled={busy || !choice}
           onClick={() => void transfer()}
         >
-          {busy ? "Transferring…" : "Transfer"}
+          {busy ? tr("Transferring…") : tr("Transfer")}
         </button>
         <button
           type="button"
           className="text-[var(--color-text-muted)] underline underline-offset-2"
           onClick={() => setOpen(false)}
         >
-          Cancel
-        </button>
+          {tr("Cancel")}</button>
       </div>
       {members !== null && members.length === 0 && !error ? (
         <p className="m-0 text-[var(--color-text-muted)] [overflow-wrap:anywhere]">
-          No one else is in this project&rsquo;s team — add a member first, or
-          make the project personal.
+          {tr("No one else is in this project’s team — add a member first, or make the project personal.")}
         </p>
       ) : null}
       {error ? (

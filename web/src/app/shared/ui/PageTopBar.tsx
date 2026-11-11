@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   useClientConfig,
@@ -43,7 +44,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
   const hasSupport = Boolean(
     activeSupport?.label?.trim() && activeSupport?.email?.trim(),
   );
-  const mobileSupportLabel = activeSupport?.mobile_label?.trim() || "Help";
+  const mobileSupportLabel = activeSupport?.mobile_label?.trim() || tr("Help");
   const supportAriaLabel = activeSupport?.label
     ? activeSupport.label.toLowerCase().includes(mobileSupportLabel.toLowerCase())
       ? activeSupport.label
@@ -79,7 +80,8 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
             with no height/title jump when switching between them. */}
         <div className="flex min-h-11 min-w-0 items-center gap-3 sm:min-h-8">
           <button
-            aria-label="Open sidebar"
+            aria-label={tr("Open sidebar")}
+            data-sidebar-toggle=""
             className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
             type="button"
             onClick={onMenu}
@@ -136,7 +138,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
       {dialogOpen && hasSupport && activeSupport ? (
         <DialogShell
           label={activeSupport.title || activeSupport.label}
-          scrimLabel="Close support dialog"
+          scrimLabel={tr("Close support dialog")}
           onDismiss={() => setDialogOpen(false)}
           testId="support-contact-dialog"
           className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto p-6"
@@ -152,7 +154,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
             </div>
             <button
               type="button"
-              aria-label="Close"
+              aria-label={tr("Close")}
               onClick={() => setDialogOpen(false)}
               className="inline-flex size-8 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
@@ -183,7 +185,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
               onClick={() => void handleCopyEmail()}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1 text-xs font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
-              {copied ? "Copied" : "Copy email"}
+              {copied ? tr("Copied") : tr("Copy email")}
             </button>
           </div>
           <div className="mt-5 flex items-center justify-end gap-2">
@@ -192,14 +194,14 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
               onClick={() => setDialogOpen(false)}
               className="inline-flex h-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3.5 text-sm font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
-              Close
+              {tr("Close")}
             </button>
             <a
               href={buildMailtoHref(activeSupport)}
               data-testid="support-contact-mailto"
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-primary-fill)] px-4 text-sm font-medium text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
-              <span>Send email</span>
+              <span>{tr("Send email")}</span>
             </a>
           </div>
         </DialogShell>

@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useRef, useState, type RefObject } from "react";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";
@@ -83,7 +85,7 @@ function NewChatButton({
         }}
       >
         <Icon name="plus" className="size-3.5" />
-        New chat
+        {tr("New chat")}
         {teamName ? <Icon name="chevron-down" className="size-3" /> : null}
       </button>
       {teamName ? (
@@ -92,28 +94,28 @@ function NewChatButton({
           onClose={() => onMenuOpenChange(false)}
           anchorRef={anchorRef}
           placement="bottom-end"
-          label="New chat"
+          label={tr("New chat")}
           className="min-w-[16rem]"
         >
           <MenuItem
             icon={<Icon name="lock" className="size-4" />}
-            description="Private until you share it"
+            description={tr("Private until you share it")}
             onClick={() => {
               onMenuOpenChange(false);
               onNewChat(false);
             }}
           >
-            Only you
+            {tr("Only you")}
           </MenuItem>
           <MenuItem
             icon={<TeamGlyph className="size-4" />}
-            description={`${teamName} can read it and branch it`}
+            description={tr("{0} can read it and branch it", [teamName])}
             onClick={() => {
               onMenuOpenChange(false);
               onNewChat(true);
             }}
           >
-            Shared with {teamName}
+            {tr("Shared with")}{" "}{teamName}
           </MenuItem>
         </Menu>
       ) : null}
@@ -139,7 +141,7 @@ function VisibilityPill({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement | null>(null);
   const shared = Boolean(chat.team_visible);
-  const label = shared ? teamName : "Only you";
+  const label = shared ? teamName : tr("Only you");
   if (!teamName) {
     // A personal project's chats cannot be team-shared; the pill states the
     // fact without offering a switch that cannot work.
@@ -148,7 +150,7 @@ function VisibilityPill({
         className={`${pillBase} border-[var(--color-border)] text-[var(--color-text-secondary)]`}
       >
         <Icon name="lock" className="size-2.5" />
-        Only you
+        {tr("Only you")}
       </span>
     );
   }
@@ -160,7 +162,7 @@ function VisibilityPill({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Who can see this chat: ${label}`}
+        aria-label={tr("Who can see this chat: {0}", [label])}
         className={[
           pillBase,
           "transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
@@ -186,23 +188,23 @@ function VisibilityPill({
         onClose={close}
         anchorRef={ref}
         placement="bottom-end"
-        label="Who can see this chat"
+        label={tr("Who can see this chat")}
         className="min-w-[16rem]"
       >
         <MenuItem
           icon={<Icon name="lock" className="size-4" />}
-          description="Private until you share it"
+          description={tr("Private until you share it")}
           trailing={!shared ? <Icon name="check" className="size-3.5" /> : undefined}
           onClick={() => {
             close();
             if (shared) onRequestUnshare();
           }}
         >
-          Only you
+          {tr("Only you")}
         </MenuItem>
         <MenuItem
           icon={<TeamGlyph className="size-4" />}
-          description="Teammates can read and branch it"
+          description={tr("Teammates can read and branch it")}
           trailing={shared ? <Icon name="check" className="size-3.5" /> : undefined}
           onClick={() => {
             close();
@@ -214,13 +216,13 @@ function VisibilityPill({
         <MenuSeparator />
         <MenuItem
           icon={<ShareGlyph className="size-4" />}
-          description="Multiplayer mode or public link"
+          description={tr("Multiplayer mode or public link")}
           onClick={() => {
             close();
             onMoreOptions();
           }}
         >
-          More sharing options…
+          {tr("More sharing options…")}
         </MenuItem>
       </Menu>
     </>
@@ -291,17 +293,17 @@ export function YourChatsSection({
   };
 
   return (
-    <section aria-label="Your chats" className={sectionClass}>
+    <section aria-label={tr("Your chats")} className={sectionClass}>
       <div className="flex flex-wrap items-center gap-2 px-2 pb-1.5 pt-1">
         <Icon name="message" className="size-4 shrink-0 text-[var(--color-accent)]" />
         <h2 className="m-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
-          Your chats
+          {tr("Your chats")}
         </h2>
         {chats.length > 0 ? <span className={countClass}>{chats.length}</span> : null}
         {teamName && chats.length > 0 ? (
           <span className="text-[0.74rem] text-[var(--color-text-muted)]">
-            {sharedCount} of {chats.length} shared with {teamName}
-          </span>
+        {rich("{0} of {1} shared with {2}", sharedCount, chats.length, teamName)}
+      </span>
         ) : null}
         <span className="flex-1" />
         <NewChatButton
@@ -316,14 +318,14 @@ export function YourChatsSection({
         showEmptyText ? (
           <p className="m-0 px-2 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
             {teamName
-              ? "No chats yet. Start one with New chat, or move one here from the sidebar. New chats can only be seen by you until you share them."
-              : "No chats yet. Start one with New chat, or move one here from the sidebar."}
+              ? tr("No chats yet. Start one with New chat, or move one here from the sidebar. New chats can only be seen by you until you share them.")
+              : tr("No chats yet. Start one with New chat, or move one here from the sidebar.")}
           </p>
         ) : null
       ) : visibleChats.length === 0 ? (
         <p className="m-0 px-2 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-          No chats of yours match “{query}”.
-        </p>
+        {rich("No chats of yours match “{0}”.", query)}
+      </p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {visibleChats.map((c) => (
@@ -344,21 +346,21 @@ export function YourChatsSection({
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-[0.9rem] text-[var(--color-text-primary)]">
-                      {c.title || "Untitled"}
+                      {c.title || tr("Untitled")}
                     </span>
                     {c.multiplayer ? (
                       <span
-                        title="Multiplayer mode — teammates can join and chat live"
-                        aria-label="Multiplayer mode — teammates can join and chat live"
+                        title={tr("Multiplayer mode — teammates can join and chat live")}
+                        aria-label={tr("Multiplayer mode — teammates can join and chat live")}
                         className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]"
                       >
-                        Live
+                        {tr("Live")}
                       </span>
                     ) : null}
                     {c.share_token ? (
                       <span
-                        title="Shared by link — anyone with the link"
-                        aria-label="Shared by link — anyone with the link"
+                        title={tr("Shared by link — anyone with the link")}
+                        aria-label={tr("Shared by link — anyone with the link")}
                         className="shrink-0 text-[var(--color-accent)]"
                       >
                         <ShareGlyph className="size-3" />
@@ -390,17 +392,17 @@ export function YourChatsSection({
       )}
       {unshare ? (
         <ConfirmDialog
-          title={`Stop sharing “${unshare.chat.title || "Untitled"}” with ${teamName}?`}
+          title={tr("Stop sharing “{0}” with {1}?", [unshare.chat.title || tr("Untitled"), teamName])}
           titleContent={
             <>
-              Stop sharing with{" "}
+              {tr("Stop sharing with")}{" "}
               <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix="?">
                 {teamName}
               </NameChip>
             </>
           }
-          confirmLabel="Stop sharing"
-          cancelLabel="Keep sharing"
+          confirmLabel={tr("Stop sharing")}
+          cancelLabel={tr("Keep sharing")}
           confirmTone="danger"
           busy={unshare.files === null}
           testId="row-unshare-confirm"
@@ -412,16 +414,15 @@ export function YourChatsSection({
           }}
         >
           <p className="m-0">
-            “{unshare.chat.title || "Untitled"}” goes back to Only you.{" "}
-            {unshare.files === null
-              ? "Counting its shared files…"
+        {rich("“{0}” goes back to Only you. {1}", unshare.chat.title || tr("Untitled"), unshare.files === null
+              ? tr("Counting its shared files…")
               : unshare.files === undefined
-                ? "Its shared files will stop being shared too."
+                ? tr("Its shared files will stop being shared too.")
                 : unshare.files > 0
-                  ? `${plural(unshare.files, "shared file", "shared files")} will stop being shared too.`
-                  : "It has no shared files."}
-          </p>
-          <p className="m-0">Teammates who branched it keep their copies.</p>
+                  ? tr("{0} will stop being shared too.", [plural(unshare.files, "shared file", "shared files")])
+                  : tr("It has no shared files."))}
+      </p>
+          <p className="m-0">{tr("Teammates who branched it keep their copies.")}</p>
         </ConfirmDialog>
       ) : null}
     </section>
@@ -446,11 +447,11 @@ export function TeamChatsSection({
   onOpenMultiplayerChat?: (id: string) => void;
 }) {
   return (
-    <section aria-label="Shared by your team" className={`${sectionClass} mt-4`}>
+    <section aria-label={tr("Shared by your team")} className={`${sectionClass} mt-4`}>
       <div className="flex items-center gap-2 px-2 pb-1.5 pt-1">
         <TeamGlyph className="size-4 shrink-0 text-[var(--color-accent)]" />
         <h2 className="m-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
-          Shared by your team
+          {tr("Shared by your team")}
         </h2>
         {teamChats && teamChats.length > 0 ? (
           <span className={countClass}>{teamChats.length}</span>
@@ -465,15 +466,15 @@ export function TeamChatsSection({
         </p>
       ) : null}
       {teamChats === null ? (
-        <p className="m-0 px-2 py-2 text-[0.85rem] text-[var(--color-text-muted)]">Loading…</p>
+        <p className="m-0 px-2 py-2 text-[0.85rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
       ) : error ? null : teamChats.length === 0 ? (
         <p className="m-0 px-2 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
-          Nothing from teammates yet. Chats they share show up here.
+          {tr("Nothing from teammates yet. Chats they share show up here.")}
         </p>
       ) : visibleTeamChats.length === 0 ? (
         <p className="m-0 px-2 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-          No shared chats match “{query}”.
-        </p>
+        {rich("No shared chats match “{0}”.", query)}
+      </p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {visibleTeamChats.map((c) => (
@@ -498,7 +499,7 @@ export function TeamChatsSection({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[0.9rem] text-[var(--color-text-primary)]">
-                  {c.title || "Untitled"}
+                  {c.title || tr("Untitled")}
                 </span>
                 <span className="block truncate text-[0.75rem] text-[var(--color-text-muted)]">
                   {c.user_email}
@@ -513,14 +514,14 @@ export function TeamChatsSection({
                     aria-hidden="true"
                     className="size-1.5 rounded-full bg-[var(--color-accent)]"
                   />
-                  Live · Multiplayer
+                  {tr("Live · Multiplayer")}
                 </span>
               ) : null}
               {!c.multiplayer || c.viewer_branch ? (
                 <span
                   className={`${pillBase} border-[var(--color-border)] text-[var(--color-text-secondary)]`}
                 >
-                  {c.viewer_branch ? "You branched this" : "Read, branch"}
+                  {c.viewer_branch ? tr("You branched this") : tr("Read, branch")}
                 </span>
               ) : null}
               <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">

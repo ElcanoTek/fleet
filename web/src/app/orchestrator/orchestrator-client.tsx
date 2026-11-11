@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { signOutAfter } from "@/app/shared/signOut";
 import { useEffect, useRef, useState } from "react";
 import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
@@ -46,8 +48,8 @@ function OrchestratorSlimHeader() {
             {/* Neutral, not a company name: this bar renders pre-auth on
                 white-labeled deployments (BRANDING.md — nothing here may
                 hardcode a brand). */}
-            <p className="ds-app-header__eyebrow">Internal</p>
-            <h1 className="ds-app-header__title">Background tasks</h1>
+            <p className="ds-app-header__eyebrow">{tr("Internal")}</p>
+            <h1 className="ds-app-header__title">{tr("Background tasks")}</h1>
           </div>
         </div>
         <div className="ds-app-header__actions">
@@ -224,10 +226,10 @@ function OrchestratorInner({
     let stale = false;
     const load = TASK_ID.test(linkedTaskId)
       ? orchestratorApi.task(linkedTaskId)
-      : Promise.reject(new Error("not a task id"));
+      : Promise.reject(new Error(tr("not a task id")));
     load
       .then((task) => {
-        if (task.id.toLowerCase() !== linkedTaskId) throw new Error("a different task came back");
+        if (task.id.toLowerCase() !== linkedTaskId) throw new Error(tr("a different task came back"));
         if (!stale) setLogTask((current) => current ?? task);
       })
       .then(
@@ -235,11 +237,11 @@ function OrchestratorInner({
         (err: unknown) => {
           if (stale) return true;
           if (transientLoadError(err)) {
-            showToast("That task could not be loaded just now. Reload the page to try again.", "error");
+            showToast(tr("That task could not be loaded just now. Reload the page to try again."), "error");
             return false;
           }
           showToast(
-            "That task could not be opened. It may have been deleted, or it is not visible to you.",
+            tr("That task could not be opened. It may have been deleted, or it is not visible to you."),
             "error",
           );
           return true;
@@ -265,14 +267,14 @@ function OrchestratorInner({
     try {
       const created = await orchestratorApi.rerunTask(task.id);
       showToast(
-        `Started run ${created.id.slice(0, 8)}… from this task`,
+        tr("Started run {0}… from this task", [created.id.slice(0, 8)]),
         "success",
       );
       setRunNowTask(null);
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Run now failed: ${errorMessage(err, "unknown error")}`,
+        tr("Run now failed: {0}", [errorMessage(err, tr("unknown error"))]),
         "error",
       );
     } finally {
@@ -287,12 +289,12 @@ function OrchestratorInner({
     setStopBusy(true);
     try {
       await orchestratorApi.cancelTask(task.id);
-      showToast(`Stopped ${taskRunLabel(task)}`, "success");
+      showToast(tr("Stopped {0}", [taskRunLabel(task)]), "success");
       setStopTask(null);
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Stop failed: ${errorMessage(err, "unknown error")}`,
+        tr("Stop failed: {0}", [errorMessage(err, tr("unknown error"))]),
         "error",
       );
     } finally {
@@ -304,14 +306,14 @@ function OrchestratorInner({
     setDeleteBusy(true);
     try {
       await orchestratorApi.deleteTask(task.id);
-      showToast(`Deleted ${taskRunLabel(task)}`, "success");
+      showToast(tr("Deleted {0}", [taskRunLabel(task)]), "success");
       setDeleteTask(null);
       // The modal may be showing the row that just stopped existing.
       setLogTask((current) => (current?.id === task.id ? null : current));
       void dashboard.reload();
     } catch (err) {
       showToast(
-        `Delete failed: ${errorMessage(err, "unknown error")}`,
+        tr("Delete failed: {0}", [errorMessage(err, tr("unknown error"))]),
         "error",
       );
     } finally {
@@ -396,7 +398,7 @@ function OrchestratorInner({
     return (
       <div className="container">
         <div className="loading" data-testid="orchestrator-loading">
-          <p>Loading…</p>
+          <p>{tr("Loading…")}</p>
         </div>
       </div>
     );
@@ -415,21 +417,19 @@ function OrchestratorInner({
         <div
           className="auth-section"
           role="region"
-          aria-label="Server unreachable"
+          aria-label={tr("Server unreachable")}
         >
           <div className="auth-fields stack-form">
-            <h2>Can&apos;t reach the server</h2>
+            <h2>{tr("Can't reach the server")}</h2>
             <p className="caption" data-testid="orchestrator-unreachable">
-              The background-tasks server didn&apos;t answer — it may be
-              restarting. Your sign-in state is untouched; try again in a
-              moment.
+              {tr("The background-tasks server didn't answer — it may be restarting. Your sign-in state is untouched; try again in a moment.")}
             </p>
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => window.location.reload()}
             >
-              Retry
+              {tr("Retry")}
             </button>
           </div>
         </div>
@@ -448,13 +448,11 @@ function OrchestratorInner({
       <div className="container">
         <OrchestratorSlimHeader />
         {session.noAccess ? (
-          <div className="auth-section" role="region" aria-label="No access">
+          <div className="auth-section" role="region" aria-label={tr("No access")}>
             <div className="auth-fields stack-form">
-              <h2>No access</h2>
+              <h2>{tr("No access")}</h2>
               <p className="caption" data-testid="orchestrator-no-access">
-                You&apos;re signed in, but that identity isn&apos;t provisioned
-                for background tasks. Ask an administrator to provision
-                your account.
+                {tr("You're signed in, but that identity isn't provisioned for background tasks. Ask an administrator to provision your account.")}
               </p>
               <button
                 type="button"
@@ -462,7 +460,7 @@ function OrchestratorInner({
                 data-testid="orchestrator-no-access-signout"
                 onClick={() => void signOutAfter(session.logout())}
               >
-                Sign out
+                {tr("Sign out")}
               </button>
             </div>
           </div>
@@ -514,7 +512,7 @@ function OrchestratorInner({
             >
               <Icon name="plus" className="size-4" />
               <span className={railCollapse.collapsed ? "sm:hidden" : ""}>
-                New task
+                {tr("New task")}
               </span>
             </button>
           </div>
@@ -523,7 +521,7 @@ function OrchestratorInner({
 
       <main className="flex min-h-0 flex-col overflow-hidden">
         <PageTopBar
-          title="Background tasks"
+          title={tr("Background tasks")}
           onMenu={() => setSidebarOpen(true)}
           actions={
             /* Mobile-only New task: on phones the rail's button is inside the
@@ -536,7 +534,7 @@ function OrchestratorInner({
                 onClick={() => setTaskModalOpen(true)}
               >
                 <Icon name="plus" className="size-4" />
-                New task
+                {tr("New task")}
               </button>
             )
           }
@@ -560,7 +558,7 @@ function OrchestratorInner({
               <div
                 className="dashboard-tabs"
                 role="tablist"
-                aria-label="Background tasks view"
+                aria-label={tr("Background tasks view")}
                 ref={tabsRef}
               >
                 <button
@@ -570,7 +568,7 @@ function OrchestratorInner({
                   className={`tab-btn${effectiveTab === "tasks" ? " tab-btn-active" : ""}`}
                   onClick={() => switchTab("tasks")}
                 >
-                  Recent Tasks
+                  {tr("Recent Tasks")}
                 </button>
                 <button
                   type="button"
@@ -579,7 +577,7 @@ function OrchestratorInner({
                   className={`tab-btn${effectiveTab === "upcoming" ? " tab-btn-active" : ""}`}
                   onClick={() => switchTab("upcoming")}
                 >
-                  Upcoming
+                  {tr("Upcoming")}
                 </button>
                 {/* #458 symptom 2: only admins see the SLA tab. The render guard
                     below mirrors this — a non-admin holding a stale tab === "sla"
@@ -592,7 +590,7 @@ function OrchestratorInner({
                     className={`tab-btn${effectiveTab === "sla" ? " tab-btn-active" : ""}`}
                     onClick={() => switchTab("sla")}
                   >
-                    SLA
+                    {tr("SLA")}
                   </button>
                 ) : null}
                 {/* Usage/spend analytics (#601) is admin-only like SLA: the
@@ -639,8 +637,8 @@ function OrchestratorInner({
                     other tabs fetch once and carry their own Refresh button,
                     so the note is true only here. */}
                     <p className="refresh-note">
-                      Auto-refresh every {dashboard.refreshSeconds} seconds
-                    </p>
+        {rich("Auto-refresh every {0} seconds", dashboard.refreshSeconds)}
+      </p>
                   </>
                 )}
               </div>
@@ -668,19 +666,17 @@ function OrchestratorInner({
           own schedule is left alone. */}
       <ConfirmDialog
         open={!!runNowTask}
-        title="Run now"
+        title={tr("Run now")}
         message={
           runNowTask
-            ? `Start a run of "${taskRunLabel(runNowTask)}" right now?${
-                runNowTask.recurrence
-                  ? " This is a one-off copy — the task keeps its schedule and still runs at its next scheduled time."
+            ? tr("Start a run of \"{0}\" right now?{1}", [taskRunLabel(runNowTask), runNowTask.recurrence
+                  ? tr(" This is a one-off copy — the task keeps its schedule and still runs at its next scheduled time.")
                   : runNowTask.scheduled_for
-                    ? " This is a one-off copy — the task stays scheduled and will still run at its scheduled time."
-                    : ""
-              }`
+                    ? tr(" This is a one-off copy — the task stays scheduled and will still run at its scheduled time.")
+                    : ""])
             : ""
         }
-        confirmLabel={runNowBusy ? "Starting…" : "Run now"}
+        confirmLabel={runNowBusy ? tr("Starting…") : tr("Run now")}
         busy={runNowBusy}
         onConfirm={() => {
           if (runNowTask) void runNow(runNowTask);
@@ -694,18 +690,18 @@ function OrchestratorInner({
           than asking "are you sure". */}
       <ConfirmDialog
         open={!!stopTask}
-        title={stopTask?.recurrence ? "Stop this schedule for good?" : "Stop this task?"}
+        title={stopTask?.recurrence ? tr("Stop this schedule for good?") : tr("Stop this task?")}
         message={
           stopTask
             ? stopTask.recurrence
-              ? `"${taskRunLabel(stopTask)}" won't run again. If it is running now, that run stops at its next checkpoint too. To bring it back later, create a new task.`
+              ? tr("\"{0}\" won't run again. If it is running now, that run stops at its next checkpoint too. To bring it back later, create a new task.", [taskRunLabel(stopTask)])
               : stopTask.status === "pending" || stopTask.status === "scheduled"
-                ? `"${taskRunLabel(stopTask)}" hasn't started yet, so it is cancelled and won't run.`
-                : `"${taskRunLabel(stopTask)}" stops at its next checkpoint. Anything it has done so far is kept.`
+                ? tr("\"{0}\" hasn't started yet, so it is cancelled and won't run.", [taskRunLabel(stopTask)])
+                : tr("\"{0}\" stops at its next checkpoint. Anything it has done so far is kept.", [taskRunLabel(stopTask)])
             : ""
         }
         confirmLabel={
-          stopBusy ? "Stopping…" : stopTask?.recurrence ? "Stop schedule" : "Stop task"
+          stopBusy ? tr("Stopping…") : stopTask?.recurrence ? tr("Stop schedule") : tr("Stop task")
         }
         busy={stopBusy}
         onConfirm={() => {
@@ -719,17 +715,15 @@ function OrchestratorInner({
           what it buys — freeing the name is the whole reason someone is here. */}
       <ConfirmDialog
         open={!!deleteTask}
-        title="Delete task"
+        title={tr("Delete task")}
         message={
           deleteTask
-            ? `Permanently delete "${taskRunLabel(deleteTask)}" and its run history? This cannot be undone.${
-                deleteTask.name
-                  ? ` The name "${deleteTask.name}" becomes available again.`
-                  : ""
-              }`
+            ? tr("Permanently delete \"{0}\" and its run history? This cannot be undone.{1}", [taskRunLabel(deleteTask), deleteTask.name
+                  ? tr(" The name \"{0}\" becomes available again.", [deleteTask.name])
+                  : ""])
             : ""
         }
-        confirmLabel={deleteBusy ? "Deleting…" : "Delete"}
+        confirmLabel={deleteBusy ? tr("Deleting…") : tr("Delete")}
         busy={deleteBusy}
         onConfirm={() => {
           if (deleteTask) void remove(deleteTask);

@@ -211,7 +211,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				g.redirectToParkedTeamLink(w, r, parked)
 				return
 			}
-			temporaryRedirect(w, g.redirectURL(r, "/chat"))
+			temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat")))
 			return
 		}
 		g.servePage(w, r, nil)
@@ -233,11 +233,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/chat" {
 			if id := r.URL.Query().Get("team"); teamLinkID.MatchString(id) {
 				setCookie(w, teamLinkCookie, id, teamLinkMaxAgeSeconds, g.secureRequest(r), "")
-				temporaryRedirect(w, g.redirectURL(r, "/login?team_link=1"))
+				temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login?team_link=1")))
 				return
 			}
 		}
-		temporaryRedirect(w, g.redirectURL(r, "/login"))
+		temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/login")))
 		return
 	}
 
@@ -286,7 +286,7 @@ func clearTeamLink(w http.ResponseWriter, _ bool) {
 
 func (g *Gateway) redirectToParkedTeamLink(w http.ResponseWriter, r *http.Request, id string) {
 	clearTeamLink(w, false)
-	temporaryRedirect(w, g.redirectURL(r, "/chat?team="+url.QueryEscape(id)))
+	temporaryRedirect(w, g.redirectURL(r, requestLanguagePath(r, "/chat?team="+url.QueryEscape(id))))
 }
 
 // decorate stamps the headers every gated response carries. A route handler

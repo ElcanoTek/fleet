@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // #785: the pending-input chip strip under the composer. Renders the
 // conversation's queued follow-ups / steer requests with remove and
 // send-now affordances; state arrives via queue.updated on the live stream
@@ -42,14 +43,14 @@ export function QueuedInputs({
             {it.mode === "resume"
               ? // fleet's own input (docs/RESUME-AFTER-APPROVAL.md): say what
                 // it is rather than show its machine-oriented text.
-                "Continue after the approval, once the current turn ends"
+                tr("Continue after the approval, once the current turn ends")
               : it.message_preview}
           </span>
           {it.state === "queued" ? (
             <>
               <button
                 type="button"
-                aria-label="Send now"
+                aria-label={tr("Send now")}
                 data-tip-top="Send now"
                 className="shrink-0 rounded p-1 transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)]"
                 onClick={() => onSendNow(it.id)}
@@ -58,7 +59,7 @@ export function QueuedInputs({
               </button>
               <button
                 type="button"
-                aria-label="Remove from queue"
+                aria-label={tr("Remove from queue")}
                 data-tip-top="Remove"
                 className="shrink-0 rounded p-1 transition hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)]"
                 onClick={() => onRemove(it.id)}

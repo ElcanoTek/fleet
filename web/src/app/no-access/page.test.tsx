@@ -24,13 +24,13 @@ describe("/no-access", () => {
     expect(screen.queryByText(/Elcano/)).toBeNull();
     expect(screen.getByRole("link", { name: /try again/i })).toHaveAttribute(
       "href",
-      "/chat",
+      "/chat?lang=en",
     );
     // Still a real form, so signing out works before the page has hydrated.
     const button = screen.getByRole("button", { name: /sign out/i });
     const form = button.closest("form")!;
     expect(form.getAttribute("method")).toBe("post");
-    expect(form.getAttribute("action")).toBe("/api/auth/logout");
+    expect(form.getAttribute("action")).toBe("/api/auth/logout?lang=en");
   });
 
   it("lets go of this browser's push subscription before the logout form posts", async () => {

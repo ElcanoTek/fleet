@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 import { Icon } from "./Icon";
 import {
@@ -30,7 +31,7 @@ export function FormFields({
   fields,
   values,
   onChange,
-  advancedLabel = "Advanced",
+  advancedLabel = tr("Advanced"),
 }: {
   fields: PillField[];
   values: PillValues;
@@ -164,7 +165,7 @@ function Field({
           >
             {(field.options ?? []).map((opt) => (
               <option key={opt} value={opt}>
-                {opt}
+                {field.optionLabels?.[opt] ?? opt}
               </option>
             ))}
           </select>
@@ -216,7 +217,7 @@ function Field({
         <span className="flex items-center gap-2">
           <input
             type="date"
-            aria-label={`${field.label} from`}
+            aria-label={tr("{0} from", [field.label])}
             className={INPUT_CLASS}
             value={range.from}
             onChange={(e) => onChange({ ...range, from: e.target.value })}
@@ -224,7 +225,7 @@ function Field({
           <span className="text-[var(--color-text-muted)]">→</span>
           <input
             type="date"
-            aria-label={`${field.label} to`}
+            aria-label={tr("{0} to", [field.label])}
             className={INPUT_CLASS}
             value={range.to}
             onChange={(e) => onChange({ ...range, to: e.target.value })}
@@ -240,7 +241,7 @@ function Field({
 }
 
 function describeValue(field: PillField, value: PillFieldValue | undefined): string {
-  if (field.type === "toggle") return value ? "on" : "off";
+  if (field.type === "toggle") return value ? tr("on") : tr("off");
   if (field.type === "daterange") {
     const r = (value as DateRangeValue) ?? { from: "", to: "" };
     return r.from || r.to ? `${r.from || "?"} → ${r.to || "?"}` : "—";

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+import { deleteChatsText, ProjectSettingsDialog, type ProjectImpact } from "./ProjectSettingsDialog";
 import type { Project } from "./ProjectsModal";
+
+it("keeps incomplete impact responses readable without inventing deletion counts", () => {
+  expect(deleteChatsText({ chats_from_teammates: 2 } as ProjectImpact))
+    .toBe("Every chat in it leaves the project and becomes temporary. They expire unless someone pins them.");
+});
 
 // Project settings (B26–B31): Name, "Who can see it", the owner line with
 // Transfer…, Delete project, Cancel / Save. Counts are real, from

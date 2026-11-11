@@ -1,3 +1,5 @@
+import { bundleText } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // The Tools picker's rules, shared by the composer popover (ToolsPopover) and
 // the library modal (ToolsLibrary): what status a connection is in, what
 // counts as on, how search matches and ranks, and how rows group under the
@@ -40,9 +42,9 @@ export const MISC_CATEGORY = "misc";
 // from the design, Misc Tools last.
 export const FALLBACK_CATEGORIES: PickerCategory[] = [
   { id: "ssps", name: "SSPs" },
-  { id: "deal-management", name: "Deal Management" },
-  { id: "data-storage", name: "Data & Storage" },
-  { id: MISC_CATEGORY, name: "Misc Tools" },
+  { id: "deal-management", name: tr("Deal Management") },
+  { id: "data-storage", name: tr("Data & Storage") },
+  { id: MISC_CATEGORY, name: tr("Misc Tools") },
 ];
 
 export function connectorStatus(c: PickerConnector): ConnectorStatus {
@@ -79,7 +81,7 @@ export function countOn(rows: readonly PickerConnector[]): number {
 }
 
 export function toolCountLabel(n: number): string {
-  return `${n} ${n === 1 ? "tool" : "tools"}`;
+  return tr(n === 1 ? "{0} tool" : "{0} tools", [n]);
 }
 
 /** Resolve a row's category against the known list; unknown → Misc Tools. */
@@ -88,14 +90,18 @@ export function categoryOf(c: PickerConnector, cats: readonly PickerCategory[]):
   return cats.some((cat) => cat.id === id) ? id : MISC_CATEGORY;
 }
 
+/** Categories reach the picker through orderedCategories; their labels are
+ * already translated. A translated value may itself match another source key. */
 export function categoryName(id: string, cats: readonly PickerCategory[]): string {
-  return cats.find((c) => c.id === id)?.name ?? "Misc Tools";
+  return cats.find((category) => category.id === id)?.name ?? tr("Misc Tools");
 }
 
 /** The category list with Misc Tools forced last, whatever order it came in. */
 export function orderedCategories(cats: readonly PickerCategory[] | undefined): PickerCategory[] {
-  const list = cats && cats.length > 0 ? [...cats] : [...FALLBACK_CATEGORIES];
-  const misc = list.find((c) => c.id === MISC_CATEGORY) ?? { id: MISC_CATEGORY, name: "Misc Tools" };
+  const list = cats && cats.length > 0
+    ? cats.map((category) => ({ ...category, name: bundleText(category.name) }))
+    : FALLBACK_CATEGORIES;
+  const misc = list.find((c) => c.id === MISC_CATEGORY) ?? { id: MISC_CATEGORY, name: tr("Misc Tools") };
   return [...list.filter((c) => c.id !== MISC_CATEGORY), misc];
 }
 
@@ -233,7 +239,7 @@ export function popoverSections<T extends PickerConnector>(
     return groupConnectors(matchAll(rows, query, cats), cats, true).map((g) => ({
       key: g.category.id,
       label: g.category.name,
-      count: `${g.rows.length} ${g.rows.length === 1 ? "match" : "matches"}`,
+      count: tr(g.rows.length === 1 ? "{0} match" : "{0} matches", [g.rows.length]),
       rows: g.rows,
     }));
   }
@@ -243,7 +249,7 @@ export function popoverSections<T extends PickerConnector>(
   if (onRows.length > 0) {
     sections.push({
       key: "on",
-      label: "On",
+      label: tr("On"),
       count: String(countOn(rows)),
       // Category order, then name — the same order they would have below.
       rows: groupConnectors(onRows, cats, false).flatMap((g) => g.rows),
@@ -281,11 +287,11 @@ export function bulkScope(sections: readonly PopoverSection[]): string[] {
 export type LibraryStatusFilter = "on" | "off" | "always" | "setup" | "unavailable";
 
 export const LIBRARY_STATUSES: { id: LibraryStatusFilter; label: string }[] = [
-  { id: "on", label: "On" },
-  { id: "off", label: "Off" },
-  { id: "always", label: "Always on" },
-  { id: "setup", label: "Needs setup" },
-  { id: "unavailable", label: "Unavailable" },
+  { id: "on", label: tr("On") },
+  { id: "off", label: tr("Off") },
+  { id: "always", label: tr("Always on") },
+  { id: "setup", label: tr("Needs setup") },
+  { id: "unavailable", label: tr("Unavailable") },
 ];
 
 /** "On" includes always-on (it counts as on everywhere); the rest are exact. */
@@ -302,15 +308,15 @@ export function inCategory(c: PickerConnector, cat: string, cats: readonly Picke
 export function statusText(s: ConnectorStatus): string {
   switch (s) {
     case "on":
-      return "On for this chat";
+      return tr("On for this chat");
     case "off":
-      return "Off for this chat";
+      return tr("Off for this chat");
     case "always":
-      return "Always on";
+      return tr("Always on");
     case "setup":
-      return "Needs setup";
+      return tr("Needs setup");
     case "unavailable":
-      return "Unavailable";
+      return tr("Unavailable");
   }
 }
 
@@ -318,11 +324,11 @@ export function statusText(s: ConnectorStatus): string {
 export function statusKicker(s: ConnectorStatus): string {
   switch (s) {
     case "always":
-      return "Always on";
+      return tr("Always on");
     case "setup":
-      return "Needs setup";
+      return tr("Needs setup");
     case "unavailable":
-      return "Unavailable";
+      return tr("Unavailable");
     default:
       return "";
   }
@@ -334,10 +340,10 @@ export function statusKicker(s: ConnectorStatus): string {
  * when only a category does.
  */
 export function libraryBulkScope(n: number, opts: { filtered: boolean; categoryName?: string }): string {
-  const noun = `${n} ${n === 1 ? "connection" : "connections"}`;
-  if (opts.filtered) return `Applies to ${noun} shown`;
-  if (opts.categoryName) return `Applies to ${noun} in ${opts.categoryName}`;
-  return `Applies to ${noun}`;
+  const noun = tr(n === 1 ? "{0} connection" : "{0} connections", [n]);
+  if (opts.filtered) return tr("Applies to {0} shown", [noun]);
+  if (opts.categoryName) return tr("Applies to {0} in {1}", [noun, opts.categoryName]);
+  return tr("Applies to {0}", [noun]);
 }
 
 // ── Accounts ────────────────────────────────────────────────────────────
@@ -352,7 +358,7 @@ export type SeatOption = { value: string; label: string; isDefault: boolean };
  */
 export function seatOptions(c: PickerConnector, appName: string): SeatOption[] {
   const def = c.default_account ?? "";
-  const defaultLabel = def || (c.remote ? "Primary login" : appName);
+  const defaultLabel = def || (c.remote ? tr("Primary login") : appName);
   return [
     { value: "", label: defaultLabel, isDefault: true },
     ...(c.accounts ?? []).filter((s) => s !== def).map((s) => ({ value: s, label: s, isDefault: false })),
