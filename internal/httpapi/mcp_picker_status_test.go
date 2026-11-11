@@ -235,13 +235,31 @@ func TestCatalogCopyForUsesEffectiveMS365Endpoint(t *testing.T) {
 	bundle := []clientconfig.RemoteMCPCatalogEntry{{Name: "microsoft-365", DisplayName: "Microsoft 365",
 		Description: "Mail, calendar and files.", URL: "https://placeholder.invalid/mcp"}}
 	boxURL := "https://fleet.example.com/api/ms365/mcp"
-	if dn, _ := catalogCopyFor(bundle, "microsoft-365", boxURL); dn != "" {
+	if dn, _ := catalogCopyFor(bundle, "streamable_http", "microsoft-365", boxURL); dn != "" {
 		t.Fatalf("bundle catalog matched the box endpoint: %q", dn)
 	}
 	effective := applyMS365CatalogOverride(bundle, ms365ConfigResponse{Configured: true, MCPURL: boxURL})
-	dn, d := catalogCopyFor(effective, "microsoft-365", boxURL)
+	dn, d := catalogCopyFor(effective, "streamable_http", "microsoft-365", boxURL)
 	if dn != "Microsoft 365" || d != "Mail, calendar and files." {
 		t.Fatalf("effective catalog copy = %q, %q", dn, d)
+	}
+}
+
+// Settings rows go through catalogCopyFor directly: a Connector Studio
+// connector at a directory endpoint under a directory name keeps its own
+// identity there too, not just in the Tools picker.
+func TestCatalogCopyForSkipsCustomTransports(t *testing.T) {
+	t.Parallel()
+
+	catalog := []clientconfig.RemoteMCPCatalogEntry{{Name: "gamma", DisplayName: "Gamma", Description: "Decks.",
+		URL: "https://mcp.gamma.app/mcp"}}
+	for _, transport := range []string{store.RemoteMCPTransportHTTPTools, store.RemoteMCPTransportPlaywright} {
+		if dn, d := catalogCopyFor(catalog, transport, "gamma", "https://mcp.gamma.app/mcp"); dn != "" || d != "" {
+			t.Errorf("%s: got card copy %q, %q", transport, dn, d)
+		}
+	}
+	if dn, _ := catalogCopyFor(catalog, "streamable_http", "gamma", "https://mcp.gamma.app/mcp"); dn != "Gamma" {
+		t.Errorf("standard transport: display_name = %q, want Gamma", dn)
 	}
 }
 

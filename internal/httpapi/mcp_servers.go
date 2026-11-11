@@ -305,8 +305,14 @@ func (s *Server) effectiveRemoteCatalog(ctx context.Context) []clientconfig.Remo
 // concrete instantiation of its {placeholder} template, or a listed regional
 // variant (catalogEntryMatchesURL). A server the user added by hand under a
 // name of their own keeps that name. Empty strings when nothing matches or
-// the entry leaves a field blank: the caller keeps its own fallback.
-func catalogCopyFor(catalog []clientconfig.RemoteMCPCatalogEntry, name, rawURL string) (displayName, description string) {
+// the entry leaves a field blank: the caller keeps its own fallback. A custom
+// connector (Connector Studio's http_tools or playwright transport) is the
+// user's own work even at a directory endpoint under a directory name, so it
+// never takes card copy.
+func catalogCopyFor(catalog []clientconfig.RemoteMCPCatalogEntry, transport, name, rawURL string) (displayName, description string) {
+	if transport == store.RemoteMCPTransportHTTPTools || transport == store.RemoteMCPTransportPlaywright {
+		return "", ""
+	}
 	canonURL, err := mcpoauth.CanonicalResourceURI(strings.TrimSpace(rawURL))
 	if err != nil {
 		return "", ""
@@ -399,7 +405,7 @@ func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, ac
 		// A connection added from the directory reads the way its card does.
 		// Custom connectors (above) are synthesized by the user, so they keep
 		// their own name and the connector-kind sentence.
-		if dn, d := catalogCopyFor(catalog, g.Name, g.URL); dn != "" || d != "" {
+		if dn, d := catalogCopyFor(catalog, g.Transport, g.Name, g.URL); dn != "" || d != "" {
 			if dn != "" {
 				display = dn
 			}

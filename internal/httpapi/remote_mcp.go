@@ -103,12 +103,12 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		catalog := s.effectiveRemoteCatalog(r.Context())
 		sharedWithMe := make([]sharedServerView, 0, len(sharedRows))
 		for _, m := range sharedRows {
-			dn, d := catalogCopyFor(catalog, m.Name, m.URL)
+			dn, d := catalogCopyFor(catalog, m.Transport, m.Name, m.URL)
 			sharedWithMe = append(sharedWithMe, sharedServerView{RemoteMCPServer: m, Owner: m.UserEmail, DisplayName: dn, Description: d})
 		}
 		views := make([]remoteServerView, 0, len(servers))
 		for _, row := range servers {
-			dn, d := catalogCopyFor(catalog, row.Name, row.URL)
+			dn, d := catalogCopyFor(catalog, row.Transport, row.Name, row.URL)
 			views = append(views, remoteServerView{RemoteMCPServer: row, CatalogDrift: driftFromCatalog(row, catalog), DisplayName: dn, Description: d})
 		}
 		writeJSON(w, r, map[string]any{
