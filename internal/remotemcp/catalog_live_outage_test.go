@@ -4,10 +4,13 @@
 package remotemcp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"syscall"
@@ -114,8 +117,81 @@ func TestProbeTimeoutBudgetCoversMultiStepHandshake(t *testing.T) {
 		t.Errorf("unauthenticated probeTimeoutBudget = %s, want %s", openBudget, want)
 	}
 	keyBudget := probeTimeoutBudget(perReq, "secret-key")
-	if want := 3*perReq + mcp.MaxConnectRetryBudget; keyBudget != want {
+	if want := 6*perReq + mcp.MaxConnectRetryBudget; keyBudget != want {
 		t.Errorf("credentialed probeTimeoutBudget = %s, want %s", keyBudget, want)
+	}
+
+	// Regression test: when initialize and tools/list each finish within
+	// HTTPTimeout (80ms < 120ms) while their sum exceeds one HTTPTimeout
+	// (160ms > 120ms), both probeServer's inner handshake budget and
+	// probeForTest's outer budget must let the multi-step handshake finish.
+	const reqTimeout = 120 * time.Millisecond
+	const stepDelay = 80 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			time.Sleep(stepDelay)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "slow-open", "version": "1.0"},
+				},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			time.Sleep(stepDelay)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"tools": []map[string]any{{
+						"name":        "get_status",
+						"description": "status",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				},
+			})
+		default:
+			time.Sleep(stepDelay)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "ok"}},
+				},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	hc := srv.Client()
+	hc.Timeout = reqTimeout
+	svc := &Service{cfg: Config{HTTPTimeout: reqTimeout}, httpClient: hc}
+
+	report, err := svc.probeForTest(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatalf("open probeForTest failed when each request stayed within HTTPTimeout: %v", err)
+	}
+	if report.ToolCount != 1 {
+		t.Fatalf("open probeForTest ToolCount = %d, want 1", report.ToolCount)
+	}
+
+	keyReport, err := svc.probeForTest(srv.URL, "", "", "", "real-key")
+	if err != nil {
+		t.Fatalf("credentialed probeForTest failed when each request stayed within HTTPTimeout: %v", err)
+	}
+	if keyReport.ToolCount != 1 {
+		t.Fatalf("credentialed probeForTest ToolCount = %d, want 1", keyReport.ToolCount)
 	}
 }
 

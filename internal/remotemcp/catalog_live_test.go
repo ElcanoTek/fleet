@@ -297,16 +297,14 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // run would also fail on — an outage outlasting the retries, a refusal, a
 // dead host — and the last attempt's error is the one reported.
 // probeTimeoutBudget is the outer context deadline for one probeForTest call:
-// an unauthenticated probe runs initialize + notifications/initialized +
-// tools/list (up to two request round-trips with response bodies), and a
-// credentialed probe adds verifyAPIKeyAtProbe on top, plus the shared
-// MaxConnectRetryBudget for transient connect retries. A single HTTPTimeout
-// outer cap starved slow multi-step handshakes before individual requests hit
-// the HTTP client's own per-request timeout.
+// an unauthenticated probe runs one handshake (handshakeSteps * HTTPTimeout),
+// and a credentialed probe runs the real handshake + blindCall + the control
+// handshake + control blindCall, plus the shared MaxConnectRetryBudget for
+// transient connect retries.
 func probeTimeoutBudget(httpTimeout time.Duration, credential string) time.Duration {
-	steps := 2
+	steps := handshakeSteps
 	if credential != "" {
-		steps = 3
+		steps = 2*handshakeSteps + 2
 	}
 	return time.Duration(steps)*httpTimeout + mcp.MaxConnectRetryBudget
 }
