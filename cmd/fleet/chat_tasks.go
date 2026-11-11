@@ -117,27 +117,48 @@ func resolveManagedTasks(schedStorage *storage.Storage, req httpapi.TaskMutation
 	if tag := strings.TrimSpace(req.Match.Tag); tag != "" {
 		filter.Tags = []string{tag}
 	}
-	// One over the cap, so "you matched too many" is honest about there being
-	// more rather than reporting exactly the ceiling.
-	tasks, total, err := schedStorage.GetTasksFiltered(filter, tools.MaxManagedTasks+1, 0)
-	if err != nil {
-		return nil, err
+	model := strings.TrimSpace(req.Match.Model)
+	if model == "" {
+		// One over the cap, so "you matched too many" is honest about there
+		// being more rather than reporting exactly the ceiling.
+		tasks, total, err := schedStorage.GetTasksFiltered(filter, tools.MaxManagedTasks+1, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(tasks) > tools.MaxManagedTasks {
+			return nil, fmt.Errorf("that selector matches %d tasks, above the %d-task limit for one approved change; narrow it (add a tag, or name the tasks explicitly)", total, tools.MaxManagedTasks)
+		}
+		return tasks, nil
 	}
-	if model := strings.TrimSpace(req.Match.Model); model != "" {
-		filtered := tasks[:0]
-		for _, t := range tasks {
+	// The model predicate is applied here, not in SQL, so it must see every
+	// row the storage filter matches: filtering only the first page would
+	// silently drop later matches (and report the short list as complete).
+	// Page through the requester's own tasks until the matches pass the cap.
+	var tasks []*schedmodels.Task
+	for offset := 0; ; {
+		page, total, err := schedStorage.GetTasksFiltered(filter, managedTasksScanPage, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range page {
 			if t.Model != nil && strings.EqualFold(strings.TrimSpace(*t.Model), model) {
-				filtered = append(filtered, t)
+				tasks = append(tasks, t)
 			}
 		}
-		tasks = filtered
-		total = len(tasks)
+		offset += len(page)
+		if len(page) == 0 || offset >= total || len(tasks) > tools.MaxManagedTasks {
+			break
+		}
 	}
 	if len(tasks) > tools.MaxManagedTasks {
-		return nil, fmt.Errorf("that selector matches %d tasks, above the %d-task limit for one approved change; narrow it (add a tag, or name the tasks explicitly)", total, tools.MaxManagedTasks)
+		return nil, fmt.Errorf("that selector matches more than %d tasks, the limit for one approved change; narrow it (add a tag, or name the tasks explicitly)", tools.MaxManagedTasks)
 	}
 	return tasks, nil
 }
+
+// managedTasksScanPage is the page size resolveManagedTasks reads with while
+// applying the in-memory model predicate.
+const managedTasksScanPage = 200
 
 // applyTaskMutation writes one task's field changes and returns a short
 // description of what actually changed, for the chat-visible report.
@@ -198,6 +219,15 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 		n := req.MaxIterations
 		edit.MaxIterations = &n
 		changed = append(changed, fmt.Sprintf("max_iterations %d", n))
+	}
+	// The API create/edit handlers bound a prompt's length; this path reaches
+	// UpdateEditableTask without them, so an edit that empties a prompt (old =
+	// the whole prompt, new = "") or an append that overflows it is refused
+	// here, by the same rule, before anything is written.
+	if edit.Prompt != t.Prompt {
+		if err := schedmodels.ValidateTaskPromptLength(edit.Prompt); err != nil {
+			return "", err
+		}
 	}
 	if len(changed) > 0 {
 		if _, err := schedStorage.UpdateEditableTask(ctx, t.ID, edit); err != nil {

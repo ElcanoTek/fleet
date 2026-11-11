@@ -57,9 +57,17 @@ func TestApplyPromptEdits(t *testing.T) {
 	})
 
 	t.Run("old text that is ambiguous refuses rather than guessing", func(t *testing.T) {
-		_, err := ApplyPromptEdits("spend. spend.", []PromptEdit{{Old: "spend.", New: "cost."}}, "")
-		if err == nil || !strings.Contains(err.Error(), "appears 2 times") {
-			t.Fatalf("err = %v, want the occurrence count", err)
+		for _, tc := range []struct{ current, old string }{
+			{"spend. spend.", "spend."},
+			// Overlapping starts are ambiguous too; a non-overlapping count
+			// sees one "ana" in "banana" and would edit the first.
+			{"banana", "ana"},
+			{"ééé", "éé"},
+		} {
+			_, err := ApplyPromptEdits(tc.current, []PromptEdit{{Old: tc.old, New: "x"}}, "")
+			if err == nil || !strings.Contains(err.Error(), "more than once") {
+				t.Errorf("%q in %q: err = %v, want it refused as ambiguous", tc.old, tc.current, err)
+			}
 		}
 	})
 

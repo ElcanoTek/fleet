@@ -87,10 +87,19 @@ func TestApplyTaskMutation_LockedEditPath(t *testing.T) {
 			t.Fatalf("next fire not refreshed from the new cron: status=%s scheduled_for=%v", got.Status, got.ScheduledFor)
 		}
 	})
+}
 
-	// A user asked for a small change to a scheduled email; the model, unable to
-	// read the stored prompt, retyped it and dropped its rules. Edits apply to
-	// the stored text, and an edit that does not match leaves the task alone.
+// A user asked for a small change to a scheduled email; the model, unable to
+// read the stored prompt, retyped it and dropped its rules. Edits apply to the
+// stored text, and an edit that does not match leaves the task alone.
+func TestApplyTaskMutation_PromptEdits(t *testing.T) {
+	t.Parallel()
+
+	store := storage.New()
+	store.SetDatabase(fleetdb.SchedDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
 	t.Run("prompt edits apply to the stored prompt and keep the rest", func(t *testing.T) {
 		future := now.Add(time.Hour)
 		stored := "Pull the last 7 days.\nNever pass a country filter.\nColumns: date, spend."
@@ -131,7 +140,59 @@ func TestApplyTaskMutation_LockedEditPath(t *testing.T) {
 		if got.Recurrence != "0 6 * * *" || got.Status != schedmodels.TaskStatusScheduled {
 			t.Fatalf("an edit touched more than the prompt: recurrence=%q status=%s", got.Recurrence, got.Status)
 		}
+
+		// An edit that empties the prompt is refused by the API's own bound.
+		if _, err := applyTaskMutation(ctx, store, got, httpapi.TaskMutationRequest{
+			PromptEdits: []tools.PromptEdit{{Old: got.Prompt, New: ""}},
+		}); err == nil || !strings.Contains(err.Error(), "at least") {
+			t.Fatalf("emptying the prompt: err = %v, want the length bound", err)
+		}
+		if again, _ := store.GetTask(task.ID); again == nil || again.Prompt != want {
+			t.Fatalf("a refused edit reached the row: %+v", again)
+		}
 	})
+}
+
+// match.model is applied in memory, so it must see every page the storage
+// filter returns: matches past the first page were silently dropped.
+func TestResolveManagedTasksModelPagesThroughAllRows(t *testing.T) {
+	t.Parallel()
+
+	store := storage.New()
+	store.SetDatabase(fleetdb.SchedDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	owner, err := store.Identity().CreateAccount(ctx, identity.NewAccount{Email: "pager@example.com", Role: identity.RoleMember})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	add := func(model string, n int) {
+		for i := 0; i < n; i++ {
+			m := model
+			task := &schedmodels.Task{ID: uuid.New(), Prompt: "a job", Status: schedmodels.TaskStatusPending,
+				Priority: schedmodels.PriorityNormal, CreatedAt: now, CreatedBy: &owner.ID, Model: &m}
+			if _, err := store.AddTask(task); err != nil {
+				t.Fatalf("AddTask: %v", err)
+			}
+		}
+	}
+	add("old/model", 2)
+	add("other/model", managedTasksScanPage+5)
+	add("old/model", 1)
+
+	got, err := resolveManagedTasks(store, httpapi.TaskMutationRequest{Match: &httpapi.TaskMutationMatch{Model: "old/model"}}, &owner.ID)
+	if err != nil {
+		t.Fatalf("resolveManagedTasks: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("matched %d tasks on old/model, want all 3 across pages", len(got))
+	}
+
+	add("old/model", tools.MaxManagedTasks)
+	if _, err := resolveManagedTasks(store, httpapi.TaskMutationRequest{Match: &httpapi.TaskMutationMatch{Model: "old/model"}}, &owner.ID); err == nil ||
+		!strings.Contains(err.Error(), "more than") {
+		t.Fatalf("err = %v, want the cap refusal", err)
+	}
 }
 
 func TestTaskSnapshot(t *testing.T) {

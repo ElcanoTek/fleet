@@ -17,7 +17,10 @@ the user could not see what would be lost before clicking Approve.
   (`task_ids` or `match`, same rules as `update`). It runs through the same
   seam an approved update runs through (`httpapi.TaskMutationRequest` →
   `taskManagerProvider`), so the selector resolution, the 25-task cap and the
-  ownership rule are the update's own. The model sees the prompts of exactly
+  ownership rule are the update's own. A `match.model` selector, applied in
+  memory, now pages through every task the storage filter returns instead of
+  only the first page, so a match past the first page is not silently dropped
+  (this fixes `update` too). The model sees the prompts of exactly
   the tasks the same selector could change. A task the person did not create
   is listed under `not_shown` with the reason and without its prompt. Each
   prompt is bounded at 20,000 characters (runes); a longer one is cut and
@@ -30,9 +33,11 @@ the user could not see what would be lost before clicking Approve.
   retyped (`tools.ApplyPromptEdits`). Edits run in order. Each `old` must occur
   exactly once in the text the earlier edits left. If it does not, the whole
   task is skipped and left unchanged, and the report gives the reason ("prompt
-  edit 2: the text to replace (…) is not in this task's prompt", or "appears 3
-  times"). It never replaces the first match, and it never leaves a task half
-  edited. `prompt_append` adds a paragraph after a blank line. Both are refused
+  edit 2: the text to replace (…) is not in this task's prompt", or "appears
+  more than once", overlapping matches included). It never replaces the first
+  match, and it never leaves a task half edited. The edited prompt must still
+  fit the API's prompt bounds (3 bytes to 250,000 bytes), so an edit that
+  empties a prompt is refused for that task. `prompt_append` adds a paragraph after a blank line. Both are refused
   next to a full `prompt`, and an update carries at most 20 edits. With a
   `match` selector the edits apply to every matched task separately. Tasks
   whose prompt matches are changed; the rest are skipped by name.

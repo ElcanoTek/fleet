@@ -331,14 +331,18 @@ func (p ManageTasksParams) HasChanges() bool {
 func ApplyPromptEdits(current string, edits []PromptEdit, appendText string) (string, error) {
 	out := current
 	for i, e := range edits {
-		switch n := strings.Count(out, e.Old); n {
-		case 1:
-			out = strings.Replace(out, e.Old, e.New, 1)
-		case 0:
+		at := strings.Index(out, e.Old)
+		if at < 0 {
 			return "", fmt.Errorf("prompt edit %d: the text to replace (%q) is not in this task's prompt", i+1, truncate.Runes(truncate.OneLine(e.Old), 60, "…"))
-		default:
-			return "", fmt.Errorf("prompt edit %d: the text to replace (%q) appears %d times in this task's prompt; it must match exactly once", i+1, truncate.Runes(truncate.OneLine(e.Old), 60, "…"), n)
 		}
+		// A second start position anywhere after the first one's first rune —
+		// overlapping included ("ana" in "banana") — makes the edit ambiguous.
+		// strings.Count counts only non-overlapping matches and would miss it.
+		_, size := utf8.DecodeRuneInString(out[at:])
+		if strings.Contains(out[at+size:], e.Old) {
+			return "", fmt.Errorf("prompt edit %d: the text to replace (%q) appears more than once in this task's prompt; include more surrounding text so it matches exactly once", i+1, truncate.Runes(truncate.OneLine(e.Old), 60, "…"))
+		}
+		out = out[:at] + e.New + out[at+len(e.Old):]
 	}
 	if appendText = strings.TrimSpace(appendText); appendText != "" {
 		switch {
