@@ -820,7 +820,10 @@ Chromium automation connector (badged **Playwright Browser**, with an optional
 live Co-Pilot browser view when you need to complete SSO, 2FA, or a CAPTCHA
 yourself), collects any API key or password through a masked password field so
 the secret stays on the host, and saves the connection for you alone or for the
-whole workspace.
+whole workspace. A live browser view ends when you click **End Session**, when
+the assistant closes it, after 10 minutes without activity, when Fleet restarts,
+or when Fleet needs its place for a newer session; its link then opens a page
+saying the session is no longer available, and the assistant can open a new one.
 
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before

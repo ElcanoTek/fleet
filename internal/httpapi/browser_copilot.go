@@ -27,7 +27,15 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, userEmail, viewToken)
 	if err != nil {
-		writeJSONStatus(w, r, http.StatusNotFound, map[string]string{"error": err.Error()})
+		// One answer whatever the reason (gone, closed, someone else's), so a
+		// session id does not tell anyone whether that session is still live.
+		// The view is the link a person opens from chat, so it gets a page;
+		// the endpoints its script calls get the same answer as JSON.
+		if action == "view" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			serveBrowserSessionUnavailable(w)
+			return
+		}
+		writeJSONStatus(w, r, http.StatusNotFound, map[string]string{"error": "this live browser session is no longer available"})
 		return
 	}
 
@@ -132,6 +140,51 @@ func (s *Server) serveBrowserSessionStream(w http.ResponseWriter, r *http.Reques
 		}
 	}
 }
+
+// serveBrowserSessionUnavailable answers a live-view link whose session is
+// gone or is not the caller's, with one page for every case.
+func serveBrowserSessionUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(browserSessionUnavailablePage))
+}
+
+const browserSessionUnavailablePage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live browser session unavailable — Fleet</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0e14;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 32rem; padding: 24px; line-height: 1.5; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  p { color: #8b949e; margin: 0 0 16px; }
+  a { color: #3b82f6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>This live browser session is no longer available</h1>
+  <p>It has ended, it was closed after a while without activity, or it belongs to someone else.</p>
+  <p>Go back to your chat and ask the assistant to open a new live browser session if you still need one.</p>
+  <p><a href="/chat">Back to chat</a></p>
+</main>
+</body>
+</html>
+`
 
 func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request, sess *playwrightrunner.LiveSession, viewToken string) {
 	info := sess.Info(nil)
