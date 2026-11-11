@@ -21,11 +21,13 @@ import (
 // construction. Failure is always cosmetic: any error yields the defaults,
 // which mirror clientconfig.applyBrandingDefaults.
 type Branding struct {
-	AppName          string `json:"appName"`
-	LoginTitle       string `json:"loginTitle"`
-	LoginTagline     string `json:"loginTagline"`
-	ShareTitle       string `json:"shareTitle"`
-	ShareDescription string `json:"shareDescription"`
+	AppName          string                       `json:"appName"`
+	LoginTitle       string                       `json:"loginTitle"`
+	LoginTagline     string                       `json:"loginTagline"`
+	ShareTitle       string                       `json:"shareTitle"`
+	ShareDescription string                       `json:"shareDescription"`
+	Localizations    map[string]map[string]string `json:"localizations,omitempty"`
+	HasLocalizations bool                         `json:"hasLocalizations,omitempty"`
 	// BackgroundLight/Dark are the bundle's background token per mode, or ""
 	// for fleet's own.
 	BackgroundLight string `json:"backgroundLight,omitempty"`
@@ -101,6 +103,14 @@ func (g *Gateway) fetchBranding() Branding {
 	// The backend already defaults share_title to app_name; mirror it.
 	v.ShareTitle = str("share_title", v.AppName)
 	v.ShareDescription = str("share_description", v.ShareDescription)
+	var localized struct {
+		Localizations    map[string]map[string]string `json:"localizations"`
+		HasLocalizations bool                         `json:"has_localizations"`
+	}
+	if json.Unmarshal(body, &localized) == nil {
+		v.Localizations = localized.Localizations
+		v.HasLocalizations = localized.HasLocalizations
+	}
 	v.BackgroundLight = color("background_light")
 	v.BackgroundDark = color("background_dark")
 	// Only ever a fleet-authored path, but constrained anyway: it lands in an

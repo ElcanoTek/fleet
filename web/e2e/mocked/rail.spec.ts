@@ -116,7 +116,7 @@ test("Sign out asks first in a centred dialog, then signs out", async ({ page })
   // gateway lands on the manual sign-in page.
   const confirm = await openConfirm();
   await Promise.all([
-    page.waitForURL(/\/login\?manual=1/),
+    page.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("manual") === "1" && url.searchParams.get("lang") === "en"),
     confirm.getByRole("button", { name: "Sign out" }).click(),
   ]);
 });
@@ -161,7 +161,7 @@ for (const layout of [
     await page.getByTestId("account-menu-button").click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await Promise.all([
-      page.waitForURL(/\/login\?manual=1/),
+      page.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("manual") === "1" && url.searchParams.get("lang") === "en"),
       page.getByRole("dialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click(),
     ]);
   });

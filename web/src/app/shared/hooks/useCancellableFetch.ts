@@ -1,3 +1,4 @@
+import { localizeError } from "@/app/lib/i18n/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // useCancellableFetch — the single audited place where a setState lands after
@@ -101,7 +102,7 @@ export function useCancellableFetch<T>(
     } catch (err) {
       if (!mountedRef.current || runId !== runIdRef.current) return;
       if (isAbortError(err)) return;
-      setError(err instanceof Error ? err.message : String(err));
+      setError(localizeError(err instanceof Error ? err.message : String(err)));
     } finally {
       if (mountedRef.current && runId === runIdRef.current) {
         setLoading(false);

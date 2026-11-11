@@ -1,3 +1,4 @@
+import { bundleText } from "@/app/lib/i18n";
 // User-authored personas in the chat shell (docs/USER-PERSONAS.md). A
 // conversation selects one by its ref, "user:<name>"; the bundle personas keep
 // their plain basenames. These helpers keep the picker, the composer tooltip
@@ -20,7 +21,7 @@ export function isUserPersonaRef(persona: string): boolean {
 
 /** Capitalized bundle persona basename ("assistant" → "Assistant"). */
 export function formatBundlePersona(p: string): string {
-  return p.charAt(0).toUpperCase() + p.slice(1);
+  return bundleText(p.charAt(0).toUpperCase() + p.slice(1));
 }
 
 /**

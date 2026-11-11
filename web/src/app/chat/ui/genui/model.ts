@@ -1,3 +1,5 @@
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // Pure model for generative-UI cards (show_ui): spec types, default values,
 // visibility-aware validation, and the submission message. No React here so
 // it unit-tests without jsdom. The renderer is GenerativeCard.tsx; the spec
@@ -578,24 +580,24 @@ const EMAIL_RE = new RegExp(`^[a-zA-Z0-9.!#$%&'*+/=?^_\`{|}~-]+@${EMAIL_LABEL}(?
 /** One input's own problem, or "" (required-ness included). */
 export function checkField(c: Component, v: unknown): string {
   // A required toggle is an acknowledgement: it must be switched on.
-  if (c.required === true && c.type === "toggle") return v === true ? "" : "Required";
-  if (c.required === true && isEmpty(c, v)) return "Required";
+  if (c.required === true && c.type === "toggle") return v === true ? "" : tr("Required");
+  if (c.required === true && isEmpty(c, v)) return tr("Required");
   if (isEmpty(c, v)) return "";
   switch (c.type) {
     case "text_input": {
       const s = String(v);
-      if (typeof c.min_length === "number" && s.length < c.min_length) return `At least ${c.min_length} characters`;
-      if (typeof c.max_length === "number" && s.length > c.max_length) return `At most ${c.max_length} characters`;
-      if (c.format === "email" && !EMAIL_RE.test(s.trim())) return "Enter an email address";
-      if (c.format === "url" && !isWebUrl(s.trim())) return "Enter a URL (https://…)";
+      if (typeof c.min_length === "number" && s.length < c.min_length) return tr("At least {0} characters", [c.min_length]);
+      if (typeof c.max_length === "number" && s.length > c.max_length) return tr("At most {0} characters", [c.max_length]);
+      if (c.format === "email" && !EMAIL_RE.test(s.trim())) return tr("Enter an email address");
+      if (c.format === "url" && !isWebUrl(s.trim())) return tr("Enter a URL (https://…)");
       return "";
     }
     case "number":
     case "slider": {
       const n = typeof v === "number" ? v : Number(v);
-      if (!Number.isFinite(n)) return "Enter a number";
-      if (typeof c.min === "number" && n < c.min) return `Must be at least ${c.min}`;
-      if (typeof c.max === "number" && n > c.max) return `Must be at most ${c.max}`;
+      if (!Number.isFinite(n)) return tr("Enter a number");
+      if (typeof c.min === "number" && n < c.min) return tr("Must be at least {0}", [c.min]);
+      if (typeof c.max === "number" && n > c.max) return tr("Must be at most {0}", [c.max]);
       // The card does not submit through HTML form validation, so the
       // input's step rule (based at min, like the native control) is
       // enforced here.
@@ -604,28 +606,28 @@ export function checkField(c: Component, v: unknown): string {
       if (step !== undefined && step > 0) {
         const base = typeof c.min === "number" ? c.min : 0;
         const k = (n - base) / step;
-        if (Math.abs(k - Math.round(k)) > 1e-9) return `Must be in steps of ${step}${base ? ` from ${base}` : ""}`;
+        if (Math.abs(k - Math.round(k)) > 1e-9) return tr("Must be in steps of {0}{1}", [step, base ? tr(" from {0}", [base]) : ""]);
       }
       return "";
     }
     case "multi_select":
-      if (typeof c.max_items === "number" && Array.isArray(v) && v.length > c.max_items) return `At most ${c.max_items} items`;
+      if (typeof c.max_items === "number" && Array.isArray(v) && v.length > c.max_items) return tr("At most {0} items", [c.max_items]);
       return "";
     case "list_input": {
       // The protocol cap applies even when the card sets no max_items: a
       // paste must not become an unbounded user turn.
       const cap = Math.min(typeof c.max_items === "number" ? c.max_items : MAX_LIST_ITEMS, MAX_LIST_ITEMS);
-      if (Array.isArray(v) && v.length > cap) return `At most ${cap.toLocaleString()} items`;
+      if (Array.isArray(v) && v.length > cap) return tr("At most {0} items", [cap.toLocaleString(getLanguage())]);
       return "";
     }
     case "date":
-      if (typeof c.min === "string" && String(v) < c.min) return `On or after ${c.min}`;
-      if (typeof c.max === "string" && String(v) > c.max) return `On or before ${c.max}`;
+      if (typeof c.min === "string" && String(v) < c.min) return tr("On or after {0}", [c.min]);
+      if (typeof c.max === "string" && String(v) > c.max) return tr("On or before {0}", [c.max]);
       return "";
     case "repeater": {
       const n = Array.isArray(v) ? v.length : 0;
-      if (typeof c.min_items === "number" && n < c.min_items) return `Add at least ${c.min_items}`;
-      if (typeof c.max_items === "number" && n > c.max_items) return `At most ${c.max_items}`;
+      if (typeof c.min_items === "number" && n < c.min_items) return tr("Add at least {0}", [c.min_items]);
+      if (typeof c.max_items === "number" && n > c.max_items) return tr("At most {0}", [c.max_items]);
       return "";
     }
     default:

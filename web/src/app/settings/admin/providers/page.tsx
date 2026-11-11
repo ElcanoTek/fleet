@@ -1,3 +1,5 @@
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
 // surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
 // Vercel AI Gateway/Gemini API key, an Azure OpenAI resource, or point at any
@@ -80,11 +82,11 @@ const PROVIDER_TYPES: Record<
 > = {
   openrouter: {
     label: "OpenRouter",
-    hint: "Routes across many upstream providers with one key.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: openrouter.ai)",
+    hint: tr("Routes across many upstream providers with one key."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: openrouter.ai)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: false,
@@ -92,99 +94,99 @@ const PROVIDER_TYPES: Record<
   },
   anthropic: {
     label: "Anthropic",
-    hint: "Direct Anthropic API access with your own key.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: api.anthropic.com)",
+    hint: tr("Direct Anthropic API access with your own key."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: api.anthropic.com)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 200000",
+    windowPlaceholder: tr("e.g. 200000"),
   },
   openai: {
     label: "OpenAI",
-    hint: "Direct OpenAI API access with your own key. For another server that speaks the OpenAI API, choose OpenAI-compatible.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: api.openai.com/v1)",
+    hint: tr("Direct OpenAI API access with your own key. For another server that speaks the OpenAI API, choose OpenAI-compatible."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: api.openai.com/v1)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 128000",
+    windowPlaceholder: tr("e.g. 128000"),
   },
   ollama: {
-    label: "Ollama (local)",
-    hint: "A local or remote Ollama server; no API key needed.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: http://localhost:11434/v1)",
+    label: tr("Ollama (local)"),
+    hint: tr("A local or remote Ollama server; no API key needed."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: http://localhost:11434/v1)"),
     urlNeeded: false,
-    keyLabel: "API key (not needed)",
+    keyLabel: tr("API key (not needed)"),
     keyNeeded: false,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "the server's num_ctx, e.g. 65536",
+    windowPlaceholder: tr("the server's num_ctx, e.g. 65536"),
   },
   openaicompat: {
-    label: "OpenAI-compatible",
-    hint: "Any server that speaks the OpenAI API: vLLM, LM Studio, llama.cpp, a hosted gateway. Needs its Base URL; the key is optional.",
-    urlLabel: "Base URL",
+    label: tr("OpenAI-compatible"),
+    hint: tr("Any server that speaks the OpenAI API: vLLM, LM Studio, llama.cpp, a hosted gateway. Needs its Base URL; the key is optional."),
+    urlLabel: tr("Base URL"),
     urlPlaceholder: "https://llm.example.com/v1",
     urlNeeded: true,
-    keyLabel: "API key (optional)",
+    keyLabel: tr("API key (optional)"),
     keyNeeded: false,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "the server's limit, e.g. 131072",
+    windowPlaceholder: tr("the server's limit, e.g. 131072"),
   },
   vercel: {
     label: "Vercel AI Gateway",
-    hint: "Many model providers through one Vercel key. Model ids are creator/model, like OpenRouter's, so a model listed here moves off OpenRouter; leave the list empty to reach it only as name/creator/model.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: ai-gateway.vercel.sh/v1)",
+    hint: tr("Many model providers through one Vercel key. Model ids are creator/model, like OpenRouter's, so a model listed here moves off OpenRouter; leave the list empty to reach it only as name/creator/model."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: ai-gateway.vercel.sh/v1)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 200000",
+    windowPlaceholder: tr("e.g. 200000"),
   },
   azure: {
     label: "Azure OpenAI",
-    hint: "An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models. Name a GPT-5 or o-series deployment after its model, in lower case (e.g. gpt-5-prod, o4-mini), or its turns fail; newer reasoning models such as GPT-6 may not work yet.",
-    urlLabel: "Base URL",
+    hint: tr("An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models. Name a GPT-5 or o-series deployment after its model, in lower case (e.g. gpt-5-prod, o4-mini), or its turns fail; newer reasoning models such as GPT-6 may not work yet."),
+    urlLabel: tr("Base URL"),
     urlPlaceholder: "https://your-resource.openai.azure.com",
     urlNeeded: true,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 128000",
+    windowPlaceholder: tr("e.g. 128000"),
   },
   google: {
     label: "Google Gemini",
-    hint: "The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-3.8-flash. Don't name it google: that name would also take OpenRouter's google/… models.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: generativelanguage.googleapis.com)",
+    hint: tr("The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-3.8-flash. Don't name it google: that name would also take OpenRouter's google/… models."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: generativelanguage.googleapis.com)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: false,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 1048576",
+    windowPlaceholder: tr("e.g. 1048576"),
   },
   bedrock: {
     label: "Amazon Bedrock",
-    hint: "Claude models on Amazon Bedrock, with a Bedrock API key. Set the Region the key was made in, and list Bedrock inference profile ids, like us.anthropic.claude-sonnet-4-5-20250929-v1:0: newer Claude models need one. Bedrock's other models are not supported.",
-    urlLabel: "Base URL (optional)",
-    urlPlaceholder: "(default: the Region's bedrock-runtime endpoint)",
+    hint: tr("Claude models on Amazon Bedrock, with a Bedrock API key. Set the Region the key was made in, and list Bedrock inference profile ids, like us.anthropic.claude-sonnet-4-5-20250929-v1:0: newer Claude models need one. Bedrock's other models are not supported."),
+    urlLabel: tr("Base URL (optional)"),
+    urlPlaceholder: tr("(default: the Region's bedrock-runtime endpoint)"),
     urlNeeded: false,
-    keyLabel: "API key",
+    keyLabel: tr("API key"),
     keyNeeded: true,
     regionShown: true,
     windowNeeded: true,
-    windowPlaceholder: "e.g. 200000",
+    windowPlaceholder: tr("e.g. 200000"),
   },
 };
 
@@ -247,10 +249,10 @@ function contextWindowWarning(raw: string): string | null {
   const n = Number(raw.trim());
   if (!(n > 0)) return null;
   if (n < SMALL_CONTEXT_WINDOW) {
-    return `Below about ${SMALL_CONTEXT_WINDOW.toLocaleString()} tokens a turn usually cannot fit fleet's tools and reply; for Ollama, raise num_ctx on the server.`;
+    return tr("Below about {0} tokens a turn usually cannot fit fleet's tools and reply; for Ollama, raise num_ctx on the server.", [SMALL_CONTEXT_WINDOW.toLocaleString(getLanguage())]);
   }
   if (n < TIGHT_CONTEXT_WINDOW) {
-    return `Below about ${TIGHT_CONTEXT_WINDOW.toLocaleString()} tokens little room is left for the conversation itself once fleet's tools and reply are reserved.`;
+    return tr("Below about {0} tokens little room is left for the conversation itself once fleet's tools and reply are reserved.", [TIGHT_CONTEXT_WINDOW.toLocaleString(getLanguage())]);
   }
   return null;
 }
@@ -280,40 +282,40 @@ function isOrigin(raw: string): boolean {
 // can be enabled.
 function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(d.name.trim().toLowerCase())) {
-    return "Name must be a lowercase slug (letters, digits, . _ -), no slashes or spaces.";
+    return tr("Name must be a lowercase slug (letters, digits, . _ -), no slashes or spaces.");
   }
   if (d.base_url.trim() && !/^https?:\/\//.test(d.base_url.trim())) {
-    return "Base URL must start with http:// or https://.";
+    return tr("Base URL must start with http:// or https://.");
   }
   const t = PROVIDER_TYPES[d.type];
   if (t?.urlNeeded && !d.base_url.trim()) {
-    return `${t.label} needs a Base URL.`;
+    return tr("{0} needs a Base URL.", [t.label]);
   }
   if (t?.regionShown && d.region.trim() && !AWS_REGION.test(d.region.trim())) {
-    return "Region must be an AWS Region name, such as us-east-1.";
+    return tr("Region must be an AWS Region name, such as us-east-1.");
   }
   // A China (cn-…) or ISO (…-iso…) Region's endpoints are not under
   // amazonaws.com, where the server would build the default one.
   const region = d.region.trim();
   if (t?.regionShown && !d.base_url.trim() && (region.startsWith("cn-") || region.includes("-iso"))) {
-    return "A China or ISO Region's endpoints are not under amazonaws.com: set the Base URL to its Bedrock Runtime endpoint.";
+    return tr("A China or ISO Region's endpoints are not under amazonaws.com: set the Base URL to its Bedrock Runtime endpoint.");
   }
   if (d.type === "bedrock" && d.base_url.trim() && !isOrigin(d.base_url.trim())) {
-    return "A Bedrock Base URL is an endpoint's origin with no path, query or credentials, such as https://bedrock-runtime.us-east-1.amazonaws.com.";
+    return tr("A Bedrock Base URL is an endpoint's origin with no path, query or credentials, such as https://bedrock-runtime.us-east-1.amazonaws.com.");
   }
   if (d.enabled && t?.keyNeeded && !d.api_key && !(d.id && editingHasKey)) {
-    return `${t.label} needs an API key.`;
+    return tr("{0} needs an API key.", [t.label]);
   }
   if (t?.windowNeeded) {
     const w = d.context_window.trim();
     if (w && (!/^[0-9]+$/.test(w) || Number(w) <= 0)) {
-      return "Context window must be a positive whole number of tokens.";
+      return tr("Context window must be a positive whole number of tokens.");
     }
     if (Number(w) > MAX_CONTEXT_WINDOW) {
-      return `Context window must be at most ${MAX_CONTEXT_WINDOW.toLocaleString()} tokens.`;
+      return tr("Context window must be at most {0} tokens.", [MAX_CONTEXT_WINDOW.toLocaleString(getLanguage())]);
     }
     if (d.enabled && !w) {
-      return `${t.label} needs its context window (in tokens: the smallest limit among the models it serves) before it can be enabled.`;
+      return tr("{0} needs its context window (in tokens: the smallest limit among the models it serves) before it can be enabled.", [t.label]);
     }
   }
   return null;
@@ -328,8 +330,8 @@ function contextWindowFor(d: Draft): number {
 
 async function fetchProviders(): Promise<LLMProvider[] | null> {
   const data = await getGatedJson<{ providers?: LLMProvider[] }>("/api/admin/llm-providers", {
-    label: "Providers",
-    statusText: { 403: "You are not an admin." },
+    label: tr("Providers"),
+    statusText: { 403: tr("You are not an admin.") },
   });
   return data ? (data.providers ?? []) : null;
 }
@@ -382,7 +384,7 @@ function ClampInfo({ children }: { children: ReactNode }) {
           onClick={() => setExpanded((e) => !e)}
           className="mt-[0.15rem] border-none bg-transparent p-0 text-[0.72rem] text-[var(--color-accent)] underline-offset-2 hover:underline focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
         >
-          {expanded ? "less" : "more"}
+          {expanded ? tr("less") : tr("more")}
         </button>
       ) : null}
     </div>
@@ -431,7 +433,7 @@ function ProvidersAdmin() {
         if (!stale && rows !== null) setProviders(rows);
       })
       .catch((err: unknown) => {
-        if (!stale) setError(errorMessage(err, "Failed to load."));
+        if (!stale) setError(errorMessage(err, tr("Failed to load.")));
       });
     return () => {
       stale = true;
@@ -443,7 +445,7 @@ function ProvidersAdmin() {
       .then((rows) => {
         if (rows !== null) setProviders(rows);
       })
-      .catch((err: unknown) => setError(errorMessage(err, "Failed to load.")));
+      .catch((err: unknown) => setError(errorMessage(err, tr("Failed to load."))));
 
   // Retry after a failed initial load: clear the banner so a second failure
   // is visibly a fresh one, then re-run the same fetch.
@@ -501,11 +503,11 @@ function ProvidersAdmin() {
       },
     )
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Save failed")));
         setDraft(null);
         return reload();
       })
-      .catch((err: unknown) => setError(errorMessage(err, "Save failed.")))
+      .catch((err: unknown) => setError(errorMessage(err, tr("Save failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -516,7 +518,7 @@ function ProvidersAdmin() {
       setDraft({ ...draftFrom(p), enabled: true });
       focusWindowRef.current = true;
       setError(
-        `Set ${p.name}'s context window (in tokens: the smallest limit among the models it serves), then save to enable it.`,
+        tr("Set {0}'s context window (in tokens: the smallest limit among the models it serves), then save to enable it.", [p.name]),
       );
       return;
     }
@@ -535,10 +537,10 @@ function ProvidersAdmin() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Update failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Update failed")));
         return reload();
       })
-      .catch((err: unknown) => setError(errorMessage(err, "Update failed.")))
+      .catch((err: unknown) => setError(errorMessage(err, tr("Update failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -549,7 +551,7 @@ function ProvidersAdmin() {
     setProbes((cur) => ({ ...cur, [p.id]: "running" }));
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}/test`, { method: "POST" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Test failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Test failed")));
         return (await res.json()) as ProbeResult;
       })
       .then((result) => setProbes((cur) => ({ ...cur, [p.id]: result })))
@@ -558,7 +560,7 @@ function ProvidersAdmin() {
           ...cur,
           [p.id]: {
             ok: false,
-            detail: errorMessage(err, "Test failed."),
+            detail: errorMessage(err, tr("Test failed.")),
             latency_ms: 0,
           },
         })),
@@ -572,10 +574,10 @@ function ProvidersAdmin() {
     setBusy(true);
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}`, { method: "DELETE" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
+        if (!res.ok) throw new Error(await responseErrorText(res, tr("Delete failed")));
         return reload();
       })
-      .catch((err: unknown) => setError(errorMessage(err, "Delete failed.")))
+      .catch((err: unknown) => setError(errorMessage(err, tr("Delete failed."))))
       .finally(() => setBusy(false));
   };
 
@@ -583,14 +585,14 @@ function ProvidersAdmin() {
 
   return (
     <SetSection
-      title="Providers"
-      intro="LLM backends this deployment can route models through — several can run at once."
+      title={tr("Providers")}
+      intro={tr("LLM backends this deployment can route models through — several can run at once.")}
     >
       <ConnPanel>
-        <ConnPanelHead title="Model providers">
+        <ConnPanelHead title={tr("Model providers")}>
           <RevealButton
             open={draft !== null}
-            closedLabel="Add provider"
+            closedLabel={tr("Add provider")}
             onClick={() => {
               if (draft) {
                 setDraft(null);
@@ -603,11 +605,8 @@ function ProvidersAdmin() {
           />
         </ConnPanelHead>
         <ClampInfo>
-          An OpenRouter, Anthropic, OpenAI, Vercel AI Gateway, Gemini or Amazon Bedrock key, an Azure OpenAI resource, or any
-          OpenAI-compatible endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
-          <CodeChip>provider/model</CodeChip> prefix or by its models list; a provider with an
-          empty models list is a catch-all serving any slug. Changes apply on the next message —
-          no restart. Keys are stored encrypted and are never shown again.
+          {tr("An OpenRouter, Anthropic, OpenAI, Vercel AI Gateway, Gemini or Amazon Bedrock key, an Azure OpenAI resource, or any OpenAI-compatible endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit")}{" "}
+          <CodeChip>provider/model</CodeChip> {tr("prefix or by its models list; a provider with an empty models list is a catch-all serving any slug. Changes apply on the next message — no restart. Keys are stored encrypted and are never shown again.")}
         </ClampInfo>
 
         {error ? (
@@ -624,7 +623,7 @@ function ProvidersAdmin() {
                 data-testid="providers-retry"
                 className={btnClass({ sm: true, reveal: true })}
               >
-                Retry
+                {tr("Retry")}
               </button>
             ) : null}
           </div>
@@ -636,8 +635,8 @@ function ProvidersAdmin() {
               <ConnField
                 label={
                   draft.id
-                    ? "Name (routing prefix — fixed after creation)"
-                    : "Name (routing prefix, e.g. anthropic-direct)"
+                    ? tr("Name (routing prefix — fixed after creation)")
+                    : tr("Name (routing prefix, e.g. anthropic-direct)")
                 }
               >
                 <input
@@ -651,7 +650,7 @@ function ProvidersAdmin() {
                   className={`${SETTINGS_INPUT} disabled:opacity-60`}
                 />
               </ConnField>
-              <ConnField label="Type">
+              <ConnField label={tr("Type")}>
                 <span className="select-wrap block">
                   <select
                     id="providerType"
@@ -685,7 +684,7 @@ function ProvidersAdmin() {
               </p>
             ) : null}
             <div className="grid grid-cols-2 gap-[0.75rem] max-[640px]:grid-cols-1">
-              <ConnField label={typeInfo?.urlLabel ?? "Base URL (optional)"}>
+              <ConnField label={typeInfo?.urlLabel ?? tr("Base URL (optional)")}>
                 <input
                   id="providerBaseUrl"
                   value={draft.base_url}
@@ -697,8 +696,8 @@ function ProvidersAdmin() {
               <ConnField
                 label={
                   draft.id && providers?.find((p) => p.id === draft.id)?.has_api_key
-                    ? "API key (stored — leave blank to keep it)"
-                    : (typeInfo?.keyLabel ?? "API key")
+                    ? tr("API key (stored — leave blank to keep it)")
+                    : (typeInfo?.keyLabel ?? tr("API key"))
                 }
               >
                 <input
@@ -710,7 +709,7 @@ function ProvidersAdmin() {
                   onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
                   placeholder={
                     draft.id && providers?.find((p) => p.id === draft.id)?.has_api_key
-                      ? "•••••••• (unchanged)"
+                      ? tr("•••••••• (unchanged)")
                       : "sk-…"
                   }
                   className={`${SETTINGS_INPUT} disabled:opacity-60`}
@@ -733,23 +732,23 @@ function ProvidersAdmin() {
                   }
                   className="size-4 accent-[var(--color-primary)]"
                 />
-                Remove the stored key (this type works without one)
+                {tr("Remove the stored key (this type works without one)")}
               </label>
             ) : null}
             {typeInfo?.regionShown ? (
-              <ConnField label="Region (the AWS Region the key was made in)">
+              <ConnField label={tr("Region (the AWS Region the key was made in)")}>
                 <input
                   id="providerRegion"
                   value={draft.region}
                   onChange={(e) => setDraft({ ...draft, region: e.target.value })}
-                  placeholder="us-east-1 (default)"
+                  placeholder={tr("us-east-1 (default)")}
                   className={SETTINGS_INPUT}
                 />
               </ConnField>
             ) : null}
             {typeInfo?.windowNeeded ? (
               <>
-                <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">
+                <ConnField label={tr("Context window (tokens: the smallest limit among the models this provider serves; needed to enable)")}>
                   <input
                     id="providerContextWindow"
                     inputMode="numeric"
@@ -777,9 +776,8 @@ function ProvidersAdmin() {
             <ConnField
               label={
                 <>
-                  Models (one slug per line — these appear in everyone’s model picker as{" "}
-                  <code>{draft.name.trim() || "name"}/model</code>; leave empty to serve any model
-                  as a catch-all)
+                  {tr("Models (one slug per line — these appear in everyone’s model picker as")}{" "}
+                  <code>{draft.name.trim() || "name"}/model</code>{tr("; leave empty to serve any model as a catch-all)")}
                 </>
               }
             >
@@ -805,7 +803,7 @@ function ProvidersAdmin() {
                   onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
                   className="size-4 accent-[var(--color-primary)]"
                 />
-                Enabled
+                {tr("Enabled")}
               </label>
               <span className="inline-flex items-center gap-2">
                 <button
@@ -818,8 +816,7 @@ function ProvidersAdmin() {
                   disabled={busy}
                   className={btnClass({ sm: true, reveal: true })}
                 >
-                  Cancel
-                </button>
+                  {tr("Cancel")}</button>
                 <button
                   type="button"
                   onClick={save}
@@ -832,12 +829,12 @@ function ProvidersAdmin() {
                   className={btnClass({ variant: "primary" })}
                 >
                   {busy
-                    ? "Saving…"
+                    ? tr("Saving…")
                     : catchAllArmed
-                      ? "Confirm catch-all"
+                      ? tr("Confirm catch-all")
                       : draft.id === ""
-                        ? "Create provider"
-                        : "Save changes"}
+                        ? tr("Create provider")
+                        : tr("Save changes")}
                 </button>
               </span>
             </div>
@@ -847,8 +844,7 @@ function ProvidersAdmin() {
                 role="alert"
                 data-testid="provider-catch-all-warning"
               >
-                No models listed — this provider becomes a CATCH-ALL and may serve any model not
-                claimed by another provider. Click again to continue.
+                {tr("No models listed — this provider becomes a CATCH-ALL and may serve any model not claimed by another provider. Click again to continue.")}
               </p>
             ) : null}
           </div>
@@ -858,13 +854,11 @@ function ProvidersAdmin() {
           // Still loading — unless the load already failed, in which case the
           // banner + Retry above is the whole story.
           error ? null : (
-            <p className="py-2 text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="py-2 text-[0.8rem] text-[var(--color-text-muted)]">{tr("Loading…")}</p>
           )
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
-            No extra providers configured — the deployment is using its bundle/environment
-            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI, Vercel,
-            Gemini or Bedrock key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
+            {tr("No extra providers configured — the deployment is using its bundle/environment provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI, Vercel, Gemini or Bedrock key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.")}
           </ConnEmpty>
         ) : (
           <ConnRows>
@@ -874,14 +868,14 @@ function ProvidersAdmin() {
               const modelsPart =
                 p.models.length > 0
                   ? plural(p.models.length, "model")
-                  : "catch-all (any model)";
+                  : tr("catch-all (any model)");
               // A row with no declared window cannot be enabled (rows saved
               // before the field existed may still be): flag it so the admin
               // knows what to edit.
               const windowUsed = PROVIDER_TYPES[p.type]?.windowNeeded === true;
               const windowPart =
                 windowUsed && p.context_window_tokens > 0
-                  ? ` · ${p.context_window_tokens.toLocaleString()}-token context`
+                  ? tr(" · {0}-token context", [p.context_window_tokens.toLocaleString(getLanguage())])
                   : "";
               // With a Base URL set the Region picks nothing, so it is not shown.
               const regionPart =
@@ -904,17 +898,17 @@ function ProvidersAdmin() {
                       ) : null}
                     </>
                   }
-                  sub={`${typeLabel}${regionPart} · ${modelsPart}${windowPart}${p.enabled ? "" : " · disabled"}`}
+                  sub={`${typeLabel}${regionPart} · ${modelsPart}${windowPart}${p.enabled ? "" : tr(" · disabled")}`}
                   actions={
                     <>
                       <button
                         type="button"
                         onClick={() => test(p)}
                         disabled={busy || probe === "running"}
-                        title="One authenticated call against the provider's endpoint — verifies the key/base URL and cross-checks the listed models."
+                        title={tr("One authenticated call against the provider's endpoint — verifies the key/base URL and cross-checks the listed models.")}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        Test
+                        {tr("Test")}
                       </button>
                       <button
                         type="button"
@@ -922,7 +916,7 @@ function ProvidersAdmin() {
                         disabled={busy}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        {p.enabled ? "Disable" : "Enable"}
+                        {p.enabled ? tr("Disable") : tr("Enable")}
                       </button>
                       <button
                         type="button"
@@ -933,11 +927,11 @@ function ProvidersAdmin() {
                         disabled={busy}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        Edit
+                        {tr("Edit")}
                       </button>
                       <InlineConfirmButton
-                        label="Remove"
-                        confirmLabel="Confirm remove"
+                        label={tr("Remove")}
+                        confirmLabel={tr("Confirm remove")}
                         onConfirm={() => remove(p)}
                         disabled={busy}
                       />
@@ -946,15 +940,15 @@ function ProvidersAdmin() {
                 >
                   {probe === "running" ? (
                     <span className="mt-[0.1rem]">
-                      <ActStatus state="running">Testing against the provider’s endpoint…</ActStatus>
+                      <ActStatus state="running">{tr("Testing against the provider’s endpoint…")}</ActStatus>
                     </span>
                   ) : probe ? (
                     <span className="mt-[0.1rem]" data-testid={`probe-result-${p.id}`}>
                       <ActStatus state={probe.ok ? "ok" : "err"}>
                         {probe.ok ? "✓" : "✗"} {probe.detail}
-                        {probe.latency_ms > 0 ? ` · ${probe.latency_ms}ms` : ""}
+                        {probe.latency_ms > 0 ? tr(" · {0}ms", [probe.latency_ms]) : ""}
                         {probe.missing_models && probe.missing_models.length > 0
-                          ? ` — missing: ${probe.missing_models.join(", ")}`
+                          ? tr(" — missing: {0}", [probe.missing_models.join(", ")])
                           : ""}
                       </ActStatus>
                     </span>

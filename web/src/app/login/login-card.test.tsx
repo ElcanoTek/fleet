@@ -59,7 +59,7 @@ describe("LoginCard — Elcano-email button gating", () => {
   it("shows the Use Elcano email button when enabled", () => {
     render(<LoginCard magicLinkLoginEnabled={true} {...DEFAULT_COPY} />);
     const button = screen.getByRole("link", { name: "Use Elcano email" });
-    expect(button).toHaveAttribute("href", "/api/auth/elcano-login");
+    expect(button).toHaveAttribute("href", "/api/auth/elcano-login?lang=en");
     // The "or" divider only makes sense alongside the secondary path.
     expect(screen.getByText("or")).toBeInTheDocument();
   });
@@ -87,7 +87,7 @@ describe("LoginCard — OIDC SSO button gating", () => {
       />,
     );
     const button = screen.getByRole("link", { name: "Sign in with Okta" });
-    expect(button).toHaveAttribute("href", "/api/auth/oidc/start");
+    expect(button).toHaveAttribute("href", "/api/auth/oidc/start?lang=en");
     // The divider shows even when only the SSO path is enabled.
     expect(screen.getByText("or")).toBeInTheDocument();
   });
@@ -114,10 +114,10 @@ describe("LoginCard — OIDC SSO button gating", () => {
     );
     expect(
       screen.getByRole("link", { name: "Sign in with SSO" }),
-    ).toHaveAttribute("href", "/api/auth/oidc/start");
+    ).toHaveAttribute("href", "/api/auth/oidc/start?lang=en");
     expect(
       screen.getByRole("link", { name: "Use Elcano email" }),
-    ).toHaveAttribute("href", "/api/auth/elcano-login");
+    ).toHaveAttribute("href", "/api/auth/elcano-login?lang=en");
   });
 });
 
@@ -253,7 +253,7 @@ describe("LoginCard: central Auth only", () => {
       />,
     );
     const sso = screen.getByRole("link", { name: "Sign in with Omnicom" });
-    expect(sso).toHaveAttribute("href", "/api/auth/oidc/start");
+    expect(sso).toHaveAttribute("href", "/api/auth/oidc/start?lang=en");
     expect(sso.className).toContain("--color-primary-fill");
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByLabelText("Password")).toBeNull();
@@ -326,7 +326,7 @@ describe("LoginCard — matches Auth's sign-in card", () => {
     );
     expect(
       screen.getByRole("link", { name: "Sign in with Omnicom SSO" }),
-    ).toHaveAttribute("href", "/api/auth/oidc/start");
+    ).toHaveAttribute("href", "/api/auth/oidc/start?lang=en");
     expect(
       screen.getByText("Accounts are created by an administrator."),
     ).toBeInTheDocument();

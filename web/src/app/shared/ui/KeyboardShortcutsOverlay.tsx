@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useMemo, useRef, useState } from "react";
 import { isMacPlatform } from "@/app/shared/hooks/useKeyboardShortcuts";
 import { CloseButton } from "./CloseButton";
@@ -45,7 +46,7 @@ function chipLabel(chip: ShortcutChip, mac: boolean): string {
 function comboAriaLabel(chips: ShortcutChip[], mac: boolean): string {
   return chips
     .map((chip) => {
-      if ("mod" in chip) return mac ? "Command" : "Control";
+      if ("mod" in chip) return mac ? tr("Command") : "Control";
       if ("shift" in chip) return "Shift";
       return chip.label;
     })
@@ -86,8 +87,8 @@ export function KeyboardShortcutsOverlay({
 
   return (
     <DialogShell
-      label="Keyboard shortcuts"
-      scrimLabel="Close keyboard shortcuts"
+      label={tr("Keyboard shortcuts")}
+      scrimLabel={tr("Close keyboard shortcuts")}
       onDismiss={onClose}
       align="top"
       className="flex max-h-[80vh] max-w-[34rem] flex-col overflow-hidden"
@@ -96,10 +97,10 @@ export function KeyboardShortcutsOverlay({
     >
       <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-strong)] px-4 py-3">
         <h2 className="text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
-          Keyboard shortcuts
+          {tr("Keyboard shortcuts")}
         </h2>
         <CloseButton
-          label="Close keyboard shortcuts"
+          label={tr("Close keyboard shortcuts")}
           testId="shortcuts-close"
           onClick={onClose}
         />
@@ -110,9 +111,9 @@ export function KeyboardShortcutsOverlay({
         type="text"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
-        placeholder="Filter shortcuts…"
+        placeholder={tr("Filter shortcuts…")}
         className="w-full border-b border-[var(--color-border-strong)] bg-transparent px-4 py-3 text-[0.9rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)]"
-        aria-label="Filter shortcuts"
+        aria-label={tr("Filter shortcuts")}
       />
       <div className="max-h-[55vh] overflow-y-auto px-4 py-2" data-testid="shortcuts-list">
         {filtered.length === 0 ? (
@@ -120,7 +121,7 @@ export function KeyboardShortcutsOverlay({
             data-testid="shortcuts-empty"
             className="px-1 py-3 text-[0.85rem] text-[var(--color-text-muted)]"
           >
-            No matching shortcuts.
+            {tr("No matching shortcuts.")}
           </div>
         ) : (
           filtered.map((group) => (

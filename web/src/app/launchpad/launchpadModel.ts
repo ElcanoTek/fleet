@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Patrol Launchpad — the pure half (docs/PATROL-LAUNCHPAD.md).
 //
 // Everything the wizard decides without touching the network lives here, so
@@ -39,73 +40,73 @@ export type PatrolGoal = {
 export const PATROL_GOALS: PatrolGoal[] = [
   {
     id: "deals",
-    title: "Catch misconfigured deals",
-    blurb: "Spot deals with wrong floors, targeting, dates or seats before they cost you.",
+    title: tr("Catch misconfigured deals"),
+    blurb: tr("Spot deals with wrong floors, targeting, dates or seats before they cost you."),
     icon: "target",
     keywords: ["deal", "ssp", "dsp", "pmp", "curat", "inventory", "trading", "programmatic"],
-    needs: "a deal or SSP/DSP connector",
+    needs: tr("a deal or SSP/DSP connector"),
     step:
-      "Check every active deal for misconfiguration — floor price, targeting, flight dates, seat or buyer IDs, and deals that are live but not bidding — and say exactly what looks wrong and how to fix it.",
+      tr("Check every active deal for misconfiguration — floor price, targeting, flight dates, seat or buyer IDs, and deals that are live but not bidding — and say exactly what looks wrong and how to fix it."),
   },
   {
     id: "spend",
-    title: "Alert when spend drops off",
-    blurb: "Notice pacing drops, stalled campaigns and budgets about to run out.",
+    title: tr("Alert when spend drops off"),
+    blurb: tr("Notice pacing drops, stalled campaigns and budgets about to run out."),
     icon: "dollar-sign",
     keywords: ["spend", "pacing", "budget", "campaign", "dsp", "ads", "advert", "media", "deal", "analytics", "report"],
-    needs: "a campaign, DSP or reporting connector",
+    needs: tr("a campaign, DSP or reporting connector"),
     step:
-      "Compare spend and pacing with the previous run and the same time yesterday; flag anything down more than 25% (a starting threshold the person can change), campaigns that stopped delivering, and budgets on track to run out early.",
+      tr("Compare spend and pacing with the previous run and the same time yesterday; flag anything down more than 25% (a starting threshold the person can change), campaigns that stopped delivering, and budgets on track to run out early."),
   },
   {
     id: "reports",
-    title: "Make sure reports get delivered",
-    blurb: "Confirm the scheduled reports and files you depend on actually arrived.",
+    title: tr("Make sure reports get delivered"),
+    blurb: tr("Confirm the scheduled reports and files you depend on actually arrived."),
     icon: "file-text",
     keywords: ["report", "mail", "email", "inbox", "gmail", "outlook", "drive", "sharepoint", "sheet", "storage", "s3", "file"],
-    needs: "an email, file or reporting connector",
+    needs: tr("an email, file or reporting connector"),
     step:
-      "Confirm the recurring reports and data files the person depends on arrived on time and look complete; list anything missing, late or empty, with when it was last seen.",
+      tr("Confirm the recurring reports and data files the person depends on arrived on time and look complete; list anything missing, late or empty, with when it was last seen."),
   },
   {
     id: "inbox",
-    title: "Triage my inbox",
-    blurb: "Surface what needs a reply, what is urgent, and what can wait.",
+    title: tr("Triage my inbox"),
+    blurb: tr("Surface what needs a reply, what is urgent, and what can wait."),
     icon: "mail",
     keywords: ["mail", "email", "inbox", "gmail", "outlook", "microsoft", "365", "message", "slack", "teams"],
-    needs: "an email or messaging connector",
+    needs: tr("an email or messaging connector"),
     step:
-      "Scan new email and messages since the last run; pull out what needs a reply or a decision, anything urgent, and requests from clients or partners, each with a one-line summary and a suggested next step.",
+      tr("Scan new email and messages since the last run; pull out what needs a reply or a decision, anything urgent, and requests from clients or partners, each with a one-line summary and a suggested next step."),
   },
   {
     id: "optimize",
-    title: "Suggest optimizations",
-    blurb: "Find the bids, floors and budgets worth adjusting, with the reasoning.",
+    title: tr("Suggest optimizations"),
+    blurb: tr("Find the bids, floors and budgets worth adjusting, with the reasoning."),
     icon: "zap",
     keywords: ["campaign", "dsp", "ssp", "deal", "bid", "analytics", "performance", "ads", "advert", "report"],
-    needs: "a campaign, deal or analytics connector",
+    needs: tr("a campaign, deal or analytics connector"),
     step:
-      "Look for the two or three optimizations most worth making now — bids, floors, budgets, targeting or underperforming line items — each with the evidence, the expected impact and the exact change to make.",
+      tr("Look for the two or three optimizations most worth making now — bids, floors, budgets, targeting or underperforming line items — each with the evidence, the expected impact and the exact change to make."),
   },
   {
     id: "day",
-    title: "Prep me for my day",
-    blurb: "A short brief on meetings, deadlines and what changed overnight.",
+    title: tr("Prep me for my day"),
+    blurb: tr("A short brief on meetings, deadlines and what changed overnight."),
     icon: "calendar",
     keywords: ["calendar", "meeting", "outlook", "gmail", "google", "microsoft", "365", "task", "project", "jira", "linear", "asana"],
-    needs: "a calendar, email or task connector",
+    needs: tr("a calendar, email or task connector"),
     step:
-      "Brief the person on the day ahead: meetings and who they are with, deadlines coming due, and anything that changed since the last run that they should know before they start.",
+      tr("Brief the person on the day ahead: meetings and who they are with, deadlines coming due, and anything that changed since the last run that they should know before they start."),
   },
   {
     id: "anomalies",
-    title: "Watch my data for anomalies",
-    blurb: "Flag sudden jumps, gaps or broken feeds in the numbers you track.",
+    title: tr("Watch my data for anomalies"),
+    blurb: tr("Flag sudden jumps, gaps or broken feeds in the numbers you track."),
     icon: "activity",
     keywords: ["data", "database", "warehouse", "bigquery", "snowflake", "postgres", "sql", "analytics", "metric", "dashboard"],
-    needs: "a database, warehouse or analytics connector",
+    needs: tr("a database, warehouse or analytics connector"),
     step:
-      "Check the key metrics the person tracks for sudden jumps, drops, gaps or stale data compared with recent history, and say which look like real changes and which look like a broken feed.",
+      tr("Check the key metrics the person tracks for sudden jumps, drops, gaps or stale data compared with recent history, and say which look like real changes and which look like a broken feed."),
   },
 ];
 
@@ -158,40 +159,40 @@ export type CadencePreset = { id: string; cron: string; label: string; hint: str
 
 // Five-minute floor is the server's (patrol schedules); none of these is near it.
 export const CADENCE_PRESETS: CadencePreset[] = [
-  { id: "weekday-morning", cron: "0 8 * * 1-5", label: "Weekday mornings", hint: "8:00, Monday to Friday" },
-  { id: "twice-daily", cron: "0 9,16 * * 1-5", label: "Twice a workday", hint: "9:00 and 16:00, Monday to Friday" },
-  { id: "every-2h", cron: "0 */2 * * *", label: "Every 2 hours", hint: "Around the clock" },
-  { id: "hourly", cron: "0 * * * *", label: "Every hour", hint: "Around the clock" },
-  { id: "daily", cron: "0 8 * * *", label: "Every morning", hint: "8:00, every day" },
-  { id: "weekly", cron: "0 9 * * 1", label: "Monday kickoff", hint: "9:00 every Monday" },
+  { id: "weekday-morning", cron: "0 8 * * 1-5", label: tr("Weekday mornings"), hint: tr("8:00, Monday to Friday") },
+  { id: "twice-daily", cron: "0 9,16 * * 1-5", label: tr("Twice a workday"), hint: tr("9:00 and 16:00, Monday to Friday") },
+  { id: "every-2h", cron: "0 */2 * * *", label: tr("Every 2 hours"), hint: tr("Around the clock") },
+  { id: "hourly", cron: "0 * * * *", label: tr("Every hour"), hint: tr("Around the clock") },
+  { id: "daily", cron: "0 8 * * *", label: tr("Every morning"), hint: tr("8:00, every day") },
+  { id: "weekly", cron: "0 9 * * 1", label: tr("Monday kickoff"), hint: tr("9:00 every Monday") },
 ];
 
 export const MODE_OPTIONS: { id: PatrolMode; title: string; blurb: string }[] = [
   {
     id: "report",
-    title: "Just report",
-    blurb: "Looks and tells you. Never changes anything.",
+    title: tr("Just report"),
+    blurb: tr("Looks and tells you. Never changes anything."),
   },
   {
     id: "suggest",
-    title: "Suggest & ask",
-    blurb: "Recommends fixes and stages them as approval cards for you to press.",
+    title: tr("Suggest & ask"),
+    blurb: tr("Recommends fixes and stages them as approval cards for you to press."),
   },
   {
     id: "act",
-    title: "Act for me",
-    blurb: "Handles routine, reversible fixes itself (auto-approve on) and lists everything it did.",
+    title: tr("Act for me"),
+    blurb: tr("Handles routine, reversible fixes itself (auto-approve on) and lists everything it did."),
   },
 ];
 
 /** Suggested non-negotiables: tap to add, edit before saving. */
 export const MEMORY_SUGGESTIONS: string[] = [
-  "Never send an email or message on my behalf without asking me first.",
-  "Lead with the number and the action; keep updates short.",
-  "Report money in USD with two decimals.",
-  "Flag anything that could cost more than $500 as urgent.",
-  "My working hours are 9:00–18:00 on weekdays.",
-  "Never change a live deal or campaign without my approval.",
+  tr("Never send an email or message on my behalf without asking me first."),
+  tr("Lead with the number and the action; keep updates short."),
+  tr("Report money in USD with two decimals."),
+  tr("Flag anything that could cost more than $500 as urgent."),
+  tr("My working hours are 9:00–18:00 on weekdays."),
+  tr("Never change a live deal or campaign without my approval."),
 ];
 
 export type LaunchpadAnswers = {
@@ -212,28 +213,28 @@ export function pickedGoals(ids: string[]): PatrolGoal[] {
 /** draftTitle names the patrol from its goals ("Deals & spend patrol"). */
 export function draftTitle(goalIds: string[]): string {
   const short: Record<string, string> = {
-    deals: "Deals",
-    spend: "Spend",
-    reports: "Reports",
-    inbox: "Inbox",
-    optimize: "Optimization",
-    day: "Daily brief",
-    anomalies: "Data",
+    deals: tr("Deals"),
+    spend: tr("Spend"),
+    reports: tr("Reports"),
+    inbox: tr("Inbox"),
+    optimize: tr("Optimization"),
+    day: tr("Daily brief"),
+    anomalies: tr("Data"),
   };
   const names = pickedGoals(goalIds).map((g) => short[g.id] ?? g.title);
-  if (names.length === 0) return "My patrol";
-  if (names.length === 1) return `${names[0]} patrol`;
-  if (names.length === 2) return `${names[0]} & ${names[1].toLowerCase()} patrol`;
-  return `${names[0]}, ${names[1].toLowerCase()} & more patrol`;
+  if (names.length === 0) return tr("My patrol");
+  if (names.length === 1) return tr("{0} patrol", [names[0]]);
+  if (names.length === 2) return tr("{0} & {1} patrol", [names[0], names[1].toLowerCase()]);
+  return tr("{0}, {1} & more patrol", [names[0], names[1].toLowerCase()]);
 }
 
 const MODE_RULES: Record<PatrolMode, string> = {
   report:
-    "Observe and report only. Never change anything, send anything or stage an action — recommend, and let me decide.",
+    tr("Observe and report only. Never change anything, send anything or stage an action — recommend, and let me decide."),
   suggest:
-    "Recommend specific fixes and stage each one for my approval. Do not make changes yourself.",
+    tr("Recommend specific fixes and stage each one for my approval. Do not make changes yourself."),
   act:
-    "You may take routine, reversible actions yourself; list every action you took in the report. Ask me first for anything costly, irreversible or outside these checks.",
+    tr("You may take routine, reversible actions yourself; list every action you took in the report. Ask me first for anything costly, irreversible or outside these checks."),
 };
 
 /**
@@ -248,15 +249,15 @@ export function draftPrompt(a: LaunchpadAnswers): string {
   const lines: string[] = [];
   lines.push("**Mission**");
   lines.push(
-    "You are on patrol for me. Each time this runs, check the things below with my connected tools and tell me what needs my attention — and what to do about it.",
+    tr("You are on patrol for me. Each time this runs, check the things below with my connected tools and tell me what needs my attention — and what to do about it."),
   );
   lines.push("");
-  lines.push("**Each run**");
+  lines.push(tr("**Each run**"));
   let n = 0;
   for (const g of goals) {
     n += 1;
     const using = matchingConnectors(g, active).map(connectorLabel);
-    const via = using.length > 0 ? ` (use ${joinWords(using)})` : ` (if no connector can do this, tell me once that it needs ${g.needs})`;
+    const via = using.length > 0 ? tr(" (use {0})", [joinWords(using)]) : tr(" (if no connector can do this, tell me once that it needs {0})", [g.needs]);
     lines.push(`${n}. ${g.step}${via}`);
   }
   const notes = a.notes.trim();
@@ -267,22 +268,22 @@ export function draftPrompt(a: LaunchpadAnswers): string {
   lines.push("");
   lines.push("**Report**");
   lines.push(
-    "Start with one headline: “✅ All clear” or “⚠️ N items need you”. Then list the items by urgency — what you found, why it matters, and the next step. Compare with your previous report in this chat: say what is new, what is resolved and what is still open, instead of repeating unchanged findings.",
+    tr("Start with one headline: “✅ All clear” or “⚠️ N items need you”. Then list the items by urgency — what you found, why it matters, and the next step. Compare with your previous report in this chat: say what is new, what is resolved and what is still open, instead of repeating unchanged findings."),
   );
   lines.push("");
   lines.push("**Boundaries**");
   lines.push(MODE_RULES[a.mode]);
   if (active.length > 0) {
-    lines.push(`Tools switched on for this patrol: ${joinWords(active.map(connectorLabel))}.`);
+    lines.push(tr("Tools switched on for this patrol: {0}.", [joinWords(active.map(connectorLabel))]));
   }
   if (a.cadenceLabel.trim()) {
-    lines.push(`Schedule: ${a.cadenceLabel.trim()}.`);
+    lines.push(tr("Schedule: {0}.", [a.cadenceLabel.trim()]));
   }
   return lines.join("\n");
 }
 
 function joinWords(items: string[]): string {
   if (items.length <= 1) return items.join("");
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  if (items.length === 2) return tr("{0} and {1}", [items[0], items[1]]);
+  return tr("{0} and {1}", [items.slice(0, -1).join(", "), items[items.length - 1]]);
 }

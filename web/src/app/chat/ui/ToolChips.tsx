@@ -1,3 +1,8 @@
+import { messageRoleLabel, warningSeverityLabel } from "@/app/lib/i18n/ownedLabels";
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Tool-call rendering family extracted from chat-experience.tsx (slice 3 of
 // #169). These components turn an agent ToolCall (and run_python output) into
 // the collapsible chips and per-tool input/result views shown under an
@@ -10,6 +15,7 @@
 import { lazy, Suspense, useState } from "react";
 import {
   prettyToolName,
+  subagentRoleLabel,
   safePretty,
   toolIcon,
   type Message,
@@ -75,7 +81,7 @@ export function PythonOutput({
         {images.map((path, i) => {
           const { href } = resolveWorkspaceHref(path, conversationId ?? null);
           return (
-            <WorkspaceImage key={`${path}-${i}`} src={href} alt="figure" />
+            <WorkspaceImage key={`${path}-${i}`} src={href} alt={tr("figure")} />
           );
         })}
       </div>
@@ -104,13 +110,15 @@ export function PythonOutput({
         >
           <span className="flex items-center gap-2">
             <span aria-hidden>{expanded ? "▾" : "▸"}</span>
-            <span>python output{summaryBits ? ` · ${summaryBits}` : ""}</span>
+            <span>
+        {rich("python output{0}", summaryBits ? ` · ${summaryBits}` : "")}
+      </span>
             {hasErr ? (
-              <StatusChip tone="danger">error</StatusChip>
+              <StatusChip tone="danger">{tr("error")}</StatusChip>
             ) : null}
           </span>
           <span className="text-[var(--color-text-muted)]">
-            {expanded ? "collapse" : "expand"}
+            {expanded ? tr("collapse") : tr("expand")}
           </span>
         </button>
         {expanded ? (
@@ -225,13 +233,13 @@ export function ToolChip({
             delegation shows movement even with the panel closed. */}
         {tc.subagent && tc.state === "pending" ? (
           <span className="text-[var(--color-text-muted)]">
-            · {tc.subagent.role || "explore"}
-            {tc.subagent.steps > 0 ? ` · ${tc.subagent.steps} steps` : ""}
+            · {subagentRoleLabel(tc.subagent.role || "explore")}
+            {tc.subagent.steps > 0 ? tr(" · {0} steps", [tc.subagent.steps]) : ""}
           </span>
         ) : null}
         {stagedForApproval ? (
           <span data-testid="tool-chip-staged" className="text-[var(--color-text-muted)]">
-            · sent for approval
+            {tr("· sent for approval")}
           </span>
         ) : null}
         {tc.state === "pending" ? (
@@ -470,10 +478,10 @@ function ToolInputView({
     return (
       <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-          <span>bash</span>
+          <span>{tr("bash")}</span>
           {cwd ? (
             <span className="truncate normal-case tracking-normal text-[0.7rem]">
-              cwd: {cwd}
+              {tr("cwd:")}{" "}{cwd}
             </span>
           ) : null}
         </div>
@@ -496,7 +504,7 @@ function ToolInputView({
     if (cmd === "view") {
       return (
         <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
-          viewing task list
+          {tr("viewing task list")}
         </div>
       );
     }
@@ -561,7 +569,7 @@ function ToolInputView({
   if (name === "web_fetch" && typeof args.url === "string") {
     return (
       <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
-        <span className="text-[var(--color-text-muted)]">GET </span>
+        <span className="text-[var(--color-text-muted)]">{tr("GET")}{" "}</span>
         <span style={{ fontFamily: "var(--font-code)" }}>{args.url}</span>
       </div>
     );
@@ -570,7 +578,7 @@ function ToolInputView({
   if (name === "smart_search" && typeof args.query === "string") {
     return (
       <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
-        <span className="text-[var(--color-text-muted)]">search </span>
+        <span className="text-[var(--color-text-muted)]">{tr("search")}{" "}</span>
         <span className="italic">&ldquo;{args.query}&rdquo;</span>
       </div>
     );
@@ -583,9 +591,9 @@ function ToolInputView({
     return (
       <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-          <span>sub-agent</span>
+          <span>{tr("sub-agent")}</span>
           <StatusChip tone="neutral" className="normal-case tracking-normal">
-            {role}
+            {subagentRoleLabel(role)}
           </StatusChip>
         </div>
         <pre
@@ -607,7 +615,7 @@ function TaskList({ tasks }: { tasks: unknown[] }) {
     <ul className="grid gap-0.5 rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.78rem]">
       {tasks.map((raw, i) => {
         const t = (raw ?? {}) as Record<string, unknown>;
-        const title = typeof t.title === "string" ? t.title : "(untitled)";
+        const title = typeof t.title === "string" ? t.title : tr("(untitled)");
         const status = typeof t.status === "string" ? t.status : "todo";
         const notes = typeof t.notes === "string" ? t.notes : "";
         const glyph =
@@ -771,10 +779,12 @@ function BashResult({
     <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem]">
         <StatusChip tone={failed ? "danger" : "success"} caps>
-          exit {exitCode}
+          {tr("exit")}{" "}{exitCode}
         </StatusChip>
         {elapsed ? (
-          <span className="text-[var(--color-text-muted)]">{elapsed}ms</span>
+          <span className="text-[var(--color-text-muted)]">
+        {rich("{0}ms", elapsed)}
+      </span>
         ) : null}
       </div>
       <div
@@ -804,7 +814,7 @@ function BashResult({
         ) : null}
         {!stdout && !stderr && !err ? (
           <p className="text-[0.7rem] text-[var(--color-text-muted)]">
-            (no output)
+            {tr("(no output)")}
           </p>
         ) : null}
       </div>
@@ -874,12 +884,14 @@ function SubagentActivityPanel({ activity }: { activity: SubagentActivity }) {
       data-testid="chat-subagent-activity"
     >
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-        <span>sub-agent activity</span>
+        <span>{tr("sub-agent activity")}</span>
         {activity.steps > 0 ? (
-          <span className="normal-case tracking-normal">{activity.steps} steps</span>
+          <span className="normal-case tracking-normal">
+        {rich("{0} steps", activity.steps)}
+      </span>
         ) : null}
         {running ? (
-          <span className="ml-auto normal-case tracking-normal">running…</span>
+          <span className="ml-auto normal-case tracking-normal">{tr("running…")}</span>
         ) : null}
       </div>
       {activity.current ? (
@@ -937,7 +949,7 @@ function SubagentChatTranscript({
   const load = async () => {
     const url = conversationApiPath(conversationId, "subagents", childId);
     if (!url) {
-      setNote("Transcript not available (invalid subagent id).");
+      setNote(tr("Transcript not available (invalid subagent id)."));
       setState("error");
       return;
     }
@@ -947,8 +959,8 @@ function SubagentChatTranscript({
       if (!res.ok) {
         setNote(
           res.status === 404
-            ? "Transcript not available (it may have been cleaned up on the server)."
-            : `Transcript fetch failed (${res.status}).`,
+            ? tr("Transcript not available (it may have been cleaned up on the server).")
+            : tr("Transcript fetch failed ({0}).", [res.status]),
         );
         setState("error");
         return;
@@ -957,7 +969,7 @@ function SubagentChatTranscript({
       setMessages(session.messages ?? []);
       setState("loaded");
     } catch {
-      setNote("Transcript fetch failed.");
+      setNote(tr("Transcript fetch failed."));
       setState("error");
     }
   };
@@ -969,9 +981,9 @@ function SubagentChatTranscript({
         if ((e.target as HTMLDetailsElement).open && state === "idle") void load();
       }}
     >
-      <summary className="cursor-pointer text-[var(--color-text-muted)]">Transcript</summary>
+      <summary className="cursor-pointer text-[var(--color-text-muted)]">{tr("Transcript")}</summary>
       {state === "loading" ? (
-        <p className="py-1 text-[var(--color-text-muted)]">Loading transcript…</p>
+        <p className="py-1 text-[var(--color-text-muted)]">{tr("Loading transcript…")}</p>
       ) : null}
       {state === "error" ? <p className="py-1 text-[var(--color-text-muted)]">{note}</p> : null}
       {state === "loaded" ? (
@@ -979,7 +991,7 @@ function SubagentChatTranscript({
           {messages.map((m, i) => (
             <div key={i} className="min-w-0">
               <span className="text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
-                {m.role ?? "?"}
+                {m.role ? messageRoleLabel(m.role) : "?"}
                 {m.tool_name ? ` · ${m.tool_name}` : ""}
               </span>
               {(m.content ?? "").trim() ? (
@@ -1035,22 +1047,26 @@ function SubagentSpawnResult({
     >
       <div className="flex items-center gap-2 px-2 py-1 text-[0.7rem]">
         <span className="font-semibold text-[var(--color-text-primary)]">
-          Sub-agent{childId ? ` ${childId.replace(/^subagent-/, "").slice(0, 8)}…` : ""}
-        </span>
+        {rich("Sub-agent{0}", childId ? ` ${childId.replace(/^subagent-/, "").slice(0, 8)}…` : "")}
+      </span>
         {role ? (
-          <StatusChip tone="neutral">{role}</StatusChip>
+          <StatusChip tone="neutral">{subagentRoleLabel(role)}</StatusChip>
         ) : null}
         <span
           className="ml-auto font-semibold"
           style={{ color: success ? "var(--color-success)" : "var(--color-danger)" }}
         >
-          {status}
+          {tr(status)}
         </span>
       </div>
       <div className="flex flex-wrap gap-2 px-2 pb-1 text-[0.68rem] text-[var(--color-text-muted)]">
-        {cost > 0 ? <span>${cost.toFixed(4)}</span> : null}
-        {tokens > 0 ? <span>{tokens.toLocaleString()} tokens</span> : null}
-        {steps > 0 ? <span>{steps} steps</span> : null}
+        {cost > 0 ? <span>${formatFixed(cost, 4)}</span> : null}
+        {tokens > 0 ? <span>
+        {rich("{0} tokens", tokens.toLocaleString(getLanguage()))}
+      </span> : null}
+        {steps > 0 ? <span>
+        {rich("{0} steps", steps)}
+      </span> : null}
         {toolsUsed.length > 0 ? (
           <span className="min-w-0 truncate" title={toolsUsed.join(", ")}>
             {toolsUsed.join(", ")}
@@ -1060,7 +1076,7 @@ function SubagentSpawnResult({
       {answer ? (
         <details className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]">
           <summary className="cursor-pointer text-[var(--color-text-muted)]">
-            Result
+            {tr("Result")}
           </summary>
           <pre
             className="overflow-auto whitespace-pre-wrap py-1 leading-[1.4] text-[var(--color-text-secondary)]"
@@ -1080,8 +1096,7 @@ function SubagentSpawnResult({
 function EmailSendPending() {
   return (
     <p className="text-[0.72rem] text-[var(--color-text-muted)]">
-      Waiting for your approval — the email is staged and nothing has been sent
-      yet.
+      {tr("Waiting for your approval — the email is staged and nothing has been sent yet.")}
     </p>
   );
 }
@@ -1117,18 +1132,18 @@ export function EmailSendResult({
   const failed = isErr || error !== "" || httpFailed;
 
   const headline = failed
-    ? "Not sent"
+    ? tr("Not sent")
     : duplicate
-      ? "Already sent"
-      : "Queued for delivery";
+      ? tr("Already sent")
+      : tr("Queued for delivery");
   const detail = failed
     ? error ||
       (statusCode !== null
-        ? `the email provider returned status ${statusCode}`
-        : "the email provider rejected the send")
+        ? tr("the email provider returned status {0}", [statusCode])
+        : tr("the email provider rejected the send"))
     : duplicate
       ? note ||
-        "an identical email was already sent by an earlier run of this task"
+        tr("an identical email was already sent by an earlier run of this task")
       : "";
 
   return (
@@ -1153,19 +1168,19 @@ export function EmailSendResult({
         {!failed && warnings.length ? (
           <StatusChip tone="warning">
             {warnings.length === 1
-              ? "1 formatting note"
-              : `${warnings.length} formatting notes`}
+              ? tr("1 formatting note")
+              : tr("{0} formatting notes", [warnings.length])}
           </StatusChip>
         ) : null}
       </div>
       <details className="border-t border-[var(--color-border)]">
         <summary className="cursor-pointer px-2 py-1 text-[0.68rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]">
-          Delivery details
+          {tr("Delivery details")}
         </summary>
         <div className="grid gap-1.5 px-2 pb-2 text-[0.7rem] leading-[1.45]">
           {messageId ? (
             <p className="text-[var(--color-text-secondary)]">
-              Message ID:{" "}
+              {tr("Message ID:")}{" "}
               <span style={{ fontFamily: "var(--font-code)" }}>{messageId}</span>
             </p>
           ) : null}
@@ -1177,7 +1192,7 @@ export function EmailSendResult({
                   className="text-[var(--color-text-secondary)]"
                 >
                   <span style={{ color: "var(--color-warning)" }}>
-                    {w.severity}
+                    {warningSeverityLabel(w.severity)}
                     {w.rule ? ` ${w.rule}` : ""}
                   </span>{" "}
                   — {w.message}
@@ -1216,16 +1231,22 @@ function TaskTrackerResult({ result }: { result: Record<string, unknown> }) {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-        <span>{total} total</span>
+        <span>
+        {rich("{0} total", total)}
+      </span>
         {done ? (
-          <span style={{ color: "var(--color-success)" }}>✓ {done} done</span>
+          <span style={{ color: "var(--color-success)" }}>
+        {rich("✓ {0} done", done)}
+      </span>
         ) : null}
         {inProgress ? (
           <span style={{ color: "var(--color-accent)" }}>
-            ◐ {inProgress} in progress
-          </span>
+        {rich("◐ {0} in progress", inProgress)}
+      </span>
         ) : null}
-        {todo ? <span>○ {todo} todo</span> : null}
+        {todo ? <span>
+        {rich("○ {0} todo", todo)}
+      </span> : null}
       </div>
       {tasks.length > 0 ? <TaskList tasks={tasks} /> : null}
     </div>

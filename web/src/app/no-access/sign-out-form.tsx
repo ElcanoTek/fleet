@@ -1,3 +1,4 @@
+import { getLanguage, t as tr } from "@/app/lib/i18n";
 import { signOut } from "@/app/shared/signOut";
 
 // The no-access page's way out, through the one signOut every other surface
@@ -13,7 +14,7 @@ import { signOut } from "@/app/shared/signOut";
 export function SignOutForm() {
   return (
     <form
-      action="/api/auth/logout"
+      action={`/api/auth/logout?lang=${getLanguage()}`}
       method="post"
       className="mt-3"
       onSubmit={(event) => {
@@ -25,7 +26,7 @@ export function SignOutForm() {
         type="submit"
         className="w-full rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
       >
-        Sign out
+        {tr("Sign out")}
       </button>
     </form>
   );

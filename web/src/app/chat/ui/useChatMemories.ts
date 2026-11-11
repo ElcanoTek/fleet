@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // useChatMemories — chat's memory manager state and actions, moved out of
 // chat-experience.tsx unchanged (#2008). The requests live in
 // shared/lib/memoriesApi.ts (shared with Settings → Memories); the dialog is
@@ -43,9 +44,9 @@ export function useChatMemories() {
     setIsLoadingMemories(true);
     setMemoryError(null);
     try {
-      setMemories(await listMemories("Unable to load memories"));
+      setMemories(await listMemories(tr("Unable to load memories")));
     } catch (err) {
-      setMemoryError(errorMessage(err, "Unable to load memories."));
+      setMemoryError(errorMessage(err, tr("Unable to load memories.")));
     } finally {
       setIsLoadingMemories(false);
     }
@@ -68,14 +69,14 @@ export function useChatMemories() {
     try {
       await saveMemoryRequest(
         { id: editingMemoryId, content, kind: memoryKindDraft },
-        "Unable to save memory",
+        tr("Unable to save memory"),
       );
       setMemoryDraft("");
       setMemoryKindDraft("fact");
       setEditingMemoryId(null);
       await loadMemories();
     } catch (err) {
-      setMemoryError(errorMessage(err, "Unable to save memory."));
+      setMemoryError(errorMessage(err, tr("Unable to save memory.")));
     } finally {
       setIsSavingMemory(false);
     }
@@ -86,25 +87,25 @@ export function useChatMemories() {
   const promoteMemoryToProject = async (id: string, projectID: string) => {
     setMemoryError(null);
     try {
-      await promoteMemory(id, projectID, "Unable to move that memory to team learnings");
+      await promoteMemory(id, projectID, tr("Unable to move that memory to team learnings"));
       setPromoteMemoryId(null);
       await loadMemories();
     } catch (err) {
-      setMemoryError(errorMessage(err, "Unable to move that memory to team learnings."));
+      setMemoryError(errorMessage(err, tr("Unable to move that memory to team learnings.")));
     }
   };
 
   const deleteMemory = async (id: string) => {
     setMemoryError(null);
     try {
-      await deleteMemoryRequest(id, "Unable to delete memory");
+      await deleteMemoryRequest(id, tr("Unable to delete memory"));
       setMemories((prev) => prev.filter((m) => m.id !== id));
       if (editingMemoryId === id) {
         setEditingMemoryId(null);
         setMemoryDraft("");
       }
     } catch (err) {
-      setMemoryError(errorMessage(err, "Unable to delete memory."));
+      setMemoryError(errorMessage(err, tr("Unable to delete memory.")));
     }
   };
 
@@ -112,10 +113,10 @@ export function useChatMemories() {
   const patchMemory = async (id: string, patch: { pinned?: boolean; retired?: boolean }) => {
     setMemoryError(null);
     try {
-      await patchMemoryRequest(id, patch, "Unable to update memory");
+      await patchMemoryRequest(id, patch, tr("Unable to update memory"));
       await loadMemories();
     } catch (err) {
-      setMemoryError(errorMessage(err, "Unable to update memory."));
+      setMemoryError(errorMessage(err, tr("Unable to update memory.")));
     }
   };
 

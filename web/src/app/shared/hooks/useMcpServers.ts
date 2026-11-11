@@ -1,3 +1,4 @@
+import { localizeConnector } from "@/app/lib/i18n/bundle";
 import { useCallback } from "react";
 import { orchestratorApi, type McpServer } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -21,7 +22,7 @@ export type UseMcpServers = {
 
 export function useMcpServers(enabled = true): UseMcpServers {
   const { data, loading, error, reload } = useCancellableFetch(
-    useCallback(async (signal: AbortSignal) => (await orchestratorApi.mcpServers(signal)).servers ?? [], []),
+    useCallback(async (signal: AbortSignal) => ((await orchestratorApi.mcpServers(signal)).servers ?? []).map(localizeConnector), []),
     [],
     { enabled },
   );

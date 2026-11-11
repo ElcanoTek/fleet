@@ -1,3 +1,6 @@
+import { memoryKindLabel } from "@/app/lib/i18n/ownedLabels";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import {
   btnClass,
@@ -57,13 +60,13 @@ export default function MemoriesPage() {
 
   const loadMemories = useCallback(async () => {
     try {
-      setMemories(await listMemories("Unable to load memories"));
+      setMemories(await listMemories(tr("Unable to load memories")));
     } catch (err) {
       if (err instanceof MemoriesApiError && err.status === 401) {
         redirectToLogin();
         return;
       }
-      setError(errorMessage(err, "Unable to load memories."));
+      setError(errorMessage(err, tr("Unable to load memories.")));
       setMemories((cur) => cur ?? []);
     }
   }, []);
@@ -101,15 +104,15 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      await saveMemory({ id: editingId, content, kind: kindDraft }, "Unable to save memory");
+      await saveMemory({ id: editingId, content, kind: kindDraft }, tr("Unable to save memory"));
       const wasEditing = editingId !== null;
       setDraft("");
       setKindDraft("fact");
       setEditingId(null);
-      setNotice(wasEditing ? "Memory updated." : "Memory added.");
+      setNotice(wasEditing ? tr("Memory updated.") : tr("Memory added."));
       await loadMemories();
     } catch (err) {
-      setError(errorMessage(err, "Unable to save memory."));
+      setError(errorMessage(err, tr("Unable to save memory.")));
     } finally {
       setBusy(false);
     }
@@ -122,10 +125,10 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      await patchMemory(id, patch, "Unable to update memory");
+      await patchMemory(id, patch, tr("Unable to update memory"));
       await loadMemories();
     } catch (err) {
-      setError(errorMessage(err, "Unable to update memory."));
+      setError(errorMessage(err, tr("Unable to update memory.")));
     }
   };
 
@@ -133,15 +136,15 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      await deleteMemory(id, "Unable to delete memory");
+      await deleteMemory(id, tr("Unable to delete memory"));
       setMemories((cur) => (cur ? cur.filter((m) => m.id !== id) : cur));
       if (editingId === id) {
         setEditingId(null);
         setDraft("");
       }
-      setNotice("Memory deleted.");
+      setNotice(tr("Memory deleted."));
     } catch (err) {
-      setError(errorMessage(err, "Unable to delete memory."));
+      setError(errorMessage(err, tr("Unable to delete memory.")));
     }
   };
 
@@ -149,13 +152,13 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      await promoteMemory(id, projectId, "Unable to move memory to team learnings");
+      await promoteMemory(id, projectId, tr("Unable to move memory to team learnings"));
       setPromoteId(null);
-      setNotice("Moved to project team learnings.");
+      setNotice(tr("Moved to project team learnings."));
       await loadMemories();
     } catch (err) {
       setError(
-        errorMessage(err, "Unable to move memory to team learnings."),
+        errorMessage(err, tr("Unable to move memory to team learnings.")),
       );
     }
   };
@@ -176,8 +179,8 @@ export default function MemoriesPage() {
 
   return (
     <SetSection
-      title="Memories"
-      intro="Facts and preferences the assistant remembers in every chat you start."
+      title={tr("Memories")}
+      intro={tr("Facts and preferences the assistant remembers in every chat you start.")}
     >
       {error ? (
         <p
@@ -198,12 +201,12 @@ export default function MemoriesPage() {
 
       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
         <Segmented
-          label="Memory status filter"
+          label={tr("Memory status filter")}
           value={filter}
           options={[
-            { value: "active", label: `Active (${activeCount})` },
-            { value: "retired", label: `Retired (${retiredCount})` },
-            { value: "all", label: `All (${allMemories.length})` },
+            { value: "active", label: tr("Active ({0})", [activeCount]) },
+            { value: "retired", label: tr("Retired ({0})", [retiredCount]) },
+            { value: "all", label: tr("All ({0})", [allMemories.length]) },
           ]}
           onChange={setFilter}
         />
@@ -212,17 +215,17 @@ export default function MemoriesPage() {
       {!readOnlyViewer ? (
         <ConnPanel>
           <ConnPanelHead
-            title={editingId ? "Edit memory" : "Add a memory"}
+            title={editingId ? tr("Edit memory") : tr("Add a memory")}
           />
               <ConnPanelSub>
-                Good memories are standing rules and preferences (for example, “Deal names may contain intentional typos; never correct them”), not temporary numbers.
+                {tr("Good memories are standing rules and preferences (for example, “Deal names may contain intentional typos; never correct them”), not temporary numbers.")}
               </ConnPanelSub>
               <div className="grid gap-3">
-                <ConnField label="Memory">
+                <ConnField label={tr("Memory")}>
                   <textarea
-                    aria-label="Memory text"
+                    aria-label={tr("Memory text")}
                     rows={3}
-                    placeholder="Remember that deal names may contain intentional typos; never correct them."
+                    placeholder={tr("Remember that deal names may contain intentional typos; never correct them.")}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     className={SETTINGS_INPUT}
@@ -234,7 +237,7 @@ export default function MemoriesPage() {
                       htmlFor="settings-memory-kind"
                       className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
                     >
-                      Kind
+                      {tr("Kind")}
                     </label>
                     <select
                       id="settings-memory-kind"
@@ -244,7 +247,7 @@ export default function MemoriesPage() {
                     >
                       {MEMORY_KINDS.map((k) => (
                         <option key={k} value={k}>
-                          {k}
+                          {memoryKindLabel(k)}
                         </option>
                       ))}
                     </select>
@@ -260,7 +263,7 @@ export default function MemoriesPage() {
                           setKindDraft("fact");
                         }}
                       >
-                        Cancel edit
+                        {tr("Cancel edit")}
                       </button>
                     ) : null}
                     <button
@@ -270,10 +273,10 @@ export default function MemoriesPage() {
                       className={btnClass({ variant: "primary", sm: true })}
                     >
                       {busy
-                        ? "Saving…"
+                        ? tr("Saving…")
                         : editingId
-                          ? "Save changes"
-                          : "Add memory"}
+                          ? tr("Save changes")
+                          : tr("Add memory")}
                     </button>
                   </div>
                 </div>
@@ -282,12 +285,12 @@ export default function MemoriesPage() {
           ) : null}
 
           <ConnPanel>
-            <ConnPanelHead title="Saved memories">
+            <ConnPanelHead title={tr("Saved memories")}>
               {allMemories.length > 0 ? (
                 <input
                   type="search"
-                  aria-label="Search memories"
-                  placeholder="Filter memories…"
+                  aria-label={tr("Search memories")}
+                  placeholder={tr("Filter memories…")}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-48 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
@@ -295,16 +298,16 @@ export default function MemoriesPage() {
               ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
-              Pinned memories come first. Retire a memory to stop using it in new chats while keeping a record of it.
+              {tr("Pinned memories come first. Retire a memory to stop using it in new chats while keeping a record of it.")}
             </ConnPanelSub>
 
             {memories === null ? (
-              <p className={LOADING}>Loading memories…</p>
+              <p className={LOADING}>{tr("Loading memories…")}</p>
             ) : visibleMemories.length === 0 ? (
               <ConnEmpty>
                 {allMemories.length === 0
-                  ? "No memories saved yet. Add one above or tell the assistant in chat “remember this: …”."
-                  : "No memories match this filter."}
+                  ? tr("No memories saved yet. Add one above or tell the assistant in chat “remember this: …”.")
+                  : tr("No memories match this filter.")}
               </ConnEmpty>
             ) : (
               <ConnRows>
@@ -313,13 +316,13 @@ export default function MemoriesPage() {
                   const sourceLabel =
                     memory.source === "chat"
                       ? memory.origin === "auto"
-                        ? "Auto-extracted from chat"
-                        : "Saved from chat"
+                        ? tr("Auto-extracted from chat")
+                        : tr("Saved from chat")
                       : memory.source === "proposed"
-                        ? "Proposed"
-                        : "Manual";
+                        ? tr("Proposed")
+                        : tr("Manual");
                   const learned = memory.learned_at
-                    ? new Date(memory.learned_at * 1000).toLocaleDateString()
+                    ? new Date(memory.learned_at * 1000).toLocaleDateString(getLanguage())
                     : null;
 
                   return (
@@ -330,24 +333,24 @@ export default function MemoriesPage() {
                     >
                       <p className="m-0 whitespace-pre-wrap text-[0.85rem] leading-[1.55] text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                         {memory.pinned ? (
-                          <span title="Pinned">📌 </span>
+                          <span title={tr("Pinned")}>📌 </span>
                         ) : null}
                         {memory.content}
                       </p>
                       <div className={ROW_HEAD}>
                         <div className="flex flex-wrap items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
                           {memory.pinned ? (
-                            <ConnBadge variant="overridden">Pinned</ConnBadge>
+                            <ConnBadge variant="overridden">{tr("Pinned")}</ConnBadge>
                           ) : null}
                           {memory.kind ? (
-                            <ConnBadge variant="neutral">{memory.kind}</ConnBadge>
+                            <ConnBadge variant="neutral">{memoryKindLabel(memory.kind)}</ConnBadge>
                           ) : null}
                           {retired ? (
-                            <ConnBadge variant="warn">Retired</ConnBadge>
+                            <ConnBadge variant="warn">{tr("Retired")}</ConnBadge>
                           ) : null}
                           <span>
                             {sourceLabel}
-                            {learned ? ` · learned ${learned}` : ""}
+                            {learned ? tr(" · learned {0}", [learned]) : ""}
                           </span>
                         </div>
                         {!readOnlyViewer ? (
@@ -360,7 +363,7 @@ export default function MemoriesPage() {
                                   void handlePatch(memory.id, { retired: false })
                                 }
                               >
-                                Restore
+                                {tr("Restore")}
                               </button>
                             ) : (
                               <>
@@ -373,7 +376,7 @@ export default function MemoriesPage() {
                                     })
                                   }
                                 >
-                                  {memory.pinned ? "Unpin" : "Pin"}
+                                  {memory.pinned ? tr("Unpin") : tr("Pin")}
                                 </button>
                                 <button
                                   type="button"
@@ -384,17 +387,17 @@ export default function MemoriesPage() {
                                     setKindDraft(memory.kind ?? "fact");
                                   }}
                                 >
-                                  Edit
+                                  {tr("Edit")}
                                 </button>
                                 <button
                                   type="button"
                                   className={btnClass({ sm: true })}
-                                  title="Keep for the record, stop giving to the assistant"
+                                  title={tr("Keep for the record, stop giving to the assistant")}
                                   onClick={() =>
                                     void handlePatch(memory.id, { retired: true })
                                   }
                                 >
-                                  Retire
+                                  {tr("Retire")}
                                 </button>
                                 {memory.source !== "proposed" &&
                                 teamProjects.length > 0 ? (
@@ -416,13 +419,13 @@ export default function MemoriesPage() {
                                       }
                                     }}
                                   >
-                                    Move to team learnings
+                                    {tr("Move to team learnings")}
                                   </button>
                                 ) : null}
                               </>
                             )}
                             <InlineConfirmButton
-                              label="Delete"
+                              label={tr("Delete")}
                               onConfirm={() => void handleDelete(memory.id)}
                             />
                           </div>
@@ -431,7 +434,7 @@ export default function MemoriesPage() {
                       {promoteId === memory.id && teamProjects.length > 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem]">
                           <span className="text-[var(--color-text-secondary)]">
-                            Move into project:
+                            {tr("Move into project:")}
                           </span>
                           {teamProjects.map((p) => (
                             <button
@@ -448,8 +451,7 @@ export default function MemoriesPage() {
                             className={btnClass({ sm: true })}
                             onClick={() => setPromoteId(null)}
                           >
-                            Cancel
-                          </button>
+                            {tr("Cancel")}</button>
                         </div>
                       ) : null}
                     </div>

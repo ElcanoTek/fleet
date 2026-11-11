@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 
 import { retryAdminProbe, type AdminState } from "./useIsAdmin";
@@ -24,7 +25,7 @@ export function AdminGateFallback({ state }: { state: AdminState }) {
       data-testid="admin-gate-unavailable"
       className="flex flex-wrap items-center justify-between gap-3"
     >
-      <span>Couldn&rsquo;t check your permissions — the server didn&rsquo;t answer.</span>
+      <span>{tr("Couldn’t check your permissions — the server didn’t answer.")}</span>
       <button
         type="button"
         className={btnClass({ sm: true })}
@@ -34,7 +35,7 @@ export function AdminGateFallback({ state }: { state: AdminState }) {
           void retryAdminProbe().finally(() => setRetrying(false));
         }}
       >
-        {retrying ? "Checking…" : "Retry"}
+        {retrying ? tr("Checking…") : tr("Retry")}
       </button>
     </NoticeBanner>
   );

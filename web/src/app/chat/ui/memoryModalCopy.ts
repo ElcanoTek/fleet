@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // The memories modal's subtitle, per tab.
 //
 // One string used to describe all three tabs: "Saved memories are scoped to
@@ -25,7 +26,7 @@ export function memoryModalSubtitle(
   },
 ): string {
   if (tab === "team" && projectName) {
-    return `Team learnings are shared with everyone in ${projectName} and added to every chat in it.`;
+    return tr("Team learnings are shared with everyone in {0} and added to every chat in it.", [projectName]);
   }
-  return `Saved memories are scoped to ${userEmail || "this user"} and are added to future chats.`;
+  return tr("Saved memories are scoped to {0} and are added to future chats.", [userEmail || tr("this user")]);
 }

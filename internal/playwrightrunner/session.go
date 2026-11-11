@@ -113,6 +113,7 @@ type LiveSession struct {
 	stdin       io.WriteCloser
 	cancel      context.CancelFunc
 	closeProxy  func()
+	refused     *proxyRefusals // what the session's guard proxy refused
 	cmd         *exec.Cmd
 }
 
@@ -211,7 +212,8 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 	}
 
 	sessCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	proxyAddr, closeProxy, err := startSSRFGuardProxy(sessCtx, DialContext)
+	refused := &proxyRefusals{}
+	proxyAddr, closeProxy, err := startSSRFGuardProxy(sessCtx, DialContext, refused)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("start SSRF guard proxy: %w", err)
@@ -239,6 +241,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 		stdin:       stdin,
 		cancel:      cancel,
 		closeProxy:  closeProxy,
+		refused:     refused,
 		cmd:         cmd,
 	}
 
@@ -428,6 +431,12 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 	creds := s.credentials
 	currentURL := s.currentURL
 	s.mu.Unlock()
+	// pageURL is where the page should be when each step starts: the
+	// session's current URL, then the target of each goto that passed the
+	// origin check. A click can still navigate; the worker re-checks the live
+	// page URL before every credential step, so this is an early refusal, not
+	// the only one.
+	pageURL := currentURL
 	for i := range steps {
 		steps[i].Action = strings.ToLower(strings.TrimSpace(steps[i].Action))
 		if err := ValidateStep(steps[i]); err != nil {
@@ -436,10 +445,17 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 		if err := validateStepNavigationOrigin(s.baseURL, creds, steps[i]); err != nil {
 			return nil, err
 		}
-		if stepUsesCredentials(steps[i].Value, creds) && currentURL != "" {
-			if err := validateStepNavigationOrigin(s.baseURL, creds, Step{Action: "goto", Value: currentURL}); err != nil {
-				return nil, fmt.Errorf("refusing secret-bearing step %q after cross-origin navigation: %w", steps[i].Action, err)
+		if steps[i].Action == "goto" {
+			if target := strings.TrimSpace(steps[i].Value); target != "" {
+				pageURL = target
+			} else if target := strings.TrimSpace(steps[i].Selector); target != "" {
+				pageURL = target
 			}
+			continue
+		}
+		if stepUsesCredentials(steps[i].Value, creds) && pageURL != "" && !sameOriginURL(s.baseURL, pageURL) {
+			return nil, fmt.Errorf("refusing secret-bearing step %q after cross-origin navigation: the page is on %s, not on this session's origin %s",
+				steps[i].Action, urlOrigin(pageURL), urlOrigin(s.baseURL))
 		}
 	}
 	reqID, _ := randomHex(8)
@@ -567,6 +583,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 	if cmd.ReqID != "" {
 		s.pending[cmd.ReqID] = replyCh
 	}
+	refusedMark := s.refused.mark()
 	line, err := json.Marshal(cmd)
 	if err != nil {
 		delete(s.pending, cmd.ReqID)
@@ -596,7 +613,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 		creds := s.credentials
 		s.mu.Unlock()
 		if !msg.OK {
-			errMsg := maskSecrets(msg.Error, creds)
+			errMsg := maskSecrets(s.refused.explain(msg.Error, refusedMark), creds)
 			if errMsg == "" {
 				errMsg = "browser session command failed"
 			}
@@ -966,7 +983,7 @@ async def main():
         exe = find_chromium_executable()
         last_exc = None
         for exe_candidate in ([None, exe] if exe else [None]):
-            kwargs = {"headless": True, "args": list(launch_args)}
+            kwargs = {"headless": True, "chromium_sandbox": True, "args": list(launch_args)}
             if proxy_server:
                 kwargs["proxy"] = {"server": proxy_server}
             if exe_candidate:
@@ -1396,7 +1413,7 @@ async function pushSnapshotFrame(page) {
     const exe = findChromiumExecutable();
     let lastErr;
     for (const exeCandidate of exe ? [null, exe] : [null]) {
-      const opts = { headless: true, args: [...launchArgs] };
+      const opts = { headless: true, chromiumSandbox: true, args: [...launchArgs] };
       if (proxyServer) opts.proxy = { server: proxyServer };
       if (exeCandidate) opts.executablePath = exeCandidate;
       try {

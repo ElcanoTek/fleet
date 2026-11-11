@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // Settings → Admin → Users (fleet-unified settings pass): the admin surface
 // for the RBAC layer (#237) merged with the old /admin usage table. One table
 // joins GET /api/admin/users (provisioned accounts: role/team/ops flag) with
@@ -58,21 +60,21 @@ export type AdminUser = {
 const ROLES = ["member", "viewer", "admin"] as const;
 type Role = (typeof ROLES)[number];
 const CHAT_ROLE_LABELS = {
-  member: "Contributor",
-  viewer: "Viewer",
-  admin: "Admin",
+  member: tr("Contributor"),
+  viewer: tr("Viewer"),
+  admin: tr("Admin"),
 } as const satisfies Record<Role, string>;
 
 const CHAT_ROLE_OPTIONS = [
   {
     value: "viewer",
     label: CHAT_ROLE_LABELS.viewer,
-    description: "Read-only Chat access: can view but cannot create or change content.",
+    description: tr("Read-only Chat access: can view but cannot create or change content."),
   },
   {
     value: "member",
     label: CHAT_ROLE_LABELS.member,
-    description: "Can actively use Chat, including creating and updating content.",
+    description: tr("Can actively use Chat, including creating and updating content."),
   },
 ] as const satisfies readonly {
   value: Role;
@@ -89,18 +91,18 @@ type OpsScope = (typeof OPS_SCOPES)[number];
 const OPS_SCOPE_OPTIONS = [
   {
     value: "none",
-    label: "None",
-    description: "No access to Background tasks.",
+    label: tr("None"),
+    description: tr("No access to Background tasks."),
   },
   {
     value: "view",
-    label: "Viewer",
-    description: "Can see background tasks and their logs but can't change them.",
+    label: tr("Viewer"),
+    description: tr("Can see background tasks and their logs but can't change them."),
   },
   {
     value: "run",
-    label: "Contributor",
-    description: "Can see, create, and run background tasks.",
+    label: tr("Contributor"),
+    description: tr("Can see, create, and run background tasks."),
   },
 ] as const satisfies readonly {
   value: OpsScope;
@@ -147,17 +149,17 @@ function PermissionFields({
   return (
     <>
       <fieldset
-        aria-label={`${ariaPrefix}Fleet Admin permissions`}
+        aria-label={tr("{0}Fleet Admin permissions", [ariaPrefix])}
         className="m-0 grid min-w-0 gap-[0.3rem] border-0 p-0"
       >
         <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-          Fleet Admin
+          {tr("Fleet Admin")}
         </legend>
         <label className={choiceClass(role === "admin")}>
           <input
             type="checkbox"
             checked={role === "admin"}
-            aria-label="Fleet Admin"
+            aria-label={tr("Fleet Admin")}
             aria-describedby={`${fieldBaseId}-admin-description`}
             onChange={(event) =>
               onChange(
@@ -168,22 +170,21 @@ function PermissionFields({
             }
             className={inputClass}
           />
-          Fleet Admin
+          {tr("Fleet Admin")}
           <small
             id={`${fieldBaseId}-admin-description`}
             className={descriptionClass}
           >
-            Full access to Chat and Background tasks.
+            {tr("Full access to Chat and Background tasks.")}
           </small>
         </label>
       </fieldset>
       <fieldset
-        aria-label={`${ariaPrefix}Chat permissions`}
+        aria-label={tr("{0}Chat permissions", [ariaPrefix])}
         className="m-0 grid min-w-0 gap-[0.15rem] border-0 p-0"
       >
         <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-          Chat
-        </legend>
+          {tr("Chat")}</legend>
         {CHAT_ROLE_OPTIONS.map((option) => (
           <label
             key={option.value}
@@ -218,11 +219,11 @@ function PermissionFields({
         ))}
       </fieldset>
       <fieldset
-        aria-label={`${ariaPrefix}Background tasks permissions`}
+        aria-label={tr("{0}Background tasks permissions", [ariaPrefix])}
         className="m-0 grid min-w-0 gap-[0.15rem] border-0 p-0"
       >
         <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-          Background tasks
+          {tr("Background tasks")}
         </legend>
         {OPS_SCOPE_OPTIONS.map((option) => (
           <label
@@ -326,20 +327,20 @@ function TeamPicker({
           }}
           className={`${className ?? ""} appearance-none pr-8!`}
         >
-          <option value="">— No team</option>
+          <option value="">{tr("— No team")}</option>
           {teams.map((t) => (
             <option key={t} value={t}>
               {t}
             </option>
           ))}
-          <option value="__new__">New team…</option>
+          <option value="__new__">{tr("New team…")}</option>
         </select>
       </span>
       {showInput ? (
         <input
           id={`${id}New`}
-          aria-label={`${label}: new team name`}
-          placeholder="Team name"
+          aria-label={tr("{0}: new team name", [label])}
+          placeholder={tr("Team name")}
           maxLength={64}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -371,8 +372,8 @@ function generatePassword(): string {
 
 async function fetchUsers(): Promise<AdminUser[] | null> {
   const data = await getGatedJson<{ users?: AdminUser[] }>("/api/admin/users", {
-    label: "Users",
-    statusText: { 403: "You are not an admin." },
+    label: tr("Users"),
+    statusText: { 403: tr("You are not an admin.") },
   });
   return data ? (data.users ?? []) : null;
 }
@@ -543,7 +544,7 @@ export default function AdminUsersPage() {
       })
       .catch((err: unknown) => {
         if (stale) return;
-        setError(errorMessage(err, "Failed to load."));
+        setError(errorMessage(err, tr("Failed to load.")));
       })
       .finally(() => {
         if (stale) return;
@@ -671,7 +672,7 @@ export default function AdminUsersPage() {
       );
       if (!res.ok) {
         throw new Error(
-          await responseErrorText(res, "Save failed"),
+          await responseErrorText(res, tr("Save failed")),
         );
       }
       const updated = (await res.json()) as AdminUser;
@@ -682,7 +683,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: errorMessage(err, "Save failed."),
+        [u.email]: errorMessage(err, tr("Save failed.")),
       }));
     }
   };
@@ -733,7 +734,7 @@ export default function AdminUsersPage() {
           message:
             message.length > 0 && message.length <= (isRefusal ? 1000 : 200)
               ? message
-              : `Delete failed (${res.status}).`,
+              : tr("Delete failed ({0}).", [res.status]),
           projects,
         });
         return;
@@ -745,7 +746,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setDeleteError({
         email: u.email,
-        message: errorMessage(err, "Delete failed."),
+        message: errorMessage(err, tr("Delete failed.")),
       });
     } finally {
       setDeleting(null);
@@ -766,7 +767,7 @@ export default function AdminUsersPage() {
       );
       if (!res.ok) {
         throw new Error(
-          await responseErrorText(res, "Reset failed"),
+          await responseErrorText(res, tr("Reset failed")),
         );
       }
       setRowStatus((s) => ({ ...s, [u.email]: "saved" }));
@@ -774,7 +775,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: errorMessage(err, "Reset failed."),
+        [u.email]: errorMessage(err, tr("Reset failed.")),
       }));
     }
   };
@@ -810,7 +811,7 @@ export default function AdminUsersPage() {
       });
       if (!res.ok) {
         throw new Error(
-          await responseErrorText(res, "Create failed"),
+          await responseErrorText(res, tr("Create failed")),
         );
       }
       const created = (await res.json()) as AdminUser;
@@ -828,7 +829,7 @@ export default function AdminUsersPage() {
       setAddStatus(null);
       setAddOpen(false);
     } catch (err) {
-      setAddStatus(errorMessage(err, "Create failed."));
+      setAddStatus(errorMessage(err, tr("Create failed.")));
     }
   };
 
@@ -842,7 +843,7 @@ export default function AdminUsersPage() {
       });
       if (!res.ok) {
         throw new Error(
-          await responseErrorText(res, "Rename failed"),
+          await responseErrorText(res, tr("Rename failed")),
         );
       }
       // The server relabels team-shared PROJECTS as well as members and
@@ -855,14 +856,14 @@ export default function AdminUsersPage() {
       const members = out.users_updated ?? 0;
       const projects = out.projects_updated ?? 0;
       setRenameStatus(
-        `Renamed "${from}" to "${to.trim()}" (${plural(members, "member")}, ${plural(projects, "shared project")}).`,
+        tr("Renamed \"{0}\" to \"{1}\" ({2}, {3}).", [from, to.trim(), plural(members, "member"), plural(projects, "shared project")]),
       );
       setRenameDraft(null);
       setFilterTeam(to.trim());
       const rows = await fetchUsers();
       if (rows !== null) setUsers(rows);
     } catch (err) {
-      setRenameStatus(errorMessage(err, "Rename failed."));
+      setRenameStatus(errorMessage(err, tr("Rename failed.")));
     }
   };
 
@@ -912,16 +913,14 @@ export default function AdminUsersPage() {
 
   return (
     <SetSection
-      title="Users"
+      title={tr("Users")}
       intro={
         <>
           {centralAuth
-            ? "View activity of everyone in the workspace. People, roles and teams are managed in Auth. "
-            : "View activity and manage roles of everyone in the workspace. "}
-          Numbers here show conversations and scheduled tasks per account; for
-          windowed spend, model usage, friction signals, and the team adoption
-          audit, open{" "}
-          <Link href="/analytics">Analytics</Link>.
+            ? tr("View activity of everyone in the workspace. People, roles and teams are managed in Auth. ")
+            : tr("View activity and manage roles of everyone in the workspace. ")}
+          {tr("Numbers here show conversations and scheduled tasks per account; for windowed spend, model usage, friction signals, and the team adoption audit, open")}{" "}
+          <Link href="/analytics">{tr("Analytics")}</Link>.
         </>
       }
     >
@@ -936,8 +935,8 @@ export default function AdminUsersPage() {
           <div className="mb-3 grid gap-[0.55rem]">
             <input
               id="userSearch"
-              aria-label="Search users"
-              placeholder="Search email or team…"
+              aria-label={tr("Search users")}
+              placeholder={tr("Search email or team…")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className={SETTINGS_INPUT}
@@ -946,15 +945,15 @@ export default function AdminUsersPage() {
               <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
                 <select
                   id="filterChatRole"
-                  aria-label="Filter by chat role"
+                  aria-label={tr("Filter by chat role")}
                   value={filterRole}
                   onChange={(e) => setFilterRole(e.target.value)}
                   className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                 >
-                  <option value="all">Chat: all</option>
+                  <option value="all">{tr("Chat: all")}</option>
                   {ROLES.map((r) => (
                     <option key={r} value={r}>
-                      Chat: {CHAT_ROLE_LABELS[r].toLowerCase()}
+                      {tr("Chat:")}{" "}{CHAT_ROLE_LABELS[r].toLowerCase()}
                     </option>
                   ))}
                 </select>
@@ -962,15 +961,15 @@ export default function AdminUsersPage() {
               <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
                 <select
                   id="filterOpsRole"
-                  aria-label="Filter by Background tasks role"
+                  aria-label={tr("Filter by Background tasks role")}
                   value={filterOps}
                   onChange={(e) => setFilterOps(e.target.value)}
                   className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                 >
-                  <option value="all">Tasks: all</option>
+                  <option value="all">{tr("Tasks: all")}</option>
                   {OPS_SCOPE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
-                      Tasks: {o.label.toLowerCase()}
+                      {tr("Tasks:")}{" "}{o.label.toLowerCase()}
                     </option>
                   ))}
                 </select>
@@ -978,16 +977,16 @@ export default function AdminUsersPage() {
               <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
                 <select
                   id="filterTeam"
-                  aria-label="Filter by team"
+                  aria-label={tr("Filter by team")}
                   value={filterTeam}
                   onChange={(e) => setFilterTeam(e.target.value)}
                   className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                 >
-                  <option value="all">Team: all</option>
-                  <option value="(none)">Team: none</option>
+                  <option value="all">{tr("Team: all")}</option>
+                  <option value="(none)">{tr("Team: none")}</option>
                   {teams.map((t) => (
                     <option key={t} value={t}>
-                      Team: {t}
+                      {tr("Team:")}{" "}{t}
                     </option>
                   ))}
                 </select>
@@ -1001,16 +1000,16 @@ export default function AdminUsersPage() {
                       setRenameDraft(filterTeam);
                     }}
                     className={btnClass({ sm: true, reveal: true })}
-                    title="Rename this team for every member and every team-shared project"
+                    title={tr("Rename this team for every member and every team-shared project")}
                   >
-                    Rename team
+                    {tr("Rename team")}
                   </button>
                 ) : (
                   <span className="inline-flex items-center gap-[0.35rem]">
                     <input
                       ref={renameInputRef}
                       id="renameTeamName"
-                      aria-label={`New name for team ${filterTeam}`}
+                      aria-label={tr("New name for team {0}", [filterTeam])}
                       value={renameDraft}
                       onChange={(e) => setRenameDraft(e.target.value)}
                       onKeyDown={(e) => {
@@ -1035,15 +1034,14 @@ export default function AdminUsersPage() {
                       onClick={() => void renameTeam(filterTeam, renameDraft)}
                       className={btnClass({ variant: "primary", sm: true })}
                     >
-                      {renameStatus === "saving" ? "Renaming…" : "Rename"}
+                      {renameStatus === "saving" ? tr("Renaming…") : tr("Rename")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setRenameDraft(null)}
                       className={btnClass({ sm: true, reveal: true })}
                     >
-                      Cancel
-                    </button>
+                      {tr("Cancel")}</button>
                   </span>
                 )
               ) : null}
@@ -1055,27 +1053,23 @@ export default function AdminUsersPage() {
             </p>
           ) : null}
           <p className="mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
-            {rows.length}
-            {filtersActive ? ` of ${allRows.length}` : ""} account
-            {rows.length === 1 ? "" : "s"}
-            {" · "}
-            {allRows.filter((r) => r.account?.role === "admin").length} admin
-            {" · "}
-            {teams.length} team{teams.length === 1 ? "" : "s"}
-          </p>
+        {rich("{0} · {1} admin · {2}", filtersActive
+              ? tr(allRows.length === 1 ? "{0} of {1} account" : "{0} of {1} accounts", [rows.length, allRows.length])
+              : tr(rows.length === 1 ? "{0} account" : "{0} accounts", [rows.length]), allRows.filter((r) => r.account?.role === "admin").length, tr(teams.length === 1 ? "{0} team" : "{0} teams", [teams.length]))}
+      </p>
 
           <div className="overflow-x-auto [scrollbar-width:thin]">
             <table className="w-full border-collapse text-[0.85rem] text-[var(--color-text-secondary)]">
               <thead>
                 <tr>
-                  <th className={TH}>User</th>
-                  <th className={TH_NUM}>Convs</th>
-                  <th className={TH_NUM}>Tasks</th>
+                  <th className={TH}>{tr("User")}</th>
+                  <th className={TH_NUM}>{tr("Convs")}</th>
+                  <th className={TH_NUM}>{tr("Tasks")}</th>
                   {/* The kebab column. A blank header leaves the row-edit
                       buttons announced with no column name at all, so the
                       name is given visually-hidden rather than dropped. */}
                   <th className={`${TH} w-[2.4rem] text-right`}>
-                    <span className="sr-only">Actions</span>
+                    <span className="sr-only">{tr("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -1086,7 +1080,7 @@ export default function AdminUsersPage() {
                       colSpan={4}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
-                      Loading…
+                      {tr("Loading…")}
                     </td>
                   </tr>
                 ) : rows.length > 0 ? (
@@ -1105,10 +1099,10 @@ export default function AdminUsersPage() {
                               {row.email}
                             </span>
                             {account?.role === "admin" ? (
-                              <RoleBadge accent>Admin</RoleBadge>
+                              <RoleBadge accent>{tr("Admin")}</RoleBadge>
                             ) : null}
                             {account?.role === "viewer" ? (
-                              <RoleBadge>Viewer</RoleBadge>
+                              <RoleBadge>{tr("Viewer")}</RoleBadge>
                             ) : null}
                             {account &&
                             opsScopeOf(account) !== "none" &&
@@ -1116,28 +1110,23 @@ export default function AdminUsersPage() {
                             // repeating "ops: admin" would present one grant as two.
                             opsScopeOf(account) !== "admin" ? (
                               <RoleBadge
-                                title={`Background tasks ${
-                                  {
-                                    run: "contributor (creates tasks)",
-                                    view: "viewer (read-only)",
-                                  }[opsScopeOf(account) as "run" | "view"]
-                                }`}
+                                title={tr("Background tasks {0}", [{
+                                    run: tr("contributor (creates tasks)"),
+                                    view: tr("viewer (read-only)"),
+                                  }[opsScopeOf(account) as "run" | "view"]])}
                               >
-                                {`ops: ${
-                                  {
+                                {tr("ops: {0}", [{
                                     run: "contributor",
                                     view: "viewer",
-                                  }[opsScopeOf(account) as "run" | "view"]
-                                }`}
+                                  }[opsScopeOf(account) as "run" | "view"]])}
                               </RoleBadge>
                             ) : null}
                           </span>
                           <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
-                            last active {formatAgo(stat?.last_activity ?? 0)}
-                            {account?.team_id.trim()
-                              ? ` · team: ${account.team_id.trim()}`
-                              : ""}
-                          </span>
+        {rich("last active {0}{1}", formatAgo(stat?.last_activity ?? 0), account?.team_id.trim()
+                              ? tr(" · team: {0}", [account.team_id.trim()])
+                              : "")}
+      </span>
                           {resetShown[row.email] ? (
                             /* Shown ONCE, so it needs both halves of that
                                contract: a way to take the value (16 random
@@ -1149,20 +1138,20 @@ export default function AdminUsersPage() {
                             <span
                               className={`mt-[0.18rem] flex flex-wrap items-center gap-[0.3rem] text-[0.7rem] text-[var(--color-text-muted)] ${TD_TEXT_WRAP}`}
                             >
-                              New password (shown once):{" "}
+                              {tr("New password (shown once):")}{" "}
                               <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
                                 {resetShown[row.email]}
                               </code>
                               <CopyButton
                                 text={resetShown[row.email]}
-                                title="Copy the new password"
+                                title={tr("Copy the new password")}
                                 variant="compact"
                               />
                               <button
                                 type="button"
                                 className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                                aria-label={`Hide the new password for ${row.email}`}
-                                title="Hide"
+                                aria-label={tr("Hide the new password for {0}", [row.email])}
+                                title={tr("Hide")}
                                 onClick={() =>
                                   setResetShown((prev) => {
                                     const next = { ...prev };
@@ -1189,12 +1178,12 @@ export default function AdminUsersPage() {
                                   ? "text-[var(--color-text-muted)]"
                                   : "text-[var(--color-danger-soft)]"
                               }`}
-                              title={status}
+                              title={status === "saving" ? tr("Saving…") : status === "saved" ? tr("Saved") : status}
                             >
                               {status === "saving"
-                                ? "Saving…"
+                                ? tr("Saving…")
                                 : status === "saved"
-                                  ? "Saved"
+                                  ? tr("Saved")
                                   : status}
                             </span>
                           ) : null}
@@ -1209,7 +1198,7 @@ export default function AdminUsersPage() {
                           {account && !centralAuth ? (
                             <button
                               type="button"
-                              aria-label={`Edit ${row.email}`}
+                              aria-label={tr("Edit {0}", [row.email])}
                               aria-haspopup="true"
                               aria-expanded={menu?.email === row.email}
                               onClick={(e) => openMenu(account, e)}
@@ -1229,8 +1218,8 @@ export default function AdminUsersPage() {
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       {centralAuth
-                        ? "No users yet. People are added in Auth."
-                        : "No users provisioned yet — add one below."}
+                        ? tr("No users yet. People are added in Auth.")
+                        : tr("No users provisioned yet — add one below.")}
                     </td>
                   </tr>
                 )}
@@ -1244,7 +1233,7 @@ export default function AdminUsersPage() {
               ref={popRef}
               tabIndex={-1}
               role="dialog"
-              aria-label={`Edit ${menu.email}`}
+              aria-label={tr("Edit {0}", [menu.email])}
               style={{ left: menu.x, top: menu.y }}
               // max-h + scroll: the panel is fixed-positioned from an
               // estimated height, and the delete refusal is the one child that
@@ -1264,11 +1253,11 @@ export default function AdminUsersPage() {
               />
               <div className="grid gap-[0.3rem]">
                 <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-                  Team
+                  {tr("Team")}
                 </span>
                 <TeamPicker
                   id="editUserTeam"
-                  label={`Team for ${menu.email}`}
+                  label={tr("Team for {0}", [menu.email])}
                   teams={teams}
                   value={menu.team}
                   onChange={(team) => setMenu({ ...menu, team })}
@@ -1281,8 +1270,7 @@ export default function AdminUsersPage() {
                   onClick={() => setMenu(null)}
                   className={btnClass({ sm: true, reveal: true })}
                 >
-                  Cancel
-                </button>
+                  {tr("Cancel")}</button>
                 <button
                   type="button"
                   disabled={!menuDirty}
@@ -1296,8 +1284,7 @@ export default function AdminUsersPage() {
                   }}
                   className={btnClass({ variant: "primary", sm: true })}
                 >
-                  Save
-                </button>
+                  {tr("Save")}</button>
               </div>
               <div className="h-px bg-[var(--color-border)]" />
               <div className="flex flex-wrap items-center justify-between gap-[0.45rem]">
@@ -1305,22 +1292,22 @@ export default function AdminUsersPage() {
                     one the moment it lands, so it arms first like Delete
                     beside it instead of firing off a single click. */}
                 <InlineConfirmButton
-                  label="Reset password"
-                  confirmLabel="Confirm reset"
+                  label={tr("Reset password")}
+                  confirmLabel={tr("Confirm reset")}
                   onConfirm={() => {
                     setMenu(null);
                     void resetPassword(menuAccount);
                   }}
                 />
                 <InlineConfirmButton
-                  label="Delete user"
+                  label={tr("Delete user")}
                   disabled={deleting !== null}
                   onConfirm={() => void remove(menuAccount)}
                 />
               </div>
               {deleting === menu.email ? (
                 <p className="text-[0.7rem] text-[var(--color-text-muted)]">
-                  Deleting…
+                  {tr("Deleting…")}
                 </p>
               ) : null}
               {/* The refusal, where the action was taken. */}
@@ -1345,10 +1332,7 @@ export default function AdminUsersPage() {
                   names what to transfer — so say that here too, where the
                   admin decides. */}
               <p className="mt-2 text-[0.7rem] leading-[1.5] text-[var(--color-text-muted)]">
-                Deleting removes their chats, memories, connected MCP servers
-                (and stored credentials), connector settings, skills and
-                personal projects. Projects they share with a team are kept —
-                transfer those first, from the project&rsquo;s settings.
+                {tr("Deleting removes their chats, memories, connected MCP servers (and stored credentials), connector settings, skills and personal projects. Projects they share with a team are kept — transfer those first, from the project’s settings.")}
               </p>
             </div>
           ) : null}
@@ -1359,15 +1343,15 @@ export default function AdminUsersPage() {
             <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
               <RevealButton
                 open={addOpen}
-                closedLabel="Add user"
+                closedLabel={tr("Add user")}
                 onClick={() => setAddOpen((o) => !o)}
               />
               {addOpen ? (
                 <ConnForm className="mt-[0.7rem]">
-                  <ConnField label="Email" grow>
+                  <ConnField label={tr("Email")} grow>
                     <input
                       id="newUserEmail"
-                      aria-label="New user email"
+                      aria-label={tr("New user email")}
                       type="email"
                       value={newEmail}
                       placeholder="email@example.com"
@@ -1375,14 +1359,14 @@ export default function AdminUsersPage() {
                       className={SETTINGS_INPUT}
                     />
                   </ConnField>
-                  <ConnField label="Password" grow>
+                  <ConnField label={tr("Password")} grow>
                     <div className="flex flex-wrap gap-[0.45rem]">
                       <input
                         id="newUserPassword"
-                        aria-label="New user password"
+                        aria-label={tr("New user password")}
                         type="text"
                         value={newPassword}
-                        placeholder="min 8 chars"
+                        placeholder={tr("min 8 chars")}
                         onChange={(e) => setNewPassword(e.target.value)}
                         className={`${SETTINGS_INPUT} min-w-[10rem] flex-1 font-[family-name:var(--font-code)] text-[0.85rem]!`}
                       />
@@ -1391,7 +1375,7 @@ export default function AdminUsersPage() {
                         onClick={() => setNewPassword(generatePassword())}
                         className={btnClass({ sm: true })}
                       >
-                        Generate
+                        {tr("Generate")}
                       </button>
                     </div>
                   </ConnField>
@@ -1399,17 +1383,17 @@ export default function AdminUsersPage() {
                     <PermissionFields
                       role={newRole}
                       opsScope={newOpsScope}
-                      labelPrefix="New user"
+                      labelPrefix={tr("New user")}
                       onChange={({ role, opsScope }) => {
                         setNewRole(role);
                         setNewOpsScope(opsScope);
                       }}
                     />
                   </div>
-                  <ConnField label="Team" grow>
+                  <ConnField label={tr("Team")} grow>
                     <TeamPicker
                       id="newUserTeam"
-                      label="New user team"
+                      label={tr("New user team")}
                       teams={teams}
                       value={newTeam}
                       onChange={setNewTeam}
@@ -1422,7 +1406,7 @@ export default function AdminUsersPage() {
                     disabled={addDisabled}
                     className={btnClass({ variant: "primary" })}
                   >
-                    {addStatus === "saving" ? "Adding…" : "Add user"}
+                    {addStatus === "saving" ? tr("Adding…") : tr("Add user")}
                   </button>
                 </ConnForm>
               ) : null}
@@ -1433,46 +1417,36 @@ export default function AdminUsersPage() {
               ) : null}
               {addedPassword ? (
                 <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                  Created{" "}
+                  {tr("Created")}{" "}
                   <span className="text-[var(--color-text-secondary)]">
                     {addedPassword.email}
                   </span>{" "}
-                  — password (shown once):{" "}
+                  {tr("— password (shown once):")}{" "}
                   <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
                     {addedPassword.password}
                   </code>
                 </p>
               ) : null}
               <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                Chat and Background tasks permissions are separate: a chat Viewer
-                is read-only, while a Contributor can use Chat or create
-                background tasks. Admin is one unified grant across both. CLI
-                equivalent for the admin case:{" "}
-                <code className="font-[family-name:var(--font-code)]">
+        {rich("Chat and Background tasks permissions are separate: a chat Viewer is read-only, while a Contributor can use Chat or create background tasks. Admin is one unified grant across both. CLI equivalent for the admin case: {0}.", <code className="font-[family-name:var(--font-code)]">
                   fleet admin add
-                </code>
-                .
-              </p>
+                </code>)}
+      </p>
             </div>
           ) : (
             <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
               <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-                People sign in to this Fleet through Auth and are managed
-                there: adding someone, their Chat and Background tasks roles, their
-                team and password resets. Granting someone Fleet in Auth creates
-                their account here; removing it signs them out and keeps their
-                data.{" "}
-                {centralAuth.adminUrl ? (
+        {rich("People sign in to this Fleet through Auth and are managed there: adding someone, their Chat and Background tasks roles, their team and password resets. Granting someone Fleet in Auth creates their account here; removing it signs them out and keeps their data. {0}", centralAuth.adminUrl ? (
                   <a
                     href={centralAuth.adminUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="underline"
                   >
-                    Open Auth
+                    {tr("Open Auth")}
                   </a>
-                ) : null}
-              </p>
+                ) : null)}
+      </p>
             </div>
           )}
         </ConnPanel>

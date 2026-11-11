@@ -209,9 +209,15 @@ func (s *Service) MarkRemoteMCPUnauthorized(ctx context.Context, ownerEmail, ser
 	return s.store.SetRemoteMCPStatus(ctx, ownerEmail, serverID, store.RemoteMCPStatusNeedsReauth, detail)
 }
 
-// SafeHTTPClient exposes the SSRF-safe client used to dial user-supplied servers
-// (also reused as the data-plane transport for the overlay MCP client).
+// SafeHTTPClient exposes the SSRF-safe control-plane client (bounded by
+// Config.HTTPTimeout): connect-time probes and custom http_tools requests.
 func (s *Service) SafeHTTPClient() *http.Client { return s.httpClient }
+
+// MCPDataPlaneHTTPClient exposes the SSRF-safe client the per-run overlay
+// mounts and calls remote MCP servers with. It has no fixed timeout, so a
+// slow remote tool runs for its whole per-call budget instead of being cut
+// off at the control plane's 30s; each request's context bounds it.
+func (s *Service) MCPDataPlaneHTTPClient() *http.Client { return s.dataPlaneClient }
 
 // AllowInsecureHTTP reports whether http:// URLs are permitted (dev/test escape hatch).
 func (s *Service) AllowInsecureHTTP() bool { return s != nil && s.cfg.AllowInsecureHTTP }

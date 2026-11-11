@@ -1,3 +1,5 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import { joinTextSegments } from "./textSegments";
 
 // Pure functions shared with chat-experience.tsx — extracted so they can be
@@ -127,7 +129,7 @@ export function applySubagentProgress(
   if (phase === "started") {
     next.workdir = p.workdir || base.workdir;
     next.model = p.model || base.model;
-    next.current = "starting…";
+    next.current = tr("starting…");
     return next;
   }
 
@@ -167,11 +169,17 @@ export function applySubagentProgress(
  * short — the indicator truncates — and always prefixed so it reads as the
  * CHILD's work, not the parent's.
  */
+export function subagentRoleLabel(role: string): string {
+  if (role === "explore") return tr("explore");
+  if (role === "worker") return tr("worker");
+  return role;
+}
+
 export function liveSubagentLabel(tc: ToolCall): string | null {
   const sa = tc.subagent;
   if (tc.name !== "spawn_subagent" || !sa || sa.phase === "finished") return null;
-  const head = sa.role ? `Sub-agent (${sa.role})` : "Sub-agent";
-  const step = sa.steps > 0 ? ` · step ${sa.steps}` : "";
+  const head = sa.role ? tr("Sub-agent ({0})", [subagentRoleLabel(sa.role)]) : tr("Sub-agent");
+  const step = sa.steps > 0 ? tr(" · step {0}", [sa.steps]) : "";
   return sa.current ? `${head}${step} · ${sa.current}` : `${head}${step}`;
 }
 
@@ -185,11 +193,11 @@ function subagentCurrentLabel(
     case "tool":
       return tool ? `${tool}${detail ? ` · ${detail}` : ""}` : undefined;
     case "tool_result":
-      return tool ? `${tool} returned` : undefined;
+      return tool ? tr("{0} returned", [tool]) : undefined;
     case "text":
-      return detail ? `writing: ${detail}` : "writing…";
+      return detail ? tr("writing: {0}", [detail]) : tr("writing…");
     case "thinking":
-      return detail ? `thinking: ${detail}` : "thinking…";
+      return detail ? tr("thinking: {0}", [detail]) : tr("thinking…");
     case "note":
       return detail;
     default:
@@ -762,12 +770,12 @@ export function parseApprovalProgress(value: unknown): ApprovalProgress | undefi
 }
 
 function formatProgressNumber(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return Number.isInteger(n) ? String(n) : formatFixed(n, 1);
 }
 
 /** "12 of 24 · creating deal 12", "12 · step", or just the message. */
 export function approvalProgressText(p: ApprovalProgress): string {
-  const count = p.total ? `${formatProgressNumber(p.progress)} of ${formatProgressNumber(p.total)}` : formatProgressNumber(p.progress);
+  const count = p.total ? tr("{0} of {1}", [formatProgressNumber(p.progress), formatProgressNumber(p.total)]) : formatProgressNumber(p.progress);
   return p.message ? `${count} · ${p.message}` : count;
 }
 
@@ -1274,7 +1282,7 @@ export function applyContextCompacted(
  * in-flight retry (we've given up on this model).
  */
 export const CREDITS_EXHAUSTED_MESSAGE =
-  "You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going.";
+  tr("You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going.");
 
 export function applyModelRequired(message: Message, payload: ModelRequiredEventPayload): Message {
   const statusCode = typeof payload.status_code === "number" ? payload.status_code : 0;
@@ -1286,7 +1294,7 @@ export function applyModelRequired(message: Message, payload: ModelRequiredEvent
   const defaultMessage =
     reason === "credits_exhausted"
       ? CREDITS_EXHAUSTED_MESSAGE
-      : "Pick a different model to continue.";
+      : tr("Pick a different model to continue.");
   const humanMessage =
     !remappedLegacy402 && typeof payload.message === "string" && payload.message.length > 0
       ? payload.message
@@ -1373,7 +1381,7 @@ export function applyTurnOutcome(
     content:
       message.content ||
       reported ||
-      "The turn ended before it could answer.",
+      tr("The turn ended before it could answer."),
     state: "done",
     failed: true,
   };
@@ -1804,30 +1812,30 @@ export function sspConnector(server: string): { display: string; toolPrefixes: s
 export function humanToolLabel(name: string): string {
   switch (name) {
     case "view_file":
-      return "Reading file";
+      return tr("Reading file");
     case "edit_file":
-      return "Editing file";
+      return tr("Editing file");
     case "write_file":
-      return "Writing file";
+      return tr("Writing file");
     case "run_python":
-      return "Running Python";
+      return tr("Running Python");
     case "bash":
-      return "Running shell";
+      return tr("Running shell");
     case "task_tracker":
-      return "Updating plan";
+      return tr("Updating plan");
     case "web_fetch":
-      return "Fetching page";
+      return tr("Fetching page");
     case "smart_search":
-      return "Searching the web";
+      return tr("Searching the web");
     case "spawn_subagent":
-      return "Delegating to sub-agent";
+      return tr("Delegating to sub-agent");
     case "chat_patrol":
-      return "Configuring in-chat patrol";
+      return tr("Configuring in-chat patrol");
     case "mcp_email_send_email":
-      return "Sending email";
+      return tr("Sending email");
     case "mcp_email_search_emails":
     case "mcp_explorer_search_emails":
-      return "Searching inbox";
+      return tr("Searching inbox");
   }
   for (const { match, tools, display } of sspPrefixes) {
     if (!name.startsWith(match)) continue;
@@ -1844,13 +1852,13 @@ export function humanToolLabel(name: string): string {
     return rest ? `${display} ${rest}` : display;
   }
   if (name.startsWith("mcp_explorer_")) {
-    return `Email ${humanize(name.slice("mcp_explorer_".length)).toLowerCase()}`;
+    return tr("Email {0}", [humanize(name.slice("mcp_explorer_".length)).toLowerCase()]);
   }
   if (name.startsWith("mcp_email_")) {
-    return `Email ${humanize(name.slice("mcp_email_".length)).toLowerCase()}`;
+    return tr("Email {0}", [humanize(name.slice("mcp_email_".length)).toLowerCase()]);
   }
   if (name.startsWith("mcp_sendgrid_")) {
-    return `SendGrid ${humanize(name.slice("mcp_sendgrid_".length)).toLowerCase()}`;
+    return tr("SendGrid {0}", [humanize(name.slice("mcp_sendgrid_".length)).toLowerCase()]);
   }
   if (name.startsWith("mcp_")) {
     return humanize(name.slice("mcp_".length));

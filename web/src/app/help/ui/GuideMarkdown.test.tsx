@@ -13,6 +13,13 @@ describe("GuideMarkdown", () => {
     expect(screen.getByRole("heading", { name: "4. Run states" }).id).toBe("4-run-states");
   });
 
+  it("uses canonical anchors for translated headings and contents links", () => {
+    render(<GuideMarkdown content={"## 4. Estados de ejecución\n\n[Estados](#4-run-states)\n"}
+      headings={[{ id: "4-run-states", text: "4. Estados de ejecución", depth: 2 }]} />);
+    expect(screen.getByRole("heading", { name: "4. Estados de ejecución" }).id).toBe("4-run-states");
+    expect(screen.getByRole("link", { name: "Estados" }).getAttribute("href")).toBe("#4-run-states");
+  });
+
   it("keeps rendered nodes across re-renders (hoisted component overrides)", () => {
     const { rerender } = render(<GuideMarkdown content={"## Section\n"} />);
     const heading = screen.getByRole("heading", { name: "Section" });

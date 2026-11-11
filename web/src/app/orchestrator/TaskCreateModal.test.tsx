@@ -881,7 +881,7 @@ describe("TaskCreateModal — edit mode", () => {
       onUpdated: vi.fn(),
     });
     fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
-    expect(screen.getByText(/Attach new files to replace them/)).toBeInTheDocument();
+    expect(screen.getByText(/Attach new files to replace it/)).toBeInTheDocument();
     const file = new File(["new report"], "report.csv", { type: "text/csv" });
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));

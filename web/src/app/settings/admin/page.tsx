@@ -1,3 +1,5 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Settings → Admin → Overview (fleet-unified settings pass): the operator's
 // live single-pane view — system health from GET /api/admin/health-summary
 // (polled every 10s, #301), the MCP catalog chips, and per-deployment usage
@@ -64,14 +66,14 @@ const REFRESH_MS = 10_000;
 // healthItems maps the summary onto the design's ADMIN_HEALTH card order.
 function healthItems(d: HealthSummary): AdminStat[] {
   const items: AdminStat[] = [
-    { title: "Version", value: d.fleet_version, sub: `up ${formatUptime(d.uptime_seconds)}` },
-    { title: "DB pool", value: `${d.db.in_use}/${d.db.pool_size}`, sub: `${d.db.idle} idle` },
+    { title: tr("Version"), value: d.fleet_version, sub: tr("up {0}", [formatUptime(d.uptime_seconds)]) },
+    { title: tr("DB pool"), value: `${d.db.in_use}/${d.db.pool_size}`, sub: tr("{0} idle", [d.db.idle]) },
     {
-      title: "LLM today",
-      value: `$${d.llm.cost_today_usd.toFixed(2)}`,
-      sub: `${d.llm.calls_today} calls · $${d.llm.avg_cost_per_call.toFixed(3)}/call`,
+      title: tr("LLM today"),
+      value: `$${formatFixed(d.llm.cost_today_usd, 2)}`,
+      sub: tr("{0} calls · ${1}/call", [d.llm.calls_today, formatFixed(d.llm.avg_cost_per_call, 3)]),
     },
-    { title: "Active chats", value: String(d.conversations_active) },
+    { title: tr("Active chats"), value: String(d.conversations_active) },
   ];
   if (d.workers) {
     // Single-box deploy: there are no separate worker nodes, so these are
@@ -79,39 +81,39 @@ function healthItems(d: HealthSummary): AdminStat[] {
     // node count.
     items.push(
       {
-        title: "Tasks",
+        title: tr("Tasks"),
         value: `${d.workers.running_tasks} running`,
-        sub: `${d.workers.queued_tasks} queued`,
+        sub: tr("{0} queued", [d.workers.queued_tasks]),
       },
       {
-        title: "Tasks today",
+        title: tr("Tasks today"),
         value: `${d.workers.completed_today} ✓`,
-        sub: `${d.workers.failed_today} failed`,
+        sub: tr("{0} failed", [d.workers.failed_today]),
       },
     );
   } else {
-    items.push({ title: "Tasks", value: "—", sub: "scheduler stats unavailable" });
+    items.push({ title: tr("Tasks"), value: "—", sub: tr("scheduler stats unavailable") });
   }
   items.push(
     {
-      title: "Sandbox pool",
+      title: tr("Sandbox pool"),
       value: d.sandbox_pool ? `${d.sandbox_pool.available}/${d.sandbox_pool.size}` : "—",
-      sub: d.sandbox_pool ? "ready / size" : "not configured",
+      sub: d.sandbox_pool ? tr("ready / size") : tr("not configured"),
     },
-    { title: "Runtime", value: `${d.memory_mb} MB`, sub: `${d.goroutines} goroutines` },
+    { title: tr("Runtime"), value: `${d.memory_mb} MB`, sub: tr("{0} goroutines", [d.goroutines]) },
   );
   // Disk. `shedding` is the one state worth spelling out rather than showing a
   // number for: the box has already stopped claiming scheduled tasks, and
   // because chat keeps working, nothing else on this page would say so.
   if (d.disk) {
     items.push({
-      title: "Disk",
-      value: d.disk.available ? `${d.disk.free_percent.toFixed(1)}% free` : "—",
+      title: tr("Disk"),
+      value: d.disk.available ? tr("{0}% free", [formatFixed(d.disk.free_percent, 1)]) : "—",
       sub: !d.disk.available
-        ? (d.disk.error ?? "not measurable")
+        ? (d.disk.error ?? tr("not measurable"))
         : d.disk.shedding
-          ? `below the ${d.disk.min_free_percent}% floor — scheduled tasks paused`
-          : `${d.disk.path} · floor ${d.disk.min_free_percent}%`,
+          ? tr("below the {0}% floor — scheduled tasks paused", [d.disk.min_free_percent])
+          : tr("{0} · floor {1}%", [d.disk.path, d.disk.min_free_percent]),
     });
   }
   return items;
@@ -140,7 +142,7 @@ export default function AdminOverviewPage() {
   const applyHealth = (isStale: () => boolean) =>
     fetch("/api/admin/health-summary", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`health request failed: ${res.status}`);
+        if (!res.ok) throw new Error(tr("health request failed: {0}", [res.status]));
         return (await res.json()) as HealthSummary;
       })
       .then((d) => {
@@ -150,7 +152,7 @@ export default function AdminOverviewPage() {
       })
       .catch((e: unknown) => {
         if (isStale()) return;
-        setHealthErr(errorMessage(e, "failed to load health"));
+        setHealthErr(errorMessage(e, tr("failed to load health")));
       });
 
   const applyStats = (isStale: () => boolean) =>
@@ -163,7 +165,7 @@ export default function AdminOverviewPage() {
       })
       .catch((err: unknown) => {
         if (isStale()) return;
-        setStatsErr(errorMessage(err, "Failed to load."));
+        setStatsErr(errorMessage(err, tr("Failed to load.")));
       });
 
   // The poll's staleness check: the current load effect's, so a poll that
@@ -201,22 +203,22 @@ export default function AdminOverviewPage() {
   const totalUncachedTok = Math.max(0, totalPromptTok - totalCachedTok);
   const overallHitPct = totalPromptTok > 0 ? (totalCachedTok / totalPromptTok) * 100 : 0;
   const usageItems: AdminStat[] = [
-    { title: "Users", value: String(stats?.length ?? 0) },
-    { title: "Turns total", value: String(totalTurns) },
+    { title: tr("Users"), value: String(stats?.length ?? 0) },
+    { title: tr("Turns total"), value: String(totalTurns) },
     // All-time chat-side spend (GET /api/admin/stats sums turn_metrics only);
     // labeled as such so it can't be misread as the Operations Center Usage
     // tab's windowed chat+task total.
-    { title: "Chat spend (all-time)", value: formatUSD(totalSpend) },
+    { title: tr("Chat spend (all-time)"), value: formatUSD(totalSpend) },
     {
-      title: "Cache hit rate",
-      value: totalPromptTok > 0 ? `${overallHitPct.toFixed(1)}%` : "—",
+      title: tr("Cache hit rate"),
+      value: totalPromptTok > 0 ? `${formatFixed(overallHitPct, 1)}%` : "—",
       sub:
         totalPromptTok > 0
-          ? `${formatCompactTokens(totalCachedTok)} hit · ${formatCompactTokens(totalUncachedTok)} miss`
-          : "no prompt tokens yet",
+          ? tr("{0} hit · {1} miss", [formatCompactTokens(totalCachedTok), formatCompactTokens(totalUncachedTok)])
+          : tr("no prompt tokens yet"),
     },
     {
-      title: "Most recent",
+      title: tr("Most recent"),
       value: stats && stats.length > 0 ? formatAgo(stats[0].last_activity) : "—",
     },
   ];
@@ -229,19 +231,19 @@ export default function AdminOverviewPage() {
   const healthHead = (
     <div className="mb-[0.8rem] flex flex-wrap items-center gap-[0.55rem]">
       <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
-        System health
+        {tr("System health")}
       </h3>
       {health ? (
         <ConnBadge variant={health.db.chat === "healthy" ? "success" : "warn"}>
-          chat DB {health.db.chat}
+          {tr("chat DB")}{" "}{tr(health.db.chat)}
         </ConnBadge>
       ) : null}
       <span className="text-[0.72rem] text-[var(--color-text-muted)]">
-        auto-refreshes every 10s
+        {tr("auto-refreshes every 10s")}
       </span>
       <button
         type="button"
-        aria-label="Refresh now"
+        aria-label={tr("Refresh now")}
         disabled={refreshing}
         onClick={refresh}
         className="ml-auto inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
@@ -253,15 +255,15 @@ export default function AdminOverviewPage() {
 
   return (
     <SetSection
-      title="Overview"
-      intro="Live operator view of this deployment — health, the MCP catalog, and usage."
+      title={tr("Overview")}
+      intro={tr("Live operator view of this deployment — health, the MCP catalog, and usage.")}
     >
       <ConnGroup>
         {healthErr ? (
           <>
             {healthHead}
             <NoticeBanner tone="danger" data-testid="health-panel-error">
-              Health unavailable: {healthErr}
+              {tr("Health unavailable:")}{" "}{healthErr}
             </NoticeBanner>
           </>
         ) : !health ? (
@@ -271,7 +273,7 @@ export default function AdminOverviewPage() {
               className="text-[0.85rem] text-[var(--color-text-muted)]"
               data-testid="health-panel-loading"
             >
-              Loading system health…
+              {tr("Loading system health…")}
             </div>
           </>
         ) : (
@@ -282,9 +284,9 @@ export default function AdminOverviewPage() {
               <div className="mt-[0.85rem] flex flex-wrap items-center gap-[0.4rem]">
                 <span
                   className="mr-[0.25rem] text-[0.62rem] font-bold uppercase tracking-[0.1em] text-[var(--color-text-muted)]"
-                  title="Optional-MCP catalog. Servers are not health-probed here; each chip's tooltip says whether it is on by default for new conversations."
+                  title={tr("Optional-MCP catalog. Servers are not health-probed here; each chip's tooltip says whether it is on by default for new conversations.")}
                 >
-                  MCP catalog
+                  {tr("MCP catalog")}
                 </span>
                 {health.mcp_servers.map((s) => (
                   // NOT a health signal — the endpoint doesn't ping servers
@@ -297,8 +299,8 @@ export default function AdminOverviewPage() {
                     key={s.name}
                     title={
                       s.enabled
-                        ? "On by default for new conversations"
-                        : "Optional — off by default (users enable it per conversation)"
+                        ? tr("On by default for new conversations")
+                        : tr("Optional — off by default (users enable it per conversation)")
                     }
                     className="rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.6rem] py-[0.2rem] font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-secondary)]"
                   >
@@ -312,7 +314,7 @@ export default function AdminOverviewPage() {
       </ConnGroup>
 
       <ConnGroup>
-        <ConnGroupHead title="Usage" />
+        <ConnGroupHead title={tr("Usage")} />
         {statsErr ? (
           <NoticeBanner tone="danger">{statsErr}</NoticeBanner>
         ) : (
@@ -325,27 +327,27 @@ export default function AdminOverviewPage() {
           <div data-testid="cache-efficiency-panel" className="grid gap-[0.85rem]">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
-                Prompt cache efficiency
+                {tr("Prompt cache efficiency")}
               </h3>
               <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-                CLI: fleet cache-stats
+                {tr("CLI: fleet cache-stats")}
               </span>
             </div>
 
             {dailyCache.length > 0 ? (
               <div className="overflow-x-auto">
                 <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                  By date (last 14 days, UTC)
+                  {tr("By date (last 14 days, UTC)")}
                 </div>
                 <table className="w-full border-collapse text-left text-[0.78rem]">
                   <thead>
                     <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-                      <th className="py-1.5 pr-3">Date</th>
-                      <th className="py-1.5 px-2 text-right">Turns</th>
-                      <th className="py-1.5 px-2 text-right">Prompt tok</th>
-                      <th className="py-1.5 px-2 text-right">Cached</th>
-                      <th className="py-1.5 px-2 text-right">Cache miss</th>
-                      <th className="py-1.5 pl-2 text-right">Hit %</th>
+                      <th className="py-1.5 pr-3">{tr("Date")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Turns")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Prompt tok")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Cached")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Cache miss")}</th>
+                      <th className="py-1.5 pl-2 text-right">{tr("Hit %")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -369,7 +371,7 @@ export default function AdminOverviewPage() {
                           {formatCompactTokens(d.uncached_prompt_tokens)}
                         </td>
                         <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
-                          {d.cache_hit_rate_pct.toFixed(1)}%
+                          {formatFixed(d.cache_hit_rate_pct, 1)}%
                         </td>
                       </tr>
                     ))}
@@ -381,17 +383,17 @@ export default function AdminOverviewPage() {
             {usersWithCache.length > 0 ? (
               <div className="overflow-x-auto">
                 <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                  By user (all-time average)
+                  {tr("By user (all-time average)")}
                 </div>
                 <table className="w-full border-collapse text-left text-[0.78rem]">
                   <thead>
                     <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-                      <th className="py-1.5 pr-3">User</th>
-                      <th className="py-1.5 px-2 text-right">Turns</th>
-                      <th className="py-1.5 px-2 text-right">Prompt tok</th>
-                      <th className="py-1.5 px-2 text-right">Cached</th>
-                      <th className="py-1.5 px-2 text-right">Cache miss</th>
-                      <th className="py-1.5 pl-2 text-right">Hit %</th>
+                      <th className="py-1.5 pr-3">{tr("User")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Turns")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Prompt tok")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Cached")}</th>
+                      <th className="py-1.5 px-2 text-right">{tr("Cache miss")}</th>
+                      <th className="py-1.5 pl-2 text-right">{tr("Hit %")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -423,7 +425,7 @@ export default function AdminOverviewPage() {
                             {formatCompactTokens(uncachedTok)}
                           </td>
                           <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
-                            {hitPct.toFixed(1)}%
+                            {formatFixed(hitPct, 1)}%
                           </td>
                         </tr>
                       );

@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
@@ -33,20 +35,20 @@ function taskControlLabel(task: Task, action: string): string {
   const label = taskRunLabel(task, 60);
   // taskRunLabel's last resort is the short id itself; don't print it twice.
   return label === idPart
-    ? `${action} task ${idPart}`
-    : `${action} task ${label} (${idPart})`;
+    ? tr("{0} task {1}", [action, idPart])
+    : tr("{0} task {1} ({2})", [action, label, idPart]);
 }
 
 // Stopping a recurring task ends its schedule for good, so its control names
 // the schedule rather than reading like a pause.
 function stopVerb(task: Task): string {
-  return task.recurrence ? "Stop the schedule for" : "Stop";
+  return task.recurrence ? tr("Stop the schedule for") : tr("Stop");
 }
 
 function stopTitle(task: Task): string {
   return task.recurrence
-    ? "Stop the schedule for good. It won't run again, and a run in progress stops too."
-    : "Stop this task";
+    ? tr("Stop the schedule for good. It won't run again, and a run in progress stops too.")
+    : tr("Stop this task");
 }
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
@@ -176,25 +178,25 @@ export function TasksTable({
   return (
     <div className="section" role="region" aria-labelledby="tasksHeading">
       <div className="section-header">
-        <h2 id="tasksHeading">Recent Tasks</h2>
+        <h2 id="tasksHeading">{tr("Recent Tasks")}</h2>
       </div>
 
-      <div className="tasks-filter-bar" role="search" aria-label="Filter tasks">
+      <div className="tasks-filter-bar" role="search" aria-label={tr("Filter tasks")}>
         <div className="filter-group">
           <label htmlFor="taskStatusFilter" className="filter-label">
-            Status
+            {tr("Status")}
           </label>
           <div className="select-wrap">
             <select
               id="taskStatusFilter"
               className="filter-select"
-              aria-label="Filter by status"
+              aria-label={tr("Filter by status")}
               value={filters.status}
               onChange={(e) => onFilters({ status: e.target.value })}
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s || "all"} value={s}>
-                  {s ? s.replaceAll("_", " ") : "All"}
+                  {s ? s.replaceAll("_", " ") : tr("All")}
                 </option>
               ))}
             </select>
@@ -202,32 +204,32 @@ export function TasksTable({
         </div>
         <div className="filter-group">
           <label htmlFor="createdByFilter" className="filter-label">
-            Created By
+            {tr("Created By")}
           </label>
           <div className="select-wrap">
             <select
               id="createdByFilter"
               className="filter-select"
-              aria-label="Filter by creator"
+              aria-label={tr("Filter by creator")}
               value={filters.createdBy}
               onChange={(e) => onFilters({ createdBy: e.target.value })}
             >
-              <option value="">All</option>
-              <option value="me">My Tasks</option>
+              <option value="">{tr("All")}</option>
+              <option value="me">{tr("My Tasks")}</option>
             </select>
           </div>
         </div>
         {tagOptions.length > 0 || filters.tags.length > 0 ? (
           <div className="filter-group">
             <label htmlFor="taskTagFilter" className="filter-label">
-              Tags
+              {tr("Tags")}
             </label>
             <div className="tag-filter-control">
               <div className="select-wrap">
                 <select
                   id="taskTagFilter"
                   className="filter-select"
-                  aria-label="Filter by tag"
+                  aria-label={tr("Filter by tag")}
                   // Always "" — this select is an ADD control, not a
                   // selection. Holding the last-added tag would claim the
                   // board is filtered by that one tag when it is filtered by
@@ -237,7 +239,7 @@ export function TasksTable({
                     if (e.target.value) toggleTag(e.target.value);
                   }}
                 >
-                  <option value="">{filters.tags.length > 0 ? "Add tag…" : "All"}</option>
+                  <option value="">{filters.tags.length > 0 ? tr("Add tag…") : tr("All")}</option>
                   {unselectedTags.map((tag) => (
                     <option key={tag} value={tag}>
                       {tag}
@@ -253,7 +255,7 @@ export function TasksTable({
                       type="button"
                       className="task-tag-chip task-tag-chip-active"
                       style={labelChipStyle(tag)}
-                      aria-label={`Stop filtering by tag ${tag}`}
+                      aria-label={tr("Stop filtering by tag {0}", [tag])}
                       onClick={() => toggleTag(tag)}
                     >
                       {tag}
@@ -267,14 +269,14 @@ export function TasksTable({
         ) : null}
         <div className="filter-group filter-group-search">
           <label htmlFor="taskSearchFilter" className="filter-label">
-            Search
+            {tr("Search")}
           </label>
           <input
             id="taskSearchFilter"
             type="text"
             className="filter-input"
-            placeholder="Search title, prompt, tag, creator or ID…"
-            aria-label="Search tasks"
+            placeholder={tr("Search title, prompt, tag, creator or ID…")}
+            aria-label={tr("Search tasks")}
             value={queryDraft}
             onChange={(e) => setQueryDraft(e.target.value)}
           />
@@ -293,7 +295,7 @@ export function TasksTable({
               onClearFilters();
             }}
           >
-            Clear filters
+            {tr("Clear filters")}
           </button>
         ) : null}
       </div>
@@ -302,14 +304,14 @@ export function TasksTable({
         <table id="tasksTable">
           <thead>
             <tr>
-              <th scope="col">ID</th>
-              <th scope="col">Task</th>
-              <th scope="col">Status</th>
-              <th scope="col">SLA</th>
-              <th scope="col">Schedule</th>
-              <th scope="col">Created By</th>
-              <th scope="col">Created</th>
-              <th scope="col">Logs</th>
+              <th scope="col">{tr("ID")}</th>
+              <th scope="col">{tr("Task")}</th>
+              <th scope="col">{tr("Status")}</th>
+              <th scope="col">{tr("SLA")}</th>
+              <th scope="col">{tr("Schedule")}</th>
+              <th scope="col">{tr("Created By")}</th>
+              <th scope="col">{tr("Created")}</th>
+              <th scope="col">{tr("Logs")}</th>
             </tr>
           </thead>
           <tbody>
@@ -337,7 +339,7 @@ export function TasksTable({
                     data-sla-breached={task.sla_breached ? "true" : undefined}
                     role="button"
                     tabIndex={0}
-                    aria-label={taskControlLabel(task, "View")}
+                    aria-label={taskControlLabel(task, tr("View"))}
                     onClick={() => onOpenLogs(task)}
                     onKeyDown={(e) => {
                       // Only open logs when the row itself is focused, not when
@@ -386,14 +388,14 @@ export function TasksTable({
                     <td>
                       <span className="task-row-actions">
                         <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
-                          {hasLogs ? "View" : "None"}
+                          {hasLogs ? tr("View") : tr("None")}
                         </StatusChip>
                         {onRunNow && isRunnable(task.status) ? (
                           <button
                             type="button"
                             className="icon-action task-run-now-btn"
-                            aria-label={`${taskControlLabel(task, "Run")} now`}
-                            title="Run now"
+                            aria-label={tr("{0} now", [taskControlLabel(task, tr("Run"))])}
+                            title={tr("Run now")}
                             data-testid="task-run-now-button"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -407,8 +409,8 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-edit-btn"
-                            aria-label={taskControlLabel(task, "Edit")}
-                            title="Edit task"
+                            aria-label={taskControlLabel(task, tr("Edit"))}
+                            title={tr("Edit task")}
                             data-testid="task-edit-button"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -437,8 +439,8 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-delete-btn"
-                            aria-label={taskControlLabel(task, "Delete")}
-                            title="Delete permanently — frees its name for reuse"
+                            aria-label={taskControlLabel(task, tr("Delete"))}
+                            title={tr("Delete permanently — frees its name for reuse")}
                             data-testid="task-delete-button"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -486,7 +488,7 @@ export function TasksTable({
                   className="task-card"
                   data-task-id={task.id}
                   data-sla-breached={task.sla_breached ? "true" : undefined}
-                  aria-label={taskControlLabel(task, "View")}
+                  aria-label={taskControlLabel(task, tr("View"))}
                   onClick={() => onOpenLogs(task)}
                 >
                   <span className="task-card-top">
@@ -496,7 +498,7 @@ export function TasksTable({
                     ) : task.expected_duration_minutes ? (
                       <SlaChip tone="ok">
                         {task.actual_duration_seconds != null
-                          ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
+                          ? tr("{0}m / {1}m", [Math.round(task.actual_duration_seconds / 60), task.expected_duration_minutes])
                           : `${task.expected_duration_minutes}m`}
                       </SlaChip>
                     ) : null}
@@ -513,15 +515,15 @@ export function TasksTable({
                       <span title={scheduleTitle(task)}>{scheduleLabel(task)}</span>
                     ) : null}
                     <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
-                      {hasLogs ? "View logs" : "No logs"}
+                      {hasLogs ? tr("View logs") : tr("No logs")}
                     </StatusChip>
                     {onRunNow && isRunnable(task.status) ? (
                       <span
                         role="button"
                         tabIndex={0}
                         className="icon-action task-run-now-btn"
-                        aria-label={`${taskControlLabel(task, "Run")} now`}
-                        title="Run now"
+                        aria-label={tr("{0} now", [taskControlLabel(task, tr("Run"))])}
+                        title={tr("Run now")}
                         data-testid="task-run-now-button-card"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -543,8 +545,8 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-edit-btn"
-                        aria-label={taskControlLabel(task, "Edit")}
-                        title="Edit task"
+                        aria-label={taskControlLabel(task, tr("Edit"))}
+                        title={tr("Edit task")}
                         data-testid="task-edit-button-card"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -589,8 +591,8 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-delete-btn"
-                        aria-label={taskControlLabel(task, "Delete")}
-                        title="Delete permanently — frees its name for reuse"
+                        aria-label={taskControlLabel(task, tr("Delete"))}
+                        title={tr("Delete permanently — frees its name for reuse")}
                         data-testid="task-delete-button-card"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -623,40 +625,40 @@ export function TasksTable({
         )}
       </ul>
 
-      <div className="tasks-pagination" role="navigation" aria-label="Tasks pagination">
+      <div className="tasks-pagination" role="navigation" aria-label={tr("Tasks pagination")}>
         <div className="pagination-info">
           <span>
-            {total > 0 ? `Showing ${start}-${end} of ${total} tasks` : "Showing 0 of 0 tasks"}
+            {total > 0 ? tr("Showing {0}-{1} of {2} tasks", [start, end, total]) : tr("Showing 0 of 0 tasks")}
           </span>
         </div>
         <div className="pagination-controls">
           <button
             type="button"
             className="btn btn-secondary"
-            aria-label="Previous page"
+            aria-label={tr("Previous page")}
             disabled={page <= 1}
             onClick={() => onPage(page - 1)}
           >
-            Prev
+            {tr("Prev")}
           </button>
           <span className="page-info">
-            Page {page} of {totalPages}
-          </span>
+        {rich("Page {0} of {1}", page, totalPages)}
+      </span>
           <button
             type="button"
             className="btn btn-secondary"
-            aria-label="Next page"
+            aria-label={tr("Next page")}
             disabled={page >= totalPages}
             onClick={() => onPage(page + 1)}
           >
-            Next
+            {tr("Next")}
           </button>
         </div>
         <div className="page-size-selector">
-          <label htmlFor="pageSizeSelect">Show</label>
+          <label htmlFor="pageSizeSelect">{tr("Show")}</label>
           <select
             id="pageSizeSelect"
-            aria-label="Items per page"
+            aria-label={tr("Items per page")}
             value={pageSize}
             onChange={(e) => onPageSize(Number.parseInt(e.target.value, 10))}
           >
@@ -698,7 +700,7 @@ function TaskTagChips({
     <span className="task-tag-row">
       {tags.map((tag) => {
         const active = selected.includes(tag);
-        const label = active ? `Stop filtering by tag ${tag}` : `Filter by tag ${tag}`;
+        const label = active ? tr("Stop filtering by tag {0}", [tag]) : tr("Filter by tag {0}", [tag]);
         const className = `task-tag-chip${active ? " task-tag-chip-active" : ""}`;
         // The row (and the card) opens the log viewer, so every chip has to
         // stop the event before it gets there.
@@ -754,35 +756,33 @@ function TasksEmptyState({
   if (error) {
     return (
       <span role="alert" data-testid="tasks-load-error">
-        Couldn&apos;t load tasks: {error}
-        {onRetry ? (
+        {rich("Couldn't load tasks: {0}{1}", error, onRetry ? (
           <>
             {" "}
             <button type="button" className="btn btn-small" onClick={onRetry}>
-              Retry
+              {tr("Retry")}
             </button>
           </>
-        ) : null}
+        ) : null)}
       </span>
     );
   }
   if (loading) {
-    return <span data-testid="tasks-loading">Loading tasks…</span>;
+    return <span data-testid="tasks-loading">{tr("Loading tasks…")}</span>;
   }
   if (anyFilter) {
     return (
       <span data-testid="tasks-no-match">
-        No tasks match the current filters.
-        {onClearFilters ? (
+        {rich("No tasks match the current filters.{0}", onClearFilters ? (
           <>
             {" "}
             <button type="button" className="btn btn-small" onClick={onClearFilters}>
-              Clear filters
+              {tr("Clear filters")}
             </button>
           </>
-        ) : null}
+        ) : null)}
       </span>
     );
   }
-  return <>No tasks created yet</>;
+  return <>{tr("No tasks created yet")}</>;
 }

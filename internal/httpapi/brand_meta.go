@@ -42,11 +42,13 @@ import (
 // brandMetaResponse is the white-label identity the web resolves server-side.
 // Field names mirror the manifest's branding keys so the two read the same.
 type brandMetaResponse struct {
-	AppName          string `json:"app_name"`
-	LoginTitle       string `json:"login_title"`
-	LoginTagline     string `json:"login_tagline"`
-	ShareTitle       string `json:"share_title"`
-	ShareDescription string `json:"share_description"`
+	AppName          string                     `json:"app_name"`
+	LoginTitle       string                     `json:"login_title"`
+	LoginTagline     string                     `json:"login_tagline"`
+	ShareTitle       string                     `json:"share_title"`
+	ShareDescription string                     `json:"share_description"`
+	Localizations    clientconfig.Localizations `json:"localizations,omitempty"`
+	HasLocalizations bool                       `json:"has_localizations,omitempty"`
 	// BackgroundLight / BackgroundDark are the bundle's `background` color token
 	// per mode, echoed here so the web can set <meta name="theme-color"> and the
 	// PWA manifest's background/theme color — neither of which can read CSS
@@ -118,6 +120,8 @@ func (s *Server) brandMeta(w http.ResponseWriter, r *http.Request) {
 		if s.clientConfig.BrandShareImagePath != "" {
 			resp.ShareImageURL = brandShareImageWebPath
 		}
+		resp.Localizations = s.clientConfig.PublicLocalizations()
+		resp.HasLocalizations = len(s.clientConfig.Localizations) > 0
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

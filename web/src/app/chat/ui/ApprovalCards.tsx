@@ -1,3 +1,7 @@
+import { memoryKindLabel } from "@/app/lib/i18n/ownedLabels";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Approval / email-preview / memory card cluster extracted from
 // chat-experience.tsx (slice 4 of #169). These cards turn a pending
 // Approval (send/preview email, run bash, suggest the advanced model) or a
@@ -116,7 +120,7 @@ function formatCountdown(totalSeconds: number): string {
 // Send. The default seat renders nothing: there is no ambiguity to resolve.
 // The verb defaults to the email card's "Sending as"; the generic action card
 // passes "Runs as" since not every critical tool sends anything.
-export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
+export function ApprovalSeatBadge({ server, account, verb = tr("Sending as") }: {
   server?: string;
   account?: string;
   verb?: string;
@@ -134,7 +138,7 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
       style={{ color: "var(--color-card-text-muted)" }}
     >
       <span>
-        {verb} <span className="font-mono">{account}</span> on{" "}
+        {verb} <span className="font-mono">{account}</span> {tr("on")}{" "}
         {named ? named : <span className="font-mono">{server}</span>}
       </span>
     </div>
@@ -190,7 +194,7 @@ export function actionLabel(
 export function askAgainPrompt(approval: Approval, names?: ReadonlyMap<string, string>): string {
   const { action, server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names);
   const what = server ? `${action.toLowerCase()} (${approval.tool})` : action.toLowerCase();
-  return `The approval card for ${what} timed out before I could act on it. Please stage it again — I'm ready to review it now.`;
+  return tr("The approval card for {0} timed out before I could act on it. Please stage it again — I'm ready to review it now.", [what]);
 }
 
 // AskAgainButton renders the one-click recovery on a timed-out card. Kept a
@@ -208,7 +212,7 @@ function AskAgainButton({ approval, onAskAgain }: {
         className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
         onClick={() => onAskAgain(approval)}
       >
-        Ask again
+        {tr("Ask again")}
       </button>
     </div>
   );
@@ -232,10 +236,10 @@ export function ApprovalCountdown({
       style={{ color: expired ? "var(--color-danger-text)" : "var(--color-card-text-muted)" }}
     >
       {expired ? (
-        <span>⏱ Timed out — the action was not taken.</span>
+        <span>{tr("⏱ Timed out — the action was not taken.")}</span>
       ) : (
         <span>
-          ⏱ Auto-denying in <span className="font-mono">{formatCountdown(remaining)}</span>
+          {tr("⏱ Auto-denying in")}{" "}<span className="font-mono">{formatCountdown(remaining)}</span>
         </span>
       )}
     </div>
@@ -262,8 +266,8 @@ export async function describeSubmitFailure(response: Response): Promise<string>
   }
   const short = body.length > 0 && body.length <= 200 && !body.startsWith("<");
   return short
-    ? `Couldn't submit your decision (HTTP ${response.status}): ${body}`
-    : `Couldn't submit your decision (HTTP ${response.status}).`;
+    ? tr("Couldn't submit your decision (HTTP {0}): {1}", [response.status, body])
+    : tr("Couldn't submit your decision (HTTP {0}).", [response.status]);
 }
 
 export function ApprovalSubmitError({
@@ -292,8 +296,8 @@ export function ApprovalSubmitError({
           className="text-[0.72rem] leading-[1.45]"
           style={{ color: "var(--color-danger-text)" }}
         >
-          {message} Try again.
-        </p>
+        {rich("{0} Try again.", message)}
+      </p>
       ) : null}
     </>
   );
@@ -327,7 +331,7 @@ function ApprovalExecutingControls({
       {progress ? <ApprovalProgressBar progress={progress} /> : null}
       {stopping ? (
         <p data-testid="approval-stopping" role="status" className="text-[0.75rem] text-[var(--color-text-secondary)]">
-          Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran.
+          {tr("Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran.")}
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
@@ -338,7 +342,7 @@ function ApprovalExecutingControls({
           disabled={submitting !== null}
           onClick={onCheck}
         >
-          {submitting === "send" ? "Checking…" : "Check result"}
+          {submitting === "send" ? tr("Checking…") : tr("Check result")}
         </button>
         {onStop && !stopping ? (
           <>
@@ -350,10 +354,10 @@ function ApprovalExecutingControls({
               disabled={submitting !== null}
               onClick={onStop}
             >
-              {submitting === "cancel" ? "Stopping…" : "Stop"}
+              {submitting === "cancel" ? tr("Stopping…") : tr("Stop")}
             </button>
             <span id={stopHintId} className="text-[0.72rem] text-[var(--color-card-text-muted)]">
-              Asks the server to stop after its current item; the result says what ran.
+              {tr("Asks the server to stop after its current item; the result says what ran.")}
             </span>
           </>
         ) : null}
@@ -376,7 +380,7 @@ export function ApprovalProgressBar({ progress }: { progress: ApprovalProgress }
       {pct !== null ? (
         <div
           role="progressbar"
-          aria-label="Progress"
+          aria-label={tr("Progress")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
@@ -537,7 +541,7 @@ export function ApprovalCard({
       if (!approvalUrl) {
         // Both ids are server-minted UUIDs; anything else is not sent, so
         // no id can steer this POST to another path or origin.
-        setSubmitError("This approval has an invalid id and can't be sent.");
+        setSubmitError(tr("This approval has an invalid id and can't be sent."));
         return;
       }
       const response = await fetch(approvalUrl, {
@@ -608,7 +612,7 @@ export function ApprovalCard({
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
       setSubmitError(
-        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
+        tr("Couldn't reach the server ({0}).", [errorMessage(err, tr("request failed"))]),
       );
     } finally {
       setSubmitting(null);
@@ -624,7 +628,7 @@ export function ApprovalCard({
     try {
       const url = conversationApiPath(conversationId, "approvals", approval.id, "stop");
       if (!url) {
-        setSubmitError("This approval has an invalid id and can't be sent.");
+        setSubmitError(tr("This approval has an invalid id and can't be sent."));
         return;
       }
       const response = await fetch(url, { method: "POST" });
@@ -641,7 +645,7 @@ export function ApprovalCard({
           // The server refused the stop: the call finished first and its
           // outcome is being recorded without one. The card keeps running
           // until the poll (or Check result) shows that outcome.
-          setSubmitError("The action finished before it could be stopped; its outcome is being recorded.");
+          setSubmitError(tr("The action finished before it could be stopped; its outcome is being recorded."));
         }
         return;
       }
@@ -656,7 +660,7 @@ export function ApprovalCard({
         stopped: data.stopped === true || undefined,
       });
     } catch (err) {
-      setSubmitError(`Couldn't reach the server (${errorMessage(err, "request failed")}).`);
+      setSubmitError(tr("Couldn't reach the server ({0}).", [errorMessage(err, tr("request failed"))]));
     } finally {
       setSubmitting(null);
     }
@@ -756,7 +760,7 @@ export function ApprovalCard({
     ...emailAttachmentNames(approval.summary.attachments),
     ...emailAttachmentNames(approval.summary.inline_attachments).map((a) => ({ ...a, inline: true })),
   ];
-  const subject = approval.summary.subject ?? "(no subject)";
+  const subject = approval.summary.subject ?? tr("(no subject)");
   const from = approval.summary.from ?? "";
   const preview = approval.summary.preview ?? "";
   // Full body comes through on the new summary.content field; older
@@ -806,25 +810,25 @@ export function ApprovalCard({
   // (e.g. /Send this email\?/i) — substring matches still pass.
   const title = isPreviewOnly
     ? executing
-      ? "Dismissing…"
+      ? tr("Dismissing…")
       : approval.status === "pending"
-      ? "DRAFT · Email preview (not sent)"
+      ? tr("DRAFT · Email preview (not sent)")
       : approval.status === "approved" || approval.status === "rejected"
-        ? "Draft dismissed"
+        ? tr("Draft dismissed")
         : approval.status === "execution_unknown"
-          ? "Preview outcome not recorded"
-          : "Preview failed"
+          ? tr("Preview outcome not recorded")
+          : tr("Preview failed")
     : executing
-      ? "Sending…"
+      ? tr("Sending…")
       : approval.status === "pending"
-      ? "ACTION REQUIRED · Send this email?"
+      ? tr("ACTION REQUIRED · Send this email?")
       : approval.status === "approved"
-        ? "Email sent ✓"
+        ? tr("Email sent ✓")
         : approval.status === "rejected"
-          ? "Send cancelled"
+          ? tr("Send cancelled")
           : approval.status === "execution_unknown"
-            ? "Approved — outcome not recorded"
-            : "Send failed";
+            ? tr("Approved — outcome not recorded")
+            : tr("Send failed");
 
   // Pending preview gets a dashed border to signal "draft / not real /
   // sketch." Pending send keeps the solid border (the default `border`
@@ -866,18 +870,18 @@ export function ApprovalCard({
              * "preview" wording since that's literally what they are.
              */}
             {isPreviewOnly
-              ? expanded ? "Hide preview" : "Show preview"
-              : expanded ? "Hide email" : "Show email"}
+              ? expanded ? tr("Hide preview") : tr("Show preview")
+              : expanded ? tr("Hide email") : tr("Show email")}
           </button>
         ) : null}
       </div>
 
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
-        {toLine ? <div data-testid="email-to"><span className="text-[var(--color-card-text-muted)]">To: </span>{toLine}</div> : null}
-        {ccLine ? <div data-testid="email-cc"><span className="text-[var(--color-card-text-muted)]">Cc: </span>{ccLine}</div> : null}
-        {bccLine ? <div data-testid="email-bcc"><span className="text-[var(--color-card-text-muted)]">Bcc: </span>{bccLine}</div> : null}
-        <div><span className="text-[var(--color-card-text-muted)]">Subject: </span>{subject}</div>
-        {from ? <div><span className="text-[var(--color-card-text-muted)]">From: </span>{from}</div> : null}
+        {toLine ? <div data-testid="email-to"><span className="text-[var(--color-card-text-muted)]">{tr("To:")}{" "}</span>{toLine}</div> : null}
+        {ccLine ? <div data-testid="email-cc"><span className="text-[var(--color-card-text-muted)]">{tr("Cc:")}{" "}</span>{ccLine}</div> : null}
+        {bccLine ? <div data-testid="email-bcc"><span className="text-[var(--color-card-text-muted)]">{tr("Bcc:")}{" "}</span>{bccLine}</div> : null}
+        <div><span className="text-[var(--color-card-text-muted)]">{tr("Subject:")}{" "}</span>{subject}</div>
+        {from ? <div><span className="text-[var(--color-card-text-muted)]">{tr("From:")}{" "}</span>{from}</div> : null}
       </div>
 
       {/* Attachments sit OUTSIDE the collapsible body so a collapsed send card
@@ -890,7 +894,7 @@ export function ApprovalCard({
           className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.78rem]"
         >
           <div className="mb-1 text-[var(--color-card-text-muted)]">
-            📎 {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
+            📎 {tr(attachments.length === 1 ? "{0} attachment" : "{0} attachments", [attachments.length])}
           </div>
           <ul className="grid gap-0.5">
             {attachments.map((a, i) => (
@@ -898,7 +902,7 @@ export function ApprovalCard({
                 <span className="font-medium text-[var(--color-text-primary)]">{a.name}</span>
                 {"inline" in a ? (
                   <StatusChip tone="neutral" className="ml-1.5">
-                    inline
+                    {tr("inline")}
                   </StatusChip>
                 ) : null}
                 {a.path !== a.name ? (
@@ -940,7 +944,7 @@ export function ApprovalCard({
               disabled={submitting !== null}
               onClick={() => void resolve(true)}
             >
-              {submitting === "send" ? "Dismissing…" : "Dismiss"}
+              {submitting === "send" ? tr("Dismissing…") : tr("Dismiss")}
             </button>
             <ApprovalSubmitError message={submitError} />
           </div>
@@ -953,7 +957,7 @@ export function ApprovalCard({
                 disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(true)}
               >
-                {submitting === "send" ? "Sending…" : applyAll ? "Send + allow all" : "Send"}
+                {submitting === "send" ? tr("Sending…") : applyAll ? tr("Send + allow all") : tr("Send")}
               </button>
               <button
                 type="button"
@@ -961,7 +965,7 @@ export function ApprovalCard({
                 disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(false)}
               >
-                {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
+                {submitting === "cancel" ? tr("Cancelling…") : applyAll ? tr("Deny + block all") : tr("Cancel")}
               </button>
             </div>
             <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} />
@@ -1020,19 +1024,19 @@ function readableTitle(
   timedOut: boolean,
   stopped: boolean,
 ): string {
-  if (executing) return `Running · ${cardTitle}`;
+  if (executing) return tr("Running · {0}", [cardTitle]);
   switch (approval.status) {
     case "pending":
       return cardTitle;
     case "approved":
-      if (stopped) return `Stop requested · ${cardTitle}`;
-      return recorded ? `${cardTitle} · ran without asking` : `Applied · ${cardTitle}`;
+      if (stopped) return tr("Stop requested · {0}", [cardTitle]);
+      return recorded ? tr("{0} · ran without asking", [cardTitle]) : tr("Applied · {0}", [cardTitle]);
     case "rejected":
-      return timedOut ? `Timed out — not applied · ${cardTitle}` : `Declined · ${cardTitle}`;
+      return timedOut ? tr("Timed out — not applied · {0}", [cardTitle]) : tr("Declined · {0}", [cardTitle]);
     case "execution_unknown":
-      return `Outcome not recorded · ${cardTitle}`;
+      return tr("Outcome not recorded · {0}", [cardTitle]);
     default:
-      return `Not applied · ${cardTitle}`;
+      return tr("Not applied · {0}", [cardTitle]);
   }
 }
 
@@ -1099,22 +1103,22 @@ function GenericActionCard({
   const title = readable
     ? readableTitle(approval, readable.title, executing, recorded, timedOut, stopped)
     : executing
-      ? `${action} · running`
+      ? tr("{0} · running", [action])
       : approval.status === "pending"
-      ? `ACTION REQUIRED · Run "${action}"?`
+      ? tr("ACTION REQUIRED · Run \"{0}\"?", [action])
       : approval.status === "approved"
         ? stopped
-          ? `${action} · stop requested`
+          ? tr("{0} · stop requested", [action])
           : recorded
-          ? `${action} · ran without asking`
-          : `${action} · completed ✓`
+          ? tr("{0} · ran without asking", [action])
+          : tr("{0} · completed ✓", [action])
         : approval.status === "rejected"
           ? timedOut
-            ? `${action} · timed out`
-            : `${action} · cancelled`
+            ? tr("{0} · timed out", [action])
+            : tr("{0} · cancelled", [action])
           : approval.status === "execution_unknown"
-            ? `${action} · outcome not recorded`
-            : `${action} · failed`;
+            ? tr("{0} · outcome not recorded", [action])
+            : tr("{0} · failed", [action]);
 
   // A record is information, not a past decision — muted chrome, like the
   // dismissed-preview state, so it never masquerades as an approval.
@@ -1139,7 +1143,7 @@ function GenericActionCard({
   // the collapsed "Details" of a readable one.
   const toolHeader = server ? (
     <div className="mb-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
-      via <span className="font-mono">{server}</span>
+      {tr("via")}{" "}<span className="font-mono">{server}</span>
       <span className="mx-1">·</span>
       <span className="font-mono">{approval.tool}</span>
     </div>
@@ -1228,7 +1232,7 @@ function GenericActionCard({
             className="text-[0.68rem] font-medium uppercase tracking-[0.18em] text-[var(--color-card-link)]"
             style={{ fontFamily: "var(--font-mono)" }}
           >
-            Approval needed
+            {tr("Approval needed")}
           </span>
           <EyebrowCountdown remaining={countdown.remaining} expired={countdown.expired} />
         </div>
@@ -1267,14 +1271,14 @@ function GenericActionCard({
             }}
           >
             {submitting === "send"
-              ? "Running…"
+              ? tr("Running…")
               : narrowing.approved && narrowing.approved.length === 0
-                ? "Decline"
+                ? tr("Decline")
                 : narrowing.approved
                   ? narrowedApproveLabel(narrowing.approved.length, narrowing.total)
                   : applyAll
-                    ? "Approve + allow all"
-                    : "Approve"}
+                    ? tr("Approve + allow all")
+                    : tr("Approve")}
           </button>
           <button
             type="button"
@@ -1282,7 +1286,7 @@ function GenericActionCard({
             disabled={submitting !== null || countdown.expired}
             onClick={() => onResolve(false)}
           >
-            {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
+            {submitting === "cancel" ? tr("Cancelling…") : applyAll ? tr("Deny + block all") : tr("Cancel")}
           </button>
           <DetailsToggle open={detailsOpen} onToggle={() => setDetailsOpen((v) => !v)} controls={detailsId} />
         </div>
@@ -1294,8 +1298,8 @@ function GenericActionCard({
           {narrowing.approved && narrowing.approved.length < narrowing.total ? (
             <p data-testid="approval-narrow-scope" className="text-[0.72rem] text-[var(--color-card-text-muted)]">
               {narrowing.approved.length === 0
-                ? "Nothing is selected, so this declines the action."
-                : `Covers only the ${narrowing.approved.length} selected; ${narrowing.total - narrowing.approved.length} left out of the call.`}
+                ? tr("Nothing is selected, so this declines the action.")
+                : tr("Covers only the {0} selected; {1} left out of the call.", [narrowing.approved.length, narrowing.total - narrowing.approved.length])}
             </p>
           ) : null}
           <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
@@ -1336,7 +1340,7 @@ function GenericActionCard({
       {narrowedLine}
       {stopped ? (
         <p data-testid="approval-stopped" className="mt-0.5 min-w-0 text-[0.75rem] text-[var(--color-warning-text)]">
-          You pressed Stop while this ran, so it may have run only in part. The result says what ran.
+          {tr("You pressed Stop while this ran, so it may have run only in part. The result says what ran.")}
         </p>
       ) : null}
 
@@ -1378,7 +1382,7 @@ function GenericActionCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
-              {submitting === "send" ? "Running…" : applyAll ? "Approve + allow all" : "Approve & run"}
+              {submitting === "send" ? tr("Running…") : applyAll ? tr("Approve + allow all") : tr("Approve & run")}
             </button>
             <button
               type="button"
@@ -1386,7 +1390,7 @@ function GenericActionCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
-              {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
+              {submitting === "cancel" ? tr("Cancelling…") : applyAll ? tr("Deny + block all") : tr("Cancel")}
             </button>
           </div>
           <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
@@ -1461,16 +1465,16 @@ function BashApprovalCard({
         <span aria-hidden>⚡</span>
         <span className="font-medium">
           {executing
-            ? "Command running"
+            ? tr("Command running")
             : approval.status === "pending"
-            ? "Run this shell command?"
+            ? tr("Run this shell command?")
             : approval.status === "approved"
-              ? "Command executed"
+              ? tr("Command executed")
               : approval.status === "rejected"
-                ? "Command declined"
+                ? tr("Command declined")
                 : approval.status === "execution_unknown"
-                  ? "Command outcome not recorded"
-                  : "Command failed"}
+                  ? tr("Command outcome not recorded")
+                  : tr("Command failed")}
         </span>
       </div>
 
@@ -1480,8 +1484,10 @@ function BashApprovalCard({
 
       {(workingDir || timeoutSec) ? (
         <div className="mt-1 grid gap-0.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
-          {workingDir ? <div>cwd: {workingDir}</div> : null}
-          {timeoutSec ? <div>timeout: {timeoutSec}s</div> : null}
+          {workingDir ? <div>{tr("cwd:")}{" "}{workingDir}</div> : null}
+          {timeoutSec ? <div>
+        {rich("timeout: {0}s", timeoutSec)}
+      </div> : null}
         </div>
       ) : null}
 
@@ -1502,7 +1508,7 @@ function BashApprovalCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
-              {submitting === "send" ? "Running…" : "Approve & run"}
+              {submitting === "send" ? tr("Running…") : tr("Approve & run")}
             </button>
             <button
               type="button"
@@ -1510,7 +1516,7 @@ function BashApprovalCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
-              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+              {submitting === "cancel" ? tr("Cancelling…") : tr("Cancel")}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
@@ -1576,13 +1582,13 @@ function ScheduleTaskCard({
 
   // Render the schedule as a single human-readable line.
   const scheduleLine = s.recurring
-    ? `Recurring · cron ${s.cron ?? ""}`
+    ? tr("Recurring · cron {0}", [s.cron ?? ""])
     : s.run_at
-      ? `One-time · ${formatRunAt(s.run_at)}`
-      : "Runs as soon as a worker is free";
+      ? tr("One-time · {0}", [formatRunAt(s.run_at)])
+      : tr("Runs as soon as a worker is free");
   const frequencyLine =
     s.recurring && typeof s.runs_per_month === "number"
-      ? `≈ ${s.runs_per_month >= 1000 ? "1000+" : s.runs_per_month} run${s.runs_per_month === 1 ? "" : "s"} / month`
+      ? tr(s.runs_per_month === 1 ? "≈ {0} run / month" : "≈ {0} runs / month", [s.runs_per_month >= 1000 ? "1000+" : s.runs_per_month])
       : null;
   // Connectors the task inherits from this chat (ADR-0068). A scheduled run
   // binds only its saved connectors plus the bundle's always-on ones, so a
@@ -1594,7 +1600,7 @@ function ScheduleTaskCard({
     connectors.length > 0
       ? connectors.join(", ")
       : alwaysOn.length > 0
-        ? `always-on only (${alwaysOn.join(", ")})`
+        ? tr("always-on only ({0})", [alwaysOn.join(", ")])
         : null;
   const noConnectors = s.no_connectors === true || (connectors.length === 0 && alwaysOn.length === 0);
 
@@ -1613,16 +1619,16 @@ function ScheduleTaskCard({
 
   const title =
     executing
-      ? "Scheduling…"
+      ? tr("Scheduling…")
       : approval.status === "pending"
-      ? "ACTION REQUIRED · Schedule this task?"
+      ? tr("ACTION REQUIRED · Schedule this task?")
       : approval.status === "approved"
-        ? "Task scheduled ✓"
+        ? tr("Task scheduled ✓")
         : approval.status === "rejected"
-          ? "Scheduling cancelled"
+          ? tr("Scheduling cancelled")
           : approval.status === "execution_unknown"
-            ? "Approved — outcome not recorded"
-            : "Scheduling failed";
+            ? tr("Approved — outcome not recorded")
+            : tr("Scheduling failed");
 
   return (
     <div
@@ -1639,35 +1645,35 @@ function ScheduleTaskCard({
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
         {name ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Name: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Name:")}{" "}</span>
             {name}
           </div>
         ) : null}
         <div>
-          <span className="text-[var(--color-card-text-muted)]">Schedule: </span>
+          <span className="text-[var(--color-card-text-muted)]">{tr("Schedule:")}{" "}</span>
           {scheduleLine}
         </div>
         {frequencyLine ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Frequency: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Frequency:")}{" "}</span>
             {frequencyLine}
           </div>
         ) : null}
         {s.model ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Model: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Model:")}{" "}</span>
             {s.model}
           </div>
         ) : null}
         {s.allow_network ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Network: </span>
-            egress allowed
+            <span className="text-[var(--color-card-text-muted)]">{tr("Network:")}{" "}</span>
+            {tr("egress allowed")}
           </div>
         ) : null}
         {connectorsLine ? (
           <div data-testid="schedule-connectors">
-            <span className="text-[var(--color-card-text-muted)]">Connectors: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Connectors:")}{" "}</span>
             {connectorsLine}
           </div>
         ) : null}
@@ -1680,17 +1686,14 @@ function ScheduleTaskCard({
           className="mt-2 rounded-md border border-[var(--color-warning-border)] px-2 py-1.5 text-[0.75rem] text-[var(--color-warning-text)]"
         >
           <span aria-hidden>⚠️ </span>
-          <span className="font-medium">No connectors.</span> This task will run without any email,
-          mailbox or data connectors, so it cannot send or fetch anything. Turn the connectors it
-          needs on in this chat&apos;s Tools menu and schedule again, or add them to the task on the
-          Background tasks page after approving.
+          <span className="font-medium">{tr("No connectors.")}</span> {tr("This task will run without any email, mailbox or data connectors, so it cannot send or fetch anything. Turn the connectors it needs on in this chat's Tools menu and schedule again, or add them to the task on the Background tasks page after approving.")}
         </div>
       ) : null}
 
       {editing && approval.status === "pending" && !executing ? (
         <div className="mt-2 grid gap-2">
           <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
-            Name
+            {tr("Name")}
             <input
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
@@ -1699,7 +1702,7 @@ function ScheduleTaskCard({
           </label>
           {s.recurring ? (
             <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
-              Cron schedule
+              {tr("Cron schedule")}
               <input
                 value={editCron}
                 onChange={(e) => setEditCron(e.target.value)}
@@ -1708,7 +1711,7 @@ function ScheduleTaskCard({
             </label>
           ) : null}
           <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
-            Prompt
+            {tr("Prompt")}
             <textarea
               value={editPrompt}
               onChange={(e) => setEditPrompt(e.target.value)}
@@ -1741,10 +1744,10 @@ function ScheduleTaskCard({
               onClick={() => onResolve(true, collectEdits())}
             >
               {submitting === "send"
-                ? "Scheduling…"
+                ? tr("Scheduling…")
                 : editing && collectEdits()
-                  ? "Approve with changes"
-                  : "Approve & schedule"}
+                  ? tr("Approve with changes")
+                  : tr("Approve & schedule")}
             </button>
             <button
               type="button"
@@ -1762,7 +1765,7 @@ function ScheduleTaskCard({
                 });
               }}
             >
-              {editing ? "Discard edits" : "Edit…"}
+              {editing ? tr("Discard edits") : tr("Edit…")}
             </button>
             <button
               type="button"
@@ -1770,7 +1773,7 @@ function ScheduleTaskCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
-              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+              {submitting === "cancel" ? tr("Cancelling…") : tr("Cancel")}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
@@ -1836,21 +1839,21 @@ function ManageTasksCard({
   const title =
     executing
       ? stopping
-        ? "Stopping tasks…"
-        : "Updating tasks…"
+        ? tr("Stopping tasks…")
+        : tr("Updating tasks…")
       : approval.status === "pending"
       ? stopping
-        ? "Stop scheduled tasks?"
-        : "Change scheduled tasks?"
+        ? tr("Stop scheduled tasks?")
+        : tr("Change scheduled tasks?")
       : approval.status === "approved"
         ? stopping
-          ? "Tasks stopped"
-          : "Tasks updated"
+          ? tr("Tasks stopped")
+          : tr("Tasks updated")
         : approval.status === "rejected"
-          ? "Change cancelled"
+          ? tr("Change cancelled")
           : approval.status === "execution_unknown"
-            ? "Approved — outcome not recorded"
-            : "Change failed";
+            ? tr("Approved — outcome not recorded")
+            : tr("Change failed");
 
   const statusStyle =
     executing
@@ -1878,20 +1881,19 @@ function ManageTasksCard({
         {ids.length > 0 ? (
           <div>
             <span className="text-[var(--color-card-text-muted)]">
-              {ids.length === 1 ? "Task: " : `Tasks (${ids.length}): `}
+              {ids.length === 1 ? tr("Task: ") : tr("Tasks ({0}): ", [ids.length])}
             </span>
             <code className="text-[0.72rem]">{ids.join(", ")}</code>
           </div>
         ) : null}
         {match.length > 0 ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Applies to every task where: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Applies to every task where:")}{" "}</span>
             {match.join("; ")}
             {s.max_tasks ? (
               <span className="text-[var(--color-card-text-muted)]">
-                {" "}
-                (refused above {s.max_tasks} matches)
-              </span>
+        {rich("(refused above {0} matches)", s.max_tasks)}
+      </span>
             ) : null}
           </div>
         ) : null}
@@ -1928,11 +1930,11 @@ function ManageTasksCard({
             >
               {submitting === "send"
                 ? stopping
-                  ? "Stopping…"
-                  : "Updating…"
+                  ? tr("Stopping…")
+                  : tr("Updating…")
                 : stopping
-                  ? "Approve & stop"
-                  : "Approve & update"}
+                  ? tr("Approve & stop")
+                  : tr("Approve & update")}
             </button>
             <button
               type="button"
@@ -1940,7 +1942,7 @@ function ManageTasksCard({
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
-              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+              {submitting === "cancel" ? tr("Cancelling…") : tr("Cancel")}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
@@ -1984,18 +1986,18 @@ function EnableMCPConnectorsCard({
   const reason = typeof s.reason === "string" ? s.reason.trim() : "";
 
   const title = executing
-    ? "Enabling connector(s)…"
+    ? tr("Enabling connector(s)…")
     : approval.status === "pending"
-      ? `ACTION REQUIRED · Enable ${labels.length === 1 ? "MCP connector" : "MCP connectors"}?`
+      ? tr("ACTION REQUIRED · Enable {0}?", [labels.length === 1 ? tr("MCP connector") : tr("MCP connectors")])
       : approval.status === "approved"
         ? approval.recorded
-          ? "Auto-enabled MCP connector(s) ✓"
-          : "MCP connector(s) enabled ✓"
+          ? tr("Auto-enabled MCP connector(s) ✓")
+          : tr("MCP connector(s) enabled ✓")
         : approval.status === "rejected"
-          ? "Connector enablement declined"
+          ? tr("Connector enablement declined")
           : approval.status === "execution_unknown"
-            ? "Approved — outcome not recorded"
-            : "Connector enablement failed";
+            ? tr("Approved — outcome not recorded")
+            : tr("Connector enablement failed");
 
   const statusStyle = executing
     ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
@@ -2021,7 +2023,7 @@ function EnableMCPConnectorsCard({
         {labels.length > 0 ? (
           <div>
             <span className="text-[var(--color-card-text-muted)]">
-              {labels.length === 1 ? "Connector: " : `Connectors (${labels.length}): `}
+              {labels.length === 1 ? tr("Connector: ") : tr("Connectors ({0}): ", [labels.length])}
             </span>
             <span className="font-medium text-[var(--color-text-primary)]">
               {labels.join(", ")}
@@ -2030,7 +2032,7 @@ function EnableMCPConnectorsCard({
         ) : null}
         {reason ? (
           <div>
-            <span className="text-[var(--color-card-text-muted)]">Why: </span>
+            <span className="text-[var(--color-card-text-muted)]">{tr("Why:")}{" "}</span>
             {reason}
           </div>
         ) : null}
@@ -2039,7 +2041,7 @@ function EnableMCPConnectorsCard({
       {approval.status === "pending" ? (
         executing ? (
           <div className="mt-2.5 flex items-center gap-2 text-[0.75rem] text-[var(--color-text-secondary)]">
-            <span>Enabling connector(s) and continuing turn…</span>
+            <span>{tr("Enabling connector(s) and continuing turn…")}</span>
           </div>
         ) : (
           <div className="mt-2.5 flex flex-col gap-2">
@@ -2050,7 +2052,7 @@ function EnableMCPConnectorsCard({
                 onClick={() => onResolve(true)}
                 className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
               >
-                {submitting === "send" ? "Enabling…" : "Approve & continue"}
+                {submitting === "send" ? tr("Enabling…") : tr("Approve & continue")}
               </button>
               <button
                 type="button"
@@ -2058,7 +2060,7 @@ function EnableMCPConnectorsCard({
                 onClick={() => onResolve(false)}
                 className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
               >
-                {submitting === "cancel" ? "Declining…" : "Decline"}
+                {submitting === "cancel" ? tr("Declining…") : tr("Decline")}
               </button>
             </div>
             <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
@@ -2083,7 +2085,7 @@ function EnableMCPConnectorsCard({
 function formatRunAt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(getLanguage(), {
     dateStyle: "medium",
     timeStyle: "short",
   });
@@ -2124,7 +2126,7 @@ function SuggestAdvancedModelCard({
   // pending (the server never recorded a choice) and says why, inline.
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const reason = approval.summary.reason ?? "Switching to the fallback model may handle this better.";
+  const reason = approval.summary.reason ?? tr("Switching to the fallback model may handle this better.");
   const recommendedSlug = approval.summary.recommend_model ?? currentAdvancedModel();
   const recommendedLabel = labelForModel(recommendedSlug);
 
@@ -2137,7 +2139,7 @@ function SuggestAdvancedModelCard({
       if (!approvalUrl) {
         // Both ids are server-minted UUIDs; anything else is not sent, so
         // no id can steer this POST to another path or origin.
-        setSubmitError("This approval has an invalid id and can't be sent.");
+        setSubmitError(tr("This approval has an invalid id and can't be sent."));
         return;
       }
       const response = await fetch(approvalUrl, {
@@ -2175,7 +2177,7 @@ function SuggestAdvancedModelCard({
       }
     } catch (err) {
       setSubmitError(
-        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
+        tr("Couldn't reach the server ({0}).", [errorMessage(err, tr("request failed"))]),
       );
     } finally {
       setPending(null);
@@ -2195,14 +2197,14 @@ function SuggestAdvancedModelCard({
 
   const title =
     approval.status === "pending"
-      ? `Try ${recommendedLabel} for the rest of this chat?`
+      ? tr("Try {0} for the rest of this chat?", [recommendedLabel])
       : approval.status === "approved"
-        ? `Switched to ${recommendedLabel}`
+        ? tr("Switched to {0}", [recommendedLabel])
         : approval.status === "rejected"
-          ? "Suggestion dismissed"
+          ? tr("Suggestion dismissed")
           : approval.status === "execution_unknown"
-            ? "Approved — outcome not recorded"
-            : "Suggestion failed";
+            ? tr("Approved — outcome not recorded")
+            : tr("Suggestion failed");
 
   return (
     <div
@@ -2225,7 +2227,7 @@ function SuggestAdvancedModelCard({
             disabled={pending !== null}
             onClick={() => void submit("switch_and_retry")}
           >
-            {pending === "switch_and_retry" ? "Switching…" : "Switch & retry"}
+            {pending === "switch_and_retry" ? tr("Switching…") : tr("Switch & retry")}
           </button>
           <button
             type="button"
@@ -2233,7 +2235,7 @@ function SuggestAdvancedModelCard({
             disabled={pending !== null}
             onClick={() => void submit("switch_only")}
           >
-            {pending === "switch_only" ? "Switching…" : "Just switch"}
+            {pending === "switch_only" ? tr("Switching…") : tr("Just switch")}
           </button>
           <button
             type="button"
@@ -2241,7 +2243,7 @@ function SuggestAdvancedModelCard({
             disabled={pending !== null}
             onClick={() => void submit("dismiss")}
           >
-            {pending === "dismiss" ? "Dismissing…" : "Dismiss"}
+            {pending === "dismiss" ? tr("Dismissing…") : tr("Dismiss")}
           </button>
           <ApprovalSubmitError message={submitError} />
         </div>
@@ -2314,7 +2316,7 @@ function EmailPreview({
   // partial HTML document can cut off mid-tag and look broken; still
   // better than hiding the preview entirely.
   const overflowNotice = contentOverflow
-    ? "Body exceeded the 1 MiB preview cap — the tail is truncated. The full email will still be sent."
+    ? tr("Body exceeded the 1 MiB preview cap — the tail is truncated. The full email will still be sent.")
     : null;
 
   // Dark-mode color inversion. Real email clients (Outlook dark,
@@ -2411,14 +2413,14 @@ function EmailPreview({
     <div className="mt-2 min-w-0 max-w-full overflow-hidden rounded-[0.6rem] border border-[var(--color-border)]">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.7rem]">
         <div className="flex flex-wrap items-center gap-2">
-          <SegGroup label="Inbox">
-            <SegButton active={inbox === "light"} onClick={() => onInboxChange("light")}>Light</SegButton>
-            <SegButton active={inbox === "dark"} onClick={() => onInboxChange("dark")}>Dark</SegButton>
+          <SegGroup label={tr("Inbox")}>
+            <SegButton active={inbox === "light"} onClick={() => onInboxChange("light")}>{tr("Light")}</SegButton>
+            <SegButton active={inbox === "dark"} onClick={() => onInboxChange("dark")}>{tr("Dark")}</SegButton>
           </SegGroup>
           {canShowDesktop ? (
-            <SegGroup label="Size">
-              <SegButton active={viewport === "mobile"} onClick={() => onViewportChange("mobile")}>Mobile</SegButton>
-              <SegButton active={viewport === "desktop"} onClick={() => onViewportChange("desktop")}>Desktop</SegButton>
+            <SegGroup label={tr("Size")}>
+              <SegButton active={viewport === "mobile"} onClick={() => onViewportChange("mobile")}>{tr("Mobile")}</SegButton>
+              <SegButton active={viewport === "desktop"} onClick={() => onViewportChange("desktop")}>{tr("Desktop")}</SegButton>
             </SegGroup>
           ) : null}
         </div>
@@ -2427,7 +2429,7 @@ function EmailPreview({
           className="underline text-[var(--color-card-text-muted)] hover:text-[var(--color-text-primary)]"
           onClick={() => onShowRawChange(!showRaw)}
         >
-          {showRaw ? "Hide source" : "Show source"}
+          {showRaw ? tr("Hide source") : tr("Show source")}
         </button>
       </div>
 
@@ -2445,7 +2447,7 @@ function EmailPreview({
           ref={iframeRef}
           onLoad={applyInboxMode}
           key={`${viewport}`}
-          title="Email preview"
+          title={tr("Email preview")}
           /* allow-same-origin lets the parent touch the iframe DOM to
              apply dark-mode color swaps. No allow-scripts → arbitrary
              LLM HTML still can't execute JS.
@@ -2478,7 +2480,7 @@ function EmailPreview({
             onClick={() => setExpanded((v) => !v)}
             className="text-[0.72rem] font-medium text-[var(--color-card-link)] hover:underline"
           >
-            {expanded ? "Collapse email preview" : "Expand full email"}
+            {expanded ? tr("Collapse email preview") : tr("Expand full email")}
           </button>
         </div>
       ) : null}
@@ -2700,15 +2702,15 @@ function toRecipientList(...groups: Array<string | string[] | undefined>): strin
 function supersedeNote(outcome?: string): string | undefined {
   switch (outcome) {
     case "retired":
-      return "Replaced the older fact (kept for audit, no longer used).";
+      return tr("Replaced the older fact (kept for audit, no longer used).");
     case "target_pinned":
-      return "The older fact is pinned, so it was kept — unpin it to let this replace it.";
+      return tr("The older fact is pinned, so it was kept — unpin it to let this replace it.");
     case "target_changed":
-      return "The older fact was edited since this was proposed, so it was kept.";
+      return tr("The older fact was edited since this was proposed, so it was kept.");
     case "target_missing":
-      return "The older fact had already been deleted.";
+      return tr("The older fact had already been deleted.");
     case "target_retired":
-      return "The older fact was already retired.";
+      return tr("The older fact was already retired.");
     default:
       return undefined;
   }
@@ -2723,8 +2725,8 @@ export type MemoryProject = { id: string; name: string; teamShared: boolean };
 export type MemoryDestination = "personal" | "project";
 
 const MEMORY_DESTINATIONS = [
-  { value: "personal", label: "My memory" },
-  { value: "project", label: "Team learnings" },
+  { value: "personal", label: tr("My memory") },
+  { value: "project", label: tr("Team learnings") },
 ] as const;
 
 // MemoryDestinationPicker is the visible "Save to:" choice (Item D1). It is
@@ -2751,9 +2753,9 @@ export function MemoryDestinationPicker({
   // <span> is invalid markup React will complain about at hydration.
   return (
     <span className="mb-2 flex flex-wrap items-center gap-1.5">
-      <span className="text-[0.7rem] text-[var(--color-card-text-muted)]">Save to:</span>
+      <span className="text-[0.7rem] text-[var(--color-card-text-muted)]">{tr("Save to:")}</span>
       <Segmented
-        label="Where to save this memory"
+        label={tr("Where to save this memory")}
         value={value}
         options={MEMORY_DESTINATIONS}
         onChange={onChange}
@@ -2761,8 +2763,8 @@ export function MemoryDestinationPicker({
       />
       <span className="text-[0.68rem] text-[var(--color-card-text-muted)]">
         {value === "project"
-          ? `everyone in ${project.name}`
-          : "only you, in every chat"}
+          ? tr("everyone in {0}", [project.name])
+          : tr("only you, in every chat")}
       </span>
     </span>
   );
@@ -2830,8 +2832,8 @@ export function MemoryProposalCard({
           // side) that this card is the only place to see.
           setError(
             response.status === 404 && toProject
-              ? "Couldn't save to team learnings — you may no longer be a member of this project."
-              : `Couldn't save this memory (HTTP ${response.status}).`,
+              ? tr("Couldn't save to team learnings — you may no longer be a member of this project.")
+              : tr("Couldn't save this memory (HTTP {0}).", [response.status]),
           );
           return;
         }
@@ -2856,13 +2858,13 @@ export function MemoryProposalCard({
           method: "DELETE",
         });
         if (!response.ok) {
-          setError(`Couldn't dismiss this memory (HTTP ${response.status}).`);
+          setError(tr("Couldn't dismiss this memory (HTTP {0}).", [response.status]));
           return;
         }
         onResolved({ ...proposal, status: "dismissed" });
       }
     } catch {
-      setError("Couldn't reach the server — nothing was saved or dismissed.");
+      setError(tr("Couldn't reach the server — nothing was saved or dismissed."));
     } finally {
       setSubmitting(null);
     }
@@ -2872,12 +2874,12 @@ export function MemoryProposalCard({
     <div className="rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3">
       <div className="mb-2 flex items-center gap-2 text-[0.75rem] font-medium text-[var(--color-text-primary)]">
         <span className="inline-flex size-5 items-center justify-center rounded-full bg-[var(--color-accent)] text-[0.65rem] text-[var(--color-surface-1)]">
-          M
+          {tr("M")}
         </span>
-        Save this memory?
+        {tr("Save this memory?")}
         {proposal.kind && proposal.kind !== "fact" ? (
           <StatusChip tone="neutral" className="font-normal">
-            {proposal.kind}
+            {memoryKindLabel(proposal.kind)}
           </StatusChip>
         ) : null}
       </div>
@@ -2886,8 +2888,8 @@ export function MemoryProposalCard({
       </p>
       {proposal.supersedesContent ? (
         <p className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-card-text-muted)]">
-          Replaces: <span className="line-through">{proposal.supersedesContent}</span>
-          <span className="ml-1">(the older fact is retired only if you save)</span>
+          {tr("Replaces:")}{" "}<span className="line-through">{proposal.supersedesContent}</span>
+          <span className="ml-1">{tr("(the older fact is retired only if you save)")}</span>
         </p>
       ) : null}
       {proposal.status === "pending" && project ? (
@@ -2917,7 +2919,7 @@ export function MemoryProposalCard({
             disabled={submitting !== null}
             onClick={() => void resolve(true)}
           >
-            {submitting === "save" ? "Saving..." : "Save"}
+            {submitting === "save" ? tr("Saving...") : tr("Save")}
           </button>
           <button
             type="button"
@@ -2925,13 +2927,13 @@ export function MemoryProposalCard({
             disabled={submitting !== null}
             onClick={() => void resolve(false)}
           >
-            {submitting === "dismiss" ? "Dismissing..." : "Don't save"}
+            {submitting === "dismiss" ? tr("Dismissing...") : tr("Don't save")}
           </button>
         </div>
       ) : (
         <div className="text-[0.75rem] text-[var(--color-card-text-muted)]">
           {proposal.status === "saved"
-            ? `${proposal.savedTo ? `Saved to ${proposal.savedTo}’s team learnings.` : "Saved to memories."}${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
+            ? `${proposal.savedTo ? tr("Saved to {0}’s team learnings.", [proposal.savedTo]) : tr("Saved to memories.")}${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
             : "Dismissed."}
         </div>
       )}

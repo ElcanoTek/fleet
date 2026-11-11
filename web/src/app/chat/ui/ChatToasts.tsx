@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
@@ -82,7 +83,7 @@ export function ChatToastProvider({ children }: { children: React.ReactNode }) {
             ) : null}
             <CloseButton
               className="-my-1"
-              label="Dismiss notification"
+              label={tr("Dismiss notification")}
               onClick={() => dismiss(t.id)}
             />
           </div>

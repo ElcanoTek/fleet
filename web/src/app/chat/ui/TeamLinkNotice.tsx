@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The dead ends a team link can land on (docs/TEAM-SHARING.md, B22 and B23).
 //
 // A team link (`/chat?team=<id>`) opens the read-only view for a member of the
@@ -41,25 +43,24 @@ export function TeamLinkNotice({
         {notice.kind === "not_on_team" ? (
           <>
             <h1 className="text-[1.25rem] font-medium text-[var(--color-text-primary)]">
-              This chat is shared with {notice.team}
-            </h1>
+        {rich("This chat is shared with {0}", notice.team)}
+      </h1>
             <p className="text-[0.875rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Only {notice.team} members can open it. If you think you should
-              have access, ask the person who sent you the link.
-            </p>
+        {rich("Only {0} members can open it. If you think you should have access, ask the person who sent you the link.", notice.team)}
+      </p>
             {notice.viewerEmail ? (
               <span className="text-[0.78rem] text-[var(--color-text-muted)]">
-                Signed in as {notice.viewerEmail}
-              </span>
+        {rich("Signed in as {0}", notice.viewerEmail)}
+      </span>
             ) : null}
           </>
         ) : (
           <>
             <h1 className="text-[1.25rem] font-medium text-[var(--color-text-primary)]">
-              This chat isn’t shared anymore
+              {tr("This chat isn’t shared anymore")}
             </h1>
             <p className="text-[0.875rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Ask the person who sent the link if you still need it.
+              {tr("Ask the person who sent the link if you still need it.")}
             </p>
             {project ? (
               <button
@@ -67,8 +68,8 @@ export function TeamLinkNotice({
                 onClick={() => onOpenProject(project.id)}
                 className="inline-flex h-9 items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
-                Open {project.name}
-              </button>
+        {rich("Open {0}", project.name)}
+      </button>
             ) : null}
           </>
         )}

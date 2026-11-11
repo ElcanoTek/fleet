@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Browser notifications preference row (Settings → General). The Web Push
 // opt-in that used to live on the Connections page as NotificationsCard
 // (#292), re-expressed as the design's preference row: label + description
@@ -43,7 +44,7 @@ function pushSupported(): boolean {
 async function fetchVapidKey(): Promise<string | null> {
   const res = await fetch("/api/push/vapid-public-key", { cache: "no-store" });
   if (res.status === 501) return null;
-  if (!res.ok) throw new Error(`Failed to load push config: ${res.status}`);
+  if (!res.ok) throw new Error(tr("Failed to load push config: {0}", [res.status]));
   const data = (await res.json()) as { key?: string };
   if (!data.key) return null;
   return data.key;
@@ -60,7 +61,7 @@ async function serverHoldsSubscription(endpoint: string): Promise<boolean> {
     cache: "no-store",
     signal: lockedFetchSignal(),
   });
-  if (!res.ok) throw new Error(`Failed to check notifications: ${res.status}`);
+  if (!res.ok) throw new Error(tr("Failed to check notifications: {0}", [res.status]));
   const data = (await res.json()) as { subscribed?: boolean };
   return data.subscribed === true;
 }
@@ -92,7 +93,7 @@ async function readOnlyRefusal(res: Response): Promise<boolean> {
 // RENEWAL_PENDING explains a switch that reads off because this browser's
 // renewal after a key change is still waiting on the server.
 const RENEWAL_PENDING =
-  "Notifications in this browser could not be renewed after a key change. Reload the page to try again.";
+  tr("Notifications in this browser could not be renewed after a key change. Reload the page to try again.");
 
 export function BrowserNotificationsRow() {
   const [state, setState] = useState<PushState>("loading");
@@ -151,7 +152,7 @@ export function BrowserNotificationsRow() {
         if (stale) return;
         setViewer(isViewer);
         setState("disabled");
-        setError(errorMessage(e, "Something went wrong."));
+        setError(errorMessage(e, tr("Something went wrong.")));
       });
     return () => {
       stale = true;
@@ -174,6 +175,7 @@ export function BrowserNotificationsRow() {
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
+      setNotificationLanguage(reg);
       // Under the same lock as the key check, so another tab never replaces
       // the subscription between this read and the store.
       const { res, endpoint } = await withPushLock(async () => {
@@ -218,16 +220,16 @@ export function BrowserNotificationsRow() {
         return;
       }
       if (!res.ok && res.status !== 204) {
-        throw new Error(await responseErrorText(res, "Subscribe failed"));
+        throw new Error(await responseErrorText(res, tr("Subscribe failed")));
       }
       // Another tab's Settings may have let this browser's subscription go
       // while it was being stored (it reads "not yours" until the store lands).
       if ((await reg.pushManager.getSubscription())?.endpoint !== endpoint) {
-        throw new Error("Notifications were turned off in another tab. Turn them on again.");
+        throw new Error(tr("Notifications were turned off in another tab. Turn them on again."));
       }
       setState("enabled");
     } catch (e: unknown) {
-      setError(errorMessage(e, "Something went wrong."));
+      setError(errorMessage(e, tr("Something went wrong.")));
     } finally {
       setBusy(false);
     }
@@ -253,7 +255,7 @@ export function BrowserNotificationsRow() {
       }
       setState("disabled");
     } catch (e: unknown) {
-      setError(errorMessage(e, "Something went wrong."));
+      setError(errorMessage(e, tr("Something went wrong.")));
     } finally {
       setBusy(false);
     }
@@ -268,22 +270,19 @@ export function BrowserNotificationsRow() {
   const note =
     viewer && state !== "enabled" ? (
       <span className="text-[var(--color-text-muted)]">
-        Viewer accounts are read-only and can&apos;t turn notifications on — ask an admin if you
-        need them.
+        {tr("Viewer accounts are read-only and can't turn notifications on — ask an admin if you need them.")}
       </span>
     ) : state === "unsupported" ? (
       <span className="text-[var(--color-text-muted)]">
-        This browser doesn&apos;t support Web Push notifications. Chrome, Edge, Firefox, and Safari
-        16.4+ do.
+        {tr("This browser doesn't support Web Push notifications. Chrome, Edge, Firefox, and Safari 16.4+ do.")}
       </span>
     ) : state === "denied" ? (
       <span className="text-[var(--color-warning-soft)]">
-        Notifications are blocked for this site. Allow them in your browser&apos;s site settings,
-        then reload this page.
+        {tr("Notifications are blocked for this site. Allow them in your browser's site settings, then reload this page.")}
       </span>
     ) : state === "unconfigured" ? (
       <span className="text-[var(--color-text-muted)]">
-        Push notifications are not configured on this server — ask your operator to set them up.
+        {tr("Push notifications are not configured on this server — ask your operator to set them up.")}
       </span>
     ) : error ? (
       <span className="text-[var(--color-danger-soft)]">{error}</span>
@@ -291,29 +290,26 @@ export function BrowserNotificationsRow() {
 
   return (
     <SetRow
-      label="Browser notifications"
+      label={tr("Browser notifications")}
       desc={
         <>
-          Get an alert in this browser when something needs you, even if this tab is in the
-          background.
+          {tr("Get an alert in this browser when something needs you, even if this tab is in the background.")}
           {/* The full list stays one click away: the row's job is the on/off
               decision, and the details only matter to someone deciding. */}
           <details className="mt-[0.3rem] [&_summary]:cursor-pointer">
             <summary className="w-fit text-[var(--color-link)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]">
-              Which alerts will I get?
+              {tr("Which alerts will I get?")}
             </summary>
             <ul className="mb-0 mt-[0.35rem] list-disc pl-[1.1rem] leading-[1.55]">
-              <li>A task you created finishes, needs your answer, or sends a progress update.</li>
-              <li>An action in one of your chats needs your approval.</li>
+              <li>{tr("A task you created finishes, needs your answer, or sends a progress update.")}</li>
+              <li>{tr("An action in one of your chats needs your approval.")}</li>
               <li>
-                Some approved actions finish, or a chat is waiting for you after an approval
-                card is approved, declined, or times out.
+                {tr("Some approved actions finish, or a chat is waiting for you after an approval card is approved, declined, or times out.")}
               </li>
-              <li>You create a task after going over your spending alert limit.</li>
+              <li>{tr("You create a task after going over your spending alert limit.")}</li>
             </ul>
             <p className="mb-0 mt-[0.35rem]">
-              Alerts show only a short title, such as the start of a task. They never show the
-              conversation or its results.
+              {tr("Alerts show only a short title, such as the start of a task. They never show the conversation or its results.")}
             </p>
           </details>
           {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
@@ -328,7 +324,7 @@ export function BrowserNotificationsRow() {
           else if (canEnable) void enable();
         }}
         disabled={busy || !(state === "enabled" || canEnable)}
-        label="Browser notifications"
+        label={tr("Browser notifications")}
         testId="browser-notifications-switch"
       />
     </SetRow>
@@ -336,3 +332,4 @@ export function BrowserNotificationsRow() {
 }
 
 export default BrowserNotificationsRow;
+import { setNotificationLanguage } from "@/app/lib/i18n/notifications";

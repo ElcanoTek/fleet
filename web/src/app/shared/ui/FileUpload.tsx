@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { validateFile } from "@/app/shared/lib/validation";
 import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";
@@ -115,7 +117,7 @@ export function FileUpload({
       }
       setLimitError(
         overflow > 0
-          ? `Up to ${maxFiles} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
+          ? tr(overflow === 1 ? "Up to {0} files per task — {1} file was not added." : "Up to {0} files per task — {1} files were not added.", [maxFiles, overflow])
           : "",
       );
       if (added.length > 0) update([...current, ...added]);
@@ -168,7 +170,7 @@ export function FileUpload({
             entry.filename = result.filename;
           } catch (err) {
             entry.status = "error";
-            entry.error = errorMessage(err, "Upload failed.");
+            entry.error = errorMessage(err, tr("Upload failed."));
             updateRef.current([...entriesRef.current]);
             throw err;
           }
@@ -181,7 +183,7 @@ export function FileUpload({
   }, [registerHandle]);
 
   return (
-    <div className="file-upload-area" role="region" aria-label="File attachments">
+    <div className="file-upload-area" role="region" aria-label={tr("File attachments")}>
       <div className="file-attach-row">
         <button
           type="button"
@@ -200,12 +202,11 @@ export function FileUpload({
           >
             <path d="M21.4 11.1l-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5" />
           </svg>
-          Attach files
+          {tr("Attach files")}
         </button>
         <span className="file-attach-hint">
-          or drag anywhere onto this dialog — {formatFileSize(maxFileBytes, 0)} per file, up to{" "}
-          {maxFiles} files
-        </span>
+        {rich("or drag anywhere onto this dialog — {0} per file, up to {1} files", formatFileSize(maxFileBytes, 0), maxFiles)}
+      </span>
         <input
           ref={inputRef}
           type="file"
@@ -234,12 +235,12 @@ export function FileUpload({
             {entry.error ? <span className="file-item-error-text">{entry.error}</span> : null}
             <span className="file-item-spacer" />
             {entry.status === "uploading" ? (
-              <span className="file-item-status-icon" aria-label="Uploading">
+              <span className="file-item-status-icon" aria-label={tr("Uploading")}>
                 …
               </span>
             ) : null}
             {entry.status === "uploaded" ? (
-              <span className="file-item-status-icon uploaded-icon" aria-label="Uploaded">
+              <span className="file-item-status-icon uploaded-icon" aria-label={tr("Uploaded")}>
                 ✓
               </span>
             ) : null}
@@ -247,7 +248,7 @@ export function FileUpload({
               <button
                 type="button"
                 className="file-item-remove"
-                aria-label={`Remove ${entry.file.name}`}
+                aria-label={tr("Remove {0}", [entry.file.name])}
                 onClick={() => removeFile(entry.id)}
               >
                 ×

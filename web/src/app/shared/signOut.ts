@@ -1,4 +1,5 @@
 import { dropPushSubscription } from "./pushSubscription";
+import { getLanguage } from "@/app/lib/i18n";
 
 // signOut is the one way every Fleet surface signs a user out: a top-level
 // form POST to /api/auth/logout. A navigation (not a fetch) is what lets the
@@ -16,7 +17,7 @@ export function signOut(): Promise<void> {
 function submitLogoutForm(): void {
   const form = document.createElement("form");
   form.method = "post";
-  form.action = "/api/auth/logout";
+  form.action = `/api/auth/logout?lang=${getLanguage()}`;
   document.body.appendChild(form);
   form.submit();
 }

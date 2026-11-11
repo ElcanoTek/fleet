@@ -31,20 +31,9 @@ func TestUserGuidesAreInSync(t *testing.T) {
 		webDir   = "web/src/app/help/guides"
 	)
 
-	// Every .md in the skill folder EXCEPT SKILL.md (the agent's instructions
-	// for using the guides — not a guide, and not something /help renders).
-	entries, err := os.ReadDir(filepath.Join(root, skillDir))
-	if err != nil {
-		t.Fatalf("read %s: %v", skillDir, err)
-	}
-	var guides []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".md") || name == "SKILL.md" {
-			continue
-		}
-		guides = append(guides, name)
-	}
+	// Walk locale directories as well as English. A localized web-only guide is
+	// just as much a fork as an English one the assistant cannot read.
+	guides := guideMarkdownFiles(t, filepath.Join(root, skillDir))
 	if len(guides) == 0 {
 		t.Fatalf("no guide Markdown found under %s — did the fleet-guide skill move?", skillDir)
 	}
@@ -64,21 +53,38 @@ func TestUserGuidesAreInSync(t *testing.T) {
 
 	// The reverse direction: a guide added to the web tree alone would render
 	// in the app and be invisible to the assistant.
-	webEntries, err := os.ReadDir(filepath.Join(root, webDir))
-	if err != nil {
-		t.Fatalf("read %s: %v", webDir, err)
-	}
+	webGuides := guideMarkdownFiles(t, filepath.Join(root, webDir))
 	known := map[string]bool{}
 	for _, name := range guides {
 		known[name] = true
 	}
-	for _, e := range webEntries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		if !known[e.Name()] {
+	for _, name := range webGuides {
+		if !known[name] {
 			t.Errorf("%s/%s has no counterpart in %s — a guide the app shows but the assistant cannot read; add it to the skill",
-				webDir, e.Name(), skillDir)
+				webDir, name, skillDir)
 		}
 	}
+}
+
+func guideMarkdownFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") || entry.Name() == "SKILL.md" {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, rel)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read guide Markdown under %s: %v", dir, err)
+	}
+	return files
 }

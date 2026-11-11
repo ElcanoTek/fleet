@@ -70,6 +70,29 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+// SafeMCPDataPlaneHTTPClient is SafeHTTPClient's posture — the
+// resolve-then-dial guard and the unconditional redirect refusal — for the
+// MCP JSON-RPC traffic to a user-supplied remote server (initialize,
+// tools/list, tools/call). It sets NO http.Client.Timeout and NO
+// ResponseHeaderTimeout: a remote tool may legitimately work for minutes
+// before its server sends the response headers (a vendor that answers
+// tools/call only when its search finishes), and the call's own budget —
+// the per-call timeout agentcore and the approval path attach, carried
+// across the broker as CallTimeoutMs — is what bounds it. A fixed client
+// timeout here silently overrode that budget: every remote tool call was cut
+// off at the control-plane 30s, whatever the call was allowed. Only the
+// connection phases are bounded here (dial 10s and TLS 10s, from
+// safeTransport). The caller owns the overall deadline through the request
+// context — every caller MUST pass one.
+func SafeMCPDataPlaneHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: netguard.WrapRoundTripper(safeTransport()),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errRedirectBlocked
+		},
+	}
+}
+
 // SafeStreamingHTTPClient is SafeHTTPClient's posture — the resolve-then-dial
 // guard and the unconditional redirect refusal — for callers that READ A
 // LONG-LIVED RESPONSE BODY (an SSE subscription). http.Client.Timeout bounds
