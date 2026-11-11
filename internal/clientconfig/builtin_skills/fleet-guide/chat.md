@@ -825,6 +825,9 @@ the assistant closes it, after 10 minutes without activity, when Fleet restarts,
 or when Fleet needs its place for a newer session; its link then opens a page
 saying the session is no longer available, and the assistant can open a new one.
 
+When the live browser view can't do something you ask, a short note at its top
+says so, and for an address it won't open (one that isn't a web page, say), why.
+
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
 questioning the arithmetic.
