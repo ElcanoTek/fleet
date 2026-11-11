@@ -2430,15 +2430,21 @@ function ConnectionsPageInner() {
                             </span>
                           }
                           sub={
-                            s.catalog_drift ? (
-                              <>
-                                {s.url}
-                                <br />
-                                {driftSummary(s.catalog_drift)}
-                              </>
-                            ) : (
-                              s.url
-                            )
+                            <>
+                              {s.description ? (
+                                <>
+                                  {bundleText(s.description)}
+                                  <br />
+                                </>
+                              ) : null}
+                              {s.url}
+                              {s.catalog_drift ? (
+                                <>
+                                  <br />
+                                  {driftSummary(s.catalog_drift)}
+                                </>
+                              ) : null}
+                            </>
                           }
                           actions={
                             <>
@@ -2894,7 +2900,17 @@ function ConnectionsPageInner() {
                         </ConnBadge>
                       </span>
                     }
-                    sub={s.url}
+                    sub={
+                      s.description ? (
+                        <>
+                          {bundleText(s.description)}
+                          <br />
+                          {s.url}
+                        </>
+                      ) : (
+                        s.url
+                      )
+                    }
                     actions={
                       <>
                         <span className="text-[0.72rem] text-[var(--color-text-muted)]">
