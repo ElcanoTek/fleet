@@ -170,7 +170,7 @@ func browserRawArgs(toolName, rawInput string, hidden []string) []map[string]str
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	rows := make([]map[string]string, 0, len(keys)+len(steps))
+	rows := make([]map[string]string, 0, len(keys))
 	for _, k := range keys {
 		rows = append(rows, map[string]string{"key": k, "value": rawArgValue(masked[k])})
 	}
