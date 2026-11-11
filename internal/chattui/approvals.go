@@ -270,6 +270,11 @@ func runsPerMonth(v any) (int, bool) {
 func genericSummaryLine(m map[string]any) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
+		// raw_args repeat the call's arguments for the web card's Details;
+		// the one-line summary keeps to the readable rows.
+		if k == "raw_args" {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

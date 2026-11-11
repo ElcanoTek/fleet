@@ -36,6 +36,7 @@ import {
 import { approvedValuesFor, selectableKeys, selectedCountText, type RowSelection } from "./approvalNarrowing";
 import {
   ApprovalCountdown,
+  ApprovalRawCallArgs,
   ApprovalSeatBadge,
   ApprovalSubmitError,
   actionLabel,
@@ -313,16 +314,34 @@ export function ApprovalGroupCard({
                     {selectedCountText(approved.length, a.narrowable.values.length)}
                   </p>
                 ) : null}
-                {a.card ? (
-                  <>
-                    <ApprovalReadableBody card={a.card} selection={selection} />
-                    <ApprovalCardDetails>
+                {(() => {
+                  const rawCallArgs = Array.isArray(a.summary.raw_args) ? a.summary.raw_args : [];
+                  if (a.card) {
+                    return (
+                      <>
+                        <ApprovalReadableBody card={a.card} selection={selection} />
+                        <ApprovalCardDetails>
+                          <RawArgs approval={a} />
+                          {rawCallArgs.length > 0 ? (
+                            <div className="mt-1.5">
+                              <ApprovalRawCallArgs rows={rawCallArgs} />
+                            </div>
+                          ) : null}
+                        </ApprovalCardDetails>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
                       <RawArgs approval={a} />
-                    </ApprovalCardDetails>
-                  </>
-                ) : (
-                  <RawArgs approval={a} />
-                )}
+                      {rawCallArgs.length > 0 ? (
+                        <ApprovalCardDetails>
+                          <ApprovalRawCallArgs rows={rawCallArgs} />
+                        </ApprovalCardDetails>
+                      ) : null}
+                    </>
+                  );
+                })()}
                 <div className="mt-1">
                   <ApprovalSeatBadge server={a.mcpServer} account={a.mcpAccount} verb="Runs as" />
                 </div>
