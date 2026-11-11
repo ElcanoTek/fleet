@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -194,7 +196,7 @@ export function ToolsLibrary({
       className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-scrim)] p-0 backdrop-blur-[3px] sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Tools and connections"
+      aria-label={tr("Tools and connections")}
     >
       <div
         ref={panelRef}
@@ -213,22 +215,22 @@ export function ToolsLibrary({
             <Icon name="tools" className="size-[1.06rem]" />
           </span>
           <div className="flex min-h-8 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
-            <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
+            <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">{tr("Tools & connections")}</h2>
             <span className="text-[0.8rem] tabular-nums text-[var(--color-text-subtle)]">
-              {countOn(servers)} of {servers.length} on
-            </span>
+        {rich("{0} of {1} on", countOn(servers), servers.length)}
+      </span>
             {isAdmin ? (
               <a
                 href={settingsHref()}
-                title="Settings › Connections"
+                title={tr("Settings › Connections")}
                 className={`${LINK} hit-area-touch basis-full text-[0.8rem] md:ml-auto md:mr-1 md:basis-auto`}
               >
-                Manage connections in Settings
+                {tr("Manage connections in Settings")}
                 <Icon name="external-link" className="size-3" />
               </a>
             ) : null}
           </div>
-          <CloseButton label="Close tools library" onClick={onClose} className="any-pointer-coarse:size-11" />
+          <CloseButton label={tr("Close tools library")} onClick={onClose} className="any-pointer-coarse:size-11" />
         </header>
 
         <div
@@ -253,14 +255,14 @@ export function ToolsLibrary({
                   const next = event.target.value;
                   filterBy(() => setQuery(next));
                 }}
-                placeholder="Search tools…"
-                aria-label="Search tools"
+                placeholder={tr("Search tools…")}
+                aria-label={tr("Search tools")}
                 className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 any-pointer-coarse:h-11 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
               />
             </div>
-            <nav aria-label="Categories" className={RAIL_NAV}>
-              <div className={RAIL_LABEL}>Categories</div>
-              {[{ id: "all", name: "All" }, ...presentCats].map((c) => (
+            <nav aria-label={tr("Categories")} className={RAIL_NAV}>
+              <div className={RAIL_LABEL}>{tr("Categories")}</div>
+              {[{ id: "all", name: tr("All") }, ...presentCats].map((c) => (
                 <RailButton
                   key={c.id}
                   active={cat === c.id}
@@ -270,8 +272,8 @@ export function ToolsLibrary({
                 />
               ))}
             </nav>
-            <nav aria-label="Status" className={RAIL_NAV}>
-              <div className={RAIL_LABEL}>Status</div>
+            <nav aria-label={tr("Status")} className={RAIL_NAV}>
+              <div className={RAIL_LABEL}>{tr("Status")}</div>
               {LIBRARY_STATUSES.map((s) => (
                 <RailButton
                   key={s.id}
@@ -290,18 +292,18 @@ export function ToolsLibrary({
             className="grid grid-cols-1 content-start md:min-h-0 md:overflow-y-auto md:overscroll-contain lg:grid-cols-[minmax(0,1fr)_23.25rem] lg:content-stretch lg:overflow-hidden"
           >
             <section
-              aria-label="Connections"
+              aria-label={tr("Connections")}
               className={`flex flex-col pb-[env(safe-area-inset-bottom)] lg:min-h-0 lg:border-r lg:border-[var(--color-divider)] lg:pb-0 ${
                 detailOpen ? "max-lg:hidden" : ""
               }`}
             >
               <div className="px-4 pb-2.5 pt-3.5">
                 <div className="text-base font-semibold text-[var(--color-text-primary)]">
-                  {(catObj ? catObj.name : "All connections") + (statusObj ? ` · ${statusObj.label}` : "")}
+                  {(catObj ? catObj.name : tr("All connections")) + (statusObj ? ` · ${statusObj.label}` : "")}
                 </div>
                 <div className="mt-0.5 text-[0.78rem] text-[var(--color-text-subtle)]">
-                  {`${flat.length} ${flat.length === 1 ? "connection" : "connections"} · ${flat.filter(isOn).length} on`}
-                  {q ? ` · matching ‘${q}’` : ""}
+                  {tr(flat.length === 1 ? "{0} connection · {1} on" : "{0} connections · {1} on", [flat.length, flat.filter(isOn).length])}
+                  {q ? tr(" · matching ‘{0}’", [q]) : ""}
                 </div>
               </div>
               {toggleable.length > 0 ? (
@@ -323,7 +325,7 @@ export function ToolsLibrary({
                       if (toggleableOn !== toggleable.length) onSetEnabled(bulkNames, true);
                     }}
                   >
-                    All on
+                    {tr("All on")}
                   </button>
                   <button
                     type="button"
@@ -333,7 +335,7 @@ export function ToolsLibrary({
                       if (toggleableOn !== 0) onSetEnabled(bulkNames, false);
                     }}
                   >
-                    All off
+                    {tr("All off")}
                   </button>
                 </div>
               ) : null}
@@ -355,14 +357,14 @@ export function ToolsLibrary({
                 ))}
                 {flat.length === 0 ? (
                   <div className="px-5 py-12 text-center text-[0.875rem] text-[var(--color-text-subtle)]">
-                    {q ? `No tools match ‘${q}’` : "Nothing here with this filter"}
+                    {q ? tr("No tools match ‘{0}’", [q]) : tr("Nothing here with this filter")}
                   </div>
                 ) : null}
               </div>
             </section>
 
             <section
-              aria-label="Connection details"
+              aria-label={tr("Connection details")}
               className={`px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3 lg:min-h-0 lg:overflow-y-auto lg:pb-6 lg:pt-4.5 ${
                 detailOpen ? "" : "max-lg:hidden"
               }`}
@@ -374,7 +376,7 @@ export function ToolsLibrary({
                 className="-ml-2 mb-1 inline-flex h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[0.875rem] text-[var(--color-link)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
               >
                 <Icon name="chevron-right" className="size-4 rotate-180" />
-                {catObj ? catObj.name : "All connections"}
+                {catObj ? catObj.name : tr("All connections")}
               </button>
               {current ? (
                 <Detail
@@ -537,13 +539,13 @@ function Detail({
       ) : null}
       {toggleable ? (
         <a href={settingsHref(c.name)} className={`${LINK} hit-area-touch -mt-1.5 self-start text-[0.78rem]`}>
-          Manage in Settings
+          {tr("Manage in Settings")}
           <Icon name="external-link" className="size-3" />
         </a>
       ) : null}
       {hasSeats ? (
         <div className="flex flex-col gap-1.5">
-          <div className="text-[0.75rem] text-[var(--color-text-subtle)]">Account for this chat</div>
+          <div className="text-[0.75rem] text-[var(--color-text-subtle)]">{tr("Account for this chat")}</div>
           <SeatMenu connector={c} appName={appName} variant="field" onChange={onSetAccount} />
         </div>
       ) : null}
@@ -551,25 +553,25 @@ function Detail({
         <div className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-panel-warn-border)] bg-[var(--color-panel-warn-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
           {isAdmin ? (
             <>
-              <span>Needs setup before it can be used.</span>
+              <span>{tr("Needs setup before it can be used.")}</span>
               <a href={settingsHref(c.name)} className={`${LINK} hit-area-touch`}>
-                Set up in Settings
+                {tr("Set up in Settings")}
                 <Icon name="external-link" className="size-3" />
               </a>
             </>
           ) : (
-            <span>An admin needs to set this up.</span>
+            <span>{tr("An admin needs to set this up.")}</span>
           )}
         </div>
       ) : null}
       {status === "always" ? (
         <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-ok-border)] bg-[var(--color-panel-ok-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-          Always on in every chat.
+          {tr("Always on in every chat.")}
         </div>
       ) : null}
       {status === "unavailable" ? (
         <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-deny-border)] bg-[var(--color-panel-deny-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-          Unavailable right now. Try again later.
+          {tr("Unavailable right now. Try again later.")}
         </div>
       ) : null}
       {tools.length > 0 ? (
@@ -580,7 +582,7 @@ function Detail({
             onClick={onToggleTools}
             className="hit-area-touch inline-flex items-center gap-1 self-start text-[0.78rem] text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
-            {toolsOpen ? "Hide tools" : `Show ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`}
+            {toolsOpen ? tr("Hide tools") : tr(tools.length === 1 ? "Show {0} tool" : "Show {0} tools", [tools.length])}
             <Icon name="chevron-down" className={`size-3 transition-transform ${toolsOpen ? "rotate-180" : ""}`} />
           </button>
           {toolsOpen ? (

@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // InjectedContextNote — the collapsed system note for a user turn's
 // server-injected context (QA finding #6).
 //
@@ -58,21 +60,17 @@ export function InjectedContextNote({ text }: { text: string | undefined }) {
               transcript must be able to tell at a glance that this text was
               not typed by the person whose bubble sits above it. */}
           <span className="min-w-0 truncate text-[0.68rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Context fleet added — not typed by the sender
+            {tr("Context fleet added — not typed by the sender")}
           </span>
         </span>
         <span className="shrink-0 text-[0.68rem] text-[var(--color-text-muted)]">
-          {expanded ? "Hide" : "Show"}
+          {expanded ? tr("Hide") : tr("Show")}
         </span>
       </button>
       <div id={panelId} hidden={!expanded}>
         <p className="mt-2 text-[0.7rem] text-[var(--color-text-muted)]">
-          fleet appended this to the message before the model read it —
-          attached-file and workspace listings, the shared file library, and any
-          expanded <code className="font-mono">@file</code> /{" "}
-          <code className="font-mono">@url</code> references. Shown verbatim, as
-          the model received it.
-        </p>
+        {rich("fleet appended this to the message before the model read it — attached-file and workspace listings, the shared file library, and any expanded {0} / {1} references. Shown verbatim, as the model received it.", <code className="font-mono">@file</code>, <code className="font-mono">@url</code>)}
+      </p>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] pt-2 font-mono text-[0.7rem] leading-[1.5] text-[var(--color-text-secondary)]">
           {text.trim()}
         </pre>

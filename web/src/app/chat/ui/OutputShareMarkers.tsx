@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Owner's chat, B17 (#40): in a chat the owner has shared with the team, each
 // output chip (a workspace file link in an assistant reply) carries a small
 // "Shared" or "Not shared" marker. Clicking it opens the project home's
@@ -72,11 +73,11 @@ export function OutputShareMarker({
     <button
       type="button"
       data-testid="output-share-marker"
-      title="Manage in Sources"
+      title={tr("Manage in Sources")}
       aria-label={
         shared
-          ? `${name} is shared with ${team}. Manage in Sources`
-          : `${name} is not shared. Manage in Sources`
+          ? tr("{0} is shared with {1}. Manage in Sources", [name, team])
+          : tr("{0} is not shared. Manage in Sources", [name])
       }
       onClick={onClick}
       className={`ml-1 inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 align-middle text-[0.6875rem] font-medium no-underline transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
@@ -90,7 +91,7 @@ export function OutputShareMarker({
       ) : (
         <LockGlyph className="size-[0.65rem]" />
       )}
-      <span>{shared ? "Shared" : "Not shared"}</span>
+      <span>{shared ? tr("Shared") : tr("Not shared")}</span>
     </button>
   );
 }

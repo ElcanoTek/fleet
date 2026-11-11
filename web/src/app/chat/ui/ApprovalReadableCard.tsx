@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // The readable approval card (docs/APPROVAL-CARD-DESCRIBERS.md). A bundle can
 // declare a read-only "describer" tool for a critical tool; when that call is
 // staged, the server calls it with the same arguments and stores its
@@ -40,7 +42,7 @@ export function LeftOutTag({ settled = false }: { settled?: boolean }) {
       data-testid="approval-card-left-out"
       className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-1.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
     >
-      {settled ? "Left out · unchecked before approval" : "Left out"}
+      {settled ? tr("Left out · unchecked before approval") : tr("Left out")}
     </span>
   );
 }
@@ -65,7 +67,7 @@ function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?:
             rel="noopener noreferrer"
             className="text-[0.72rem] text-[var(--color-card-link)] underline-offset-2 hover:underline"
           >
-            {item.linkLabel ? `${item.linkLabel} ↗` : "Open ↗"}
+            {item.linkLabel ? `${item.linkLabel} ↗` : tr("Open ↗")}
           </a>
         ) : null}
       </div>
@@ -83,13 +85,13 @@ function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?:
               <span className="text-[var(--color-card-text-muted)]">{c.label}: </span>
               {c.before !== undefined ? (
                 <>
-                  <span className="line-through decoration-[var(--color-card-text-muted)]">{c.before || "(empty)"}</span>
-                  <span aria-label="changes to" className="mx-1 text-[var(--color-card-text-muted)]">
+                  <span className="line-through decoration-[var(--color-card-text-muted)]">{c.before || tr("(empty)")}</span>
+                  <span aria-label={tr("changes to")} className="mx-1 text-[var(--color-card-text-muted)]">
                     →
                   </span>
                 </>
               ) : null}
-              <span className="font-medium text-[var(--color-text-primary)]">{c.after || "(empty)"}</span>
+              <span className="font-medium text-[var(--color-text-primary)]">{c.after || tr("(empty)")}</span>
             </div>
           ))}
         </div>
@@ -137,8 +139,8 @@ export function ApprovalCardItems({ items, leftOut }: { items: ApprovalCardItem[
         <input
           type="search"
           data-testid="approval-card-search"
-          aria-label="Search the records on this card"
-          placeholder={`Search ${items.length} records`}
+          aria-label={tr("Search the records on this card")}
+          placeholder={tr("Search {0} records", [items.length])}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="mb-1.5 w-full rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)]"
@@ -150,7 +152,9 @@ export function ApprovalCardItems({ items, leftOut }: { items: ApprovalCardItem[
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (
-        <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">No record matches “{query.trim()}”.</p>
+        <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">
+        {rich("No record matches “{0}”.", query.trim())}
+      </p>
       ) : null}
       {hidden > 0 ? (
         <button
@@ -159,8 +163,8 @@ export function ApprovalCardItems({ items, leftOut }: { items: ApprovalCardItem[
           className="mt-1 text-[0.72rem] text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
-          Show {hidden} more
-        </button>
+        {rich("Show {0} more", hidden)}
+      </button>
       ) : null}
     </div>
   );
@@ -202,7 +206,7 @@ export function ApprovalCardDetails({ children }: { children: ReactNode }) {
   return (
     <details data-testid="approval-card-details" className="mt-2 min-w-0">
       <summary className="cursor-pointer text-[0.72rem] text-[var(--color-card-text-muted)] hover:text-[var(--color-text-secondary)]">
-        Details
+        {tr("Details")}
       </summary>
       <div className="mt-1 min-w-0">{children}</div>
     </details>
@@ -231,7 +235,7 @@ export function RecordLink({ link, linkLabel }: { link: string; linkLabel?: stri
       data-testid="approval-card-link"
       className="inline-flex items-center gap-1 text-[0.75rem] font-medium text-[var(--color-card-link)] underline-offset-2 hover:underline"
     >
-      {linkLabel || "Open"}
+      {linkLabel || tr("Open")}
       <Icon name="external-link" className="size-3" />
     </a>
   );
@@ -243,13 +247,13 @@ export function ChangeValue({ before, after, align = "right" }: { before?: strin
     <span className={`min-w-0 break-words [overflow-wrap:anywhere] ${align === "right" ? "text-right" : "text-left"}`}>
       {before !== undefined ? (
         <>
-          <span className="text-[var(--color-card-text-muted)]">{before || "(empty)"}</span>
-          <span aria-label="changes to" className="mx-1.5 text-[var(--color-card-text-muted)]">
+          <span className="text-[var(--color-card-text-muted)]">{before || tr("(empty)")}</span>
+          <span aria-label={tr("changes to")} className="mx-1.5 text-[var(--color-card-text-muted)]">
             →
           </span>
         </>
       ) : null}
-      <span className="font-semibold text-[var(--color-text-primary)]">{after || "(empty)"}</span>
+      <span className="font-semibold text-[var(--color-text-primary)]">{after || tr("(empty)")}</span>
     </span>
   );
 }
@@ -290,8 +294,8 @@ export function CardRows({ changes, settings }: Pick<ApprovalCardItem, "changes"
           className="mt-0.5 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
-          Show all {rows.length}
-        </button>
+        {rich("Show all {0}", rows.length)}
+      </button>
       ) : null}
     </div>
   );
@@ -368,7 +372,7 @@ function PlanRow({ item, selection }: { item: ApprovalCardItem; selection?: RowS
               checked={!out}
               disabled={selection.disabled}
               onChange={() => selection.toggle(item.key as string)}
-              aria-label={`Include ${item.label}${item.id ? ` (${item.id})` : ""}`}
+              aria-label={tr("Include {0}{1}", [item.label, item.id ? ` (${item.id})` : ""])}
               className="mt-1 size-3.5 shrink-0 accent-[var(--color-primary)]"
             />
           ) : null}
@@ -447,8 +451,8 @@ export function ReadablePendingRecords({ items, selection }: { items: ApprovalCa
         <input
           type="search"
           data-testid="approval-card-search"
-          aria-label="Search the records on this card"
-          placeholder={`Search ${items.length} records`}
+          aria-label={tr("Search the records on this card")}
+          placeholder={tr("Search {0} records", [items.length])}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="mb-1.5 w-full rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)]"
@@ -460,7 +464,9 @@ export function ReadablePendingRecords({ items, selection }: { items: ApprovalCa
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (
-        <p className="mt-1 text-[0.72rem] text-[var(--color-card-text-muted)]">No record matches “{query.trim()}”.</p>
+        <p className="mt-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
+        {rich("No record matches “{0}”.", query.trim())}
+      </p>
       ) : null}
       {hidden > 0 ? (
         <button
@@ -469,8 +475,8 @@ export function ReadablePendingRecords({ items, selection }: { items: ApprovalCa
           className="mt-1 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
-          Show {hidden} more
-        </button>
+        {rich("Show {0} more", hidden)}
+      </button>
       ) : null}
     </div>
   );
@@ -488,7 +494,7 @@ export function DetailsToggle({ open, onToggle, controls }: { open: boolean; onT
       onClick={onToggle}
       className="ml-auto inline-flex items-center gap-1 text-[0.75rem] text-[var(--color-card-text-muted)] hover:text-[var(--color-text-secondary)]"
     >
-      Details
+      {tr("Details")}
       <Icon name="chevron-down" className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
     </button>
   );
@@ -507,10 +513,10 @@ export function DetailsPanel({ id, open, children }: { id: string; open: boolean
 export function EyebrowCountdown({ remaining, expired }: { remaining: number | null; expired: boolean }) {
   if (remaining === null) return null;
   const text = expired
-    ? "Timed out — the action was not taken."
+    ? tr("Timed out — the action was not taken.")
     : remaining >= 120
-      ? `Auto-declines in ${Math.ceil(remaining / 60)} min`
-      : `Auto-declines in ${Math.floor(remaining / 60)}:${(remaining % 60).toString().padStart(2, "0")}`;
+      ? tr("Auto-declines in {0} min", [Math.ceil(remaining / 60)])
+      : tr("Auto-declines in {0}:{1}", [Math.floor(remaining / 60), (remaining % 60).toString().padStart(2, "0")]);
   return (
     <span
       data-testid="approval-countdown"

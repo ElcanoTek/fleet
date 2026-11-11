@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useRef, useState } from "react";
 
 // MessageMinimap — the Codex-style jump rail at the left edge of the
@@ -90,7 +91,7 @@ export function MessageMinimap({
   const hovered = hoverIdx != null ? entries[hoverIdx] : null;
 
   return (
-    <nav aria-label="Conversation minimap" className="relative">
+    <nav aria-label={tr("Conversation minimap")} className="relative">
       <div
         ref={railRef}
         data-testid="message-minimap"
@@ -112,7 +113,7 @@ export function MessageMinimap({
               key={entry.id}
               type="button"
               tabIndex={0}
-              aria-label={`Jump to: ${entry.userText.slice(0, 60) || "message"}`}
+              aria-label={tr("Jump to: {0}", [entry.userText.slice(0, 60) || tr("message")])}
               aria-current={active ? "true" : undefined}
               data-testid="minimap-dash"
               className="group/dash flex w-8 items-center focus-visible:outline-none"
@@ -150,7 +151,7 @@ export function MessageMinimap({
           }}
         >
           <p className="m-0 line-clamp-2 text-[0.85rem] font-medium text-[var(--color-text-primary)]">
-            {hovered.userText || "(empty message)"}
+            {hovered.userText || tr("(empty message)")}
           </p>
           {hovered.replySnippet ? (
             <p className="m-0 mt-1 line-clamp-3 text-[0.78rem] leading-snug text-[var(--color-text-muted)]">

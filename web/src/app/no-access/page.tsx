@@ -1,3 +1,4 @@
+import { getLanguage, t as tr } from "@/app/lib/i18n";
 import { Link } from "@/app/lib/Link";
 import { SignOutForm } from "./sign-out-form";
 // Shown when a user has a valid session minted elsewhere (the shared
@@ -13,18 +14,17 @@ export default function NoAccessPage() {
     <main className="flex min-h-screen items-center justify-center bg-[var(--gradient-bg-home-signature)] px-6 py-10">
       <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 shadow-[var(--composer-shadow)]">
         <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">
-          No access yet
+          {tr("No access yet")}
         </h1>
         <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
-          You&rsquo;re signed in, but this account hasn&rsquo;t been added to
-          this workspace yet. Ask an administrator to add you, then try again.
+          {tr("You’re signed in, but this account hasn’t been added to this workspace yet. Ask an administrator to add you, then try again.")}
         </p>
 
         <Link
-          href="/chat"
+          href={`/chat?lang=${getLanguage()}`}
           className="mt-6 block w-full rounded-xl bg-[var(--color-primary-fill)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-on-primary-fill)] transition hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
         >
-          Try again
+          {tr("Try again")}
         </Link>
         <SignOutForm />
       </div>

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // SetNav — the settings area's sticky left sub-nav (the design's .set-nav),
 // organized into 3 functional groups:
 //   1. Workspace (General, Team)
@@ -13,31 +14,31 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { useIsAdmin } from "./useIsAdmin";
 
 const WORKSPACE_SECTIONS = [
-  { href: "/settings", label: "General", icon: "settings" },
-  { href: "/settings/team", label: "Team", icon: "persona" },
+  { href: "/settings", label: tr("General"), icon: "settings" },
+  { href: "/settings/team", label: tr("Team"), icon: "persona" },
 ] as const;
 
 const CONTEXT_SECTIONS = [
-  { href: "/settings/connections", label: "Connections", icon: "plug" },
-  { href: "/settings/skills", label: "Skills", icon: "sparkles" },
-  { href: "/settings/personas", label: "Personas", icon: "layers" },
-  { href: "/settings/memories", label: "Memories", icon: "brain" },
+  { href: "/settings/connections", label: tr("Connections"), icon: "plug" },
+  { href: "/settings/skills", label: tr("Skills"), icon: "sparkles" },
+  { href: "/settings/personas", label: tr("Personas"), icon: "layers" },
+  { href: "/settings/memories", label: tr("Memories"), icon: "brain" },
   // Shared between Chat and the Operations Center: /api/orchestrator/prompts
   // authorizes signed-in Chat members by their Fleet role even when their
   // Background tasks access (ops_scope) is "none".
-  { href: "/settings/prompts", label: "Prompts", icon: "book" },
+  { href: "/settings/prompts", label: tr("Prompts"), icon: "book" },
   // Member-visible on purpose: the page itself adapts (read-only library for
   // members, manage controls for admins) — NOT an ADMIN_SUBS entry.
-  { href: "/settings/shared-files", label: "Shared files", icon: "folder" },
+  { href: "/settings/shared-files", label: tr("Shared files"), icon: "folder" },
 ] as const;
 
 export const ADMIN_SUBS = [
-  { href: "/settings/admin", label: "Overview" },
-  { href: "/settings/admin/server", label: "Server" },
-  { href: "/settings/admin/doctor", label: "System checks" },
-  { href: "/settings/admin/users", label: "Users" },
-  { href: "/settings/admin/features", label: "Features" },
-  { href: "/settings/admin/providers", label: "Providers" },
+  { href: "/settings/admin", label: tr("Overview") },
+  { href: "/settings/admin/server", label: tr("Server") },
+  { href: "/settings/admin/doctor", label: tr("System checks") },
+  { href: "/settings/admin/users", label: tr("Users") },
+  { href: "/settings/admin/features", label: tr("Features") },
+  { href: "/settings/admin/providers", label: tr("Providers") },
 ] as const;
 
 const ITEM_BASE =
@@ -65,14 +66,14 @@ export function SetNav() {
 
   return (
     <nav
-      aria-label="Settings sections"
+      aria-label={tr("Settings sections")}
       className="sticky top-7 flex w-[11.5rem] shrink-0 flex-col gap-4 max-[900px]:static max-[900px]:w-full max-[900px]:flex-col max-[900px]:items-stretch max-[900px]:gap-2.5"
     >
       <div
         data-testid="setnav-group-workspace"
         className="grid gap-[0.12rem]"
       >
-        <div className={GROUP_HEADING}>Workspace</div>
+        <div className={GROUP_HEADING}>{tr("Workspace")}</div>
         <div className="grid gap-[0.12rem] max-[900px]:flex max-[900px]:flex-wrap max-[900px]:gap-[0.25rem]">
           {WORKSPACE_SECTIONS.map((s) => {
             const active = pathname === s.href;
@@ -98,7 +99,7 @@ export function SetNav() {
         data-testid="setnav-group-context"
         className="grid gap-[0.12rem]"
       >
-        <div className={GROUP_HEADING}>Model Context &amp; Tools</div>
+        <div className={GROUP_HEADING}>{tr("Model Context & Tools")}</div>
         <div className="grid gap-[0.12rem] max-[900px]:flex max-[900px]:flex-wrap max-[900px]:gap-[0.25rem]">
           {CONTEXT_SECTIONS.map((s) => {
             const active = pathname === s.href;
@@ -125,7 +126,7 @@ export function SetNav() {
           data-testid="setnav-group-admin"
           className="grid gap-[0.12rem]"
         >
-          <div className={GROUP_HEADING}>Admin</div>
+          <div className={GROUP_HEADING}>{tr("Admin")}</div>
           <div className="grid gap-[0.12rem] max-[900px]:flex max-[900px]:flex-wrap max-[900px]:gap-[0.25rem]">
             {ADMIN_SUBS.map((s) => {
               const active = pathname === s.href;

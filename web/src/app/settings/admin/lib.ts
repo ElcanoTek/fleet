@@ -1,3 +1,6 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // Shared data helpers for the /settings/admin pages (fleet-unified settings
 // pass). The per-user usage stats feed two surfaces — the Overview page's
 // Usage cards and the Users page's table join — so the fetch (with its
@@ -41,7 +44,7 @@ export type StatsResponse = {
   daily_cache?: DailyCacheStat[];
 };
 
-const compactFmt = new Intl.NumberFormat("en-US", {
+const compactFmt = new Intl.NumberFormat(getLanguage(), {
   notation: "compact",
   maximumFractionDigits: 1,
 });
@@ -54,15 +57,15 @@ export function formatCompactTokens(v: number | undefined): string {
 export function formatAgo(unixSeconds: number): string {
   if (!unixSeconds) return "—";
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 60) return tr("{0}s ago", [seconds]);
+  if (seconds < 3600) return tr("{0}m ago", [Math.floor(seconds / 60)]);
+  if (seconds < 86400) return tr("{0}h ago", [Math.floor(seconds / 3600)]);
+  return tr("{0}d ago", [Math.floor(seconds / 86400)]);
 }
 
 export function formatUSD(v: number): string {
   if (v == null) return "$0.00";
-  return `$${v.toFixed(2)}`;
+  return `$${formatFixed(v, 2)}`;
 }
 
 // formatBytes — the admin pages' byte formatter (Server health, Storage):
@@ -79,7 +82,7 @@ export function formatBytes(bytes: number, rate = false): string {
     unit += 1;
   }
   const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(digits)} ${units[unit]}${rate ? "/s" : ""}`;
+  return `${formatFixed(value, digits)} ${units[unit]}${rate ? "/s" : ""}`;
 }
 
 // formatUptime — "3d 4h", "4h 12m" or "12m"; "—" when unknown.
@@ -88,8 +91,8 @@ export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (days > 0) return tr("{0}d {1}h", [days, hours]);
+  if (hours > 0) return tr("{0}h {1}m", [hours, minutes]);
   return `${minutes}m`;
 }
 
@@ -100,8 +103,8 @@ export function formatUptime(seconds: number): string {
 // non-OK response so callers can surface it.
 export async function fetchAdminStatsPayload(): Promise<StatsResponse | null> {
   const data = await getGatedJson<StatsResponse>("/api/admin/stats", {
-    label: "Stats",
-    statusText: { 403: "You are not on the admin allowlist." },
+    label: tr("Stats"),
+    statusText: { 403: tr("You are not on the admin allowlist.") },
   });
   if (!data) return null;
   return {

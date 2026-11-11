@@ -1,3 +1,4 @@
+import { getLanguage } from "@/app/lib/i18n";
 // Next-occurrence preview for the task form's cron field. Computes when a
 // 5-field numeric cron expression would next fire so the schedule echo can say
 // "— next run Mon, Jul 13" before the task exists (the backend only computes
@@ -324,8 +325,8 @@ export function formatNextRun(date: Date, timeZone?: string): string {
   const opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
   if (timeZone) opts.timeZone = timeZone;
   try {
-    return date.toLocaleDateString("en-US", opts);
+    return date.toLocaleDateString(getLanguage(), opts);
   } catch {
-    return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return date.toLocaleDateString(getLanguage(), { weekday: "short", month: "short", day: "numeric" });
   }
 }

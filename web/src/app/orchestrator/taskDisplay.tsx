@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import type { Task, TaskStatus } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { RunStatusChip, StatusChip, type RunTone } from "@/app/shared/ui/StatusChip";
@@ -81,7 +82,7 @@ export function createdByLabel(task: Task): string {
   const uuid =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuid.test(task.created_by))
-    return `user: ${task.created_by.slice(0, 6)}…`;
+    return tr("user: {0}…", [task.created_by.slice(0, 6)]);
   return task.created_by;
 }
 
@@ -122,7 +123,7 @@ export function blockedReason(task: Task): string | null {
   if (task.status !== "success" || task.run_outcome !== "blocked") return null;
   return (
     (task.run_outcome_detail ?? "").trim() ||
-    "The run completed without publishing: its completion clause recorded a blocked outcome."
+    tr("The run completed without publishing: its completion clause recorded a blocked outcome.")
   );
 }
 
@@ -133,7 +134,7 @@ export function TaskStatusBadge({ task }: { task: Task }) {
   const blocked = blockedReason(task);
   if (blocked) {
     return (
-      <RunStatusChip state="blocked" title={`Blocked: ${blocked}`} testId="status-blocked" />
+      <RunStatusChip state="blocked" title={tr("Blocked: {0}", [blocked])} testId="status-blocked" />
     );
   }
   return <RunStatusChip state={task.status ?? "unknown"}>{task.status ?? "-"}</RunStatusChip>;
@@ -146,7 +147,7 @@ export function scheduleStoppedReason(task: Task): string | null {
   if (!task.recurrence || !task.recurrence_parked_at) return null;
   return (
     (task.recurrence_parked_reason ?? "").trim() ||
-    "The schedule was stopped after dead-lettered runs. Replay this run to resume it; if its EXECUTION REQUIREMENTS line is malformed, replay it with a corrected prompt instead."
+    tr("The schedule was stopped after dead-lettered runs. Replay this run to resume it; if its EXECUTION REQUIREMENTS line is malformed, replay it with a corrected prompt instead.")
   );
 }
 
@@ -154,12 +155,12 @@ export function scheduleStoppedReason(task: Task): string | null {
 // stopped schedule, else the exact cron expression.
 export function scheduleTitle(task: Task): string | undefined {
   const stopped = scheduleStoppedReason(task);
-  if (stopped) return `Schedule stopped: ${stopped}`;
+  if (stopped) return tr("Schedule stopped: {0}", [stopped]);
   return task.recurrence || undefined;
 }
 
 export function scheduleLabel(task: Task): string {
-  if (scheduleStoppedReason(task)) return "⏹ Schedule stopped";
+  if (scheduleStoppedReason(task)) return tr("⏹ Schedule stopped");
   if (task.recurrence) {
     // Compact plain English, not raw cron ("9:00 AM · Sat, Sun", not
     // "0 9 * * 6,0"), falling back to the verbose description and then the
@@ -178,7 +179,7 @@ export function scheduleLabel(task: Task): string {
 // suffix appended to `sla-badge-` (amber for warn, red for fail).
 export function slaBadge(task: Task): { label: string; tone: string } | null {
   if (!task.expected_duration_minutes) return null;
-  if (task.sla_breached) return { label: "SLA breached", tone: "fail" };
+  if (task.sla_breached) return { label: tr("SLA breached"), tone: "fail" };
   // Without a live elapsed probe on the client, the in-progress warn state is
   // surfaced only when the server has already latched a breach. A running task
   // that has merely CROSSED the warn threshold (but not fail) is not latched,
@@ -198,9 +199,9 @@ export function TaskSlaBadge({ task }: { task: Task }) {
   }
   if (task.expected_duration_minutes) {
     return (
-      <SlaChip tone="ok" title={`Expected ${task.expected_duration_minutes}m`}>
+      <SlaChip tone="ok" title={tr("Expected {0}m", [task.expected_duration_minutes])}>
         {task.actual_duration_seconds != null
-          ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
+          ? tr("{0}m / {1}m", [Math.round(task.actual_duration_seconds / 60), task.expected_duration_minutes])
           : `${task.expected_duration_minutes}m`}
       </SlaChip>
     );

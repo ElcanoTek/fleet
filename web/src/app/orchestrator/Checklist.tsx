@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // Checklist renders a task_tracker plan as a todo→done list in the Operations
 // Center (#518). The chat client already renders the same task_tracker tool
 // result live (ToolChips taskTrackerDisplayForMessage); this brings the live,
@@ -75,11 +77,10 @@ export function Checklist({ state, live, showSummary = true }: { state: Checklis
     <div className={`checklist${live ? " checklist--live" : ""}`} data-testid={live ? "live-checklist" : "checklist"}>
       {showSummary ? (
         <div className="checklist-summary">
-          <span className="checklist-summary-label">{live ? "Progress" : "Checklist"}</span>
+          <span className="checklist-summary-label">{live ? tr("Progress") : tr("Checklist")}</span>
           <span className="checklist-summary-count" data-testid="checklist-summary">
-            {summary.done}/{summary.total} done
-            {summary.in_progress > 0 ? ` · ${summary.in_progress} in progress` : ""}
-          </span>
+        {rich("{0}/{1} done{2}", summary.done, summary.total, summary.in_progress > 0 ? tr(" · {0} in progress", [summary.in_progress]) : "")}
+      </span>
         </div>
       ) : null}
       <ul className="checklist-items">

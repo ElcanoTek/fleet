@@ -65,6 +65,51 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
 }
 
+// BrowserCallKind says what a playwright_browser or connector_studio browser
+// call does. The approval gate stages the ones with mutating steps, and the
+// approval card describes them by kind, so both read it from here.
+type BrowserCallKind string
+
+const (
+	// BrowserCallStartSession opens a new live session at the call's url.
+	BrowserCallStartSession BrowserCallKind = "start_session"
+	// BrowserCallSessionSteps runs steps in the existing live session
+	// session_id.
+	BrowserCallSessionSteps BrowserCallKind = "session_steps"
+	// BrowserCallOneShot runs steps in a new headless browser at the url.
+	BrowserCallOneShot BrowserCallKind = "one_shot"
+)
+
+// ClassifyBrowserCall returns what a browser call with this action does, or
+// "" when toolName/action is not a browser call. Actions are matched trimmed
+// and case-insensitively, aliases included. sessionID decides between a
+// one-shot run and steps in a live session for connector_studio's probe.
+func ClassifyBrowserCall(toolName, action, sessionID string) BrowserCallKind {
+	act := strings.ToLower(strings.TrimSpace(action))
+	switch toolName {
+	case toolNameConnectorStudio:
+		switch act {
+		case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe":
+			if strings.TrimSpace(sessionID) != "" {
+				return BrowserCallSessionSteps
+			}
+			return BrowserCallOneShot
+		case "start_copilot_session", "start_session", "copilot_session", "live_view", "live_browser", "open_live_browser":
+			return BrowserCallStartSession
+		}
+	case toolNamePlaywrightBrowser:
+		switch act {
+		case "", "run", "probe", "navigate", "browse":
+			return BrowserCallOneShot
+		case "start_session", "copilot", "live", "open_session":
+			return BrowserCallStartSession
+		case "steps", "step", "run_steps", "act":
+			return BrowserCallSessionSteps
+		}
+	}
+	return ""
+}
+
 func classifyRiskyBrowser(toolName, rawInput string) (bool, string) {
 	if toolName != toolNamePlaywrightBrowser && toolName != toolNameConnectorStudio {
 		return false, ""
@@ -78,23 +123,8 @@ func classifyRiskyBrowser(toolName, rawInput string) (bool, string) {
 	if err := json.Unmarshal([]byte(rawInput), &payload); err != nil {
 		return false, ""
 	}
-	act := strings.ToLower(strings.TrimSpace(payload.Action))
-	if toolName == toolNameConnectorStudio {
-		switch act {
-		case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe",
-			"start_copilot_session", "start_session", "copilot_session", "live_view", "live_browser", "open_live_browser":
-		default:
-			return false, ""
-		}
-	}
-	if toolName == toolNamePlaywrightBrowser {
-		switch act {
-		case "", "run", "probe", "navigate", "browse",
-			"start_session", "copilot", "live", "open_session",
-			"steps", "step", "run_steps", "act":
-		default:
-			return false, ""
-		}
+	if ClassifyBrowserCall(toolName, payload.Action, "") == "" {
+		return false, ""
 	}
 	for _, st := range payload.Steps {
 		switch strings.ToLower(strings.TrimSpace(st.Action)) {

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect } from "react";
 import { claimChunkAutoReload, isChunkLoadError } from "@/app/shared/chunkReload";
 
@@ -36,25 +37,24 @@ export function ErrorScreen({ error }: { error: Error }) {
         className="w-full max-w-sm rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-[var(--shadow-md)]"
       >
         <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">
-          Something went wrong
+          {tr("Something went wrong")}
         </h1>
         <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
-          This page hit an error. Reloading usually fixes it, and also picks up
-          the latest version of the app if one has been released.
+          {tr("This page hit an error. Reloading usually fixes it, and also picks up the latest version of the app if one has been released.")}
         </p>
         <button
           type="button"
           onClick={() => window.location.reload()}
           className="mt-6 block w-full rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          Reload
+          {tr("Reload")}
         </button>
         <button
           type="button"
           onClick={() => window.location.assign("/")}
           className="mt-3 block w-full rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          Go to the home page
+          {tr("Go to the home page")}
         </button>
       </div>
     </main>

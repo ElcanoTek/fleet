@@ -271,9 +271,12 @@ tidy:
 # verbatim copy kept inside the web root — this target refreshes it, and
 # scripts/check_guides_sync_test.go fails on drift.
 sync-guides:
-	cp internal/clientconfig/builtin_skills/fleet-guide/chat.md \
-	   internal/clientconfig/builtin_skills/fleet-guide/operations-center.md \
-	   web/src/app/help/guides/
+	@set -e; for locale in . es pt; do \
+	  mkdir -p "web/src/app/help/guides/$$locale"; \
+	  cp "internal/clientconfig/builtin_skills/fleet-guide/$$locale/chat.md" \
+	     "internal/clientconfig/builtin_skills/fleet-guide/$$locale/operations-center.md" \
+	     "web/src/app/help/guides/$$locale/"; \
+	done
 	@echo "synced: web/src/app/help/guides/ ← internal/clientconfig/builtin_skills/fleet-guide/"
 
 # The configuration registry (internal/config/envreg/table.go, #2053) is the

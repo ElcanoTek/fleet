@@ -1,3 +1,6 @@
+import { localizeConnector } from "@/app/lib/i18n/bundle";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 // NOTE (lint hygiene): this large component used to disable three React
 // Compiler rules file-wide (react-hooks/set-state-in-effect,
 // react-hooks/purity, react-hooks/immutability). Those disables hid real
@@ -406,74 +409,74 @@ const STREAM_WATCHDOG_INTERVAL_MS = 10000;
 // platform-aware (⌘ on macOS, Ctrl elsewhere) in the overlay.
 const shortcutHelpGroups: ShortcutHelpGroup[] = [
   {
-    title: "Global",
+    title: tr("Global"),
     entries: [
-      { chips: [{ mod: true }, { label: "K" }], description: "Focus search" },
+      { chips: [{ mod: true }, { label: tr("K") }], description: tr("Focus search") },
       {
-        chips: [{ mod: true }, { shift: true }, { label: "O" }],
-        description: "New conversation",
+        chips: [{ mod: true }, { shift: true }, { label: tr("O") }],
+        description: tr("New conversation"),
       },
       {
-        chips: [{ shift: true }, { label: "Esc" }],
-        description: "Focus the message composer",
+        chips: [{ shift: true }, { label: tr("Esc") }],
+        description: tr("Focus the message composer"),
       },
       {
         chips: [{ label: "?" }],
-        description: "Show this keyboard-shortcut help",
+        description: tr("Show this keyboard-shortcut help"),
       },
       {
-        chips: [{ label: "Esc" }],
-        description: "Close help or the sidebar",
+        chips: [{ label: tr("Esc") }],
+        description: tr("Close help or the sidebar"),
       },
     ],
   },
   {
-    title: "Conversation list",
+    title: tr("Conversation list"),
     entries: [
-      { chips: [{ label: "J" }], description: "Focus next conversation" },
-      { chips: [{ label: "K" }], description: "Focus previous conversation" },
+      { chips: [{ label: tr("J") }], description: tr("Focus next conversation") },
+      { chips: [{ label: tr("K") }], description: tr("Focus previous conversation") },
       {
-        chips: [{ label: "Enter" }],
-        description: "Open the focused conversation",
+        chips: [{ label: tr("Enter") }],
+        description: tr("Open the focused conversation"),
       },
       {
-        chips: [{ label: "P" }],
-        description: "Pin / unpin the focused conversation",
+        chips: [{ label: tr("P") }],
+        description: tr("Pin / unpin the focused conversation"),
       },
       {
-        chips: [{ label: "A" }],
-        description: "Archive the focused conversation",
+        chips: [{ label: tr("A") }],
+        description: tr("Archive the focused conversation"),
       },
       {
-        chips: [{ label: "R" }],
-        description: "Rename the focused conversation",
+        chips: [{ label: tr("R") }],
+        description: tr("Rename the focused conversation"),
       },
       {
         chips: [{ label: "#" }],
-        description: "Delete the focused conversation",
+        description: tr("Delete the focused conversation"),
       },
     ],
   },
   {
-    title: "Composer",
+    title: tr("Composer"),
     entries: [
-      { chips: [{ label: "Enter" }], description: "Send the message" },
+      { chips: [{ label: tr("Enter") }], description: tr("Send the message") },
       {
-        chips: [{ mod: true }, { label: "Enter" }],
-        description: "Send the message",
+        chips: [{ mod: true }, { label: tr("Enter") }],
+        description: tr("Send the message"),
       },
       {
-        chips: [{ shift: true }, { label: "Enter" }],
-        description: "Insert a newline",
+        chips: [{ shift: true }, { label: tr("Enter") }],
+        description: tr("Insert a newline"),
       },
     ],
   },
   {
-    title: "Current conversation",
+    title: tr("Current conversation"),
     entries: [
-      { chips: [{ label: "Y" }], description: "Copy the last response" },
-      { chips: [{ label: "E" }], description: "Edit your last message" },
-      { chips: [{ label: "D" }], description: "Turn dashboard view on or off" },
+      { chips: [{ label: tr("Y") }], description: tr("Copy the last response") },
+      { chips: [{ label: tr("E") }], description: tr("Edit your last message") },
+      { chips: [{ label: tr("D") }], description: tr("Turn dashboard view on or off") },
     ],
   },
 ];
@@ -1117,7 +1120,7 @@ export function ChatExperience({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ auto_approve: next }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(tr("HTTP {0}", [res.status]));
         let committed = next;
         try {
           const body = (await res.json()) as { auto_approve?: boolean };
@@ -1954,7 +1957,7 @@ export function ChatExperience({
         categories?: PickerCategory[];
       };
       if (!mcpCatalogIsCurrent(gen, conversationId)) return;
-      setMcpServers(data.servers ?? []);
+      setMcpServers((data.servers ?? []).map(localizeConnector));
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal — picker just stays empty */
@@ -1996,7 +1999,7 @@ export function ChatExperience({
         servers.map((s) => [s.name, s.enabled]),
       );
       if (!mcpCatalogIsCurrent(gen, null)) return;
-      setMcpServers(servers);
+      setMcpServers(servers.map(localizeConnector));
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal */
@@ -2292,14 +2295,14 @@ export function ChatExperience({
   // server rendering, so reading navigator at render time is safe — no
   // hydration mismatch.
   const searchShortcut = useMemo(() => {
-    if (typeof navigator === "undefined") return "Ctrl+K";
-    return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : "Ctrl+K";
+    if (typeof navigator === "undefined") return tr("Ctrl+K");
+    return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : tr("Ctrl+K");
   }, []);
   // Sealed chats get the design's sandbox placeholder; everything else the
   // branded default the e2e specs match (/message .* ai/i).
   const promptPlaceholder = isLockdown
-    ? "Message your sealed sandbox…"
-    : `Message ${branding.app_name} AI...`;
+    ? tr("Message your sealed sandbox…")
+    : tr("Message {0} AI...", [branding.app_name]);
 
   // patchAssistantMessage updates a specific message inside a specific
   // conversation's slot. The convId is required because stream events
@@ -2530,7 +2533,7 @@ export function ChatExperience({
     if (!options.background) setIsLoadingHistory(true);
     try {
       const url = conversationApiUrl(conversationId);
-      if (!url) throw new Error("Unable to load conversation.");
+      if (!url) throw new Error(tr("Unable to load conversation."));
       const response = await fetch(url, {
         cache: "no-store",
         signal: options.signal,
@@ -2546,7 +2549,7 @@ export function ChatExperience({
           setTeamChatView(conversationId);
           return;
         }
-        throw new Error("Unable to load conversation.");
+        throw new Error(tr("Unable to load conversation."));
       }
       const data = (await response.json()) as {
         conversation: ConversationSummary & {
@@ -2907,12 +2910,12 @@ export function ChatExperience({
       response = await fetch("/api/conversations", { method: "DELETE" });
     } catch (err) {
       console.error("delete all unpinned error:", err);
-      showRailError("Couldn't delete the chats — network error.");
+      showRailError(tr("Couldn't delete the chats — network error."));
       return false;
     }
     if (!response.ok) {
       console.error("delete all unpinned failed:", response.status);
-      showRailError(`Couldn't delete the chats (HTTP ${response.status}).`);
+      showRailError(tr("Couldn't delete the chats (HTTP {0}).", [response.status]));
       return false;
     }
     // Mirror the server's predicate exactly: pinned rows are kept AND so are
@@ -2996,13 +2999,13 @@ export function ChatExperience({
       });
     } catch (err) {
       console.error("bulk delete error:", err);
-      showRailError("Couldn't delete the selected chats — network error.");
+      showRailError(tr("Couldn't delete the selected chats — network error."));
       return false;
     }
     if (!response.ok) {
       console.error("bulk delete failed:", response.status);
       showRailError(
-        `Couldn't delete the selected chats (HTTP ${response.status}).`,
+        tr("Couldn't delete the selected chats (HTTP {0}).", [response.status]),
       );
       return false;
     }
@@ -3043,7 +3046,7 @@ export function ChatExperience({
     changes: { pinned?: boolean; labels?: string[] },
   ) => {
     if (ids.length === 0) return;
-    const what = ids.length === 1 ? "the chat" : "the chats";
+    const what = ids.length === 1 ? tr("the chat") : tr("the chats");
     let response: Response;
     try {
       response = await fetch("/api/conversations/bulk", {
@@ -3052,11 +3055,11 @@ export function ChatExperience({
         body: JSON.stringify({ conversation_ids: ids, changes }),
       });
     } catch {
-      showRailError(`Couldn't update ${what} — network error.`);
+      showRailError(tr("Couldn't update {0} — network error.", [what]));
       return;
     }
     if (!response.ok) {
-      showRailError(`Couldn't update ${what} (HTTP ${response.status}).`);
+      showRailError(tr("Couldn't update {0} (HTTP {1}).", [what, response.status]));
       return;
     }
     const idSet = new Set(ids);
@@ -3092,7 +3095,7 @@ export function ChatExperience({
   ): Promise<boolean> => {
     const url = conversationApiUrl(conversationId);
     if (!url) {
-      showRailError("Couldn't delete the chat — it has an invalid id.");
+      showRailError(tr("Couldn't delete the chat — it has an invalid id."));
       return false;
     }
     let response: Response;
@@ -3102,12 +3105,12 @@ export function ChatExperience({
       });
     } catch (err) {
       console.error("delete conversation error:", err);
-      showRailError("Couldn't delete the chat — network error.");
+      showRailError(tr("Couldn't delete the chat — network error."));
       return false;
     }
     if (!response.ok) {
       console.error("delete conversation failed:", response.status);
-      showRailError(`Couldn't delete the chat (HTTP ${response.status}).`);
+      showRailError(tr("Couldn't delete the chat (HTTP {0}).", [response.status]));
       return false;
     }
     deletedConvIdsRef.current.add(conversationId);
@@ -3137,7 +3140,7 @@ export function ChatExperience({
     } catch (err) {
       console.error("load next conversation after delete error:", err);
       clearConversation();
-      showRailError("Deleted the chat, but couldn't open the next one.");
+      showRailError(tr("Deleted the chat, but couldn't open the next one."));
     }
     return true;
   };
@@ -3228,14 +3231,14 @@ export function ChatExperience({
       if (!response.ok) {
         if (response.status === 409) {
           throw new Error(
-            "A reply is still running. Wait for it to finish, then summarize.",
+            tr("A reply is still running. Wait for it to finish, then summarize."),
           );
         }
         const text = await response.text();
-        throw new Error(text || `Compact failed (HTTP ${response.status}).`);
+        throw new Error(text || tr("Compact failed (HTTP {0}).", [response.status]));
       }
       if (!response.body) {
-        throw new Error("Compact stream missing body.");
+        throw new Error(tr("Compact stream missing body."));
       }
       // Drain the SSE stream. summary.delta events feed the progress
       // card; summary.completed signals success and we reload the
@@ -3261,9 +3264,9 @@ export function ChatExperience({
         } else if (event.event === "summary.error") {
           try {
             const p = JSON.parse(event.data) as { message?: string };
-            streamErr = p.message ?? "Summarizing failed.";
+            streamErr = p.message ?? tr("Summarizing failed.");
           } catch {
-            streamErr = "Summarizing failed.";
+            streamErr = tr("Summarizing failed.");
           }
           completed = true;
         }
@@ -3287,7 +3290,7 @@ export function ChatExperience({
       // An abort is the page going away, not a failure to report; a failure
       // for a chat the user has left is not the open chat's either.
       if (!isAbortError(err) && stillActive()) {
-        setSummarizeError(errorMessage(err, "Summarizing failed."));
+        setSummarizeError(errorMessage(err, tr("Summarizing failed.")));
       }
     } finally {
       if (summarizeAbortRef.current === controller) summarizeAbortRef.current = null;
@@ -3380,7 +3383,7 @@ export function ChatExperience({
     if (!id) return;
     setPromptSaveTarget({
       id,
-      title: conversations.find((c) => c.id === id)?.title ?? "this chat",
+      title: conversations.find((c) => c.id === id)?.title ?? tr("this chat"),
     });
   };
 
@@ -3398,7 +3401,7 @@ export function ChatExperience({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: "New conversation",
+          title: tr("New conversation"),
           project_id: projectID,
         }),
       });
@@ -3849,14 +3852,14 @@ export function ChatExperience({
       );
       if (!res.ok) {
         console.error("rename project failed:", res.status, await res.text());
-        showRailError(`Couldn't rename the project (HTTP ${res.status}).`);
+        showRailError(tr("Couldn't rename the project (HTTP {0}).", [res.status]));
         setProjects(prev);
         return;
       }
       void loadProjects();
     } catch (err) {
       console.error("rename project error:", err);
-      showRailError("Couldn't rename the project — network error.");
+      showRailError(tr("Couldn't rename the project — network error."));
       setProjects(prev);
     }
   };
@@ -3881,14 +3884,14 @@ export function ChatExperience({
       );
       if (!res.ok) {
         console.error("pin project failed:", res.status, await res.text());
-        showRailError(`Couldn't pin the project (HTTP ${res.status}).`);
+        showRailError(tr("Couldn't pin the project (HTTP {0}).", [res.status]));
         setProjects(prev);
         return;
       }
       void loadProjects();
     } catch (err) {
       console.error("pin project error:", err);
-      showRailError("Couldn't pin the project — network error.");
+      showRailError(tr("Couldn't pin the project — network error."));
       setProjects(prev);
     }
   };
@@ -3915,7 +3918,7 @@ export function ChatExperience({
         const detail = (await res.text()).trim();
         console.error("update project failed:", res.status, detail);
         showRailError(
-          detail || `Couldn't update the project (HTTP ${res.status}).`,
+          detail || tr("Couldn't update the project (HTTP {0}).", [res.status]),
         );
         return false;
       }
@@ -3923,7 +3926,7 @@ export function ChatExperience({
       return true;
     } catch (err) {
       console.error("update project error:", err);
-      showRailError("Couldn't update the project — network error.");
+      showRailError(tr("Couldn't update the project — network error."));
       return false;
     }
   };
@@ -3950,12 +3953,12 @@ export function ChatExperience({
         const detail = (await res.text()).trim();
         return detail.length > 0 && detail.length <= 300
           ? detail
-          : `Couldn't transfer the project (HTTP ${res.status}).`;
+          : tr("Couldn't transfer the project (HTTP {0}).", [res.status]);
       }
       await loadProjects();
       return null;
     } catch {
-      return "Couldn't reach the server — the project is unchanged.";
+      return tr("Couldn't reach the server — the project is unchanged.");
     }
   };
 
@@ -3974,7 +3977,7 @@ export function ChatExperience({
       );
       if (!res.ok) {
         console.error("delete project failed:", res.status, await res.text());
-        showRailError(`Couldn't delete the project (HTTP ${res.status}).`);
+        showRailError(tr("Couldn't delete the project (HTTP {0}).", [res.status]));
         return false;
       }
       await loadProjects();
@@ -3982,7 +3985,7 @@ export function ChatExperience({
       return true;
     } catch (err) {
       console.error("delete project error:", err);
-      showRailError("Couldn't delete the project — network error.");
+      showRailError(tr("Couldn't delete the project — network error."));
       return false;
     }
   };
@@ -4031,11 +4034,11 @@ export function ChatExperience({
         const detail = (await res.text()).trim();
         return detail && detail.length <= 300
           ? detail
-          : `Couldn't create the project (HTTP ${res.status}).`;
+          : tr("Couldn't create the project (HTTP {0}).", [res.status]);
       }
       created = (await res.json()) as Project;
     } catch {
-      return "Couldn't reach the server — no project was created.";
+      return tr("Couldn't reach the server — no project was created.");
     }
     const stillOpen = newProjectDialogRef.current === dialog;
     if (stillOpen) setNewProjectDialog(null);
@@ -4045,9 +4048,9 @@ export function ChatExperience({
       // exists, but the person walked away from the move-and-share, so do
       // neither — and leave whatever dialog is open now alone.
       notify({
-        message: `Created ${created.name}.`,
+        message: tr("Created {0}.", [created.name]),
         action: {
-          label: `Open ${created.name}`,
+          label: tr("Open {0}", [created.name]),
           onClick: () => {
             setTeamChatView(null);
             setProjectHome({ id: created.id });
@@ -4072,9 +4075,9 @@ export function ChatExperience({
       // could fail too, and it throws away what they just typed). The user
       // stays on the chat, one click from the project they created.
       notify({
-        message: `Created ${created.name}, but couldn’t move the chat into it. Move it from the chat’s menu.`,
+        message: tr("Created {0}, but couldn’t move the chat into it. Move it from the chat’s menu.", [created.name]),
         action: {
-          label: `Open ${created.name}`,
+          label: tr("Open {0}", [created.name]),
           onClick: () => {
             setTeamChatView(null);
             setProjectHome({ id: created.id });
@@ -4086,14 +4089,14 @@ export function ChatExperience({
     const team = created.team_id;
     if (!team) {
       notify({
-        message: `Created ${created.name} and moved the chat in.`,
+        message: tr("Created {0} and moved the chat in.", [created.name]),
       });
       return null;
     }
     if (!conv) {
       // The dialog promised the share too; never let it go silently missing.
       notify({
-        message: `Created ${created.name} and moved the chat in, but couldn’t share it with ${team}. Share it from the chat’s Share button.`,
+        message: tr("Created {0} and moved the chat in, but couldn’t share it with {1}. Share it from the chat’s Share button.", [created.name, team]),
       });
       return null;
     }
@@ -4103,8 +4106,8 @@ export function ChatExperience({
     );
     notify({
       message: shared?.team_visible
-        ? `Created ${created.name}, moved the chat in, and shared it with ${team}.`
-        : `Created ${created.name} and moved the chat in, but couldn’t share it with ${team}. Share it from the chat’s Share button.`,
+        ? tr("Created {0}, moved the chat in, and shared it with {1}.", [created.name, team])
+        : tr("Created {0} and moved the chat in, but couldn’t share it with {1}. Share it from the chat’s Share button.", [created.name, team]),
     });
     return null;
   };
@@ -4136,7 +4139,7 @@ export function ChatExperience({
   ): Promise<boolean | "moved-elsewhere"> => {
     const projectUrl = conversationApiUrl(conversationId, "/project");
     if (!projectUrl) {
-      showRailError("Couldn't move the chat — it has an invalid id.");
+      showRailError(tr("Couldn't move the chat — it has an invalid id."));
       return false;
     }
     // An ARCHIVED chat can be moved too — the Share dialog reaches one, and it
@@ -4198,7 +4201,7 @@ export function ChatExperience({
           await response.text(),
         );
         showRailError(
-          `Couldn't move the chat (HTTP ${response.status})${response.status === 404 ? " — the server may predate this feature; update the deployment" : ""}.`,
+          tr("Couldn't move the chat (HTTP {0}){1}.", [response.status, response.status === 404 ? tr(" — the server may predate this feature; update the deployment") : ""]),
         );
         setConversations(prev);
         setArchivedConversations(prevArchived);
@@ -4207,7 +4210,7 @@ export function ChatExperience({
       return true;
     } catch (err) {
       console.error("move to project error:", err);
-      showRailError("Couldn't move the chat — network error.");
+      showRailError(tr("Couldn't move the chat — network error."));
       setConversations(prev);
       setArchivedConversations(prevArchived);
       return false;
@@ -4270,9 +4273,9 @@ export function ChatExperience({
       conv.project_id !== projectID
     ) {
       notify({
-        message: `Moved to ${target.name}. Only you can see it.`,
+        message: tr("Moved to {0}. Only you can see it.", [target.name]),
         action: {
-          label: "Share with your team",
+          label: tr("Share with your team"),
           onClick: () => {
             void (async () => {
               const res = await setTeamShared(
@@ -4281,13 +4284,13 @@ export function ChatExperience({
               );
               if (res?.team_visible)
                 notify(
-                  sharedToast(conv.title, "your team", res.shared_files, () => {
+                  sharedToast(conv.title, tr("your team"), res.shared_files, () => {
                     setTeamChatView(null);
                     setProjectHome({ id: projectID, sourcesFocus: conv.id });
                   }),
                 );
               else
-                showRailError(`Couldn't share “${conv.title}” with your team.`);
+                showRailError(tr("Couldn't share “{0}” with your team.", [conv.title]));
             })();
           },
         },
@@ -4335,7 +4338,7 @@ export function ChatExperience({
     if (activeConversationId !== null && !isPendingKey(activeConversationId)) {
       openShareDialog({
         id: activeConversationId,
-        title: "Conversation",
+        title: tr("Conversation"),
         persona: selectedPersona || "default",
         model: selectedModel || "",
         pinned: false,
@@ -4350,7 +4353,7 @@ export function ChatExperience({
       getConvMessages(currentConvKey).length > 0
     ) {
       showRailError(
-        "Send or retry your first message before sharing this chat.",
+        tr("Send or retry your first message before sharing this chat."),
       );
       return;
     }
@@ -4366,7 +4369,7 @@ export function ChatExperience({
       ? draftText.length > 80
         ? `${draftText.slice(0, 80)}…`
         : draftText
-      : "New conversation";
+      : tr("New conversation");
     const enabledOptional =
       mcpServers.length > 0
         ? enabledOptionalMcpServerNames(mcpServers)
@@ -4396,7 +4399,7 @@ export function ChatExperience({
         const errText = (await response.text().catch(() => "")).trim();
         showRailError(
           errText ||
-            `Couldn't open sharing for this chat (HTTP ${response.status}).`,
+            tr("Couldn't open sharing for this chat (HTTP {0}).", [response.status]),
         );
         return;
       }
@@ -4405,7 +4408,7 @@ export function ChatExperience({
       };
       if (!created?.id) {
         if (mountedRef.current) {
-          showRailError("Couldn't open sharing for this chat.");
+          showRailError(tr("Couldn't open sharing for this chat."));
         }
         return;
       }
@@ -4497,7 +4500,7 @@ export function ChatExperience({
     } catch {
       if (mountedRef.current) {
         showRailError(
-          "Couldn't reach the server to open sharing for this chat.",
+          tr("Couldn't reach the server to open sharing for this chat."),
         );
       }
     } finally {
@@ -4540,7 +4543,7 @@ export function ChatExperience({
   ): Promise<boolean> => {
     const shareUrl = conversationApiUrl(conversation.id, "/share");
     if (!shareUrl) {
-      setShareError("Couldn't create a link — this chat has an invalid id.");
+      setShareError(tr("Couldn't create a link — this chat has an invalid id."));
       return false;
     }
     setShareBusy(true);
@@ -4556,14 +4559,14 @@ export function ChatExperience({
       // A thrown fetch (offline, DNS, proxy reset) used to escape as an
       // unhandled rejection and leave the button silent: the user clicked
       // "Create link", nothing changed, and nothing said why.
-      setShareError("Couldn't reach the server — no link was created.");
+      setShareError(tr("Couldn't reach the server — no link was created."));
       setShareBusy(false);
       return false;
     } finally {
       setShareBusy(false);
     }
     if (!response.ok) {
-      setShareError(`Couldn't create the link (HTTP ${response.status}).`);
+      setShareError(tr("Couldn't create the link (HTTP {0}).", [response.status]));
       await refreshConversations();
       return false;
     }
@@ -4591,7 +4594,7 @@ export function ChatExperience({
   const unshareConversation = async (conversation: ConversationSummary) => {
     const shareUrl = conversationApiUrl(conversation.id, "/share");
     if (!shareUrl) {
-      setShareError("Couldn't stop sharing — this chat has an invalid id.");
+      setShareError(tr("Couldn't stop sharing — this chat has an invalid id."));
       return;
     }
     patchShareToken(conversation.id, "");
@@ -4601,12 +4604,12 @@ export function ChatExperience({
       const response = await fetch(shareUrl, { method: "DELETE" });
       if (!response.ok) {
         setShareError(
-          `Couldn't stop sharing the link (HTTP ${response.status}) — it is still live.`,
+          tr("Couldn't stop sharing the link (HTTP {0}) — it is still live.", [response.status]),
         );
         await refreshConversations();
       }
     } catch {
-      setShareError("Couldn't reach the server — the link is still live.");
+      setShareError(tr("Couldn't reach the server — the link is still live."));
       await refreshConversations();
     } finally {
       setShareBusy(false);
@@ -4626,7 +4629,7 @@ export function ChatExperience({
     checklist?: OutputChecklist,
   ): Promise<ShareWithTeamResult | null> => {
     if (!conversationApiUrl(conversation.id, "/share-with-team")) {
-      setShareError("Couldn't change team sharing — this chat has an invalid id.");
+      setShareError(tr("Couldn't change team sharing — this chat has an invalid id."));
       return null;
     }
     setShareBusy(true);
@@ -4652,7 +4655,7 @@ export function ChatExperience({
       setShareError(
         reason && !reason.startsWith("request failed")
           ? reason
-          : `Couldn't ${visible ? "share" : "stop sharing"} the chat with your team.`,
+          : tr(visible ? "Couldn't share the chat with your team." : "Couldn't stop sharing the chat with your team."),
       );
       await refreshConversations();
       return null;
@@ -4689,12 +4692,12 @@ export function ChatExperience({
     );
     setShareError((reason) =>
       [
-        reason ?? "Couldn't share the chat.",
+        reason ?? tr("Couldn't share the chat."),
         restored === "moved-elsewhere"
-          ? "It was moved again meanwhile, so it was left where it is now."
+          ? tr("It was moved again meanwhile, so it was left where it is now.")
           : restored
-            ? "It was moved back where it was."
-            : "It stayed in the new project, still Only you.",
+            ? tr("It was moved back where it was.")
+            : tr("It stayed in the new project, still Only you."),
       ].join(" "),
     );
     return null;
@@ -4729,7 +4732,7 @@ export function ChatExperience({
         ? {
             conversationId: activeConversationId,
             shared: outputShares.shared,
-            team: activeChatTeamAudience || "your team",
+            team: activeChatTeamAudience || tr("your team"),
             onOpenSources: () => {
               if (!activeSharedProjectId) return;
               setTeamChatView(null);
@@ -4762,7 +4765,7 @@ export function ChatExperience({
   ) => {
     const archiveUrl = conversationApiUrl(conversation.id, "/archive");
     if (!archiveUrl) {
-      showRailError("Couldn't update the chat — it has an invalid id.");
+      showRailError(tr("Couldn't update the chat — it has an invalid id."));
       return;
     }
     const prev = conversations;
@@ -4807,13 +4810,13 @@ export function ChatExperience({
       });
       if (!response.ok) {
         console.error(`${verb} failed:`, response.status);
-        showRailError(`Couldn't ${verb} the chat (HTTP ${response.status}).`);
+        showRailError(tr(archived ? "Couldn't archive the chat (HTTP {0})." : "Couldn't unarchive the chat (HTTP {0}).", [response.status]));
         setConversations(prev);
         setArchivedConversations(prevArchived);
       }
     } catch (err) {
       console.error(`${verb} error:`, err);
-      showRailError(`Couldn't ${verb} the chat — network error.`);
+      showRailError(tr(archived ? "Couldn't archive the chat — network error." : "Couldn't unarchive the chat — network error."));
       setConversations(prev);
       setArchivedConversations(prevArchived);
     }
@@ -4894,7 +4897,7 @@ export function ChatExperience({
       });
       if (!response.ok) {
         console.error("rename conversation failed:", response.status);
-        showRailError(`Couldn't rename the chat (HTTP ${response.status}).`);
+        showRailError(tr("Couldn't rename the chat (HTTP {0}).", [response.status]));
         setTitle(before.title);
         return false;
       }
@@ -4903,7 +4906,7 @@ export function ChatExperience({
       // A thrown fetch used to escape here as an unhandled rejection, and the
       // header's await never reached its setIsSavingTitle(false).
       console.error("rename conversation error:", err);
-      showRailError("Couldn't rename the chat — network error.");
+      showRailError(tr("Couldn't rename the chat — network error."));
       setTitle(before.title);
       return false;
     }
@@ -4921,7 +4924,7 @@ export function ChatExperience({
     { format, includeWork }: DownloadOptions,
   ) => {
     const exportUrl = conversationApiUrl(conversation.id, "/export");
-    if (!exportUrl) throw new Error("This chat has an invalid id.");
+    if (!exportUrl) throw new Error(tr("This chat has an invalid id."));
     const query = new URLSearchParams({ format });
     if (format !== "json") {
       query.set("include", includeWork ? "full" : "conversation");
@@ -4933,7 +4936,7 @@ export function ChatExperience({
       const detail = await response.text();
       console.error("export failed", response.status, detail);
       throw new Error(
-        detail.trim() || `Could not download this chat (${response.status})`,
+        detail.trim() || tr("Could not download this chat ({0})", [response.status]),
       );
     }
     // Prefer the filename chosen by the server (Content-Disposition, either
@@ -5549,9 +5552,9 @@ export function ChatExperience({
         setPendingAutoApproveForKey(key, true);
       }
       const cadenceDesc = input.cron
-        ? `cron "${input.cron}" (timezone "${input.timezone || "UTC"}"${input.title ? `, title "${input.title}"` : ""})`
-        : `a one-shot timer in ${input.durationSeconds ?? 1800} seconds${input.title ? ` (title "${input.title}")` : ""}`;
-      const synthesized = `${input.prompt}\n\nPlease also set up an in-chat patrol using \`chat_patrol\` (${cadenceDesc}) with those instructions so this chat keeps checking automatically.`;
+        ? tr("cron \"{0}\" (timezone \"{1}\"{2})", [input.cron, input.timezone || "UTC", input.title ? tr(", title \"{0}\"", [input.title]) : ""])
+        : tr("a one-shot timer in {0} seconds{1}", [input.durationSeconds ?? 1800, input.title ? tr(" (title \"{0}\")", [input.title]) : ""]);
+      const synthesized = tr("{0}\n\nPlease also set up an in-chat patrol using `chat_patrol` ({1}) with those instructions so this chat keeps checking automatically.", [input.prompt, cadenceDesc]);
       await submitPrompt(synthesized);
       return true;
     }
@@ -5567,13 +5570,13 @@ export function ChatExperience({
       applyScheduleResponse(convId, data);
       notify({
         message: data.schedule
-          ? `Scheduled ${data.schedule.title} (${formatScheduleCadence(data.schedule)}).`
-          : "Patrol scheduled.",
+          ? tr("Scheduled {0} ({1}).", [data.schedule.title, formatScheduleCadence(data.schedule)])
+          : tr("Patrol scheduled."),
       });
       return true;
     } catch (e) {
       showRailError(
-        e instanceof PatrolApiError ? e.message : "Couldn't reach the server to schedule the patrol.",
+        e instanceof PatrolApiError ? e.message : tr("Couldn't reach the server to schedule the patrol."),
       );
       return false;
     }
@@ -5584,7 +5587,7 @@ export function ChatExperience({
   // unreachable server says so. A pending (not yet created) chat has no
   // schedules to act on.
   const mutatePatrol = async (
-    verb: string,
+    verb: "trigger" | "resume" | "pause" | "cancel",
     call: (convId: string) => Promise<PatrolResponse>,
     after?: (convId: string) => void,
   ) => {
@@ -5595,7 +5598,12 @@ export function ChatExperience({
       after?.(convId);
     } catch (e) {
       showRailError(
-        e instanceof PatrolApiError ? e.message : `Couldn't reach the server to ${verb} patrol.`,
+        e instanceof PatrolApiError ? e.message : tr(
+          verb === "trigger" ? "Couldn't reach the server to trigger patrol."
+            : verb === "resume" ? "Couldn't reach the server to resume patrol."
+              : verb === "pause" ? "Couldn't reach the server to pause patrol."
+                : "Couldn't reach the server to cancel patrol.",
+        ),
       );
     }
   };
@@ -5986,7 +5994,7 @@ export function ChatExperience({
             status.status === "not_on_team"
               ? {
                   kind: "not_on_team",
-                  team: status.team_id || "this team",
+                  team: status.team_id || tr("this team"),
                   viewerEmail: status.viewer_email,
                 }
               : { kind: "not_shared", project: status.project },
@@ -6331,18 +6339,17 @@ export function ChatExperience({
       <main className="flex h-[100dvh] items-center justify-center px-6">
         <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 text-center shadow-[var(--composer-shadow)]">
           <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">
-            Can&apos;t reach the chat server
+            {tr("Can't reach the chat server")}
           </h1>
           <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
-            You&apos;re still signed in — the server may be restarting. Try
-            again in a moment.
+            {tr("You're still signed in — the server may be restarting. Try again in a moment.")}
           </p>
           <button
             type="button"
             onClick={() => window.location.reload()}
             className="mt-5 rounded-xl bg-[var(--color-primary-fill)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
           >
-            Retry
+            {tr("Retry")}
           </button>
         </div>
       </main>
@@ -6472,13 +6479,13 @@ export function ChatExperience({
 
         {confirmBulkDelete ? (
           <DialogShell
-            label="Delete all temporary chats?"
-            scrimLabel="Close delete-all confirmation"
+            label={tr("Delete all temporary chats?")}
+            scrimLabel={tr("Close delete-all confirmation")}
             onDismiss={() => setConfirmBulkDelete(false)}
             className="max-w-[26rem] p-5"
           >
             <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Delete all temporary chats?
+              {tr("Delete all temporary chats?")}
             </h2>
             <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
               {/* Counts what the server actually deletes: unpinned chats
@@ -6487,12 +6494,7 @@ export function ChatExperience({
                   clears, and the server exempts it (store.DeleteAllUnpinned)
                   — so counting one here would over-promise a deletion that
                   never happens. */}
-              {countDeletedByDeleteAllUnpinned(conversations)} conversation
-              {countDeletedByDeleteAllUnpinned(conversations) === 1
-                ? ""
-                : "s"}{" "}
-              in Temporary will be deleted. Pinned chats and chats in a project
-              are kept. This can&apos;t be undone.
+              {tr(countDeletedByDeleteAllUnpinned(conversations) === 1 ? "{0} conversation in Temporary will be deleted. Pinned chats and chats in a project are kept. This can't be undone." : "{0} conversations in Temporary will be deleted. Pinned chats and chats in a project are kept. This can't be undone.", [countDeletedByDeleteAllUnpinned(conversations)])}
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -6500,8 +6502,7 @@ export function ChatExperience({
                 className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 onClick={() => setConfirmBulkDelete(false)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 type="button"
                 className="rounded-[var(--radius-md)] bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
@@ -6512,7 +6513,7 @@ export function ChatExperience({
                   void deleteAllUnpinned();
                 }}
               >
-                Delete all
+                {tr("Delete all")}
               </button>
             </div>
           </DialogShell>
@@ -6578,7 +6579,7 @@ export function ChatExperience({
                 // user asked for — so say which half happened and leave the
                 // one-click fix in their hands.
                 showRailError(
-                  "Removed from the project, but pinning failed — this chat can expire. Pin it from its ⋮ menu.",
+                  tr("Removed from the project, but pinning failed — this chat can expire. Pin it from its ⋮ menu."),
                 );
               })();
             }}
@@ -6653,7 +6654,7 @@ export function ChatExperience({
               void deleteProject(id).then((ok) => {
                 if (ok)
                   notify({
-                    message: `${name} was deleted. Its chats are now temporary.`,
+                    message: tr("{0} was deleted. Its chats are now temporary.", [name]),
                   });
               });
             }}
@@ -6698,19 +6699,16 @@ export function ChatExperience({
 
         {confirmSummarize ? (
           <DialogShell
-            label="Summarize earlier messages?"
-            scrimLabel="Close summarize confirmation"
+            label={tr("Summarize earlier messages?")}
+            scrimLabel={tr("Close summarize confirmation")}
             onDismiss={() => setConfirmSummarize(false)}
             className="max-w-[26rem] p-5"
           >
             <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Summarize earlier messages?
+              {tr("Summarize earlier messages?")}
             </h2>
             <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-              Long chats cost more and can run out of room. This replaces
-              earlier messages with a short summary so the chat can keep going.
-              The original messages fold away under a banner, and you can open
-              them again anytime.
+              {tr("Long chats cost more and can run out of room. This replaces earlier messages with a short summary so the chat can keep going. The original messages fold away under a banner, and you can open them again anytime.")}
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -6718,8 +6716,7 @@ export function ChatExperience({
                 className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 onClick={() => setConfirmSummarize(false)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 type="button"
                 className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
@@ -6728,7 +6725,7 @@ export function ChatExperience({
                   void summarizeConversation();
                 }}
               >
-                Summarize
+                {tr("Summarize")}
               </button>
             </div>
           </DialogShell>
@@ -6885,19 +6882,18 @@ export function ChatExperience({
         {pendingDeleteConversation &&
         !sharedChatById(pendingDeleteConversation.id) ? (
           <DialogShell
-            label="Delete chat?"
-            scrimLabel="Close delete confirmation"
+            label={tr("Delete chat?")}
+            scrimLabel={tr("Close delete confirmation")}
             onDismiss={() => setPendingDeleteConversation(null)}
             className="max-w-[25rem] p-5"
           >
             <div className="mb-4 grid gap-2">
               <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                Delete chat?
+                {tr("Delete chat?")}
               </h2>
               <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                Are you sure you want to delete{" "}
-                <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>?
-              </p>
+        {rich("Are you sure you want to delete {0}?", <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>)}
+      </p>
             </div>
 
             <div className="flex items-center justify-end gap-2">
@@ -6906,15 +6902,14 @@ export function ChatExperience({
                 type="button"
                 onClick={() => setPendingDeleteConversation(null)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
                 type="button"
                 disabled={isDeletingConversation}
                 onClick={() => void confirmDeleteConversation()}
               >
-                {isDeletingConversation ? "Deleting…" : "Delete"}
+                {isDeletingConversation ? tr("Deleting…") : tr("Delete")}
               </button>
             </div>
           </DialogShell>
@@ -6929,7 +6924,7 @@ export function ChatExperience({
               the same bordered bar the Operations Center renders. */}
           {dashboardActive ? (
             <DashboardHud
-              title={activeConversationId ? title : "New dashboard"}
+              title={activeConversationId ? title : tr("New dashboard")}
               status={dashboardStatus}
               panelCount={board?.panels.length ?? 0}
               mobilePane={dashboardPane}
@@ -6939,13 +6934,13 @@ export function ChatExperience({
             />
           ) : (
           <PageTopBar
-            title="Chat"
+            title={tr("Chat")}
             onMenu={() => setSidebarOpen(true)}
             actions={
               <>
                 {!fullPageOverlay ? (
                   <button
-                    aria-label="Open dashboard view"
+                    aria-label={tr("Open dashboard view")}
                     data-testid="dashboard-enter"
                     data-tip-bottom="Dashboard view (D)"
                     type="button"
@@ -6957,12 +6952,12 @@ export function ChatExperience({
                       className="size-4 transition motion-safe:group-hover/tbtn:rotate-90"
                     />
                     <span className="hidden text-[0.75rem] font-semibold sm:inline">
-                      Dashboard
+                      {tr("Dashboard")}
                     </span>
                   </button>
                 ) : null}
                 <button
-                  aria-label="Keyboard shortcuts"
+                  aria-label={tr("Keyboard shortcuts")}
                   className="group/tbtn hidden size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex sm:size-8"
                   data-tip-bottom="Keyboard shortcuts"
                   data-testid="shortcuts-button"
@@ -6990,7 +6985,7 @@ export function ChatExperience({
               {renamingTitleDraft !== null ? (
                 <input
                   ref={renameTitleInputRef}
-                  aria-label="Rename chat"
+                  aria-label={tr("Rename chat")}
                   disabled={isSavingTitle}
                   value={renamingTitleDraft}
                   onChange={(e) => setRenamingTitleDraft(e.target.value)}
@@ -7028,7 +7023,7 @@ export function ChatExperience({
                 <h2 className="min-w-0">
                   <button
                     type="button"
-                    title="Click to rename"
+                    title={tr("Click to rename")}
                     onClick={() => setRenamingTitleDraft(title)}
                     className="block min-w-0 max-w-full cursor-text truncate rounded-md py-1 pr-1.5 text-left text-[1.0625rem] font-semibold text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] sm:text-[1.25rem]"
                   >
@@ -7044,11 +7039,11 @@ export function ChatExperience({
                 <StatusChip
                   tone="accent"
                   className="shrink-0"
-                  title="Lockdown chat — sandboxed container, restricted models"
+                  title={tr("Lockdown chat — sandboxed container, restricted models")}
                 >
                   <span className="inline-flex items-center gap-1">
                     <Icon name="lock" className="size-3" />
-                    <span className="hidden sm:inline">Lockdown</span>
+                    <span className="hidden sm:inline">{tr("Lockdown")}</span>
                   </span>
                 </StatusChip>
               ) : null}
@@ -7328,7 +7323,7 @@ export function ChatExperience({
                 // wrapped onto a second row.
                 <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
                   <button
-                    aria-label="Jump to latest"
+                    aria-label={tr("Jump to latest")}
                     data-tip-top="Jump to latest"
                     className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     type="button"
@@ -7373,8 +7368,8 @@ export function ChatExperience({
                     className="underline"
                   >
                     {modelError.modelsUrl.startsWith("/")
-                      ? "Provider settings"
-                      : "Browse models"}
+                      ? tr("Provider settings")
+                      : tr("Browse models")}
                   </a>
                   {" · "}
                   <button
@@ -7382,7 +7377,7 @@ export function ChatExperience({
                     className="underline"
                     onClick={() => setModelPickerOpen(true)}
                   >
-                    Choose a model
+                    {tr("Choose a model")}
                   </button>
                 </div>
               ) : null}

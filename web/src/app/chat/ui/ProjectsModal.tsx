@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
@@ -102,11 +104,11 @@ export function ProjectsModal({
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/projects", { cache: "no-store" });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load projects"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to load projects")));
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
     } catch (err) {
-      setError(errorMessage(err, "Unable to load projects."));
+      setError(errorMessage(err, tr("Unable to load projects.")));
     }
   }, []);
 
@@ -120,7 +122,7 @@ export function ProjectsModal({
   const loadMemories = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}/memories`, { cache: "no-store" });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load memories"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to load memories")));
       const data = (await res.json()) as { memories?: ProjectMemory[] };
       setMemories(data.memories ?? []);
     } catch {
@@ -195,13 +197,13 @@ export function ProjectsModal({
             headers: { "Content-Type": "application/json" },
             body,
           });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to save project"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to save project")));
       const p = (await res.json()) as Project;
       setEditing(false);
       setSelectedId(p.id);
       await load();
     } catch (err) {
-      setError(errorMessage(err, "Unable to save project."));
+      setError(errorMessage(err, tr("Unable to save project.")));
     } finally {
       setBusy(false);
     }
@@ -210,11 +212,11 @@ export function ProjectsModal({
   const remove = async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to delete project"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to delete project")));
       setSelectedId(null);
       await load();
     } catch (err) {
-      setError(errorMessage(err, "Unable to delete project."));
+      setError(errorMessage(err, tr("Unable to delete project.")));
     }
   };
 
@@ -227,11 +229,11 @@ export function ProjectsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to add memory"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to add memory")));
       setMemoryDraft("");
       await loadMemories(selectedId);
     } catch (err) {
-      setError(errorMessage(err, "Unable to add memory."));
+      setError(errorMessage(err, tr("Unable to add memory.")));
     }
   };
 
@@ -239,10 +241,10 @@ export function ProjectsModal({
     if (!selectedId) return;
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(selectedId)}/memories/${encodeURIComponent(memID)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to remove memory"));
+      if (!res.ok) throw new Error(await responseErrorText(res, tr("Unable to remove memory")));
       await loadMemories(selectedId);
     } catch (err) {
-      setError(errorMessage(err, "Unable to remove memory."));
+      setError(errorMessage(err, tr("Unable to remove memory.")));
     }
   };
 
@@ -254,19 +256,19 @@ export function ProjectsModal({
           confirms below are siblings of the panel, not children of it: each
           paints its own layer above it. */}
       <DialogShell
-        label="Projects"
-        scrimLabel="Close projects"
+        label={tr("Projects")}
+        scrimLabel={tr("Close projects")}
         onDismiss={onClose}
         className="flex max-h-[88vh] max-w-[40rem] flex-col gap-4 overflow-hidden p-5"
       >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Projects</h2>
+            <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">{tr("Projects")}</h2>
             <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Shared workspaces: standing instructions, shared memory, and defaults every chat in the project inherits.
+              {tr("Shared workspaces: standing instructions, shared memory, and defaults every chat in the project inherits.")}
             </p>
           </div>
-          <CloseButton label="Close projects" onClick={onClose} />
+          <CloseButton label={tr("Close projects")} onClick={onClose} />
         </div>
 
         {error ? (
@@ -279,20 +281,20 @@ export function ProjectsModal({
           <div className="grid gap-2">
             <input
               className="w-full rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-              placeholder="Project name"
+              placeholder={tr("Project name")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             <textarea
               className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-              placeholder="Standing instructions every chat in this project follows…"
+              placeholder={tr("Standing instructions every chat in this project follows…")}
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
             />
             {me === null ? (
               // The team read has not landed. Render nothing rather than
               // guessing: either branch below would be a wrong-state flash.
-              <p className="m-0 text-[0.8125rem] text-[var(--color-text-muted)]">Checking your team…</p>
+              <p className="m-0 text-[0.8125rem] text-[var(--color-text-muted)]">{tr("Checking your team…")}</p>
             ) : !me.team_id ? (
               // No team → display-only. Where to fix it depends on who is
               // asking: most users on a fleet box ARE admins, so sending them
@@ -300,30 +302,28 @@ export function ProjectsModal({
               // manages teams, nobody can fix it in Fleet.
               <p className="m-0 rounded-[0.75rem] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
                 {getBootstrap().centralAuth
-                  ? "You’re not on a team yet. Teams are set in Auth by an administrator."
+                  ? tr("You’re not on a team yet. Teams are set in Auth by an administrator.")
                   : me.admin
-                    ? "You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team."
-                    : "You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users."}
+                    ? tr("You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team.")
+                    : tr("You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users.")}
               </p>
             ) : (
               <div className="grid gap-1">
                 <label className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
                   <input type="checkbox" checked={teamShared} onChange={(e) => setTeamShared(e.target.checked)} />
-                  Share with my team ({me.team_id}) — members can chat in it and read/write its
-                  team learnings
+                  {tr("Share with my team (")}{me.team_id}{tr(") — members can chat in it and read/write its team learnings")}
                 </label>
                 <Link
                   href="/settings/team"
                   className="justify-self-start text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
                 >
-                  Manage your team
+                  {tr("Manage your team")}
                 </Link>
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
               <button type="button" className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               <button
                 type="button"
                 className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
@@ -336,20 +336,20 @@ export function ProjectsModal({
                   void save();
                 }}
               >
-                {busy ? "Saving…" : selectedId ? "Save changes" : "Create project"}
+                {busy ? tr("Saving…") : selectedId ? tr("Save changes") : tr("Create project")}
               </button>
             </div>
           </div>
         ) : (
           <button type="button" className="self-start rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80" onClick={() => (onNewProject ? onNewProject() : openEditor(null))}>
-            New project
+            {tr("New project")}
           </button>
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {projects.length === 0 && !editing ? (
             <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-              No projects yet. A project is a shared workspace with its own instructions, memory, and chats.
+              {tr("No projects yet. A project is a shared workspace with its own instructions, memory, and chats.")}
             </p>
           ) : (
             <div className="grid gap-2">
@@ -360,17 +360,19 @@ export function ProjectsModal({
                       {p.name}
                     </button>
                     <div className="flex items-center gap-3 text-[0.72rem] text-[var(--color-text-muted)]">
-                      {p.team_id ? <span title={`Shared with team ${p.team_id}`}>team: {p.team_id}</span> : <span>personal</span>}
+                      {p.team_id ? <span title={tr("Shared with team {0}", [p.team_id])}>
+        {rich("team: {0}", p.team_id)}
+      </span> : <span>{tr("personal")}</span>}
                       <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => onStartChat(p.id)}>
-                        Start chat
+                        {tr("Start chat")}
                       </button>
                       {p.owner_email === userEmail ? (
                         <>
                           <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => (onEditProject ? onEditProject(p.id) : openEditor(p))}>
-                            Edit
+                            {tr("Edit")}
                           </button>
                           <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => setConfirmDeleteId(p.id)}>
-                            Delete
+                            {tr("Delete")}
                           </button>
                         </>
                       ) : null}
@@ -382,11 +384,11 @@ export function ProjectsModal({
                   {p.id === selectedId ? (
                     <div className="mt-3 border-t border-[var(--color-border)] pt-2">
                       <p className="mb-1 text-[0.72rem] font-medium text-[var(--color-text-muted)]">
-                        Team learnings {isOwner || selected?.team_id ? "(visible to all members)" : ""}
-                      </p>
+        {rich("Team learnings {0}", isOwner || selected?.team_id ? tr("(visible to all members)") : "")}
+      </p>
                       {memories.length === 0 ? (
                         <p className="text-[0.75rem] text-[var(--color-text-muted)]">
-                          No team learnings yet. Save one from any chat in this project.
+                          {tr("No team learnings yet. Save one from any chat in this project.")}
                         </p>
                       ) : (
                         <ul className="grid gap-1">
@@ -397,7 +399,7 @@ export function ProjectsModal({
                                 {m.user_email ? <span className="ml-1 text-[0.68rem] text-[var(--color-text-muted)]">— {m.user_email}</span> : null}
                               </span>
                               <button type="button" className="text-[0.7rem] text-[var(--color-text-muted)] hover:text-[var(--color-danger)]" onClick={() => void deleteMemory(m.id)}>
-                                Remove
+                                {tr("Remove")}
                               </button>
                             </li>
                           ))}
@@ -406,12 +408,12 @@ export function ProjectsModal({
                       <div className="mt-2 flex items-center gap-2">
                         <input
                           className="min-w-0 flex-1 rounded-[0.7rem] border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                          placeholder="Add a learning the whole project should know…"
+                          placeholder={tr("Add a learning the whole project should know…")}
                           value={memoryDraft}
                           onChange={(e) => setMemoryDraft(e.target.value)}
                         />
                         <button type="button" className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40" disabled={!memoryDraft.trim()} onClick={() => void addMemory()}>
-                          Add
+                          {tr("Add")}
                         </button>
                       </div>
                     </div>
@@ -424,8 +426,8 @@ export function ProjectsModal({
       </DialogShell>
       {confirmUnshare ? (
         <ConfirmDialog
-          title="Stop sharing this project with your team?"
-          confirmLabel="Stop sharing"
+          title={tr("Stop sharing this project with your team?")}
+          confirmLabel={tr("Stop sharing")}
           confirmTone="danger"
           layer="stacked"
           busy={busy}
@@ -436,14 +438,14 @@ export function ProjectsModal({
           }}
         >
           <p className="m-0">
-            Every chat members shared into it stops being shared too.
+            {tr("Every chat members shared into it stops being shared too.")}
           </p>
         </ConfirmDialog>
       ) : null}
       {confirmDeleteId ? (
         <ConfirmDialog
-          title={`Delete ${projects.find((p) => p.id === confirmDeleteId)?.name ?? "this project"}?`}
-          confirmLabel="Delete project"
+          title={tr("Delete {0}?", [projects.find((p) => p.id === confirmDeleteId)?.name ?? tr("this project")])}
+          confirmLabel={tr("Delete project")}
           confirmTone="danger"
           layer="stacked"
           onCancel={() => setConfirmDeleteId(null)}
@@ -454,9 +456,7 @@ export function ProjectsModal({
           }}
         >
           <p className="m-0">
-            Its team learnings are lost, and every member&rsquo;s chats leave
-            the project and become temporary. Open the project to see the
-            counts and export first.
+            {tr("Its team learnings are lost, and every member’s chats leave the project and become temporary. Open the project to see the counts and export first.")}
           </p>
         </ConfirmDialog>
       ) : null}

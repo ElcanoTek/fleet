@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import {
   describeCronExpression,
   describeCronExpressionShort,
@@ -45,14 +46,14 @@ export const EMPTY_PERSONA: PersonaDraft = {
 // cron the user typed; the server enforces the same ≥5-minute floor a started
 // patrol has.
 export const CADENCE_PRESETS: { cron: string; label: string }[] = [
-  { cron: "0 * * * *", label: "Every hour" },
-  { cron: "0 */2 * * *", label: "Every 2 hours" },
-  { cron: "0 */4 * * *", label: "Every 4 hours" },
-  { cron: "0 8 * * 1-5", label: "Weekdays at 8:00" },
-  { cron: "0 9 * * 1-5", label: "Weekdays at 9:00" },
-  { cron: "0 9,13,17 * * 1-5", label: "Weekdays at 9, 13 and 17" },
-  { cron: "0 8 * * *", label: "Daily at 8:00" },
-  { cron: "0 9 * * 1", label: "Mondays at 9:00" },
+  { cron: "0 * * * *", label: tr("Every hour") },
+  { cron: "0 */2 * * *", label: tr("Every 2 hours") },
+  { cron: "0 */4 * * *", label: tr("Every 4 hours") },
+  { cron: "0 8 * * 1-5", label: tr("Weekdays at 8:00") },
+  { cron: "0 9 * * 1-5", label: tr("Weekdays at 9:00") },
+  { cron: "0 9,13,17 * * 1-5", label: tr("Weekdays at 9, 13 and 17") },
+  { cron: "0 8 * * *", label: tr("Daily at 8:00") },
+  { cron: "0 9 * * 1", label: tr("Mondays at 9:00") },
 ];
 
 /** cadenceLabel names a cron in words when it is a preset or describable schedule, else shows it. */
@@ -101,80 +102,80 @@ export type PersonaTemplate = {
 export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   {
     id: "twin",
-    label: "Digital twin",
-    hint: "Thinks, prioritizes and writes like you",
+    label: tr("Digital twin"),
+    hint: tr("Thinks, prioritizes and writes like you"),
     draft: () => ({
-      display_name: "My Twin",
+      display_name: tr("My Twin"),
       kind: "twin",
       autonomy: "advise",
-      description: "Thinks and writes the way I do; watches my work while I'm away.",
+      description: tr("Thinks and writes the way I do; watches my work while I'm away."),
       instructions: [
-        "## Who I am",
-        "- Role: …",
-        "- What I own and care about most: …",
+        tr("## Who I am"),
+        tr("- Role: …"),
+        tr("- What I own and care about most: …"),
         "",
-        "## How I decide",
-        "- My rules of thumb and thresholds (e.g. flag anything under 80% of target): …",
-        "- What I escalate immediately vs. what can wait for my morning summary: …",
+        tr("## How I decide"),
+        tr("- My rules of thumb and thresholds (e.g. flag anything under 80% of target): …"),
+        tr("- What I escalate immediately vs. what can wait for my morning summary: …"),
         "",
-        "## How I write",
-        "- Lead with the answer and the number; short bullet points; no filler.",
+        tr("## How I write"),
+        tr("- Lead with the answer and the number; short bullet points; no filler."),
         "",
-        "## Never",
-        "- Commit me to anything, contact a client, or change a live setting without asking.",
+        tr("## Never"),
+        tr("- Commit me to anything, contact a client, or change a live setting without asking."),
       ].join("\n"),
       patrols: [
         {
-          title: "Morning briefing",
+          title: tr("Morning briefing"),
           cron: "0 8 * * 1-5",
           timezone: browserTimeZone(),
           prompt:
-            "Prepare my morning briefing: what changed since yesterday in the work I own, anything that needs my decision today, and your recommended next steps.",
+            tr("Prepare my morning briefing: what changed since yesterday in the work I own, anything that needs my decision today, and your recommended next steps."),
         },
       ],
     }),
   },
   {
     id: "patrol",
-    label: "Patrol analyst",
-    hint: "Watches numbers on a schedule and flags anomalies",
+    label: tr("Patrol analyst"),
+    hint: tr("Watches numbers on a schedule and flags anomalies"),
     draft: () => ({
-      display_name: "Patrol Analyst",
+      display_name: tr("Patrol Analyst"),
       kind: "assistant",
       autonomy: "advise",
-      description: "Checks my key numbers on a schedule and flags what moved.",
+      description: tr("Checks my key numbers on a schedule and flags what moved."),
       instructions: [
-        "You watch the metrics I name and report only what changed or crossed a threshold.",
+        tr("You watch the metrics I name and report only what changed or crossed a threshold."),
         "",
-        "- Compare against the previous run in this chat; say what moved and by how much.",
-        "- Rank findings by impact. If nothing crossed a threshold, say so in one line.",
-        "- End each report with recommended actions, numbered, for me to approve.",
+        tr("- Compare against the previous run in this chat; say what moved and by how much."),
+        tr("- Rank findings by impact. If nothing crossed a threshold, say so in one line."),
+        tr("- End each report with recommended actions, numbered, for me to approve."),
       ].join("\n"),
       patrols: [
         {
-          title: "Every-4-hours check",
+          title: tr("Every-4-hours check"),
           cron: "0 */4 * * *",
           timezone: browserTimeZone(),
           prompt:
-            "Check the metrics we track in this chat, compare with the last check, and report anything that crossed a threshold with a recommended action.",
+            tr("Check the metrics we track in this chat, compare with the last check, and report anything that crossed a threshold with a recommended action."),
         },
       ],
     }),
   },
   {
     id: "writer",
-    label: "Writing partner",
-    hint: "Drafts in your voice for your review",
+    label: tr("Writing partner"),
+    hint: tr("Drafts in your voice for your review"),
     draft: () => ({
-      display_name: "Writing Partner",
+      display_name: tr("Writing Partner"),
       kind: "assistant",
       autonomy: "advise",
-      description: "Drafts emails and updates in my voice for me to review.",
+      description: tr("Drafts emails and updates in my voice for me to review."),
       instructions: [
-        "Draft in my voice: warm, direct, short sentences, no jargon.",
+        tr("Draft in my voice: warm, direct, short sentences, no jargon."),
         "",
-        "- Offer one draft, then a shorter alternative.",
-        "- Never send anything — I review and send myself.",
+        tr("- Offer one draft, then a shorter alternative."),
+        tr("- Never send anything — I review and send myself."),
       ].join("\n"),
       patrols: [],
     }),
@@ -194,16 +195,16 @@ export function twinBuilderMessage(opts: {
   const about = opts.about.trim();
   const steps = [
     opts.useHistory
-      ? "Read what I've written in my recent chats (persona_studio, action \"history\") to learn my priorities, vocabulary and the work I repeat."
-      : "Don't read my chat history — work from what I tell you and my saved memories.",
-    "Ask me up to 3 short questions if something important is unclear (my role, my thresholds, what I never want done without asking).",
-    `Propose a digital-twin persona (kind "twin", autonomy "${opts.autonomy}") with persona_studio, action "propose": concrete instructions for how I think, decide and write, plus suggested patrols for the checks I repeat, with a cadence and clear instructions for each.`,
-    "Then tell me what you proposed and where to approve it.",
+      ? tr("Read what I've written in my recent chats (persona_studio, action \"history\") to learn my priorities, vocabulary and the work I repeat.")
+      : tr("Don't read my chat history — work from what I tell you and my saved memories."),
+    tr("Ask me up to 3 short questions if something important is unclear (my role, my thresholds, what I never want done without asking)."),
+    tr("Propose a digital-twin persona (kind \"twin\", autonomy \"{0}\") with persona_studio, action \"propose\": concrete instructions for how I think, decide and write, plus suggested patrols for the checks I repeat, with a cadence and clear instructions for each.", [opts.autonomy]),
+    tr("Then tell me what you proposed and where to approve it."),
   ];
   return [
-    "Help me build my digital twin — an assistant that thinks and works the way I do and can run patrols for me.",
+    tr("Help me build my digital twin — an assistant that thinks and works the way I do and can run patrols for me."),
     "",
-    `About me: ${about || "(ask me)"}`,
+    tr("About me: {0}", [about || tr("(ask me)")]),
     "",
     ...steps.map((s, i) => `${i + 1}. ${s}`),
   ].join("\n");

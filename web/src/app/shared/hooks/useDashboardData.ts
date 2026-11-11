@@ -1,3 +1,4 @@
+import { localizeError } from "@/app/lib/i18n/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   orchestratorApi,
@@ -156,7 +157,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
       setError(null);
     } else {
       const reason = results[1].reason;
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(localizeError(reason instanceof Error ? reason.message : String(reason)));
     }
     setLoading(false);
     setRefreshNonce((n) => n + 1);

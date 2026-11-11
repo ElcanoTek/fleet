@@ -1,0 +1,1763 @@
+{
+  "exact": [
+    "\"confirm\": true required for all_matching bulk delete",
+    "\"shared\" is required",
+    "API key not found",
+    "Admin access required",
+    "Artifacts are private to the task creator",
+    "Budget check failed",
+    "Budget not found",
+    "Cross-origin request blocked",
+    "Failed to aggregate chat usage",
+    "Failed to aggregate task usage",
+    "Failed to cancel task",
+    "Failed to cleanup history",
+    "Failed to create API key",
+    "Failed to create temp dir",
+    "Failed to create user",
+    "Failed to delete budget",
+    "Failed to delete task",
+    "Failed to get dashboard stats",
+    "Failed to hash password",
+    "Failed to list accounts",
+    "Failed to list budgets",
+    "Failed to list log history",
+    "Failed to list tasks",
+    "Failed to load SLA report",
+    "Failed to load recipient history",
+    "Failed to load scheduled tasks",
+    "Failed to load tag catalogue",
+    "Failed to look up task",
+    "Failed to look up user",
+    "Failed to read migration status",
+    "Failed to read queue stats",
+    "Failed to read session logs",
+    "Failed to resolve the source task's owner",
+    "Failed to resolve workspace path",
+    "Failed to save budget",
+    "Failed to save file",
+    "Failed to set task owner",
+    "Failed to update task",
+    "Failed to validate model.",
+    "Failed to verify budget principal",
+    "Failed to wake task",
+    "File not found",
+    "Insufficient permissions",
+    "Invalid API key",
+    "Invalid budget id",
+    "Invalid created_by parameter: must be 'me' or a valid UUID",
+    "Invalid days parameter (must be a non-negative integer)",
+    "Invalid file",
+    "Invalid filename",
+    "Invalid format (want json|csv)",
+    "Invalid from (want RFC 3339 or YYYY-MM-DD)",
+    "Invalid group_by (want user|key|project|model|day|week)",
+    "Invalid history entry ID",
+    "Invalid hours parameter (must be 1-8760)",
+    "Invalid limit parameter (must be 1-1000)",
+    "Invalid offset parameter (must be a non-negative integer)",
+    "Invalid request body",
+    "Invalid role. Must be one of: admin, client, readonly",
+    "Invalid source_task_id parameter",
+    "Invalid sub-agent session id",
+    "Invalid task ID",
+    "Invalid to (want RFC 3339 or YYYY-MM-DD)",
+    "Invalid upload",
+    "Log history entry not found",
+    "Logs not found for this task",
+    "MCP broker not initialized (mock mode?)",
+    "Membership check failed",
+    "No log found for this task",
+    "No sub-agent with this id is recorded on this task's log",
+    "No workspace recorded for this task",
+    "OIDC discovery document missing required endpoints",
+    "OIDC discovery issuer does not match the configured issuer",
+    "Only pending or scheduled tasks can be edited",
+    "Only the task creator or an admin can delete this task",
+    "Only the task creator or an admin can edit this task",
+    "Only the task creator or an admin can retag this task",
+    "Only the task creator or an admin can stop this run",
+    "Password must be at least 8 characters",
+    "Rate limit exceeded",
+    "Run logs are private to the task creator",
+    "Streaming unsupported",
+    "Structured output contract violated: stored output_json is not valid JSON",
+    "Structured output contract violated: successful task has no output_json",
+    "Sub-agent transcript file is unreadable",
+    "Sub-agent transcript file not available (it may have been cleaned up on this host)",
+    "Task did not declare output_schema",
+    "Task failed terminally; the declared structured output will never be available for this run",
+    "Task has no error analysis (it did not fail terminally, analysis is disabled, or the diagnosis was not produced)",
+    "Task has not finished; error analysis is not yet available",
+    "Task has not finished; structured output is not yet available",
+    "Task has not finished; the artifact manifest is not yet final",
+    "Task is no longer editable (it may have started or been cancelled)",
+    "Task not found",
+    "Task published no artifacts",
+    "Tasks are private to their creator",
+    "This Fleet's accounts are managed in Auth. Add people in Auth: granting them Fleet there creates their account here.",
+    "This Fleet's accounts are managed in Auth. Grant Fleet and its Ops Center role there.",
+    "This Fleet's accounts are managed in Auth. Reset the password in Auth.",
+    "This Fleet's teams are managed in Auth. Rename the team there: what is shared with it stays shared.",
+    "This browser's push service is not one this server sends notifications to. Turn notifications on in Chrome, Edge, Firefox or Safari instead.",
+    "This task is running. Stop it first, then delete it — deleting a live run would pull the row out from under the worker still writing to it.",
+    "Unauthorized",
+    "Unauthorized: send a fleet API key in X-API-Key (see /.well-known/agent-card.json securitySchemes)",
+    "User not found",
+    "Username already exists",
+    "Username must be between 3 and 64 characters",
+    "Waking a task requires operator permission or ownership of the task",
+    "Workspace directory no longer exists",
+    "Workspace files are private to the task creator",
+    "Workspace is only available for completed tasks",
+    "a Stop in this conversation cancelled this message before it started",
+    "a draft is already being written; wait for it to finish",
+    "a field is null; no card field is nullable",
+    "a narrowed approval covers this call only; use scope once",
+    "a prompt with that name already exists",
+    "a turn is currently running on this conversation; wait for it to finish before summarizing",
+    "agent manager unavailable",
+    "answering a task is limited to its creator or an operator credential",
+    "approval group id required",
+    "approval handler: no sandbox pool wired (chat-server boot misconfigured?)",
+    "approval not found",
+    "approval_timeout_seconds must be between 1 and 604800, or null to clear",
+    "approved_values goes with an approval; to decline, send approved false without it",
+    "approved_values is null: send the approved values, or leave the field out to approve the whole action",
+    "attachment name is unusable as a staged filename",
+    "authorization session expired or already used — start the connection again",
+    "bad json",
+    "bad json: trailing data",
+    "both 'name' (connector name) and 'tool_name' are required",
+    "branch copy budget exhausted",
+    "branch_point_message_id must be a positive message id",
+    "cancelling a task is limited to its creator or an operator credential",
+    "card is not valid UTF-8",
+    "catwalk providers response contained no usable entries",
+    "catwalk providers response is not an array",
+    "changes must include at least one of pinned, labels",
+    "chat schedule store is not configured",
+    "chat turn panicked",
+    "client_id must be a valid Microsoft Entra Application (client) UUID",
+    "client_request_id must be at most 128 characters",
+    "conflict=replace requires admin permission",
+    "conversation has no content to promote",
+    "conversation has no content to save as a prompt",
+    "conversation has no history to summarize",
+    "conversation id required",
+    "conversation is in lockdown mode but the server has no sandbox image configured",
+    "conversation not found",
+    "conversation_ids is mutually exclusive with all_matching",
+    "conversation_ids must be 1–100 items",
+    "could not load approval",
+    "could not read request body",
+    "could not read your chat order",
+    "could not read your memories to draft with; try again",
+    "could not record the delivery",
+    "could not record the stop",
+    "could not save your chat order",
+    "could not start the turn",
+    "could not synthesize a prompt from this conversation; try again",
+    "could not synthesize a recurring task from this conversation; try again",
+    "create permission required",
+    "created_by=me requires authentication",
+    "credential_allowlist entries must name a server",
+    "cursor must be a non-negative integer",
+    "custom connectors require remote MCP storage to be configured on this server",
+    "custom_tools is required and must define at least one tool",
+    "direction must be 'asc' or 'desc'",
+    "email required",
+    "empty approval id",
+    "empty card",
+    "empty output",
+    "enable_mcp_connectors requires a conversation store",
+    "endpoint and keys (auth, p256dh) are required",
+    "endpoint is required",
+    "event is required",
+    "expected a list",
+    "expected a list of strings",
+    "expected an object",
+    "expires_at must be a unix timestamp in the future",
+    "export failed",
+    "external access lookup failed",
+    "external access unavailable",
+    "external access update failed",
+    "external session lookup failed",
+    "external session revocation failed",
+    "external sessions unavailable",
+    "failed to create prompt",
+    "failed to delete prompt",
+    "failed to export prompts",
+    "failed to list prompts",
+    "failed to list scheduled tasks",
+    "failed to load conversation history",
+    "failed to open workspace",
+    "failed to re-assign task model",
+    "failed to resolve path",
+    "failed to update prompt",
+    "file names cannot be empty",
+    "file not found",
+    "file path required",
+    "file unavailable",
+    "file_names must pair 1:1 with files",
+    "file_names requires files",
+    "forbidden",
+    "forbidden — not an admin",
+    "from must be an RFC3339 timestamp or a YYYY-MM-DD date",
+    "from must be before to",
+    "grantee required",
+    "guardrail probe unavailable",
+    "import failed",
+    "input is no longer queued",
+    "input_id belongs to another user in this conversation",
+    "insufficient key scope for this route",
+    "insufficient key scope: this key cannot read tasks",
+    "insufficient key scope: this key type cannot create tasks",
+    "insufficient key scope: this key type cannot upload task files",
+    "insufficient role: a readonly user cannot modify resources",
+    "internal error",
+    "invalid JSON",
+    "invalid JSON payload",
+    "invalid access action",
+    "invalid conversation id",
+    "invalid email payload",
+    "invalid file name",
+    "invalid filename: path traversal not allowed",
+    "invalid focus",
+    "invalid logical file name",
+    "invalid ops_role (want none|readonly|client|admin, or none|view|run)",
+    "invalid ops_scope (want none|view|run)",
+    "invalid path",
+    "invalid prompt id",
+    "invalid request",
+    "invalid request body",
+    "invalid role (want member|viewer|admin)",
+    "invalid schedule id",
+    "invalid sub-agent session id",
+    "invalid team rename",
+    "invalid token",
+    "invalid unshared_paths",
+    "items is required",
+    "kind and id query params required",
+    "labels must be non-empty",
+    "limit must be a positive integer",
+    "lockdown is unavailable on this server (no sandbox image configured)",
+    "malformed JSON",
+    "managing scheduled tasks from chat is not configured on this server",
+    "max 100 conversation_ids per request",
+    "max_cost_per_day_usd/max_cost_per_month_usd are no longer supported; create a rolling budget instead: POST /admin/budgets {\"scope\":\"key\",\"principal_id\":\"\u003ckey_id\u003e\",\"window\":\"day|week|month\",\"hard_usd\":…}",
+    "max_cost_usd must be greater than 0 and at most 100000 (omit to inherit the deployment ceiling)",
+    "max_iterations must be between 1 and 10000",
+    "max_retries must be between 0 and 10",
+    "max_total_tokens must be between 1000 and 1000000000 (omit to inherit the deployment ceiling)",
+    "mcp_selection entries must name a server",
+    "membership check failed",
+    "memory id required",
+    "memory not found",
+    "message is required",
+    "method not allowed",
+    "missing state or code",
+    "missing token",
+    "missing user identity",
+    "model is required",
+    "model must be a single line ≤200 chars",
+    "model not allowed in lockdown mode",
+    "model required (no body field, conversation has no stored slug)",
+    "name at least one approval to approve or decline",
+    "name exceeds 255 characters",
+    "narrow_args values must be strings",
+    "narrowed_arg goes with approved_values: send the approved values, or leave both out to approve the whole action",
+    "narrowed_arg is missing: send the argument the card narrows with the approved values",
+    "no connectors specified",
+    "no connectors specified in approval payload",
+    "no files provided (use field name 'files')",
+    "no identity directory",
+    "no per-lab models were found",
+    "no sub-agent with this id is recorded in this conversation",
+    "no team",
+    "not a narrowing",
+    "not a regular workspace file",
+    "not found",
+    "nothing to do: enable delete_conversations and/or sweep_files",
+    "nothing to update (provide role, team_id and/or ops_scope)",
+    "notification settings unavailable",
+    "offset must be a non-negative integer",
+    "old_endpoint, endpoint and keys (auth, p256dh) are required",
+    "older_than_days must be at least 1",
+    "one or more conversation IDs not owned by caller",
+    "only the author or the project owner can change this team learning",
+    "only the conversation owner can change multiplayer settings",
+    "only the conversation owner can stop another user's turns in this conversation",
+    "only the conversation owner or the active turn's sender can stop this turn",
+    "only the conversation owner or the message sender can cancel this input",
+    "only the project owner can do that",
+    "openrouter models response contained no usable entries",
+    "ops_role admin is the Fleet admin role; send role admin instead",
+    "outcome \"done\" with a failed, mismatched, needs_check or unclear item",
+    "outcome \"failed\" with an applied item",
+    "outcome \"unclear\" with a needs_check item and no unclear one: use \"mismatch\" or \"partial\"",
+    "output is not valid UTF-8",
+    "path escapes workspace",
+    "path is a directory; use ?format=zip to download the workspace",
+    "path is not a regular file",
+    "permissions cannot be combined with role; set one or the other",
+    "permissions cannot be combined with type; a typed key derives its permissions from its type",
+    "persona id required",
+    "persona not found",
+    "pick at least one thing for the patrol to watch",
+    "project default model not allowed in lockdown mode",
+    "project id required",
+    "project not found",
+    "prompt is required",
+    "prompt not found",
+    "provider id required",
+    "push-notification configs are limited to the task's creator or an operator credential",
+    "rate limit exceeded",
+    "recurrence must be a standard 5-field cron expression",
+    "recurrence_remaining must be between 1 and 10000",
+    "recurrence_remaining requires a recurrence",
+    "recurrence_until requires a recurrence",
+    "redirect refused",
+    "refusing to delete your own account",
+    "refusing to demote your own account",
+    "remote MCP OAuth is not configured",
+    "remote MCP connections are not configured on this server",
+    "remote MCP server not found",
+    "response writer does not support flushing",
+    "retry.keys is empty; leave retry out instead",
+    "run_if: a host-side pre-run gate can only be changed by an admin",
+    "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it",
+    "sandbox_limits.cpus must be \u003e 0",
+    "scheduled time cannot be in the past",
+    "scheduled time is too far in the future",
+    "scheduling from chat is not configured on this server",
+    "search is disabled",
+    "server id required",
+    "server is shutting down",
+    "setting key required",
+    "share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first",
+    "shared file bytes are missing on disk",
+    "shared file id required",
+    "skill id required",
+    "skill not found",
+    "skill unreadable",
+    "source changed during copy",
+    "source task has an invalid recurrence",
+    "staged path is occupied by a non-regular file",
+    "stat failed",
+    "store returned nil approval",
+    "streaming unsupported",
+    "sub-agent transcript file is unreadable",
+    "sub-agent transcript file not available (it may have been cleaned up on this host)",
+    "suggestion has no frozen model target; dismiss it and request a new suggestion",
+    "task is not awaiting a wake",
+    "task is not waiting for that event",
+    "tasks must not be empty",
+    "team rename failed",
+    "team renames unavailable",
+    "team_id required (use \"\" to leave your team)",
+    "template render error",
+    "tenant_id must be a valid Microsoft Entra Directory (tenant) ID, domain, or 'organizations'/'common'",
+    "that team already exists — ask an admin to add you to it",
+    "the Stop was sent, but the turn has not confirmed it yet",
+    "the assistant could not draft this patrol; try again or edit the draft yourself",
+    "the chat made with this client_request_id was deleted; retry with a new one",
+    "the input could not be withdrawn from the queue",
+    "the message could not be queued behind the running turn; send it again",
+    "the message could not be recorded against its turn; send it again",
+    "the schedule changed while it was being run; try again",
+    "the scheduler is not running",
+    "the server is not taking new turns right now; the run starts when it does",
+    "the turn ended before its input was saved",
+    "the turn journal lost a write; refusing to record success for an incompletely journaled turn",
+    "thinking_budget_tokens must be \u003e= 0 (0 = off, omit to inherit the default)",
+    "this action cannot be narrowed: approve or decline it whole",
+    "this action cannot be stopped once it runs",
+    "this action is not running: decline it instead",
+    "this connection needs to be re-authorized",
+    "this conversation has no active or paused patrol/timer schedules",
+    "timed out waiting for the turn's input to be saved",
+    "title must be a single line",
+    "title required",
+    "token endpoint returned no id_token",
+    "token generation failed",
+    "trailing JSON",
+    "trailing data",
+    "trailing data after the card",
+    "transfer failed",
+    "trigger slug not permitted for this key",
+    "turn journal degraded: an earlier journal write failed",
+    "turn not found",
+    "unauthorized",
+    "unknown persona_studio action",
+    "unknown project subresource",
+    "unknown search type (only \"conversations\" is indexed)",
+    "unknown skill",
+    "until must be an RFC3339 timestamp",
+    "user email required",
+    "user keys are minted with `fleet sched apikey create \u003cname\u003e --type user --user \u003cemail\u003e`",
+    "user not found",
+    "username is required",
+    "validate_email_content is not in the MCP catalog",
+    "view permission required",
+    "webhook key requires at least one allowed_trigger_slugs entry",
+    "webhook trigger model not allowed in lockdown mode",
+    "workspace file reference: no sandbox to read it from",
+    "workspace file reference: the approval has no conversation workspace",
+    "workspace filesystem is not responding; try again shortly",
+    "workspace settings store unavailable",
+    "workspace settings unavailable",
+    "workspace unavailable",
+    "workspace zip exceeds size cap",
+    "you are not in a team yet — create one in Settings → Team (or ask an admin to add you to an existing team), then share this project"
+  ],
+  "formatted": [
+    {
+      "message": "{0} items, over the {1}-item limit",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} rows across the card, over the {1}-row limit",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} task(s) already exist: {1}",
+      "fields": [
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} is {1} — over this server's {2} per-file upload limit",
+      "fields": [
+        "%q",
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} is over this server's {1} MB upload limit",
+      "fields": [
+        "%q",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} cannot exceed 200 characters",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} contains a control or bidirectional-formatting character",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} has more than {1} changes or settings",
+      "fields": [
+        "%s",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} has more than {1} flags",
+      "fields": [
+        "%s",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} is {1} characters, over the {2} limit",
+      "fields": [
+        "%s",
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} is longer than {1} bytes",
+      "fields": [
+        "%s",
+        "%d"
+      ]
+    },
+    {
+      "message": "{0} is required",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} must be a single line",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} must be an absolute https URL without credentials",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} must be an integer delegation depth, got {1}",
+      "fields": [
+        "%s",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0} names a {1} item; only failed or not_run items may be retried",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} names no item of the card",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} repeats a key",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}.after is required",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}.code is not a short lowercase code",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}.key repeats an earlier item's key",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}.link_label names no link",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}.status {1} is not one of done, failed, mismatch, needs_check, unclear, skipped, not_run",
+      "fields": [
+        "%s",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: {1} (nothing from this upload was saved)",
+      "fields": [
+        "%s",
+        "%v"
+      ]
+    },
+    {
+      "message": "{0}: appears twice in this upload",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "{0} (preparing it had failed too: {1})",
+      "fields": [
+        "%w",
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: base persona {1} is not a workspace persona",
+      "fields": [
+        "%w",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: cannot trigger a {1} schedule",
+      "fields": [
+        "%w",
+        "%s"
+      ]
+    },
+    {
+      "message": "{0}: invalid pageToken",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: message text is empty",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: message with at least one part is required",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: no task {1} is visible to this credential",
+      "fields": [
+        "%w",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: only text parts are accepted (declared defaultInputModes: text/plain); file and data parts are not supported",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: persona {1} is awaiting approval on Settings → Personas",
+      "fields": [
+        "%w",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: persona {1} not found",
+      "fields": [
+        "%w",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: task {1} has no push-notification config {2}",
+      "fields": [
+        "%w",
+        "%s",
+        "%q"
+      ]
+    },
+    {
+      "message": "{0}: url must be an absolute http(s) URL",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "{0}: url must be an absolute http(s) URL with a host",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "CreateTurn: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "Failed to update tags: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "File is over this server's {0} MB upload limit",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "Invalid {0} parameter (must be {1}-{2})",
+      "fields": [
+        "%s",
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "Invalid limit parameter (must be 1-{0})",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "MCP call not sent: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "MCP tool reported an error: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "add tags: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "approval {0} is named more than once",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0} is narrowed but not approved",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0} is narrowed to nothing; decline it instead",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0} is narrowed without narrow_args naming the argument its card showed",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0} is not in this approval group",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0} not found in this conversation",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approval {0}: {1}",
+      "fields": [
+        "%s",
+        "%v"
+      ]
+    },
+    {
+      "message": "approved_values is empty: to leave every {0} out, decline the action",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approved_values item {0} is longer than {1} characters, so it is not one of the staged {2}",
+      "fields": [
+        "%d",
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "approved_values names {0} values, more than the {1} staged {2}",
+      "fields": [
+        "%d",
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "approved_values names {0} more than once",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "approved_values names {0}, which is not one of the staged {1}",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "approved_values names more than {0} values, more than any card stages",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "at most {0} labels per conversation",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "auto-approve enable connectors: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "batch size {0} exceeds limit of {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "budget_tokens must be 0 or between {0} and {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "build request: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "card is {0} bytes, over the {1}-byte limit",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "close: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "completed_status: unknown status {0}",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connect MCP server: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "connector {0} has an ambiguous identifier that collides with another connector; toggle the intended connector directly in the Tools picker",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is an always-on connector that is currently unavailable on this server",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is currently unavailable (exposed 0 tools at startup) and cannot be enabled",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is disabled in the user's Settings → Connections preferences; ask the user to enable it there first",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is not configured on this server (needs administrator credential setup) and cannot be enabled",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is not permitted for the current persona or interactive chat policy",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "connector {0} is outside the {1} optional connectors listed in the system prompt for this turn; toggle it directly in the Tools picker",
+      "fields": [
+        "%q",
+        "%d"
+      ]
+    },
+    {
+      "message": "connector {0} is the native image generation toggle, not an MCP connector; toggle it directly in the Tools picker",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "conversation has {0} schedules; specify schedule_id",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "conversation_ids must be at most {0} items",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "copy: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "count user turns: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "create {0}: {1}",
+      "fields": [
+        "%s",
+        "%w"
+      ]
+    },
+    {
+      "message": "create custom connector: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "create: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "credential_allowlist[{0}] has no server",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "custom connector {0} could not be mounted (verify that it exists and is connected)",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "delegation depth {0} exceeds this server's maximum of {1} (FLEET_A2A_MAX_DELEGATION_DEPTH): the delegation chain is too deep, do the work locally",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "description exceeds maximum length of {0} characters",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "duplicate logical file name: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "duplicate name {0} in import payload (record {1})",
+      "fields": [
+        "%q",
+        "%d"
+      ]
+    },
+    {
+      "message": "each label must be at most {0} characters",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "email validation failed:\n  - {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "encode connector_studio result: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "encode playwright credentials: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "encode reason: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "export browser session storage state: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "file not found: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "file too large for browser download ({0} bytes); use the CLI: fleet task workspace get {1} {2}",
+      "fields": [
+        "%d",
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "import accepts at most {0} records (got {1})",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "initiate OAuth flow: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "input {0} is no longer queued",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "input queue is full ({0} pending); wait for the queue to drain or remove queued inputs",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "input_id and submission_id are limited to {0} bytes",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "input_id is limited to {0} bytes",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "invalid enable_mcp_connectors payload: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "invalid trigger slug {0}",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "invalid url: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "isolate conversation workspace: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "isolate participant workspace for approval: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "limit must be a positive integer (max {0})",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "limit must be an integer between 1 and {0}",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "list shared files: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "load connector preferences: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "load conversation: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "load session_id {0}: {1}",
+      "fields": [
+        "%s",
+        "%w"
+      ]
+    },
+    {
+      "message": "lookup conversation: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "lookup prior suggestion: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "loop_config: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "max_priority must be between {0} and {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "mcp_selection[{0}] has no server",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "mkdir staged dir: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "mkdir: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "mount custom connector {0}: {1}",
+      "fields": [
+        "%q",
+        "%s"
+      ]
+    },
+    {
+      "message": "narrow_args names approval {0}, which is not narrowed",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "no cataloged MCP tool matches {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "not an MCP tool name: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "not the card schema: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "not the result card schema: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "open approval MCP scope for {0}: {1}",
+      "fields": [
+        "%s",
+        "%w"
+      ]
+    },
+    {
+      "message": "open source: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "open upload: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "outcome {0} is not one of done, partial, failed, mismatch, unclear",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "output is {0} bytes, over the {1}-byte card limit",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "output_schema: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse bash args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse connector_studio args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse manage_tasks args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse playwright_browser args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "parse schedule_task args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "persist enabled connectors: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "persona {0} is not in the loaded client bundle (the bundle declares no personas)",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "persona {0} is not in the loaded client bundle (valid personas: {1})",
+      "fields": [
+        "%q",
+        "%s"
+      ]
+    },
+    {
+      "message": "persona must be a bundle persona name without a path (got {0})",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "priority {0} exceeds this API key's ceiling (the most urgent it may submit is {1})",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "priority must be between {0} and {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "probe request failed: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "probe_http only supports read-only GET or HEAD requests (got {0}); save mutating methods as custom connector tools so they route through the approval gate",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "prompt cannot exceed {0} bytes",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "prompt must be at least {0} characters",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "read body: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "recurrence {0} never fires",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "remote connector {0} must be enabled directly in the Tools picker",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "remove tags: {0}",
+      "fields": [
+        "%v"
+      ]
+    },
+    {
+      "message": "resolve conversation for approval workspace: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "resolve conversation for approval workspace: conversation {0} not found",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "resolve conversation lockdown state: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "resolve conversation lockdown state: conversation {0} not found",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "restore participant attachments: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "retry has {0} keys, over the {1} limit",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "retry_policy: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "run_if: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "sandbox_limits.cpus {0} exceeds operator ceiling {1}",
+      "fields": [
+        "%.2f",
+        "%.2f"
+      ]
+    },
+    {
+      "message": "sandbox_limits.memory_mb {0} exceeds operator ceiling {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "sandbox_limits.memory_mb must be \u003e= {0}",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "sandbox_limits.pids {0} exceeds operator ceiling {1}",
+      "fields": [
+        "%d",
+        "%d"
+      ]
+    },
+    {
+      "message": "sandbox_limits.pids must be \u003e= {0}",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "sandbox_limits: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "sanitize xlsx: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "schedule_task: could not resolve this conversation's connectors: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "schedule_task: encode staged args: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "server connected, but sharing with everyone failed: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "stage connector approval: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "stash owner {0}: {1}",
+      "fields": [
+        "%s",
+        "%w"
+      ]
+    },
+    {
+      "message": "tags: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "take allowlisted sandbox: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "take lockdown sandbox: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "take sandbox: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "task[{0}] (name={1}): {2}",
+      "fields": [
+        "%d",
+        "%s",
+        "%v"
+      ]
+    },
+    {
+      "message": "task[{0}] (name={1}): run_if: a host-side pre-run gate can only be imported by an admin",
+      "fields": [
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "test_custom_tool only executes read-only GET tools directly; {0} uses HTTP {1} — invoke {2} directly so it routes through the approval gate",
+      "fields": [
+        "%q",
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "test_custom_tool only executes read-only tools directly; {0} is a mutating/critical tool — invoke {1} directly so it routes through the approval gate",
+      "fields": [
+        "%q",
+        "%s"
+      ]
+    },
+    {
+      "message": "the approval was narrowed, but its record {0}; nothing was run",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "this card now narrows {0}, not {1} (fleet's policy changed after it was shown): reload it and decide again",
+      "fields": [
+        "%q",
+        "%s"
+      ]
+    },
+    {
+      "message": "this selection is too scattered for fleet to record exactly in the call's result: select fewer separate ranges of {0}, or approve or decline the action whole",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "title cannot exceed {0} characters",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "token: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "too many approvals in one group decision (max {0})",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "too many narrowed values in one group decision (max {0}); decide the cards one at a time",
+      "fields": [
+        "%d"
+      ]
+    },
+    {
+      "message": "transport must be {0} or {1}",
+      "fields": [
+        "%q",
+        "%q"
+      ]
+    },
+    {
+      "message": "trigger_type {0} is not valid (want cron or webhook)",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "type {0} requires context_window_tokens before the row can be enabled: set the endpoint's real context limit in tokens",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "unknown account {0} for connection {1}",
+      "fields": [
+        "%q",
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown account {0} for connector {1}",
+      "fields": [
+        "%q",
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown connector {0}",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown key type {0} (want admin|task|webhook|readonly)",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown or unavailable optional MCP connector {0} — only connectors listed under 'Available Optional MCP Connectors' can be enabled",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown permission {0}",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unknown timezone {0}: must be a valid IANA timezone name (e.g. America/New_York)",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unsupported action {0}",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "unsupported tool for approval: {0}",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "update conversation persona: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "upload is over this server's {0} combined request limit — attach fewer files at once",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "upload is over this server's {0} combined request limit — upload fewer files at once",
+      "fields": [
+        "%s"
+      ]
+    },
+    {
+      "message": "upload would put the shared library at {0}, over its {1} cap — remove files or raise shared_files_max_total_mb in Settings → Admin → Features",
+      "fields": [
+        "%s",
+        "%s"
+      ]
+    },
+    {
+      "message": "vaulted secret {0} is not authorized for host {1}; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message",
+      "fields": [
+        "%q",
+        "%q"
+      ]
+    },
+    {
+      "message": "vaulted secret {0} requires a valid HTTPS target URL: {1}",
+      "fields": [
+        "%q",
+        "%w"
+      ]
+    },
+    {
+      "message": "vaulted secret {0} requires a valid target URL",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "vaulted secret {0} was not found or expired; ask the user to submit the credential again via show_ui",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
+      "message": "workspace file reference: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "workspace file reference: bind conversation workspace: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "workspace too large for browser download (\u003e{0} bytes uncompressed); use the CLI: fleet task workspace get {1}",
+      "fields": [
+        "%d",
+        "%s"
+      ]
+    },
+    {
+      "message": "worktree_config: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "write {0}: {1}",
+      "fields": [
+        "%s",
+        "%w"
+      ]
+    }
+  ]
+}

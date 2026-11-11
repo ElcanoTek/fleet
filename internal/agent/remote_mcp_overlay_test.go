@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -51,6 +52,9 @@ type fakeResolver struct {
 	listed   int
 	asked    []string // server IDs AcquireTokenByID was called for
 	marked   []string // MarkRemoteMCPUnauthorized calls, "owner|id|detail"
+	// control and dataPlane override the two clients (nil = http.DefaultClient).
+	control   *http.Client
+	dataPlane *http.Client
 }
 
 func (f *fakeResolver) ConnectedServersForUser(_ context.Context, _ string) ([]RemoteMCPConn, error) {
@@ -66,7 +70,18 @@ func (f *fakeResolver) AcquireTokenByID(_ context.Context, _, id string) (string
 	}
 	return f.tokens[id], nil
 }
-func (f *fakeResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
+func (f *fakeResolver) SafeHTTPClient() *http.Client {
+	if f.control != nil {
+		return f.control
+	}
+	return http.DefaultClient
+}
+func (f *fakeResolver) MCPDataPlaneHTTPClient() *http.Client {
+	if f.dataPlane != nil {
+		return f.dataPlane
+	}
+	return http.DefaultClient
+}
 
 // MarkRemoteMCPUnauthorized records the call as "owner|serverID|detail" so
 // tests can assert who was marked and why.
@@ -849,5 +864,115 @@ func TestBuildRemoteMCPOverlayNeedsReauthConnSkippedOnlyWhenRequested(t *testing
 	defer ovChat.Close()
 	if len(ovChat.Skipped) != 1 || ovChat.Skipped[0] != "microsoft-365" || ovChat.SkipReason("microsoft-365") != SkipReasonNeedsReauth {
 		t.Errorf("interactive chat Skipped = %v (%q), want [microsoft-365] (%q)", ovChat.Skipped, ovChat.SkipReason("microsoft-365"), SkipReasonNeedsReauth)
+	}
+}
+
+// slowToolMCPServer is a remote MCP server whose initialize answers after
+// initDelay and whose tools/call answers (headers included) after callDelay.
+func slowToolMCPServer(t *testing.T, initDelay, callDelay time.Duration) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		wait := time.Duration(0)
+		switch req.Method {
+		case "initialize":
+			wait = initDelay
+		case "tools/call":
+			wait = callDelay
+		}
+		select {
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "propose", "inputSchema": map[string]any{"type": "object"}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "proposed"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestRemoteMCPToolCallRunsForItsBudgetNotTheControlTimeout: a remote tool
+// that answers after the control plane's fixed timeout still succeeds inside
+// its per-call budget, and fails once that budget is spent. The overlay used
+// to mount every remote server on the control-plane client, whose 30s
+// Timeout cut off a slow vendor tool ("Client.Timeout exceeded while
+// awaiting headers") however long the call was allowed.
+func TestRemoteMCPToolCallRunsForItsBudgetNotTheControlTimeout(t *testing.T) {
+	t.Parallel()
+	srv := slowToolMCPServer(t, 0, 300*time.Millisecond)
+	r := &fakeResolver{
+		conns:     []RemoteMCPConn{{ID: "op", Name: "optable", URL: srv.URL + "/mcp"}},
+		tokens:    map[string]string{"op": "key"},
+		control:   &http.Client{Timeout: 50 * time.Millisecond}, // stands in for the 30s control plane
+		dataPlane: &http.Client{},
+	}
+	ov, err := BuildRemoteMCPOverlay(context.Background(), r, "u@x.com", nil, RemoteMCPAllConnected)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if !ov.Active() {
+		t.Fatalf("server not mounted; skipped = %v", ov.Skipped)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := ov.Client.CallToolOn(mcp.WithCallTimeout(ctx, 5*time.Second), "optable", "propose", nil)
+	if err != nil {
+		t.Fatalf("slow tool inside its budget failed: %v", err)
+	}
+	if res == nil || len(res.Content) == 0 || res.Content[0].Text != "proposed" {
+		t.Fatalf("result = %+v, want the tool's answer", res)
+	}
+
+	_, err = ov.Client.CallToolOn(mcp.WithCallTimeout(context.Background(), 100*time.Millisecond), "optable", "propose", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow tool past its budget: err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestRemoteMCPMountIsBounded: the data-plane client has no timeout of its
+// own, so a server that never finishes the handshake must still be given up
+// on — remoteMCPMountTimeout bounds each mount attempt.
+func TestRemoteMCPMountIsBounded(t *testing.T) {
+	// Sets a package var: not parallel.
+	old := remoteMCPMountTimeout
+	remoteMCPMountTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { remoteMCPMountTimeout = old })
+
+	srv := slowToolMCPServer(t, 5*time.Second, 0)
+	r := &fakeResolver{
+		conns:     []RemoteMCPConn{{ID: "st", Name: "stalled", URL: srv.URL + "/mcp"}},
+		tokens:    map[string]string{"st": "key"},
+		dataPlane: &http.Client{},
+	}
+	start := time.Now()
+	ov, err := BuildRemoteMCPOverlay(context.Background(), r, "u@x.com", nil, RemoteMCPAllConnected)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("mount waited %v; the mount bound did not apply", took)
+	}
+	if ov.Active() {
+		t.Fatal("a server that never finished its handshake must not mount")
+	}
+	if got := ov.SkipReason("stalled"); got != SkipReasonUnreachable {
+		t.Errorf("SkipReason = %q, want %q", got, SkipReasonUnreachable)
 	}
 }

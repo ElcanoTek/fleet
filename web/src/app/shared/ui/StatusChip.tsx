@@ -1,4 +1,20 @@
 import type { HTMLAttributes, ReactNode } from "react";
+import { t } from "@/app/lib/i18n";
+
+const RUN_STATE_LABELS: Readonly<Record<string, string>> = {
+  pending: t("pending"), scheduled: t("scheduled"), assigned: t("assigned"),
+  leased: t("leased"), running: t("running"), proposed: t("proposed"),
+  success: t("success"), succeeded: t("succeeded"), active: t("active"), idle: t("idle"),
+  error: t("error"), failed: t("failed"), blocked: t("blocked"), cancelled: t("cancelled"),
+  stopped: t("stopped"), paused: t("paused"), queued: t("queued"), completed: t("completed"),
+  paused_awaiting_wake: t("paused_awaiting_wake"), paused_awaiting_input: t("paused_awaiting_input"),
+  dead_lettered: t("dead_lettered"), warning: t("warning"), skipped: t("skipped"), unknown: t("unknown"),
+};
+
+/** Display known lifecycle states without changing IDs or custom labels. */
+export function runStateLabel(state: string): string {
+  return Object.hasOwn(RUN_STATE_LABELS, state) ? RUN_STATE_LABELS[state] : state;
+}
 
 // StatusChip — the one pill/badge recipe for small status-tinted labels
 // ("Connected", "Bundled", "Third-party", health pills, task run states, SLA
@@ -179,7 +195,7 @@ export function RunStatusChip({
       testId={testId}
       className={`status-badge status-${state}${className ? ` ${className}` : ""}`}
     >
-      {children ?? state}
+      {children == null || children === state ? runStateLabel(state) : children}
     </StatusChip>
   );
 }

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import type { DashboardStats } from "@/app/shared/lib/orchestratorApi";
 
 // StatsGrid — the task-metric cards. Renders the design handoff's segmented
@@ -30,10 +31,10 @@ const CARDS: Array<{
   // live = the in-flight "Running" metric; its dot pulses (reduced-motion safe).
   live?: boolean;
 }> = [
-  { filter: "tasks-pending", label: "Pending Tasks", key: "pending_tasks", tone: "pending" },
-  { filter: "tasks-running", label: "Running Tasks", key: "running_tasks", tone: "running", live: true },
-  { filter: "tasks-completed-today", label: "Completed Today", key: "completed_tasks_today", tone: "success" },
-  { filter: "tasks-failed-today", label: "Failed Today", key: "failed_tasks_today", tone: "error" },
+  { filter: "tasks-pending", label: tr("Pending Tasks"), key: "pending_tasks", tone: "pending" },
+  { filter: "tasks-running", label: tr("Running Tasks"), key: "running_tasks", tone: "running", live: true },
+  { filter: "tasks-completed-today", label: tr("Completed Today"), key: "completed_tasks_today", tone: "success" },
+  { filter: "tasks-failed-today", label: tr("Failed Today"), key: "failed_tasks_today", tone: "error" },
 ];
 
 export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
@@ -42,11 +43,11 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
   // (older servers omit the fields).
   const agentCards: Array<{ label: string; value: number; tone: string; live?: boolean }> = [];
   if (typeof stats?.agent_slots === "number") {
-    agentCards.push({ label: "Agent Slots", value: stats.agent_slots, tone: "slots" });
+    agentCards.push({ label: tr("Agent Slots"), value: stats.agent_slots, tone: "slots" });
   }
   if (typeof stats?.active_agents === "number") {
     agentCards.push({
-      label: "Active Agents",
+      label: tr("Active Agents"),
       value: stats.active_agents,
       tone: "agents",
       live: stats.active_agents > 0,
@@ -56,7 +57,7 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
     <div
       className={`stats-bar${agentCards.length > 0 ? " stats-bar-agents" : ""}`}
       role="region"
-      aria-label="Dashboard statistics"
+      aria-label={tr("Dashboard statistics")}
     >
       {agentCards.map((card) => (
         <div

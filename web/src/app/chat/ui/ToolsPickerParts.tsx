@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/app/shared/ui/Icon";
@@ -110,21 +111,21 @@ export function StatusDot({ status }: { status: ConnectorStatus }) {
 export function StatusIcon({ status }: { status: ConnectorStatus }) {
   if (status === "always") {
     return (
-      <span title="Always on in every chat." className="text-[var(--color-text-subtle)]">
+      <span title={tr("Always on in every chat.")} className="text-[var(--color-text-subtle)]">
         <Icon name="lock" className="size-3.5" />
       </span>
     );
   }
   if (status === "setup") {
     return (
-      <span title="Needs setup" className="text-[var(--color-state-warn)]">
+      <span title={tr("Needs setup")} className="text-[var(--color-state-warn)]">
         <Icon name="alert-circle" className="size-[0.95rem]" />
       </span>
     );
   }
   if (status === "unavailable") {
     return (
-      <span title="Unavailable" className="text-[var(--color-state-deny)]">
+      <span title={tr("Unavailable")} className="text-[var(--color-state-deny)]">
         <Icon name="alert-triangle" className="size-[0.95rem]" />
       </span>
     );
@@ -254,7 +255,7 @@ export function SeatMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        aria-label={`Account for ${name}: ${selected.label}`}
+        aria-label={tr("Account for {0}: {1}", [name, selected.label])}
         data-testid={`mcp-seat-${connector.name}`}
         onClick={(event) => {
           event.stopPropagation();
@@ -273,7 +274,7 @@ export function SeatMenu({
         ) : null}
         <span className="min-w-0 flex-1 truncate">{selected.label}</span>
         {variant === "field" && selected.isDefault ? (
-          <span className="shrink-0 text-[0.7rem] text-[var(--color-text-subtle)]">Default</span>
+          <span className="shrink-0 text-[0.7rem] text-[var(--color-text-subtle)]">{tr("Default")}</span>
         ) : null}
         <Icon
           name="chevron-down"
@@ -288,7 +289,7 @@ export function SeatMenu({
               role="listbox"
               data-seat-menu=""
               tabIndex={-1}
-              aria-label={`Account for ${name}`}
+              aria-label={tr("Account for {0}", [name])}
               aria-activedescendant={`${listId}-${active}`}
               onKeyDown={onListKey}
               onClick={(event) => event.stopPropagation()}
@@ -296,7 +297,7 @@ export function SeatMenu({
               className="fixed z-[1300] grid max-h-64 max-w-[18rem] gap-[0.1rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-popover)] outline-none motion-safe:animate-pop-up"
             >
               <div className="px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
-                Account
+                {tr("Account")}
               </div>
               {options.map((o, i) => {
                 const isSel = o.value === current;
@@ -316,7 +317,7 @@ export function SeatMenu({
                   >
                     <span className="min-w-0 flex-1 truncate">{o.label}</span>
                     {o.isDefault ? (
-                      <span className="shrink-0 text-[0.66rem] text-[var(--color-text-subtle)]">Default</span>
+                      <span className="shrink-0 text-[0.66rem] text-[var(--color-text-subtle)]">{tr("Default")}</span>
                     ) : null}
                     <span className="flex size-3.5 shrink-0 items-center justify-center text-[var(--color-accent)]">
                       {isSel ? <Icon name="check" className="size-3.5" /> : null}

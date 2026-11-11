@@ -1,3 +1,4 @@
+import { localizeError } from "@/app/lib/i18n/errors";
 // Saving a file from the page (#2006).
 //
 // saveBlob hands a Blob to the browser as a download: an object URL clicked
@@ -48,7 +49,7 @@ export function saveBlob(blob: Blob, name: string): void {
 // something an operator can act on ("401 Unauthorized" → sign in again).
 async function describeFailure(res: Response): Promise<string> {
   const body = (await res.json().catch(() => null)) as { error?: string } | null;
-  if (body?.error) return body.error;
+  if (typeof body?.error === "string") return localizeError(body.error);
   return `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
 }
 

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 type MessageLike = {
   role: "assistant" | "user";
   content: string;
@@ -6,7 +7,7 @@ type MessageLike = {
 export function deriveConversationTitle(messages: MessageLike[]) {
   const firstUserMessage = messages.find((message) => message.role === "user");
   if (!firstUserMessage) {
-    return "New chat";
+    return tr("New chat");
   }
 
   return firstUserMessage.content.length > 44

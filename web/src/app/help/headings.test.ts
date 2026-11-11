@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GUIDES, readGuide } from "./guideContent";
+import { LANGUAGES } from "@/app/lib/i18n";
 import { extractHeadings, slugify } from "./headings";
 
 describe("slugify", () => {
@@ -50,3 +51,33 @@ describe("the shipped guides", () => {
     expect(dangling).toEqual([]);
   });
 });
+
+for (const { value: language } of LANGUAGES) {
+  describe(`the shipped ${language} guides`, () => {
+    it.each(GUIDES)("$slug retains canonical section anchors and link destinations", (guide) => {
+      const english = readGuide(guide, "en");
+      const content = readGuide(guide, language);
+      const canonical = extractHeadings(english);
+      const headings = extractHeadings(content, english);
+      expect(headings.map(({ id, depth }) => ({ id, depth }))).toEqual(
+        canonical.map(({ id, depth }) => ({ id, depth })),
+      );
+      const ids = new Set(headings.map(({ id }) => id));
+      const dangling = [...content.matchAll(/\]\(#([^)]+)\)/g)]
+        .map((match) => match[1]).filter((id) => !ids.has(id));
+      expect(dangling).toEqual([]);
+      const links = (value: string) => [...value.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]);
+      expect(links(content)).toEqual(links(english));
+      if (language !== "en") {
+        expect(content).not.toBe(english);
+        expect(headings[0].text).not.toBe(canonical[0].text);
+      }
+    });
+
+    it.each(GUIDES)("$slug preserves commands and code while translating prose", (guide) => {
+      const code = (value: string) => [...value.matchAll(/```[\s\S]*?```|`[^`]+`/g)]
+        .map((match) => match[0].replace(/\s+/g, " "));
+      expect(code(readGuide(guide, language))).toEqual(code(readGuide(guide, "en")));
+    });
+  });
+}

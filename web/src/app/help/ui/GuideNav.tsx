@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // GuideNav — the /help sub-nav, the same sticky left column Settings uses
 // (SetNav): the guide list, then the contents of whichever guide is open so a
 // reader can jump between sections without scrolling back to the top. Below
@@ -41,7 +42,7 @@ export function GuideNav({
 
   return (
     <nav
-      aria-label="Guides"
+      aria-label={tr("Guides")}
       className="sticky top-7 flex w-[13rem] shrink-0 flex-col gap-[1.1rem] max-[900px]:static max-[900px]:w-full max-[900px]:flex-row max-[900px]:flex-wrap max-[900px]:items-start max-[900px]:gap-3"
     >
       <div className="grid gap-[0.15rem] max-[900px]:flex max-[900px]:flex-wrap max-[900px]:gap-[0.2rem]">
@@ -50,7 +51,7 @@ export function GuideNav({
           aria-current={pathname === "/help" ? "page" : undefined}
           className={itemClass(pathname === "/help")}
         >
-          Overview
+          {tr("Overview")}
         </Link>
         {guides.map((guide) => {
           const href = `/help/${guide.slug}`;
@@ -71,7 +72,7 @@ export function GuideNav({
       {sections.length > 0 ? (
         <div className="grid gap-[0.1rem] max-[900px]:hidden">
           <span className="px-[0.6rem] pb-1 text-[0.62rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-            On this page
+            {tr("On this page")}
           </span>
           {sections.map((heading) => (
             <a

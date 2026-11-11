@@ -15,7 +15,7 @@ export default function GuidePage({ slug }: { slug: string }) {
   if (!guide) return <NotFound />;
 
   const content = readGuide(guide);
-  const headings = extractHeadings(content);
+  const headings = extractHeadings(content, readGuide(guide, "en"));
 
   return (
     <>
@@ -29,7 +29,7 @@ export default function GuidePage({ slug }: { slug: string }) {
             {guide.blurb}
           </p>
         </header>
-        <GuideMarkdown content={content} />
+        <GuideMarkdown content={content} headings={headings} />
       </article>
     </>
   );

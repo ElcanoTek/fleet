@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { usePathname } from "@/app/lib/navigation";
 import { useEffect, useState } from "react";
 import { startDeployDriftProbe, useUpdateAvailable } from "./deployDrift";
@@ -42,15 +44,17 @@ export function UpdateNotice({ appName }: { appName: string }) {
       style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.5rem)" }}
     >
       <Icon name="refresh" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
-      <span className="min-w-0 truncate">{appName} was updated</span>
+      <span className="min-w-0 truncate">
+        {rich("{0} was updated", appName)}
+      </span>
       <button
         type="button"
         onClick={() => window.location.reload()}
         className="shrink-0 rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-2.5 py-1 font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       >
-        Reload
+        {tr("Reload")}
       </button>
-      <CloseButton label="Dismiss update notice" onClick={() => setDismissed(true)} />
+      <CloseButton label={tr("Dismiss update notice")} onClick={() => setDismissed(true)} />
     </div>
   );
 }

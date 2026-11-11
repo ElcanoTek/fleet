@@ -23,7 +23,11 @@ func TestDocsNameWhereTheBrowserNotificationsSwitchIs(t *testing.T) {
 	// The authority: the General settings page renders the row, and the row's
 	// label is the name the documents use.
 	page := readFile(t, root, filepath.Join("web", "src", "app", "settings", "page.tsx"))
-	start := strings.Index(page, `title="General"`)
+	match := regexp.MustCompile(`title=(?:"General"|\{(?:t|tr)\("General"\)\})`).FindStringIndex(page)
+	start := -1
+	if match != nil {
+		start = match[0]
+	}
 	if start < 0 {
 		t.Fatal(`settings/page.tsx has no title="General" section — the page's shape changed; fix this check rather than deleting it`)
 	}
@@ -36,7 +40,7 @@ func TestDocsNameWhereTheBrowserNotificationsSwitchIs(t *testing.T) {
 		t.Fatal("the General settings section no longer renders <BrowserNotificationsRow />: update this check and every document below to the switch's new home")
 	}
 	row := readFile(t, root, filepath.Join("web", "src", "app", "settings", "BrowserNotificationsRow.tsx"))
-	if !strings.Contains(row, `label="Browser notifications"`) {
+	if !regexp.MustCompile(`label=(?:"Browser notifications"|\{(?:t|tr)\("Browser notifications"\)\})`).MatchString(row) {
 		t.Fatal(`BrowserNotificationsRow no longer carries label="Browser notifications": the documents name it by that label`)
 	}
 

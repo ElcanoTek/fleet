@@ -72,7 +72,11 @@ raw result for scripts.
   by conversation, so switching threads cannot authorize another thread's work.
   Policies accumulate and a matching deny takes precedence. Patterns match
   string arguments by their original names (for example, `name`, `cron`, or
-  `to_email`, not the email summary's `to` label). The terminal shows the
+  `to_email`, not the email summary's `to` label). For the two browser tools
+  (`playwright_browser`, `connector_studio`), an `action=` pattern also
+  matches the action's canonical name, and an alias in the pattern stands for
+  its action (for `playwright_browser`, `action=start_session` also matches
+  `live`). The terminal shows the
   handler-only argument strings supplied by the server; older servers without
   that metadata cannot support handler-only patterns. Spaces are allowed in a
   pattern, such as `/approve pattern cron=0 9 * * *`.

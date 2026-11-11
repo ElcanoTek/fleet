@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useState } from "react";
 import { FormFields } from "./FormFields";
 import { Icon } from "./Icon";
@@ -94,25 +96,23 @@ export function PromptLibraryForm({
 
   return (
     <section
-      aria-label={`${prompt.name} form`}
+      aria-label={tr("{0} form", [prompt.name])}
       className="mt-3 flex min-h-0 flex-1 flex-col gap-3"
     >
       <p className="m-0 text-xs text-[var(--color-text-muted)]">
-        Fill in the form, then <strong>Use prompt</strong> puts the finished
-        prompt in your draft to review before you send it. Fields marked{" "}
-        <span className="text-[var(--color-accent)]">*</span> are required.
+        {rich("Fill in the form, then {0} puts the finished prompt in your draft to review before you send it. Fields marked {1} are required.", <strong>{tr("Use prompt")}</strong>, <span className="text-[var(--color-accent)]">*</span>)}
       </p>
       <div className="grid gap-3">
         <FormFields
           fields={prompt.fields}
           values={values}
           onChange={set}
-          advancedLabel="More options"
+          advancedLabel={tr("More options")}
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1">
         <span className="text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-          Prompt preview
+          {tr("Prompt preview")}
         </span>
         <pre
           data-testid="prompt-form-preview"
@@ -123,7 +123,7 @@ export function PromptLibraryForm({
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-[var(--color-text-muted)]">
-          {requiredFilled && empty ? "Fill in at least one field to use this prompt." : note}
+          {requiredFilled && empty ? tr("Fill in at least one field to use this prompt.") : note}
         </span>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -133,7 +133,7 @@ export function PromptLibraryForm({
             // rather fill it in by hand in the draft.
             onClick={() => onUse(prompt.prompt_template)}
           >
-            Insert raw prompt
+            {tr("Insert raw prompt")}
           </button>
           <button
             type="button"
@@ -142,7 +142,7 @@ export function PromptLibraryForm({
             onClick={() => ready && onUse(rendered)}
           >
             <Icon name="arrow-up" className="mr-1.5 size-3.5 rotate-90" />
-            Use prompt
+            {tr("Use prompt")}
           </button>
         </div>
       </div>
