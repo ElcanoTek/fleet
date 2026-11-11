@@ -171,9 +171,20 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 		return nil, fmt.Errorf("playwright tool not found: %s", name)
 	}
 	args, _ := p["arguments"].(map[string]interface{})
-	if redact.ContainsMarker(args) {
+	switch {
+	case playwrightSpecCarriesMarkerOrVaultRef(spec):
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.SavedConnectorMarkerRefusal}},
+			IsError: true,
+		})
+	case redact.ContainsMarker(args):
 		return json.Marshal(&ToolResult{
 			Content: []ContentBlock{{Type: "text", Text: redact.MarkerArgumentRefusal}},
+			IsError: true,
+		})
+	case redact.ContainsVaultReference(args):
+		return json.Marshal(&ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: redact.VaultReferenceArgumentRefusal}},
 			IsError: true,
 		})
 	}
@@ -201,3 +212,18 @@ func (t *playwrightToolTransport) Call(ctx context.Context, method string, param
 
 func (t *playwrightToolTransport) Notify(context.Context, string, interface{}) error { return nil }
 func (t *playwrightToolTransport) Close() error                                      { return nil }
+
+func playwrightSpecCarriesMarkerOrVaultRef(spec PlaywrightToolSpec) bool {
+	has := func(s string) bool {
+		return strings.Contains(s, redact.MarkerPrefix) || strings.Contains(s, redact.VaultReferencePrefix)
+	}
+	if has(spec.URL) || playwrightrunner.CredentialsCarryMarkerOrVaultRef(spec.Credentials) {
+		return true
+	}
+	for _, st := range spec.Steps {
+		if has(st.Selector) || has(st.Value) || has(st.Attribute) {
+			return true
+		}
+	}
+	return false
+}

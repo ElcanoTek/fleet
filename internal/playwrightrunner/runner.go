@@ -116,16 +116,44 @@ type RunResult struct {
 }
 
 // refuseRedactedValue refuses a typed step (fill, select, press) whose value
-// carries the redactor's placeholder: a value copied out of an earlier,
-// redacted call, which would be typed as written.
+// carries the redactor's placeholder or an unresolved "$secret:" vault
+// reference: either would be typed into the page as written.
 func refuseRedactedValue(st Step) error {
 	switch action := strings.ToLower(strings.TrimSpace(st.Action)); action {
 	case "fill", "select", "press":
 		if strings.Contains(st.Value, redact.MarkerPrefix) {
 			return fmt.Errorf(`%s step value contains "[REDACTED]", the placeholder the conversation shows in place of a secret; use {{PASSWORD}}, {{USERNAME}} or {{SECRET}} with a credential reference instead`, action)
 		}
+		if strings.Contains(st.Value, redact.VaultReferencePrefix) {
+			return fmt.Errorf(`%s step value contains a "$secret:..." vault reference, which would be typed literally; use {{PASSWORD}}, {{USERNAME}} or {{SECRET}} in the step value and pass the reference in password_ref, username_ref or secret_ref instead`, action)
+		}
 	}
 	return nil
+}
+
+// CredentialsCarryMarkerOrVaultRef reports whether any credential value,
+// header or storage_state entry carries a redaction marker or an unresolved
+// "$secret:" vault reference.
+func CredentialsCarryMarkerOrVaultRef(c Credentials) bool {
+	has := func(s string) bool {
+		return strings.Contains(s, redact.MarkerPrefix) || strings.Contains(s, redact.VaultReferencePrefix)
+	}
+	if has(c.Username) || has(c.Password) || has(c.Secret) {
+		return true
+	}
+	for k, v := range c.Headers {
+		if has(k) || has(v) {
+			return true
+		}
+	}
+	if len(c.StorageState) > 0 {
+		if b, err := json.Marshal(c.StorageState); err == nil {
+			if bytes.Contains(b, []byte(redact.MarkerPrefix)) || bytes.Contains(b, []byte(redact.VaultReferencePrefix)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ValidateStep validates a single declarative Playwright step.
@@ -277,6 +305,10 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	if CredentialsCarryMarkerOrVaultRef(req.Credentials) {
+		return nil, errors.New(redact.SavedConnectorMarkerRefusal)
+	}
 
 	targetURL := substituteURLArgs(strings.TrimSpace(req.URL), req.Args)
 	if targetURL == "" {

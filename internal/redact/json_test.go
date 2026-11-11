@@ -95,3 +95,28 @@ func TestRedactJSONKeepsVaultReferences(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactJSONScrubsLiteralMatchingVaultReference: when a vaulted credential
+// itself begins "secret:" (for example "secret:password" under field ID
+// "password"), the full "$secret:password" value contains the registered
+// secret and must be scrubbed rather than exempted as a reference.
+func TestRedactJSONScrubsLiteralMatchingVaultReference(t *testing.T) {
+	for _, secret := range []string{"secret:password", "$secret:password"} { // gitleaks:allow (made-up test values)
+		r := NewRedactor(nil)
+		r.RegisterSecrets("ui_secret:test", false, secret)
+		in := `{"password_ref":"$secret:password","username_ref":"$secret:password","other_ref":"$secret:api_token"}`
+		got := r.Redact(in)
+		if strings.Contains(got, secret) || strings.Contains(got, "$secret:password") {
+			t.Errorf("secret=%q: Redact = %s, want registered secret scrubbed from *_ref", secret, got)
+		}
+		if !strings.Contains(got, `"other_ref":"$secret:api_token"`) {
+			t.Errorf("secret=%q: Redact = %s, want unrelated vault reference kept", secret, got)
+		}
+	}
+	r := NewRedactor(nil)
+	for _, msg := range []string{MarkerArgumentRefusal, VaultReferenceArgumentRefusal, SavedConnectorMarkerRefusal} {
+		if got := r.Redact(msg); got != msg {
+			t.Errorf("Redact altered refusal message:\n got: %s\nwant: %s", got, msg)
+		}
+	}
+}

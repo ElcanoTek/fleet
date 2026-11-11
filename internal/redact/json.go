@@ -8,6 +8,9 @@ import (
 
 var authorizationValue = regexp.MustCompile(`(?i)authorization:\s*(?:bearer|basic)\s+([A-Za-z0-9\-._~+/]+=*)`)
 
+// VaultReferencePrefix opens a show_ui credential reference ("$secret:<id>").
+const VaultReferencePrefix = "$secret:"
+
 // vaultReference is a show_ui credential reference ("$secret:<field_id>",
 // docs/CONNECTOR-BUILDER.md §1.2): what a tool call carries in its *_ref
 // arguments in place of a vaulted credential, resolved host-side. A field ID
@@ -127,14 +130,18 @@ func (r *Redactor) redactJSON(input string) string {
 
 // keepVaultReference reports whether a JSON string value is a vault reference
 // to leave as it is: the value under a *_ref key is exactly "$secret:<id>",
-// and the id itself is nothing any other rule would redact (no registered
-// literal, no vendor key shape, no credential seen elsewhere in this payload).
-// A secret wrapped in the reference syntax is therefore still redacted.
+// the whole value matches no registered secret, credential shape or custom
+// pattern, and the id itself is nothing any rule would redact. A secret
+// wrapped in the reference syntax — or one whose own bytes begin "secret:" —
+// is therefore still redacted.
 func (r *Redactor) keepVaultReference(key, value string, credentials []string) bool {
 	if !refKey.MatchString(key) || !vaultReference.MatchString(value) {
 		return false
 	}
-	id := strings.TrimPrefix(value, "$secret:")
+	if r.matchesLiteralOrShape(value) {
+		return false
+	}
+	id := strings.TrimPrefix(value, VaultReferencePrefix)
 	// Every JWT starts "eyJ" ({"); one fits the field ID grammar but is no
 	// field ID.
 	for _, seg := range strings.Split(id, ".") {
@@ -145,11 +152,38 @@ func (r *Redactor) keepVaultReference(key, value string, credentials []string) b
 	for _, c := range credentials {
 		// A Basic credential is collected with its "=" padding, which a
 		// field ID cannot hold.
-		if t := strings.TrimRight(c, "="); t != "" && strings.Contains(id, t) {
+		if t := strings.TrimRight(c, "="); t != "" && strings.Contains(value, t) {
 			return false
 		}
 	}
 	return r.redactPlain(id) == id
+}
+
+// matchesLiteralOrShape reports whether s matches a registered literal, a
+// credential-shape pattern or an operator-configured custom pattern — every
+// rule except the generic marker=value rule, whose "secret:<value>" arm would
+// match the "$secret:<id>" prefix itself.
+func (r *Redactor) matchesLiteralOrShape(s string) bool {
+	r.sweepDue()
+	r.mu.RLock()
+	for _, lit := range r.literals {
+		if lit.value != "" && strings.Contains(s, lit.value) {
+			r.mu.RUnlock()
+			return true
+		}
+	}
+	r.mu.RUnlock()
+	for _, p := range r.patterns[:r.shapePatterns] {
+		if p.re.MatchString(s) {
+			return true
+		}
+	}
+	for _, p := range r.customPatterns {
+		if p.re.MatchString(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // MarkerArgumentRefusal is the reason a tool gives when it refuses an
@@ -158,6 +192,19 @@ func (r *Redactor) keepVaultReference(key, value string, credentials []string) b
 // placeholder as if it were the value. It names the placeholder in a form the
 // redactor leaves alone, so the model can still read it.
 const MarkerArgumentRefusal = `an argument contains "[REDACTED]", the placeholder the conversation shows in place of a secret; it is not the secret itself. If you are quoting redacted text, leave the placeholder out. If the call needs the secret, it has to be supplied again: in a chat, ask the user to submit it with show_ui and pass the reference that submission gives you`
+
+// VaultReferenceArgumentRefusal is the reason a saved custom connector tool
+// gives when an argument carries a "$secret:" vault reference: custom
+// connector tools have no show_ui vault and take their credentials from the
+// saved connection instead, so substituting the argument would send or type
+// the reference text itself.
+const VaultReferenceArgumentRefusal = `an argument contains a "$secret:..." vault reference, which saved connector tools cannot resolve; saved connectors use the credentials stored on the connection itself, or use connector_studio / playwright_browser in an interactive chat`
+
+// SavedConnectorMarkerRefusal is the reason a saved custom connector tool
+// gives when its own persisted definition or credentials carry MarkerPrefix or
+// VaultReferencePrefix: an earlier save recorded a placeholder or unresolved
+// vault reference in place of a secret or template value.
+const SavedConnectorMarkerRefusal = `this saved connector's stored definition or credentials contain "[REDACTED]" or an unresolved "$secret:..." reference instead of the real value; update or recreate the connector with real credentials before calling it`
 
 // ContainsMarker reports whether any string in v (a decoded JSON value:
 // strings, maps, slices) carries a redaction marker: a value the model copied
@@ -175,6 +222,28 @@ func ContainsMarker(v any) bool {
 	case []any:
 		for _, c := range x {
 			if ContainsMarker(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ContainsVaultReference reports whether any string in v (a decoded JSON
+// value: strings, maps, slices) carries a "$secret:" vault reference.
+func ContainsVaultReference(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(x, VaultReferencePrefix)
+	case map[string]any:
+		for _, c := range x {
+			if ContainsVaultReference(c) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range x {
+			if ContainsVaultReference(c) {
 				return true
 			}
 		}
