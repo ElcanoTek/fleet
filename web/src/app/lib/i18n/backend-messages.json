@@ -275,6 +275,7 @@
     "no per-lab models were found",
     "no sub-agent with this id is recorded in this conversation",
     "no team",
+    "no vaulted secret from a reference that names no field: ask the user to submit the credential again via show_ui",
     "not a narrowing",
     "not a regular workspace file",
     "not found",
@@ -1201,6 +1202,12 @@
       ]
     },
     {
+      "message": "no vaulted secret from the {0} field: it was never submitted or has expired; ask the user to submit the credential again via show_ui",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
       "message": "not an MCP tool name: {0}",
       "fields": [
         "%s"
@@ -1565,6 +1572,26 @@
       ]
     },
     {
+      "message": "the vaulted secret from the {0} field is not authorized for host {1}; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message",
+      "fields": [
+        "%q",
+        "%q"
+      ]
+    },
+    {
+      "message": "the vaulted secret from the {0} field needs a valid HTTPS target URL: {1}",
+      "fields": [
+        "%q",
+        "%w"
+      ]
+    },
+    {
+      "message": "the vaulted secret from the {0} field needs a valid target URL",
+      "fields": [
+        "%q"
+      ]
+    },
+    {
       "message": "this card now narrows {0}, not {1} (fleet's policy changed after it was shown): reload it and decide again",
       "fields": [
         "%q",
@@ -1699,32 +1726,6 @@
       "fields": [
         "%s",
         "%s"
-      ]
-    },
-    {
-      "message": "vaulted secret {0} is not authorized for host {1}; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message",
-      "fields": [
-        "%q",
-        "%q"
-      ]
-    },
-    {
-      "message": "vaulted secret {0} requires a valid HTTPS target URL: {1}",
-      "fields": [
-        "%q",
-        "%w"
-      ]
-    },
-    {
-      "message": "vaulted secret {0} requires a valid target URL",
-      "fields": [
-        "%q"
-      ]
-    },
-    {
-      "message": "vaulted secret {0} was not found or expired; ask the user to submit the credential again via show_ui",
-      "fields": [
-        "%q"
       ]
     },
     {
