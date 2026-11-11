@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -828,17 +829,10 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 	return s.resolveSecretForConnectorURL(ctx, userEmail, convID, "", refOrValue, targetURL)
 }
 
-// secretRefLabel names a "$secret:<field_id>" reference for an error message
-// by its form field: `the "password" field`. The reference itself would not
-// survive the output redactor, whose "secret:<value>" rule masks any field ID
-// of eight or more characters, so the model would read `$secret:[REDACTED]`.
-func secretRefLabel(refOrValue string) string {
-	if id := secretFieldID(refOrValue); id != "" {
-		return fmt.Sprintf("the %q field", id)
-	}
-	return "a reference that names no field"
-}
-
+// secretFieldID extracts the form field ID from a "$secret:<field_id>"
+// reference so error messages can name `the "password" field` directly: the
+// "$secret:<field_id>" form itself would be masked to `$secret:[REDACTED]` by
+// the output redactor's "secret:<value>" rule for any ID of 8+ characters.
 func secretFieldID(refOrValue string) string {
 	trimmed := strings.TrimSpace(refOrValue)
 	if strings.HasPrefix(trimmed, "$secret:") {
@@ -852,17 +846,20 @@ func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, co
 	if !isVaulted {
 		return val, nil
 	}
+	fieldID := secretFieldID(refOrValue)
+	if fieldID == "" {
+		return "", errors.New("no vaulted secret from a reference that names no field: ask the user to submit the credential again via show_ui")
+	}
 	if val == "" {
-		return "", fmt.Errorf("no vaulted secret from %s: it was never submitted or has expired; ask the user to submit the credential again via show_ui", secretRefLabel(refOrValue))
+		return "", fmt.Errorf("no vaulted secret from the %q field: it was never submitted or has expired; ask the user to submit the credential again via show_ui", fieldID)
 	}
 	if _, err := mcpoauth.ValidateServerURL(targetURL, s.allowInsecureHTTP()); err != nil {
-		return "", fmt.Errorf("the vaulted secret from %s needs a valid HTTPS target URL: %w", secretRefLabel(refOrValue), err)
+		return "", fmt.Errorf("the vaulted secret from the %q field needs a valid HTTPS target URL: %w", fieldID, err)
 	}
 	targetHost := normalizeOriginHost(targetURL)
 	if targetHost == "" {
-		return "", fmt.Errorf("the vaulted secret from %s needs a valid target URL", secretRefLabel(refOrValue))
+		return "", fmt.Errorf("the vaulted secret from the %q field needs a valid target URL", fieldID)
 	}
-	fieldID := secretFieldID(refOrValue)
 	allowed, hasExplicitBinding := s.uiSecrets.isFieldOriginAllowed(userEmail, convID, fieldID, targetHost)
 	if !allowed && !hasExplicitBinding && !s.isCatalogApprovedHost(connectorName, targetHost) {
 		if s.store != nil && convID != "" {
@@ -876,11 +873,9 @@ func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, co
 		allowed, _ = s.uiSecrets.isFieldOriginAllowed(userEmail, convID, fieldID, targetHost)
 	}
 	if !allowed && !s.isCatalogApprovedHost(connectorName, targetHost) {
-		return "", fmt.Errorf("the vaulted secret from %s is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", secretRefLabel(refOrValue), targetHost)
+		return "", fmt.Errorf("the vaulted secret from the %q field is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", fieldID, targetHost)
 	}
-	if fieldID != "" {
-		registerUISecretLiteral("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, val)
-	}
+	registerUISecretLiteral("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, val)
 	return val, nil
 }
 

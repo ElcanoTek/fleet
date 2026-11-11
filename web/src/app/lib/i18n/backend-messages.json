@@ -275,6 +275,7 @@
     "no per-lab models were found",
     "no sub-agent with this id is recorded in this conversation",
     "no team",
+    "no vaulted secret from a reference that names no field: ask the user to submit the credential again via show_ui",
     "not a narrowing",
     "not a regular workspace file",
     "not found",
@@ -1201,9 +1202,9 @@
       ]
     },
     {
-      "message": "no vaulted secret from {0}: it was never submitted or has expired; ask the user to submit the credential again via show_ui",
+      "message": "no vaulted secret from the {0} field: it was never submitted or has expired; ask the user to submit the credential again via show_ui",
       "fields": [
-        "%s"
+        "%q"
       ]
     },
     {
@@ -1571,23 +1572,23 @@
       ]
     },
     {
-      "message": "the vaulted secret from {0} is not authorized for host {1}; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message",
+      "message": "the vaulted secret from the {0} field is not authorized for host {1}; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message",
       "fields": [
-        "%s",
+        "%q",
         "%q"
       ]
     },
     {
-      "message": "the vaulted secret from {0} needs a valid HTTPS target URL: {1}",
+      "message": "the vaulted secret from the {0} field needs a valid HTTPS target URL: {1}",
       "fields": [
-        "%s",
+        "%q",
         "%w"
       ]
     },
     {
-      "message": "the vaulted secret from {0} needs a valid target URL",
+      "message": "the vaulted secret from the {0} field needs a valid target URL",
       "fields": [
-        "%s"
+        "%q"
       ]
     },
     {
