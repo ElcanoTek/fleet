@@ -18,13 +18,15 @@ import (
 )
 
 // taskManagerProvider adapts the sched storage layer to the chat manage_tasks
-// seam (#1152): update or stop tasks that already exist.
+// seam (#1152): show, update or stop tasks that already exist.
 //
 // Chat gains no authority the same person lacks through the API. Every target
 // is resolved, then filtered to tasks the APPROVING user created — the same
 // ownership rule handlers.CancelTask applies to a non-admin stop — and anything
 // dropped is reported back by name with the reason rather than silently
-// omitted. A count without names is a bulk edit nobody can check.
+// omitted. A count without names is a bulk edit nobody can check. A read-only
+// show goes through the same resolution and the same ownership filter, so the
+// model reads the prompts of exactly the tasks the person could change.
 func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
 	return func(ctx context.Context, req httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
 		// The approving person's one identity row gives the owner UUID (#2049
@@ -50,6 +52,10 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 					ID: t.ID.String(), Label: label,
 					Detail: "you did not create this task; an admin can change it on the Background tasks page",
 				})
+				continue
+			}
+			if req.Action == tools.ManageTasksActionShow {
+				res.Shown = append(res.Shown, taskSnapshot(t, label))
 				continue
 			}
 			if req.Action == tools.ManageTasksActionStop {
@@ -152,6 +158,20 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 		edit.Prompt = req.Prompt
 		changed = append(changed, "prompt")
 	}
+	// Edits apply to the prompt as stored, not to anything the model retyped,
+	// so a small change cannot drop what the edit does not name. One edit that
+	// does not match exactly once skips the whole task, unchanged — a partly
+	// edited prompt is a prompt nobody approved.
+	if len(req.PromptEdits) > 0 || req.PromptAppend != "" {
+		next, err := tools.ApplyPromptEdits(t.Prompt, req.PromptEdits, req.PromptAppend)
+		if err != nil {
+			return "", err
+		}
+		if next != t.Prompt {
+			edit.Prompt = next
+			changed = append(changed, promptEditDetail(req))
+		}
+	}
 	if req.Cron != "" && req.Cron != t.Recurrence {
 		// The API edit path validates the expression and refreshes the next
 		// fire from it (in the task's zone); an unparseable cron stored as-is
@@ -199,6 +219,33 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 		return "already matched the requested values", nil
 	}
 	return strings.Join(changed, ", "), nil
+}
+
+// promptEditDetail names an applied prompt edit in the post-approval report.
+func promptEditDetail(req httpapi.TaskMutationRequest) string {
+	var parts []string
+	switch n := len(req.PromptEdits); {
+	case n == 1:
+		parts = append(parts, "1 edit")
+	case n > 1:
+		parts = append(parts, fmt.Sprintf("%d edits", n))
+	}
+	if req.PromptAppend != "" {
+		parts = append(parts, "text appended")
+	}
+	return "prompt (" + strings.Join(parts, ", ") + ")"
+}
+
+// taskSnapshot is a task's current definition for a read-only show.
+func taskSnapshot(t *schedmodels.Task, label string) httpapi.TaskSnapshot {
+	snap := httpapi.TaskSnapshot{
+		ID: t.ID.String(), Label: label, Status: string(t.Status),
+		Cron: t.Recurrence, Timezone: t.Timezone, Tags: t.Tags, Prompt: t.Prompt,
+	}
+	if t.Model != nil {
+		snap.Model = *t.Model
+	}
+	return snap
 }
 
 // taskMutationLabel is the human name for a task in the report: its title, then

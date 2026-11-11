@@ -34,10 +34,19 @@ func (s *Server) runStagedManageTasks(ctx context.Context, approval *store.Appro
 	if err := p.Validate(); err != nil {
 		return "", err
 	}
+	// show is read-only and runs in the tool itself; the gate never stages it.
+	// A staged one is a bug, and an approval is not the place to answer it.
+	if strings.TrimSpace(p.Action) == tools.ManageTasksActionShow {
+		return "", errors.New("manage_tasks: action 'show' is read-only and is never approved; nothing was changed")
+	}
 	req := TaskMutationRequest{
-		Action:        strings.TrimSpace(p.Action),
-		TaskIDs:       p.CleanTaskIDs(),
-		Prompt:        strings.TrimSpace(p.Prompt),
+		Action:  strings.TrimSpace(p.Action),
+		TaskIDs: p.CleanTaskIDs(),
+		Prompt:  strings.TrimSpace(p.Prompt),
+		// Edits are exact text: trimming old would make it match something
+		// the card did not show.
+		PromptEdits:   p.PromptEdits,
+		PromptAppend:  strings.TrimSpace(p.PromptAppend),
 		Cron:          strings.TrimSpace(p.Cron),
 		Model:         strings.TrimSpace(p.Model),
 		MaxIterations: p.MaxIterations,
@@ -61,6 +70,53 @@ func (s *Server) runStagedManageTasks(ctx context.Context, approval *store.Appro
 		return "", err
 	}
 	return formatTaskMutationReport(req.Action, res, s.orchestratorTaskLink()), nil
+}
+
+// newManageTasksShowHandler is the per-turn handler behind manage_tasks
+// action="show". It reads through the same manageTasks seam an approved update
+// executes through, as the person at the keyboard, so the selector resolution
+// and the ownership rule are the update's own: show returns the prompts of
+// exactly the tasks an update with the same selector could change, and names
+// the others with the reason instead of revealing them. nil (no tool context
+// value) when task management is not configured.
+func (s *Server) newManageTasksShowHandler(user string) tools.ManageTasksShowHandler {
+	if s.manageTasks == nil {
+		return nil
+	}
+	return func(ctx context.Context, p tools.ManageTasksParams) (*tools.ManageTasksShowResult, error) {
+		req := TaskMutationRequest{
+			Action:      tools.ManageTasksActionShow,
+			TaskIDs:     p.CleanTaskIDs(),
+			RequestedBy: user,
+		}
+		if !p.Match.IsEmpty() {
+			req.Match = &TaskMutationMatch{
+				Query: strings.TrimSpace(p.Match.Query),
+				Tag:   strings.TrimSpace(p.Match.Tag),
+				Model: strings.TrimSpace(p.Match.Model),
+			}
+		}
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		res, err := s.manageTasks(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		out := &tools.ManageTasksShowResult{Tasks: []tools.ManagedTaskView{}}
+		if res == nil {
+			return out, nil
+		}
+		for _, t := range res.Shown {
+			out.Tasks = append(out.Tasks, tools.ManagedTaskView{
+				ID: t.ID, Name: t.Label, Status: t.Status, Cron: t.Cron, Timezone: t.Timezone,
+				Model: t.Model, Tags: t.Tags, Prompt: t.Prompt,
+			})
+		}
+		for _, e := range res.Skipped {
+			out.NotShown = append(out.NotShown, tools.ManagedTaskSkip{ID: e.ID, Name: e.Label, Reason: e.Detail})
+		}
+		return out, nil
+	}
 }
 
 // runStagedTool executes the staged tool one-shot outside the agent

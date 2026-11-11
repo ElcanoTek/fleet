@@ -18,7 +18,7 @@ MODE"); this page is the card UX.
 | Email preview | `preview_email` | Dismiss only — display-only by design |
 | Bash | `bash` (risky commands) | Approve & run / Cancel |
 | Schedule | `schedule_task` | Approve & schedule / Edit… / Cancel |
-| Manage tasks | `manage_tasks` | Approve & stop/update / Cancel |
+| Manage tasks | `manage_tasks` (prompt edits show as old → new; a full replacement shows its whole text, marked as replacing everything — [MANAGE-TASKS-PROMPT-EDITS.md](MANAGE-TASKS-PROMPT-EDITS.md)) | Approve & stop/update / Cancel |
 | Advanced-model nudge | `suggest_advanced_model` | Switch & retry / Just switch / Dismiss |
 | **Generic action** | everything else (bundle critical tools, e.g. a pages deploy) | Approve & run / Cancel (+ apply-all, unless the bundle requires a decision per call) |
 

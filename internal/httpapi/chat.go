@@ -1225,6 +1225,7 @@ func (s *Server) runTurnAsync(
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.turnStore(buf), convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
+	turnCtx = tools.WithManageTasksShowHandler(turnCtx, s.newManageTasksShowHandler(user))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
 	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))
 	turnCtx = tools.WithPlaywrightBrowserContext(turnCtx, s.newPlaywrightBrowserContext(conv, user))
