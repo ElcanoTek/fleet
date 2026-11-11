@@ -40,7 +40,7 @@ on:
       - "E2E canary (real model)"
       - "Daily Go vulnerability scan"
       - "Weekly container vulnerability scan"
-      - "Nightly MCP catalog smoke"
+      - "Weekly MCP catalog smoke"
     types: [completed]
 
 permissions:

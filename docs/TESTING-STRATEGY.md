@@ -31,7 +31,7 @@ broke, in minutes. That gives three properties to protect, in this order:
 | **Contract** | `testdata/contracts/`, `cmd/fleet` OpenAPI drift tests | Two processes agree on the bytes between them, checked from both sides without starting either. | Milliseconds per side. |
 | **Browser, mocked** | `web/e2e/mocked` (Playwright, every `/api/*` intercepted) | The UI behaves: a click, a render, a state transition, against a deterministic backend. | About 1 s per test against one shared Next server. |
 | **Live** | `web/e2e/live` and the always-on sandbox invariants in `e2e-live` | The real stack fits together: real Postgres, Go server, rootless-podman sandbox and Next build. Only the LLM is faked. | Minutes to boot. Keep it to journeys no lower layer can see. |
-| **Drift** (nightly, never a gate) | `e2e-canary.yml`, `mcp-catalog-smoke.yml`, the scheduled scans, `benchmark.yml` | Things outside our control still behave: a real model, third-party MCP servers, new CVEs, throughput. | Real money or network. |
+| **Drift** (scheduled, never a gate) | `e2e-canary.yml`, `mcp-catalog-smoke.yml`, the scheduled scans, `benchmark.yml` | Things outside our control still behave: a real model, third-party MCP servers, new CVEs, throughput. | Real money or network. |
 
 ### Where does my test go?
 

@@ -245,11 +245,11 @@ handshake sweep described above — and `—` when nothing could be checked
 templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
 while public DNS is fine). A row is not re-verified by later releases.
 
-Counts — can CI hit?: yes 12 · key-fixture 42 · oauth-manual 196 · tenant 40 ·
-dead-suspect 0. Auth: oauth 196 · tenant 39 · api_key 41 · open 14.
+Counts — can CI hit?: yes 11 · key-fixture 42 · oauth-manual 197 · tenant 40 ·
+dead-suspect 0. Auth: oauth 197 · tenant 39 · api_key 41 · open 13.
 Provenance: official 283 · third_party 5 · community 2. Featured: 21. Last
-verified: live 15 · probe 2026-09-14 181 · probe 2026-09-16 33 · probe
-2026-09-25 7 · probe 2026-11-02 1 · probe 2026-11-04 1 · probe 2026-11-08 18 · not probeable 34. These totals are derived from the table
+verified: live 15 · probe 2026-09-14 180 · probe 2026-09-16 33 · probe
+2026-09-25 7 · probe 2026-11-02 1 · probe 2026-11-04 1 · probe 2026-11-08 18 · probe 2026-11-11 1 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -541,6 +541,6 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | xero | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | zapier | oauth | third_party | automation | ★ | oauth-manual | 2026-09-16 probe | discovery ✓ | self-registering, public client ok |
 | zenhub | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (21 tools listed; the key is checked only at tools/call) (F14) |
-| zerodha-kite | open | official | finance |  | yes | 2026-09-14 probe | open ✓ (initialize 200) | `login` tool session lives only within the calling turn; does not persist across turns and cannot authenticate in scheduled runs |
+| zerodha-kite | oauth | official | finance |  | oauth-manual | 2026-11-11 probe | discovery ✓ | self-registering, public client ok; upgraded from unauthenticated `login`-tool flow to MCP OAuth 2.1 (`https://mcp.kite.trade/authorize` 200; no revocation endpoint, so sign-out clears locally only) (#2118) |
 | zoom | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | zoominfo | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url was 404 — replaced with the vendor's current page on `docs.gtm.ai` (ZoomInfo's GTM AI rebrand) |

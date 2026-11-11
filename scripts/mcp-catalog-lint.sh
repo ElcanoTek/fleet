@@ -13,7 +13,9 @@
 # Verdicts, per link:
 #   OK    — final status 2xx/3xx after following up to 5 redirects.
 #   DEAD  — 404 or 410 at the URL itself, or the hostname still does not
-#           resolve after the retries. These FAIL the run.
+#           resolve after the retries — confirmed once more after
+#           --confirm-delay seconds so a brief deploy swap or resolver hiccup
+#           does not fail the run. These FAIL the run.
 #   WARN  — anything else: 401/403/405/406/429 (documentation sites often sit
 #           behind a bot wall that rejects a non-browser client), 5xx, TLS or
 #           timeout errors — and a 404/410 reached only AFTER a redirect. That
@@ -57,6 +59,7 @@ CATALOG="internal/clientconfig/builtin_remote_catalog.yaml"
 FIELDS="docs_url"
 CONCURRENCY=4
 DELAY=1
+CONFIRM_DELAY=""
 TIMEOUT=20
 RETRIES=2
 REPORT=""
@@ -79,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --fields) FIELDS="$2"; shift 2 ;;
     --concurrency) CONCURRENCY="$2"; shift 2 ;;
     --delay) DELAY="$2"; shift 2 ;;
+    --confirm-delay) CONFIRM_DELAY="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --retries) RETRIES="$2"; shift 2 ;;
     --report) REPORT="$2"; shift 2 ;;
@@ -114,6 +118,16 @@ if [[ ! "$DELAY" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   exit 2
 fi
 command -v awk >/dev/null 2>&1 || { echo "awk is required" >&2; exit 2; }
+if [[ -z "$CONFIRM_DELAY" ]]; then
+  if awk -v d="$DELAY" 'BEGIN { exit !(d == 0) }'; then
+    CONFIRM_DELAY=0
+  else
+    CONFIRM_DELAY=30
+  fi
+elif [[ ! "$CONFIRM_DELAY" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  echo "--confirm-delay takes seconds (got $CONFIRM_DELAY)" >&2
+  exit 2
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -246,9 +260,9 @@ backoff() {
   fi
 }
 
-# check_url NAME FIELD URL — appends one result line.
+# check_url NAME FIELD URL [OUTFILE] — appends one result line.
 check_url() {
-  local name="$1" field="$2" url="$3"
+  local name="$1" field="$2" url="$3" out_file="${4:-$RESULTS}"
   local attempt=0 method=HEAD code rc ra eff verdict note line
   while :; do
     IFS="$US" read -r code rc ra eff < <(fetch "$url" "$method")
@@ -258,6 +272,14 @@ check_url() {
       if (( attempt < RETRIES )); then
         attempt=$((attempt + 1))
         sleep "$(backoff "$attempt" "$ra")"
+        continue
+      fi
+      # Some origins/CDNs answer 503 or 429 only to HEAD; try GET once with its
+      # own retry allowance after waiting out the backoff.
+      if [[ "$method" == "HEAD" ]]; then
+        sleep "$(backoff "$((attempt + 1))" "$ra")"
+        method=GET
+        attempt=0
         continue
       fi
       break
@@ -273,17 +295,19 @@ check_url() {
       break
     fi
     # HEAD refused, errored or answered anything but 2xx/3xx: ask again with
-    # GET. That includes a HEAD 404 — some servers only route GET — so a page
-    # is never called dead on the strength of HEAD alone.
+    # GET, resetting the retry counter for GET. That includes a HEAD 404 — some
+    # servers only route GET — so a page is never called dead on the strength of
+    # HEAD alone.
     if [[ "$method" == "HEAD" ]] && { (( rc != 0 )) || [[ ! "$code" =~ ^[23] ]]; }; then
       method=GET
+      attempt=0
       continue
     fi
     break
   done
   IFS="$US" read -r verdict note < <(classify "$code" "$rc" "$url" "$eff")
   line="$(printf '%s%s%s%s%s%s%s%s%s%s%s%s%s' "$verdict" "$US" "$code" "$US" "$name" "$US" "$field" "$US" "$url" "$US" "$eff" "$US" "$note")"
-  echo "$line" >> "$RESULTS"
+  echo "$line" >> "$out_file"
 }
 
 # process_host FILE — one host's links, sequentially, --delay apart.
@@ -314,6 +338,25 @@ echo "checking $total link(s) across $(find "$WORK/hosts" -type f | wc -l | tr -
 
 xargs_rc=0
 find "$WORK/hosts" -type f -print0 | xargs -0 -P "$CONCURRENCY" -I{} bash -c 'process_host "$1"' _ {} || xargs_rc=$?
+
+# Re-check DEAD links once after --confirm-delay seconds before failing the
+# run: a docs site mid-deploy swap or a momentary runner DNS blip clears by the
+# confirmation pass, while a genuinely moved or deleted page is still dead.
+if (( xargs_rc == 0 )) && awk -v d="$CONFIRM_DELAY" 'BEGIN { exit !(d > 0) }'; then
+  DEAD_FIRST="$WORK/dead-first.tsv"
+  awk -F "$US" '$1 == "DEAD" { print $3 "\t" $4 "\t" $5 }' "$RESULTS" > "$DEAD_FIRST"
+  dead_first_count="$(wc -l < "$DEAD_FIRST" | tr -d ' ')"
+  if (( dead_first_count > 0 )); then
+    echo "re-checking $dead_first_count dead link(s) after ${CONFIRM_DELAY}s to confirm..."
+    sleep "$CONFIRM_DELAY"
+    KEEP="$WORK/results.keep.tsv"
+    awk -F "$US" '$1 != "DEAD"' "$RESULTS" > "$KEEP"
+    while IFS=$'\t' read -r name field url; do
+      check_url "$name" "$field" "$url" "$KEEP"
+    done < "$DEAD_FIRST"
+    mv "$KEEP" "$RESULTS"
+  fi
+fi
 
 sort -t "$US" -k3,3 -k4,4 "$RESULTS" > "$RESULTS.sorted"
 ok=0; warn=0; dead=0
