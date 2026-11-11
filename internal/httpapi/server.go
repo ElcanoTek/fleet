@@ -30,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
@@ -324,8 +325,14 @@ type TaskScheduleRequest struct {
 // TaskMutationRequest is the sched-agnostic payload the approved manage_tasks
 // path hands to the orchestrator. Exactly one of TaskIDs / Match names the
 // targets; the change fields are all "omitted = leave alone".
+//
+// The read-only "show" action rides the same seam on purpose: it resolves the
+// selector and applies the ownership rule through the very code an update
+// does, so the model can only read the prompts of tasks the person could
+// change — never a different set picked by a second, drifting resolver.
 type TaskMutationRequest struct {
-	// Action is "update" or "stop" (tools.ManageTasksAction*).
+	// Action is "show", "update" or "stop" (tools.ManageTasksAction*). "show"
+	// writes nothing and fills TaskMutationResult.Shown.
 	Action  string
 	TaskIDs []string
 	// Match selects by property. Only ever set for "update" — the tool refuses
@@ -333,7 +340,12 @@ type TaskMutationRequest struct {
 	// the human has not seen resolved is not something to approve.
 	Match *TaskMutationMatch
 
+	// Prompt is a FULL replacement. PromptEdits / PromptAppend instead change
+	// each task's stored prompt at execution (tools.ApplyPromptEdits); the
+	// tool refuses a call that sets both kinds.
 	Prompt        string
+	PromptEdits   []tools.PromptEdit
+	PromptAppend  string
 	Cron          string
 	Model         string
 	MaxIterations int
@@ -365,6 +377,21 @@ type TaskMutationResult struct {
 	// Matched is how many tasks the selector found, which can exceed
 	// len(Changed) only when something was skipped.
 	Matched int
+	// Shown carries the current definition of each selected task the
+	// requester owns, for action "show" only.
+	Shown []TaskSnapshot
+}
+
+// TaskSnapshot is one task's current definition as action "show" reads it.
+type TaskSnapshot struct {
+	ID       string
+	Label    string
+	Status   string
+	Cron     string
+	Timezone string
+	Model    string
+	Tags     []string
+	Prompt   string
 }
 
 // TaskMutationEntry names one affected task for the chat-visible report.

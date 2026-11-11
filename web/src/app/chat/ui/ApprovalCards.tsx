@@ -1821,6 +1821,11 @@ function ScheduleTaskCard({
 //
 // And "stop" reads as destructive, because it is: a recurring job stops
 // recurring, and there is no undo from chat.
+//
+// Prompt changes render as text, not as a one-line preview: each exact-text
+// edit as the text it replaces and the text it becomes, text added at the end,
+// or — marked as such — the whole new prompt of a full replacement. A user
+// approving a "slight adjustment" has to be able to see that it is one.
 function ManageTasksCard({
   approval,
   submitting,
@@ -1844,11 +1849,17 @@ function ManageTasksCard({
     destructive?: boolean;
     consequence?: string;
     max_tasks?: number;
+    prompt_edits?: { old?: string; new?: string }[];
+    prompt_append?: string;
+    prompt_replacement?: string;
   };
   const stopping = s.action === "stop";
   const ids = Array.isArray(s.task_ids) ? s.task_ids : [];
   const match = Array.isArray(s.match) ? s.match : [];
   const changes = Array.isArray(s.changes) ? s.changes : [];
+  const promptEdits = Array.isArray(s.prompt_edits) ? s.prompt_edits : [];
+  const promptBlock =
+    "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-inset)] p-2 font-mono text-[0.72rem] text-[var(--color-text-primary)]";
 
   const title =
     executing
@@ -1919,6 +1930,48 @@ function ManageTasksCard({
             <li key={line}>{line}</li>
           ))}
         </ul>
+      ) : null}
+
+      {promptEdits.length > 0 ? (
+        <div data-testid="manage-tasks-prompt-edits" className="mt-2 grid gap-2 text-[0.75rem]">
+          <div className="text-[var(--color-text-secondary)]">
+            {tr("Edits to each task's current prompt (everything else is kept):")}
+          </div>
+          {promptEdits.map((edit, i) => (
+            <div key={i} className="grid gap-1">
+              <div>
+                <span className="text-[var(--color-card-text-muted)]">{tr("Replace:")}</span>
+                <div className={promptBlock}>
+                  <del>{edit.old ?? ""}</del>
+                </div>
+              </div>
+              <div>
+                <span className="text-[var(--color-card-text-muted)]">{tr("With:")}</span>
+                <div className={promptBlock}>
+                  {edit.new ? <ins className="no-underline">{edit.new}</ins> : <em>{tr("(removed)")}</em>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {s.prompt_append ? (
+        <div data-testid="manage-tasks-prompt-append" className="mt-2 text-[0.75rem]">
+          <span className="text-[var(--color-text-secondary)]">
+            {tr("Added to the end of each task's prompt (everything else is kept):")}
+          </span>
+          <div className={promptBlock}>{s.prompt_append}</div>
+        </div>
+      ) : null}
+
+      {s.prompt_replacement ? (
+        <div data-testid="manage-tasks-prompt-replacement" className="mt-2 text-[0.75rem]">
+          <span className="font-medium text-[var(--color-danger,#b3261e)]">
+            {tr("New prompt — replaces each task's whole current prompt; anything not in this text is removed:")}
+          </span>
+          <div className={promptBlock}>{s.prompt_replacement}</div>
+        </div>
       ) : null}
 
       {s.consequence ? (

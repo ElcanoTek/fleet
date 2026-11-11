@@ -462,7 +462,11 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		return nil, 0, err
 	}
 
-	dataQuery := fmt.Sprintf("SELECT %s FROM tasks %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d",
+	// id breaks created_at ties (a batch or an import shares one timestamp):
+	// without it, rows with equal created_at have no defined order, so
+	// successive LIMIT/OFFSET pages can repeat or skip them — which the chat
+	// manage_tasks model selector pages through.
+	dataQuery := fmt.Sprintf("SELECT %s FROM tasks %s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d",
 		taskColumns, whereSQL, argIndex, argIndex+1)
 	args = append(args, limit, offset)
 

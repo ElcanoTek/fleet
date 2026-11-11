@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // approvalClientFields is the review payload shared by live SSE events and
@@ -298,6 +299,14 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 // update's blast radius, and the post-approval report names every task it
 // touched. What the card must never be is vague about the ACTION — so "stop"
 // carries its own irreversibility line.
+//
+// Prompt text gets its own fields rather than a squeezed line: each exact-text
+// edit as old → new (prompt_edits), text added at the end (prompt_append), and
+// a full replacement's new text (prompt_replacement). The card used to show the
+// first 80 characters of a full replacement, so a user approving a "slight
+// adjustment" could not see that the rest of the prompt was being rewritten.
+// Each field is bounded by runes, never bytes, so a multibyte prompt is not
+// cut mid-character; a bounded field says so.
 func summarizeManageTasksInput(toolName, rawInput string) map[string]any {
 	var p tools.ManageTasksParams
 	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
@@ -319,8 +328,33 @@ func summarizeManageTasksInput(toolName, rawInput string) map[string]any {
 		out["destructive"] = true
 		out["consequence"] = "A recurring job stops recurring and will not run again. A run in progress halts at its next checkpoint and keeps its partial transcript."
 	}
+	if len(p.PromptEdits) > 0 {
+		edits := make([]map[string]string, 0, len(p.PromptEdits))
+		for _, e := range p.PromptEdits {
+			edits = append(edits, map[string]string{
+				"old": truncate.Runes(e.Old, manageTasksCardPromptRunes, cardTruncatedMarker),
+				"new": truncate.Runes(e.New, manageTasksCardPromptRunes, cardTruncatedMarker),
+			})
+		}
+		out["prompt_edits"] = edits
+	}
+	if v := strings.TrimSpace(p.PromptAppend); v != "" {
+		out["prompt_append"] = truncate.Runes(v, manageTasksCardPromptRunes, cardTruncatedMarker)
+	}
+	if v := strings.TrimSpace(p.Prompt); v != "" {
+		out["prompt_replacement"] = truncate.Runes(v, manageTasksCardPromptRunes, cardTruncatedMarker)
+	}
 	return out
 }
+
+// manageTasksCardPromptRunes bounds each block of prompt text on a manage_tasks
+// card. Generous on purpose — the text IS what is being approved — and only
+// there so one enormous argument cannot make the card unusable.
+const manageTasksCardPromptRunes = 6000
+
+// cardTruncatedMarker ends a prompt block the card had to shorten, so the
+// approver knows the card is not showing all of it.
+const cardTruncatedMarker = "… [shortened on this card]"
 
 // formatTaskMutationReport names every task the call touched. A bulk edit that
 // reports only a count is a bulk edit nobody can check — and the operator asking

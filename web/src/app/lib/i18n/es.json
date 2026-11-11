@@ -5647,5 +5647,12 @@
   "⚡ Act for me": "⚡ Actuar por mí",
   "✓ {0} done": "✓ {0} completados",
   "✨ new": "✨ nuevo",
-  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversación compartida de solo lectura: cualquiera que tenga este enlace puede verla."
+  "🔗 Read-only shared conversation — anyone with this link can view it.": "🔗 Conversación compartida de solo lectura: cualquiera que tenga este enlace puede verla.",
+  "Edits to each task's current prompt (everything else is kept):": "Cambios en el prompt actual de cada tarea (todo lo demás se conserva):",
+  "Replace:": "Reemplazar:",
+  "With:": "Por:",
+  "(removed)": "(eliminado)",
+  "Added to the end of each task's prompt (everything else is kept):": "Se añade al final del prompt de cada tarea (todo lo demás se conserva):",
+  "New prompt — replaces each task's whole current prompt; anything not in this text is removed:": "Nuevo prompt: reemplaza todo el prompt actual de cada tarea; se elimina todo lo que no esté en este texto:",
+  "manage_tasks: action 'show' is read-only and is never approved; nothing was changed": "manage_tasks: la acción 'show' es de solo lectura y nunca se aprueba; no se cambió nada"
 }

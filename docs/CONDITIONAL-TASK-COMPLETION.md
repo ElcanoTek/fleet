@@ -138,8 +138,11 @@ EXECUTION REQUIREMENTS (JSON):
   marker, bad JSON, a server or tool name outside `^[a-zA-Z0-9_.-]{1,200}$`, too
   many names) is refused when the task is saved. That covers:
   - create, edit, clone, import (HTTP and CLI) and batch;
-  - a chat `schedule_task` / `manage_tasks` call, refused before its approval
-    card is staged.
+  - a chat `schedule_task` / `manage_tasks` call carrying a full prompt,
+    refused before its approval card is staged. A `manage_tasks`
+    `prompt_edits` / `prompt_append` result only exists once applied to the
+    stored prompt, so it is checked at approval and that task is skipped with
+    the message ([MANAGE-TASKS-PROMPT-EDITS.md](MANAGE-TASKS-PROMPT-EDITS.md)).
 
   The message names the field, index and identifier, e.g. `invalid server or
   tool identifier "fast_io + fastio_helpers" in mcp_servers[0]; allowed

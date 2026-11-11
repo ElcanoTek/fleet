@@ -238,3 +238,61 @@ func TestTaskGatesReportAStageRefusalAsARefusal(t *testing.T) {
 		}
 	}
 }
+
+// manage_tasks action="show" only reads, so it runs without a card — the model
+// has to be able to see a stored prompt before it edits one. Every write action
+// still stages, through the full interactive policy, not just the one gate.
+func TestManageTasksShowPassesTheGateAndWritesStillStage(t *testing.T) {
+	sink := &stagerFake{}
+	p := NewInteractivePolicy(0, 0, sink, nil)
+
+	if blocked, msg := p.BeforeToolCall("manage_tasks", "tc-1", `{"action":"show","match":{"query":"daily email"}}`); blocked {
+		t.Fatalf("show was blocked: %s", msg)
+	}
+	if len(sink.staged) != 0 {
+		t.Fatalf("show staged a card: %v", sink.staged)
+	}
+
+	for i, raw := range []string{
+		`{"action":"update","task_ids":["a"],"prompt_edits":[{"old":"x","new":"y"}]}`,
+		`{"action":"update","task_ids":["a"],"prompt":"all new"}`,
+		`{"action":"stop","task_ids":["a"]}`,
+		`{"action":"show ","prompt":"smuggled"}`, // still show: Run refuses the change field; nothing can write
+		`{not json`,
+	} {
+		blocked, msg := p.BeforeToolCall("manage_tasks", fmt.Sprintf("tc-w%d", i), raw)
+		show := strings.Contains(raw, `"show `)
+		if show {
+			if blocked {
+				t.Errorf("%s: blocked=%v msg=%q; a show goes to the tool, whose Run refuses the change field", raw, blocked, msg)
+			}
+			continue
+		}
+		if !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Errorf("%s: blocked=%v msg=%q, want it staged for approval", raw, blocked, msg)
+		}
+	}
+	if len(sink.staged) != 4 {
+		t.Fatalf("staged %d write calls, want 4: %v", len(sink.staged), sink.staged)
+	}
+}
+
+// A bundle that lists manage_tasks (or a suffix it matches) as critical must
+// not turn a read-only show into a generic card: the dedicated gate owns the
+// tool, and it still stages every write.
+func TestManageTasksShowIsNotStagedByABundleCriticalList(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{CriticalToolSuffixes: []string{"manage_tasks", "tasks"}})
+
+	sink := &stagerFake{}
+	p := NewInteractivePolicy(0, 0, sink, nil)
+	if blocked, msg := p.BeforeToolCall("manage_tasks", "tc-1", `{"action":"show","task_ids":["a"]}`); blocked {
+		t.Fatalf("show was blocked under a critical list: %s", msg)
+	}
+	if blocked, msg := p.BeforeToolCall("manage_tasks", "tc-2", `{"action":"update","task_ids":["a"],"prompt_append":"x"}`); !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
+		t.Fatalf("update: blocked=%v msg=%q, want it staged", blocked, msg)
+	}
+	if len(sink.staged) != 1 {
+		t.Fatalf("staged = %v, want exactly the update", sink.staged)
+	}
+}

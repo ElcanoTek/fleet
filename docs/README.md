@@ -321,6 +321,7 @@ above fails otherwise.
 - [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md) — Admin-managed LLM providers
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
+- [`MANAGE-TASKS-PROMPT-EDITS.md`](MANAGE-TASKS-PROMPT-EDITS.md) — Editing a scheduled task's prompt from chat: `manage_tasks` show, exact-text prompt edits applied to the stored prompt, and a card that shows the text
 - [`MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md) — Manifest contract: reading fleet's API facts from the OpenAPI spec
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, the signed-in user's `${FLEET_USER_EMAIL}` (ADR-0087), `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging

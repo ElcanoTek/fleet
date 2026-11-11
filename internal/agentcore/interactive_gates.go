@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Interactive-only native approval gates: risky bash, preview_email, and
@@ -189,8 +191,11 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 		return false, "" // checkEmailSafety owns send_email end-to-end
 	}
 	switch toolName {
-	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameSuggestAdvancedModel:
-		return false, "" // dedicated gates own these
+	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameManageTasks, toolNameSuggestAdvancedModel:
+		// Dedicated gates own these. manage_tasks: checkManageTasksSafety
+		// stages every write itself, and a read-only show staged here would
+		// reach an executor that (rightly) refuses to approve a show.
+		return false, ""
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -335,12 +340,21 @@ func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawIn
 // tool has no execution path of its own, and the card the human reads IS the
 // safety mechanism — one call can rewrite the schedule on a dozen jobs or stop
 // a recurring one for good, and neither is something to discover afterwards.
+//
+// The one exception is action="show", which only reads: it passes through to
+// the tool's Run, which serves nothing but that read (every other action there
+// is a tripwire), so letting it by cannot let a write by. Without it the model
+// had no way to see a stored prompt and rebuilt "slight adjustments" from its
+// memory of the conversation, dropping whatever it did not remember.
 func (o *orchestrationState) checkManageTasksSafety(toolName, toolCallID, rawInput string) (bool, string) {
 	if toolName != toolNameManageTasks {
 		return false, ""
 	}
 	if hasUnresolvedToolPlaceholder(rawInput) {
 		return true, "manage_tasks argument contains an unresolved ${tool:…} placeholder. The agent runtime does NOT substitute that syntax; paste the actual value into the tool arguments instead."
+	}
+	if tools.IsManageTasksShow(rawInput) {
+		return false, ""
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()

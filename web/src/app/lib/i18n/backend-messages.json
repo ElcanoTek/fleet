@@ -244,6 +244,7 @@
     "limit must be a positive integer",
     "lockdown is unavailable on this server (no sandbox image configured)",
     "malformed JSON",
+    "manage_tasks: action 'show' is read-only and is never approved; nothing was changed",
     "managing scheduled tasks from chat is not configured on this server",
     "max 100 conversation_ids per request",
     "max_cost_per_day_usd/max_cost_per_month_usd are no longer supported; create a rolling budget instead: POST /admin/budgets {\"scope\":\"key\",\"principal_id\":\"\u003ckey_id\u003e\",\"window\":\"day|week|month\",\"hard_usd\":…}",
