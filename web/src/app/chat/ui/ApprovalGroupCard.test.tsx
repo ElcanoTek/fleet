@@ -189,6 +189,52 @@ describe("ApprovalGroupCard", () => {
       expect.objectContaining({ id: "ap-pm", status: "pending", decisionError: expect.stringContaining("shutting down") }),
     );
   });
+
+  it("shows raw_args under Details for grouped browser approvals", () => {
+    const browserCalls: Approval[] = [
+      {
+        id: "ap-b1",
+        tool: "playwright_browser",
+        summary: {
+          tool: "playwright_browser",
+          args: [
+            { key: "Opens", value: "https://portal.example.com/login in a headless browser" },
+            { key: "Step 1", value: 'Fill "#email" with "alice@example.com"' },
+          ],
+          raw_args: [
+            { key: "action", value: "run" },
+            { key: "steps", value: '[{"action":"extract","selector":"#tok","mode":"attribute","attribute":"data-token","timeout_ms":5000}]' },
+          ],
+        },
+        status: "pending",
+        groupId: "11111111-2222-3333-4444-555555555555",
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      },
+      {
+        id: "ap-b2",
+        tool: "connector_studio",
+        summary: {
+          tool: "connector_studio",
+          args: [{ key: "Opens", value: "https://portal.example.com/export in a headless browser" }],
+          raw_args: [
+            { key: "action", value: "probe_browser" },
+            { key: "password_ref", value: "$secret:password" },
+          ],
+        },
+        status: "pending",
+        groupId: "11111111-2222-3333-4444-555555555555",
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      },
+    ];
+    renderGroup({ approvals: browserCalls });
+    const details = screen.getAllByTestId("approval-card-details");
+    expect(details).toHaveLength(2);
+    const rawBlocks = screen.getAllByTestId("approval-raw-args");
+    expect(rawBlocks).toHaveLength(2);
+    expect(rawBlocks[0].textContent).toContain("data-token");
+    expect(rawBlocks[0].textContent).toContain("timeout_ms");
+    expect(rawBlocks[1].textContent).toContain("password_ref: $secret:password");
+  });
 });
 
 describe("a card a grouped decision could not decide", () => {

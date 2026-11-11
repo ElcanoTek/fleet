@@ -291,3 +291,120 @@ func TestBrowserApprovalPressAndFallbackHideCredentials(t *testing.T) {
 		t.Errorf("a vaulted reference is hidden on the fallback card: %s", b)
 	}
 }
+
+// TestBrowserApprovalRawArgsHideWhatTheRowsHide: the card's Details carry the
+// call's own arguments, with the same values hidden as in the readable rows.
+func TestBrowserApprovalRawArgsHideWhatTheRowsHide(t *testing.T) {
+	t.Parallel()
+	raw := `{"action":"run","url":"https://a.example.com/?k=plain-key-1928","password_ref":"plain-key-1928","username_ref":"alice","steps":[` + // gitleaks:allow (made-up test value)
+		`{"action":"fill","selector":"#user","value":"{{USERNAME}}"},{"action":"fill","selector":"#apiKey","value":"literal-1928"},` +
+		`{"action":"goto","value":"https://a.example.com/x?k=plain-key-1928"},{"action":"fill","selector":"#q","value":"hello"}]}`
+	summary := summarizeApprovalInput(tools.PlaywrightBrowserToolName, raw, "")
+	rows, ok := summary["raw_args"].([]map[string]string)
+	if !ok || len(rows) == 0 {
+		t.Fatalf("no raw_args in %#v", summary)
+	}
+	b, _ := json.Marshal(rows)
+	for _, secret := range []string{"plain-key-1928", "literal-1928"} {
+		if strings.Contains(string(b), secret) {
+			t.Errorf("raw_args show %q: %s", secret, b)
+		}
+	}
+	for _, keep := range []string{`"key":"action","value":"run"`, `"key":"username_ref","value":"alice"`, "given in the chat (not shown here)", "{{USERNAME}}", `\"value\":\"hello\"`} {
+		if !strings.Contains(string(b), keep) {
+			t.Errorf("raw_args = %s, want %s", b, keep)
+		}
+	}
+	vaulted := summarizeApprovalInput(tools.ConnectorStudioToolName, `{"action":"probe_browser","url":"https://a.example.com/","password_ref":"$secret:password"}`, "")
+	if b, _ := json.Marshal(vaulted["raw_args"]); !strings.Contains(string(b), `"value":"$secret:password"`) {
+		t.Errorf("a vaulted reference is not shown as itself: %s", b)
+	}
+}
+
+// TestBrowserApprovalDetailsNeverShowMoreThanTheRows: for each call, any
+// credential the readable rows keep out is also kept out of raw_args, however
+// the call spells it: key case, duplicate keys (the last wins, as when it
+// runs), a goto given as a selector, a credential under a key the tool does
+// not read, a press of it.
+func TestBrowserApprovalDetailsNeverShowMoreThanTheRows(t *testing.T) {
+	t.Parallel()
+	const pw = "hunter4-details" // gitleaks:allow (made-up test value)
+	cases := map[string]string{
+		"key case":       `{"ACTION":"run","URL":"https://a.example.com/","PASSWORD_REF":"` + pw + `","Steps":[{"Action":"fill","Selector":"#q","Value":"` + pw + `"}]}`,
+		"duplicate keys": `{"action":"run","url":"https://a.example.com/","password_ref":"$secret:pw","Password_Ref":"` + pw + `"}`,
+		"goto selector":  `{"action":"run","url":"https://a.example.com/","password_ref":"` + pw + `","steps":[{"action":"goto","selector":"https://a.example.com/?k=` + pw + `"}]}`,
+		"other key":      `{"action":"run","url":"https://a.example.com/","password_ref":"` + pw + `","headers":{"Authorization":"Bearer ` + pw + `"},"text":"` + pw + `"}`,
+		"press":          `{"action":"run","url":"https://a.example.com/","password_ref":"` + pw + `","steps":[{"action":"press","selector":"#q","value":"` + pw + `"}]}`,
+		"secret_ref":     `{"action":"probe_browser","url":"https://a.example.com/","secret_ref":"` + pw + `","steps":[{"action":"wait_for","value":"https://a.example.com/` + pw + `"}]}`,
+		"unknown step":   `{"action":"run","url":"https://a.example.com/","steps":[{"action":"type","selector":"#x","value":"` + pw + `"}]}`,
+		// Masked whole before rows are shortened or encoded, so neither a
+		// prefix nor an escaped form shows.
+		"past the limit":  `{"action":"run","url":"https://a.example.com/","password_ref":"` + pw + `","steps":[{"action":"press","selector":"#` + strings.Repeat("s", 250) + `","value":"` + pw + `"}]}`,
+		"long secret_ref": `{"action":"probe_browser","url":"https://a.example.com/","secret_ref":"` + strings.Repeat(pw, 30) + `","steps":[{"action":"press","selector":"#q","value":"` + strings.Repeat(pw, 30) + `"}]}`,
+		"quote in value":  `{"action":"run","url":"https://a.example.com/","password_ref":"hun\"` + pw + `","steps":[{"action":"click","selector":"#q","value":"hun\"` + pw + `"}]}`,
+		"backslash":       `{"action":"run","url":"https://a.example.com/","password_ref":"hun\\` + pw + `","steps":[{"action":"press","selector":"#q","value":"hun\\` + pw + `"}]}`,
+		"custom tools":    `{"action":"probe_browser","url":"https://a.example.com/","custom_tools":[{"name":"t","headers":{"X-Key":"` + pw + `"},"body":"` + pw + `"}]}`,
+		"unused values":   `{"action":"run","url":"https://a.example.com/","steps":[{"action":"click","selector":"#password","value":"` + pw + `"},{"action":"wait_for","selector":"#pin","value":"` + pw + `"},{"action":"extract","selector":"#secret","value":"` + pw + `"}]}`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			tool := tools.PlaywrightBrowserToolName
+			if strings.Contains(raw, "probe_browser") {
+				tool = tools.ConnectorStudioToolName
+			}
+			summary := summarizeApprovalInput(tool, raw, "")
+			rows, _ := json.Marshal(summary["args"])
+			details, _ := json.Marshal(summary["raw_args"])
+			if !strings.Contains(string(rows), pw) && strings.Contains(string(details), pw[:7]) {
+				t.Errorf("Details show what the rows hide:\nrows    %s\ndetails %s", rows, details)
+			}
+		})
+	}
+}
+
+// TestBrowserApprovalDetailsKeepParameterNames: a very short plain
+// credential hides every value it occurs in, but not the parameter names, so
+// Details still reads as the call's arguments.
+func TestBrowserApprovalDetailsKeepParameterNames(t *testing.T) {
+	t.Parallel()
+	rows, _ := summarizeApprovalInput(tools.PlaywrightBrowserToolName,
+		`{"action":"run","url":"https://a.example.com/","password_ref":"a","steps":[{"action":"fill","selector":"#q","value":"a"}]}`, "")["raw_args"].([]map[string]string)
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, r["key"])
+		if r["key"] == "steps[1]" && (!strings.Contains(r["value"], `"action":`) || !strings.Contains(r["value"], `"selector":`)) {
+			t.Errorf("step row lost its parameter names: %s", r["value"])
+		}
+	}
+	if got := strings.Join(keys, ","); got != "action,password_ref,url,steps[1]" {
+		t.Errorf("Details keys = %s", got)
+	}
+}
+
+// TestBrowserApprovalDetailsListStepsAndKeepSelectors: one row per step, so a
+// long flow is not cut off mid-step, and selectors keep their > (no HTML
+// escaping).
+func TestBrowserApprovalDetailsListStepsAndKeepSelectors(t *testing.T) {
+	t.Parallel()
+	var steps []string
+	for i := 0; i < 8; i++ {
+		steps = append(steps, `{"action":"extract","selector":"form > input[name=f`+string(rune('a'+i))+`]","mode":"attribute","attribute":"value","optional":true}`)
+	}
+	raw := `{"action":"run","url":"https://a.example.com/?a=1&b=2","steps":[` + strings.Join(steps, ",") + `]}`
+	rows, _ := summarizeApprovalInput(tools.PlaywrightBrowserToolName, raw, "")["raw_args"].([]map[string]string)
+	var stepRows int
+	for _, r := range rows {
+		if strings.HasPrefix(r["key"], "steps[") {
+			stepRows++
+			if !strings.Contains(r["value"], `"selector":"form > input`) || !strings.Contains(r["value"], `"attribute":"value"`) {
+				t.Errorf("step row %s = %s", r["key"], r["value"])
+			}
+		}
+		if r["key"] == "url" && r["value"] != "https://a.example.com/?a=1&b=2" {
+			t.Errorf("url row = %q", r["value"])
+		}
+	}
+	if stepRows != 8 {
+		t.Errorf("%d step rows, want 8: %v", stepRows, rows)
+	}
+}

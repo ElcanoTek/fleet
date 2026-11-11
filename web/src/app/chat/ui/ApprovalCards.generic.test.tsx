@@ -122,6 +122,54 @@ describe("the generic critical-action card", () => {
     expect(screen.queryByTestId("generic-action-card")).toBeNull();
   });
 
+  it("keeps a described call's own arguments under Details", () => {
+    renderCard({
+      tool: "connector_studio",
+      summary: {
+        tool: "connector_studio",
+        args: [
+          { key: "What", value: "Run these steps in your live browser session" },
+          { key: "Step 1", value: "Type the password into #pw" },
+        ],
+        raw_args: [
+          { key: "action", value: "probe_browser" },
+          { key: "password_ref", value: "$secret:password" },
+          { key: "steps[1]", value: '{"action":"fill","selector":"#pw","value":"{{PASSWORD}}"}' },
+        ],
+      },
+    });
+    expect(screen.getByText("Type the password into #pw")).toBeTruthy();
+    const details = screen.getByTestId("approval-card-details");
+    expect(details.tagName).toBe("DETAILS");
+    expect((details as HTMLDetailsElement).open).toBe(false);
+    const raw = screen.getByTestId("approval-raw-args");
+    expect(details.contains(raw)).toBe(true);
+    expect(raw.textContent).toContain("password_ref: $secret:password");
+    expect(raw.textContent).toContain("action: probe_browser");
+    expect(raw.textContent).toContain('steps[1]: {"action":"fill","selector":"#pw"');
+  });
+
+  it("keeps Details on a settled and on a running described card", () => {
+    const summary = {
+      tool: "playwright_browser",
+      args: [{ key: "What", value: "Run these steps in a new headless browser" }],
+      raw_args: [{ key: "action", value: "run" }],
+    };
+    renderCard({ tool: "playwright_browser", status: "approved", resultText: "ok", summary });
+    expect(screen.getByTestId("approval-raw-args").textContent).toContain("action: run");
+    document.body.innerHTML = "";
+    renderCard({ tool: "playwright_browser", status: "pending", executing: true, summary });
+    expect(screen.getByTestId("approval-raw-args").textContent).toContain("action: run");
+  });
+
+  it("has no Details for a card without raw arguments", () => {
+    renderCard({
+      tool: "mcp_pages_deploy_page",
+      summary: { tool: "mcp_pages_deploy_page", args: [{ key: "slug", value: "q3-report" }] },
+    });
+    expect(screen.queryByTestId("approval-card-details")).toBeNull();
+  });
+
   it("falls back to raw args when the input was unparseable", () => {
     renderCard({
       tool: "mcp_pages_deploy_page",
