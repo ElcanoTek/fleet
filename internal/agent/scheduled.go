@@ -658,7 +658,8 @@ func stripOptionalCodeFence(text string) (body string, jsonFence bool) {
 	}
 	nl := strings.IndexByte(rest, '\n')
 	if nl < 0 {
-		return "", false
+		lang := strings.ToLower(strings.TrimSpace(rest))
+		return "", lang == "json" || strings.HasPrefix(lang, "json ")
 	}
 	lang := strings.ToLower(strings.TrimSpace(rest[:nl]))
 	jsonFence = lang == "json" || strings.HasPrefix(lang, "json ")
@@ -666,10 +667,7 @@ func stripOptionalCodeFence(text string) (body string, jsonFence bool) {
 	if trimmed, closed := strings.CutSuffix(strings.TrimSpace(inner), "```"); closed {
 		return strings.TrimSpace(trimmed), jsonFence
 	}
-	if jsonFence {
-		return strings.TrimSpace(inner), true
-	}
-	return text, false
+	return strings.TrimSpace(inner), jsonFence
 }
 
 // isSingleJSONValue reports whether text is exactly one JSON value (object,
@@ -701,38 +699,96 @@ func isSingleJSONValue(text string) bool {
 // structured JSON answer or draft rather than prose. Every valid single JSON
 // value qualifies (isSingleJSONValue), and so does a malformed or truncated
 // JSON object or array draft (such as a trailing bracket typo at the end of an
-// object, or an explicit ```json code block): appending a repair round to a
-// broken JSON draft leaves the broken JSON in front of the repaired value, so
-// no later repair round can ever produce one valid JSON value. Prose answers
-// (including "[OK] ...", "[2026-11-11] ...", "[1] ...", and Markdown links)
-// return false and keep supplement composition.
+// object, a missing comma inside an array, a truncated element, or an explicit
+// ```json code block): appending a repair round to a broken JSON draft leaves
+// the broken JSON in front of the repaired value, so no later repair round can
+// ever produce one valid JSON value. Prose answers (including "[OK] ...",
+// "[2026-11-11] ...", "[1] ...", and Markdown links) return false and keep
+// supplement composition.
 func isStructuredAnswerDraft(text string) bool {
 	if isSingleJSONValue(text) {
 		return true
 	}
 	body, jsonFence := stripOptionalCodeFence(text)
-	if body == "" {
-		return false
-	}
 	if jsonFence {
 		return true
+	}
+	if body == "" {
+		return false
 	}
 	switch body[0] {
 	case '{':
 		rest := strings.TrimLeft(body[1:], " \t\r\n")
-		return rest == "" || rest[0] == '"' || rest[0] == '}'
+		return rest == "" || rest[0] == '"' || rest[0] == '}' || rest[0] == '\'' || rest[0] == ','
 	case '[':
-		rest := strings.TrimLeft(body[1:], " \t\r\n")
-		if rest == "" || rest[0] == '{' || rest[0] == '[' || rest[0] == '"' {
+		return isJSONArrayDraft(strings.TrimLeft(body[1:], " \t\r\n"))
+	default:
+		return false
+	}
+}
+
+// isJSONArrayDraft reports whether rest (the bytes after a leading '[' and
+// whitespace) looks like a malformed or truncated JSON array rather than a
+// bracketed prose prefix such as "[OK] ...", "[2026-11-11] ...", "[1] ...", or
+// "[Label](url)".
+func isJSONArrayDraft(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	case '{', '[', '"', ']', ',':
+		return true
+	}
+	if !startsJSONArrayPrimitive(rest) {
+		return false
+	}
+	closeIdx := strings.IndexByte(rest, ']')
+	if closeIdx < 0 {
+		return true
+	}
+	inside := rest[:closeIdx]
+	if strings.ContainsAny(inside, ",[{\"'") {
+		return true
+	}
+	after := strings.TrimLeft(rest[closeIdx+1:], " \t\r\n")
+	if after == "" {
+		return true
+	}
+	switch after[0] {
+	case ',', ']', '[', '{', '}':
+		return true
+	default:
+		return false
+	}
+}
+
+func startsJSONArrayPrimitive(rest string) bool {
+	if rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9') {
+		return true
+	}
+	n := 0
+	for n < len(rest) && rest[n] >= 'a' && rest[n] <= 'z' {
+		n++
+	}
+	if n == 0 {
+		return false
+	}
+	word := rest[:n]
+	if n < len(rest) && !isJSONTokenBoundary(rest[n]) {
+		return false
+	}
+	for _, kw := range [...]string{"true", "false", "null"} {
+		if strings.HasPrefix(kw, word) {
 			return true
 		}
-		dec := json.NewDecoder(strings.NewReader(rest))
-		var first json.RawMessage
-		if dec.Decode(&first) != nil {
-			return false
-		}
-		after := strings.TrimLeft(rest[dec.InputOffset():], " \t\r\n")
-		return after == "" || after[0] == ',' || strings.HasPrefix(after, "]]") || strings.HasPrefix(after, "][")
+	}
+	return false
+}
+
+func isJSONTokenBoundary(b byte) bool {
+	switch b {
+	case ' ', '\t', '\r', '\n', ',', ']', '[', '{', '}':
+		return true
 	default:
 		return false
 	}
