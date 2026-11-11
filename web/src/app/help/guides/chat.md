@@ -66,7 +66,10 @@ automation; direct terminal output remains escaped.
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.
 Patterns use original string argument names, such as `name`, `cron`, or
-`to_email` (not the summary label `to`). Spaces are allowed in globs, and a
+`to_email` (not the summary label `to`). For the built-in browser tools, an
+`action=` pattern also matches the action's usual name, and another name for
+the same action in a pattern stands for it (for `playwright_browser`,
+`action=start_session` also covers `live`). Spaces are allowed in globs, and a
 matching deny takes precedence over approvals. `/approvals` shows the available
 handler-only pattern arguments; this requires a server that supplies them.
 Executable-tool policies reset on server restart. Scheduled-task and other

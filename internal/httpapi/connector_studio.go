@@ -900,7 +900,9 @@ func (s *Server) newConnectorStudioHandler(conv *store.Conversation, user string
 		convID = conv.ID
 	}
 	return func(ctx context.Context, params tools.ConnectorStudioParams) (any, error) {
-		switch strings.ToLower(strings.TrimSpace(params.Action)) {
+		// Normalized here as well as in the tool: an approved call reaches
+		// this handler with the action exactly as the model wrote it.
+		switch tools.NormalizeConnectorStudioAction(params.Action) {
 		case tools.ConnectorStudioActionSearchCatalog:
 			return s.connectorStudioSearchCatalog(ctx, user, params.Query)
 		case tools.ConnectorStudioActionProbeHTTP:

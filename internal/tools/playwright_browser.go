@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"charm.land/fantasy"
@@ -97,11 +98,33 @@ func RunPlaywrightBrowserForApproval(ctx context.Context, pctx PlaywrightBrowser
 	return string(out), nil
 }
 
+// playwrightBrowserActions maps every action name playwright_browser accepts,
+// aliases included, to its canonical action.
+var playwrightBrowserActions = map[string]string{
+	"": "run", "run": "run", "probe": "run", "navigate": "run", "browse": "run",
+	"start_session": "start_session", "copilot": "start_session", "live": "start_session", "open_session": "start_session",
+	"steps": "steps", "step": "steps", "run_steps": "steps", "act": "steps",
+	"snapshot":      "snapshot",
+	"close_session": "close_session", "close": "close_session", "end": "close_session",
+}
+
+// NormalizePlaywrightBrowserAction maps an action name or one of its aliases
+// (trimmed, any case) to the canonical action ("run", "start_session",
+// "steps", "snapshot", "close_session"), or "" when it is none. The
+// executor applies it, so an approved call under an alias runs.
+func NormalizePlaywrightBrowserAction(raw string) string {
+	return playwrightBrowserActions[strings.ToLower(strings.TrimSpace(raw))]
+}
+
+// PlaywrightBrowserActions returns a copy of every action name the tool
+// accepts, mapped to its canonical action, so the approval gate's tests can
+// check that each one that runs browser steps is staged.
+func PlaywrightBrowserActions() map[string]string {
+	return maps.Clone(playwrightBrowserActions)
+}
+
 func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserParams) (any, error) {
-	action := strings.ToLower(strings.TrimSpace(params.Action))
-	if action == "" {
-		action = "run"
-	}
+	action := NormalizePlaywrightBrowserAction(params.Action)
 	pctx := playwrightBrowserContextFrom(ctx)
 	targetURL := strings.TrimSpace(params.URL)
 	if (targetURL == "" || action == "steps") && strings.TrimSpace(params.SessionID) != "" {
@@ -227,7 +250,7 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 			"result":     res,
 		}, nil
 
-	case "close_session", "close", "end":
+	case "close_session":
 		if err := playwrightrunner.DefaultSessionManager().CloseSession(params.SessionID, pctx.UserEmail, ""); err != nil {
 			return nil, err
 		}
