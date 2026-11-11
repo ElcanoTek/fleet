@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -293,7 +294,8 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		steps = append(steps, st)
 	}
 
-	proxyAddr, closeProxy, err := startSSRFGuardProxy(runCtx, DialContext)
+	refused := &proxyRefusals{}
+	proxyAddr, closeProxy, err := startSSRFGuardProxy(runCtx, DialContext, refused)
 	if err != nil {
 		return nil, fmt.Errorf("start SSRF guard proxy: %w", err)
 	}
@@ -319,7 +321,7 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if len(rawOut) > 0 {
 		if jerr := json.Unmarshal(rawOut, &parsed); jerr == nil {
 			if !parsed.OK {
-				msg := maskSecrets(parsed.Error, req.Credentials)
+				msg := maskSecrets(refused.explain(parsed.Error, 0), req.Credentials)
 				if msg == "" {
 					msg = "playwright browser run failed"
 				}
@@ -331,7 +333,7 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		}
 	}
 	if runErr != nil {
-		return nil, fmt.Errorf("playwright browser failed: %s", maskSecrets(runErr.Error(), req.Credentials))
+		return nil, fmt.Errorf("playwright browser failed: %s", maskSecrets(refused.explain(runErr.Error(), 0), req.Credentials))
 	}
 	return nil, errors.New("playwright browser returned no output")
 }
@@ -444,9 +446,186 @@ func buildRunnerEnv() []string {
 	return env
 }
 
+// proxyRefusals records the upstream connections the guard proxy refused or
+// could not open. Chromium reports a refused HTTPS tunnel only as
+// "net::ERR_TUNNEL_CONNECTION_FAILED at <url>", so explain adds the host and
+// the reason to a run or live-session error that carries that code.
+//
+// It keeps the most recent maxProxyRefusals entries, one per host (a page
+// that keeps retrying a blocked host would otherwise fill it), each with a
+// sequence number so mark/explain can cover just one live-session command.
+type proxyRefusals struct {
+	mu   sync.Mutex
+	seq  int
+	list []proxyRefusal
+}
+
+type proxyRefusal struct {
+	seq     int
+	host    string // host:port as the browser asked for it
+	blocked bool   // the guard refused the address; false means the dial failed
+	reason  string // why the dial failed, in words (dialFailureReason)
+}
+
+const maxProxyRefusals = 32
+
+func (p *proxyRefusals) add(host string, err error) {
+	if p == nil || err == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seq++
+	for i := range p.list {
+		if p.list[i].host == host {
+			p.list = append(p.list[:i], p.list[i+1:]...)
+			break
+		}
+	}
+	p.list = append(p.list, proxyRefusal{seq: p.seq, host: host, blocked: errors.Is(err, errBlockedAddress), reason: dialFailureReason(err)})
+	if len(p.list) > maxProxyRefusals {
+		p.list = p.list[len(p.list)-maxProxyRefusals:]
+	}
+}
+
+// mark returns the current sequence number; explain(msg, mark) then covers
+// only the refusals recorded after it.
+func (p *proxyRefusals) mark() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seq
+}
+
+// explain returns msg with the refused host and the reason inserted after its
+// first line, when msg is a refused-tunnel error ("ERR_TUNNEL_CONNECTION_FAILED
+// at <url>") and a refusal was recorded after since. It names the refusal for
+// the failing URL's host:port, or else the most recent one (a redirect fails
+// under the URL it started from), never refusals of unrelated subresources
+// alongside it. Otherwise msg is returned unchanged.
+func (p *proxyRefusals) explain(msg string, since int) string {
+	if p == nil {
+		return msg
+	}
+	target, ok := tunnelFailureTarget(msg)
+	if !ok {
+		return msg
+	}
+	p.mu.Lock()
+	var match, latest *proxyRefusal
+	for i := range p.list {
+		r := &p.list[i]
+		if r.seq <= since {
+			continue
+		}
+		if latest == nil || r.seq > latest.seq {
+			latest = r
+		}
+		if r.host == target {
+			match = r
+		}
+	}
+	pick := match
+	if pick == nil {
+		pick = latest
+	}
+	note := ""
+	if pick != nil {
+		note = pick.describe()
+	}
+	p.mu.Unlock()
+	if note == "" {
+		return msg
+	}
+	first, rest, more := strings.Cut(msg, "\n")
+	out := first + " (" + note + ")"
+	if more {
+		out += "\n" + rest
+	}
+	return out
+}
+
+// tunnelFailureTarget returns the host:port of the URL in a Chromium
+// "ERR_TUNNEL_CONNECTION_FAILED at <url>" error, the form the proxy records.
+func tunnelFailureTarget(msg string) (string, bool) {
+	const code = "ERR_TUNNEL_CONNECTION_FAILED"
+	i := strings.Index(msg, code)
+	if i < 0 {
+		return "", false
+	}
+	rest := strings.TrimPrefix(strings.TrimSpace(msg[i+len(code):]), "at ")
+	if f := strings.Fields(rest); len(f) > 0 {
+		if u, err := url.Parse(f[0]); err == nil && u.Hostname() != "" {
+			return proxyHostPort(u.Host, u.Scheme), true
+		}
+	}
+	return "", true
+}
+
+// proxyHostPort adds the scheme's default port to a host that has none.
+func proxyHostPort(host, scheme string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	port := "443"
+	if strings.EqualFold(scheme, "http") {
+		port = "80"
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), port)
+}
+
+func (r proxyRefusal) describe() string {
+	if r.blocked {
+		hostOnly, _, _ := net.SplitHostPort(r.host)
+		if net.ParseIP(hostOnly) != nil {
+			return r.host + " is a private or internal network address, which Fleet's browser does not open"
+		}
+		return r.host + " resolves to a private or internal network address, which Fleet's browser does not open"
+	}
+	return "Fleet's browser could not reach " + r.host + ": " + r.reason
+}
+
+// dialFailureReason says in words why the guard proxy could not open a
+// connection. It does not pass the error text through: a resolver error names
+// the DNS server the host uses, which is no business of the page or model.
+func dialFailureReason(err error) string {
+	var dnsErr *net.DNSError
+	var netErr net.Error
+	switch {
+	case errors.Is(err, errBlockedAddress):
+		return ""
+	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
+		return "the name does not resolve"
+	case errors.As(err, &dnsErr) && dnsErr.IsTimeout:
+		return "looking the name up timed out"
+	case errors.As(err, &dnsErr):
+		return "looking the name up failed"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "the connection was refused"
+	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
+		return "there is no route to it"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "the connection timed out"
+	}
+	return "the connection failed"
+}
+
+// guardRefusalResponse is the status and body the proxy answers a refused
+// upstream with; a plain-HTTP page shows the body to the reader.
+func guardRefusalResponse(host string, err error) (int, string) {
+	r := proxyRefusal{host: host, blocked: errors.Is(err, errBlockedAddress), reason: dialFailureReason(err)}
+	if r.blocked {
+		return http.StatusForbidden, "Blocked by Fleet: " + r.describe() + "."
+	}
+	return http.StatusBadGateway, r.describe() + "."
+}
+
 // startSSRFGuardProxy starts an ephemeral loopback HTTP + CONNECT proxy that
-// dials every upstream address through dial (which enforces netguard.IsBlockedIP).
-func startSSRFGuardProxy(ctx context.Context, dial func(ctx context.Context, network, addr string) (net.Conn, error)) (string, func(), error) {
+// dials every upstream address through dial (which enforces netguard.IsBlockedIP)
+// and records what it refused in refused (which may be nil).
+func startSSRFGuardProxy(ctx context.Context, dial func(ctx context.Context, network, addr string) (net.Conn, error), refused *proxyRefusals) (string, func(), error) {
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
@@ -463,10 +642,10 @@ func startSSRFGuardProxy(ctx context.Context, dial func(ctx context.Context, net
 		ReadHeaderTimeout: 15 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodConnect {
-				handleProxyConnect(w, r, dial)
+				handleProxyConnect(w, r, dial, refused)
 				return
 			}
-			handleProxyHTTP(w, r, transport)
+			handleProxyHTTP(w, r, transport, refused)
 		}),
 	}
 	go func() {
@@ -483,14 +662,18 @@ func startSSRFGuardProxy(ctx context.Context, dial func(ctx context.Context, net
 	return ln.Addr().String(), closeFn, nil
 }
 
-func handleProxyConnect(w http.ResponseWriter, r *http.Request, dial func(ctx context.Context, network, addr string) (net.Conn, error)) {
+func handleProxyConnect(w http.ResponseWriter, r *http.Request, dial func(ctx context.Context, network, addr string) (net.Conn, error), refused *proxyRefusals) {
 	targetAddr := r.Host
 	if _, _, err := net.SplitHostPort(targetAddr); err != nil {
 		targetAddr = net.JoinHostPort(targetAddr, "443")
 	}
 	upConn, err := dial(r.Context(), "tcp", targetAddr)
 	if err != nil {
-		http.Error(w, "SSRF guard refused target", http.StatusForbidden)
+		if r.Context().Err() == nil { // not a request the browser gave up on
+			refused.add(targetAddr, err)
+		}
+		code, body := guardRefusalResponse(targetAddr, err)
+		http.Error(w, body, code)
 		return
 	}
 	hj, ok := w.(http.Hijacker)
@@ -526,7 +709,7 @@ func handleProxyConnect(w http.ResponseWriter, r *http.Request, dial func(ctx co
 	}()
 }
 
-func handleProxyHTTP(w http.ResponseWriter, r *http.Request, transport *http.Transport) {
+func handleProxyHTTP(w http.ResponseWriter, r *http.Request, transport *http.Transport, refused *proxyRefusals) {
 	if r.URL == nil || (r.URL.Scheme != "http" && r.URL.Scheme != "https") || r.URL.Hostname() == "" {
 		http.Error(w, "invalid proxy URL", http.StatusBadRequest)
 		return
@@ -546,7 +729,12 @@ func handleProxyHTTP(w http.ResponseWriter, r *http.Request, transport *http.Tra
 	}
 	resp, err := transport.RoundTrip(outReq)
 	if err != nil {
-		http.Error(w, "SSRF guard or upstream refused request", http.StatusForbidden)
+		host := proxyHostPort(r.URL.Host, r.URL.Scheme)
+		if r.Context().Err() == nil { // not a request the browser gave up on
+			refused.add(host, err)
+		}
+		code, body := guardRefusalResponse(host, err)
+		http.Error(w, body, code)
 		return
 	}
 	defer resp.Body.Close()

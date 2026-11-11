@@ -113,6 +113,7 @@ type LiveSession struct {
 	stdin       io.WriteCloser
 	cancel      context.CancelFunc
 	closeProxy  func()
+	refused     *proxyRefusals // what the session's guard proxy refused
 	cmd         *exec.Cmd
 }
 
@@ -211,7 +212,8 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 	}
 
 	sessCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	proxyAddr, closeProxy, err := startSSRFGuardProxy(sessCtx, DialContext)
+	refused := &proxyRefusals{}
+	proxyAddr, closeProxy, err := startSSRFGuardProxy(sessCtx, DialContext, refused)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("start SSRF guard proxy: %w", err)
@@ -239,6 +241,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 		stdin:       stdin,
 		cancel:      cancel,
 		closeProxy:  closeProxy,
+		refused:     refused,
 		cmd:         cmd,
 	}
 
@@ -561,6 +564,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 	if cmd.ReqID != "" {
 		s.pending[cmd.ReqID] = replyCh
 	}
+	refusedMark := s.refused.mark()
 	line, err := json.Marshal(cmd)
 	if err != nil {
 		delete(s.pending, cmd.ReqID)
@@ -590,7 +594,7 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 		creds := s.credentials
 		s.mu.Unlock()
 		if !msg.OK {
-			errMsg := maskSecrets(msg.Error, creds)
+			errMsg := maskSecrets(s.refused.explain(msg.Error, refusedMark), creds)
 			if errMsg == "" {
 				errMsg = "browser session command failed"
 			}
