@@ -66,8 +66,13 @@ automation; direct terminal output remains escaped.
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.
 Patterns use original string argument names, such as `name`, `cron`, or
-`to_email` (not the summary label `to`). For the built-in browser tools, an
-`action=` pattern also matches the action's usual name, and another name for
+`to_email` (not the summary label `to`). For executable tools, argument
+names match in any letter case, and when a call gives the same argument more
+than once, a deny applies if any of its values matches and an approval only if
+all of them do. On a scheduled-task or other handler-only card, a pattern
+matches a name only as the call writes it, and never one the call gives more
+than once, so that pattern leaves the card for you to decide. For the built-in
+browser tools, an `action=` pattern also matches the action's usual name, and another name for
 the same action in a pattern stands for it (for `playwright_browser`,
 `action=start_session` also covers `live`). Spaces are allowed in globs, and a
 matching deny takes precedence over approvals. `/approvals` shows the available

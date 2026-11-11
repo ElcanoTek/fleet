@@ -72,7 +72,13 @@ raw result for scripts.
   by conversation, so switching threads cannot authorize another thread's work.
   Policies accumulate and a matching deny takes precedence. Patterns match
   string arguments by their original names (for example, `name`, `cron`, or
-  `to_email`, not the email summary's `to` label). For the two browser tools
+  `to_email`, not the email summary's `to` label). For executable tools, an
+  argument name matches in any letter case (Fleet's own tools read names that
+  way), and every spelling of it in a call is checked: a deny applies when any
+  of them matches, an approve only when all of them do. A handler-only card's
+  pattern arguments keep each name as the call writes it and leave out one the
+  call gives more than once (in any letter case), so a terminal pattern on that
+  name leaves the card for you. For the two browser tools
   (`playwright_browser`, `connector_studio`), an `action=` pattern also
   matches the action's canonical name, and an alias in the pattern stands for
   its action (for `playwright_browser`, `action=start_session` also matches
