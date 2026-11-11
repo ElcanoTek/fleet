@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Storage panel for Settings → Admin → Server: byte accounting for the
 // fleet data trees (chat attachment uploads, orchestrator temp uploads,
 // per-conversation workspaces), the largest workspaces with owner/pinned
@@ -69,12 +70,12 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
   const load = (isStale: () => boolean) =>
     fetch("/api/admin/storage", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`storage request failed: ${res.status}`);
+        if (!res.ok) throw new Error(tr("storage request failed: {0}", [res.status]));
         const parsed = (await res.json()) as StorageResponse;
         // Guard the shape: an older server (or a proxy error page) must
         // degrade to the error banner, not crash the whole settings page.
         if (!parsed || typeof parsed !== "object" || !parsed.uploads || !parsed.workspaces || !parsed.temp_uploads) {
-          throw new Error("storage stats unavailable on this server");
+          throw new Error(tr("storage stats unavailable on this server"));
         }
         return parsed;
       })
@@ -85,7 +86,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!isStale()) setError(errorMessage(err, "storage stats unavailable"));
+        if (!isStale()) setError(errorMessage(err, tr("storage stats unavailable")));
       });
 
   useEffect(() => {
@@ -112,18 +113,20 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || `cleanup failed: ${res.status}`);
+        throw new Error(text || tr("cleanup failed: {0}", [res.status]));
       }
       const out = (await res.json()) as CleanupResponse;
       setResult(
-        `Removed ${plural(out.deleted_conversations, "conversation")}, ` +
-          `${plural(out.removed_workspaces, "workspace dir")}, ` +
-          `${out.removed_upload_files + out.removed_temp_files} file${out.removed_upload_files + out.removed_temp_files === 1 ? "" : "s"} — ` +
-          `${formatBytes(out.bytes_freed)} freed.`,
+        tr("Removed {0}, {1}, {2} — {3} freed.", [
+          plural(out.deleted_conversations, "conversation"),
+          plural(out.removed_workspaces, "workspace dir"),
+          plural(out.removed_upload_files + out.removed_temp_files, "file"),
+          formatBytes(out.bytes_freed),
+        ]),
       );
       void load(() => false);
     } catch (err) {
-      setCleanupError(errorMessage(err, "cleanup failed"));
+      setCleanupError(errorMessage(err, tr("cleanup failed")));
     } finally {
       setCleaning(false);
     }
@@ -146,24 +149,24 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
   const items: AdminStat[] = data
     ? [
         {
-          title: "Chat data on disk",
+          title: tr("Chat data on disk"),
           value: formatBytes(chatDataBytes),
-          sub: `${formatBytes(data.disk_available_bytes)} free of ${formatBytes(data.disk_total_bytes)}`,
+          sub: tr("{0} free of {1}", [formatBytes(data.disk_available_bytes), formatBytes(data.disk_total_bytes)]),
         },
         {
-          title: "Attachment uploads",
+          title: tr("Attachment uploads"),
           value: formatBytes(data.uploads.bytes),
-          sub: `${data.uploads.files} files`,
+          sub: tr("{0} files", [data.uploads.files]),
         },
         {
-          title: "Task file uploads",
+          title: tr("Task file uploads"),
           value: formatBytes(data.temp_uploads.bytes),
-          sub: `${data.temp_uploads.files} files`,
+          sub: tr("{0} files", [data.temp_uploads.files]),
         },
         {
-          title: "Workspaces",
+          title: tr("Workspaces"),
           value: formatBytes(data.workspaces.bytes),
-          sub: `${data.conversations_total} conversations (${data.conversations_pinned} pinned)`,
+          sub: tr("{0} conversations ({1} pinned)", [data.conversations_total, data.conversations_pinned]),
         },
       ]
     : [];
@@ -171,25 +174,25 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
   return (
     <ConnGroup>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">Storage</h3>
+        <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">{tr("Storage")}</h3>
       </div>
 
       {error ? (
-        <NoticeBanner tone="danger" data-testid="storage-error">Storage statistics unavailable: {error}</NoticeBanner>
+        <NoticeBanner tone="danger" data-testid="storage-error">{tr("Storage statistics unavailable:")}{" "}{error}</NoticeBanner>
       ) : !data ? (
-        <p className="text-sm text-[var(--color-text-muted)]" data-testid="storage-loading">Loading storage statistics…</p>
+        <p className="text-sm text-[var(--color-text-muted)]" data-testid="storage-loading">{tr("Loading storage statistics…")}</p>
       ) : (
         <div data-testid="storage-panel">
           {heavy ? (
             <NoticeBanner tone="warning" data-testid="storage-heavy-warning">
-              Chat data is using {formatBytes(chatDataBytes)}, more than half of this disk. You can delete old data below.
+              {tr("Chat data is using")}{" "}{formatBytes(chatDataBytes)}{tr(", more than half of this disk. You can delete old data below.")}
             </NoticeBanner>
           ) : null}
           <AdminStats items={items} />
 
           {data.largest_workspaces && data.largest_workspaces.length > 0 ? (
             <div className="mt-5 border-t border-[var(--color-border)] pt-4">
-              <h4 className="m-0 mb-2 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Largest conversation workspaces</h4>
+              <h4 className="m-0 mb-2 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">{tr("Largest conversation workspaces")}</h4>
               <ul className="m-0 list-none p-0 text-sm">
                 {data.largest_workspaces.map((w) => (
                   <li
@@ -197,9 +200,9 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                     className="flex flex-col gap-0.5 border-b border-[var(--color-border)] py-2 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3"
                   >
                     <span className="min-w-0 break-words text-[var(--color-text-secondary)] sm:truncate">
-                      {w.orphaned ? "(orphaned — reclaimed on next sweep)" : w.title || "(untitled)"}
+                      {w.orphaned ? tr("(orphaned — reclaimed on next sweep)") : w.title || tr("(untitled)")}
                       {w.user_email ? <span className="text-[var(--color-text-muted)]"> · {w.user_email}</span> : null}
-                      {w.pinned ? <span className="text-[var(--color-text-muted)]"> · pinned</span> : null}
+                      {w.pinned ? <span className="text-[var(--color-text-muted)]"> {tr("· pinned")}</span> : null}
                     </span>
                     <span className="shrink-0 font-medium tabular-nums text-[var(--color-text-primary)]">
                       {formatBytes(w.bytes)}
@@ -212,25 +215,13 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
 
           {allowCleanup ? (
             <div className="mt-5 border-t border-[var(--color-border)] pt-4">
-              <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Delete old data</h4>
+              <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">{tr("Delete old data")}</h4>
               <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
-                Permanently deletes chats with no activity, and uploaded files older than, the number of days
-                below. Pinned, archived, shared, and project chats are always kept.{" "}
+                {tr("Permanently deletes chats with no activity, and uploaded files older than, the number of days below. Pinned, archived, shared, and project chats are always kept.")}{" "}
                 <span data-testid="storage-cleanup-preview">
-                  {previewAtDefault ? (
-                    <>
-                      A cleanup at {days} days would remove{" "}
-                      <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
-                      conversation{data.reclaimable_conversations === 1 ? "" : "s"}.
-                    </>
-                  ) : (
-                    <>
-                      At the default {data.default_days}-day cutoff a cleanup would remove{" "}
-                      <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
-                      conversation{data.reclaimable_conversations === 1 ? "" : "s"}; the count at {days} days isn&apos;t
-                      known until it runs.
-                    </>
-                  )}
+                  {previewAtDefault
+                    ? tr(data.reclaimable_conversations === 1 ? "A cleanup at {0} days would remove {1} conversation." : "A cleanup at {0} days would remove {1} conversations.", [days, data.reclaimable_conversations])
+                    : tr(data.reclaimable_conversations === 1 ? "At the default {0}-day cutoff a cleanup would remove {1} conversation; the count at {2} days isn't known until it runs." : "At the default {0}-day cutoff a cleanup would remove {1} conversations; the count at {2} days isn't known until it runs.", [data.default_days, data.reclaimable_conversations, days])}
                 </span>
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -238,7 +229,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                   className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
                   htmlFor="cleanupDays"
                 >
-                  Cutoff
+                  {tr("Cutoff")}
                   <input
                     id="cleanupDays"
                     type="number"
@@ -247,7 +238,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                     onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
                     className="w-16 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.8rem] text-[var(--color-text-primary)]"
                   />
-                  days
+                  {tr("days")}
                 </label>
                 <label
                   className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
@@ -259,7 +250,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                     checked={deleteChats}
                     onChange={(e) => setDeleteChats(e.target.checked)}
                   />
-                  Delete unpinned chats
+                  {tr("Delete unpinned chats")}
                 </label>
                 <label
                   className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
@@ -271,14 +262,14 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                     checked={sweepFiles}
                     onChange={(e) => setSweepFiles(e.target.checked)}
                   />
-                  Delete old uploaded files
+                  {tr("Delete old uploaded files")}
                 </label>
                 {/* Cleanup deletes chats and files for good, so it takes the
                     same two-click inline confirmation as every other
                     irreversible action in Settings — no native dialog. */}
                 <InlineConfirmButton
-                  label={cleaning ? "Deleting…" : "Delete old data"}
-                  confirmLabel="Permanently delete"
+                  label={cleaning ? tr("Deleting…") : tr("Delete old data")}
+                  confirmLabel={tr("Permanently delete")}
                   disabled={cleaning || (!deleteChats && !sweepFiles)}
                   onConfirm={() => void runCleanup()}
                   testId="storage-cleanup-run"
@@ -291,7 +282,7 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
               ) : null}
               {cleanupError ? (
                 <NoticeBanner tone="danger" className="mt-3" data-testid="storage-cleanup-error" role="alert">
-                  Cleanup failed: {cleanupError}
+                  {tr("Cleanup failed:")}{" "}{cleanupError}
                 </NoticeBanner>
               ) : null}
             </div>
@@ -300,12 +291,12 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
               className="m-0 mt-5 border-t border-[var(--color-border)] pt-3 text-[0.78rem] text-[var(--color-text-muted)]"
               data-testid="storage-readonly-note"
             >
-              To prune old conversations or reclaim workspace files, go to{" "}
+              {tr("To prune old conversations or reclaim workspace files, go to")}{" "}
               <Link
                 href="/settings/admin/server"
                 className="font-medium text-[var(--color-accent)] hover:underline"
               >
-                Settings → Admin → Server
+                {tr("Settings → Admin → Server")}
               </Link>
               .
             </p>

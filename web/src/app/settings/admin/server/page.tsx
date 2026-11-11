@@ -1,3 +1,7 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@/app/lib/navigation";
 
@@ -82,8 +86,8 @@ type ServerStats = {
 };
 
 const REFRESH_MS = 10_000;
-const plain = new Intl.NumberFormat("en-US");
-const usd = new Intl.NumberFormat("en-US", {
+const plain = new Intl.NumberFormat(getLanguage());
+const usd = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
@@ -98,10 +102,14 @@ function percent(used: number, total: number): number {
 function UsageBar({ label, used, total }: { label: string; used: number; total: number }) {
   const value = percent(used, total);
   return (
-    <div className="mt-3" aria-label={`${label}: ${value.toFixed(1)}% used`}>
+    <div className="mt-3" aria-label={tr("{0}: {1}% used", [label, formatFixed(value, 1)])}>
       <div className="mb-1.5 flex justify-between gap-3 text-xs text-[var(--color-text-muted)]">
-        <span>{formatBytes(used)} used</span>
-        <span>{formatBytes(total)} total</span>
+        <span>
+        {rich("{0} used", formatBytes(used))}
+      </span>
+        <span>
+        {rich("{0} total", formatBytes(total))}
+      </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
         <div
@@ -121,10 +129,10 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
   const load = (isStale: () => boolean) =>
     fetch("/api/admin/server-stats", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`server stats request failed: ${res.status}`);
+        if (!res.ok) throw new Error(tr("server stats request failed: {0}", [res.status]));
         const parsed = (await res.json()) as ServerStats;
         if (!parsed || typeof parsed !== "object" || !parsed.cpu || !parsed.memory || !parsed.disk || !parsed.network) {
-          throw new Error("server stats unavailable on this server");
+          throw new Error(tr("server stats unavailable on this server"));
         }
         return parsed;
       })
@@ -134,7 +142,7 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!isStale()) setError(errorMessage(err, "server stats unavailable"));
+        if (!isStale()) setError(errorMessage(err, tr("server stats unavailable")));
       });
 
   // The poll's staleness check: the current load effect's, so a poll that
@@ -187,24 +195,24 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
   const agentPrimaryItems: AdminStat[] = stats
     ? [
         {
-          title: "Total active agents",
+          title: tr("Total active agents"),
           value: plain.format(ag.active_agents_total),
-          sub: `${ag.active_chat_turns} chat · ${ag.running_tasks} task bots · ${ag.active_subagents} sub-agents`,
+          sub: tr("{0} chat · {1} task bots · {2} sub-agents", [ag.active_chat_turns, ag.running_tasks, ag.active_subagents]),
         },
         {
-          title: "Live chat agents",
+          title: tr("Live chat agents"),
           value: plain.format(ag.active_chat_turns),
-          sub: `${plain.format(ag.active_conversations_24h)} active chats in 24h`,
+          sub: tr("{0} active chats in 24h", [plain.format(ag.active_conversations_24h)]),
         },
         {
-          title: "Scheduled task bots",
+          title: tr("Scheduled task bots"),
           value: plain.format(ag.running_tasks),
-          sub: `${ag.queued_tasks} queued · ${ag.completed_tasks_today} completed today · ${ag.failed_tasks_today} failed`,
+          sub: tr("{0} queued · {1} completed today · {2} failed", [ag.queued_tasks, ag.completed_tasks_today, ag.failed_tasks_today]),
         },
         {
-          title: "Sub-agents used by bots",
+          title: tr("Sub-agents used by bots"),
           value: `${plain.format(ag.active_subagents)} active · ${plain.format(ag.subagents_spawned_24h)} (24h)`,
-          sub: `${plain.format(ag.subagents_spawned_total)} total sub-agents spawned`,
+          sub: tr("{0} total sub-agents spawned", [plain.format(ag.subagents_spawned_total)]),
         },
       ]
     : [];
@@ -212,24 +220,24 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
   const agentRuntimeItems: AdminStat[] = stats
     ? [
         {
-          title: "Tool executions (24h)",
+          title: tr("Tool executions (24h)"),
           value: plain.format(ag.tool_calls_24h),
-          sub: `${plain.format(ag.tool_calls_total)} total tool calls logged`,
+          sub: tr("{0} total tool calls logged", [plain.format(ag.tool_calls_total)]),
         },
         {
-          title: "LLM calls today",
+          title: tr("LLM calls today"),
           value: plain.format(ag.llm_calls_today),
-          sub: `${usd.format(ag.llm_cost_today_usd)} runtime spend today (UTC)`,
+          sub: tr("{0} runtime spend today (UTC)", [usd.format(ag.llm_cost_today_usd)]),
         },
         {
-          title: "Warm sandbox containers",
+          title: tr("Warm sandbox containers"),
           value: `${ag.sandbox_pool_available} / ${ag.sandbox_pool_size}`,
-          sub: "ready for isolated code & tool runs",
+          sub: tr("ready for isolated code & tool runs"),
         },
         {
-          title: "DB pool & runtime",
+          title: tr("DB pool & runtime"),
           value: `${ag.db_pool_in_use} / ${ag.db_pool_size} DB conns`,
-          sub: `${ag.mcp_servers_enabled}/${ag.mcp_servers_total} MCP connectors · ${ag.goroutines} goroutines · ${ag.process_memory_mb.toFixed(1)} MB heap`,
+          sub: tr("{0}/{1} MCP connectors · {2} goroutines · {3} MB heap", [ag.mcp_servers_enabled, ag.mcp_servers_total, ag.goroutines, formatFixed(ag.process_memory_mb, 1)]),
         },
       ]
     : [];
@@ -238,38 +246,38 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
     ? [
         {
           title: "CPU",
-          value: stats.cpu.usage_percent === null ? "Sampling…" : `${stats.cpu.usage_percent.toFixed(1)}%`,
-          sub: `${stats.cpu.cores} logical cores`,
+          value: stats.cpu.usage_percent === null ? tr("Sampling…") : `${formatFixed(stats.cpu.usage_percent, 1)}%`,
+          sub: tr("{0} logical cores", [stats.cpu.cores]),
         },
-        { title: "Load", value: stats.cpu.load_1.toFixed(2), sub: `${stats.cpu.load_5.toFixed(2)} / ${stats.cpu.load_15.toFixed(2)} (5m / 15m)` },
-        { title: "Host uptime", value: formatUptime(stats.uptime_seconds) },
-        { title: "Platform", value: stats.platform || "—", sub: stats.hostname || "hostname unavailable" },
+        { title: tr("Load"), value: formatFixed(stats.cpu.load_1, 2), sub: tr("{0} / {1} (5m / 15m)", [formatFixed(stats.cpu.load_5, 2), formatFixed(stats.cpu.load_15, 2)]) },
+        { title: tr("Host uptime"), value: formatUptime(stats.uptime_seconds) },
+        { title: tr("Platform"), value: stats.platform || "—", sub: stats.hostname || tr("hostname unavailable") },
       ]
     : [];
 
   const resourceItems: AdminStat[] = stats
     ? [
         {
-          title: "Memory",
-          value: stats.memory.available ? `${percent(stats.memory.used_bytes, stats.memory.total_bytes).toFixed(1)}%` : "—",
+          title: tr("Memory"),
+          value: stats.memory.available ? `${formatFixed(percent(stats.memory.used_bytes, stats.memory.total_bytes), 1)}%` : "—",
           sub: stats.memory.available
-            ? `${formatBytes(stats.memory.available_bytes)} available${stats.memory.swap_total_bytes > 0 ? ` · ${formatBytes(stats.memory.swap_used_bytes)} swap used` : ""}`
-            : "unavailable",
+            ? tr("{0} available{1}", [formatBytes(stats.memory.available_bytes), stats.memory.swap_total_bytes > 0 ? tr(" · {0} swap used", [formatBytes(stats.memory.swap_used_bytes)]) : ""])
+            : tr("unavailable"),
         },
         {
-          title: "Root disk",
-          value: stats.disk.available ? `${stats.disk.usage_percent.toFixed(1)}%` : "—",
-          sub: stats.disk.available ? `${formatBytes(stats.disk.available_bytes)} available` : "unavailable",
+          title: tr("Root disk"),
+          value: stats.disk.available ? `${formatFixed(stats.disk.usage_percent, 1)}%` : "—",
+          sub: stats.disk.available ? tr("{0} available", [formatBytes(stats.disk.available_bytes)]) : tr("unavailable"),
         },
         {
-          title: "Network in",
-          value: stats.network.receive_bytes_per_second === null ? "Sampling…" : formatBytes(stats.network.receive_bytes_per_second, true),
-          sub: `${formatBytes(stats.network.received_bytes)} since boot`,
+          title: tr("Network in"),
+          value: stats.network.receive_bytes_per_second === null ? tr("Sampling…") : formatBytes(stats.network.receive_bytes_per_second, true),
+          sub: tr("{0} since boot", [formatBytes(stats.network.received_bytes)]),
         },
         {
-          title: "Network out",
-          value: stats.network.transmit_bytes_per_second === null ? "Sampling…" : formatBytes(stats.network.transmit_bytes_per_second, true),
-          sub: `${formatBytes(stats.network.transmitted_bytes)} since boot`,
+          title: tr("Network out"),
+          value: stats.network.transmit_bytes_per_second === null ? tr("Sampling…") : formatBytes(stats.network.transmit_bytes_per_second, true),
+          sub: tr("{0} since boot", [formatBytes(stats.network.transmitted_bytes)]),
         },
       ]
     : [];
@@ -279,19 +287,19 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
       <ConnGroup>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
-            Bot &amp; agent activity
+            {tr("Bot & agent activity")}
           </h3>
           {stats ? (
             <ConnBadge variant={ag.active_agents_total > 0 ? "success" : "neutral"}>
               {ag.active_agents_total > 0
-                ? `${ag.active_agents_total} active now`
-                : "idle"}
+                ? tr("{0} active now", [ag.active_agents_total])
+                : tr("idle")}
             </ConnBadge>
           ) : null}
-          <span className="text-xs text-[var(--color-text-muted)]">auto-refreshes every 10s</span>
+          <span className="text-xs text-[var(--color-text-muted)]">{tr("auto-refreshes every 10s")}</span>
           <button
             type="button"
-            aria-label="Refresh server stats"
+            aria-label={tr("Refresh server stats")}
             disabled={refreshing}
             onClick={refresh}
             className="ml-auto inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
@@ -305,14 +313,14 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
             10s-poll failure flicker the whole page out and back. */}
         {error ? (
           <NoticeBanner tone="danger" data-testid="server-stats-error" className={stats ? "mb-3" : undefined}>
-            Server statistics unavailable: {error}
-            {stats ? " — showing the last successful sample." : ""}
+            {tr("Server statistics unavailable:")}{" "}{error}
+            {stats ? tr(" — showing the last successful sample.") : ""}
           </NoticeBanner>
         ) : null}
         {!stats ? (
           error ? null : (
             <p className="text-sm text-[var(--color-text-muted)]" data-testid="server-stats-loading">
-              Loading server statistics…
+              {tr("Loading server statistics…")}
             </p>
           )
         ) : (
@@ -328,9 +336,9 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
       {stats ? (
         <ConnGroup>
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">Host resources</h3>
+            <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">{tr("Host resources")}</h3>
             <ConnBadge variant={stats.available ? "success" : "warn"}>
-              {stats.available ? "reporting" : "limited"}
+              {stats.available ? tr("reporting") : tr("limited")}
             </ConnBadge>
             {ag.fleet_version ? (
               <span className="font-[family-name:var(--font-code)] text-xs text-[var(--color-text-muted)]">
@@ -343,15 +351,15 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
             <div className="mt-5 border-t border-[var(--color-border)] pt-4">
               <AdminStats items={resourceItems} />
               {stats.memory.available ? (
-                <UsageBar label="Memory" used={stats.memory.used_bytes} total={stats.memory.total_bytes} />
+                <UsageBar label={tr("Memory")} used={stats.memory.used_bytes} total={stats.memory.total_bytes} />
               ) : null}
               {stats.disk.available ? (
-                <UsageBar label="Root disk" used={stats.disk.used_bytes} total={stats.disk.total_bytes} />
+                <UsageBar label={tr("Root disk")} used={stats.disk.used_bytes} total={stats.disk.total_bytes} />
               ) : null}
             </div>
             {stats.warnings && stats.warnings.length > 0 ? (
               <NoticeBanner tone="warning" data-testid="server-stats-warnings">
-                Some host metrics are unavailable: {stats.warnings.join("; ")}.
+                {tr("Some host metrics are unavailable:")}{" "}{stats.warnings.join("; ")}.
               </NoticeBanner>
             ) : null}
           </div>
@@ -375,8 +383,8 @@ export default function AdminServerPage() {
 
   return (
     <SetSection
-      title="Server"
-      intro="Live bot and sub-agent concurrency, host resources, and workspace storage for this Fleet node."
+      title={tr("Server")}
+      intro={tr("Live bot and sub-agent concurrency, host resources, and workspace storage for this Fleet node.")}
     >
       <ServerStatsView allowCleanup={true} />
     </SetSection>

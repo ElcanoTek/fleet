@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
@@ -88,14 +90,14 @@ export function SavePromptDialog({
     (async () => {
       try {
         const url = conversationApiUrl(conversationId, "/suggest-prompt");
-        if (!url) throw new Error("This chat has an invalid id.");
+        if (!url) throw new Error(tr("This chat has an invalid id."));
         const response = await fetch(url, {
           method: "POST",
           signal: controller.signal,
         });
         if (!response.ok) {
           throw new Error(
-            await responseErrorText(response, "distill failed"),
+            await responseErrorText(response, tr("distill failed")),
           );
         }
         const body = (await response.json()) as {
@@ -115,7 +117,7 @@ export function SavePromptDialog({
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
         setError(
-          errorMessage(err, "Could not build a workflow from this conversation"),
+          errorMessage(err, tr("Could not build a workflow from this conversation")),
         );
         setPhase("edit");
       }
@@ -147,7 +149,7 @@ export function SavePromptDialog({
         });
         if (!res.ok) {
           throw new Error(
-            await responseErrorText(res, "Could not save skill"),
+            await responseErrorText(res, tr("Could not save skill")),
           );
         }
         setSkillName(cleanSlug);
@@ -156,7 +158,7 @@ export function SavePromptDialog({
       }
       setPhase("saved");
     } catch (err) {
-      setError(errorMessage(err, "Could not save workflow"));
+      setError(errorMessage(err, tr("Could not save workflow")));
     } finally {
       setSaving(false);
     }
@@ -171,7 +173,7 @@ export function SavePromptDialog({
       className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-overlay-strong)] p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Save as workflow"
+      aria-label={tr("Save as workflow")}
     >
       <div
         ref={modalRef}
@@ -186,13 +188,13 @@ export function SavePromptDialog({
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="m-0 truncate text-base font-semibold text-[var(--color-text-primary)]">
-              Save as workflow
+              {tr("Save as workflow")}
             </h2>
             <p className="m-0 truncate text-xs text-[var(--color-text-muted)]">
-              From “{conversationTitle}”
-            </p>
+        {rich("From “{0}”", conversationTitle)}
+      </p>
           </div>
-          <CloseButton label="Close save-workflow dialog" onClick={onClose} />
+          <CloseButton label={tr("Close save-workflow dialog")} onClick={onClose} />
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -205,8 +207,7 @@ export function SavePromptDialog({
                 aria-hidden="true"
                 className="size-5 animate-spin rounded-full border-2 border-[var(--color-border-strong)] border-t-[var(--color-accent)]"
               />
-              Reading the whole chat and writing it up as a reusable
-              workflow…
+              {tr("Reading the whole chat and writing it up as a reusable workflow…")}
             </div>
           ) : phase === "saved" ? (
             <div
@@ -221,13 +222,13 @@ export function SavePromptDialog({
               </span>
               <p className="m-0 text-sm text-[var(--color-text-primary)]">
                 {targetKind === "skill"
-                  ? `Saved skill “/${skillName || toSkillSlug(draft.name)}”${draft.visibility === "workspace" ? " (shared with workspace)" : ""}.`
-                  : `Saved “${draft.name.trim() || "workflow"}” to your library.`}
+                  ? tr("Saved skill “/{0}”{1}.", [skillName || toSkillSlug(draft.name), draft.visibility === "workspace" ? tr(" (shared with workspace)") : ""])
+                  : tr("Saved “{0}” to your library.", [draft.name.trim() || "workflow"])}
               </p>
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
                 {targetKind === "skill"
-                  ? `Invoke it in chat with /${skillName || toSkillSlug(draft.name)}, or manage it under Settings → Skills.`
-                  : "Find it under the book icon next to the message box."}
+                  ? tr("Invoke it in chat with /{0}, or manage it under Settings → Skills.", [skillName || toSkillSlug(draft.name)])
+                  : tr("Find it under the book icon next to the message box.")}
               </p>
             </div>
           ) : distillFailed ? (
@@ -244,24 +245,21 @@ export function SavePromptDialog({
                   setAttempt((a) => a + 1);
                 }}
               >
-                Try again
+                {tr("Try again")}
               </button>
             </div>
           ) : (
             <div className="grid gap-3">
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
-                Written up from the whole conversation — the steps, the tools
-                each one used, and what to watch out for. Fill-in points are
-                marked in <code>[BRACKETS]</code>. Review and edit it before
-                saving; nothing is stored until you do.
-              </p>
+        {rich("Written up from the whole conversation — the steps, the tools each one used, and what to watch out for. Fill-in points are marked in {0}. Review and edit it before saving; nothing is stored until you do.", <code>[BRACKETS]</code>)}
+      </p>
               <div
                 role="radiogroup"
-                aria-label="Save destination"
+                aria-label={tr("Save destination")}
                 className="grid grid-cols-1 gap-2 sm:grid-cols-2"
               >
                 <label
-                  aria-label="Prompt Library workflow"
+                  aria-label={tr("Prompt Library workflow")}
                   className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs ${
                     targetKind === "prompt"
                       ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,var(--color-surface-2))]"
@@ -276,11 +274,10 @@ export function SavePromptDialog({
                     onChange={() => setTargetKind("prompt")}
                     className="mt-0.5"
                   />{" "}
-                  Prompt Library workflow — Pick from the book icon in Chat &amp;
-                  Background tasks
+                  {tr("Prompt Library workflow — Pick from the book icon in Chat & Background tasks")}
                 </label>
                 <label
-                  aria-label="Agent Skill"
+                  aria-label={tr("Agent Skill")}
                   className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs ${
                     targetKind === "skill"
                       ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,var(--color-surface-2))]"
@@ -298,19 +295,17 @@ export function SavePromptDialog({
                     }}
                     className="mt-0.5"
                   />{" "}
-                  Agent Skill (/{skillName || toSkillSlug(draft.name)}) —
-                  Auto-loaded by the agent when relevant or via /skill-name
+                  {tr("Agent Skill (/")}{skillName || toSkillSlug(draft.name)}{tr(") — Auto-loaded by the agent when relevant or via /skill-name")}
                 </label>
               </div>
               {targetKind === "skill" ? (
                 <label className="grid gap-1 text-sm">
-                  Skill slash-command name{" "}
+                  {tr("Skill slash-command name")}{" "}
                   <span className="text-xs text-[var(--color-text-muted)]">
-                    Lowercase kebab-case (a-z, 0-9, hyphens), invoked as{" "}
-                    <code>/{skillName || toSkillSlug(draft.name)}</code>
-                  </span>
+        {rich("Lowercase kebab-case (a-z, 0-9, hyphens), invoked as {0}", <code>/{skillName || toSkillSlug(draft.name)}</code>)}
+      </span>
                   <input
-                    aria-label="Skill slash-command name"
+                    aria-label={tr("Skill slash-command name")}
                     className={FIELD}
                     maxLength={64}
                     value={skillName}
@@ -319,7 +314,7 @@ export function SavePromptDialog({
                 </label>
               ) : null}
               <label className="grid gap-1 text-sm">
-                Name
+                {tr("Name")}
                 <input
                   className={FIELD}
                   maxLength={120}
@@ -334,9 +329,9 @@ export function SavePromptDialog({
                 />
               </label>
               <label className="grid gap-1 text-sm">
-                Description{" "}
+                {tr("Description")}{" "}
                 <span className="text-xs text-[var(--color-text-muted)]">
-                  Optional — helps teammates find it.
+                  {tr("Optional — helps teammates find it.")}
                 </span>
                 <input
                   className={FIELD}
@@ -348,7 +343,7 @@ export function SavePromptDialog({
                 />
               </label>
               <label className="grid gap-1 text-sm">
-                Workflow
+                {tr("Workflow")}
                 <textarea
                   className={`${FIELD} min-h-80 font-mono text-xs`}
                   value={draft.content}
@@ -368,7 +363,7 @@ export function SavePromptDialog({
                     })
                   }
                 />{" "}
-                Share with this workspace
+                {tr("Share with this workspace")}
               </label>
               {error ? (
                 <p className="m-0 text-sm text-[var(--color-status-error-fg)]">
@@ -382,7 +377,7 @@ export function SavePromptDialog({
         <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
           {phase === "saved" ? (
             <button type="button" className="btn btn-primary" onClick={onClose}>
-              Done
+              {tr("Done")}
             </button>
           ) : (
             <>
@@ -391,8 +386,7 @@ export function SavePromptDialog({
                 className="btn btn-secondary"
                 onClick={onClose}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
               {distillFailed ? null : (
                 <button
                   type="button"
@@ -409,10 +403,10 @@ export function SavePromptDialog({
                   onClick={() => void save()}
                 >
                   {saving
-                    ? "Saving…"
+                    ? tr("Saving…")
                     : targetKind === "skill"
-                      ? "Save skill"
-                      : "Save workflow"}
+                      ? tr("Save skill")
+                      : tr("Save workflow")}
                 </button>
               )}
             </>

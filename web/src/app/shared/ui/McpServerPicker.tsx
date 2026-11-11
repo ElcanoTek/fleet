@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback } from "react";
 import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 import { StatusChip } from "./StatusChip";
@@ -95,10 +96,10 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
       className="mcp-server-picker"
       data-mode={mode}
       role="group"
-      aria-label={mode === "task" ? "Connections for this task" : "Connections for this conversation"}
+      aria-label={mode === "task" ? tr("Connections for this task") : tr("Connections for this conversation")}
     >
       {servers.length === 0 ? (
-        <p className="mcp-server-picker__empty">No connections available.</p>
+        <p className="mcp-server-picker__empty">{tr("No connections available.")}</p>
       ) : (
         <ul className="mcp-server-picker__list">
           {ordered.map((server) => {
@@ -122,32 +123,32 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                     tone="success"
                     className="mcp-server-picker__connected shrink-0"
                     testId={`mcp-remote-${server.name}`}
-                    aria-label={`${server.name} (connected, auto-available)`}
+                    aria-label={tr("{0} (connected, auto-available)", [server.name])}
                   >
-                    Connected
+                    {tr("Connected")}
                   </StatusChip>
                   <span className="mcp-server-picker__name">{server.display_name || server.name}</span>
                   {server.description ? (
                     <span className="mcp-server-picker__desc">{server.description}</span>
                   ) : (
-                    <span className="mcp-server-picker__desc">auto-available on every run</span>
+                    <span className="mcp-server-picker__desc">{tr("auto-available on every run")}</span>
                   )}
                   {seats.length > 0 ? (
                     <div className="mcp-server-picker__account">
                       <label htmlFor={remoteAccountInputId} className="mcp-server-picker__account-label">
-                        Account
+                        {tr("Account")}
                       </label>
                       <select
                         id={remoteAccountInputId}
                         className="mcp-server-picker__account-select"
                         value={remoteChoice?.account ?? ""}
                         disabled={disabled}
-                        aria-label={`Credential account for ${server.name}`}
+                        aria-label={tr("Credential account for {0}", [server.name])}
                         data-testid={`mcp-account-${server.name}`}
                         onChange={(e) => setRemoteAccount(server.name, e.target.value)}
                       >
                         <option value="">
-                          Default seat{server.default_account ? ` (${server.default_account})` : ""}
+                          {tr("Default seat")}{server.default_account ? ` (${server.default_account})` : ""}
                         </option>
                         {seats.map((acct) => (
                           <option key={acct} value={acct}>
@@ -177,7 +178,7 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                     checked={available}
                     disabled
                     readOnly
-                    aria-label={`${server.name} always on (${available ? "available" : "unavailable"})`}
+                    aria-label={tr(available ? "{0} always on (available)" : "{0} always on (unavailable)", [server.name])}
                     data-testid={`mcp-always-on-${server.name}`}
                   />
                   <span className="mcp-server-picker__name">{server.display_name || server.name}</span>
@@ -185,17 +186,17 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                     className={`mcp-server-picker__status${available ? "" : " mcp-server-picker__status--error"}`}
                     data-testid={`mcp-always-on-status-${server.name}`}
                   >
-                    {available ? "Always on" : "Unavailable"}
+                    {available ? tr("Always on") : tr("Unavailable")}
                   </span>
                   {available && typeof server.tool_count === "number" ? (
                     <span className="mcp-server-picker__count">
-                      {server.tool_count} {server.tool_count === 1 ? "tool" : "tools"}
+                      {tr(server.tool_count === 1 ? "{0} tool" : "{0} tools", [server.tool_count])}
                     </span>
                   ) : null}
                   <span className="mcp-server-picker__desc">
                     {available
-                      ? server.description || "Available on every run"
-                      : "Always-on connector did not expose any tools"}
+                      ? server.description || tr("Available on every run")
+                      : tr("Always-on connector did not expose any tools")}
                   </span>
                 </li>
               );
@@ -216,14 +217,14 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                     className="ui-switch"
                     checked={enabled}
                     disabled={disabled}
-                    aria-label={`Enable ${server.name}`}
+                    aria-label={tr("Enable {0}", [server.name])}
                     data-testid={`mcp-toggle-${server.name}`}
                     onChange={(e) => toggleServer(server.name, e.target.checked)}
                   />
                   <span className="mcp-server-picker__name">{server.name}</span>
                   {enabled && typeof server.tool_count === "number" ? (
                     <span className="mcp-server-picker__count">
-                      {server.tool_count} {server.tool_count === 1 ? "tool" : "tools"}
+                      {tr(server.tool_count === 1 ? "{0} tool" : "{0} tools", [server.tool_count])}
                     </span>
                   ) : null}
                   {!enabled && server.description ? (
@@ -233,18 +234,18 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                 {enabled ? (
                   <div className="mcp-server-picker__account">
                     <label htmlFor={accountInputId} className="mcp-server-picker__account-label">
-                      Account
+                      {tr("Account")}
                     </label>
                     <select
                       id={accountInputId}
                       className="mcp-server-picker__account-select"
                       value={choice?.account ?? ""}
                       disabled={disabled}
-                      aria-label={`Credential account for ${server.name}`}
+                      aria-label={tr("Credential account for {0}", [server.name])}
                       data-testid={`mcp-account-${server.name}`}
                       onChange={(e) => setAccount(server.name, e.target.value)}
                     >
-                      <option value="">Default seat</option>
+                      <option value="">{tr("Default seat")}</option>
                       {accounts.map((acct) => (
                         <option key={acct} value={acct}>
                           {acct}

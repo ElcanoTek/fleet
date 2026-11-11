@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
 
 import { useClientConfig } from "@/app/lib/useClientConfig";
@@ -183,7 +184,7 @@ export function LoadingLogo({
       <span
         className={className}
         role="img"
-        aria-label="Loading"
+        aria-label={tr("Loading")}
         style={{
           position: "relative",
           display: "block",
@@ -253,7 +254,7 @@ export function LoadingLogo({
       width={size}
       height={size}
       className={className}
-      aria-label="Loading"
+      aria-label={tr("Loading")}
       role="img"
       style={{ display: "block", overflow: "visible" }}
     >

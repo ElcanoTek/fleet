@@ -1,3 +1,6 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -22,9 +25,9 @@ function dayLabel(d: Date): string {
   const today = new Date();
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
-  if (dayKey(d) === dayKey(today)) return "Today";
-  if (dayKey(d) === dayKey(tomorrow)) return "Tomorrow";
-  return d.toLocaleDateString(undefined, {
+  if (dayKey(d) === dayKey(today)) return tr("Today");
+  if (dayKey(d) === dayKey(tomorrow)) return tr("Tomorrow");
+  return d.toLocaleDateString(getLanguage(), {
     weekday: "long",
     month: "short",
     day: "numeric",
@@ -32,7 +35,7 @@ function dayLabel(d: Date): string {
 }
 
 function timeLabel(d: Date): string {
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString(getLanguage(), { hour: "numeric", minute: "2-digit" });
 }
 
 type UpcomingView = "list" | "week";
@@ -45,8 +48,8 @@ export const HORIZON_DAYS = 14;
 const VIEW_STORAGE_KEY = "fleet-upcoming-view";
 
 const VIEWS: Array<{ id: UpcomingView; label: string }> = [
-  { id: "list", label: "List" },
-  { id: "week", label: "Week" },
+  { id: "list", label: tr("List") },
+  { id: "week", label: tr("Week") },
 ];
 
 export function UpcomingPanel() {
@@ -98,20 +101,20 @@ export function UpcomingPanel() {
   return (
     <div className="section" role="region" aria-labelledby="upcomingHeading">
       <div className="section-header">
-        <h2 id="upcomingHeading">Upcoming Runs</h2>
+        <h2 id="upcomingHeading">{tr("Upcoming Runs")}</h2>
         {/* This tab does not auto-refresh (only the task list does), so the
             projection is as old as the last click here. */}
         <button
           type="button"
           className="btn btn-secondary btn-small"
-          aria-label="Refresh upcoming runs"
+          aria-label={tr("Refresh upcoming runs")}
           data-testid="upcoming-refresh"
           disabled={loading}
           onClick={() => void reload()}
         >
-          Refresh
+          {tr("Refresh")}
         </button>
-        <div className="seg seg--md" role="radiogroup" aria-label="Upcoming view">
+        <div className="seg seg--md" role="radiogroup" aria-label={tr("Upcoming view")}>
           {VIEWS.map((v) => (
             <button
               key={v.id}
@@ -131,13 +134,15 @@ export function UpcomingPanel() {
 
       {loading ? (
         <div className="loading">
-          <p>Loading upcoming runs…</p>
+          <p>{tr("Loading upcoming runs…")}</p>
         </div>
       ) : error ? (
-        <div className="table-error">Failed to load upcoming runs: {error}</div>
+        <div className="table-error">
+        {rich("Failed to load upcoming runs: {0}", error)}
+      </div>
       ) : runs.length === 0 ? (
         <div className="table-empty">
-          No upcoming runs. Recurring tasks and future one-shot schedules appear here.
+          {tr("No upcoming runs. Recurring tasks and future one-shot schedules appear here.")}
         </div>
       ) : view === "week" ? (
         <UpcomingWeek runs={runs} today={today} />
@@ -219,10 +224,10 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
   const nextWeekBeyondHorizon = saturdayEnd > horizon;
   const weekLabel =
     weekOffset === 0
-      ? "This week"
+      ? tr("This week")
       : weekOffset === 1
-        ? "Next week"
-        : `${sunday.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${new Date(saturdayEnd.getTime() - 1).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+        ? tr("Next week")
+        : `${sunday.toLocaleDateString(getLanguage(), { month: "short", day: "numeric" })} – ${new Date(saturdayEnd.getTime() - 1).toLocaleDateString(getLanguage(), { month: "short", day: "numeric" })}`;
 
   return (
     <div className="upcoming-week-wrapper" data-testid="upcoming-week">
@@ -230,7 +235,7 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
         <button
           type="button"
           className="btn btn-secondary btn-small"
-          aria-label="Previous week"
+          aria-label={tr("Previous week")}
           data-tip-top="Previous week"
           data-testid="week-prev"
           disabled={weekOffset === 0}
@@ -244,13 +249,13 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
         <button
           type="button"
           className="btn btn-secondary btn-small"
-          aria-label="Next week"
+          aria-label={tr("Next week")}
           data-tip-top={nextWeekBeyondHorizon ? undefined : "Next week"}
           data-testid="week-next"
           disabled={nextWeekBeyondHorizon}
           title={
             nextWeekBeyondHorizon
-              ? `Runs are projected ${HORIZON_DAYS} days ahead — the next week is past that window.`
+              ? tr("Runs are projected {0} days ahead — the next week is past that window.", [HORIZON_DAYS])
               : undefined
           }
           onClick={() => setWeekOffset((w) => w + 1)}
@@ -272,10 +277,10 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
           >
             <div className="upcoming-week-day-header">
               <span className="upcoming-week-day-name">
-                {day.date.toLocaleDateString(undefined, { weekday: "short" })}
+                {day.date.toLocaleDateString(getLanguage(), { weekday: "short" })}
               </span>
               <span className="upcoming-week-day-date">
-                {day.date.toLocaleDateString(undefined, { month: "numeric", day: "numeric" })}
+                {day.date.toLocaleDateString(getLanguage(), { month: "numeric", day: "numeric" })}
               </span>
             </div>
             {day.runs.length === 0 ? (
@@ -293,7 +298,7 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
                     >
                       <span className="upcoming-week-run-time">{timeLabel(when)}</span>
                       <span className="upcoming-week-run-name">
-                        {run.title || run.name || run.prompt.slice(0, 60) || "(untitled task)"}
+                        {run.title || run.name || run.prompt.slice(0, 60) || tr("(untitled task)")}
                       </span>
                     </li>
                   );
@@ -305,7 +310,7 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
       </div>
       <p className="refresh-note">
         {beyond > 0
-          ? `${weekLabel} · ${plural(beyond, "more scheduled run")} after this week`
+          ? tr("{0} · {1} after this week", [weekLabel, plural(beyond, "more scheduled run")])
           : weekLabel}
       </p>
     </div>
@@ -339,13 +344,13 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
                 <li key={`${run.task_id}-${i}`} className="upcoming-run-row" data-testid="upcoming-run-row">
                   <span className="upcoming-run-time">{timeLabel(when)}</span>
                   <span className="upcoming-run-name" title={run.prompt}>
-                    {run.title || run.name || run.prompt.slice(0, 80) || "(untitled task)"}
+                    {run.title || run.name || run.prompt.slice(0, 80) || tr("(untitled task)")}
                   </span>
                   <StatusChip
                     tone={run.recurring ? "run-assigned" : "run-scheduled"}
                     className={`upcoming-run-kind upcoming-run-kind-${run.recurring ? "recurring" : "oneshot"}`}
                   >
-                    {run.recurring ? describeCronExpression(run.recurrence) : "One-time"}
+                    {run.recurring ? describeCronExpression(run.recurrence) : tr("One-time")}
                   </StatusChip>
                 </li>
               );
@@ -353,7 +358,9 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
           </ul>
         </div>
       ))}
-      <p className="refresh-note">Next {plural(runs.length, "scheduled run")}</p>
+      <p className="refresh-note">
+        {rich("Next {0}", plural(runs.length, "scheduled run"))}
+      </p>
     </div>
   );
 }

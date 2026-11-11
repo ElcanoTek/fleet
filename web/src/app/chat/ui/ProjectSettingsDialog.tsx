@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useId, useRef, useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -42,44 +44,42 @@ export type ProjectImpact = {
 // null impact = we couldn't count, and the sentence says so instead of "0".
 export function makePrivateImpactText(impact: ProjectImpact | null): string {
   if (!impact)
-    return "Shared chats will become Only you, and chats from teammates will move to their unfiled chats, where they can expire. We couldn’t count them.";
+    return tr("Shared chats will become Only you, and chats from teammates will move to their unfiled chats, where they can expire. We couldn’t count them.");
   const parts: string[] = [];
   if (impact.team_shared_chats > 0)
     parts.push(
-      `${plural(impact.team_shared_chats, "shared chat", "shared chats")} will become Only you`,
+      tr("{0} will become Only you", [plural(impact.team_shared_chats, "shared chat", "shared chats")]),
     );
   const mates = impact.chats_from_teammates;
   const people = impact.teammates_with_chats;
   if (typeof mates === "number" && mates > 0)
     parts.push(
-      `${plural(mates, "chat", "chats")} from ${
-        typeof people === "number" && people > 0
+      tr("{0} from {1} will move to their unfiled chats, where they can expire", [plural(mates, "chat", "chats"), typeof people === "number" && people > 0
           ? plural(people, "teammate", "teammates")
-          : "teammates"
-      } will move to their unfiled chats, where they can expire`,
+          : tr("teammates")]),
     );
   else if (typeof mates !== "number")
     // An older server, or a count it could not work out: say so rather than
     // letting a missing field read as "no teammates' chats move".
     parts.push(
-      "chats from teammates will move to their unfiled chats, where they can expire (we couldn’t count those)",
+      tr("chats from teammates will move to their unfiled chats, where they can expire (we couldn’t count those)"),
     );
   if (parts.length === 0)
-    return "Only you will see this project. No chats are shared in it, so nothing else changes.";
-  const text = parts.join(", and ");
+    return tr("Only you will see this project. No chats are shared in it, so nothing else changes.");
+  const text = parts.join(tr(", and "));
   return `${text[0].toUpperCase()}${text.slice(1)}.`;
 }
 
 // The B29 list's first line.
 export function deleteChatsText(impact: ProjectImpact | null): string {
-  if (!impact)
-    return "Every chat in it leaves the project and becomes temporary. They expire unless someone pins them.";
-  if (impact.chats === 0) return "No chats are filed in it, so none become temporary.";
-  return `${plural(impact.chats, "chat", "chats")} from ${plural(
+  if (!impact || !Number.isFinite(impact.chats) || !Number.isFinite(impact.members))
+    return tr("Every chat in it leaves the project and becomes temporary. They expire unless someone pins them.");
+  if (impact.chats === 0) return tr("No chats are filed in it, so none become temporary.");
+  return tr("{0} from {1} leave the project and become temporary. They expire unless someone pins them.", [plural(impact.chats, "chat", "chats"), plural(
     Math.max(impact.members, 1),
     "person",
     "people",
-  )} leave the project and become temporary. They expire unless someone pins them.`;
+  )]);
 }
 
 // The /impact read both delete confirms (settings panel, rail kebab) and the
@@ -137,7 +137,7 @@ function useMembers(projectId: string, enabled: boolean, nonce: number) {
           if (!cancelled)
             setState({
               members: [],
-              error: `Couldn’t load this project’s members (HTTP ${res.status}).`,
+              error: tr("Couldn’t load this project’s members (HTTP {0}).", [res.status]),
             });
           return;
         }
@@ -147,7 +147,7 @@ function useMembers(projectId: string, enabled: boolean, nonce: number) {
         if (!cancelled)
           setState({
             members: [],
-            error: "Couldn’t reach the server to list this project’s members.",
+            error: tr("Couldn’t reach the server to list this project’s members."),
           });
       }
     })();
@@ -242,7 +242,7 @@ export function ProjectSettingsDialog({
     setError(null);
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("A project needs a name.");
+      setError(tr("A project needs a name."));
       return;
     }
     const patch: { name?: string; team_shared?: boolean } = {};
@@ -258,10 +258,10 @@ export function ProjectSettingsDialog({
     if (!ok) return;
     closeIfStillOpen();
     if (shared && !wasShared)
-      notify({ message: `Shared with ${team || "your team"}. Chats stay Only you.` });
+      notify({ message: tr("Shared with {0}. Chats stay Only you.", [team || tr("your team")]) });
     else if (!shared && wasShared)
-      notify({ message: "Project is Only you again." });
-    else notify({ message: "Project settings saved." });
+      notify({ message: tr("Project is Only you again.") });
+    else notify({ message: tr("Project settings saved.") });
   };
 
   const transfer = async () => {
@@ -275,26 +275,26 @@ export function ProjectSettingsDialog({
       return;
     }
     closeIfStillOpen();
-    notify({ message: `${pick} now owns ${project.name}.` });
+    notify({ message: tr("{0} now owns {1}.", [pick, project.name]) });
   };
 
   let note: string;
   let noteTone: "default" | "warning" = "default";
   if (shared) {
-    note = `${team || "Your team"} will see the instructions, Team learnings, and chats shared with them. Each chat stays Only you until its owner shares it.`;
+    note = tr("{0} will see the instructions, Team learnings, and chats shared with them. Each chat stays Only you until its owner shares it.", [team || tr("Your team")]);
   } else if (unsharing) {
     noteTone = "warning";
     note = impactState.settled
       ? makePrivateImpactText(impactState.impact)
-      : "Counting what changes…";
+      : tr("Counting what changes…");
   } else {
-    note = "Only you can see this project and its chats.";
+    note = tr("Only you can see this project and its chats.");
   }
 
   return (
     <DialogShell
-      label={`Settings for ${project.name}`}
-      scrimLabel="Close project settings"
+      label={tr("Settings for {0}", [project.name])}
+      scrimLabel={tr("Close project settings")}
       onDismiss={onClose}
       initialFocusRef={nameRef}
       className="flex max-h-[90vh] max-w-[30rem] flex-col gap-4 overflow-y-auto p-5"
@@ -302,9 +302,9 @@ export function ProjectSettingsDialog({
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
-          Project settings
+          {tr("Project settings")}
         </h2>
-        <CloseButton label="Close project settings" onClick={onClose} />
+        <CloseButton label={tr("Close project settings")} onClick={onClose} />
       </div>
 
       <div className="grid gap-1.5">
@@ -312,7 +312,7 @@ export function ProjectSettingsDialog({
           htmlFor={nameId}
           className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
         >
-          Name
+          {tr("Name")}
         </label>
         <input
           id={nameId}
@@ -320,7 +320,7 @@ export function ProjectSettingsDialog({
           value={name}
           maxLength={128}
           // "Project name" stays the accessible name the e2e specs query by.
-          aria-label="Project name"
+          aria-label={tr("Project name")}
           onChange={(e) => setName(e.target.value)}
           className="w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
         />
@@ -341,15 +341,15 @@ export function ProjectSettingsDialog({
       <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5 text-[0.8rem] leading-[1.45] text-[var(--color-text-secondary)]">
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span>
-            Owner:{" "}
+            {tr("Owner:")}{" "}
             <span className="text-[var(--color-text-primary)]">
               {project.owner_email}
             </span>
-            . Only the owner can edit, share, or delete.
+            {tr(". Only the owner can edit, share, or delete.")}
           </span>
           {canTransfer ? null : (
             <span className="text-[var(--color-text-muted)]">
-              Transfer needs a member, so share the project first.
+              {tr("Transfer needs a member, so share the project first.")}
             </span>
           )}
         </span>
@@ -363,7 +363,7 @@ export function ProjectSettingsDialog({
               setTransferError(null);
             }}
           >
-            Transfer…
+            {tr("Transfer…")}
           </button>
         ) : (
           <button
@@ -373,7 +373,7 @@ export function ProjectSettingsDialog({
             className="inline-flex shrink-0 cursor-not-allowed items-center gap-1 rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-disabled)]"
           >
             <LockGlyph className="size-3" />
-            Transfer… (unavailable)
+            {tr("Transfer… (unavailable)")}
           </button>
         )}
       </div>
@@ -381,15 +381,15 @@ export function ProjectSettingsDialog({
       {panel === "transfer" ? (
         <div
           role="group"
-          aria-label="Transfer ownership"
+          aria-label={tr("Transfer ownership")}
           className="grid gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] p-3"
         >
           <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
-            Transfer ownership
+            {tr("Transfer ownership")}
           </span>
           {membersState.members === null ? (
             <p className="m-0 text-[0.78rem] text-[var(--color-text-muted)]">
-              Loading members…
+              {tr("Loading members…")}
             </p>
           ) : membersState.error ? (
             <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-danger)]">
@@ -399,17 +399,16 @@ export function ProjectSettingsDialog({
                 className="underline"
                 onClick={() => setMembersNonce((n) => n + 1)}
               >
-                Try again
+                {tr("Try again")}
               </button>
             </p>
           ) : candidates.length === 0 ? (
             <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Only a member can become the owner, and nobody else is on{" "}
-              {team || "this project’s team"} yet.
-            </p>
+        {rich("Only a member can become the owner, and nobody else is on {0} yet.", team || tr("this project’s team"))}
+      </p>
           ) : (
             <>
-              <div role="radiogroup" aria-label="New owner" className="grid gap-1.5">
+              <div role="radiogroup" aria-label={tr("New owner")} className="grid gap-1.5">
                 {candidates.map((m) => (
                   <button
                     key={m}
@@ -437,9 +436,9 @@ export function ProjectSettingsDialog({
               <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
                 {pick
                   ? ownerStaysMember
-                    ? `${pick} becomes the owner. You stay a member: you keep your chats here and can still share them, but you can’t edit settings, share the project, or delete it. This happens right away, separately from Save.`
-                    : `${pick} becomes the owner. You’re no longer on ${project.team_id}, so you lose access to ${short}, and your chats in it become temporary again. This happens right away, separately from Save.`
-                  : `Pick who should own ${short}.`}
+                    ? tr("{0} becomes the owner. You stay a member: you keep your chats here and can still share them, but you can’t edit settings, share the project, or delete it. This happens right away, separately from Save.", [pick])
+                    : tr("{0} becomes the owner. You’re no longer on {1}, so you lose access to {2}, and your chats in it become temporary again. This happens right away, separately from Save.", [pick, project.team_id, short])
+                  : tr("Pick who should own {0}.", [short])}
               </p>
             </>
           )}
@@ -454,8 +453,7 @@ export function ProjectSettingsDialog({
               className={pillGhost}
               onClick={() => setPanel(null)}
             >
-              Cancel
-            </button>
+              {tr("Cancel")}</button>
             {candidates.length > 0 ? (
               <button
                 type="button"
@@ -463,7 +461,7 @@ export function ProjectSettingsDialog({
                 className={pillPrimary}
                 onClick={() => void transfer()}
               >
-                {transferBusy ? "Transferring…" : "Transfer ownership"}
+                {transferBusy ? tr("Transferring…") : tr("Transfer ownership")}
               </button>
             ) : null}
           </div>
@@ -473,31 +471,31 @@ export function ProjectSettingsDialog({
       {panel === "delete" ? (
         <div
           role="alertdialog"
-          aria-label={`Delete ${short}?`}
+          aria-label={tr("Delete {0}?", [short])}
           className="grid gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3"
         >
           <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
-            Delete {short}?
-          </span>
+        {rich("Delete {0}?", short)}
+      </span>
           <ul className="m-0 grid list-disc gap-1 pl-[1.1rem] text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
             <li>
               {impactState.settled
                 ? deleteChatsText(impactState.impact)
-                : "Counting the chats in it…"}
+                : tr("Counting the chats in it…")}
             </li>
             <li>
-              {impactState.impact
-                ? `Team learnings (${impactState.impact.memories}) are lost.`
-                : "Its team learnings are lost."}
+              {impactState.impact && Number.isFinite(impactState.impact.memories)
+                ? tr("Team learnings ({0}) are lost.", [impactState.impact.memories])
+                : tr("Its team learnings are lost.")}
             </li>
-            <li>Instructions and sharing are removed.</li>
+            <li>{tr("Instructions and sharing are removed.")}</li>
           </ul>
           <div className="flex flex-wrap items-center gap-2">
             <a
               href={`/api/projects/${encodeURIComponent(project.id)}/export`}
               className={pillGhost}
             >
-              Export first
+              {tr("Export first")}
             </a>
             <span className="flex-1" />
             <button
@@ -505,8 +503,7 @@ export function ProjectSettingsDialog({
               className={pillGhost}
               onClick={() => setPanel(null)}
             >
-              Cancel
-            </button>
+              {tr("Cancel")}</button>
             <button
               type="button"
               // The list above promises real counts; the delete waits until
@@ -519,7 +516,7 @@ export function ProjectSettingsDialog({
                 onDelete();
               }}
             >
-              Delete project
+              {tr("Delete project")}
             </button>
           </div>
         </div>
@@ -538,12 +535,11 @@ export function ProjectSettingsDialog({
             className="rounded-[var(--radius-md)] px-2 py-1.5 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => setPanel("delete")}
           >
-            Delete project
+            {tr("Delete project")}
           </button>
           <span className="flex-1" />
           <button type="button" className={pillGhost} onClick={onClose}>
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
           <button
             type="button"
             // Switching to Only you promises the counts BEFORE Save (B28), so
@@ -553,7 +549,7 @@ export function ProjectSettingsDialog({
             className={pillPrimary}
             onClick={() => void save()}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? tr("Saving…") : tr("Save")}
           </button>
         </div>
       ) : null}

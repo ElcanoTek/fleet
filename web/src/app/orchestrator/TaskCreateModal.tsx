@@ -1,3 +1,6 @@
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CostForecast,
@@ -85,10 +88,10 @@ const defaultPrimaryModel = () => currentTaskModel();
 const defaultFallbackModel = () => currentTaskFallbackModel();
 
 const SCHEDULE_PRESETS = [
-  { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
-  { label: "Weekly Mon", cron: "0 9 * * 1" },
-  { label: "Mon & Thu 1pm", cron: "0 13 * * 1,4" },
-  { label: "Wed 5am", cron: "0 5 * * 3" },
+  { label: tr("Weekdays 9am"), cron: "0 9 * * 1-5" },
+  { label: tr("Weekly Mon"), cron: "0 9 * * 1" },
+  { label: tr("Mon & Thu 1pm"), cron: "0 13 * * 1,4" },
+  { label: tr("Wed 5am"), cron: "0 5 * * 3" },
 ];
 
 type ScheduleMode = "now" | "once" | "repeat";
@@ -99,13 +102,13 @@ type RepeatEndMode = "never" | "date" | "count";
 type SimpleFrequency = "daily" | "weekdays" | "weekly";
 
 const WEEKDAYS = [
-  { value: "1", label: "Monday" },
-  { value: "2", label: "Tuesday" },
-  { value: "3", label: "Wednesday" },
-  { value: "4", label: "Thursday" },
-  { value: "5", label: "Friday" },
-  { value: "6", label: "Saturday" },
-  { value: "0", label: "Sunday" },
+  { value: "1", label: tr("Monday") },
+  { value: "2", label: tr("Tuesday") },
+  { value: "3", label: tr("Wednesday") },
+  { value: "4", label: tr("Thursday") },
+  { value: "5", label: tr("Friday") },
+  { value: "6", label: tr("Saturday") },
+  { value: "0", label: tr("Sunday") },
 ];
 
 type SimpleSchedule = { frequency: SimpleFrequency; time: string; weekdays: string[] };
@@ -148,9 +151,9 @@ function parseSimpleSchedule(raw: string): SimpleSchedule | null {
 }
 
 const SCHEDULE_MODES: Array<{ id: ScheduleMode; label: string }> = [
-  { id: "now", label: "Run now" },
-  { id: "once", label: "Run once" },
-  { id: "repeat", label: "Repeat" },
+  { id: "now", label: tr("Run now") },
+  { id: "once", label: tr("Run once") },
+  { id: "repeat", label: tr("Repeat") },
 ];
 
 export type TaskCreateModalProps = {
@@ -417,7 +420,7 @@ export function TaskCreateModal({
     () =>
       timeZoneOptions(viewerTimeZone, timezone).map((zone) => ({
         zone,
-        label: sameTimeZone(zone, viewerTimeZone) ? `${zone} (your time zone)` : zone,
+        label: sameTimeZone(zone, viewerTimeZone) ? tr("{0} (your time zone)", [zone]) : zone,
       })),
     [viewerTimeZone, timezone],
   );
@@ -983,19 +986,19 @@ export function TaskCreateModal({
   ).length;
   const remoteServers = servers.filter((server) => server.remote).length;
   const toolsSummary = serversLoading
-    ? "Loading servers…"
+    ? tr("Loading servers…")
     : enabledServers === 0 &&
         alwaysOnServers === 0 &&
         remoteServers === 0 &&
         unavailableAlwaysOnServers === 0 &&
         fileCount === 0
-      ? "Sandbox only — no tools"
+      ? tr("Sandbox only — no tools")
       : [
-          alwaysOnServers > 0 ? `${alwaysOnServers} always on` : "",
-          remoteServers > 0 ? `${remoteServers} connected` : "",
-          enabledServers > 0 ? `${enabledServers} selected` : "",
+          alwaysOnServers > 0 ? tr("{0} always on", [alwaysOnServers]) : "",
+          remoteServers > 0 ? tr("{0} connected", [remoteServers]) : "",
+          enabledServers > 0 ? tr("{0} selected", [enabledServers]) : "",
           unavailableAlwaysOnServers > 0
-            ? `${unavailableAlwaysOnServers} unavailable`
+            ? tr("{0} unavailable", [unavailableAlwaysOnServers])
             : "",
           fileCount > 0 ? plural(fileCount, "file") : "",
         ]
@@ -1007,19 +1010,19 @@ export function TaskCreateModal({
 
   // The dirty-close guard names what would be lost.
   const dirtyParts: string[] = [];
-  if (prompt.trim()) dirtyParts.push("the prompt");
-  if (contextCount > 0) dirtyParts.push("the context notes");
-  if (scheduleMode !== "now" || recurrence.trim() || scheduledDate) dirtyParts.push("the schedule");
+  if (prompt.trim()) dirtyParts.push(tr("the prompt"));
+  if (contextCount > 0) dirtyParts.push(tr("the context notes"));
+  if (scheduleMode !== "now" || recurrence.trim() || scheduledDate) dirtyParts.push(tr("the schedule"));
   if (emails.length > 0)
     dirtyParts.push(plural(emails.length, "email recipient"));
   if (enabledServers > 0)
     dirtyParts.push(plural(enabledServers, "enabled server"));
   if (fileCount > 0) dirtyParts.push(plural(fileCount, "attachment"));
-  if (advancedCount > 0) dirtyParts.push("the advanced settings");
+  if (advancedCount > 0) dirtyParts.push(tr("the advanced settings"));
   const dirtyList =
     dirtyParts.length <= 1
-      ? (dirtyParts[0] ?? "your changes")
-      : `${dirtyParts.slice(0, -1).join(", ")}, and ${dirtyParts[dirtyParts.length - 1]}`;
+      ? (dirtyParts[0] ?? tr("your changes"))
+      : tr("{0}, and {1}", [dirtyParts.slice(0, -1).join(", "), dirtyParts[dirtyParts.length - 1]]);
 
   // ── Field helpers ─────────────────────────────────────────────────────────
 
@@ -1044,7 +1047,7 @@ export function TaskCreateModal({
 
   const blurValidateScheduled = () => {
     if (scheduleMode !== "once") return;
-    setFieldError("scheduled_for", scheduledDate ? "" : "Pick a date and time.");
+    setFieldError("scheduled_for", scheduledDate ? "" : tr("Pick a date and time."));
   };
 
   const buildFinalPrompt = (recipients: string[]): string =>
@@ -1141,15 +1144,15 @@ export function TaskCreateModal({
     });
     const next: Record<string, string> = { ...(validation.errors as Record<string, string>) };
     if (title.trim().length > TITLE_MAX_LENGTH)
-      next.title = `Title cannot exceed ${TITLE_MAX_LENGTH} characters.`;
-    if (scheduleMode === "once" && !scheduledDate) next.scheduled_for = "Pick a date and time.";
+      next.title = tr("Title cannot exceed {0} characters.", [TITLE_MAX_LENGTH]);
+    if (scheduleMode === "once" && !scheduledDate) next.scheduled_for = tr("Pick a date and time.");
     if (scheduleMode === "repeat" && !recurrence.trim())
-      next.recurrence = "Type a cron expression or pick a preset below.";
+      next.recurrence = tr("Type a cron expression or pick a preset below.");
     if (scheduleMode === "repeat" && endMode === "date" && !endDate)
-      next.recurrence_end = "Pick the date the repeat ends.";
+      next.recurrence_end = tr("Pick the date the repeat ends.");
     if (scheduleMode === "repeat" && endMode === "count") {
       const n = Number.parseInt(endCount, 10);
-      if (!Number.isFinite(n) || n < 1) next.recurrence_end = "Enter how many runs (at least 1).";
+      if (!Number.isFinite(n) || n < 1) next.recurrence_end = tr("Enter how many runs (at least 1).");
     }
     return next;
   };
@@ -1198,7 +1201,7 @@ export function TaskCreateModal({
   const estimate = async () => {
     if (promptEmpty) {
       setForecast(null);
-      setEstimateNote("Add a prompt first.");
+      setEstimateNote(tr("Add a prompt first."));
       return;
     }
     const taskData = buildTaskData(buildFinalPrompt(emails));
@@ -1215,7 +1218,7 @@ export function TaskCreateModal({
       // client bundle", …) is actionable, and hiding it behind a generic
       // "try again" sent operators bug-hunting for what was a clear 400.
       const detail = errorMessage(err, "");
-      setEstimateNote(detail ? `Estimate failed: ${detail}` : "Estimate failed — try again.");
+      setEstimateNote(detail ? tr("Estimate failed: {0}", [detail]) : tr("Estimate failed — try again."));
       setForecast(null);
       console.warn("estimate failed:", detail);
     } finally {
@@ -1298,7 +1301,7 @@ export function TaskCreateModal({
             carry_context: Boolean(taskData.carry_context),
           });
           showToast(
-            `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
+            tr("Resubmitted as task {0}… — running now", [created.id.slice(0, 8)]),
             "success",
           );
         } else {
@@ -1311,27 +1314,27 @@ export function TaskCreateModal({
           await orchestratorApi.updateTask(editTask.id, taskData);
           showToast(
             editTask.recurrence
-              ? "Task updated — applies to all future runs."
-              : "Task updated.",
+              ? tr("Task updated — applies to all future runs.")
+              : tr("Task updated."),
             "success",
           );
         }
         onUpdated?.();
       } else {
         await orchestratorApi.createTask(taskData);
-        showToast("Task created successfully!", "success");
+        showToast(tr("Task created successfully!"), "success");
         onCreated();
       }
       resetForm();
       onClose();
     } catch (err) {
-      const msg = errorMessage(err, "unknown error");
+      const msg = errorMessage(err, tr("unknown error"));
       // The one server-side validation surface the form can't pre-check fully.
       if (/run_if/i.test(msg)) {
         setFieldError("run_if", msg);
         setAdvancedOpen(true);
       }
-      showToast(`Error: ${msg}`, "error");
+      showToast(tr("Error: {0}", [msg]), "error");
     } finally {
       setSubmitting(false);
     }
@@ -1379,10 +1382,10 @@ export function TaskCreateModal({
     : errorCount > 0
       ? {
           className: "task-footer-status task-footer-status--error",
-          text: `Fix ${plural(errorCount, "field")} above`,
+          text: tr("Fix {0} above", [plural(errorCount, "field")]),
         }
       : promptEmpty
-        ? { className: "task-footer-status", text: "Add a prompt to launch" }
+        ? { className: "task-footer-status", text: tr("Add a prompt to launch") }
         : null;
 
   return (
@@ -1424,7 +1427,7 @@ export function TaskCreateModal({
         className="modal modal-lg task-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={editing ? "Edit Task" : "Create New Task"}
+        aria-label={editing ? tr("Edit Task") : tr("Create New Task")}
         ref={modalRef}
         tabIndex={-1}
       >
@@ -1433,18 +1436,18 @@ export function TaskCreateModal({
           inert={discardOpen || scopeOpen ? true : undefined}
         >
           <div className="modal-header-text">
-            <h3>{editing ? "Edit Task" : "Create New Task"}</h3>
+            <h3>{editing ? tr("Edit Task") : tr("Create New Task")}</h3>
             <p className="modal-subtitle">
               {editing
                 ? editTerminal
-                  ? "This task already ran — saving resubmits it as a new one-off run with your changes."
+                  ? tr("This task already ran — saving resubmits it as a new one-off run with your changes.")
                   : editTask?.recurrence
-                    ? "Editing the schedule definition — you'll choose the scope when you save."
-                    : "Editing a task that hasn't started yet."
-                : "Define what runs, when it runs, and what it may touch."}
+                    ? tr("Editing the schedule definition — you'll choose the scope when you save.")
+                    : tr("Editing a task that hasn't started yet.")
+                : tr("Define what runs, when it runs, and what it may touch.")}
             </p>
           </div>
-          <CloseButton label="Close modal" onClick={requestClose} />
+          <CloseButton label={tr("Close modal")} onClick={requestClose} />
         </div>
 
         <div
@@ -1469,8 +1472,8 @@ export function TaskCreateModal({
               {!editing && pendingTemplate ? (
                 <section className="task-group" data-testid="template-var-fill">
                   <div className="task-group-label">
-                    Fill in: {pendingTemplate.name}
-                  </div>
+        {rich("Fill in: {0}", pendingTemplate.name)}
+      </div>
                   <div className="field-grid">
                     {templatePendingVars.map((name, i) => (
                       <div className="form-group" key={name}>
@@ -1505,7 +1508,7 @@ export function TaskCreateModal({
                       data-testid="template-var-back"
                       onClick={() => setPendingTemplate(null)}
                     >
-                      Back
+                      {tr("Back")}
                     </button>
                     <button
                       type="button"
@@ -1513,14 +1516,14 @@ export function TaskCreateModal({
                       data-testid="template-var-apply"
                       onClick={confirmTemplateVars}
                     >
-                      Apply template
+                      {tr("Apply template")}
                     </button>
                   </div>
                 </section>
               ) : !editing && templates.length > 0 ? (
                 <section className="task-group" data-testid="task-template-section">
-                  <div className="task-group-label">Start from a template</div>
-                  <div className="template-card-grid" role="group" aria-label="Task templates">
+                  <div className="task-group-label">{tr("Start from a template")}</div>
+                  <div className="template-card-grid" role="group" aria-label={tr("Task templates")}>
                     {templates.map((tpl) => (
                       <button
                         key={tpl.name}
@@ -1554,9 +1557,9 @@ export function TaskCreateModal({
               <section className="task-group">
                 <div className="task-label-row">
                   <label className="task-label" htmlFor="titleInput">
-                    Title
+                    {tr("Title")}
                   </label>
-                  <span className="task-optional-badge">Optional</span>
+                  <span className="task-optional-badge">{tr("Optional")}</span>
                 </div>
                 <input
                   id="titleInput"
@@ -1564,7 +1567,7 @@ export function TaskCreateModal({
                   type="text"
                   className={`task-title-input${errors.title ? " has-error" : ""}`}
                   maxLength={TITLE_MAX_LENGTH}
-                  placeholder="Daily pacing summary"
+                  placeholder={tr("Daily pacing summary")}
                   aria-describedby={errors.title ? "title-error title-help" : "title-help"}
                   value={title}
                   onChange={(e) => {
@@ -1578,9 +1581,7 @@ export function TaskCreateModal({
                   </div>
                 ) : null}
                 <p className="field-hint" id="title-help">
-                  How this task is listed in Background tasks. Every run of it — including
-                  future scheduled ones — carries the same title. Left empty, the list falls back
-                  to the first line of the prompt.
+                  {tr("How this task is listed in Background tasks. Every run of it — including future scheduled ones — carries the same title. Left empty, the list falls back to the first line of the prompt.")}
                 </p>
               </section>
 
@@ -1588,7 +1589,7 @@ export function TaskCreateModal({
               <section className="task-group">
                 <div className="task-label-row">
                   <label className="task-label" htmlFor="promptTextarea">
-                    Prompt
+                    {tr("Prompt")}
                   </label>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <PromptLibrary
@@ -1609,7 +1610,7 @@ export function TaskCreateModal({
                       data-testid="prompt-expand-toggle"
                       aria-pressed={promptExpanded}
                       aria-controls="promptTextarea"
-                      aria-label={promptExpanded ? "Collapse prompt editor" : "Expand prompt editor"}
+                      aria-label={promptExpanded ? tr("Collapse prompt editor") : tr("Expand prompt editor")}
                       data-tip-top={promptExpanded ? "Collapse the editor" : "Expand the editor"}
                       onClick={togglePromptExpanded}
                     >
@@ -1619,7 +1620,7 @@ export function TaskCreateModal({
                         <Icon name="expand" className="size-4" />
                       )}
                     </button>
-                    <span className="task-required-badge">Required</span>
+                    <span className="task-required-badge">{tr("Required")}</span>
                   </span>
                 </div>
                 <textarea
@@ -1631,7 +1632,7 @@ export function TaskCreateModal({
                   }`}
                   required
                   rows={3}
-                  placeholder="Pull yesterday's sales report, compare it to the plan, and email a pacing summary…"
+                  placeholder={tr("Pull yesterday's sales report, compare it to the plan, and email a pacing summary…")}
                   aria-describedby={errors.prompt ? "prompt-error prompt-help" : "prompt-help"}
                   value={prompt}
                   onChange={(e) => {
@@ -1643,7 +1644,7 @@ export function TaskCreateModal({
                   }}
                   onBlur={() => {
                     if (prompt.trim() && prompt.trim().length < 3) {
-                      setFieldError("prompt", "Prompt must be at least 3 characters");
+                      setFieldError("prompt", tr("Prompt must be at least 3 characters"));
                     }
                   }}
                 />
@@ -1653,27 +1654,28 @@ export function TaskCreateModal({
                   </div>
                 ) : null}
                 <p className="field-hint" id="prompt-help">
-                  What should this task do each run? Be concrete — sources, checks, and the output
-                  you expect.
+                  {tr("What should this task do each run? Be concrete — sources, checks, and the output you expect.")}
                 </p>
               </section>
 
               {/* ── Context reveal (documentation · tags · persona, #281) ── */}
               <Reveal
                 id="task-context-body"
-                label="Context"
-                hint="documentation · tags · persona"
+                label={tr("Context")}
+                hint={tr("documentation · tags · persona")}
                 open={contextOpen}
                 onToggle={() => setContextOpen((o) => !o)}
                 right={
                   contextCount > 0 ? (
-                    <span className="task-count-chip">{contextCount} set</span>
+                    <span className="task-count-chip">
+        {rich("{0} set", contextCount)}
+      </span>
                   ) : undefined
                 }
               >
                 <div className="form-group">
                   <label className="task-field-label" htmlFor="descriptionTextarea">
-                    Documentation
+                    {tr("Documentation")}
                   </label>
                   <textarea
                     id="descriptionTextarea"
@@ -1681,37 +1683,36 @@ export function TaskCreateModal({
                     className="task-doc-input"
                     rows={3}
                     maxLength={10000}
-                    placeholder="Notes for operators… (Markdown)"
+                    placeholder={tr("Notes for operators… (Markdown)")}
                     aria-describedby="description-help"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
                   <p className="field-hint" id="description-help">
-                    Why this task exists, what it costs, side effects, the runbook if it fails, who
-                    owns it. Shown to operators — never injected into the agent&apos;s prompt.
+                    {tr("Why this task exists, what it costs, side effects, the runbook if it fails, who owns it. Shown to operators — never injected into the agent's prompt.")}
                   </p>
                 </div>
                 <div className="field-grid">
                   <div className="form-group">
                     <label className="task-field-label" htmlFor="tagsInput">
-                      Tags
+                      {tr("Tags")}
                     </label>
                     <input
                       id="tagsInput"
                       name="tags"
                       type="text"
-                      placeholder="nightly, prod, data-pipeline"
+                      placeholder={tr("nightly, prod, data-pipeline")}
                       aria-describedby="tags-help"
                       value={tagsInput}
                       onChange={(e) => setTagsInput(e.target.value)}
                     />
                     <p className="field-hint" id="tags-help">
-                      Comma-separated; used for filtering.
+                      {tr("Comma-separated; used for filtering.")}
                     </p>
                   </div>
                   <div className="form-group">
                     <label className="task-field-label" htmlFor="personaInput">
-                      Persona
+                      {tr("Persona")}
                     </label>
                     <input
                       id="personaInput"
@@ -1723,7 +1724,7 @@ export function TaskCreateModal({
                       onChange={(e) => setPersona(e.target.value)}
                     />
                     <p className="field-hint" id="persona-help">
-                      Persona name from your workspace; blank = default.
+                      {tr("Persona name from your workspace; blank = default.")}
                     </p>
                   </div>
                 </div>
@@ -1733,7 +1734,7 @@ export function TaskCreateModal({
               <section className="task-group">
                 <div className="task-label-row">
                   <span className="task-label" id="schedule-label">
-                    Schedule
+                    {tr("Schedule")}
                   </span>
                 </div>
                 <div className="seg seg--md" role="radiogroup" aria-labelledby="schedule-label">
@@ -1754,18 +1755,18 @@ export function TaskCreateModal({
                 </div>
 
                 {scheduleMode === "now" ? (
-                  <p className="task-schedule-caption">Runs immediately after launch.</p>
+                  <p className="task-schedule-caption">{tr("Runs immediately after launch.")}</p>
                 ) : null}
 
                 {scheduleMode === "once" ? (
                   <div className="task-schedule-once">
                     <div className="schedule-datetime-group">
                       <label className="task-schedule-field" htmlFor="scheduledForDate">
-                        <span>Date</span>
+                        <span>{tr("Date")}</span>
                         <input
                           id="scheduledForDate"
                           type="date"
-                          aria-label="Schedule date"
+                          aria-label={tr("Schedule date")}
                           className={errors.scheduled_for ? "has-error" : ""}
                           value={scheduledDate}
                           onChange={(e) => {
@@ -1776,11 +1777,11 @@ export function TaskCreateModal({
                         />
                       </label>
                       <label className="task-schedule-field" htmlFor="scheduledForTime">
-                        <span>Time</span>
+                        <span>{tr("Time")}</span>
                         <input
                           id="scheduledForTime"
                           type="time"
-                          aria-label="Schedule time"
+                          aria-label={tr("Schedule time")}
                           value={scheduledTime}
                           onChange={(e) => setScheduledTime(e.target.value)}
                           onBlur={blurValidateScheduled}
@@ -1806,15 +1807,15 @@ export function TaskCreateModal({
                       </div>
                     ) : (
                       <p className="task-schedule-caption">
-                        Runs once at the chosen time, in your time zone ({viewerTimeZone}).
-                      </p>
+        {rich("Runs once at the chosen time, in your time zone ({0}).", viewerTimeZone)}
+      </p>
                     )}
                   </div>
                 ) : null}
 
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
-                    <div className="seg seg--md repeat-editor-tabs" role="tablist" aria-label="Repeat input method">
+                    <div className="seg seg--md repeat-editor-tabs" role="tablist" aria-label={tr("Repeat input method")}>
                       <button
                         type="button"
                         role="tab"
@@ -1823,23 +1824,23 @@ export function TaskCreateModal({
                         disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
                         title={
                           repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
-                            ? "This cron schedule is too complex for the simple editor"
+                            ? tr("This cron schedule is too complex for the simple editor")
                             : undefined
                         }
                         onClick={showSimpleRepeatEditor}
                       >
-                        Simple schedule
+                        {tr("Simple schedule")}
                       </button>
                       <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className="seg-option" onClick={() => setRepeatEditor("cron")}>
-                        Advanced cron
+                        {tr("Advanced cron")}
                       </button>
                     </div>
                     {repeatEditor === "simple" ? (
                       <div className="simple-schedule-grid" role="tabpanel">
                         <label className="task-schedule-field">
-                          <span>Repeat</span>
+                          <span>{tr("Repeat")}</span>
                           <select
-                            aria-label="Repeat frequency"
+                            aria-label={tr("Repeat frequency")}
                             value={simpleFrequency}
                             onChange={(e) => {
                               const frequency = e.target.value as SimpleFrequency;
@@ -1848,22 +1849,22 @@ export function TaskCreateModal({
                               setFieldError("recurrence", "");
                             }}
                           >
-                            <option value="daily">Every day</option>
-                            <option value="weekdays">Every weekday</option>
-                            <option value="weekly">Every week</option>
+                            <option value="daily">{tr("Every day")}</option>
+                            <option value="weekdays">{tr("Every weekday")}</option>
+                            <option value="weekly">{tr("Every week")}</option>
                           </select>
                         </label>
                         {simpleFrequency === "weekly" ? (
                           <fieldset className="weekly-days">
-                            <legend>On</legend>
-                            <div role="group" aria-label="Repeat weekdays">
+                            <legend>{tr("On")}</legend>
+                            <div role="group" aria-label={tr("Repeat weekdays")}>
                               {WEEKDAYS.map((day) => {
                                 const selected = simpleWeekdays.includes(day.value);
                                 return (
                                   <button
                                     key={day.value}
                                     type="button"
-                                    aria-label={`Run on ${day.label}`}
+                                    aria-label={tr("Run on {0}", [day.label])}
                                     aria-pressed={selected}
                                     disabled={selected && simpleWeekdays.length === 1}
                                     className={selected ? "is-selected" : ""}
@@ -1886,10 +1887,10 @@ export function TaskCreateModal({
                           </fieldset>
                         ) : null}
                         <label className="task-schedule-field">
-                          <span>At</span>
+                          <span>{tr("At")}</span>
                           <input
                             type="time"
-                            aria-label="Repeat time"
+                            aria-label={tr("Repeat time")}
                             value={simpleTime}
                             onChange={(e) => {
                               setSimpleTime(e.target.value);
@@ -1903,7 +1904,7 @@ export function TaskCreateModal({
                       </div>
                     ) : (
                       <label className="task-schedule-field task-cron-field" role="tabpanel" htmlFor="recurrenceInput">
-                        <span>Cron expression</span>
+                        <span>{tr("Cron expression")}</span>
                         <input
                           id="recurrenceInput"
                           type="text"
@@ -1911,7 +1912,7 @@ export function TaskCreateModal({
                           className={`task-cron-input${errors.recurrence ? " has-error" : ""}`}
                           maxLength={100}
                           placeholder="0 9 * * 1-5"
-                          aria-label="Cron expression"
+                          aria-label={tr("Cron expression")}
                           aria-describedby={errors.recurrence ? "recurrence-error" : "recurrence-echo"}
                           value={recurrence}
                           onChange={(e) => {
@@ -1948,7 +1949,7 @@ export function TaskCreateModal({
                       </div>
                     ) : null}
                     {repeatEditor === "cron" ? (
-                      <div className="schedule-presets" role="group" aria-label="Schedule presets">
+                      <div className="schedule-presets" role="group" aria-label={tr("Schedule presets")}>
                         {SCHEDULE_PRESETS.map((p) => (
                           <button
                             key={p.cron}
@@ -1969,9 +1970,9 @@ export function TaskCreateModal({
                     ) : null}
                     <div className="simple-schedule-grid" data-testid="repeat-timezone">
                       <label className="task-schedule-field">
-                        <span>Time zone</span>
+                        <span>{tr("Time zone")}</span>
                         <select
-                          aria-label="Repeat time zone"
+                          aria-label={tr("Repeat time zone")}
                           aria-describedby={zoneIsViewers ? undefined : "repeat-timezone-hint"}
                           value={timezone}
                           onChange={(e) => setTimezone(e.target.value)}
@@ -1986,8 +1987,8 @@ export function TaskCreateModal({
                     </div>
                     {!zoneIsViewers ? (
                       <p className="field-hint" id="repeat-timezone-hint" data-testid="repeat-timezone-hint">
-                        Times above are in {timezone}, not your own time zone ({viewerTimeZone}).
-                      </p>
+        {rich("Times above are in {0}, not your own time zone ({1}).", timezone, viewerTimeZone)}
+      </p>
                     ) : null}
                     {!errors.recurrence && cronDescription ? (
                       <div className="task-cron-echo" id="recurrence-echo" aria-live="polite">
@@ -2005,7 +2006,7 @@ export function TaskCreateModal({
                           <path d="M5 12l5 5L20 6" />
                         </svg>
                         <span>
-                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext, timezone)}` : "Schedule ready"}</strong>
+                          <strong>{cronNext ? tr("Next run {0}", [formatNextRun(cronNext, timezone)]) : tr("Schedule ready")}</strong>
                           <span>
                             {cronDescription} · {formatTimeZoneLabel(timezone, cronNext ?? undefined)}
                           </span>
@@ -2014,31 +2015,31 @@ export function TaskCreateModal({
                     ) : null}
                     {!errors.recurrence && !cronDescription ? (
                       <p className="field-hint" id="recurrence-echo">
-                        Choose a schedule above or enter an advanced cron expression.
+                        {tr("Choose a schedule above or enter an advanced cron expression.")}
                       </p>
                     ) : null}
                     <div className="simple-schedule-grid" data-testid="repeat-end">
                       <label className="task-schedule-field">
-                        <span>End repeat</span>
+                        <span>{tr("End repeat")}</span>
                         <select
-                          aria-label="End repeat"
+                          aria-label={tr("End repeat")}
                           value={endMode}
                           onChange={(e) => {
                             setEndMode(e.target.value as RepeatEndMode);
                             setFieldError("recurrence_end", "");
                           }}
                         >
-                          <option value="never">Never</option>
-                          <option value="date">On a date</option>
-                          <option value="count">After a number of runs</option>
+                          <option value="never">{tr("Never")}</option>
+                          <option value="date">{tr("On a date")}</option>
+                          <option value="count">{tr("After a number of runs")}</option>
                         </select>
                       </label>
                       {endMode === "date" ? (
                         <label className="task-schedule-field">
-                          <span>Ends on</span>
+                          <span>{tr("Ends on")}</span>
                           <input
                             type="date"
-                            aria-label="Repeat end date"
+                            aria-label={tr("Repeat end date")}
                             value={endDate}
                             onChange={(e) => {
                               setEndDate(e.target.value);
@@ -2049,12 +2050,12 @@ export function TaskCreateModal({
                       ) : null}
                       {endMode === "count" ? (
                         <label className="task-schedule-field">
-                          <span>Total runs</span>
+                          <span>{tr("Total runs")}</span>
                           <input
                             type="number"
                             min={1}
                             max={10000}
-                            aria-label="Total runs before the repeat ends"
+                            aria-label={tr("Total runs before the repeat ends")}
                             value={endCount}
                             onChange={(e) => {
                               setEndCount(e.target.value);
@@ -2087,17 +2088,16 @@ export function TaskCreateModal({
               {/* ── Tools & files reveal ───────────────────────────────── */}
               <Reveal
                 id="task-tools-body"
-                label="Tools & files"
-                hint="Connections · attachments"
+                label={tr("Tools & files")}
+                hint={tr("Connections · attachments")}
                 open={toolsOpen}
                 onToggle={() => setToolsOpen((o) => !o)}
                 right={<span className="task-reveal-summary">{toolsSummary}</span>}
               >
                 <div className="form-group" data-testid="task-mcp-section">
-                  <span className="task-field-label">Connections</span>
+                  <span className="task-field-label">{tr("Connections")}</span>
                   <p className="field-hint task-hint-tight">
-                    Always-on connections are part of every run. Pick any others this task
-                    needs. Locked rows show whether a connection is available right now.
+                    {tr("Always-on connections are part of every run. Pick any others this task needs. Locked rows show whether a connection is available right now.")}
                   </p>
                   <McpServerPicker
                     mode="task"
@@ -2107,11 +2107,10 @@ export function TaskCreateModal({
                   />
                 </div>
                 <div className="form-group">
-                  <span className="task-field-label">Attachments</span>
+                  <span className="task-field-label">{tr("Attachments")}</span>
                   {editing && editTask?.files && editTask.files.length > 0 ? (
                     <p className="field-hint task-hint-tight">
-                      This task has {editTask.files.length} existing {editTask.files.length === 1 ? "attachment" : "attachments"}.
-                      Attach new files to replace them, or leave this empty to keep them.
+                      {tr(editTask.files.length === 1 ? "This task has {0} existing attachment. Attach new files to replace it, or leave this empty to keep it." : "This task has {0} existing attachments. Attach new files to replace them, or leave this empty to keep them.", [editTask.files.length])}
                     </p>
                   ) : null}
                   <FileUpload
@@ -2126,23 +2125,25 @@ export function TaskCreateModal({
               {/* ── Advanced reveal ────────────────────────────────────── */}
               <Reveal
                 id="task-advanced-body"
-                label="Advanced"
-                hint="model · limits · behavior · gate"
+                label={tr("Advanced")}
+                hint={tr("model · limits · behavior · gate")}
                 open={advancedOpen}
                 onToggle={() => setAdvancedOpen((o) => !o)}
                 right={
                   advancedCount > 0 ? (
-                    <span className="task-count-chip">{advancedCount} set</span>
+                    <span className="task-count-chip">
+        {rich("{0} set", advancedCount)}
+      </span>
                   ) : undefined
                 }
               >
                 <div data-testid="advanced-section" className="task-advanced">
                   <div className="task-subcluster">
-                    <div className="task-eyebrow">Model</div>
+                    <div className="task-eyebrow">{tr("Model")}</div>
                     <div className="field-grid">
                       <div className="form-group">
                         <label className="task-field-label" htmlFor="taskModelInput">
-                          Primary
+                          {tr("Primary")}
                         </label>
                         <ModelPicker
                           id="taskModelInput"
@@ -2161,7 +2162,7 @@ export function TaskCreateModal({
                       </div>
                       <div className="form-group">
                         <label className="task-field-label" htmlFor="taskFallbackModelInput">
-                          Fallback
+                          {tr("Fallback")}
                         </label>
                         <ModelPicker
                           id="taskFallbackModelInput"
@@ -2180,15 +2181,15 @@ export function TaskCreateModal({
                       </div>
                     </div>
                     <p className="field-hint">
-                      From your workspace&apos;s providers — type to use an unlisted slug.
+                      {tr("From your workspace's providers — type to use an unlisted slug.")}
                     </p>
                   </div>
 
                   <div className="task-subcluster">
-                    <div className="task-eyebrow">Limits</div>
+                    <div className="task-eyebrow">{tr("Limits")}</div>
                     <div className="task-limits-grid">
                       <label className="task-limit-label" htmlFor="taskMaxIterations">
-                        Max iterations
+                        {tr("Max iterations")}
                       </label>
                       <input
                         id="taskMaxIterations"
@@ -2197,13 +2198,13 @@ export function TaskCreateModal({
                         max={10000}
                         step={1}
                         inputMode="numeric"
-                        placeholder="default"
+                        placeholder={tr("default")}
                         aria-describedby="max-iterations-help"
                         value={maxIterations}
                         onChange={(e) => setMaxIterations(e.target.value)}
                       />
                       <span className="task-limit-help" id="max-iterations-help">
-                        Blank = server default
+                        {tr("Blank = server default")}
                       </span>
                       {errors.max_iterations ? (
                         <div
@@ -2214,7 +2215,7 @@ export function TaskCreateModal({
                         </div>
                       ) : null}
                       <label className="task-limit-label" htmlFor="taskMaxCostUSD">
-                        Max cost (USD)
+                        {tr("Max cost (USD)")}
                       </label>
                       <input
                         id="taskMaxCostUSD"
@@ -2223,14 +2224,13 @@ export function TaskCreateModal({
                         max={100000}
                         step={0.01}
                         inputMode="decimal"
-                        placeholder="deployment ceiling"
+                        placeholder={tr("deployment ceiling")}
                         aria-describedby="max-cost-help"
                         value={maxCostUSD}
                         onChange={(e) => setMaxCostUSD(e.target.value)}
                       />
                       <span className="task-limit-help" id="max-cost-help">
-                        This task&apos;s own per-run ceiling. Blank = the deployment ceiling; above it needs
-                        admin.
+                        {tr("This task's own per-run ceiling. Blank = the deployment ceiling; above it needs admin.")}
                       </span>
                       {errors.max_cost_usd ? (
                         <div
@@ -2241,7 +2241,7 @@ export function TaskCreateModal({
                         </div>
                       ) : null}
                       <label className="task-limit-label" htmlFor="taskExpectedDuration">
-                        Expected duration
+                        {tr("Expected duration")}
                       </label>
                       <input
                         id="taskExpectedDuration"
@@ -2249,16 +2249,16 @@ export function TaskCreateModal({
                         min={1}
                         step={1}
                         inputMode="numeric"
-                        placeholder="none"
+                        placeholder={tr("none")}
                         aria-describedby="duration-help"
                         value={expectedDuration}
                         onChange={(e) => setExpectedDuration(e.target.value)}
                       />
                       <span className="task-limit-help" id="duration-help">
-                        Minutes. Warns past 1.5×, breach at 2×. Blank = no SLA.
+                        {tr("Minutes. Warns past 1.5×, breach at 2×. Blank = no SLA.")}
                       </span>
                       <label className="task-limit-label" htmlFor="taskThinkingBudget">
-                        Thinking budget
+                        {tr("Thinking budget")}
                       </label>
                       <input
                         id="taskThinkingBudget"
@@ -2266,16 +2266,16 @@ export function TaskCreateModal({
                         min={0}
                         step={1024}
                         inputMode="numeric"
-                        placeholder="inherit"
+                        placeholder={tr("inherit")}
                         aria-describedby="thinking-help"
                         value={thinkingBudget}
                         onChange={(e) => setThinkingBudget(e.target.value)}
                       />
                       <span className="task-limit-help" id="thinking-help">
-                        Tokens, Claude models. Blank = inherit · 0 = off.
+                        {tr("Tokens, Claude models. Blank = inherit · 0 = off.")}
                       </span>
                       <label className="task-limit-label" htmlFor="taskSandboxMemory">
-                        Sandbox memory
+                        {tr("Sandbox memory")}
                       </label>
                       <input
                         id="taskSandboxMemory"
@@ -2283,16 +2283,16 @@ export function TaskCreateModal({
                         min={128}
                         step={128}
                         inputMode="numeric"
-                        placeholder="default"
+                        placeholder={tr("default")}
                         aria-describedby="sandbox-memory-help"
                         value={sandboxMemory}
                         onChange={(e) => setSandboxMemory(e.target.value)}
                       />
                       <span className="task-limit-help" id="sandbox-memory-help">
-                        MiB. Blank = global default. Floor 128.
+                        {tr("MiB. Blank = global default. Floor 128.")}
                       </span>
                       <label className="task-limit-label" htmlFor="taskSandboxCpus">
-                        Sandbox CPUs
+                        {tr("Sandbox CPUs")}
                       </label>
                       <input
                         id="taskSandboxCpus"
@@ -2300,16 +2300,16 @@ export function TaskCreateModal({
                         min={0.1}
                         step={0.5}
                         inputMode="decimal"
-                        placeholder="default"
+                        placeholder={tr("default")}
                         aria-describedby="sandbox-cpus-help"
                         value={sandboxCpus}
                         onChange={(e) => setSandboxCpus(e.target.value)}
                       />
                       <span className="task-limit-help" id="sandbox-cpus-help">
-                        Fractional CPUs. Blank = global default.
+                        {tr("Fractional CPUs. Blank = global default.")}
                       </span>
                       <label className="task-limit-label" htmlFor="taskSandboxPids">
-                        Sandbox PIDs
+                        {tr("Sandbox PIDs")}
                       </label>
                       <input
                         id="taskSandboxPids"
@@ -2317,19 +2317,19 @@ export function TaskCreateModal({
                         min={16}
                         step={16}
                         inputMode="numeric"
-                        placeholder="default"
+                        placeholder={tr("default")}
                         aria-describedby="sandbox-pids-help"
                         value={sandboxPids}
                         onChange={(e) => setSandboxPids(e.target.value)}
                       />
                       <span className="task-limit-help" id="sandbox-pids-help">
-                        Max processes. Blank = global default. Floor 16.
+                        {tr("Max processes. Blank = global default. Floor 16.")}
                       </span>
                     </div>
                   </div>
 
                   <div className="task-subcluster">
-                    <div className="task-eyebrow">Behavior</div>
+                    <div className="task-eyebrow">{tr("Behavior")}</div>
                     {/* Each switch names itself from its TITLE line and takes the
                         paragraph under it as a description. Without that split the
                         wrapping <label> hands the checkbox one accessible name made
@@ -2350,10 +2350,10 @@ export function TaskCreateModal({
                         />
                         <span className="switch-row-text">
                           <span className="switch-row-title" id="taskAllowNetwork-title">
-                            Allow network egress
+                            {tr("Allow network egress")}
                           </span>
                           <span className="switch-row-desc" id="taskAllowNetwork-desc">
-                            Off = sealed — the sandbox has no internet access.
+                            {tr("Off = sealed — the sandbox has no internet access.")}
                           </span>
                         </span>
                       </label>
@@ -2369,11 +2369,10 @@ export function TaskCreateModal({
                         />
                         <span className="switch-row-text">
                           <span className="switch-row-title" id="taskAllowDelegation-title">
-                            Allow sub-agent delegation
+                            {tr("Allow sub-agent delegation")}
                           </span>
                           <span className="switch-row-desc" id="taskAllowDelegation-desc">
-                            The agent may fan work out to governed child agents (capped at 5,
-                            each ≤10% of the remaining budget). Off = this task never delegates.
+                            {tr("The agent may fan work out to governed child agents (capped at 5, each ≤10% of the remaining budget). Off = this task never delegates.")}
                           </span>
                         </span>
                       </label>
@@ -2389,11 +2388,10 @@ export function TaskCreateModal({
                         />
                         <span className="switch-row-text">
                           <span className="switch-row-title" id="taskCarryContext-title">
-                            Carry context across runs
+                            {tr("Carry context across runs")}
                           </span>
                           <span className="switch-row-desc" id="taskCarryContext-desc">
-                            Each run starts with a bounded summary of the previous run&apos;s
-                            output. Recurring tasks only.
+                            {tr("Each run starts with a bounded summary of the previous run's output. Recurring tasks only.")}
                           </span>
                         </span>
                       </label>
@@ -2402,12 +2400,12 @@ export function TaskCreateModal({
 
                   <div className="task-gate">
                     <div className="task-gate-head">
-                      <span className="task-gate-title">Pre-run gate</span>
+                      <span className="task-gate-title">{tr("Pre-run gate")}</span>
                       <span className="task-gate-chip">run_if</span>
                       <span className="task-reveal-spacer" />
                     </div>
                     <p className="task-gate-warning">
-                      Runs on the host as the fleet process user — treat the command as trusted.
+                      {tr("Runs on the host as the fleet process user — treat the command as trusted.")}
                     </p>
                     <input
                       id="runIfCommandInput"
@@ -2418,12 +2416,12 @@ export function TaskCreateModal({
                       placeholder='git -C /workspace log --since="24 hours ago" --oneline | grep -q .'
                       value={runIfCommand}
                       onChange={(e) => setRunIfCommand(e.target.value)}
-                      aria-label="Pre-run shell command"
+                      aria-label={tr("Pre-run shell command")}
                       aria-describedby="run-if-help"
                     />
                     <div className="task-gate-options">
                       <label htmlFor="runIfTimeoutInput" className="task-gate-option-label">
-                        Timeout
+                        {tr("Timeout")}
                       </label>
                       <input
                         id="runIfTimeoutInput"
@@ -2437,20 +2435,20 @@ export function TaskCreateModal({
                         // clearable while retyping, so the raw string stands
                         // until focus leaves (and submit normalizes again).
                         onBlur={() => setRunIfTimeout((t) => String(normalizeRunIfTimeout(t)))}
-                        aria-label="Pre-run gate timeout seconds"
+                        aria-label={tr("Pre-run gate timeout seconds")}
                       />
-                      <span className="task-gate-option-label">s</span>
+                      <span className="task-gate-option-label">{tr("s")}</span>
                       <span className="task-gate-option-gap" />
                       <label htmlFor="runIfOnErrorSelect" className="task-gate-option-label">
-                        On error
+                        {tr("On error")}
                       </label>
                       <select
                         id="runIfOnErrorSelect"
                         value={runIfOnError}
                         onChange={(e) => setRunIfOnError(e.target.value as "run" | "skip")}
                       >
-                        <option value="run">run anyway</option>
-                        <option value="skip">skip</option>
+                        <option value="run">{tr("run anyway")}</option>
+                        <option value="skip">{tr("skip")}</option>
                       </select>
                     </div>
                     {errors.run_if ? (
@@ -2459,7 +2457,7 @@ export function TaskCreateModal({
                       </div>
                     ) : null}
                     <p className="field-hint task-hint-tight" id="run-if-help">
-                      The occurrence runs only when this exits 0 — otherwise it&apos;s skipped.
+                      {tr("The occurrence runs only when this exits 0 — otherwise it's skipped.")}
                     </p>
                   </div>
                 </div>
@@ -2477,16 +2475,16 @@ export function TaskCreateModal({
           <button
             type="button"
             className="btn btn-secondary task-estimate-btn"
-            aria-label="Estimate cost"
+            aria-label={tr("Estimate cost")}
             disabled={estimating || submitting}
             onClick={() => void estimate()}
           >
-            Estimate Cost
+            {tr("Estimate Cost")}
           </button>
           <span className="task-estimate-slot" role="status" aria-live="polite">
             {estimating ? (
               <span className="task-estimate-value">
-                <Spinner /> Estimating…
+                <Spinner /> {tr("Estimating…")}
               </span>
             ) : forecast ? (
               <span className={`task-estimate-result${estimateStale ? " is-stale" : ""}`}>
@@ -2505,20 +2503,19 @@ export function TaskCreateModal({
                   aria-describedby="task-estimate-detail"
                 >
                   {forecast.pricing_known && forecast.estimated_total_cost_usd != null
-                    ? `≈ $${forecast.estimated_total_cost_usd.toFixed(2)} per run`
-                    : "Cost unknown for this model"}
+                    ? tr("≈ ${0} per run", [formatFixed(forecast.estimated_total_cost_usd, 2)])
+                    : tr("Cost unknown for this model")}
                   {forecast.would_hit_ceiling ? (
                     <span className="task-estimate-ceiling">
-                      {" "}
-                      · may hit the ${forecast.max_cost_ceiling_usd.toFixed(2)} ceiling
-                    </span>
+        {rich("· may hit the ${0} ceiling", formatFixed(forecast.max_cost_ceiling_usd, 2))}
+      </span>
                   ) : null}
                 </button>
                 <span className="task-estimate-popover" id="task-estimate-detail">
                   <CostForecastPanel forecast={forecast} />
                   {estimateStale ? (
                     <p className="task-estimate-stale-note">
-                      The form changed since this estimate — run it again.
+                      {tr("The form changed since this estimate — run it again.")}
                     </p>
                   ) : null}
                 </span>
@@ -2536,12 +2533,11 @@ export function TaskCreateModal({
           <button
             type="button"
             className="btn btn-secondary"
-            aria-label="Cancel"
+            aria-label={tr("Cancel")}
             disabled={submitting}
             onClick={requestClose}
           >
-            Cancel
-          </button>
+            {tr("Cancel")}</button>
           <button
             type="submit"
             form="createTaskForm"
@@ -2554,20 +2550,20 @@ export function TaskCreateModal({
                 screen reader hears the same words. */}
             {submitting ? (
               <>
-                <Spinner /> {editing ? "Saving…" : scheduleMode === "now" ? "Starting…" : "Scheduling…"}
+                <Spinner /> {editing ? tr("Saving…") : scheduleMode === "now" ? tr("Starting…") : tr("Scheduling…")}
               </>
             ) : editing ? (
               editTerminal ? (
-                "Run again with changes"
+                tr("Run again with changes")
               ) : (
-                "Save changes"
+                tr("Save changes")
               )
             ) : scheduleMode === "now" ? (
-              "Run task now"
+              tr("Run task now")
             ) : scheduleMode === "once" ? (
-              "Schedule task"
+              tr("Schedule task")
             ) : (
-              "Start schedule"
+              tr("Start schedule")
             )}
           </button>
         </div>
@@ -2587,12 +2583,10 @@ export function TaskCreateModal({
               data-testid="edit-scope-chooser"
             >
               <div className="task-discard-title" id="edit-scope-title">
-                Apply changes to…
+                {tr("Apply changes to…")}
               </div>
               <div className="task-discard-message" id="edit-scope-message">
-                This task repeats on a schedule. Save the changes for every
-                future run, or run once now with these changes and leave the
-                schedule as it is?
+                {tr("This task repeats on a schedule. Save the changes for every future run, or run once now with these changes and leave the schedule as it is?")}
               </div>
               <div className="task-discard-actions">
                 <button
@@ -2600,7 +2594,7 @@ export function TaskCreateModal({
                   className="btn btn-secondary"
                   onClick={() => setScopeOpen(false)}
                 >
-                  Back
+                  {tr("Back")}
                 </button>
                 <button
                   type="button"
@@ -2611,7 +2605,7 @@ export function TaskCreateModal({
                     void submit("once");
                   }}
                 >
-                  Run once now
+                  {tr("Run once now")}
                 </button>
                 <button
                   type="button"
@@ -2622,7 +2616,7 @@ export function TaskCreateModal({
                     void submit("definition");
                   }}
                 >
-                  All future runs
+                  {tr("All future runs")}
                 </button>
               </div>
             </div>
@@ -2641,11 +2635,11 @@ export function TaskCreateModal({
               aria-describedby="discard-message"
             >
               <div className="task-discard-title" id="discard-title">
-                Discard this task?
+                {tr("Discard this task?")}
               </div>
               <div className="task-discard-message" id="discard-message">
-                You have unsaved changes — {dirtyList} will be lost if you close.
-              </div>
+        {rich("You have unsaved changes — {0} will be lost if you close.", dirtyList)}
+      </div>
               <div className="task-discard-actions">
                 <button
                   type="button"
@@ -2656,7 +2650,7 @@ export function TaskCreateModal({
                     resumeFocusRef.current?.focus();
                   }}
                 >
-                  Keep editing
+                  {tr("Keep editing")}
                 </button>
                 <button
                   type="button"
@@ -2666,7 +2660,7 @@ export function TaskCreateModal({
                     onClose();
                   }}
                 >
-                  Discard
+                  {tr("Discard")}
                 </button>
               </div>
             </div>

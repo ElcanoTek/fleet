@@ -1,3 +1,9 @@
+import { subagentRoleLabel } from "@/app/chat/ui/history";
+import { formatFixed } from "@/app/lib/i18n";
+import { localizeError } from "@/app/lib/i18n/errors";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import {
   useCallback,
   useEffect,
@@ -14,7 +20,7 @@ import type {
 import { orchestratorApi, OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
-import { RunStatusChip } from "@/app/shared/ui/StatusChip";
+import { runStateLabel, RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { useToast } from "@/app/shared/ui/Toast";
 import {
@@ -140,28 +146,28 @@ function TaskSummary({ task }: { task: Task }) {
   const schedule = scheduleLabel(task);
   const items: Array<{ label: string; node: ReactNode }> = [
     {
-      label: "ID",
+      label: tr("ID"),
       node: (
         <code title={task.id}>{task.id.slice(0, 8)}…</code>
       ),
     },
-    { label: "Status", node: <TaskStatusBadge task={task} /> },
-    { label: "SLA", node: <TaskSlaBadge task={task} /> },
+    { label: tr("Status"), node: <TaskStatusBadge task={task} /> },
+    { label: tr("SLA"), node: <TaskSlaBadge task={task} /> },
     {
-      label: "Schedule",
+      label: tr("Schedule"),
       node: (
         <span title={scheduleTitle(task)}>{schedule}</span>
       ),
     },
-    { label: "Created by", node: <span>{createdByLabel(task)}</span> },
-    { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
+    { label: tr("Created by"), node: <span>{createdByLabel(task)}</span> },
+    { label: tr("Created"), node: <span>{formatTimeFirst(task.created_at)}</span> },
   ];
   // A stopped schedule says so, and why, in the summary itself — a tooltip
   // alone is invisible on a phone (ADR-0073).
   const stopped = scheduleStoppedReason(task);
   if (stopped) {
     items.push({
-      label: "Schedule stopped",
+      label: tr("Schedule stopped"),
       node: <span data-testid="schedule-stopped">{stopped}</span>,
     });
   }
@@ -169,17 +175,17 @@ function TaskSummary({ task }: { task: Task }) {
   const blocked = blockedReason(task);
   if (blocked) {
     items.push({
-      label: "Blocked",
+      label: tr("Blocked"),
       node: <span data-testid="blocked-reason">{blocked}</span>,
     });
   }
   if (task.status === "paused_awaiting_wake") {
     items.push({
-      label: "Wake",
+      label: tr("Wake"),
       node: (
         <span data-testid="wake-summary">
-          {task.wake_event_key ? `event “${task.wake_event_key}”` : "timer"}
-          {task.wake_at ? ` · by ${formatTimeFirst(task.wake_at)}` : ""}
+          {task.wake_event_key ? tr("event “{0}”", [task.wake_event_key]) : "timer"}
+          {task.wake_at ? tr(" · by {0}", [formatTimeFirst(task.wake_at)]) : ""}
         </span>
       ),
     });
@@ -200,7 +206,7 @@ function TaskSummary({ task }: { task: Task }) {
 // and cost figures recorded on the captain's-log session.
 function SessionMetrics({ session }: { session: LogSession }) {
   const num = (n: number | undefined) =>
-    typeof n === "number" ? n.toLocaleString() : undefined;
+    typeof n === "number" ? n.toLocaleString(getLanguage()) : undefined;
   const toolCalls = (session.messages ?? []).reduce(
     (n, m) => n + (m.tool_calls?.length ?? 0),
     0,
@@ -210,18 +216,18 @@ function SessionMetrics({ session }: { session: LogSession }) {
       ? formatDuration(session.updated_at - session.created_at)
       : undefined;
   const tiles: Array<{ label: string; value: string | undefined }> = [
-    { label: "Session", value: session.title || undefined },
-    { label: "Duration", value: span },
-    { label: "Messages", value: num(session.messages?.length) },
-    { label: "Tool calls", value: toolCalls > 0 ? num(toolCalls) : undefined },
-    { label: "Prompt tokens", value: num(session.prompt_tokens) },
-    { label: "Completion tokens", value: num(session.completion_tokens) },
-    { label: "Cached tokens", value: num(session.cached_tokens) },
+    { label: tr("Session"), value: session.title || undefined },
+    { label: tr("Duration"), value: span },
+    { label: tr("Messages"), value: num(session.messages?.length) },
+    { label: tr("Tool calls"), value: toolCalls > 0 ? num(toolCalls) : undefined },
+    { label: tr("Prompt tokens"), value: num(session.prompt_tokens) },
+    { label: tr("Completion tokens"), value: num(session.completion_tokens) },
+    { label: tr("Cached tokens"), value: num(session.cached_tokens) },
     {
-      label: "Cost",
+      label: tr("Cost"),
       value:
         typeof session.cost === "number" && session.cost > 0
-          ? `$${session.cost.toFixed(4)}`
+          ? `$${formatFixed(session.cost, 4)}`
           : undefined,
     },
   ];
@@ -246,8 +252,8 @@ function SessionMetrics({ session }: { session: LogSession }) {
 // tracing is on), each with a copy action.
 function RunCorrelation({ session }: { session: LogSession }) {
   const ids: Array<{ label: string; value: string }> = [];
-  if (session.run_id) ids.push({ label: "Run ID", value: session.run_id });
-  if (session.trace_id) ids.push({ label: "Trace ID", value: session.trace_id });
+  if (session.run_id) ids.push({ label: tr("Run ID"), value: session.run_id });
+  if (session.trace_id) ids.push({ label: tr("Trace ID"), value: session.trace_id });
   if (ids.length === 0) return null;
   return (
     <div className="log-correlation" data-testid="log-correlation">
@@ -279,10 +285,10 @@ function CorrelationID({ label, value }: { label: string; value: string }) {
       <button
         type="button"
         className="btn btn-small"
-        aria-label={`Copy ${label}`}
+        aria-label={tr("Copy {0}", [label])}
         onClick={() => void onCopy()}
       >
-        {state === "idle" ? "Copy" : state === "ok" ? "Copied" : "Copy failed"}
+        {state === "idle" ? tr("Copy") : state === "ok" ? tr("Copied") : tr("Copy failed")}
       </button>
     </div>
   );
@@ -335,12 +341,12 @@ function subagentStatus(info: SubagentInfo): {
   label: string;
   tone: "running" | "done" | "failed";
 } {
-  if (info.pending) return { label: "running", tone: "running" };
-  if (info.success) return { label: "done", tone: "done" };
+  if (info.pending) return { label: tr("running"), tone: "running" };
+  if (info.success) return { label: tr("done"), tone: "done" };
   // A refusal never built a child, so it has no session id.
-  if (!info.childSessionId) return { label: "refused", tone: "failed" };
-  if ((info.result ?? "").includes("timed out")) return { label: "timed out", tone: "failed" };
-  return { label: "failed", tone: "failed" };
+  if (!info.childSessionId) return { label: tr("refused"), tone: "failed" };
+  if ((info.result ?? "").includes("timed out")) return { label: tr("timed out"), tone: "failed" };
+  return { label: tr("failed"), tone: "failed" };
 }
 
 function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string }) {
@@ -355,9 +361,9 @@ function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string })
     >
       <div className="subagent-card-head">
         <span className="subagent-card-title">
-          Sub-agent{shortId ? <code> {shortId}…</code> : null}
-        </span>
-        {info.role ? <span className="subagent-card-role">{info.role}</span> : null}
+        {rich("Sub-agent{0}", shortId ? <code> {shortId}…</code> : null)}
+      </span>
+        {info.role ? <span className="subagent-card-role">{subagentRoleLabel(info.role)}</span> : null}
         <span className={`subagent-card-status subagent-card-status--${status.tone}`}>
           {status.label}
         </span>
@@ -370,13 +376,17 @@ function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string })
       ) : null}
       <div className="subagent-card-meta">
         {typeof info.steps === "number" && info.steps > 0 ? (
-          <span>{info.steps} steps</span>
+          <span>
+        {rich("{0} steps", info.steps)}
+      </span>
         ) : null}
         {typeof info.costUsd === "number" && info.costUsd > 0 ? (
-          <span>${info.costUsd.toFixed(4)}</span>
+          <span>${formatFixed(info.costUsd, 4)}</span>
         ) : null}
         {typeof info.tokens === "number" && info.tokens > 0 ? (
-          <span>{info.tokens.toLocaleString()} tokens</span>
+          <span>
+        {rich("{0} tokens", info.tokens.toLocaleString(getLanguage()))}
+      </span>
         ) : null}
         {info.workdir ? (
           <code className="subagent-card-workdir" title={info.workdir}>
@@ -386,7 +396,7 @@ function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string })
       </div>
       {info.result ? (
         <details className="subagent-card-result">
-          <summary>Result</summary>
+          <summary>{tr("Result")}</summary>
           <pre className="log-pre">{stripAnsiCodes(info.result)}</pre>
         </details>
       ) : null}
@@ -419,7 +429,7 @@ function SubagentTranscript({
       setSession(s);
       setState("loaded");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(localizeError(e instanceof Error ? e.message : String(e)));
       setState("error");
     }
   }, [taskId, childSessionId]);
@@ -433,12 +443,14 @@ function SubagentTranscript({
         }
       }}
     >
-      <summary>Transcript</summary>
+      <summary>{tr("Transcript")}</summary>
       {state === "loading" ? (
-        <p className="subagent-card-transcript-note">Loading transcript…</p>
+        <p className="subagent-card-transcript-note">{tr("Loading transcript…")}</p>
       ) : null}
       {state === "error" ? (
-        <p className="subagent-card-transcript-note">Transcript unavailable: {error}</p>
+        <p className="subagent-card-transcript-note">
+        {rich("Transcript unavailable: {0}", error)}
+      </p>
       ) : null}
       {state === "loaded" && session ? (
         <TranscriptTimeline
@@ -501,7 +513,7 @@ export function liveSubagentActivity(
   };
   switch (frame.phase) {
     case "started":
-      next.current = "starting…";
+      next.current = tr("starting…");
       break;
     case "tool":
       next.current = frame.tool
@@ -509,13 +521,13 @@ export function liveSubagentActivity(
         : base.current;
       break;
     case "tool_result":
-      next.current = frame.tool ? `${frame.tool} returned` : base.current;
+      next.current = frame.tool ? tr("{0} returned", [frame.tool]) : base.current;
       break;
     case "text":
-      next.current = frame.detail ? `writing: ${frame.detail}` : "writing…";
+      next.current = frame.detail ? tr("writing: {0}", [frame.detail]) : tr("writing…");
       break;
     case "thinking":
-      next.current = frame.detail ? `thinking: ${frame.detail}` : "thinking…";
+      next.current = frame.detail ? tr("thinking: {0}", [frame.detail]) : tr("thinking…");
       break;
     case "note":
       next.current = frame.detail || base.current;
@@ -537,7 +549,7 @@ function sameFailedCall(a: ActivityEntry, b: ActivityEntry) {
 // a disclosure below; the old 600-character clamp hid the useful error tail.
 const clampText = (s: string, max = 20_000) =>
   s.length > max
-    ? s.slice(0, max) + "\n… output capped at 20,000 characters"
+    ? s.slice(0, max) + tr("\n… output capped at 20,000 characters")
     : s;
 
 // streamGoneMessage maps a stream failure that will not heal on reconnect to
@@ -550,8 +562,8 @@ const STREAM_NOT_FOUND_GRACE = 5;
 
 function streamGoneMessage(err: unknown): string | null {
   if (!(err instanceof OrchestratorError)) return null;
-  if (err.status === 401) return "Sign in again to keep watching this run.";
-  if (err.status === 403 || err.status === 404) return "This run is no longer available.";
+  if (err.status === 401) return tr("Sign in again to keep watching this run.");
+  if (err.status === 403 || err.status === 404) return tr("This run is no longer available.");
   return null;
 }
 
@@ -759,7 +771,7 @@ function LiveTaskView({
           }
           failures += 1;
           setStreamError(
-            `${errorMessage(err, "stream failed")}; reconnecting…`,
+            tr("{0}; reconnecting…", [errorMessage(err, tr("stream failed"))]),
           );
           await new Promise((resolve) =>
             window.setTimeout(
@@ -786,7 +798,7 @@ function LiveTaskView({
       await orchestratorApi.cancelTask(task.id);
       // The terminal "stopped" frame arrives on the stream; nothing else to do.
     } catch (err) {
-      setStreamError(errorMessage(err, "stop failed"));
+      setStreamError(errorMessage(err, tr("stop failed")));
       setStopping(false);
     }
   };
@@ -798,19 +810,19 @@ function LiveTaskView({
       className="modal-overlay is-open"
       role="dialog"
       aria-modal="true"
-      aria-label="Live task activity"
+      aria-label={tr("Live task activity")}
     >
       <div className="modal modal-log live-activity-modal">
         <div className="modal-header">
           <h3 className="modal-log-title" title={task.prompt ?? ""}>
-            Live activity
+            {tr("Live activity")}
             <RunStatusChip
               state={terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}
               className="ml-2"
               testId="live-run-status"
             >
-              {runStatus}
-              {stoppedBy ? ` by ${stoppedBy}` : ""}
+              {runStateLabel(runStatus)}
+              {stoppedBy ? tr(" by {0}", [stoppedBy]) : ""}
             </RunStatusChip>
           </h3>
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -822,10 +834,10 @@ function LiveTaskView({
                 disabled={stopping}
                 onClick={() => void stop()}
               >
-                {stopping ? "Stopping…" : "Stop run"}
+                {stopping ? tr("Stopping…") : tr("Stop run")}
               </button>
             ) : null}
-            <CloseButton label="Close modal" onClick={onClose} />
+            <CloseButton label={tr("Close modal")} onClick={onClose} />
           </div>
         </div>
         <TaskSummary task={task} />
@@ -839,10 +851,10 @@ function LiveTaskView({
             >
               <span className="live-progress-copy">
                 <span className="live-progress-meta">
-                  Progress · {checklist.summary.done}/{checklist.summary.total} done
-                </span>
+        {rich("Progress · {0}/{1} done", checklist.summary.done, checklist.summary.total)}
+      </span>
                 <span className="live-progress-active">
-                  {checklist.activeTask || "Plan complete"}
+                  {checklist.activeTask || tr("Plan complete")}
                 </span>
               </span>
               <span className="live-progress-chevron" aria-hidden="true">
@@ -865,11 +877,13 @@ function LiveTaskView({
         ) : null}
         <div className="modal-body" data-testid="live-activity-body">
           {streamError ? (
-            <div className="table-error">Live stream error: {streamError}</div>
+            <div className="table-error">
+        {rich("Live stream error: {0}", streamError)}
+      </div>
           ) : null}
           {entries.length === 0 && !streamError ? (
             <div className="loading">
-              <p>Waiting for activity…</p>
+              <p>{tr("Waiting for activity…")}</p>
             </div>
           ) : (
             <div className="log-session" aria-live="polite">
@@ -1008,7 +1022,7 @@ function LogViewerBody({
   // wording differs, because "Resubmit" on a job that has never run reads as
   // though something went wrong.
   const hasRun = isTerminal(task.status);
-  const actionLabel = hasRun ? "Resubmit" : "Run now";
+  const actionLabel = hasRun ? tr("Resubmit") : tr("Run now");
 
   const resubmit = async () => {
     if (resubmitting) return;
@@ -1017,14 +1031,14 @@ function LogViewerBody({
       const created = await orchestratorApi.rerunTask(task.id);
       showToast(
         hasRun
-          ? `Resubmitted as task ${created.id.slice(0, 8)}… — running now`
-          : `Started run ${created.id.slice(0, 8)}… — the task keeps its schedule`,
+          ? tr("Resubmitted as task {0}… — running now", [created.id.slice(0, 8)])
+          : tr("Started run {0}… — the task keeps its schedule", [created.id.slice(0, 8)]),
         "success",
       );
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `${actionLabel} failed: ${errorMessage(err, "unknown error")}`,
+        tr("{0} failed: {1}", [actionLabel, errorMessage(err, tr("unknown error"))]),
         "error",
       );
     } finally {
@@ -1056,11 +1070,11 @@ function LogViewerBody({
     setWaking(true);
     try {
       await orchestratorApi.wakeTask(task.id, task.wake_event_key, wakeNote.trim());
-      showToast(`Fired “${task.wake_event_key}” — task is pending again`, "success");
+      showToast(tr("Fired “{0}” — task is pending again", [task.wake_event_key]), "success");
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `Fire event failed: ${errorMessage(err, "unknown error")}`,
+        tr("Fire event failed: {0}", [errorMessage(err, tr("unknown error"))]),
         "error",
       );
     } finally {
@@ -1083,14 +1097,14 @@ function LogViewerBody({
       );
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error ?? `HTTP ${res.status}`);
+        throw new Error(body?.error ?? tr("HTTP {0}", [res.status]));
       }
       const { conversation_id } = (await res.json()) as { conversation_id: string | null };
-      if (!conversation_id) throw new Error("no conversation id returned");
+      if (!conversation_id) throw new Error(tr("no conversation id returned"));
       window.location.href = `/chat?c=${encodeURIComponent(conversation_id)}`;
     } catch (err) {
       showToast(
-        `Discuss failed: ${errorMessage(err, "unknown error")}`,
+        tr("Discuss failed: {0}", [errorMessage(err, tr("unknown error"))]),
         "error",
       );
       setDiscussing(false);
@@ -1103,30 +1117,30 @@ function LogViewerBody({
       className="modal-overlay is-open"
       role="dialog"
       aria-modal="true"
-      aria-label="Task Logs"
+      aria-label={tr("Task Logs")}
     >
       <div className="modal modal-log">
         <div className="modal-header">
           {/* Lead with the operator's own title when the job has one; the
               full prompt stays in the tooltip either way. */}
           <h3 className="modal-log-title" title={task.prompt ?? ""}>
-            Task: {taskRunLabel(task, 90)}
-          </h3>
-          <CloseButton label="Close modal" onClick={onClose} />
+        {rich("Task: {0}", taskRunLabel(task, 90))}
+      </h3>
+          <CloseButton label={tr("Close modal")} onClick={onClose} />
         </div>
         <TaskSummary task={task} />
         {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
         <div className="modal-body" data-testid="log-modal-body">
           <div className="task-detail-bar" data-testid="task-detail-bar">
             <span className="task-detail-status">
-              Status: <TaskStatusBadge task={task} />
+              {tr("Status:")}{" "}<TaskStatusBadge task={task} />
             </span>
             <span className="task-detail-actions">
               {attempts.length > 0 ? (
                 <select
                   className="btn btn-secondary"
                   data-testid="attempt-picker"
-                  aria-label="Transcript attempt"
+                  aria-label={tr("Transcript attempt")}
                   value={attemptId ?? "latest"}
                   onChange={(e) =>
                     setAttemptId(
@@ -1134,10 +1148,10 @@ function LogViewerBody({
                     )
                   }
                 >
-                  <option value="latest">Latest transcript</option>
+                  <option value="latest">{tr("Latest transcript")}</option>
                   {attempts.map((a) => (
                     <option key={a.id} value={a.id}>
-                      Superseded {formatTimeFirst(a.superseded_at)}
+                      {tr("Superseded")}{" "}{formatTimeFirst(a.superseded_at)}
                     </option>
                   ))}
                 </select>
@@ -1149,7 +1163,7 @@ function LogViewerBody({
                   data-testid="edit-task-button"
                   onClick={() => onEdit(task)}
                 >
-                  Edit
+                  {tr("Edit")}
                 </button>
               ) : null}
               {canResubmit ? (
@@ -1160,7 +1174,7 @@ function LogViewerBody({
                   disabled={resubmitting}
                   onClick={() => void resubmit()}
                 >
-                  {resubmitting ? (hasRun ? "Resubmitting…" : "Starting…") : actionLabel}
+                  {resubmitting ? (hasRun ? tr("Resubmitting…") : tr("Starting…")) : actionLabel}
                 </button>
               ) : null}
               {/* Deleting is the only way to free a task's NAME: cancelling
@@ -1173,18 +1187,18 @@ function LogViewerBody({
                   type="button"
                   className="btn btn-danger"
                   data-testid="delete-task-button"
-                  title="Permanently delete this task and its run history"
+                  title={tr("Permanently delete this task and its run history")}
                   onClick={() => onDelete(task)}
                 >
-                  Delete
+                  {tr("Delete")}
                 </button>
               ) : null}
               {canFireWake ? (
                 <span className="wake-fire" data-testid="wake-fire">
                   <input
                     type="text"
-                    aria-label="Wake note"
-                    placeholder="optional note"
+                    aria-label={tr("Wake note")}
+                    placeholder={tr("optional note")}
                     value={wakeNote}
                     onChange={(e) => setWakeNote(e.target.value)}
                   />
@@ -1195,7 +1209,7 @@ function LogViewerBody({
                     disabled={waking}
                     onClick={() => void fireWake()}
                   >
-                    {waking ? "Firing…" : `Fire “${task.wake_event_key}”`}
+                    {waking ? tr("Firing…") : tr("Fire “{0}”", [task.wake_event_key])}
                   </button>
                 </span>
               ) : null}
@@ -1206,7 +1220,7 @@ function LogViewerBody({
                 aria-expanded={historyOpen}
                 onClick={() => setHistoryOpen((v) => !v)}
               >
-                History
+                {tr("History")}
               </button>
               {session && session.messages && session.messages.length > 0 ? (
                 <button
@@ -1216,7 +1230,7 @@ function LogViewerBody({
                   disabled={discussing}
                   onClick={() => void discuss()}
                 >
-                  {discussing ? "Opening chat…" : "Discuss in chat"}
+                  {discussing ? tr("Opening chat…") : tr("Discuss in chat")}
                 </button>
               ) : null}
               <button
@@ -1226,7 +1240,7 @@ function LogViewerBody({
                 disabled={!session}
                 onClick={download}
               >
-                Download logs
+                {tr("Download logs")}
               </button>
             </span>
           </div>
@@ -1238,17 +1252,19 @@ function LogViewerBody({
           <TaskRunIfBanner task={task} />
           {loading ? (
             <div className="loading">
-              <p>Loading logs...</p>
+              <p>{tr("Loading logs...")}</p>
             </div>
           ) : error ? (
-            <div className="table-error">Failed to load logs: {error}</div>
+            <div className="table-error">
+        {rich("Failed to load logs: {0}", error)}
+      </div>
           ) : !session || !session.messages || session.messages.length === 0 ? (
             // Worded to be true for BOTH conditions the server's one-status
             // 404 covers (see absent404 above): a task that has never run, and
             // one whose transcript this principal may not read. Do not split
             // the cases or name a cause here — distinguishing them client-side
             // would leak the denied case the server deliberately hides.
-            <div className="table-empty">No transcript available for this task.</div>
+            <div className="table-empty">{tr("No transcript available for this task.")}</div>
           ) : (
             <TranscriptTimeline
               key={attemptId ?? "latest"}
@@ -1311,16 +1327,18 @@ function TaskRunHistory({
   return (
     <div className="task-history" data-testid="task-history">
       <div className="task-history-title">
-        Run history <span className="task-history-hint">(same task prompt)</span>
+        {tr("Run history")}{" "}<span className="task-history-hint">{tr("(same task prompt)")}</span>
       </div>
       {loading ? (
         <div className="loading">
-          <p>Loading history…</p>
+          <p>{tr("Loading history…")}</p>
         </div>
       ) : error ? (
-        <div className="table-error">Failed to load history: {error}</div>
+        <div className="table-error">
+        {rich("Failed to load history: {0}", error)}
+      </div>
       ) : runs.length <= 1 ? (
-        <div className="task-history-empty">No other runs of this task yet.</div>
+        <div className="task-history-empty">{tr("No other runs of this task yet.")}</div>
       ) : (
         <ul className="task-history-list">
           {runs.map((run) => {
@@ -1341,9 +1359,9 @@ function TaskRunHistory({
                   <TaskSlaBadge task={run} />
                   <code className="task-history-id">{run.id.slice(0, 8)}</code>
                   {current ? (
-                    <span className="task-history-current">viewing</span>
+                    <span className="task-history-current">{tr("viewing")}</span>
                   ) : (
-                    <span className="task-history-open">view →</span>
+                    <span className="task-history-open">{tr("view →")}</span>
                   )}
                 </button>
               </li>
@@ -1380,13 +1398,13 @@ function SLADetail({ task }: { task: Task }) {
   const pct = expected > 0 ? Math.min((actualMin / expected) * 100, 200) : 0;
   const label =
     actualSecs > 0
-      ? `${actualMin.toFixed(1)}m / ${expected}m expected`
-      : `${expected}m expected (not yet complete)`;
+      ? tr("{0}m / {1}m expected", [formatFixed(actualMin, 1), expected])
+      : tr("{0}m expected (not yet complete)", [expected]);
 
   return (
     <div className="sla-detail" data-testid="sla-detail" data-sla-tone={tone}>
       <div className="sla-detail-label">
-        <span>SLA</span>
+        <span>{tr("SLA")}</span>
         <span>{label}</span>
       </div>
       <div
@@ -1395,7 +1413,7 @@ function SLADetail({ task }: { task: Task }) {
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={200}
-        aria-label="Actual vs expected duration"
+        aria-label={tr("Actual vs expected duration")}
       >
         <div
           className={`sla-progress-bar sla-progress-${tone}`}
@@ -1404,12 +1422,12 @@ function SLADetail({ task }: { task: Task }) {
         <div
           className="sla-progress-mark sla-progress-mark-warn"
           style={{ left: `${Math.min(warnMul * 100, 200)}%` }}
-          title={`warn @ ${warnMul}×`}
+          title={tr("warn @ {0}×", [warnMul])}
         />
         <div
           className="sla-progress-mark sla-progress-mark-fail"
           style={{ left: `${Math.min(failMul * 100, 200)}%` }}
-          title={`fail @ ${failMul}×`}
+          title={tr("fail @ {0}×", [failMul])}
         />
       </div>
     </div>
@@ -1430,12 +1448,12 @@ function TaskRunIfBanner({ task }: { task: Task }) {
   return (
     <div className="task-run-if-banner" data-testid="task-run-if-banner">
       <div className="task-run-if-banner__header">
-        <span className="task-run-if-banner__title">Pre-run gate</span>
+        <span className="task-run-if-banner__title">{tr("Pre-run gate")}</span>
         <code className="task-run-if-banner__command">
           {task.run_if.command}
         </code>
         <span className="task-run-if-banner__meta">
-          exit={exitCode} · timeout={timeout}s · on_error={onError}
+          {tr("Exit code: {0} · Timeout: {1}s · On error: {2}", [exitCode, timeout, onError === "skip" ? tr("Skip") : tr("Run")])}
         </span>
         {skipped ? (
           <button
@@ -1445,8 +1463,8 @@ function TaskRunIfBanner({ task }: { task: Task }) {
             aria-controls="task-run-if-skip-detail"
             onClick={() => setExpanded((v) => !v)}
           >
-            Skipped {task.skip_count}×{expanded ? " ▾" : " ▸"}
-          </button>
+        {rich("Skipped {0}×{1}", task.skip_count, expanded ? " ▾" : " ▸")}
+      </button>
         ) : null}
       </div>
       {skipped && expanded ? (
@@ -1455,12 +1473,13 @@ function TaskRunIfBanner({ task }: { task: Task }) {
           className="task-run-if-banner__skip-detail"
         >
           <div>
-            Last skip:{" "}
-            {task.last_skip_at
-              ? new Date(task.last_skip_at).toLocaleString()
-              : "—"}
-          </div>
-          <div>Reason: {task.last_skip_reason ?? "—"}</div>
+        {rich("Last skip: {0}", task.last_skip_at
+              ? new Date(task.last_skip_at).toLocaleString(getLanguage())
+              : "—")}
+      </div>
+          <div>
+        {rich("Reason: {0}", task.last_skip_reason ?? "—")}
+      </div>
         </div>
       ) : null}
     </div>

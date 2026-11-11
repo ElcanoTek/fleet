@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { TeamGlyph } from "./ShareGlyphs";
@@ -86,7 +87,7 @@ export function decideMoveConfirm({
     return projectID
       ? {
           kind: "unshare-move",
-          targetProjectName: target?.name ?? "another project",
+          targetProjectName: target?.name ?? tr("another project"),
           team,
           ...chat,
         }
@@ -139,19 +140,19 @@ function sharedFilesLabel(n: number): string {
 // ", along with 3 shared files" — empty for 0, unnumbered when unknown.
 function alongWith(count: number | null | undefined, its = false): string {
   if (count === 0) return "";
-  const pre = its ? "its " : "";
-  if (typeof count !== "number") return `, along with ${pre}shared files`;
-  return `, along with ${pre}${sharedFilesLabel(count)}`;
+  const pre = its ? tr("its ") : "";
+  if (typeof count !== "number") return tr(", along with {0}shared files", [pre]);
+  return tr(", along with {0}{1}", [pre, sharedFilesLabel(count)]);
 }
 
 function quoted(title?: string): string {
-  return `“${title?.trim() || "This chat"}”`;
+  return `“${title?.trim() || tr("This chat")}”`;
 }
 
 export function TeamChip({ team, suffix }: { team?: string; suffix?: string }) {
   return (
     <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix={suffix}>
-      {team || "your team"}
+      {team || tr("your team")}
     </NameChip>
   );
 }
@@ -177,15 +178,14 @@ export function MoveChatConfirmDialog({
     return (
       <ConfirmDialog
         bodyId="move-chat-confirm-body"
-        cancelAriaLabel="Cancel removing this chat from the project"
-        confirmLabel="Remove from project"
+        cancelAriaLabel={tr("Cancel removing this chat from the project")}
+        confirmLabel={tr("Remove from project")}
         onCancel={onCancel}
         onConfirm={onConfirm}
-        secondary={{ label: "Pin it and remove", onClick: onPinAndConfirm }}
+        secondary={{ label: tr("Pin it and remove"), onClick: onPinAndConfirm }}
         testId="move-chat-confirm"
       >
-        This chat will become temporary and expire unless pinned. Remove it from
-        the project?
+        {tr("This chat will become temporary and expire unless pinned. Remove it from the project?")}
       </ConfirmDialog>
     );
   }
@@ -194,9 +194,9 @@ export function MoveChatConfirmDialog({
     // B32: today's sentence, plus what it costs the team.
     return (
       <ConfirmDialog
-        title="Remove from project?"
-        cancelAriaLabel="Cancel removing this chat from the project"
-        confirmLabel="Pin it and remove"
+        title={tr("Remove from project?")}
+        cancelAriaLabel={tr("Cancel removing this chat from the project")}
+        confirmLabel={tr("Pin it and remove")}
         confirmTone="accent"
         busy={count === undefined}
         onCancel={onCancel}
@@ -204,15 +204,14 @@ export function MoveChatConfirmDialog({
         // Both ways forward stop sharing, so both wait for the count the
         // sentence quotes (a failed count settles to the unnumbered copy).
         secondary={{
-          label: "Remove",
+          label: tr("Remove"),
           onClick: onConfirm,
           disabled: count === undefined,
         }}
         testId="move-chat-confirm"
       >
         <p className="m-0" data-testid="move-chat-confirm-body">
-          {quoted(confirm.chatTitle)} will become temporary and expire unless
-          pinned. It also stops being shared with{" "}
+          {quoted(confirm.chatTitle)} {tr("will become temporary and expire unless pinned. It also stops being shared with")}{" "}
           <TeamChip team={confirm.team} suffix={`${alongWith(count)}.`} />
         </p>
       </ConfirmDialog>
@@ -220,12 +219,12 @@ export function MoveChatConfirmDialog({
   }
 
   // B35: a shared chat moving to a project its team can't see.
-  const target = confirm.targetProjectName || "another project";
+  const target = confirm.targetProjectName || tr("another project");
   return (
     <ConfirmDialog
-      title={`Move to ${target}?`}
-      cancelAriaLabel="Cancel moving this chat"
-      confirmLabel="Move and stop sharing"
+      title={tr("Move to {0}?", [target])}
+      cancelAriaLabel={tr("Cancel moving this chat")}
+      confirmLabel={tr("Move and stop sharing")}
       confirmTone="accent"
       busy={count === undefined}
       onCancel={onCancel}
@@ -233,10 +232,9 @@ export function MoveChatConfirmDialog({
       testId="move-chat-confirm"
     >
       <p className="m-0" data-testid="move-chat-confirm-body">
-        <NameChip>{target}</NameChip> isn&rsquo;t shared with{" "}
-        <TeamChip team={confirm.team} suffix="," /> so{" "}
-        {quoted(confirm.chatTitle)} will stop being shared{alongWith(count)}.
-        Teammates lose access, but their branches keep their copies.
+        <NameChip>{target}</NameChip> {tr("isn’t shared with")}{" "}
+        <TeamChip team={confirm.team} suffix="," /> {tr("so")}{" "}
+        {quoted(confirm.chatTitle)} {tr("will stop being shared")}{alongWith(count)}{tr(". Teammates lose access, but their branches keep their copies.")}
       </p>
     </ConfirmDialog>
   );
@@ -263,13 +261,13 @@ export function SharedChatLossConfirmDialog({
   onConfirm: () => void;
 }) {
   const count = useSharedFileCount(conversationId);
-  const title = `${kind === "delete" ? "Delete" : "Archive"} ${quoted(chatTitle)}?`;
-  const teamName = team || "your team";
+  const title = `${kind === "delete" ? tr("Delete") : tr("Archive")} ${quoted(chatTitle)}?`;
+  const teamName = team || tr("your team");
   return (
     <ConfirmDialog
       title={title}
       confirmLabel={
-        kind === "delete" ? (busy ? "Deleting…" : "Delete chat") : "Archive chat"
+        kind === "delete" ? (busy ? tr("Deleting…") : tr("Delete chat")) : tr("Archive chat")
       }
       confirmTone={kind === "delete" ? "danger" : "accent"}
       busy={busy || count === undefined}
@@ -279,21 +277,19 @@ export function SharedChatLossConfirmDialog({
     >
       {kind === "delete" ? (
         <p className="m-0">
-          The chat and its files are deleted. <TeamChip team={teamName} /> will
-          lose access to this chat
+          {tr("The chat and its files are deleted.")}{" "}<TeamChip team={teamName} /> {tr("will lose access to this chat")}
           {count === 0
             ? ""
             : typeof count === "number"
-              ? ` and its ${sharedFilesLabel(count)}`
-              : " and its shared files"}
-          . Teammates who branched it keep their copies.
+              ? tr(" and its {0}", [sharedFilesLabel(count)])
+              : tr(" and its shared files")}
+          {tr(". Teammates who branched it keep their copies.")}
         </p>
       ) : (
         <p className="m-0">
-          Archiving stops sharing this chat with{" "}
+          {tr("Archiving stops sharing this chat with")}{" "}
           <TeamChip team={teamName} suffix={`${alongWith(count, true)}.`} />{" "}
-          Teammates who branched it keep their copies. If you unarchive it, it
-          comes back as Only you.
+          {tr("Teammates who branched it keep their copies. If you unarchive it, it comes back as Only you.")}
         </p>
       )}
     </ConfirmDialog>

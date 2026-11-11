@@ -1,3 +1,8 @@
+import { runStateLabel } from "@/app/shared/ui/StatusChip";
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import { signOutAfter } from "@/app/shared/signOut";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -90,23 +95,23 @@ type AdminSettingsResponse = {
   settings: AdminSettingItem[];
 };
 
-const usd = new Intl.NumberFormat("en-US", {
+const usd = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const usdFine = new Intl.NumberFormat("en-US", {
+const usdFine = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
-const compact = new Intl.NumberFormat("en-US", {
+const compact = new Intl.NumberFormat(getLanguage(), {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-const plain = new Intl.NumberFormat("en-US");
+const plain = new Intl.NumberFormat(getLanguage());
 
 function fmtUSD(v: number): string {
   return v > 0 && v < 0.01 ? usdFine.format(v) : usd.format(v);
@@ -137,8 +142,8 @@ function modelDisplayName(
 ): string {
   if (b.key === "") {
     return b.label
-      ? `${b.label} (deleted chats & default-model turns)`
-      : "(deleted chats & default-model turns)";
+      ? tr("{0} (deleted chats & default-model turns)", [b.label])
+      : tr("(deleted chats & default-model turns)");
   }
   const cleanKey = b.key.trim().toLowerCase().replace(/^openrouter\//, "");
   const matchedPin = pinned?.find(
@@ -255,12 +260,12 @@ function MonthlyAllowanceBanner() {
       });
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
+        throw new Error(text || tr("HTTP {0}", [res.status]));
       }
       setSettingsNonce((n) => n + 1);
       setEditingLimit(false);
     } catch (err) {
-      setLimitError(errorMessage(err, "Failed to update monthly soft spend limit"));
+      setLimitError(errorMessage(err, tr("Failed to update monthly soft spend limit")));
     } finally {
       setSavingLimit(false);
     }
@@ -306,17 +311,16 @@ function MonthlyAllowanceBanner() {
   return (
     <section
       className="mb-6 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-sm)]"
-      aria-label="Monthly spend allowance and model mix overview"
+      aria-label={tr("Monthly spend allowance and model mix overview")}
       data-testid="analytics-monthly-banner"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Current UTC Month (since {monthStart})
-          </p>
+        {rich("Current UTC Month (since {0})", monthStart)}
+      </p>
           <h2 className="mt-0.5 font-heading text-[1.1rem] font-bold text-[var(--color-text-primary)]">
-            Workspace Spend &amp; Model Mix Overview
-          </h2>
+            {tr("Workspace Spend & Model Mix Overview")}</h2>
         </div>
         <div className="flex items-center gap-2">
           {!editingLimit ? (
@@ -330,7 +334,7 @@ function MonthlyAllowanceBanner() {
                 setEditingLimit(true);
               }}
             >
-              {softLimit > 0 ? "Edit monthly spend limit" : "Set monthly spend limit"}
+              {softLimit > 0 ? tr("Edit monthly spend limit") : tr("Set monthly spend limit")}
             </button>
           ) : (
             <form
@@ -341,13 +345,12 @@ function MonthlyAllowanceBanner() {
               }}
             >
               <label htmlFor="monthlySoftSpendLimitInput" className="sr-only">
-                Monthly soft spend limit (USD)
-              </label>
+                {tr("Monthly soft spend limit (USD)")}</label>
               <input
                 id="monthlySoftSpendLimitInput"
                 type="text"
                 inputMode="decimal"
-                placeholder="e.g. 500 (USD, 0 = unlimited)"
+                placeholder={tr("e.g. 500 (USD, 0 = unlimited)")}
                 value={limitDraft}
                 onChange={(e) => setLimitDraft(e.target.value)}
                 className="w-full max-w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 font-[family-name:var(--font-code)] text-[0.8rem] text-[var(--color-text-primary)] sm:w-52"
@@ -359,7 +362,7 @@ function MonthlyAllowanceBanner() {
                 className="btn text-[0.78rem]"
                 data-testid="save-monthly-soft-limit"
               >
-                {savingLimit ? "Saving…" : "Save"}
+                {savingLimit ? tr("Saving…") : tr("Save")}
               </button>
               {softLimit > 0 ? (
                 <button
@@ -368,8 +371,7 @@ function MonthlyAllowanceBanner() {
                   className="btn btn-ghost text-[0.78rem]"
                   onClick={() => void saveSoftLimit("0")}
                 >
-                  Clear
-                </button>
+                  {tr("Clear")}</button>
               ) : null}
               <button
                 type="button"
@@ -377,8 +379,7 @@ function MonthlyAllowanceBanner() {
                 className="btn btn-ghost text-[0.78rem]"
                 onClick={() => setEditingLimit(false)}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
             </form>
           )}
         </div>
@@ -397,8 +398,7 @@ function MonthlyAllowanceBanner() {
       <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-            Monthly Token Usage
-          </div>
+            {tr("Monthly Token Usage")}</div>
           <div
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             title={plain.format(totalTokens)}
@@ -407,30 +407,27 @@ function MonthlyAllowanceBanner() {
             {usageLoading && !monthUsage ? "…" : fmtTokens(totalTokens)}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {fmtTokens(monthUsage?.totals?.prompt_tokens ?? 0)} input ·{" "}
-            {fmtTokens(monthUsage?.totals?.completion_tokens ?? 0)} output
-          </div>
+        {rich("{0} input · {1} output", fmtTokens(monthUsage?.totals?.prompt_tokens ?? 0), fmtTokens(monthUsage?.totals?.completion_tokens ?? 0))}
+      </div>
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-            Included / $0-Cost Share
-          </div>
+            {tr("Included / $0-Cost Share")}</div>
           <div
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-included-share"
           >
-            {usageLoading && !monthUsage ? "…" : `${includedSharePct.toFixed(1)}%`}
+            {usageLoading && !monthUsage ? "…" : `${formatFixed(includedSharePct, 1)}%`}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {fmtTokens(includedTokens)} included · {fmtTokens(billedTokens)} billed
-          </div>
+        {rich("{0} included · {1} billed", fmtTokens(includedTokens), fmtTokens(billedTokens))}
+      </div>
         </div>
 
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-            Billed Model Spend (MTD)
-          </div>
+            {tr("Billed Model Spend (MTD)")}</div>
           <div
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-billed-spend"
@@ -438,17 +435,15 @@ function MonthlyAllowanceBanner() {
             {usageLoading && !monthUsage ? "…" : fmtUSD(billedCostUSD)}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            Chat {fmtUSD(billedChatCostUSD)} · Tasks{" "}
-            {fmtUSD(billedTaskCostUSD)}
-          </div>
+        {rich("Chat {0} · Tasks {1}", fmtUSD(billedChatCostUSD), fmtUSD(billedTaskCostUSD))}
+      </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
             {softLimit > 0 ? (
               <span>
-                of {fmtUSD(softLimit)} soft spend limit ({limitPct.toFixed(1)}%)
-                {limitSource === "admin" ? " · custom" : ""}
-              </span>
+        {rich("of {0} soft spend limit ({1}%){2}", fmtUSD(softLimit), formatFixed(limitPct, 1), limitSource === "admin" ? tr(" · custom") : "")}
+      </span>
             ) : (
-              <span>Soft spend limit: Unlimited (advisory)</span>
+              <span>{tr("Soft spend limit: Unlimited (advisory)")}</span>
             )}
           </div>
           {softLimit > 0 ? (
@@ -469,8 +464,7 @@ function MonthlyAllowanceBanner() {
               </div>
               {limitPct >= 100 ? (
                 <p className="mt-1 text-[0.72rem] font-medium text-[var(--color-danger)]">
-                  Soft spend limit exceeded — runs continue without interruption
-                </p>
+                  {tr("Soft spend limit exceeded — runs continue without interruption")}</p>
               ) : null}
             </div>
           ) : null}
@@ -478,18 +472,16 @@ function MonthlyAllowanceBanner() {
 
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-            Prompt Cache Hit Rate
-          </div>
+            {tr("Prompt Cache Hit Rate")}</div>
           <div
             className="mt-1 font-[family-name:var(--font-code)] text-[1.35rem] font-bold text-[var(--color-text-primary)]"
             data-testid="monthly-cache-hit-rate"
           >
-            {usageLoading && !monthUsage ? "…" : `${cacheHitPct.toFixed(1)}%`}
+            {usageLoading && !monthUsage ? "…" : `${formatFixed(cacheHitPct, 1)}%`}
           </div>
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
-            {fmtTokens(monthUsage?.totals?.cached_tokens ?? 0)} cached ·{" "}
-            {fmtTokens(monthUsage?.totals?.uncached_tokens ?? 0)} uncached
-          </div>
+        {rich("{0} cached · {1} uncached", fmtTokens(monthUsage?.totals?.cached_tokens ?? 0), fmtTokens(monthUsage?.totals?.uncached_tokens ?? 0))}
+      </div>
         </div>
       </div>
     </section>
@@ -497,9 +489,9 @@ function MonthlyAllowanceBanner() {
 }
 
 const MODEL_RANGES = [
-  { value: 7, label: "Last 7 days" },
-  { value: 30, label: "Last 30 days" },
-  { value: 90, label: "Last 90 days" },
+  { value: 7, label: tr("Last 7 days") },
+  { value: 30, label: tr("Last 30 days") },
+  { value: 90, label: tr("Last 90 days") },
 ] as const;
 
 function ModelUsageTab() {
@@ -577,16 +569,15 @@ function ModelUsageTab() {
     >
       <div className="section-header">
         <div>
-          <h2 id="modelUsageHeading">Model Mix &amp; Cost Efficiency</h2>
+          <h2 id="modelUsageHeading">{tr("Model Mix & Cost Efficiency")}</h2>
           <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-            Compare zero-rated / included models against frontier billed models across Chat and Background Tasks.
-          </p>
+            {tr("Compare zero-rated / included models against frontier billed models across Chat and Background Tasks.")}</p>
         </div>
         <div className="usage-controls">
-          <label htmlFor="modelUsageRange">Range</label>
+          <label htmlFor="modelUsageRange">{tr("Range")}</label>
           <select
             id="modelUsageRange"
-            aria-label="Model usage window in days"
+            aria-label={tr("Model usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
@@ -601,8 +592,8 @@ function ModelUsageTab() {
 
       {error ? (
         <div className="table-error" role="alert">
-          Could not load model usage: {error}
-        </div>
+        {rich("Could not load model usage: {0}", error)}
+      </div>
       ) : null}
 
       <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -612,24 +603,21 @@ function ModelUsageTab() {
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-success)]">
-              Included / $0-Cost Models
-            </span>
+              {tr("Included / $0-Cost Models")}</span>
             <span className="rounded-full border border-[var(--color-status-success-border)] bg-[var(--color-status-success-bg)] px-2.5 py-0.5 font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-success)]">
-              $0.00 billed
-            </span>
+              {tr("$0.00 billed")}</span>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
             <span className="font-[family-name:var(--font-code)] text-[1.4rem] font-bold text-[var(--color-text-primary)]">
-              {fmtTokens(includedTokens)} tokens
-            </span>
+        {rich("{0} tokens", fmtTokens(includedTokens))}
+      </span>
             <span className="text-[0.82rem] text-[var(--color-text-secondary)]">
-              ({includedPct.toFixed(1)}% of workspace volume)
-            </span>
+        {rich("({0}% of workspace volume)", formatFixed(includedPct, 1))}
+      </span>
           </div>
           <p className="mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
-            {includedBuckets.length} model{includedBuckets.length === 1 ? "" : "s"} ·{" "}
-            {plain.format(includedRuns)} chat turns &amp; task iterations absorbed at $0 direct cost
-          </p>
+        {rich("{0} · {1} chat turns & task iterations absorbed at $0 direct cost", tr(includedBuckets.length === 1 ? "{0} model" : "{0} models", [includedBuckets.length]), plain.format(includedRuns))}
+      </p>
         </div>
 
         <div
@@ -638,24 +626,22 @@ function ModelUsageTab() {
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
-              Frontier / Billed Models
-            </span>
+              {tr("Frontier / Billed Models")}</span>
             <span className="rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2.5 py-0.5 font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-text-primary)]">
-              {fmtUSD(billedCost)} billed
-            </span>
+        {rich("{0} billed", fmtUSD(billedCost))}
+      </span>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
             <span className="font-[family-name:var(--font-code)] text-[1.4rem] font-bold text-[var(--color-text-primary)]">
-              {fmtTokens(billedTokens)} tokens
-            </span>
+        {rich("{0} tokens", fmtTokens(billedTokens))}
+      </span>
             <span className="text-[0.82rem] text-[var(--color-text-secondary)]">
-              ({billedPct.toFixed(1)}% of workspace volume)
-            </span>
+        {rich("({0}% of workspace volume)", formatFixed(billedPct, 1))}
+      </span>
           </div>
           <p className="mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
-            {billedBuckets.length} model{billedBuckets.length === 1 ? "" : "s"} ·{" "}
-            {plain.format(billedRuns)} chat turns &amp; task iterations on metered models
-          </p>
+        {rich("{0} · {1} chat turns & task iterations on metered models", tr(billedBuckets.length === 1 ? "{0} model" : "{0} models", [billedBuckets.length]), plain.format(billedRuns))}
+      </p>
         </div>
       </div>
 
@@ -664,70 +650,55 @@ function ModelUsageTab() {
         data-testid="model-attribution-note"
       >
         <div className="font-semibold text-[var(--color-text-primary)]">
-          How Model Attribution, Deleted Chats &amp; Tiers Work
-        </div>
+          {tr("How Model Attribution, Deleted Chats & Tiers Work")}</div>
         <ul className="mt-1.5 list-disc space-y-1 pl-4">
           <li>
-            <strong className="text-[var(--color-text-primary)]">
-              How Model Attribution Works:
-            </strong>{" "}
-            Chat turns are grouped by each conversation&apos;s currently active model setting (whereas background task steps record the exact model used per step). If a conversation&apos;s model is switched later (or bulk-migrated), earlier turns in that conversation are grouped under the conversation&apos;s current model.
-          </li>
+        {rich("{0} Chat turns are grouped by each conversation's currently active model setting (whereas background task steps record the exact model used per step). If a conversation's model is switched later (or bulk-migrated), earlier turns in that conversation are grouped under the conversation's current model.", <strong className="text-[var(--color-text-primary)]">
+              {tr("How Model Attribution Works:")}</strong>)}
+      </li>
           <li>
-            <strong className="text-[var(--color-text-primary)]">
-              Deleted Chats Are Included in Spend &amp; Token Totals:
-            </strong>{" "}
-            When a user deletes a conversation, its messages are removed, but its completed turn metrics are retained for accurate monthly token and cost accounting and appear under{" "}
-            <code className="font-[family-name:var(--font-code)] text-[0.75rem]">
+        {rich("{0} When a user deletes a conversation, its messages are removed, but its completed turn metrics are retained for accurate monthly token and cost accounting and appear under {1}.", <strong className="text-[var(--color-text-primary)]">
+              {tr("Deleted Chats Are Included in Spend & Token Totals:")}</strong>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">
               (deleted chats &amp; default-model turns)
-            </code>
-            .
-          </li>
+            </code>)}
+      </li>
           <li>
-            <strong className="text-[var(--color-text-primary)]">
-              Model Tiers &amp; Budget Impact:
-            </strong>{" "}
-            <strong>Included ($0)</strong> models (pinned with <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code> or a <code className="font-[family-name:var(--font-code)] text-[0.75rem]">$0</code> pricing override) count 100% toward token volume and the monthly token allowance, and accrue <strong>$0.00</strong> toward billed USD spend and USD budget lines.{" "}
-            <strong>Billed</strong> models accrue metered provider or override rates.{" "}
-            <strong>No price data</strong> indicates runs where no dollar rate was reported.
-          </li>
+        {rich("{0} {1} models (pinned with {2} or a {3} pricing override) count 100% toward token volume and the monthly token allowance, and accrue {4} toward billed USD spend and USD budget lines. {5} models accrue metered provider or override rates. {6} indicates runs where no dollar rate was reported.", <strong className="text-[var(--color-text-primary)]">
+              {tr("Model Tiers & Budget Impact:")}</strong>, <strong>{tr("Included ($0)")}</strong>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">free: true</code>, <code className="font-[family-name:var(--font-code)] text-[0.75rem]">$0</code>, <strong>$0.00</strong>, <strong>{tr("Billed")}</strong>, <strong>{tr("No price data")}</strong>)}
+      </li>
         </ul>
       </div>
 
       {loading && !report ? (
         <div className="empty-state">
-          <p>Loading model breakdown…</p>
+          <p>{tr("Loading model breakdown…")}</p>
         </div>
       ) : buckets.length === 0 ? (
         <div className="empty-state" data-testid="model-usage-empty">
-          <p>No model usage recorded in the last {rangeDays} days.</p>
+          <p>
+        {rich("No model usage recorded in the last {0} days.", rangeDays)}
+      </p>
         </div>
       ) : (
         <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
           <table className="tasks-table usage-table" data-testid="model-breakdown-table">
             <thead>
               <tr>
-                <th scope="col">Model</th>
-                <th scope="col">Tier</th>
-                <th scope="col">Token Share</th>
+                <th scope="col">{tr("Model")}</th>
+                <th scope="col">{tr("Tier")}</th>
+                <th scope="col">{tr("Token Share")}</th>
                 <th scope="col" className="num">
-                  Total Tokens
-                </th>
+                  {tr("Total Tokens")}</th>
                 <th scope="col" className="num">
-                  Cache Hit %
-                </th>
+                  {tr("Cache Hit %")}</th>
                 <th scope="col" className="num">
-                  Chat Turns
-                </th>
+                  {tr("Chat Turns")}</th>
                 <th scope="col" className="num">
-                  Task Steps
-                </th>
+                  {tr("Task Steps")}</th>
                 <th scope="col" className="num">
-                  Total Spend
-                </th>
+                  {tr("Total Spend")}</th>
                 <th scope="col" className="num">
-                  Avg / Step
-                </th>
+                  {tr("Avg / Step")}</th>
               </tr>
             </thead>
             <tbody>
@@ -747,21 +718,18 @@ function ModelUsageTab() {
                     <td>
                       {isIncluded ? (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-status-success-border)] bg-[var(--color-status-success-bg)] px-2 py-0.5 text-[0.7rem] font-semibold text-[var(--color-success)]">
-                          Included ($0)
-                        </span>
+                          {tr("Included ($0)")}</span>
                       ) : isUnpriced ? (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                          No price data
-                        </span>
+                          {tr("No price data")}</span>
                       ) : (
                         <span className="inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
-                          Billed
-                        </span>
+                          {tr("Billed")}</span>
                       )}
                     </td>
                     <td
                       className="min-w-[8rem]"
-                      aria-label={`${share.toFixed(1)}% token share`}
+                      aria-label={tr("{0}% token share", [formatFixed(share, 1)])}
                     >
                       <div className="flex items-center gap-2">
                         <div className="h-2 w-20 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
@@ -776,7 +744,7 @@ function ModelUsageTab() {
                           />
                         </div>
                         <span className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                          {share.toFixed(1)}%
+                          {formatFixed(share, 1)}%
                         </span>
                       </div>
                     </td>
@@ -785,10 +753,10 @@ function ModelUsageTab() {
                     </td>
                     <td
                       className="num"
-                      title={`${plain.format(b.cached_tokens)} cached / ${plain.format(b.uncached_tokens)} uncached`}
+                      title={tr("{0} cached / {1} uncached", [plain.format(b.cached_tokens), plain.format(b.uncached_tokens)])}
                     >
                       {b.prompt_tokens > 0 || b.cached_tokens > 0
-                        ? `${b.cache_hit_rate_pct.toFixed(1)}%`
+                        ? `${formatFixed(b.cache_hit_rate_pct, 1)}%`
                         : "—"}
                     </td>
                     <td className="num">{plain.format(b.chat_turns)}</td>
@@ -828,7 +796,7 @@ function OutliersAndFrictionTab() {
         signal,
       });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        throw new Error(tr("HTTP {0}", [res.status]));
       }
       return (await res.json()) as AdminStatsResponse;
     }, []),
@@ -918,44 +886,33 @@ function OutliersAndFrictionTab() {
         data-testid="friction-signals-explainer"
       >
         <h2 className="font-heading text-[0.95rem] font-bold text-[var(--color-text-primary)]">
-          How Friction &amp; Escalation Signals Work
-        </h2>
+          {tr("How Friction & Escalation Signals Work")}</h2>
         <div className="mt-2.5 grid grid-cols-1 gap-3 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)] sm:grid-cols-2">
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
             <div className="font-semibold text-[var(--color-text-primary)]">
-              Frustrated (Frustrated Messages)
-            </div>
+              {tr("Frustrated (Frustrated Messages)")}</div>
             <p className="mt-0.5">
-              User replies that push back on or correct the assistant (for example,{" "}
-              <em>&ldquo;that&apos;s wrong&rdquo;</em>, <em>&ldquo;stop&rdquo;</em>,{" "}
-              <em>&ldquo;you didn&apos;t follow instructions&rdquo;</em>, or repeated corrections).
-            </p>
+        {rich("User replies that push back on or correct the assistant (for example, {0}, {1}, {2}, or repeated corrections).", <em>{tr("“that's wrong”")}</em>, <em>{tr("“stop”")}</em>, <em>{tr("“you didn't follow instructions”")}</em>)}
+      </p>
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
             <div className="font-semibold text-[var(--color-text-primary)]">
-              Struggles (Assistant Struggle Signals)
-            </div>
+              {tr("Struggles (Assistant Struggle Signals)")}</div>
             <p className="mt-0.5">
-              Automated detections where the assistant ran into trouble during a turn — repeated tool failures, loop-guard blocks, context compaction, or turns requiring 25+ tool calls.
-            </p>
+              {tr("Automated detections where the assistant ran into trouble during a turn — repeated tool failures, loop-guard blocks, context compaction, or turns requiring 25+ tool calls.")}</p>
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
             <div className="font-semibold text-[var(--color-text-primary)]">
-              Model Upgrades (Switched up / Model Escalations)
-            </div>
+              {tr("Model Upgrades (Switched up / Model Escalations)")}</div>
             <p className="mt-0.5">
-              Times a user accepted the in-chat prompt to switch mid-conversation from a lower-cost or non-fallback model up to the stronger frontier fallback model to finish a harder task.
-            </p>
+              {tr("Times a user accepted the in-chat prompt to switch mid-conversation from a lower-cost or non-fallback model up to the stronger frontier fallback model to finish a harder task.")}</p>
           </div>
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3">
             <div className="font-semibold text-[var(--color-text-primary)]">
-              Friction Score &amp; Deleted Chats Scope
-            </div>
+              {tr("Friction Score & Deleted Chats Scope")}</div>
             <p className="mt-0.5">
-              <strong>Friction</strong> is the combined count of{" "}
-              <strong>Frustrated + Struggles + Model Upgrades</strong>.{" "}
-              <strong>Top Conversations</strong> and <strong>User Escalation Signals</strong> below count <strong>live (non-deleted)</strong> chats, whereas <strong>Chat Spend / Turns</strong> and <strong>Models &amp; Cost</strong> retain completed turn metrics from deleted chats.
-            </p>
+        {rich("{0} is the combined count of {1}. {2} and {3} below count {4} chats, whereas {5} and {6} retain completed turn metrics from deleted chats.", <strong>{tr("Friction")}</strong>, <strong>{tr("Frustrated + Struggles + Model Upgrades")}</strong>, <strong>{tr("Top Conversations")}</strong>, <strong>{tr("User Escalation Signals")}</strong>, <strong>{tr("live (non-deleted)")}</strong>, <strong>{tr("Chat Spend / Turns")}</strong>, <strong>{tr("Models & Cost")}</strong>)}
+      </p>
           </div>
         </div>
       </div>
@@ -965,39 +922,39 @@ function OutliersAndFrictionTab() {
         <div className="section-header">
           <div>
             <h2 id="outlierConvsHeading">
-              Top High-Spend, High-Token &amp; High-Friction Chats
+              {tr("Top High-Spend, High-Token & High-Friction Chats")}
             </h2>
             <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-              Spot long-running patrol threads, heavy context growth, and conversations that triggered model escalations.
+              {tr("Spot long-running patrol threads, heavy context growth, and conversations that triggered model escalations.")}
             </p>
           </div>
           <div className="usage-controls">
-            <label htmlFor="convSortSelect">Rank by</label>
+            <label htmlFor="convSortSelect">{tr("Rank by")}</label>
             <select
               id="convSortSelect"
-              aria-label="Rank outlier conversations by"
+              aria-label={tr("Rank outlier conversations by")}
               value={convSort}
               onChange={(e) => setConvSort(e.target.value as ConvSort)}
             >
-              <option value="cost">Cost ($ USD)</option>
-              <option value="tokens">Total Tokens</option>
-              <option value="turns">Turn Count</option>
-              <option value="friction">Friction Signals</option>
+              <option value="cost">{tr("Cost ($ USD)")}</option>
+              <option value="tokens">{tr("Total Tokens")}</option>
+              <option value="turns">{tr("Turn Count")}</option>
+              <option value="friction">{tr("Friction Signals")}</option>
             </select>
           </div>
         </div>
 
         {statsError ? (
           <div className="table-error" role="alert">
-            Could not load conversation outliers: {statsError}
-          </div>
+        {rich("Could not load conversation outliers: {0}", statsError)}
+      </div>
         ) : statsLoading && !adminStats ? (
           <div className="empty-state">
-            <p>Loading conversation outliers…</p>
+            <p>{tr("Loading conversation outliers…")}</p>
           </div>
         ) : sortedConversations.length === 0 ? (
           <div className="empty-state" data-testid="outliers-conversations-empty">
-            <p>No conversations recorded yet.</p>
+            <p>{tr("No conversations recorded yet.")}</p>
           </div>
         ) : (
           <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
@@ -1007,31 +964,29 @@ function OutliersAndFrictionTab() {
             >
               <thead>
                 <tr>
-                  <th scope="col">Conversation</th>
-                  <th scope="col">User</th>
-                  <th scope="col">Model</th>
+                  <th scope="col">{tr("Conversation")}</th>
+                  <th scope="col">{tr("User")}</th>
+                  <th scope="col">{tr("Model")}</th>
                   <th scope="col" className="num">
-                    Turns
+                    {tr("Turns")}
                   </th>
                   <th scope="col" className="num">
-                    Tokens
+                    {tr("Tokens")}
                   </th>
                   <th
                     scope="col"
                     className="num"
-                    title="Share of prompt tokens served from the provider prompt cache"
+                    title={tr("Share of prompt tokens served from the provider prompt cache")}
                   >
-                    Cache Hit %
-                  </th>
+                    {tr("Cache Hit %")}</th>
                   <th
                     scope="col"
                     className="num"
-                    title="Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades"
+                    title={tr("Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades")}
                   >
-                    Friction
-                  </th>
+                    {tr("Friction")}</th>
                   <th scope="col" className="num">
-                    Spend
+                    {tr("Spend")}
                   </th>
                 </tr>
               </thead>
@@ -1053,39 +1008,39 @@ function OutliersAndFrictionTab() {
                           href={`/chat?c=${encodeURIComponent(c.conversation_id)}`}
                           className="font-medium text-[var(--color-accent)] hover:underline"
                         >
-                          {c.title || `Chat ${c.conversation_id.slice(0, 8)}`}
+                          {c.title || tr("Chat {0}", [c.conversation_id.slice(0, 8)])}
                         </Link>
                         {isPatrol ? (
                           <span
                             className="ml-2 inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
-                            title="Automated recurring patrol conversation"
+                            title={tr("Automated recurring patrol conversation")}
                           >
-                            Patrol
+                            {tr("Patrol")}
                           </span>
                         ) : null}
                       </td>
                       <td className="font-[family-name:var(--font-code)] text-[0.78rem]">
-                        {c.user_email || "(unattributed)"}
+                        {c.user_email || tr("(unattributed)")}
                       </td>
                       <td className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                        {c.model || "(default model)"}
+                        {c.model || tr("(default model)")}
                       </td>
                       <td className="num">{plain.format(c.turns)}</td>
                       <td className="num" title={plain.format(totalTok)}>
                         {fmtTokens(totalTok)}
                       </td>
                       <td className="num">
-                        {c.prompt_tokens > 0 ? `${hitRate.toFixed(0)}%` : "—"}
+                        {c.prompt_tokens > 0 ? `${formatFixed(hitRate, 0)}%` : "—"}
                       </td>
                       <td
                         className="num text-[0.75rem]"
-                        title={`${c.frustrated_messages} frustrated · ${c.struggle_signals} struggles · ${c.advanced_switches} model upgrades`}
+                        title={tr("{0} frustrated · {1} struggles · {2} model upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])}
                       >
                         {c.frustrated_messages +
                           c.struggle_signals +
                           c.advanced_switches >
                         0
-                          ? `${c.frustrated_messages} frustrated · ${c.struggle_signals} struggles · ${c.advanced_switches} upgrade${c.advanced_switches === 1 ? "" : "s"}`
+                          ? tr(c.advanced_switches === 1 ? "{0} frustrated · {1} struggles · {2} upgrade" : "{0} frustrated · {1} struggles · {2} upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])
                           : "—"}
                       </td>
                       <td className="num">{fmtUSD(c.cost_usd)}</td>
@@ -1103,39 +1058,39 @@ function OutliersAndFrictionTab() {
         <div className="section-header">
           <div>
             <h2 id="outlierTasksHeading">
-              Top Heavy, High-Iteration &amp; Failing Background Tasks
+              {tr("Top Heavy, High-Iteration & Failing Background Tasks")}
             </h2>
             <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-              Identify scheduled or ad-hoc runs with high token consumption, long tool-call loops, or terminal errors.
+              {tr("Identify scheduled or ad-hoc runs with high token consumption, long tool-call loops, or terminal errors.")}
             </p>
           </div>
           <div className="usage-controls">
-            <label htmlFor="taskSortSelect">Rank by</label>
+            <label htmlFor="taskSortSelect">{tr("Rank by")}</label>
             <select
               id="taskSortSelect"
-              aria-label="Rank background tasks by"
+              aria-label={tr("Rank background tasks by")}
               value={taskSort}
               onChange={(e) => setTaskSort(e.target.value as TaskSort)}
             >
-              <option value="cost">Cost ($ USD)</option>
-              <option value="tokens">Total Tokens</option>
-              <option value="iterations">Iterations Used</option>
-              <option value="failures">Failures &amp; Dead Letters</option>
+              <option value="cost">{tr("Cost ($ USD)")}</option>
+              <option value="tokens">{tr("Total Tokens")}</option>
+              <option value="iterations">{tr("Iterations Used")}</option>
+              <option value="failures">{tr("Failures & Dead Letters")}</option>
             </select>
           </div>
         </div>
 
         {statsError ? (
           <div className="table-error" role="alert">
-            Could not load background tasks: {statsError}
-          </div>
+        {rich("Could not load background tasks: {0}", statsError)}
+      </div>
         ) : statsLoading && !adminStats ? (
           <div className="empty-state">
-            <p>Loading background task outliers…</p>
+            <p>{tr("Loading background task outliers…")}</p>
           </div>
         ) : sortedTasks.length === 0 ? (
           <div className="empty-state" data-testid="outliers-tasks-empty">
-            <p>No background tasks recorded yet.</p>
+            <p>{tr("No background tasks recorded yet.")}</p>
           </div>
         ) : (
           <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
@@ -1145,18 +1100,18 @@ function OutliersAndFrictionTab() {
             >
               <thead>
                 <tr>
-                  <th scope="col">Task</th>
-                  <th scope="col">Owner</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Model</th>
+                  <th scope="col">{tr("Task")}</th>
+                  <th scope="col">{tr("Owner")}</th>
+                  <th scope="col">{tr("Status")}</th>
+                  <th scope="col">{tr("Model")}</th>
                   <th scope="col" className="num">
-                    Iterations
+                    {tr("Iterations")}
                   </th>
                   <th scope="col" className="num">
-                    Tokens
+                    {tr("Tokens")}
                   </th>
                   <th scope="col" className="num">
-                    Spend
+                    {tr("Spend")}
                   </th>
                 </tr>
               </thead>
@@ -1164,7 +1119,7 @@ function OutliersAndFrictionTab() {
                 {sortedTasks.map((t) => {
                   const tok = t.prompt_tokens + t.completion_tokens;
                   const label =
-                    t.title.trim() || `Task ${t.task_id.slice(0, 8)}`;
+                    t.title.trim() || tr("Task {0}", [t.task_id.slice(0, 8)]);
                   return (
                     <tr key={t.task_id} data-testid="outliers-task-row">
                       <td className="max-w-[20rem] truncate">
@@ -1181,18 +1136,18 @@ function OutliersAndFrictionTab() {
                         ) : null}
                       </td>
                       <td className="font-[family-name:var(--font-code)] text-[0.78rem]">
-                        {t.owner_email || "(unattributed)"}
+                        {t.owner_email || tr("(unattributed)")}
                       </td>
                       <td>
                         <span
                           className="font-[family-name:var(--font-code)] text-[0.76rem]"
                           title={t.error_message || undefined}
                         >
-                          {t.status}
+                          {runStateLabel(t.status)}
                         </span>
                       </td>
                       <td className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                        {t.model || "(default)"}
+                        {t.model || tr("(default)")}
                       </td>
                       <td className="num">{plain.format(t.iterations)}</td>
                       <td className="num" title={plain.format(tok)}>
@@ -1217,17 +1172,17 @@ function OutliersAndFrictionTab() {
         <div className="section-header">
           <div>
             <h2 id="userSignalsHeading">
-              User Struggle, Frustration &amp; Model-Switch Signals
+              {tr("User Struggle, Frustration & Model-Switch Signals")}
             </h2>
             <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-              Per-user totals across all completed turns: user messages expressing frustration or correction, turns where the assistant hit tool/loop trouble, and mid-chat upgrades to the stronger frontier model.
+              {tr("Per-user totals across all completed turns: user messages expressing frustration or correction, turns where the assistant hit tool/loop trouble, and mid-chat upgrades to the stronger frontier model.")}
             </p>
           </div>
         </div>
 
         {userSignals.length === 0 ? (
           <div className="empty-state" data-testid="outliers-user-signals-empty">
-            <p>No user activity signals recorded yet.</p>
+            <p>{tr("No user activity signals recorded yet.")}</p>
           </div>
         ) : (
           <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
@@ -1237,39 +1192,38 @@ function OutliersAndFrictionTab() {
             >
               <thead>
                 <tr>
-                  <th scope="col">User</th>
+                  <th scope="col">{tr("User")}</th>
                   <th
                     scope="col"
                     className="num"
-                    title="User replies expressing frustration, correction, or pushback"
+                    title={tr("User replies expressing frustration, correction, or pushback")}
                   >
-                    Frustrated
-                  </th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title="Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts"
-                  >
-                    Struggles
+                    {tr("Frustrated")}
                   </th>
                   <th
                     scope="col"
                     className="num"
-                    title="Times the user accepted the in-chat prompt to switch up to the stronger frontier model"
+                    title={tr("Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts")}
                   >
-                    Switched up
+                    {tr("Struggles")}
                   </th>
-                  <th scope="col" className="num" title="Live (non-deleted) conversations owned by this user">
-                    Chats
+                  <th
+                    scope="col"
+                    className="num"
+                    title={tr("Times the user accepted the in-chat prompt to switch up to the stronger frontier model")}
+                  >
+                    {tr("Switched up")}
                   </th>
-                  <th scope="col" className="num" title="All completed chat turns (including deleted conversations)">
-                    Turns
+                  <th scope="col" className="num" title={tr("Live (non-deleted) conversations owned by this user")}>
+                    {tr("Chats")}
                   </th>
-                  <th scope="col" className="num" title="Share of prompt tokens served from the provider prompt cache">
-                    Cache Hit %
+                  <th scope="col" className="num" title={tr("All completed chat turns (including deleted conversations)")}>
+                    {tr("Turns")}
                   </th>
-                  <th scope="col" className="num" title="Total chat spend across all completed turns">
-                    Chat Spend
+                  <th scope="col" className="num" title={tr("Share of prompt tokens served from the provider prompt cache")}>
+                    {tr("Cache Hit %")}</th>
+                  <th scope="col" className="num" title={tr("Total chat spend across all completed turns")}>
+                    {tr("Chat Spend")}
                   </th>
                 </tr>
               </thead>
@@ -1286,7 +1240,7 @@ function OutliersAndFrictionTab() {
                     <td className="num">{plain.format(u.total_turns)}</td>
                     <td className="num">
                       {u.total_prompt_tokens > 0
-                        ? `${u.cache_hit_rate_pct.toFixed(0)}%`
+                        ? `${formatFixed(u.cache_hit_rate_pct, 0)}%`
                         : "—"}
                     </td>
                     <td className="num">{fmtUSD(u.total_cost_usd)}</td>
@@ -1336,7 +1290,7 @@ function AnalyticsInner() {
       />
 
       <main className="flex min-h-0 flex-col overflow-hidden">
-        <PageTopBar title="Analytics" onMenu={() => setSidebarOpen(true)} />
+        <PageTopBar title={tr("Analytics")} onMenu={() => setSidebarOpen(true)} />
 
         <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="container">
@@ -1346,22 +1300,22 @@ function AnalyticsInner() {
             >
               {!session.ready ? (
                 <div className="empty-state">
-                  <p>Loading analytics…</p>
+                  <p>{tr("Loading analytics…")}</p>
                 </div>
               ) : !session.signedIn || !isAdmin ? (
                 <div
                   className="section"
                   role="region"
-                  aria-label="Admin access required"
+                  aria-label={tr("Admin access required")}
                   data-testid="analytics-admin-required"
                 >
-                  <h2>Admin access required</h2>
+                  <h2>{tr("Admin access required")}</h2>
                   <p className="mt-2 text-[0.88rem] text-[var(--color-text-secondary)]">
-                    Workspace usage, model mix, and adoption analytics are visible to workspace administrators.
+                    {tr("Workspace usage, model mix, and adoption analytics are visible to workspace administrators.")}
                   </p>
                   <div className="mt-4">
                     <Link href="/chat" className="btn">
-                      Back to chat
+                      {tr("Back to chat")}
                     </Link>
                   </div>
                 </div>
@@ -1372,7 +1326,7 @@ function AnalyticsInner() {
                   <div
                     className="dashboard-tabs flex-wrap overflow-x-auto [-webkit-overflow-scrolling:touch]"
                     role="tablist"
-                    aria-label="Analytics view"
+                    aria-label={tr("Analytics view")}
                   >
                     <button
                       type="button"
@@ -1381,7 +1335,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "models" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("models")}
                     >
-                      Models &amp; Cost
+                      {tr("Models & Cost")}
                     </button>
                     <button
                       type="button"
@@ -1390,7 +1344,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "outliers" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("outliers")}
                     >
-                      Problem Chats &amp; Friction
+                      {tr("Problem Chats & Friction")}
                     </button>
                     <button
                       type="button"
@@ -1399,7 +1353,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("usage")}
                     >
-                      Spend &amp; Budgets
+                      {tr("Spend & Budgets")}
                     </button>
                     <button
                       type="button"
@@ -1408,7 +1362,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("adoption")}
                     >
-                      Team Adoption
+                      {tr("Team Adoption")}
                     </button>
                     <button
                       type="button"
@@ -1417,7 +1371,7 @@ function AnalyticsInner() {
                       className={`tab-btn${tab === "server" ? " tab-btn-active" : ""}`}
                       onClick={() => switchTab("server")}
                     >
-                      Server &amp; Live Agents
+                      {tr("Server & Live Agents")}
                     </button>
                   </div>
 
@@ -1433,10 +1387,10 @@ function AnalyticsInner() {
                         <div className="section-header mb-4">
                           <div>
                             <h2 id="serverAgentsHeading">
-                              Server Resources &amp; Live Agent Concurrency
+                              {tr("Server Resources & Live Agent Concurrency")}
                             </h2>
                             <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-                              Real-time bot and sub-agent execution counts, tool &amp; LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.
+                              {tr("Real-time bot and sub-agent execution counts, tool & LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.")}
                             </p>
                           </div>
                         </div>

@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // approvalToolLabel — the words an approval card uses for the tool a call
 // runs, so a trader never reads a raw model-facing id ("mcp_ix_execute_plan")
 // on a card.
@@ -106,12 +107,12 @@ export function approvalToolLabel(
   const srv = mcpToolServer(tool, server, names);
   const seatPrefix = srv && account?.trim() ? `mcp_${srv}_${canonicalAccount(account)}_` : "";
   if (srv && seatPrefix && tool.startsWith(seatPrefix) && tool.length > seatPrefix.length) {
-    const action = humanize(stripConnectorPrefix(tool.slice(seatPrefix.length), srv)) || "This action";
+    const action = humanize(stripConnectorPrefix(tool.slice(seatPrefix.length), srv)) || tr("This action");
     return { action, connector: connectorLabel(srv, names) };
   }
   let rest = srv ? tool.slice(`mcp_${srv}_`.length) : tool.replace(/^mcp_/, "");
   if (srv) rest = stripConnectorPrefix(rest, srv);
-  const action = humanize(rest) || "This action";
+  const action = humanize(rest) || tr("This action");
   return srv ? { action, connector: connectorLabel(srv, names) } : { action };
 }
 
@@ -133,5 +134,5 @@ function stripConnectorPrefix(rest: string, server: string): string {
  */
 export function applyAllText(label: ApprovalToolLabel): string {
   const what = label.connector ? `${label.connector} “${label.action}”` : `“${label.action}”`;
-  return `Apply my choice to every ${what} request in this chat`;
+  return tr("Apply my choice to every {0} request in this chat", [what]);
 }

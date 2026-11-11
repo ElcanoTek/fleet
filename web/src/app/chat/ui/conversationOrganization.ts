@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Pure helpers for the rail's conversation organization — pinning, labels
 // (#258 contract, served live by the #279 bulk API), and projects (#509).
 // Kept free of React so the section-derivation and label-validation rules are
@@ -177,9 +178,9 @@ export function applyChatOrder<T extends { id?: string }>(chats: readonly T[], o
 //   • "title"    — A to Z by title
 export type RecentSort = "activity" | "created" | "title";
 export const RECENT_SORTS: readonly { value: RecentSort; label: string }[] = [
-  { value: "activity", label: "Recent activity" },
-  { value: "created", label: "Newest first" },
-  { value: "title", label: "Title A–Z" },
+  { value: "activity", label: tr("Recent activity") },
+  { value: "created", label: tr("Newest first") },
+  { value: "title", label: tr("Title A–Z") },
 ];
 
 // Where the chosen sort is remembered (browser storage, per device).

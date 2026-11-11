@@ -29,7 +29,7 @@ export function slugify(text: string): string {
 // Fenced code blocks are skipped: a "## " line inside one is code, not a
 // heading, and fabricating an anchor for it would put a phantom row in the
 // contents list.
-export function extractHeadings(markdown: string): Heading[] {
+export function extractHeadings(markdown: string, canonicalMarkdown?: string): Heading[] {
   const headings: Heading[] = [];
   let inFence = false;
   for (const line of markdown.split("\n")) {
@@ -42,6 +42,16 @@ export function extractHeadings(markdown: string): Heading[] {
     if (!match) continue;
     const text = match[2];
     headings.push({ id: slugify(text), text, depth: match[1].length as 2 | 3 });
+  }
+  // Anchors belong to the document, not its display language. Translated guides
+  // retain the English section order, so existing shared links and cross-references
+  // still land on the same section after changing language.
+  if (canonicalMarkdown !== undefined) {
+    const canonical = extractHeadings(canonicalMarkdown);
+    return headings.map((heading, index) => ({
+      ...heading,
+      id: canonical[index]?.id ?? heading.id,
+    }));
   }
   return headings;
 }

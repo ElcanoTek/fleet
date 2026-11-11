@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { orchestratorApi, type RecipientUse } from "@/app/shared/lib/orchestratorApi";
 import { describeEmailError } from "@/app/shared/lib/validation";
@@ -115,10 +116,10 @@ export function RecipientsField({
   // that box to be both a group and a click target; a group is not a widget,
   // so the handler had no keyboard equivalent to offer.
   return (
-      <section className="task-group" role="group" aria-label="Email recipients">
+      <section className="task-group" role="group" aria-label={tr("Email recipients")}>
         <div className="task-label-row">
           <label className="task-label" htmlFor="emailChipInput">
-            Email results
+            {tr("Email results")}
           </label>
         </div>
         {/* The chip box is a painted surrogate for the text field
@@ -141,7 +142,7 @@ export function RecipientsField({
                 <button
                   type="button"
                   className="task-chip-delete"
-                  aria-label={`Remove ${e}`}
+                  aria-label={tr("Remove {0}", [e])}
                   onClick={() => onChange(value.filter((x) => x !== e))}
                 >
                   <svg
@@ -167,7 +168,7 @@ export function RecipientsField({
               ref={inputRef}
               type="email"
               className="task-chipfield-input"
-              placeholder={value.length === 0 ? "Add email — press Enter" : "Add email…"}
+              placeholder={value.length === 0 ? tr("Add email — press Enter") : tr("Add email…")}
               maxLength={254}
               autoComplete="off"
               role="combobox"
@@ -223,7 +224,7 @@ export function RecipientsField({
               id="email-suggestions"
               className="task-suggest"
               role="listbox"
-              aria-label="Recipients used before"
+              aria-label={tr("Recipients used before")}
               data-testid="email-suggestions"
             >
               {recipientSuggestions.map((r, i) => (
@@ -270,7 +271,7 @@ export function RecipientsField({
           </div>
         ) : (
           <p className="field-hint" id="email-help">
-            The agent is instructed to email its report to these recipients after each run.
+            {tr("The agent is instructed to email its report to these recipients after each run.")}
           </p>
         )}
       </section>

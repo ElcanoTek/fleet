@@ -1,3 +1,8 @@
+import { messageRoleLabel } from "@/app/lib/i18n/ownedLabels";
+import { subagentRoleLabel } from "@/app/chat/ui/history";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
+import { getLanguage } from "@/app/lib/i18n";
 // The Operations Center transcript, rendered as a timeline (see logTimeline.ts
 // for the model). One card per tool call with its result folded in, colored by
 // tool family; code and JSON syntax-highlighted; python and shell output shown
@@ -53,7 +58,7 @@ function useClamp(text: string, maxLines: number) {
   const toggle =
     lines.length > maxLines ? (
       <button type="button" className="lt-clamp-toggle" onClick={() => setAll((v) => !v)}>
-        {all ? "Show less" : `Show all ${lines.length.toLocaleString()} lines`}
+        {all ? tr("Show less") : tr("Show all {0} lines", [lines.length.toLocaleString(getLanguage())])}
       </button>
     ) : null;
   return { shown, toggle };
@@ -103,7 +108,7 @@ function TerminalOutput({ stdout, stderr, error }: { stdout: string; stderr: str
   const errText = stripAnsiCodes([stderr, error ?? ""].filter((s) => s.trim()).join("\n")).replace(/\n+$/, "");
   const err = useClamp(errText, 30);
   if (!out.shown && !errText) {
-    return <div className="lt-terminal lt-terminal--empty">(no output)</div>;
+    return <div className="lt-terminal lt-terminal--empty">{tr("(no output)")}</div>;
   }
   return (
     <div className="lt-terminal">
@@ -168,7 +173,7 @@ function planItems(list: unknown): PlanItem[] {
   return list.map((raw) => {
     const t = (raw ?? {}) as Record<string, unknown>;
     return {
-      title: typeof t.title === "string" ? t.title : "(untitled)",
+      title: typeof t.title === "string" ? t.title : tr("(untitled)"),
       status: typeof t.status === "string" ? t.status : "todo",
       notes: typeof t.notes === "string" ? t.notes : "",
     };
@@ -254,7 +259,7 @@ function AuditInput({ args }: { args: Record<string, unknown> }) {
   return (
     <div className="lt-audit">
       <div className="lt-audit-verdict">
-        <Pill tone={pass ? "ok" : "error"}>{pass ? "Audit passes" : "Audit aborts the run"}</Pill>
+        <Pill tone={pass ? "ok" : "error"}>{pass ? tr("Audit passes") : tr("Audit aborts the run")}</Pill>
         {summary ? <span className="lt-audit-summary">{summary}</span> : null}
       </div>
       {reasoning ? <p className="lt-audit-reasoning">{reasoning}</p> : null}
@@ -267,14 +272,14 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
   const args = parseJsonObject(argsRaw);
   if (!args) {
     return argsRaw.trim() ? (
-      <Section label="Input">
+      <Section label={tr("Input")}>
         <CodeView code={argsRaw} wrap maxLines={20} />
       </Section>
     ) : null;
   }
   if (name === "run_python" && typeof args.code === "string") {
     return (
-      <Section label="Code" aside="python">
+      <Section label={tr("Code")} aside="python">
         <CodeView code={args.code} language="python" lineNumbers maxLines={60} />
       </Section>
     );
@@ -282,7 +287,7 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
   if (name === "bash" && typeof args.command === "string") {
     const cwd = typeof args.working_dir === "string" ? args.working_dir : "";
     return (
-      <Section label="Command" aside={cwd ? `cwd ${cwd}` : "shell"}>
+      <Section label={tr("Command")} aside={cwd ? tr("cwd {0}", [cwd]) : tr("shell")}>
         <CodeView code={args.command} language="bash" wrap maxLines={30} />
       </Section>
     );
@@ -290,25 +295,25 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
   if (name === "task_tracker") {
     const items = planItems(args.task_list);
     return items.length > 0 ? (
-      <Section label={`Plan · ${String(args.command ?? "update")}`}>
+      <Section label={tr("Plan · {0}", [String(args.command ?? tr("update"))])}>
         <PlanList items={items} />
       </Section>
     ) : (
-      <Section label="Input">
+      <Section label={tr("Input")}>
         <ArgsList args={args} />
       </Section>
     );
   }
   if (name === "confirm_audit") {
     return (
-      <Section label="Audit">
+      <Section label={tr("Audit")}>
         <AuditInput args={args} />
       </Section>
     );
   }
   if (name === "write_file" && typeof args.path === "string" && typeof args.content === "string") {
     return (
-      <Section label="Write" aside={args.path}>
+      <Section label={tr("Write")} aside={args.path}>
         <CodeView code={args.content} language={languageForPath(args.path)} lineNumbers maxLines={40} />
       </Section>
     );
@@ -317,7 +322,7 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
     const oldText = typeof args.old_text === "string" ? args.old_text : "";
     const newText = typeof args.new_text === "string" ? args.new_text : "";
     return (
-      <Section label="Edit" aside={args.path}>
+      <Section label={tr("Edit")} aside={args.path}>
         <div className="lt-diff">
           {oldText ? <pre className="lt-diff-del">{oldText}</pre> : null}
           {newText ? <pre className="lt-diff-add">{newText}</pre> : null}
@@ -327,13 +332,13 @@ export function ToolInput({ name, argsRaw }: { name: string; argsRaw: string }) 
   }
   if (name === "spawn_subagent" && typeof args.task === "string") {
     return (
-      <Section label="Delegated task" aside={typeof args.role === "string" ? args.role : "explore"}>
+      <Section label={tr("Delegated task")} aside={subagentRoleLabel(typeof args.role === "string" ? args.role : "explore")}>
         <TextBlock text={args.task} maxLines={20} />
       </Section>
     );
   }
   return (
-    <Section label="Arguments">
+    <Section label={tr("Arguments")}>
       <ArgsList args={args} />
     </Section>
   );
@@ -360,22 +365,24 @@ export function ToolOutput({
   pending?: boolean;
 }) {
   if (resultRaw === undefined) {
-    return pending ? <div className="lt-waiting">Waiting for the result…</div> : null;
+    return pending ? <div className="lt-waiting">{tr("Waiting for the result…")}</div> : null;
   }
   const parsed: ParsedResult = parseToolResult(name, resultRaw, isError);
   if (parsed.kind === "python" || parsed.kind === "shell") {
     const aside = (
       <>
         {parsed.kind === "shell" ? (
-          <Pill tone={parsed.exitCode === 0 ? "ok" : "error"}>exit {parsed.exitCode}</Pill>
+          <Pill tone={parsed.exitCode === 0 ? "ok" : "error"}>{tr("exit")}{" "}{parsed.exitCode}</Pill>
         ) : (
-          <Pill tone={parsed.ok ? "ok" : "error"}>{parsed.ok ? "ok" : "error"}</Pill>
+          <Pill tone={parsed.ok ? "ok" : "error"}>{parsed.ok ? tr("ok") : tr("error")}</Pill>
         )}
-        {parsed.ms !== undefined ? <span>{parsed.ms.toLocaleString()} ms</span> : null}
+        {parsed.ms !== undefined ? <span>
+        {rich("{0} ms", parsed.ms.toLocaleString(getLanguage()))}
+      </span> : null}
       </>
     );
     return (
-      <Section label="Output" aside={aside}>
+      <Section label={tr("Output")} aside={aside}>
         <TerminalOutput
           stdout={parsed.stdout}
           stderr={parsed.stderr}
@@ -389,14 +396,14 @@ export function ToolOutput({
     const obj = parseJsonObject(parsed.pretty);
     if (name === "task_tracker" && obj && Array.isArray(obj.tasks)) {
       return (
-        <Section label="Plan" aside={typeof obj.active_task === "string" && obj.active_task ? `now: ${obj.active_task}` : undefined}>
+        <Section label={tr("Plan")} aside={typeof obj.active_task === "string" && obj.active_task ? tr("now: {0}", [obj.active_task]) : undefined}>
           <PlanList items={planItems(obj.tasks)} />
         </Section>
       );
     }
     return (
       <Section
-        label="Result"
+        label={tr("Result")}
         aside={parsed.headline ? <Pill tone={parsed.ok ? "neutral" : "error"}>{parsed.headline}</Pill> : undefined}
       >
         <CodeView code={parsed.pretty} language="json" maxLines={30} />
@@ -409,7 +416,7 @@ export function ToolOutput({
   const path = args && typeof args.path === "string" ? args.path : "";
   const lang = name === "view_file" && path ? languageForPath(path) : undefined;
   return (
-    <Section label={parsed.ok ? "Result" : "Error"} aside={parsed.headline || undefined}>
+    <Section label={parsed.ok ? tr("Result") : tr("Error")} aside={parsed.headline || undefined}>
       {lang ? <CodeView code={parsed.text} language={lang} lineNumbers maxLines={30} /> : <TextBlock text={parsed.text} />}
       <Notes text={parsed.notes} />
     </Section>
@@ -464,13 +471,13 @@ export const ToolStepCard = memo(function ToolStepCard({
       ? formatDuration(tool.endedAt - tool.startedAt)
       : "";
   const status = tool.pending ? (
-    <Pill tone="running">Running…</Pill>
+    <Pill tone="running">{tr("Running…")}</Pill>
   ) : failed ? (
     <Pill tone="error">
-      Failed{(tool.repeats ?? 1) > 1 ? ` · ${tool.repeats} attempts` : ""}
+      {tr("Failed")}{(tool.repeats ?? 1) > 1 ? tr(" · {0} attempts", [tool.repeats]) : ""}
     </Pill>
   ) : tool.resultRaw !== undefined ? (
-    <Pill tone="ok">Done</Pill>
+    <Pill tone="ok">{tr("Done")}</Pill>
   ) : null;
   return (
     <article
@@ -518,7 +525,7 @@ export const ToolStepCard = memo(function ToolStepCard({
 // ── non-tool items ───────────────────────────────────────────────────────────
 
 function clock(ts?: number): string {
-  return ts ? new Date(ts * 1000).toLocaleTimeString() : "";
+  return ts ? new Date(ts * 1000).toLocaleTimeString(getLanguage()) : "";
 }
 
 function Markdown({ content, taskId }: { content: string; taskId: string }) {
@@ -538,11 +545,10 @@ function PromptCard({ msg }: { msg: LogMessage }) {
   return (
     <section className="lt-prompt" data-testid="log-task-prompt">
       <header className="lt-prompt-head">
-        <span className="lt-prompt-title">Task prompt</span>
+        <span className="lt-prompt-title">{tr("Task prompt")}</span>
         <span className="lt-prompt-meta">
-          {content.length.toLocaleString()} characters
-          {msg.created_at ? ` · ${clock(msg.created_at)}` : ""}
-        </span>
+        {rich("{0} characters{1}", content.length.toLocaleString(getLanguage()), msg.created_at ? ` · ${clock(msg.created_at)}` : "")}
+      </span>
         {long ? (
           <button
             type="button"
@@ -550,7 +556,7 @@ function PromptCard({ msg }: { msg: LogMessage }) {
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
           >
-            {open ? "Collapse" : "Show full prompt"}
+            {open ? tr("Collapse") : tr("Show full prompt")}
           </button>
         ) : null}
       </header>
@@ -567,13 +573,13 @@ function AssistantCard({ msg, final, taskId }: { msg: LogMessage; final: boolean
   return (
     <section className={`lt-assistant${final ? " lt-assistant--final" : ""}`} data-testid="log-assistant">
       <header className="lt-assistant-head">
-        <span className="lt-assistant-title">{final ? "Final answer" : "Assistant"}</span>
+        <span className="lt-assistant-title">{final ? tr("Final answer") : tr("Assistant")}</span>
         {msg.model ? <span className="lt-assistant-model">{msg.model}</span> : null}
         <span className="lt-assistant-time">{clock(msg.created_at)}</span>
       </header>
       {reasoning ? (
         <details className="lt-reasoning">
-          <summary>Reasoning</summary>
+          <summary>{tr("Reasoning")}</summary>
           <pre>{stripAnsiCodes(reasoning)}</pre>
         </details>
       ) : null}
@@ -587,12 +593,12 @@ function AssistantCard({ msg, final, taskId }: { msg: LogMessage; final: boolean
 }
 
 const EVENT_FIELD_LABEL: Record<string, (v: string) => string> = {
-  removed_turns: (v) => `${v} turns summarized`,
-  elided_results: (v) => `${v} results trimmed`,
-  used: (v) => `${Number(v).toLocaleString()} tokens resent`,
+  removed_turns: (v) => tr("{0} turns summarized", [v]),
+  elided_results: (v) => tr("{0} results trimmed", [v]),
+  used: (v) => tr("{0} tokens resent", [Number(v).toLocaleString(getLanguage())]),
   trigger: (v) => v.replace(/_/g, " "),
-  effective_budget: (v) => `budget ${Number(v).toLocaleString()}`,
-  raised_budget: (v) => `budget raised to ${Number(v).toLocaleString()}`,
+  effective_budget: (v) => tr("budget {0}", [Number(v).toLocaleString(getLanguage())]),
+  raised_budget: (v) => tr("budget raised to {0}", [Number(v).toLocaleString(getLanguage())]),
 };
 
 function eventFacts(event: RuntimeEvent): string {
@@ -631,8 +637,8 @@ function SummaryCard({ msg, taskId }: { msg: LogMessage; taskId: string }) {
   return (
     <details className="lt-summary" data-testid="log-compaction-summary">
       <summary>
-        <span className="lt-summary-title">Compaction summary</span>
-        <span className="lt-summary-hint">what the run continued from after the history was compacted</span>
+        <span className="lt-summary-title">{tr("Compaction summary")}</span>
+        <span className="lt-summary-hint">{tr("what the run continued from after the history was compacted")}</span>
       </summary>
       <div className="lt-summary-body">
         <Markdown content={(msg.content ?? "").replace(/^\[context compaction\]\s*/, "")} taskId={taskId} />
@@ -645,7 +651,7 @@ function UserCard({ msg, taskId }: { msg: LogMessage; taskId: string }) {
   return (
     <section className="lt-user" data-testid="log-user">
       <header className="lt-user-head">
-        <span>{msg.role === "user" ? "Message to the agent" : msg.role || "Message"}</span>
+        <span>{msg.role === "user" ? tr("Message to the agent") : (msg.role ? messageRoleLabel(msg.role) : tr("Message"))}</span>
         <span className="lt-assistant-time">{clock(msg.created_at)}</span>
       </header>
       <div className="lt-user-body">
@@ -670,7 +676,7 @@ function StepStrip({ items, onJump }: { items: TimelineItem[]; onJump: (key: str
   const ticks = items.filter((it) => it.kind === "tool" || (it.kind === "event" && STRIP_GAP_TAGS.has(it.event.tag)));
   if (ticks.filter((t) => t.kind === "tool").length < 2) return null;
   return (
-    <div className="lt-strip" data-testid="log-step-strip" aria-label="Run overview">
+    <div className="lt-strip" data-testid="log-step-strip" aria-label={tr("Run overview")}>
       {ticks.map((it) => {
         if (it.kind !== "tool") return <span key={it.key} className="lt-strip-gap" title={it.kind === "event" ? it.event.title : undefined} />;
         const meta = toolMeta(it.tool.name);
@@ -680,8 +686,8 @@ function StepStrip({ items, onJump }: { items: TimelineItem[]; onJump: (key: str
             key={it.key}
             type="button"
             className={`lt-strip-tick lt-cat--${meta.category}${failed ? " lt-strip-tick--error" : ""}`}
-            title={`#${it.tool.step} ${it.tool.name}${failed ? " — failed" : ""}`}
-            aria-label={`Step ${it.tool.step}: ${it.tool.name}${failed ? ", failed" : ""}`}
+            title={`#${it.tool.step} ${it.tool.name}${failed ? tr(" — failed") : ""}`}
+            aria-label={tr("Step {0}: {1}{2}", [it.tool.step, it.tool.name, failed ? tr(", failed") : ""])}
             onClick={() => onJump(it.key)}
           />
         );
@@ -734,19 +740,19 @@ export function buildFilterIndex(items: TimelineItem[]): { tags: Array<Set<strin
     });
   };
   const highlights: FilterChip[] = [
-    { key: "hl:errors", label: "Errors", count: count("hl:errors") },
-    { key: "hl:reasoning", label: "Reasoning", count: count("hl:reasoning") },
-    { key: "hl:responses", label: "Responses", count: count("hl:responses") },
-    { key: "hl:tool-calls", label: "Tool calls", count: count("hl:tool-calls") },
-    { key: "hl:tool-results", label: "Tool results", count: count("hl:tool-results") },
-    { key: "hl:task-tracker", label: "Task tracker", count: count("hl:task-tracker") },
-    { key: "hl:events", label: "Runtime events", count: count("hl:events") },
+    { key: "hl:errors", label: tr("Errors"), count: count("hl:errors") },
+    { key: "hl:reasoning", label: tr("Reasoning"), count: count("hl:reasoning") },
+    { key: "hl:responses", label: tr("Responses"), count: count("hl:responses") },
+    { key: "hl:tool-calls", label: tr("Tool calls"), count: count("hl:tool-calls") },
+    { key: "hl:tool-results", label: tr("Tool results"), count: count("hl:tool-results") },
+    { key: "hl:task-tracker", label: tr("Task tracker"), count: count("hl:task-tracker") },
+    { key: "hl:events", label: tr("Runtime events"), count: count("hl:events") },
   ].filter((c) => c.count > 0);
   const groups: FilterGroups = [
-    { title: "Highlights", chips: highlights },
-    { title: "Tools", chips: collect("tool:", (label) => toolMeta(label).category) },
-    { title: "Models", chips: collect("model:") },
-    { title: "Providers", chips: collect("provider:") },
+    { title: tr("Highlights"), chips: highlights },
+    { title: tr("Tools"), chips: collect("tool:", (label) => toolMeta(label).category) },
+    { title: tr("Models"), chips: collect("model:") },
+    { title: tr("Providers"), chips: collect("provider:") },
   ].filter((g) => g.chips.length > 0);
   return { tags, groups };
 }
@@ -780,21 +786,21 @@ function Filters({
         <input
           type="search"
           className="lt-search"
-          placeholder="Search this run — tool, file, error text…"
-          aria-label="Search the transcript"
+          placeholder={tr("Search this run — tool, file, error text…")}
+          aria-label={tr("Search the transcript")}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
         />
         <span className="lt-filter-actions">
           <button type="button" className="btn btn-secondary btn-small" onClick={onExpandAll}>
-            Expand all
+            {tr("Expand all")}
           </button>
           <button type="button" className="btn btn-secondary btn-small" onClick={onCollapseAll}>
-            Collapse all
+            {tr("Collapse all")}
           </button>
           {selected.size > 0 || query ? (
             <button type="button" className="btn btn-secondary btn-small" onClick={onClear}>
-              Clear all
+              {tr("Clear all")}
             </button>
           ) : null}
         </span>
@@ -819,7 +825,7 @@ function Filters({
         </div>
       ))}
       <div className="log-filters-shown">
-        {selected.size === 0 && !query ? `Showing all ${total} messages` : `Showing ${shown} of ${total} messages`}
+        {selected.size === 0 && !query ? tr("Showing all {0} messages", [total]) : tr("Showing {0} of {1} messages", [shown, total])}
       </div>
     </div>
   );
@@ -908,7 +914,7 @@ export function TranscriptTimeline({
       ) : null}
       {withFilters ? <StepStrip items={items} onJump={jump} /> : null}
       <div className="log-session lt-timeline">
-        {visible.length === 0 ? <div className="table-empty">Nothing in this run matches.</div> : null}
+        {visible.length === 0 ? <div className="table-empty">{tr("Nothing in this run matches.")}</div> : null}
         {visible.map((it) => {
           switch (it.kind) {
             case "prompt":

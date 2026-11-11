@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 import { useMemo, useState } from "react";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import {
@@ -120,7 +121,7 @@ export function PatrolSchedulePicker({
       >
         <label className={labelClass}>
           <span className="flex items-center justify-between gap-2">
-            <span>Repeat</span>
+            <span>{tr("Repeat")}</span>
             {frequency === "custom_cron" ? (
               <button
                 type="button"
@@ -133,7 +134,7 @@ export function PatrolSchedulePicker({
                 }
                 className="pill-btn h-5 px-2 text-[0.68rem]"
               >
-                Use simple schedule
+                {tr("Use simple schedule")}
               </button>
             ) : (
               <button
@@ -141,12 +142,12 @@ export function PatrolSchedulePicker({
                 onClick={() => handleFrequencyChange("custom_cron")}
                 className="pill-btn h-5 px-2 text-[0.68rem]"
               >
-                Advanced cron
+                {tr("Advanced cron")}
               </button>
             )}
           </span>
           <select
-            aria-label="Repeat"
+            aria-label={tr("Repeat")}
             data-testid={`${testIdPrefix}-frequency`}
             value={frequency}
             onChange={(e) =>
@@ -154,20 +155,20 @@ export function PatrolSchedulePicker({
             }
             className={inputClass}
           >
-            <option value="hours">Every N hours</option>
-            <option value="minutes">Every N minutes</option>
-            <option value="daily">Every day</option>
-            <option value="weekdays">Weekdays (Mon–Fri)</option>
-            <option value="weekly">Specific days of the week</option>
-            <option value="custom_cron">Advanced (cron expression)</option>
+            <option value="hours">{tr("Every N hours")}</option>
+            <option value="minutes">{tr("Every N minutes")}</option>
+            <option value="daily">{tr("Every day")}</option>
+            <option value="weekdays">{tr("Weekdays (Mon–Fri)")}</option>
+            <option value="weekly">{tr("Specific days of the week")}</option>
+            <option value="custom_cron">{tr("Advanced (cron expression)")}</option>
           </select>
         </label>
 
         {frequency === "hours" ? (
           <label className={labelClass}>
-            <span>Interval</span>
+            <span>{tr("Interval")}</span>
             <select
-              aria-label="Hour interval"
+              aria-label={tr("Hour interval")}
               data-testid={`${testIdPrefix}-hours`}
               value={state.intervalHours}
               onChange={(e) =>
@@ -177,7 +178,7 @@ export function PatrolSchedulePicker({
             >
               {HOUR_INTERVAL_OPTIONS.map((hrs) => (
                 <option key={hrs} value={hrs}>
-                  {hrs === 1 ? "Every hour" : `Every ${hrs} hours`}
+                  {hrs === 1 ? tr("Every hour") : tr("Every {0} hours", [hrs])}
                 </option>
               ))}
             </select>
@@ -186,9 +187,9 @@ export function PatrolSchedulePicker({
 
         {frequency === "minutes" ? (
           <label className={labelClass}>
-            <span>Interval</span>
+            <span>{tr("Interval")}</span>
             <select
-              aria-label="Minute interval"
+              aria-label={tr("Minute interval")}
               data-testid={`${testIdPrefix}-minutes`}
               value={state.intervalMinutes}
               onChange={(e) =>
@@ -198,7 +199,7 @@ export function PatrolSchedulePicker({
             >
               {MINUTE_INTERVAL_OPTIONS.map((mins) => (
                 <option key={mins} value={mins}>
-                  Every {mins} minutes
+                  {tr("Every {0} minutes", [mins])}
                 </option>
               ))}
             </select>
@@ -209,10 +210,10 @@ export function PatrolSchedulePicker({
         frequency === "weekdays" ||
         frequency === "weekly" ? (
           <label className={labelClass}>
-            <span>At time</span>
+            <span>{tr("At time")}</span>
             <input
               type="time"
-              aria-label="At time"
+              aria-label={tr("At time")}
               data-testid={`${testIdPrefix}-time`}
               value={state.time}
               onChange={(e) =>
@@ -233,11 +234,11 @@ export function PatrolSchedulePicker({
                 : "text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
             }
           >
-            On days
+            {tr("On days")}
           </span>
           <div
             role="group"
-            aria-label="Days of the week"
+            aria-label={tr("Days of the week")}
             className="flex flex-wrap gap-1.5"
           >
             {PATROL_WEEKDAYS.map((day) => {
@@ -261,10 +262,10 @@ export function PatrolSchedulePicker({
 
       {frequency === "custom_cron" ? (
         <label className={labelClass}>
-          <span>Cron expression (5 fields: min hour day month weekday)</span>
+          <span>{tr("Cron expression (5 fields: min hour day month weekday)")}</span>
           <input
             type="text"
-            aria-label="Cron expression"
+            aria-label={tr("Cron expression")}
             data-testid={`${testIdPrefix}-raw-cron`}
             value={cron}
             onChange={(e) => {
@@ -281,7 +282,7 @@ export function PatrolSchedulePicker({
       {onChangeTimezone ? (
         <label className={labelClass}>
           <span className="flex items-center justify-between gap-2">
-            <span>Time zone</span>
+            <span>{tr("Time zone")}</span>
             <button
               type="button"
               onClick={() => {
@@ -292,13 +293,13 @@ export function PatrolSchedulePicker({
               }}
               className="pill-btn h-5 px-2 text-[0.68rem]"
             >
-              {customTzMode ? "Pick from list" : "Custom zone"}
+              {customTzMode ? tr("Pick from list") : tr("Custom zone")}
             </button>
           </span>
           {customTzMode ? (
             <input
               type="text"
-              aria-label="Time zone"
+              aria-label={tr("Time zone")}
               data-testid={`${testIdPrefix}-timezone-custom`}
               value={timezone}
               onChange={(e) => onChangeTimezone(e.target.value)}
@@ -307,12 +308,12 @@ export function PatrolSchedulePicker({
                   onChangeTimezone("UTC");
                 }
               }}
-              placeholder="America/New_York or UTC"
+              placeholder={tr("America/New_York or UTC")}
               className={`${inputClass} font-mono`}
             />
           ) : (
             <select
-              aria-label="Time zone"
+              aria-label={tr("Time zone")}
               data-testid={`${testIdPrefix}-timezone`}
               value={effectiveTz}
               onChange={(e) => onChangeTimezone(e.target.value)}
@@ -333,12 +334,12 @@ export function PatrolSchedulePicker({
           {humanSummary ? (
             <>
               <strong className="font-medium text-[var(--color-text-secondary)]">
-                Schedule:
+                {tr("Schedule:")}
               </strong>{" "}
               {humanSummary} ({formatTimeZoneLabel(effectiveTz)})
             </>
           ) : (
-            "Enter a valid 5-field cron expression."
+            tr("Enter a valid 5-field cron expression.")
           )}
         </span>
       </div>

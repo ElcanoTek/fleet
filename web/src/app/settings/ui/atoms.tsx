@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Settings-area atoms (fleet-unified settings design pass). These transcribe
 // the design's component vocabulary — .btn/.settings-input/.conn-badge/
 // .set-switch/.theme-seg/.act-status and friends — into the token-driven
@@ -85,7 +86,7 @@ export function RevealButton({
       className={btnClass({ sm: true, reveal: true })}
     >
       <Icon name={open ? "close" : "plus"} className="size-[0.85rem]" />
-      {open ? (openLabel ?? "Cancel") : closedLabel}
+      {open ? (openLabel ?? tr("Cancel")) : closedLabel}
     </button>
   );
 }
@@ -248,7 +249,7 @@ export function ActNote({ children }: { children: ReactNode }) {
 // inline-confirm affordance, composed from the ghost-danger button.
 export function InlineConfirmButton({
   label,
-  confirmLabel = "Confirm delete",
+  confirmLabel = tr("Confirm delete"),
   onConfirm,
   disabled,
   testId,
@@ -342,7 +343,7 @@ export function ClampText({
           onClick={() => setExpanded((e) => !e)}
           className="mt-[0.15rem] border-none bg-transparent p-0 text-[0.72rem] text-[var(--color-accent)] underline-offset-2 hover:underline focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
         >
-          {expanded ? "less" : "more"}
+          {expanded ? tr("less") : tr("more")}
         </button>
       ) : null}
     </div>

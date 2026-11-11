@@ -74,8 +74,9 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 // strings + the chat empty-state catalog. Sourced from the loaded client
 // bundle's manifest; neutral generic defaults when no bundle is wired.
 type clientConfigResponse struct {
-	Branding   clientConfigBranding   `json:"branding"`
-	EmptyState clientConfigEmptyState `json:"empty_state"`
+	Branding      clientConfigBranding       `json:"branding"`
+	EmptyState    clientConfigEmptyState     `json:"empty_state"`
+	Localizations clientconfig.Localizations `json:"localizations,omitempty"`
 	// Models carries the workspace's effective model tiers (#1187) — the slug a
 	// new conversation starts on and the escalation target — resolved from the
 	// live agentcore holders the admin settings apply into. The web reads this
@@ -166,6 +167,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.clientConfig != nil {
 		b := s.clientConfig
+		resp.Localizations = b.Localizations
 		resp.Branding = clientConfigBranding{
 			AppName:          b.Branding.AppName,
 			LoginTitle:       b.Branding.LoginTitle,

@@ -40,6 +40,15 @@ quote is worth more than a page they have to find.
 drift in either direction (a web-only guide the assistant cannot read is a
 failure too).
 
+The English files remain at the guide root; `es/` and `pt/` hold the complete
+Spanish and Portuguese editions in both trees. `/help` reads the same language
+as the rest of the interface, chosen under **Settings → General → Language**.
+The built-in skill points the assistant to the matching language edition too.
+Language changes preserve the English section anchors, so a shared section URL
+still lands in the same place in all three languages. Heading-order, link-target
+and command-preservation tests cover every edition, and the sync check walks
+locale directories in both directions.
+
 The copy is not laziness — neither direction of linking works:
 
 - `go:embed` cannot reach outside its own package, so the skill's files must

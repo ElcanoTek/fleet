@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // patrolApi — the in-chat patrol (schedule) routes, one typed wrapper each:
 // POST /api/conversations/<id>/schedules, POST …/schedules/<sid>/run-now,
 // PATCH …/schedules/<sid> {action}, DELETE …/schedules/<sid>.
@@ -48,7 +49,7 @@ async function send(
   init: RequestInit,
   fallback: string,
 ): Promise<PatrolResponse> {
-  if (!path) throw new PatrolApiError("Invalid conversation or schedule id.", 0);
+  if (!path) throw new PatrolApiError(tr("Invalid conversation or schedule id."), 0);
   const res = await fetch(path, init);
   if (!res.ok) throw new PatrolApiError(await responseErrorText(res, fallback), res.status);
   // A 2xx with no JSON body (an older server) still counts as done.
@@ -60,7 +61,7 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 export function createSchedule(
   conversationId: string,
   body: CreateScheduleBody,
-  fallback = "Couldn't schedule patrol",
+  fallback = tr("Couldn't schedule patrol"),
 ): Promise<PatrolResponse> {
   return send(
     conversationApiPath(conversationId, "schedules"),
@@ -72,7 +73,7 @@ export function createSchedule(
 export function runScheduleNow(
   conversationId: string,
   scheduleId: string,
-  fallback = "Couldn't trigger patrol",
+  fallback = tr("Couldn't trigger patrol"),
 ): Promise<PatrolResponse> {
   return send(
     conversationApiPath(conversationId, "schedules", scheduleId, "run-now"),
@@ -85,7 +86,7 @@ export function setScheduleAction(
   conversationId: string,
   scheduleId: string,
   action: ScheduleAction,
-  fallback = `Couldn't ${action} patrol`,
+  fallback = tr("Couldn't {0} patrol", [tr(action)]),
 ): Promise<PatrolResponse> {
   return send(
     conversationApiPath(conversationId, "schedules", scheduleId),
@@ -97,7 +98,7 @@ export function setScheduleAction(
 export function deleteSchedule(
   conversationId: string,
   scheduleId: string,
-  fallback = "Couldn't cancel patrol",
+  fallback = tr("Couldn't cancel patrol"),
 ): Promise<PatrolResponse> {
   return send(
     conversationApiPath(conversationId, "schedules", scheduleId),

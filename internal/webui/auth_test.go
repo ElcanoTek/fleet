@@ -131,6 +131,7 @@ func TestLogoutClearsEverythingAndLandsOnManualLogin(t *testing.T) {
 		"fleet_oidc_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
 		"fleet_oidc_nonce=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
 		"fleet_oidc_verifier=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
+		"fleet_oidc_language=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
 	}
 	if strings.Join(cookies, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("cookies:\n%s", strings.Join(cookies, "\n"))

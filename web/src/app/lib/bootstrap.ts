@@ -1,3 +1,4 @@
+import { t as tr, bundleText } from "@/app/lib/i18n";
 // The per-request state the Go server renders into index.html
 // (<script type="application/json" id="fleet-bootstrap">, see
 // internal/webui/spa.go Bootstrap). It replaces what the Next.js server
@@ -18,6 +19,7 @@ export type BootBranding = {
   backgroundLight?: string;
   backgroundDark?: string;
   shareImageUrl?: string;
+  localizations?: Record<string, Record<string, string>>;
 };
 
 export type Bootstrap = {
@@ -32,6 +34,7 @@ export type Bootstrap = {
     oidcLabel: string;
     teamLink: boolean;
   };
+  localizations?: Record<string, Record<string, string>>;
   shared?: SharedSnapshot;
   notFound?: boolean;
   /** Routes whose page the server decides (Go fullLoadRoutes); "/x/" is a prefix. */
@@ -48,17 +51,17 @@ export const DEFAULT_BOOTSTRAP: Bootstrap = {
   buildId: "dev",
   branding: {
     appName: "Fleet",
-    loginTitle: "Welcome aboard.",
-    loginTagline: "Sign in to your workspace and pick up where you left off.",
+    loginTitle: bundleText("Welcome aboard."),
+    loginTagline: bundleText("Sign in to your workspace and pick up where you left off."),
     shareTitle: "",
-    shareDescription: "An AI workspace with real tool use.",
+    shareDescription: bundleText("An AI workspace with real tool use."),
   },
   session: null,
   login: {
     passwordLoginEnabled: true,
     magicLinkLoginEnabled: false,
     oidcEnabled: false,
-    oidcLabel: "Sign in with SSO",
+    oidcLabel: tr("Sign in with SSO"),
     teamLink: false,
   },
   fullLoadRoutes: ["/login", "/no-access", "/shared/"],

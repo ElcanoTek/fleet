@@ -330,6 +330,14 @@ guides). Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
 
+**Settings → General → Language** selects **English**, **Español**, or
+**Português** for the interface and these guides. Your choice is saved in this
+browser. Before you choose, the platform uses your browser's language when it
+is supported, otherwise English. Changing the language reloads the current
+page and keeps its path and section; the URL's `lang` parameter also preserves
+the choice when browser storage is unavailable. Conversations, files, prompts
+you saved, and other content you wrote stay in their original language.
+
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one
 when a task you created finishes, is waiting for your answer, or sends a

@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "oxlint --deny-warnings --report-unused-disable-directives",
+    "lint": "npm run check:localizations && oxlint --deny-warnings --report-unused-disable-directives",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -21,7 +21,9 @@
     "test:e2e:screenshots": "E2E_SCREENSHOTS=1 playwright test --project=screenshots",
     "test:all": "npm run test && npm run test:e2e",
     "typecheck": "tsc --noEmit",
-    "gen:api": "npm run --workspace tools/openapi-typescript generate"
+    "gen:api": "npm run --workspace tools/openapi-typescript generate",
+    "check:localizations": "node tools/check-localizations.cjs",
+    "gen:localizations": "go test -tags fleet_host_executor ../scripts -run '^TestBackendErrorCatalog$' -update-localizations"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.26",

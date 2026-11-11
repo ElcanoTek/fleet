@@ -1,3 +1,6 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 // Dashboard view (docs/DASHBOARD-VIEW.md): the chat as a live board. The HUD
 // bar replaces the page header, the board of panels fills the screen, and the
 // ordinary chat (transcript + composer, approvals and forms inline) narrows
@@ -34,7 +37,7 @@ function useClock(): string {
     const id = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(id);
   }, []);
-  return now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return now.toLocaleTimeString(getLanguage(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals: () => void }) {
@@ -52,7 +55,7 @@ function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals
           {status.count}
         </span>
         <span className="max-sm:sr-only">
-          {status.count} approval{status.count === 1 ? "" : "s"} waiting
+          {tr(status.count === 1 ? "{0} approval waiting" : "{0} approvals waiting", [status.count])}
         </span>
       </button>
     );
@@ -61,14 +64,14 @@ function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals
     return (
       <span data-testid="dashboard-status" data-status="working" className="dash-status dash-status-live" role="status">
         <span className="dash-led dash-led-pulse" aria-hidden="true" />
-        <span className="truncate max-sm:sr-only">{status.label ? humanToolLabel(status.label) : "Working"}</span>
+        <span className="truncate max-sm:sr-only">{status.label ? humanToolLabel(status.label) : tr("Working")}</span>
       </span>
     );
   }
   return (
     <span data-testid="dashboard-status" data-status="standby" className="dash-status dash-status-ok" role="status">
       <span className="dash-led" aria-hidden="true" />
-      <span className="max-sm:sr-only">Standby</span>
+      <span className="max-sm:sr-only">{tr("Standby")}</span>
     </span>
   );
 }
@@ -102,30 +105,28 @@ function HelpPopover({ onClose, onEscape }: { onClose: () => void; onEscape: () 
       ref={ref}
       tabIndex={-1}
       role="dialog"
-      aria-label="How dashboard view works"
+      aria-label={tr("How dashboard view works")}
       data-testid="dashboard-help"
       className="dash-popover absolute right-0 top-[calc(100%+0.5rem)] z-40 w-[min(22rem,calc(100vw-2rem))] p-4 text-[0.8125rem] leading-[1.55] outline-none"
     >
-      <p className="dash-overline mb-2">How it works</p>
+      <p className="dash-overline mb-2">{tr("How it works")}</p>
       <ul className="grid gap-2 text-[var(--color-text-secondary)]">
         <li>
-          <strong className="text-[var(--color-text-primary)]">Ask for what you want to watch.</strong> The assistant builds
-          panels — numbers, charts, tables — and updates them in place when things change.
+        {rich("{0} The assistant builds panels — numbers, charts, tables — and updates them in place when things change.", <strong className="text-[var(--color-text-primary)]">{tr("Ask for what you want to watch.")}</strong>)}
+      </li>
+        <li>
+          {tr("Try “turn this into a dashboard”, “add a panel for…”, or “refresh the revenue panel”.")}
         </li>
         <li>
-          Try “turn this into a dashboard”, “add a panel for…”, or “refresh the revenue panel”.
+          {tr("Approvals, emails and forms still appear in the chat rail. Nothing runs without your OK.")}
         </li>
         <li>
-          Approvals, emails and forms still appear in the chat rail. Nothing runs without your OK.
+          {tr("Drag a panel by its header to reorder it. Use the panel buttons to widen it, focus it, or take it off the board (its card goes back to the chat).")}
         </li>
-        <li>
-          Drag a panel by its header to reorder it. Use the panel buttons to widen it, focus it, or take it off the board
-          (its card goes back to the chat).
-        </li>
-        <li>Pin any card from the chat with “Pin to board”. Your layout is saved in this browser.</li>
+        <li>{tr("Pin any card from the chat with “Pin to board”. Your layout is saved in this browser.")}</li>
       </ul>
       <p className="mt-3 flex flex-wrap items-center gap-1.5 text-[0.75rem] text-[var(--color-text-muted)]">
-        <kbd className="dash-kbd">D</kbd> toggles dashboard view · <kbd className="dash-kbd">Esc</kbd> exits
+        {rich("{0} toggles dashboard view · {1} exits", <kbd className="dash-kbd">{tr("D")}</kbd>, <kbd className="dash-kbd">{tr("Esc")}</kbd>)}
       </p>
     </div>
   );
@@ -165,7 +166,7 @@ export function DashboardHud({
           <Icon name="target" className="size-4" />
         </span>
         <div className="min-w-0">
-          <p className="dash-overline">Dashboard</p>
+          <p className="dash-overline">{tr("Dashboard")}</p>
           <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]">{title}</h1>
         </div>
       </div>
@@ -173,7 +174,7 @@ export function DashboardHud({
         <StatusLight status={status} onApprovals={onApprovals} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-        <div className="dash-segment lg:hidden" role="group" aria-label="Show">
+        <div className="dash-segment lg:hidden" role="group" aria-label={tr("Show")}>
           {(["board", "chat"] as const).map((pane) => (
             <button
               key={pane}
@@ -182,11 +183,11 @@ export function DashboardHud({
               onClick={() => setMobilePane(pane)}
               className="dash-segment-btn"
             >
-              {pane === "board" ? "Board" : "Chat"}
+              {pane === "board" ? tr("Board") : tr("Chat")}
             </button>
           ))}
         </div>
-        <span className="dash-readout hidden md:inline-flex" title="Panels on the board">
+        <span className="dash-readout hidden md:inline-flex" title={tr("Panels on the board")}>
           <Icon name="grid" className="size-3.5" />
           <span data-testid="dashboard-panel-count">{panelCount}</span>
         </span>
@@ -196,7 +197,7 @@ export function DashboardHud({
         <div className="relative">
           <button
             type="button"
-            aria-label="How dashboard view works"
+            aria-label={tr("How dashboard view works")}
             aria-expanded={helpOpen}
             ref={helpButtonRef}
             data-testid="dashboard-help-button"
@@ -208,9 +209,9 @@ export function DashboardHud({
           {helpOpen ? <HelpPopover onClose={closeHelp} onEscape={escapeHelp} /> : null}
         </div>
         <button type="button" data-testid="dashboard-exit" className="dash-exit" onClick={onExit}>
-          <span>Exit</span>
+          <span>{tr("Exit")}</span>
           <kbd className="dash-kbd hidden sm:inline-flex" aria-hidden="true">
-            Esc
+            {tr("Esc")}
           </kbd>
         </button>
       </div>
@@ -221,9 +222,9 @@ export function DashboardHud({
 // ───────────────────────────── board ─────────────────────────────
 
 const STARTERS = [
-  "Turn what we've covered so far into dashboard panels",
-  "Build me a dashboard: the 3–4 numbers I should watch, plus a trend chart",
-  "Put the options we discussed side by side in a comparison panel",
+  tr("Turn what we've covered so far into dashboard panels"),
+  tr("Build me a dashboard: the 3–4 numbers I should watch, plus a trend chart"),
+  tr("Put the options we discussed side by side in a comparison panel"),
 ];
 
 function EmptyBoard({ onStarter }: { onStarter: (text: string) => void }) {
@@ -235,10 +236,9 @@ function EmptyBoard({ onStarter }: { onStarter: (text: string) => void }) {
         <span />
       </div>
       <div className="max-w-[30rem]">
-        <h2 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">Your board is clear</h2>
+        <h2 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">{tr("Your board is clear")}</h2>
         <p className="mt-2 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-          Ask for anything you want to keep an eye on. The assistant pins live panels here — numbers, trends, tables —
-          and refreshes them as the conversation moves.
+          {tr("Ask for anything you want to keep an eye on. The assistant pins live panels here — numbers, trends, tables — and refreshes them as the conversation moves.")}
         </p>
       </div>
       <div className="flex max-w-[40rem] flex-wrap justify-center gap-2">
@@ -355,7 +355,7 @@ function PanelMenu({
         ref={triggerRef}
         type="button"
         className="dash-icon-btn"
-        aria-label={`More for ${panel.spec.title}`}
+        aria-label={tr("More for {0}", [panel.spec.title])}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -365,9 +365,9 @@ function PanelMenu({
       </button>
       {open ? (
         <div ref={menuRef} id={menuId} role="menu" className="dash-popover absolute right-0 top-[calc(100%+0.25rem)] z-30 grid min-w-[11rem] p-1">
-          {item("Move earlier", () => onMove(panel.key, -1), index === 0)}
-          {item("Move later", () => onMove(panel.key, 1), index === count - 1)}
-          {item("Remove from board", () => onRemove(panel.key), false, true)}
+          {item(tr("Move earlier"), () => onMove(panel.key, -1), index === 0)}
+          {item(tr("Move later"), () => onMove(panel.key, 1), index === count - 1)}
+          {item(tr("Remove from board"), () => onRemove(panel.key), false, true)}
         </div>
       ) : null}
     </div>
@@ -466,7 +466,7 @@ function Panel(props: PanelProps) {
             type="button"
             className="dash-grip"
             draggable
-            aria-label={`Reorder ${panel.spec.title}: drag, or use the arrow keys`}
+            aria-label={tr("Reorder {0}: drag, or use the arrow keys", [panel.spec.title])}
             data-testid="dashboard-panel-grip"
             onDragStart={onDragStart}
             onDragEnd={() => props.setDragging(null)}
@@ -491,13 +491,13 @@ function Panel(props: PanelProps) {
           {panel.spec.title}
         </h3>
         {panel.version > 1 ? (
-          <span className="dash-tag" title={`Updated ${panel.version - 1} time${panel.version === 2 ? "" : "s"}`}>
-            v{panel.version}
+          <span className="dash-tag" title={tr(panel.version === 2 ? "Updated {0} time" : "Updated {0} times", [panel.version - 1])}>
+            {tr("v")}{panel.version}
           </span>
         ) : null}
         {retired ? (
-          <span className="dash-tag" title="From before this conversation was summarized">
-            archived
+          <span className="dash-tag" title={tr("From before this conversation was summarized")}>
+            {tr("archived")}
           </span>
         ) : null}
         <div className="flex shrink-0 items-center">
@@ -505,7 +505,7 @@ function Panel(props: PanelProps) {
             <button
               type="button"
               className="dash-icon-btn hidden sm:inline-flex"
-              aria-label={panel.wide ? `Make ${panel.spec.title} narrow` : `Make ${panel.spec.title} wide`}
+              aria-label={panel.wide ? tr("Make {0} narrow", [panel.spec.title]) : tr("Make {0} wide", [panel.spec.title])}
               aria-pressed={panel.wide}
               onClick={() => props.onToggleWide(panel.key, !panel.wide)}
             >
@@ -516,7 +516,7 @@ function Panel(props: PanelProps) {
             ref={maximized ? restoreRef : undefined}
             type="button"
             className="dash-icon-btn"
-            aria-label={maximized ? `Close focused ${panel.spec.title}` : `Focus ${panel.spec.title}`}
+            aria-label={maximized ? tr("Close focused {0}", [panel.spec.title]) : tr("Focus {0}", [panel.spec.title])}
             data-testid={maximized ? "dashboard-panel-restore" : "dashboard-panel-focus"}
             onClick={() => props.onMaximize(maximized ? "" : panel.key)}
           >
@@ -531,7 +531,7 @@ function Panel(props: PanelProps) {
         {!nearView ? (
           <div className="min-h-[9rem]" data-testid="dashboard-panel-deferred" aria-hidden="true" />
         ) : (
-        <Suspense fallback={<div className="px-3.5 py-3 text-[0.75rem] text-[var(--color-text-muted)]">Loading…</div>}>
+        <Suspense fallback={<div className="px-3.5 py-3 text-[0.75rem] text-[var(--color-text-muted)]">{tr("Loading…")}</div>}>
           <GenerativeCard
             key={`${panel.cardId}#${panel.occurrence}`}
             variant="panel"

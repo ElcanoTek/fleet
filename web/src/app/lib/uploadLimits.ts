@@ -1,3 +1,4 @@
+import { t as tr } from "@/app/lib/i18n";
 // Client-side attachment size screening.
 //
 // The server enforces a per-file cap on /attachments (FLEET_UPLOAD_MAX_BYTES,
@@ -51,10 +52,10 @@ export function screenFilesForUpload<T extends FileSizeLike>(
   let error: string | null = null;
   if (rejected.length === 1) {
     const f = rejected[0];
-    error = `"${f.name}" is ${formatBytes(f.size)} — over this server's ${formatBytes(maxBytes)} per-file upload limit, so it was not attached.`;
+    error = tr("\"{0}\" is {1} — over this server's {2} per-file upload limit, so it was not attached.", [f.name, formatBytes(f.size), formatBytes(maxBytes)]);
   } else if (rejected.length > 1) {
     const names = rejected.map((f) => `"${f.name}"`).join(", ");
-    error = `${rejected.length} files are over this server's ${formatBytes(maxBytes)} per-file upload limit and were not attached: ${names}.`;
+    error = tr("{0} files are over this server's {1} per-file upload limit and were not attached: {2}.", [rejected.length, formatBytes(maxBytes), names]);
   }
   return { accepted, rejected, error };
 }
@@ -63,5 +64,5 @@ export function screenFilesForUpload<T extends FileSizeLike>(
 // enough that the user should expect a slow send, null otherwise.
 export function largeUploadWarning(totalBytes: number): string | null {
   if (totalBytes < LARGE_UPLOAD_WARNING_BYTES) return null;
-  return `Large upload (${formatBytes(totalBytes)}) — sending may take a while, especially on a slow connection. Keep this tab open until the upload finishes.`;
+  return tr("Large upload ({0}) — sending may take a while, especially on a slow connection. Keep this tab open until the upload finishes.", [formatBytes(totalBytes)]);
 }

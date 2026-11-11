@@ -1,3 +1,5 @@
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { deleteChatsText, useImpact } from "./ProjectSettingsDialog";
 
@@ -24,30 +26,30 @@ export function DeleteProjectConfirmDialog({
   const fetched = useImpact(projectId ?? "", Boolean(projectId));
   const state = projectId ? fetched : { settled: true, impact: null };
 
-  const name = projectName || "this project";
+  const name = projectName || tr("this project");
   return (
     <DialogShell
-      label={`Delete ${name}?`}
-      scrimLabel="Cancel deleting the project"
+      label={tr("Delete {0}?", [name])}
+      scrimLabel={tr("Cancel deleting the project")}
       onDismiss={onCancel}
       className="max-w-[28rem] p-5"
       testId="rail-delete-project-confirm"
     >
       <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-        Delete {name}?
+        {rich("Delete {0}?", name)}
       </h2>
       <ul className="mb-4 grid list-disc gap-1 pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
         <li>
           {state.settled
             ? deleteChatsText(state.impact)
-            : "Counting the chats in it…"}
+            : tr("Counting the chats in it…")}
         </li>
         <li>
-          {state.impact
-            ? `Team learnings (${state.impact.memories}) are lost.`
-            : "Its team learnings are lost."}
+          {state.impact && Number.isFinite(state.impact.memories)
+            ? tr("Team learnings ({0}) are lost.", [state.impact.memories])
+            : tr("Its team learnings are lost.")}
         </li>
-        <li>Instructions and sharing are removed.</li>
+        <li>{tr("Instructions and sharing are removed.")}</li>
       </ul>
       <div className="flex flex-wrap items-center gap-2">
         {projectId ? (
@@ -55,7 +57,7 @@ export function DeleteProjectConfirmDialog({
             href={`/api/projects/${encodeURIComponent(projectId)}/export`}
             className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
           >
-            Export first
+            {tr("Export first")}
           </a>
         ) : null}
         <span className="flex-1" />
@@ -64,8 +66,7 @@ export function DeleteProjectConfirmDialog({
           className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
           onClick={onCancel}
         >
-          Cancel
-        </button>
+          {tr("Cancel")}</button>
         <button
           type="button"
           // Waits for the counts the list promises; a failed read still
@@ -76,7 +77,7 @@ export function DeleteProjectConfirmDialog({
             if (state.settled) onConfirm();
           }}
         >
-          Delete project
+          {tr("Delete project")}
         </button>
       </div>
     </DialogShell>

@@ -1,3 +1,7 @@
+import { bundleText } from "@/app/lib/i18n";
+import { localizeConnector } from "@/app/lib/i18n/bundle";
+import { rich } from "@/app/lib/i18n/rich";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -131,7 +135,7 @@ const MAX_INLINE_CATEGORIES = 6;
 // Editorial picks, in display order; these are not usage rankings. Keep the
 // catalog's endpoint, operator and setup instructions behind the short names.
 const POPULAR_CONNECTORS = new Map([
-  ["microsoft-365", "Microsoft 365 (Outlook, Teams & OneDrive)"],
+  ["microsoft-365", tr("Microsoft 365 (Outlook, Teams & OneDrive)")],
   ["github", "GitHub"],
   ["slack", "Slack"],
   ["google-gmail", "Gmail"],
@@ -142,10 +146,10 @@ const POPULAR_CONNECTORS = new Map([
 ]);
 
 const STATUS_LABEL: Record<string, string> = {
-  login_required: "Sign-in needed",
-  connected: "Connected",
-  needs_reauth: "Sign-in needed",
-  error: "Error",
+  login_required: tr("Sign-in needed"),
+  connected: tr("Connected"),
+  needs_reauth: tr("Sign-in needed"),
+  error: tr("Error"),
 };
 
 const STATUS_VARIANTS: Record<string, BadgeVariant> = {
@@ -159,7 +163,7 @@ const STATUS_VARIANTS: Record<string, BadgeVariant> = {
 // share needs_reauth; the key case asks for a new key, matching its Update key
 // button.
 function statusLabel(status: string, authKind?: string): string {
-  if (status === "needs_reauth" && authKind === "api_key") return "New key needed";
+  if (status === "needs_reauth" && authKind === "api_key") return tr("New key needed");
   return STATUS_LABEL[status] ?? status;
 }
 
@@ -193,13 +197,13 @@ function hostOf(url: string): string {
 function keySentAsNote(header: string | undefined, prefix?: string): string | null {
   if (!prefix) return null;
   return header
-    ? `Sent as ${header}: ${prefix}<key> — paste only the key.`
-    : `Sent as ${prefix}<key> — paste only the key.`;
+    ? tr("Sent as {0}: {1}<key> — paste only the key.", [header, prefix])
+    : tr("Sent as {0}<key> — paste only the key.", [prefix]);
 }
 
 const AUTH_LABEL: Record<string, string> = {
   oauth: "OAuth",
-  api_key: "API key",
+  api_key: tr("API key"),
   open: "no",
 };
 
@@ -210,10 +214,10 @@ const AUTH_LABEL: Record<string, string> = {
 // lists, never where the row came from.
 function driftSummary(d: NonNullable<RemoteServer["catalog_drift"]>): string {
   const parts: string[] = [];
-  if (d.url) parts.push(`the address ${d.url}`);
-  if (d.auth) parts.push(`${AUTH_LABEL[d.auth] ?? d.auth} sign-in`);
-  if (d.key_sent_as) parts.push(`the key sent in ${d.key_sent_as}`);
-  return `The directory entry of this name now lists ${parts.join(", ")}. Remove this connection and add it again from the directory to take the change, or keep it as it is if you set it up by hand.`;
+  if (d.url) parts.push(tr("the address {0}", [d.url]));
+  if (d.auth) parts.push(tr("{0} sign-in", [AUTH_LABEL[d.auth] ?? d.auth]));
+  if (d.key_sent_as) parts.push(tr("the key sent in {0}", [d.key_sent_as]));
+  return tr("The directory entry of this name now lists {0}. Remove this connection and add it again from the directory to take the change, or keep it as it is if you set it up by hand.", [parts.join(", ")]);
 }
 
 const PROVENANCE_VARIANTS: Record<string, BadgeVariant> = {
@@ -231,25 +235,25 @@ function provenanceVariant(provenance: string): BadgeVariant {
 
 async function fetchServers(): Promise<ListResponse | null> {
   return getGatedJson<ListResponse>("/api/remote-mcp-servers", {
-    label: "Connections",
+    label: tr("Connections"),
     statusText: {
-      503: "Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL).",
+      503: tr("Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL)."),
     },
   });
 }
 
 // granteeLabel renders the everyone wildcard readably.
 function granteeLabel(g: string): string {
-  return g === "*" ? "Everyone on this box" : g;
+  return g === "*" ? tr("Everyone on this box") : g;
 }
 
 function errMessage(err: unknown): string {
-  return errorMessage(err, "Something went wrong.");
+  return errorMessage(err, tr("Something went wrong."));
 }
 
 // seatLabel renders a seat's account label; the unlabeled seat is "primary".
 function seatLabel(s: { account?: string }): string {
-  return s.account || "primary";
+  return s.account || tr("primary");
 }
 
 // groupSeats buckets the caller's own rows by connection name, first
@@ -294,14 +298,14 @@ function readCallbackBanner(): { notice: string | null; error: string | null } {
   if (params.get("connected")) {
     const n = params.get("connected");
     return {
-      notice: n && n !== "1" ? `Connected ${n}.` : "Connected.",
+      notice: n && n !== "1" ? tr("Connected {0}.", [n]) : "Connected.",
       error: null,
     };
   }
   if (params.get("error")) {
     return {
       notice: null,
-      error: `Authorization failed: ${params.get("error")}`,
+      error: tr("Authorization failed: {0}", [params.get("error")]),
     };
   }
   return { notice: null, error: null };
@@ -310,7 +314,15 @@ function readCallbackBanner(): { notice: string | null; error: string | null } {
 async function fetchCatalog(): Promise<CatalogResponse | null> {
   const res = await fetch("/api/mcp-catalog", { cache: "no-store" });
   if (!res.ok) return null; // the directory is optional decoration — never block the page
-  return (await res.json()) as CatalogResponse;
+  const catalog = (await res.json()) as CatalogResponse;
+  return {
+    ...catalog,
+    bundled: (catalog.bundled ?? []).map(localizeConnector),
+    third_party: (catalog.third_party ?? []).map((entry) => ({
+      ...localizeConnector(entry),
+      ...(entry.url_variants ? { url_variants: entry.url_variants.map((variant) => ({ ...variant, label: bundleText(variant.label) })) } : {}),
+    })),
+  };
 }
 
 // ToggleForMe — the design's .conn-toggle: a small switch plus a clickable
@@ -383,7 +395,7 @@ function DataSourceChips({ sources }: { sources?: string[] }) {
       data-testid="data-sources"
     >
       <span className="text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-        Reads
+        {tr("Reads")}
       </span>
       {sources.map((s) => (
         <code
@@ -418,15 +430,15 @@ function NeedsSetupCard({ entry, isAdmin, idPrefix = "" }: { entry: CatalogBundl
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
         </span>
-        <ConnBadge variant="warn">Needs setup</ConnBadge>
+        <ConnBadge variant="warn">{tr("Needs setup")}</ConnBadge>
       </div>
       {entry.description ? (
         <ClampText text={entry.description} className="text-[var(--color-text-muted)]!" />
       ) : null}
       <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-warn-border)] bg-[var(--color-panel-warn-bg)] px-[0.75rem] py-[0.5rem] text-[0.75rem] leading-[1.5] text-[var(--color-text-secondary)]">
         {isAdmin
-          ? "Needs setup before it can be used. Its credentials are added on the server by whoever deploys this workspace."
-          : "An admin needs to set this up."}
+          ? tr("Needs setup before it can be used. Its credentials are added on the server by whoever deploys this workspace.")
+          : tr("An admin needs to set this up.")}
       </div>
     </div>
   );
@@ -465,29 +477,29 @@ function BundledCard({
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
         </span>
-        {entry.beta ? <ConnBadge>Beta</ConnBadge> : null}
+        {entry.beta ? <ConnBadge>{tr("Beta")}</ConnBadge> : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
       <DataSourceChips sources={entry.data_sources} />
       <div className="mt-auto flex flex-wrap items-center gap-[0.8rem]">
         <ToggleForMe
           on={on}
-          onLabel="On for me"
-          offLabel="Off for me"
-          ariaLabel={`Enable ${label} for me`}
+          onLabel={tr("On for me")}
+          offLabel={tr("Off for me")}
+          ariaLabel={tr("Enable {0} for me", [label])}
           onToggle={onToggle}
           disabled={busy}
-          title="Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection."
+          title={tr("Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection.")}
         />
         {on ? (
           <ToggleForMe
             on={autoOn}
-            onLabel="On for new chats"
-            offLabel="Off for new chats"
-            ariaLabel={`Start ${label} enabled in new chats`}
+            onLabel={tr("On for new chats")}
+            offLabel={tr("Off for new chats")}
+            ariaLabel={tr("Start {0} enabled in new chats", [label])}
             onToggle={onToggleAuto}
             disabled={busy}
-            title="On seeds this connector enabled in every new conversation; off means you flip it on per conversation from the Tools picker."
+            title={tr("On seeds this connector enabled in every new conversation; off means you flip it on per conversation from the Tools picker.")}
           />
         ) : null}
         {on && (entry.accounts?.length ?? 0) > 0 ? (
@@ -495,7 +507,7 @@ function BundledCard({
             htmlFor={`${idPrefix}bundledAccount-${entry.name}`}
             className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]"
           >
-            Account
+            {tr("Account")}
             <span className="select-wrap inline-block">
               <select
                 id={`${idPrefix}bundledAccount-${entry.name}`}
@@ -503,7 +515,7 @@ function BundledCard({
                 value={pref?.default_account ?? ""}
                 onChange={(e) => onPickAccount(e.target.value)}
                 disabled={busy}
-                aria-label={`${entry.name} credential account`}
+                aria-label={tr("{0} credential account", [entry.name])}
               >
                 <option value="">{appName}</option>
                 {(entry.accounts ?? []).map((a) => (
@@ -522,7 +534,7 @@ function BundledCard({
             disabled={busy}
             className="border-none bg-transparent p-0 text-[0.72rem] text-[var(--color-accent)] underline underline-offset-2 disabled:opacity-50"
           >
-            Reset
+            {tr("Reset")}
           </button>
         ) : null}
       </div>
@@ -599,7 +611,7 @@ function DirectoryCard({
   const isWorkIQ = entry.name.startsWith("microsoft-workiq-");
   const ms365NeedsEntraSetup = isMS365BuiltIn && !ms365Config?.configured;
   const hint = ms365NeedsEntraSetup
-    ? "requires Entra app setup"
+    ? tr("requires Entra app setup")
     : isMS365BuiltIn && ms365Config?.configured
       ? null
       : authHint(entry);
@@ -694,19 +706,19 @@ function DirectoryCard({
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {entry.display_name}
         </span>
-        {popular ? <ConnBadge>Popular</ConnBadge> : null}
+        {popular ? <ConnBadge>{tr("Popular")}</ConnBadge> : null}
         {isMS365BuiltIn ? (
-          <ConnBadge variant="success">Recommended · Standard M365</ConnBadge>
+          <ConnBadge variant="success">{tr("Recommended · Standard M365")}</ConnBadge>
         ) : null}
         {isWorkIQ ? (
-          <ConnBadge variant="warn">Requires Copilot ($30/mo)</ConnBadge>
+          <ConnBadge variant="warn">{tr("Requires Copilot ($30/mo)")}</ConnBadge>
         ) : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
       {entry.setup_hint ? (
         <p className="m-0 text-[0.72rem] leading-[1.5] text-[var(--color-text-secondary)]">
           {isMS365BuiltIn && ms365Config?.configured
-            ? "Ready for your workspace — click Add to sign in with your Microsoft 365 account (Outlook, Teams, Calendar, OneDrive, SharePoint & To Do)."
+            ? tr("Ready for your workspace — click Add to sign in with your Microsoft 365 account (Outlook, Teams, Calendar, OneDrive, SharePoint & To Do).")
             : entry.setup_hint}
           {guide ? (
             <>
@@ -717,7 +729,7 @@ function DirectoryCard({
                 rel="noreferrer"
                 className={linkClass}
               >
-                Setup guide
+                {tr("Setup guide")}
               </a>
             </>
           ) : null}
@@ -736,7 +748,7 @@ function DirectoryCard({
                 rel="noreferrer"
                 className={linkClass}
               >
-                docs
+                {tr("docs")}
               </a>
             </>
           ) : null}
@@ -749,7 +761,7 @@ function DirectoryCard({
                 rel="noreferrer"
                 className={linkClass}
               >
-                source
+                {tr("source")}
               </a>
             </>
           ) : null}
@@ -762,7 +774,7 @@ function DirectoryCard({
                 rel="noreferrer"
                 className={linkClass}
               >
-                setup guide
+                {tr("setup guide")}
               </a>
             </>
           ) : null}
@@ -780,7 +792,7 @@ function DirectoryCard({
                 disabled={busy}
                 className={btnClass({ sm: true, reveal: true })}
               >
-                Entra app
+                {tr("Entra app")}
               </button>
             ) : null}
             {added ? (
@@ -795,7 +807,7 @@ function DirectoryCard({
                 disabled={busy}
                 className={dirAddButtonClass(false)}
               >
-                {formOpen ? "Cancel" : "Add another account"}
+                {formOpen ? tr("Cancel") : tr("Add another account")}
               </button>
             ) : null}
             <button
@@ -817,14 +829,14 @@ function DirectoryCard({
               className={dirAddButtonClass(added)}
             >
               {added
-                ? "Added"
+                ? tr("Added")
                 : ms365NeedsEntraSetup
-                  ? "Set up…"
+                  ? tr("Set up…")
                   : needsForm
                     ? formOpen
-                      ? "Cancel"
-                      : "Set up…"
-                    : "Add"}
+                      ? tr("Cancel")
+                      : tr("Set up…")
+                    : tr("Add")}
             </button>
           </div>
         ) : null}
@@ -840,18 +852,17 @@ function DirectoryCard({
               htmlFor={`dirFormAccount-${entry.name}`}
               className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
             >
-              <span className="font-medium">Account label</span>
+              <span className="font-medium">{tr("Account label")}</span>
               <input
                 id={`dirFormAccount-${entry.name}`}
                 className={SETTINGS_INPUT}
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
-                placeholder="work, personal…"
+                placeholder={tr("work, personal…")}
                 data-testid={`dir-form-account-${entry.name}`}
               />
               <span className="text-[0.68rem] text-[var(--color-text-muted)]">
-                Tells the seats apart in the Tools picker. Letters, digits and
-                underscores.
+                {tr("Tells the seats apart in the Tools picker. Letters, digits and underscores.")}
               </span>
             </label>
           ) : null}
@@ -860,7 +871,7 @@ function DirectoryCard({
               htmlFor={`dirFormEndpoint-${entry.name}`}
               className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
             >
-              <span className="font-medium">Endpoint</span>
+              <span className="font-medium">{tr("Endpoint")}</span>
               <select
                 id={`dirFormEndpoint-${entry.name}`}
                 className={SETTINGS_INPUT}
@@ -868,7 +879,7 @@ function DirectoryCard({
                 onChange={(e) => setEndpointURL(e.target.value)}
                 data-testid={`dir-form-endpoint-${entry.name}`}
               >
-                <option value={entry.url}>Default ({hostOf(entry.url)})</option>
+                <option value={entry.url}>{tr("Default (")}{hostOf(entry.url)})</option>
                 {variants.map((v) => (
                   <option key={v.id} value={v.url}>
                     {v.label} — {hostOf(v.url)}
@@ -883,7 +894,7 @@ function DirectoryCard({
               htmlFor={`dirFormField-${entry.name}-${ph}`}
               className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
             >
-              <span className="font-medium">Your {placeholderLabel(ph)}</span>
+              <span className="font-medium">{placeholderLabel(ph)}</span>
               <input
                 id={`dirFormField-${entry.name}-${ph}`}
                 className={SETTINGS_INPUT}
@@ -905,7 +916,7 @@ function DirectoryCard({
               htmlFor={`dirFormApiKey-${entry.name}`}
               className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
             >
-              <span className="font-medium">API key</span>
+              <span className="font-medium">{tr("API key")}</span>
               <input
                 id={`dirFormApiKey-${entry.name}`}
                 ref={apiKeyRef}
@@ -914,7 +925,7 @@ function DirectoryCard({
                 autoComplete="off"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="paste your key (stored encrypted, never shown again)"
+                placeholder={tr("paste your key (stored encrypted, never shown again)")}
               />
               {keySentAsNote(entry.api_key_header, entry.api_key_prefix) ? (
                 <span
@@ -934,7 +945,7 @@ function DirectoryCard({
                 // field in the dialog stretches past the container.
                 <div className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
                   <span className="font-medium">
-                    Authorization callback URL for your app registration
+                    {tr("Authorization callback URL for your app registration")}
                   </span>
                   <div className="flex min-w-0 items-center gap-2">
                     <code className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]">
@@ -945,7 +956,7 @@ function DirectoryCard({
                       className={btnClass({ reveal: true })}
                       onClick={() => void copyText(redirectUri)}
                     >
-                      Copy
+                      {tr("Copy")}
                     </button>
                   </div>
                 </div>
@@ -954,13 +965,13 @@ function DirectoryCard({
                 htmlFor={`dirFormClientId-${entry.name}`}
                 className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
               >
-                <span className="font-medium">OAuth client ID</span>
+                <span className="font-medium">{tr("OAuth client ID")}</span>
                 <input
                   id={`dirFormClientId-${entry.name}`}
                   className={SETTINGS_INPUT}
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
-                  placeholder="from your app registration — see the setup guide"
+                  placeholder={tr("from your app registration — see the setup guide")}
                   data-testid={`dir-form-client-id-${entry.name}`}
                 />
               </label>
@@ -970,8 +981,8 @@ function DirectoryCard({
               >
                 <span className="font-medium">
                   {secretRequired
-                    ? "OAuth client secret"
-                    : "OAuth client secret (if your client has one)"}
+                    ? tr("OAuth client secret")
+                    : tr("OAuth client secret (if your client has one)")}
                 </span>
                 <input
                   id={`dirFormClientSecret-${entry.name}`}
@@ -981,13 +992,12 @@ function DirectoryCard({
                   required={secretRequired}
                   value={clientSecret}
                   onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder="stored encrypted, never shown again"
+                  placeholder={tr("stored encrypted, never shown again")}
                   data-testid={`dir-form-client-secret-${entry.name}`}
                 />
                 {secretRequired ? (
                   <span className="text-[0.68rem] text-[var(--color-text-muted)]">
-                    Required: this vendor rejects the token exchange without
-                    the secret.
+                    {tr("Required: this vendor rejects the token exchange without the secret.")}
                   </span>
                 ) : null}
               </label>
@@ -1000,8 +1010,7 @@ function DirectoryCard({
                 onClick={() => setFormOpen(false)}
                 className={btnClass({ reveal: true })}
               >
-                Cancel
-              </button>
+                {tr("Cancel")}</button>
             ) : null}
             <button
               type="button"
@@ -1010,7 +1019,7 @@ function DirectoryCard({
               disabled={busy || !ready}
               className={dirAddButtonClass(false)}
             >
-              Add
+              {tr("Add")}
             </button>
           </div>
         </FormShell>
@@ -1058,13 +1067,13 @@ function FormShell({
   const guide = setupLink(entry);
   return (
     <DialogShell
-      label={`Set up ${entry.display_name}`}
-      scrimLabel={`Close the ${entry.display_name} setup dialog`}
+      label={tr("Set up {0}", [entry.display_name])}
+      scrimLabel={tr("Close the {0} setup dialog", [entry.display_name])}
       onDismiss={onClose}
       className="max-w-md p-5"
     >
       <h3 className="mb-2 text-[0.9375rem] font-semibold">
-        Set up {entry.display_name}
+        {rich("Set up {0}", entry.display_name)}
       </h3>
       {entry.setup_hint ? (
         <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
@@ -1078,7 +1087,7 @@ function FormShell({
                 rel="noreferrer"
                 className="underline underline-offset-2"
               >
-                Setup guide
+                {tr("Setup guide")}
               </a>
             </>
           ) : null}
@@ -1119,8 +1128,8 @@ function MS365SetupDialog({
 
   const dialog = (
     <DialogShell
-      label="Set up Microsoft 365"
-      scrimLabel="Close the Microsoft 365 setup dialog"
+      label={tr("Set up Microsoft 365")}
+      scrimLabel={tr("Close the Microsoft 365 setup dialog")}
       layer="rail"
       sheetOnPhone
       onDismiss={onClose}
@@ -1130,16 +1139,15 @@ function MS365SetupDialog({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="m-0 text-[1rem] font-semibold">
-              Microsoft 365 (Built-in Graph Connector)
+              {tr("Microsoft 365 (Built-in Graph Connector)")}
             </h3>
-            <ConnBadge variant="success">Recommended</ConnBadge>
+            <ConnBadge variant="success">{tr("Recommended")}</ConnBadge>
           </div>
           <p className="mb-0 mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
-            Connects Outlook Mail &amp; Attachments, Microsoft Teams, Calendar,
-            OneDrive, SharePoint, To Do &amp; Contacts in one sign-in.
+            {tr("Connects Outlook Mail & Attachments, Microsoft Teams, Calendar, OneDrive, SharePoint, To Do & Contacts in one sign-in.")}
           </p>
         </div>
-        <CloseButton label="Close" onClick={onClose} />
+        <CloseButton label={tr("Close")} onClick={onClose} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 max-sm:px-4">
@@ -1150,34 +1158,24 @@ function MS365SetupDialog({
         >
           <div>
             <strong className="text-[var(--color-text-primary)]">
-              Why use this connector instead of Microsoft Work IQ?
+              {tr("Why use this connector instead of Microsoft Work IQ?")}
             </strong>
           </div>
           <div className="grid gap-1.5 text-[var(--color-text-secondary)]">
             <div>
-              •{" "}
-              <strong className="text-[var(--color-text-primary)]">
-                Microsoft 365 (this connector)
-              </strong>
-              : Works with{" "}
-              <strong className="text-[var(--color-text-primary)]">
-                any standard Microsoft 365 / Outlook business or school account
-              </strong>{" "}
-              at no extra license cost. One sign-in covers Mail (with attachments),
-              Teams, Calendar, OneDrive, SharePoint, To Do &amp; Contacts.
-            </div>
+        {rich("• {0}: Works with {1} at no extra license cost. One sign-in covers Mail (with attachments), Teams, Calendar, OneDrive, SharePoint, To Do & Contacts.", <strong className="text-[var(--color-text-primary)]">
+                {tr("Microsoft 365 (this connector)")}
+              </strong>, <strong className="text-[var(--color-text-primary)]">
+                {tr("any standard Microsoft 365 / Outlook business or school account")}
+              </strong>)}
+      </div>
             <div>
-              •{" "}
-              <strong className="text-[var(--color-text-primary)]">
-                Microsoft Work IQ (Copilot Only)
-              </strong>
-              : Microsoft’s Agent 365 preview servers — requires a paid{" "}
-              <strong className="text-[var(--color-text-primary)]">
-                $30/user/month Microsoft 365 Copilot
-              </strong>{" "}
-              add-on license, Frontier preview enrollment, and 4 separate
-              connectors.
-            </div>
+        {rich("• {0}: Microsoft’s Agent 365 preview servers — requires a paid {1} add-on license, Frontier preview enrollment, and 4 separate connectors.", <strong className="text-[var(--color-text-primary)]">
+                {tr("Microsoft Work IQ (Copilot Only)")}
+              </strong>, <strong className="text-[var(--color-text-primary)]">
+                {tr("$30/user/month Microsoft 365 Copilot")}
+              </strong>)}
+      </div>
           </div>
         </div>
 
@@ -1185,23 +1183,18 @@ function MS365SetupDialog({
         <div className="grid min-w-0 gap-3 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
           <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
             <div className="mb-1 font-semibold text-[var(--color-text-primary)]">
-              Step 1 — Register an app in Microsoft Entra ID
+              {tr("Step 1 — Register an app in Microsoft Entra ID")}
             </div>
             <p className="m-0 mb-2 text-[0.74rem]">
-              Open{" "}
-              <a
+        {rich("Open {0} and click {1}. Under {2}, select {3} and paste this exact callback URL:", <a
                 href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
                 target="_blank"
                 rel="noreferrer"
                 className="text-[var(--color-link)] underline underline-offset-2"
               >
-                Microsoft Entra App Registrations
-              </a>{" "}
-              and click <strong>New registration</strong>. Under{" "}
-              <strong>Redirect URI</strong>, select{" "}
-              <strong>Public client/native (mobile &amp; desktop)</strong> and
-              paste this exact callback URL:
-            </p>
+                {tr("Microsoft Entra App Registrations")}
+              </a>, <strong>{tr("New registration")}</strong>, <strong>{tr("Redirect URI")}</strong>, <strong>{tr("Public client/native (mobile & desktop)")}</strong>)}
+      </p>
             {effectiveRedirectUri ? (
               <div className="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
                 <code
@@ -1220,7 +1213,7 @@ function MS365SetupDialog({
                     setTimeout(() => setCopiedRedirect(false), 2000);
                   }}
                 >
-                  {copiedRedirect ? "Copied" : "Copy"}
+                  {copiedRedirect ? tr("Copied") : tr("Copy")}
                 </button>
               </div>
             ) : null}
@@ -1229,7 +1222,7 @@ function MS365SetupDialog({
           <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
               <span className="font-semibold text-[var(--color-text-primary)]">
-                Step 2 — Add Microsoft Graph Delegated Permissions
+                {tr("Step 2 — Add Microsoft Graph Delegated Permissions")}
               </span>
               <button
                 type="button"
@@ -1241,17 +1234,12 @@ function MS365SetupDialog({
                   setTimeout(() => setCopiedPerms(false), 2000);
                 }}
               >
-                {copiedPerms ? "Copied" : "Copy permissions"}
+                {copiedPerms ? tr("Copied") : tr("Copy permissions")}
               </button>
             </div>
             <p className="m-0 mb-2 text-[0.74rem]">
-              In <strong>Authentication</strong>, set{" "}
-              <strong>Allow public client flows</strong> to <strong>Yes</strong>{" "}
-              (no client secret is needed). Then in{" "}
-              <strong>API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
-              , enable these permissions and click{" "}
-              <strong>Grant admin consent</strong>:
-            </p>
+        {rich("In {0}, set {1} to {2} (no client secret is needed). Then in {3}, enable these permissions and click {4}:", <strong>{tr("Authentication")}</strong>, <strong>{tr("Allow public client flows")}</strong>, <strong>{tr("Yes")}</strong>, <strong>{tr("API permissions → Add a permission → Microsoft Graph → Delegated permissions")}</strong>, <strong>{tr("Grant admin consent")}</strong>)}
+      </p>
             <div className="flex flex-wrap gap-1">
               {MS365_GRAPH_DELEGATED_PERMISSIONS.map((perm) => (
                 <CodeChip key={perm}>{perm}</CodeChip>
@@ -1261,32 +1249,27 @@ function MS365SetupDialog({
 
           <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3">
             <div className="mb-2 font-semibold text-[var(--color-text-primary)]">
-              Step 3 — Save your Entra App IDs for this workspace
+              {tr("Step 3 — Save your Entra App IDs for this workspace")}
             </div>
             {isEnvLocked ? (
               <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
-                Configured via server environment (<CodeChip>MS365_MCP_CLIENT_ID</CodeChip>).
+                {tr("Configured via server environment (")}<CodeChip>MS365_MCP_CLIENT_ID</CodeChip>).
               </p>
             ) : !canEdit ? (
               <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-warning)]">
-                Ask a workspace administrator to enter your organization’s Entra
-                Application (client) ID and Directory (tenant) ID here once. Once
-                saved, everyone in this workspace can connect Microsoft 365 in one
-                click.
+                {tr("Ask a workspace administrator to enter your organization’s Entra Application (client) ID and Directory (tenant) ID here once. Once saved, everyone in this workspace can connect Microsoft 365 in one click.")}
               </p>
             ) : (
               <p className="m-0 mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
-                From your app’s <strong>Overview</strong> page in Microsoft Entra,
-                paste the IDs below. Once saved, everyone on this workspace can
-                connect Microsoft 365 in one click.
-              </p>
+        {rich("From your app’s {0} page in Microsoft Entra, paste the IDs below. Once saved, everyone on this workspace can connect Microsoft 365 in one click.", <strong>{tr("Overview")}</strong>)}
+      </p>
             )}
             <div className="grid min-w-0 gap-2.5">
               <label
                 htmlFor="ms365ClientIdInput"
                 className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
               >
-                <span className="font-medium">Application (client) ID</span>
+                <span className="font-medium">{tr("Application (client) ID")}</span>
                 <input
                   id="ms365ClientIdInput"
                   data-testid="ms365-client-id-input"
@@ -1294,14 +1277,14 @@ function MS365SetupDialog({
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
                   disabled={!canEdit || busy}
-                  placeholder="e.g. 68dad9d6-e1aa-4195-9bd5-2e94a0e4a073"
+                  placeholder={tr("e.g. 68dad9d6-e1aa-4195-9bd5-2e94a0e4a073")}
                 />
               </label>
               <label
                 htmlFor="ms365TenantIdInput"
                 className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
               >
-                <span className="font-medium">Directory (tenant) ID</span>
+                <span className="font-medium">{tr("Directory (tenant) ID")}</span>
                 <input
                   id="ms365TenantIdInput"
                   data-testid="ms365-tenant-id-input"
@@ -1309,13 +1292,11 @@ function MS365SetupDialog({
                   value={tenantId}
                   onChange={(e) => setTenantId(e.target.value)}
                   disabled={!canEdit || busy}
-                  placeholder="e.g. 5db5070c-2c68-449d-868f-2b0d3407f6d2 (or organizations / common)"
+                  placeholder={tr("e.g. 5db5070c-2c68-449d-868f-2b0d3407f6d2 (or organizations / common)")}
                 />
                 <span className="text-[0.68rem] text-[var(--color-text-muted)]">
-                  Use your Entra tenant UUID for single-tenant apps, or{" "}
-                  <code>organizations</code> / <code>common</code> for multi-tenant
-                  apps.
-                </span>
+        {rich("Use your Entra tenant UUID for single-tenant apps, or {0} / {1} for multi-tenant apps.", <code>organizations</code>, <code>common</code>)}
+      </span>
               </label>
             </div>
           </div>
@@ -1326,8 +1307,8 @@ function MS365SetupDialog({
         <div>
           {config?.source === "db" && canEdit ? (
             <InlineConfirmButton
-              label="Clear saved Entra app"
-              confirmLabel="Confirm clear"
+              label={tr("Clear saved Entra app")}
+              confirmLabel={tr("Confirm clear")}
               disabled={busy}
               onConfirm={() => void onDelete()}
               testId="ms365-delete-config-btn"
@@ -1340,7 +1321,7 @@ function MS365SetupDialog({
             onClick={onClose}
             className={btnClass({ reveal: true })}
           >
-            {canEdit ? "Cancel" : "Close"}
+            {canEdit ? tr("Cancel") : tr("Close")}
           </button>
           {canEdit ? (
             <button
@@ -1352,7 +1333,7 @@ function MS365SetupDialog({
               }
               className={btnClass({ variant: "primary" })}
             >
-              {connectAfterSave ? "Save & Add Microsoft 365" : "Save"}
+              {connectAfterSave ? tr("Save & Add Microsoft 365") : tr("Save")}
             </button>
           ) : null}
         </div>
@@ -1591,16 +1572,16 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error(await responseErrorText(res, "Add failed"));
+          throw new Error(await responseErrorText(res, tr("Add failed")));
         }
         const data = (await res.json()) as { id?: string; name?: string };
         setName("");
         setUrl("");
         setAccountLabel("");
         setAddServerOpen(false);
-        setNotice("Connection added. Click Sign in to finish.");
+        setNotice(tr("Connection added. Click Sign in to finish."));
         if (data.id)
-          setConnectPromptFor({ id: data.id, name: data.name || "the server" });
+          setConnectPromptFor({ id: data.id, name: data.name || tr("the server") });
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -1621,18 +1602,18 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok) {
           throw new Error(
-            await responseErrorText(res, "Authorize failed"),
+            await responseErrorText(res, tr("Authorize failed")),
           );
         }
         const data = (await res.json()) as { redirect_url?: string };
         if (!data.redirect_url)
-          throw new Error("No authorization URL returned.");
+          throw new Error(tr("No authorization URL returned."));
         // The URL comes from the remote server's OAuth discovery document —
         // third-party data. Navigating this tab (or a tab whose window.opener
         // is us) to a javascript: URL would run it with scripted access to
         // the app, so only http(s) may pass.
         if (!/^https?:\/\//i.test(data.redirect_url)) {
-          throw new Error("Authorization URL has an unsupported scheme.");
+          throw new Error(tr("Authorization URL has an unsupported scheme."));
         }
         // The authorization server redirects back to /api/oauth/mcp/callback,
         // which lands on this page with ?connected / ?error — in the new tab.
@@ -1641,7 +1622,7 @@ function ConnectionsPageInner() {
           authTab.location.href = data.redirect_url;
           awaitingAuthReturn.current = true;
           setBusy(false);
-          setNotice("Finish signing in — this page updates when you return.");
+          setNotice(tr("Finish signing in — this page updates when you return."));
         } else {
           window.location.href = data.redirect_url;
         }
@@ -1668,7 +1649,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Update failed"));
+          throw new Error(await responseErrorText(res, tr("Update failed")));
         }
         const data =
           res.status === 204
@@ -1677,7 +1658,7 @@ function ConnectionsPageInner() {
         setKeyOpenFor(null);
         setKeyValue("");
         setNotice(
-          `API key updated${toolCountSuffix(data?.tool_count)}${keyVerifiedSuffix(data?.key_verified)}.`,
+          tr("API key updated{0}{1}.", [toolCountSuffix(data?.tool_count), keyVerifiedSuffix(data?.key_verified)]),
         );
         refresh();
       })
@@ -1697,10 +1678,10 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            await responseErrorText(res, "Set default failed"),
+            await responseErrorText(res, tr("Set default failed")),
           );
         }
-        setNotice("Default account updated.");
+        setNotice(tr("Default account updated."));
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -1719,7 +1700,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Rename failed"));
+          throw new Error(await responseErrorText(res, tr("Rename failed")));
         }
         setRenameOpenFor(null);
         setRenameValue("");
@@ -1767,7 +1748,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error(await responseErrorText(res, "Add failed"));
+          throw new Error(await responseErrorText(res, tr("Add failed")));
         }
         const data = (await res.json()) as {
           id?: string;
@@ -1780,11 +1761,11 @@ function ConnectionsPageInner() {
         setAddSeatKey("");
         setAddSeatURL("");
         if (authKind === "oauth") {
-          setNotice(`${shown} added. Click Sign in to finish.`);
+          setNotice(tr("{0} added. Click Sign in to finish.", [shown]));
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
         } else {
           setNotice(
-            `${shown} connected${toolCountSuffix(data.tool_count)}${keyVerifiedSuffix(data.key_verified)}.`,
+            tr("{0} connected{1}{2}.", [shown, toolCountSuffix(data.tool_count), keyVerifiedSuffix(data.key_verified)]),
           );
         }
         refresh();
@@ -1855,7 +1836,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error(await responseErrorText(res, "Add failed"));
+          throw new Error(await responseErrorText(res, tr("Add failed")));
         }
         const data = (await res.json()) as {
           id?: string;
@@ -1867,10 +1848,10 @@ function ConnectionsPageInner() {
           : entry.display_name;
         if (entry.auth === "open" || entry.auth === "api_key") {
           setNotice(
-            `${shown} connected${toolCountSuffix(data.tool_count)}${keyVerifiedSuffix(data.key_verified)}.`,
+            tr("{0} connected{1}{2}.", [shown, toolCountSuffix(data.tool_count), keyVerifiedSuffix(data.key_verified)]),
           );
         } else {
-          setNotice(`${shown} added. Click Sign in to finish.`);
+          setNotice(tr("{0} added. Click Sign in to finish.", [shown]));
           // OAuth adds land in login_required — offer the sign-in right here
           // instead of making the user find the row in "Your connections".
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
@@ -1898,7 +1879,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Save failed"));
+          throw new Error(await responseErrorText(res, tr("Save failed")));
         }
         setPrefs((cur) => [
           ...cur.filter(
@@ -1921,7 +1902,7 @@ function ConnectionsPageInner() {
     )
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Reset failed"));
+          throw new Error(await responseErrorText(res, tr("Reset failed")));
         }
         setPrefs((cur) =>
           cur.filter((p) => !(p.kind === kind && p.connector_id === id)),
@@ -1946,7 +1927,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(await responseErrorText(res, "Share failed"));
+          throw new Error(await responseErrorText(res, tr("Share failed")));
         }
         setShareGrantee("");
         refresh();
@@ -1965,7 +1946,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            await responseErrorText(res, "Unshare failed"),
+            await responseErrorText(res, tr("Unshare failed")),
           );
         }
         refresh();
@@ -1983,11 +1964,11 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            await responseErrorText(res, "Sign out failed"),
+            await responseErrorText(res, tr("Sign out failed")),
           );
         }
         setNotice(
-          "Signed out. The connection is kept; click Sign in to use it again.",
+          tr("Signed out. The connection is kept; click Sign in to use it again."),
         );
         refresh();
       })
@@ -2006,7 +1987,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            await responseErrorText(res, "Disconnect failed"),
+            await responseErrorText(res, tr("Disconnect failed")),
           );
         }
         setNotice("Disconnected.");
@@ -2029,7 +2010,7 @@ function ConnectionsPageInner() {
             <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
               {b.display_name || b.name}
             </span>
-            <ConnBadge>Always on</ConnBadge>
+            <ConnBadge>{tr("Always on")}</ConnBadge>
           </div>
           {/* .conn-desc.muted — the important flag is needed
               because ClampText's own text color would otherwise
@@ -2037,7 +2018,7 @@ function ConnectionsPageInner() {
           <ClampText
             text={
               b.description ||
-              "Enabled by your operator in every conversation."
+              tr("Enabled by your operator in every conversation.")
             }
             className="text-[var(--color-text-muted)]!"
           />
@@ -2177,7 +2158,7 @@ function ConnectionsPageInner() {
         body: JSON.stringify({ client_id: clientId, tenant_id: tenantId }),
       });
       if (!res.ok) {
-        throw new Error(await responseErrorText(res, "Failed to save Microsoft 365 configuration"));
+        throw new Error(await responseErrorText(res, tr("Failed to save Microsoft 365 configuration")));
       }
       const saved = (await res.json()) as MS365Config;
       const updatedCatalog = await fetchCatalog();
@@ -2191,7 +2172,7 @@ function ConnectionsPageInner() {
           { url: saved.mcp_url },
         );
       } else {
-        setNotice("Microsoft 365 Entra app saved for this workspace.");
+        setNotice(tr("Microsoft 365 Entra app saved for this workspace."));
       }
     } catch (err: unknown) {
       setError(errMessage(err));
@@ -2207,12 +2188,12 @@ function ConnectionsPageInner() {
     try {
       const res = await fetch("/api/mcp/ms365-config", { method: "DELETE" });
       if (!res.ok) {
-        throw new Error(await responseErrorText(res, "Failed to clear Microsoft 365 configuration"));
+        throw new Error(await responseErrorText(res, tr("Failed to clear Microsoft 365 configuration")));
       }
       const updatedCatalog = await fetchCatalog();
       if (updatedCatalog) setCatalog(updatedCatalog);
       setMs365SetupModal(null);
-      setNotice("Cleared saved Microsoft 365 Entra app configuration.");
+      setNotice(tr("Cleared saved Microsoft 365 Entra app configuration."));
     } catch (err: unknown) {
       setError(errMessage(err));
     } finally {
@@ -2266,18 +2247,18 @@ function ConnectionsPageInner() {
 
   return (
     <SetSection
-      title="Connections"
-      intro="Choose the apps and data your chats and tasks can use. You sign in with your own account; your credentials are encrypted and never shared."
+      title={tr("Connections")}
+      intro={tr("Choose the apps and data your chats and tasks can use. You sign in with your own account; your credentials are encrypted and never shared.")}
     >
       {/* ── Group 1 — Your connections ── */}
       <ConnGroup>
-        <ConnGroupHead title="Your connections">
-          Everything your chats can use today.
+        <ConnGroupHead title={tr("Your connections")}>
+          {tr("Everything your chats can use today.")}
         </ConnGroupHead>
 
         {catalog && catalog.bundled.length > 0 ? (
           <ConnPanel>
-            <ConnPanelHead title="Included with your workspace">
+            <ConnPanelHead title={tr("Included with your workspace")}>
               {catalog.bundled.length > BUNDLED_PREVIEW_COUNT ? (
                 <button
                   type="button"
@@ -2286,12 +2267,12 @@ function ConnectionsPageInner() {
                   className={btnClass({ sm: true, reveal: true })}
                 >
                   <Icon name="maximize" className="size-[0.85rem]" />
-                  Show all ({catalog.bundled.length})
+                  {tr("Show all (")}{catalog.bundled.length})
                 </button>
               ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
-              Choose which ones your chats use.
+              {tr("Choose which ones your chats use.")}
             </ConnPanelSub>
             <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
               {catalog.bundled.slice(0, BUNDLED_PREVIEW_COUNT).map((entry) => renderBundledCard(entry))}
@@ -2300,7 +2281,7 @@ function ConnectionsPageInner() {
         ) : null}
 
         <ConnPanel>
-          <ConnPanelHead title="Added by you">
+          <ConnPanelHead title={tr("Added by you")}>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -2312,23 +2293,22 @@ function ConnectionsPageInner() {
                 }
                 className={btnClass({ sm: true, variant: "primary" })}
               >
-                Build a connection in chat
+                {tr("Build a connection in chat")}
               </button>
               <RevealButton
                 open={addServerOpen}
-                closedLabel="Add by URL"
+                closedLabel={tr("Add by URL")}
                 onClick={() => setAddServerOpen((o) => !o)}
               />
             </div>
           </ConnPanelHead>
           <ConnPanelSub>
-            Connections you added from the directory, by URL, or with the
-            connection assistant.
+            {tr("Connections you added from the directory, by URL, or with the connection assistant.")}
           </ConnPanelSub>
           {addServerOpen ? (
             <form onSubmit={addServer}>
               <ConnForm>
-                <ConnField label="Name">
+                <ConnField label={tr("Name")}>
                   <input
                     id="remoteServerName"
                     className={SETTINGS_INPUT}
@@ -2338,7 +2318,7 @@ function ConnectionsPageInner() {
                     required
                   />
                 </ConnField>
-                <ConnField label="Server URL" grow>
+                <ConnField label={tr("Server URL")} grow>
                   <input
                     id="remoteServerUrl"
                     className={SETTINGS_INPUT}
@@ -2349,14 +2329,14 @@ function ConnectionsPageInner() {
                     required
                   />
                 </ConnField>
-                <ConnField label="Account label (optional)">
+                <ConnField label={tr("Account label (optional)")}>
                   <input
                     id="remoteServerAccountLabel"
                     className={SETTINGS_INPUT}
                     value={accountLabel}
                     onChange={(e) => setAccountLabel(e.target.value)}
-                    placeholder="work"
-                    aria-label="Account label (optional)"
+                    placeholder={tr("work")}
+                    aria-label={tr("Account label (optional)")}
                   />
                 </ConnField>
                 <button
@@ -2364,14 +2344,14 @@ function ConnectionsPageInner() {
                   disabled={busy || !name.trim() || !url.trim()}
                   className={btnClass({ variant: "primary" })}
                 >
-                  Add
+                  {tr("Add")}
                 </button>
               </ConnForm>
             </form>
           ) : null}
           {loading ? (
             <p className="mt-[0.2rem] py-[1.05rem] text-center text-[0.79rem] text-[var(--color-text-muted)]">
-              Loading…
+              {tr("Loading…")}
             </p>
           ) : servers && servers.length > 0 ? (
             <div className="grid gap-[0.7rem]">
@@ -2453,9 +2433,9 @@ function ConnectionsPageInner() {
                               <span className="mr-[0.25rem]">
                                 <ToggleForMe
                                   on={enabledForMe}
-                                  onLabel="On for me"
-                                  offLabel="Off for me"
-                                  ariaLabel={`Enable ${s.name} (${seatLabel(s)}) for me`}
+                                  onLabel={tr("On for me")}
+                                  offLabel={tr("Off for me")}
+                                  ariaLabel={tr("Enable {0} ({1}) for me", [s.name, seatLabel(s)])}
                                   onToggle={() =>
                                     setConnectorPref({
                                       kind: "remote",
@@ -2464,7 +2444,7 @@ function ConnectionsPageInner() {
                                     })
                                   }
                                   disabled={busy}
-                                  title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
+                                  title={tr("Off hides this connection from your own chats and tasks; people you share with are unaffected.")}
                                 />
                               </span>
                               {s.auth_kind === "api_key" ? (
@@ -2486,7 +2466,7 @@ function ConnectionsPageInner() {
                                     variant: needsSignIn(s.status) ? "primary" : "ghost",
                                   })}
                                 >
-                                  Update key
+                                  {tr("Update key")}
                                 </button>
                               ) : s.auth_kind === "open" || isCustomTransport ? null : (
                                 <button
@@ -2499,7 +2479,7 @@ function ConnectionsPageInner() {
                                     variant: needsSignIn(s.status) ? "primary" : "ghost",
                                   })}
                                 >
-                                  {s.status === "connected" ? "Sign in again" : "Sign in"}
+                                  {s.status === "connected" ? tr("Sign in again") : tr("Sign in")}
                                 </button>
                               )}
                               {s.auth_kind !== "api_key" &&
@@ -2510,10 +2490,10 @@ function ConnectionsPageInner() {
                                   type="button"
                                   onClick={() => signOut(s.id)}
                                   disabled={busy}
-                                  title="Sign out of this account and keep the connection. Click Sign in to use it again."
+                                  title={tr("Sign out of this account and keep the connection. Click Sign in to use it again.")}
                                   className={btnClass({ sm: true })}
                                 >
-                                  Sign out
+                                  {tr("Sign out")}
                                 </button>
                               ) : null}
                               {s.name === "microsoft-365" &&
@@ -2529,7 +2509,7 @@ function ConnectionsPageInner() {
                                   disabled={busy}
                                   className={btnClass({ sm: true, reveal: true })}
                                 >
-                                  Entra app
+                                  {tr("Entra app")}
                                 </button>
                               ) : null}
                               {multi && !s.is_default ? (
@@ -2537,10 +2517,10 @@ function ConnectionsPageInner() {
                                   type="button"
                                   onClick={() => setDefaultSeat(s.id)}
                                   disabled={busy}
-                                  title="Chats and tasks mount this login unless a conversation or task picks another."
+                                  title={tr("Chats and tasks mount this login unless a conversation or task picks another.")}
                                   className={btnClass({ sm: true })}
                                 >
-                                  Set default
+                                  {tr("Set default")}
                                 </button>
                               ) : null}
                               <button
@@ -2557,7 +2537,7 @@ function ConnectionsPageInner() {
                                 disabled={busy}
                                 className={btnClass({ sm: true })}
                               >
-                                Rename
+                                {tr("Rename")}
                               </button>
                               <button
                                 type="button"
@@ -2573,11 +2553,11 @@ function ConnectionsPageInner() {
                                 disabled={busy}
                                 className={btnClass({ sm: true })}
                               >
-                                Share{shareCount > 0 ? ` (${shareCount})` : ""}
-                              </button>
+        {rich("Share{0}", shareCount > 0 ? ` (${shareCount})` : "")}
+      </button>
                               <InlineConfirmButton
-                                label="Remove"
-                                confirmLabel="Confirm remove"
+                                label={tr("Remove")}
+                                confirmLabel={tr("Confirm remove")}
                                 onConfirm={() => disconnect(s.id)}
                                 disabled={busy}
                               />
@@ -2596,8 +2576,8 @@ function ConnectionsPageInner() {
                                       renameSeat(s.id);
                                     }
                                   }}
-                                  placeholder="account label — e.g. work"
-                                  aria-label={`New account label for ${s.name} (${seatLabel(s)})`}
+                                  placeholder={tr("account label — e.g. work")}
+                                  aria-label={tr("New account label for {0} ({1})", [s.name, seatLabel(s)])}
                                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                                 />
                                 <button
@@ -2608,7 +2588,7 @@ function ConnectionsPageInner() {
                             }
                                   className={btnClass({ sm: true, reveal: true })}
                                 >
-                                  Save label
+                                  {tr("Save label")}
                                 </button>
                               </div>
                             ) : keyOpenFor === s.id ? (
@@ -2623,7 +2603,7 @@ function ConnectionsPageInner() {
                                       updateKey(s.id);
                                     }
                                   }}
-                                  placeholder="paste the new API key (never shown again)"
+                                  placeholder={tr("paste the new API key (never shown again)")}
                                   type="password"
                                   autoComplete="off"
                                   className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
@@ -2634,7 +2614,7 @@ function ConnectionsPageInner() {
                                   disabled={busy || !keyValue.trim()}
                                   className={btnClass({ sm: true, reveal: true })}
                                 >
-                                  Save key
+                                  {tr("Save key")}
                                 </button>
                                 {keySentAsNote(undefined, s.api_key_prefix) ? (
                                   <span className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]">
@@ -2645,14 +2625,10 @@ function ConnectionsPageInner() {
                             ) : shareOpenFor === s.id ? (
                               <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                                 <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-                                  People you share with can use this connection in
-                                  their chats and scheduled tasks through{" "}
-                                  <strong className="text-[var(--color-text-secondary)]">
-                                    your
-                                  </strong>{" "}
-                                  account. They never see your sign-in details, and
-                                  removing a share stops their access right away.
-                                </p>
+        {rich("People you share with can use this connection in their chats and scheduled tasks through {0} account. They never see your sign-in details, and removing a share stops their access right away.", <strong className="text-[var(--color-text-secondary)]">
+                                    {tr("your")}
+                                  </strong>)}
+      </p>
                                 {(shares[s.id] ?? []).length > 0 ? (
                                   <ul className="mb-2 flex flex-wrap gap-1.5">
                                     {(shares[s.id] ?? []).map((g) => (
@@ -2665,7 +2641,7 @@ function ConnectionsPageInner() {
                                           type="button"
                                           onClick={() => unshare(s.id, g)}
                                           disabled={busy}
-                                          aria-label={`Stop sharing with ${granteeLabel(g)}`}
+                                          aria-label={tr("Stop sharing with {0}", [granteeLabel(g)])}
                                           className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
                                         >
                                           ×
@@ -2695,15 +2671,15 @@ function ConnectionsPageInner() {
                                     disabled={busy || !shareGrantee.trim()}
                                     className={btnClass({ sm: true, reveal: true })}
                                   >
-                                    Share
+                                    {tr("Share")}
                                   </button>
                                   {(shares[s.id] ?? []).includes("*") ? null : (
                                     // Opens the connection to every account in
                                     // the workspace at once — armed first, like
                                     // Remove, rather than granted on one click.
                                     <InlineConfirmButton
-                                      label="Share with everyone"
-                                      confirmLabel="Confirm share with everyone"
+                                      label={tr("Share with everyone")}
+                                      confirmLabel={tr("Confirm share with everyone")}
                                       disabled={busy}
                                       onConfirm={() => share(s.id, "*")}
                                       testId={`share-everyone-${s.id}`}
@@ -2744,13 +2720,12 @@ function ConnectionsPageInner() {
                           className="size-[0.85rem]"
                         />
                         {addSeatFor === group.name
-                          ? "Cancel"
-                          : "Add another account"}
+                          ? tr("Cancel")
+                          : tr("Add another account")}
                       </button>
                       {multi ? (
                         <span className="text-[0.72rem] text-[var(--color-text-muted)]">
-                          Chats use the default login unless a conversation or
-                          task picks another.
+                          {tr("Chats use the default login unless a conversation or task picks another.")}
                         </span>
                       ) : null}
                     </div>
@@ -2773,8 +2748,8 @@ function ConnectionsPageInner() {
                               addSeat(group);
                             }
                           }}
-                          placeholder="account label — e.g. work"
-                          aria-label={`Account label for the new ${group.name} login`}
+                          placeholder={tr("account label — e.g. work")}
+                          aria-label={tr("Account label for the new {0} login", [group.name])}
                           className="min-w-0 flex-1 basis-[10rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                         />
                         {(() => {
@@ -2785,7 +2760,7 @@ function ConnectionsPageInner() {
                           if (!dir || variants.length === 0) return null;
                           const current = group.seats[0]?.url ?? "";
                           const options = [
-                            { url: dir.url, label: `Default (${hostOf(dir.url)})` },
+                            { url: dir.url, label: tr("Default ({0})", [hostOf(dir.url)]) },
                             ...variants.map((v) => ({
                               url: v.url,
                               label: `${v.label} — ${hostOf(v.url)}`,
@@ -2794,14 +2769,14 @@ function ConnectionsPageInner() {
                           if (current && !options.some((o) => o.url === current)) {
                             options.unshift({
                               url: current,
-                              label: `This connection's endpoint (${hostOf(current)})`,
+                              label: tr("This connection's endpoint ({0})", [hostOf(current)]),
                             });
                           }
                           return (
                             <select
                               value={addSeatURL || current}
                               onChange={(e) => setAddSeatURL(e.target.value)}
-                              aria-label={`Endpoint for the new ${group.name} login`}
+                              aria-label={tr("Endpoint for the new {0} login", [group.name])}
                               data-testid={`add-seat-endpoint-${group.name}`}
                               className="min-w-0 flex-1 basis-[12rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                             >
@@ -2818,8 +2793,8 @@ function ConnectionsPageInner() {
                             id={`addSeatKey-${group.name}`}
                             value={addSeatKey}
                             onChange={(e) => setAddSeatKey(e.target.value)}
-                            placeholder="API key for this account (never shown again)"
-                            aria-label={`API key for the new ${group.name} login`}
+                            placeholder={tr("API key for this account (never shown again)")}
+                            aria-label={tr("API key for the new {0} login", [group.name])}
                             type="password"
                             autoComplete="off"
                             className="min-w-0 flex-1 basis-[14rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
@@ -2836,7 +2811,7 @@ function ConnectionsPageInner() {
                           }
                           className={btnClass({ sm: true, reveal: true })}
                         >
-                          {groupAuth === "oauth" ? "Add and sign in" : "Add"}
+                          {groupAuth === "oauth" ? tr("Add and sign in") : tr("Add")}
                         </button>
                         {groupAuth === "api_key"
                           ? (() => {
@@ -2860,8 +2835,7 @@ function ConnectionsPageInner() {
                             })()
                           : null}
                         <span className="basis-full text-[0.7rem] text-[var(--color-text-muted)]">
-                          A label is required for a second login — it tells the
-                          seats apart in the Tools picker.
+                          {tr("A label is required for a second login — it tells the seats apart in the Tools picker.")}
                         </span>
                       </div>
                     ) : null}
@@ -2871,17 +2845,16 @@ function ConnectionsPageInner() {
             </div>
           ) : (
             <ConnEmpty>
-              Nothing added yet. Pick one from the list below, or add one by URL.
+              {tr("Nothing added yet. Pick one from the list below, or add one by URL.")}
             </ConnEmpty>
           )}
         </ConnPanel>
 
         {sharedWithMe.length > 0 ? (
           <ConnPanel>
-            <ConnPanelHead title="Shared with you" />
+            <ConnPanelHead title={tr("Shared with you")} />
             <ConnPanelSub>
-              Connections other people shared with you. You can use them in your
-              chats and scheduled tasks through the owner&apos;s account.
+              {tr("Connections other people shared with you. You can use them in your chats and scheduled tasks through the owner's account.")}
             </ConnPanelSub>
             <ConnRows>
               {sharedWithMe.map((s) => {
@@ -2913,14 +2886,14 @@ function ConnectionsPageInner() {
                     actions={
                       <>
                         <span className="text-[0.72rem] text-[var(--color-text-muted)]">
-                          shared by {s.owner}
-                        </span>
+        {rich("shared by {0}", s.owner)}
+      </span>
                         <span className="ml-[0.45rem]">
                           <ToggleForMe
                             on={on}
-                            onLabel="On for me"
-                            offLabel="Off for me"
-                            ariaLabel={`Enable ${s.name} (${seatLabel(s)}) for me`}
+                            onLabel={tr("On for me")}
+                            offLabel={tr("Off for me")}
+                            ariaLabel={tr("Enable {0} ({1}) for me", [s.name, seatLabel(s)])}
                             onToggle={() =>
                               setConnectorPref({
                                 kind: "remote",
@@ -2929,7 +2902,7 @@ function ConnectionsPageInner() {
                               })
                             }
                             disabled={busy}
-                            title="Off hides this shared connection from your chats and tasks — only for you; the owner and other users are unaffected."
+                            title={tr("Off hides this shared connection from your chats and tasks — only for you; the owner and other users are unaffected.")}
                           />
                         </span>
                       </>
@@ -2944,10 +2917,8 @@ function ConnectionsPageInner() {
 
       {/* ── Group 2 — Credential accounts ── */}
       <ConnGroup>
-        <ConnGroupHead title="Credential accounts">
-          Named sign-ins your connectors use — e.g. one per client seat. Your
-          administrator provisions them on the server; secret values are never
-          displayed.
+        <ConnGroupHead title={tr("Credential accounts")}>
+          {tr("Named sign-ins your connectors use — e.g. one per client seat. Your administrator provisions them on the server; secret values are never displayed.")}
         </ConnGroupHead>
         <CredentialAccountAdmin servers={mcpServers} />
       </ConnGroup>
@@ -2960,7 +2931,7 @@ function ConnectionsPageInner() {
           <div className="mb-[0.8rem]">
             <div className="flex items-center justify-between gap-4">
               <h3 className="m-0 text-[1.08rem] font-semibold text-[var(--color-text-primary)]">
-                Find more connections
+                {tr("Find more connections")}
               </h3>
               <button
                 type="button"
@@ -2968,12 +2939,11 @@ function ConnectionsPageInner() {
                 onClick={() => setCatalogOpen((v) => !v)}
                 className={btnClass({ sm: true, reveal: true })}
               >
-                {catalogOpen ? "Hide" : `Browse all ${catalog.third_party.length}`}
+                {catalogOpen ? tr("Hide") : tr("Browse all {0}", [catalog.third_party.length])}
               </button>
             </div>
             <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)]">
-              Start with a popular app, or search for the one you use. An app you
-              connect sees the parts of your conversations the assistant sends it.
+              {tr("Start with a popular app, or search for the one you use. An app you connect sees the parts of your conversations the assistant sends it.")}
             </p>
           </div>
 
@@ -2986,14 +2956,14 @@ function ConnectionsPageInner() {
                     setCatalogQuery(q);
                     setDirVisibleLimit(DIRECTORY_PAGE_SIZE);
                   }}
-                  placeholder="Search connections…"
-                  label="Search connections"
+                  placeholder={tr("Search connections…")}
+                  label={tr("Search connections")}
                 />
                 {thirdParty.length > 1 ? (
                   <div
                     data-testid="dir-category-bar"
                     role="group"
-                    aria-label="Filter connectors by category"
+                    aria-label={tr("Filter connectors by category")}
                     className="flex flex-wrap items-center gap-1.5"
                   >
                     <button
@@ -3009,7 +2979,7 @@ function ConnectionsPageInner() {
                       ].join(" ")}
                     >
                       <Icon name="sparkles" className="size-[0.8rem] shrink-0" />
-                      <span>Popular</span>
+                      <span>{tr("Popular")}</span>
                       <span className="rounded-[var(--radius-pill)] bg-[var(--color-overlay-soft)] px-1.5 py-[0.05rem] text-[0.68rem] text-[var(--color-text-muted)]">
                         {dirPopular.length}
                       </span>
@@ -3027,7 +2997,7 @@ function ConnectionsPageInner() {
                       ].join(" ")}
                     >
                       <Icon name="grid" className="size-[0.8rem] shrink-0" />
-                      <span>All</span>
+                      <span>{tr("All")}</span>
                       <span className="rounded-[var(--radius-pill)] bg-[var(--color-overlay-soft)] px-1.5 py-[0.05rem] text-[0.68rem] text-[var(--color-text-muted)]">
                         {thirdParty.length}
                       </span>
@@ -3072,19 +3042,17 @@ function ConnectionsPageInner() {
                         className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-dashed border-[var(--color-border-strong)] bg-transparent px-2.5 py-1 text-[0.73rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                       >
                         {showAllCategories
-                          ? "Fewer categories"
-                          : `+${hiddenCategoryCount} more`}
+                          ? tr("Fewer categories")
+                          : tr("+{0} more", [hiddenCategoryCount])}
                       </button>
                     ) : null}
                   </div>
                 ) : null}
                 <p className="m-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
-                  Can’t find what you’re looking for?{" "}
-                  <a href="mailto:hello@elcanotek.com?subject=Connector%20request" className="text-[var(--color-link)] underline underline-offset-2">
-                    Contact Elcano
-                  </a>{" "}
-                  if you’re interested in adding a connector.
-                </p>
+        {rich("Can’t find what you’re looking for? {0} if you’re interested in adding a connector.", <a href="mailto:hello@elcanotek.com?subject=Connector%20request" className="text-[var(--color-link)] underline underline-offset-2">
+                    {tr("Contact Elcano")}
+                  </a>)}
+      </p>
               </div>
 
               <div>
@@ -3104,13 +3072,13 @@ function ConnectionsPageInner() {
                       />
                       <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
                         {dirFilter.mode === "all"
-                          ? "All connectors"
+                          ? tr("All connectors")
                           : categoryLabel(dirFilter.slug)}
                       </span>
                       <ConnBadge>
                         {dirHits.length === 1
                           ? "1 connector"
-                          : `${dirHits.length} connectors`}
+                          : tr("{0} connectors", [dirHits.length])}
                       </ConnBadge>
                     </div>
                     <button
@@ -3119,7 +3087,7 @@ function ConnectionsPageInner() {
                       onClick={() => selectDirectoryMode("popular")}
                       className={btnClass({ sm: true, reveal: true })}
                     >
-                      Back to Popular
+                      {tr("Back to Popular")}
                     </button>
                   </div>
                 ) : null}
@@ -3127,10 +3095,10 @@ function ConnectionsPageInner() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p role="status" className="m-0 text-[0.75rem] text-[var(--color-text-muted)]">
                       {dirHits.length === 1
-                        ? "1 connector matches"
-                        : `${dirHits.length} connectors match`}
+                        ? tr("1 connector matches")
+                        : tr("{0} connectors match", [dirHits.length])}
                       {activeCategoryFilter
-                        ? ` in ${categoryLabel(activeCategoryFilter)}`
+                        ? tr(" in {0}", [categoryLabel(activeCategoryFilter)])
                         : ""}
                     </p>
                     {activeCategoryFilter ? (
@@ -3140,20 +3108,18 @@ function ConnectionsPageInner() {
                         onClick={() => selectDirectoryMode("all")}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        Search all categories ({allCatalogSearchCount})
-                      </button>
+        {rich("Search all categories ({0})", allCatalogSearchCount)}
+      </button>
                     ) : null}
                   </div>
                 ) : null}
                 {dirHits.length === 0 ? (
                   <ConnEmpty>
                     <span>
-                      No connectors match “{trimmedQuery}”
-                      {activeCategoryFilter
-                        ? ` in ${categoryLabel(activeCategoryFilter)}`
-                        : ""}
-                      . Try another name or keyword.
-                    </span>
+        {rich("No connectors match “{0}”{1}. Try another name or keyword.", trimmedQuery, activeCategoryFilter
+                        ? tr(" in {0}", [categoryLabel(activeCategoryFilter)])
+                        : "")}
+      </span>
                     <span className="mt-2 flex flex-wrap items-center justify-center gap-2">
                       {activeCategoryFilter && allCatalogSearchCount > 0 ? (
                         <button
@@ -3161,9 +3127,7 @@ function ConnectionsPageInner() {
                           onClick={() => selectDirectoryMode("all")}
                           className={btnClass({ sm: true, variant: "primary" })}
                         >
-                          Show {allCatalogSearchCount}{" "}
-                          {allCatalogSearchCount === 1 ? "match" : "matches"}{" "}
-                          across all categories
+                          {tr(allCatalogSearchCount === 1 ? "Show {0} match across all categories" : "Show {0} matches across all categories", [allCatalogSearchCount])}
                         </button>
                       ) : null}
                       <button
@@ -3181,8 +3145,8 @@ function ConnectionsPageInner() {
                         className={btnClass({ sm: true })}
                       >
                         {trimmedQuery
-                          ? `Build a custom “${trimmedQuery}” connection in chat`
-                          : "Create your own connection in chat"}
+                          ? tr("Build a custom “{0}” connection in chat", [trimmedQuery])
+                          : tr("Create your own connection in chat")}
                       </button>
                     </span>
                   </ConnEmpty>
@@ -3213,7 +3177,7 @@ function ConnectionsPageInner() {
                             onClick={() => selectDirectoryCategory(group.slug)}
                             className="text-[0.72rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
                           >
-                            Filter category →
+                            {tr("Filter category →")}
                           </button>
                         </div>
                         <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
@@ -3237,8 +3201,8 @@ function ConnectionsPageInner() {
                       }
                       className={btnClass({ sm: true })}
                     >
-                      Show more ({remainingDirHits} remaining)
-                    </button>
+        {rich("Show more ({0} remaining)", remainingDirHits)}
+      </button>
                     {remainingDirHits > DIRECTORY_PAGE_SIZE ? (
                       <button
                         type="button"
@@ -3246,8 +3210,8 @@ function ConnectionsPageInner() {
                         onClick={() => setDirVisibleLimit(dirHits.length)}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        Show all {dirHits.length}
-                      </button>
+        {rich("Show all {0}", dirHits.length)}
+      </button>
                     ) : null}
                   </div>
                 ) : null}
@@ -3261,12 +3225,11 @@ function ConnectionsPageInner() {
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <h4 className="m-0 text-[0.88rem] font-semibold text-[var(--color-text-primary)]">
-                          Explore by category
+                          {tr("Explore by category")}
                         </h4>
                         <p className="mb-0 mt-0.5 text-[0.74rem] text-[var(--color-text-muted)]">
-                          Browse {thirdParty.length} connectors across{" "}
-                          {categories.length} categories.
-                        </p>
+        {rich("Browse {0} connectors across {1} categories.", thirdParty.length, categories.length)}
+      </p>
                       </div>
                       <button
                         type="button"
@@ -3274,8 +3237,8 @@ function ConnectionsPageInner() {
                         onClick={() => selectDirectoryMode("all")}
                         className={btnClass({ sm: true, reveal: true })}
                       >
-                        View all ({thirdParty.length})
-                      </button>
+        {rich("View all ({0})", thirdParty.length)}
+      </button>
                     </div>
                     <div className="grid grid-cols-3 gap-[0.6rem] max-[960px]:grid-cols-2 max-[600px]:grid-cols-1">
                       {categories.map((cat) => {
@@ -3321,19 +3284,13 @@ function ConnectionsPageInner() {
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
                     {adminState === "admin" ? (
                       <>
-                        Connecting hosted servers is off because remote MCP
-                        isn’t configured. To enable it, set{" "}
-                        <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> (a
-                        32-byte base64 key) and{" "}
-                        <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> on the
-                        server, then restart — see docs/MCP-CATALOG.md in the
-                        fleet repository for the walkthrough.
+                        {tr("Connecting hosted servers is off because remote MCP isn’t configured. To enable it, set")}{" "}
+                        <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> {tr("(a 32-byte base64 key) and")}{" "}
+                        <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> {tr("on the server, then restart — see docs/MCP-CATALOG.md in the fleet repository for the walkthrough.")}
                       </>
                     ) : (
                       <>
-                        Connecting hosted servers isn’t enabled on this
-                        workspace yet — ask your administrator to turn on remote
-                        MCP connections.
+                        {tr("Connecting hosted servers isn’t enabled on this workspace yet — ask your administrator to turn on remote MCP connections.")}
                       </>
                     )}
                   </p>
@@ -3348,21 +3305,20 @@ function ConnectionsPageInner() {
           popup and scrim cover the navigation rail as well as the page. */}
       {showBundledDialog && catalog ? createPortal(
         <DialogShell
-          label="Included with your workspace"
-          scrimLabel="Close included connections"
+          label={tr("Included with your workspace")}
+          scrimLabel={tr("Close included connections")}
           layer="rail"
           onDismiss={() => setBundledDialogOpen(false)}
           className="flex max-h-[85dvh] max-w-4xl flex-col p-5"
         >
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
-              <h3 className="m-0 text-[1rem] font-semibold">Included with your workspace</h3>
+              <h3 className="m-0 text-[1rem] font-semibold">{tr("Included with your workspace")}</h3>
               <p className="mb-0 mt-1 text-[0.78rem] text-[var(--color-text-muted)]">
-                All {catalog.bundled.length} connections. Changes apply to your chats. Scheduled
-                tasks keep the connections they were set up with.
-              </p>
+        {rich("All {0} connections. Changes apply to your chats. Scheduled tasks keep the connections they were set up with.", catalog.bundled.length)}
+      </p>
             </div>
-            <CloseButton label="Close" onClick={() => setBundledDialogOpen(false)} />
+            <CloseButton label={tr("Close")} onClick={() => setBundledDialogOpen(false)} />
           </div>
           {errorBanner.text ? (
             <p role="alert" className="mb-3 mt-0 text-[0.78rem] text-[var(--color-danger-text)]">
@@ -3389,18 +3345,17 @@ function ConnectionsPageInner() {
       {connectPromptFor
         ? createPortal(
             <DialogShell
-              label={`Sign in to ${connectPromptFor.name}?`}
-              scrimLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
+              label={tr("Sign in to {0}?", [connectPromptFor.name])}
+              scrimLabel={tr("Dismiss the {0} sign-in prompt", [connectPromptFor.name])}
               layer="rail"
               onDismiss={() => setConnectPromptFor(null)}
               className="max-w-md p-5"
             >
               <h3 className="mb-2 text-[0.9375rem] font-semibold">
-                {connectPromptFor.name} added — sign in now?
-              </h3>
+        {rich("{0} added — sign in now?", connectPromptFor.name)}
+      </h3>
               <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-                One step left: sign in so you can use it in your chats. You can also
-                do it later with its Sign in button under Your connections.
+                {tr("One step left: sign in so you can use it in your chats. You can also do it later with its Sign in button under Your connections.")}
               </p>
               <div className="flex justify-end gap-2">
                 <button
@@ -3408,7 +3363,7 @@ function ConnectionsPageInner() {
                   onClick={() => setConnectPromptFor(null)}
                   className={btnClass({ reveal: true })}
                 >
-                  Later
+                  {tr("Later")}
                 </button>
                 <button
                   type="button"
@@ -3420,7 +3375,7 @@ function ConnectionsPageInner() {
                   disabled={busy}
                   className={btnClass({ variant: "primary" })}
                 >
-                  Sign in
+                  {tr("Sign in")}
                 </button>
               </div>
             </DialogShell>,
@@ -3430,16 +3385,16 @@ function ConnectionsPageInner() {
       {consentFor
         ? createPortal(
             <DialogShell
-              label={`Connect ${consentFor.entry.display_name}?`}
-              scrimLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
+              label={tr("Connect {0}?", [consentFor.entry.display_name])}
+              scrimLabel={tr("Dismiss the {0} connect dialog", [consentFor.entry.display_name])}
               layer="rail"
               onDismiss={() => setConsentFor(null)}
               className="max-w-md p-5"
             >
               <div className="mb-2 flex items-center gap-2">
                 <h3 className="text-[0.9375rem] font-semibold">
-                  Connect {consentFor.entry.display_name}?
-                </h3>
+        {rich("Connect {0}?", consentFor.entry.display_name)}
+      </h3>
                 <ConnBadge
                   variant={provenanceVariant(consentFor.entry.provenance)}
                 >
@@ -3447,61 +3402,49 @@ function ConnectionsPageInner() {
                 </ConnBadge>
               </div>
               <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
-                This endpoint is operated by{" "}
-                <strong className="text-[var(--color-text-primary)]">
-                  {consentFor.entry.vendor || "an unnamed operator"}
-                </strong>
-                {provenanceBadge(consentFor.entry.provenance).label ===
+        {rich("This endpoint is operated by {0}{1} Once connected, it receives your tool calls (which can include parts of your conversations){2}{3}.", <strong className="text-[var(--color-text-primary)]">
+                  {consentFor.entry.vendor || tr("an unnamed operator")}
+                </strong>, provenanceBadge(consentFor.entry.provenance).label ===
                 "Aggregator"
-                  ? " — a platform that hosts access to other vendors' services, not the services themselves."
-                  : " — not the vendor of the underlying service, and not your workspace."}{" "}
-                Once connected, it receives your tool calls (which can include
-                parts of your conversations)
-                {consentFor.entry.auth === "oauth"
-                  ? " and holds the access token you grant during sign-in"
-                  : ""}
-                {consentFor.overrides?.apiKey
-                  ? " and holds the API key you provide"
-                  : ""}
-                .
-              </p>
+                  ? tr(" — a platform that hosts access to other vendors' services, not the services themselves.")
+                  : tr(" — not the vendor of the underlying service, and not your workspace."), consentFor.entry.auth === "oauth"
+                  ? tr(" and holds the access token you grant during sign-in")
+                  : "", consentFor.overrides?.apiKey
+                  ? tr(" and holds the API key you provide")
+                  : "")}
+      </p>
               <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
-                Vet it first:{" "}
-                {consentFor.entry.docs_url ? (
+        {rich("Vet it first: {0}{1}{2}{3}", consentFor.entry.docs_url ? (
                   <a
                     href={consentFor.entry.docs_url}
                     target="_blank"
                     rel="noreferrer"
                     className="underline underline-offset-2"
                   >
-                    documentation
+                    {tr("documentation")}
                   </a>
-                ) : null}
-                {consentFor.entry.docs_url && consentFor.entry.repo_url
+                ) : null, consentFor.entry.docs_url && consentFor.entry.repo_url
                   ? " · "
-                  : null}
-                {consentFor.entry.repo_url ? (
+                  : null, consentFor.entry.repo_url ? (
                   <a
                     href={consentFor.entry.repo_url}
                     target="_blank"
                     rel="noreferrer"
                     className="underline underline-offset-2"
                   >
-                    source code
+                    {tr("source code")}
                   </a>
-                ) : null}
-                {!consentFor.entry.docs_url && !consentFor.entry.repo_url
-                  ? "no docs or source were provided for this entry."
-                  : null}
-              </p>
+                ) : null, !consentFor.entry.docs_url && !consentFor.entry.repo_url
+                  ? tr("no docs or source were provided for this entry.")
+                  : null)}
+      </p>
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setConsentFor(null)}
                   className={btnClass({ reveal: true })}
                 >
-                  Cancel
-                </button>
+                  {tr("Cancel")}</button>
                 <button
                   type="button"
                   onClick={() =>
@@ -3510,7 +3453,7 @@ function ConnectionsPageInner() {
                   disabled={busy}
                   className={btnClass({ variant: "primary" })}
                 >
-                  I trust this operator — add
+                  {tr("I trust this operator — add")}
                 </button>
               </div>
             </DialogShell>,

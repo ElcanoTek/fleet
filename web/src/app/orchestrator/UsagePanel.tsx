@@ -1,3 +1,8 @@
+import { budgetScopeLabel, budgetWindowLabel, usageSourceLabel } from "@/app/lib/i18n/ownedLabels";
+import { formatFixed } from "@/app/lib/i18n";
+import { rich } from "@/app/lib/i18n/rich";
+import { getLanguage } from "@/app/lib/i18n";
+import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useState } from "react";
 import {
   orchestratorApi,
@@ -32,32 +37,32 @@ import { errorMessage } from "@/app/shared/lib/errorMessage";
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
 const GROUP_OPTIONS: { value: UsageGroupBy; label: string }[] = [
-  { value: "user", label: "User" },
-  { value: "key", label: "API key" },
-  { value: "project", label: "Project" },
-  { value: "model", label: "Model" },
-  { value: "day", label: "Day" },
-  { value: "week", label: "Week" },
+  { value: "user", label: tr("User") },
+  { value: "key", label: tr("API key") },
+  { value: "project", label: tr("Project") },
+  { value: "model", label: tr("Model") },
+  { value: "day", label: tr("Day") },
+  { value: "week", label: tr("Week") },
 ];
 
 // Past this many entity buckets the tail folds into "Other" — more bars stop
 // being readable and the table below still lists every bucket.
 const MAX_BARS = 11;
 
-const usd = new Intl.NumberFormat("en-US", {
+const usd = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const usdFine = new Intl.NumberFormat("en-US", {
+const usdFine = new Intl.NumberFormat(getLanguage(), {
   style: "currency",
   currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
-const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
-const plain = new Intl.NumberFormat("en-US");
+const compact = new Intl.NumberFormat(getLanguage(), { notation: "compact", maximumFractionDigits: 1 });
+const plain = new Intl.NumberFormat(getLanguage());
 
 function fmtUSD(v: number): string {
   // Sub-cent spend is real at per-iteration granularity — keep enough
@@ -71,15 +76,15 @@ function bucketDisplayName(b: UsageBucket, groupBy: UsageGroupBy): string {
   if (b.key === "") {
     switch (groupBy) {
       case "user":
-        return "(unattributed)";
+        return tr("(unattributed)");
       case "key":
-        return "(no API key)";
+        return tr("(no API key)");
       case "project":
-        return "(no project)";
+        return tr("(no project)");
       case "model":
-        return "(deleted chats & default-model turns)";
+        return tr("(deleted chats & default-model turns)");
       default:
-        return "(none)";
+        return tr("(none)");
     }
   }
   if (groupBy === "project" && b.label) return b.label;
@@ -112,26 +117,26 @@ export function UsagePanel() {
   return (
     <div className="section" role="region" aria-labelledby="usageHeading">
       <div className="section-header">
-        <h2 id="usageHeading">Usage &amp; Spend</h2>
+        <h2 id="usageHeading">{tr("Usage & Spend")}</h2>
         {/* One filter row scoping everything below; date range first. */}
         <div className="usage-controls">
-          <label htmlFor="usageRange">Range</label>
+          <label htmlFor="usageRange">{tr("Range")}</label>
           <select
             id="usageRange"
-            aria-label="Usage window in days"
+            aria-label={tr("Usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
             {RANGE_OPTIONS.map((d) => (
               <option key={d} value={d}>
-                Last {d} days
+                {tr("Last")}{" "}{d} {tr("days")}
               </option>
             ))}
           </select>
-          <label htmlFor="usageGroupBy">Group by</label>
+          <label htmlFor="usageGroupBy">{tr("Group by")}</label>
           <select
             id="usageGroupBy"
-            aria-label="Usage grouping dimension"
+            aria-label={tr("Usage grouping dimension")}
             value={groupBy}
             onChange={(e) => setGroupBy(e.target.value as UsageGroupBy)}
           >
@@ -141,21 +146,21 @@ export function UsagePanel() {
               </option>
             ))}
           </select>
-          <label htmlFor="usageMeasure">Measure</label>
+          <label htmlFor="usageMeasure">{tr("Measure")}</label>
           <select
             id="usageMeasure"
-            aria-label="Chart measure"
+            aria-label={tr("Chart measure")}
             value={measure}
             onChange={(e) => setMeasure(e.target.value as "cost" | "tokens" | "cache")}
           >
-            <option value="cost">Cost (USD)</option>
-            <option value="tokens">Tokens</option>
-            <option value="cache">Cache hit %</option>
+            <option value="cost">{tr("Cost (USD)")}</option>
+            <option value="tokens">{tr("Tokens")}</option>
+            <option value="cache">{tr("Cache hit %")}</option>
           </select>
           <button
             type="button"
             className="btn"
-            aria-label="Download the current usage report as CSV"
+            aria-label={tr("Download the current usage report as CSV")}
             data-testid="usage-download-csv"
             onClick={() => {
               // Clock read + navigation in the click handler (not render) so the
@@ -167,25 +172,27 @@ export function UsagePanel() {
               // Fetch-then-save (downloadFile) instead of navigating: a 401/500
               // used to replace the dashboard with the server's error body.
               void downloadFile(`/api/orchestrator/admin/usage?${qs.toString()}`, `usage-${groupBy}-${from}.csv`).catch(
-                (err: unknown) => setDownloadError(errorMessage(err, "download failed")),
+                (err: unknown) => setDownloadError(errorMessage(err, tr("download failed"))),
               );
             }}
           >
-            Download CSV
+            {tr("Download CSV")}
           </button>
         </div>
       </div>
 
       {downloadError ? (
         <div className="table-error" role="alert" data-testid="usage-download-error">
-          Couldn&apos;t download the CSV: {downloadError}
-        </div>
+        {rich("Couldn't download the CSV: {0}", downloadError)}
+      </div>
       ) : null}
       {error ? (
-        <div className="table-error">Failed to load usage report: {error}</div>
+        <div className="table-error">
+        {rich("Failed to load usage report: {0}", error)}
+      </div>
       ) : !report && loading ? (
         <div className="loading">
-          <p>Loading usage report…</p>
+          <p>{tr("Loading usage report…")}</p>
         </div>
       ) : !report ? null : (
         <div className={loading ? "usage-refetching" : undefined}>
@@ -194,7 +201,7 @@ export function UsagePanel() {
             {report.note}
           </p>
           {report.buckets.length === 0 ? (
-            <div className="table-empty">No recorded usage in this window.</div>
+            <div className="table-empty">{tr("No recorded usage in this window.")}</div>
           ) : (
             <>
               <UsageChart report={report} measure={measure} />
@@ -202,10 +209,8 @@ export function UsagePanel() {
             </>
           )}
           <p className="refresh-note">
-            {new Date(report.from).toISOString().slice(0, 10)} →{" "}
-            {new Date(report.to).toISOString().slice(0, 10)} · sources: {report.sources.join(" + ")}{" "}
-            · {plural(report.buckets.length, "bucket")}
-          </p>
+        {rich("{0} → {1} · sources: {2} · {3}", new Date(report.from).toISOString().slice(0, 10), new Date(report.to).toISOString().slice(0, 10), report.sources.map(usageSourceLabel).join(" + "), plural(report.buckets.length, "bucket"))}
+      </p>
         </div>
       )}
       <BudgetsSection />
@@ -250,7 +255,7 @@ function BudgetsSection() {
     if (softTokens.trim() && Number.isFinite(st)) body.soft_tokens = st;
     if (hardTokens.trim() && Number.isFinite(ht)) body.hard_tokens = ht;
     if (!body.principal_id) {
-      setFormError("Principal is required (user email or API key id).");
+      setFormError(tr("Principal is required (user email or API key id)."));
       return;
     }
     if (
@@ -259,7 +264,7 @@ function BudgetsSection() {
       body.soft_tokens === undefined &&
       body.hard_tokens === undefined
     ) {
-      setFormError("Set at least one bound (USD or tokens, soft or hard).");
+      setFormError(tr("Set at least one bound (USD or tokens, soft or hard)."));
       return;
     }
     setSaving(true);
@@ -272,7 +277,7 @@ function BudgetsSection() {
       setHardTokens("");
       await reload();
     } catch (err) {
-      setFormError(errorMessage(err, "Failed to save budget"));
+      setFormError(errorMessage(err, tr("Failed to save budget")));
     } finally {
       setSaving(false);
     }
@@ -286,50 +291,50 @@ function BudgetsSection() {
       await orchestratorApi.deleteBudget(id);
       await reload();
     } catch (err) {
-      setFormError(errorMessage(err, "Failed to delete budget"));
+      setFormError(errorMessage(err, tr("Failed to delete budget")));
     } finally {
       setDeleting(null);
     }
   };
 
   if (error) {
-    return <div className="table-error">Failed to load budgets: {error}</div>;
+    return <div className="table-error">
+        {rich("Failed to load budgets: {0}", error)}
+      </div>;
   }
   const budgets = data?.budgets ?? [];
   return (
     <div data-testid="budgets-section">
-      <h3 className="usage-subheading">Budgets</h3>
+      <h3 className="usage-subheading">{tr("Budgets")}</h3>
       {budgets.length === 0 ? (
         <p className="usage-note" data-testid="budgets-empty">
-          No budgets configured. A per-principal rolling budget (soft alert / hard
-          refusal per day, week, or month) refuses new task creation when the
-          window is exhausted.
+          {tr("No budgets configured. A per-principal rolling budget (soft alert / hard refusal per day, week, or month) refuses new task creation when the window is exhausted.")}
         </p>
       ) : (
         <div className="table-wrapper">
           <table data-testid="budgets-table">
             <thead>
               <tr>
-                <th scope="col">Scope</th>
-                <th scope="col">Principal</th>
-                <th scope="col">Window</th>
-                <th scope="col">Spend</th>
-                <th scope="col">Soft / hard (USD)</th>
-                <th scope="col">Soft / hard (tokens)</th>
-                <th scope="col">Status</th>
-                <th scope="col">Actions</th>
+                <th scope="col">{tr("Scope")}</th>
+                <th scope="col">{tr("Principal")}</th>
+                <th scope="col">{tr("Window")}</th>
+                <th scope="col">{tr("Spend")}</th>
+                <th scope="col">{tr("Soft / hard (USD)")}</th>
+                <th scope="col">{tr("Soft / hard (tokens)")}</th>
+                <th scope="col">{tr("Status")}</th>
+                <th scope="col">{tr("Actions")}</th>
               </tr>
             </thead>
             <tbody>
               {budgets.map((b) => (
                 <tr key={b.id} data-testid="budget-row">
-                  <td>{b.scope}</td>
+                  <td>{budgetScopeLabel(b.scope)}</td>
                   <td className="prompt-cell" title={b.principal_id}>
                     {b.principal_id}
                   </td>
-                  <td>{b.window}</td>
+                  <td>{budgetWindowLabel(b.window)}</td>
                   <td>
-                    {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} tok
+                    {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} {tr("tok")}
                   </td>
                   <td>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</td>
                   <td>
@@ -346,7 +351,7 @@ function BudgetsSection() {
                       disabled={deleting === b.id}
                       onClick={() => void remove(b.id)}
                     >
-                      {deleting === b.id ? "Deleting…" : "Delete"}
+                      {deleting === b.id ? tr("Deleting…") : tr("Delete")}
                     </button>
                   </td>
                 </tr>
@@ -364,83 +369,83 @@ function BudgetsSection() {
           void submit();
         }}
       >
-        <div className="task-eyebrow">New budget</div>
+        <div className="task-eyebrow">{tr("New budget")}</div>
         <div className="budget-form-grid">
-          <label htmlFor="budgetScope">Scope</label>
+          <label htmlFor="budgetScope">{tr("Scope")}</label>
           <select
             id="budgetScope"
-            aria-label="Budget scope"
+            aria-label={tr("Budget scope")}
             value={scope}
             onChange={(e) => setScope(e.target.value as BudgetCreate["scope"])}
           >
-            <option value="user">User</option>
-            <option value="key">API key</option>
+            <option value="user">{tr("User")}</option>
+            <option value="key">{tr("API key")}</option>
           </select>
-          <label htmlFor="budgetPrincipal">Principal</label>
+          <label htmlFor="budgetPrincipal">{tr("Principal")}</label>
           <input
             id="budgetPrincipal"
             type="text"
-            aria-label="Budget principal"
-            placeholder={scope === "user" ? "alice@example.com" : "key id"}
+            aria-label={tr("Budget principal")}
+            placeholder={scope === "user" ? "alice@example.com" : tr("key id")}
             value={principal}
             onChange={(e) => setPrincipal(e.target.value)}
           />
-          <label htmlFor="budgetWindow">Window</label>
+          <label htmlFor="budgetWindow">{tr("Window")}</label>
           <select
             id="budgetWindow"
-            aria-label="Budget window"
+            aria-label={tr("Budget window")}
             value={windowKind}
             onChange={(e) => setWindowKind(e.target.value as BudgetCreate["window"])}
           >
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
+            <option value="day">{tr("Day")}</option>
+            <option value="week">{tr("Week")}</option>
+            <option value="month">{tr("Month")}</option>
           </select>
-          <label htmlFor="budgetSoftUsd">Soft USD</label>
+          <label htmlFor="budgetSoftUsd">{tr("Soft USD")}</label>
           <input
             id="budgetSoftUsd"
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            aria-label="Soft USD bound"
-            placeholder="optional"
+            aria-label={tr("Soft USD bound")}
+            placeholder={tr("optional")}
             value={softUsd}
             onChange={(e) => setSoftUsd(e.target.value)}
           />
-          <label htmlFor="budgetHardUsd">Hard USD</label>
+          <label htmlFor="budgetHardUsd">{tr("Hard USD")}</label>
           <input
             id="budgetHardUsd"
             type="number"
             min={0}
             step="0.01"
             inputMode="decimal"
-            aria-label="Hard USD bound"
-            placeholder="optional"
+            aria-label={tr("Hard USD bound")}
+            placeholder={tr("optional")}
             value={hardUsd}
             onChange={(e) => setHardUsd(e.target.value)}
           />
-          <label htmlFor="budgetSoftTokens">Soft tokens</label>
+          <label htmlFor="budgetSoftTokens">{tr("Soft tokens")}</label>
           <input
             id="budgetSoftTokens"
             type="number"
             min={0}
             step={1}
             inputMode="numeric"
-            aria-label="Soft token bound"
-            placeholder="optional"
+            aria-label={tr("Soft token bound")}
+            placeholder={tr("optional")}
             value={softTokens}
             onChange={(e) => setSoftTokens(e.target.value)}
           />
-          <label htmlFor="budgetHardTokens">Hard tokens</label>
+          <label htmlFor="budgetHardTokens">{tr("Hard tokens")}</label>
           <input
             id="budgetHardTokens"
             type="number"
             min={0}
             step={1}
             inputMode="numeric"
-            aria-label="Hard token bound"
-            placeholder="optional"
+            aria-label={tr("Hard token bound")}
+            placeholder={tr("optional")}
             value={hardTokens}
             onChange={(e) => setHardTokens(e.target.value)}
           />
@@ -451,15 +456,11 @@ function BudgetsSection() {
           </div>
         ) : null}
         <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? "Saving…" : "Save budget"}
+          {saving ? tr("Saving…") : tr("Save budget")}
         </button>
       </form>
       <p className="usage-note">
-        A soft bound fires one alert per window; a hard bound refuses new task creation until
-        the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds
-        cover only priced runs (see the note above) — zero-rated / included models (free: true or
-        $0 pricing override) accrue $0.00 toward USD bounds while counting 100% of tokens toward
-        token bounds.
+        {tr("A soft bound fires one alert per window; a hard bound refuses new task creation until the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds cover only priced runs (see the note above) — zero-rated / included models (free: true or $0 pricing override) accrue $0.00 toward USD bounds while counting 100% of tokens toward token bounds.")}
       </p>
     </div>
   );
@@ -476,7 +477,7 @@ function budgetBound(
   const softStr = soft === undefined ? "—" : fmt(soft);
   let hardStr = hard === undefined ? "—" : fmt(hard);
   if (hard !== undefined && effectiveHard !== undefined && effectiveHard < hard) {
-    hardStr = `${fmt(effectiveHard)} (clamped from ${fmt(hard)})`;
+    hardStr = tr("{0} (clamped from {1})", [fmt(effectiveHard), fmt(hard)]);
   }
   return `${softStr} / ${hardStr}`;
 }
@@ -532,35 +533,36 @@ function UsageTotals({ report }: { report: UsageReport }) {
   return (
     <div className="usage-tiles" data-testid="usage-totals">
       <div className="usage-tile">
-        <span className="usage-tile-label">Total cost</span>
+        <span className="usage-tile-label">{tr("Total cost")}</span>
         <span className="usage-tile-value">{fmtUSD(t.cost_usd)}</span>
         <span className="usage-tile-sub">
-          tasks {fmtUSD(t.task_cost_usd)} · chat {fmtUSD(t.chat_cost_usd)}
-        </span>
+        {rich("tasks {0} · chat {1}", fmtUSD(t.task_cost_usd), fmtUSD(t.chat_cost_usd))}
+      </span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">Prompt tokens</span>
+        <span className="usage-tile-label">{tr("Prompt tokens")}</span>
         <span className="usage-tile-value">{compact.format(t.prompt_tokens)}</span>
-        <span className="usage-tile-sub">{compact.format(t.cached_tokens)} cached (chat)</span>
+        <span className="usage-tile-sub">
+        {rich("{0} cached (chat)", compact.format(t.cached_tokens))}
+      </span>
       </div>
       <div className="usage-tile" data-testid="usage-cache-tile">
-        <span className="usage-tile-label">Cache efficiency</span>
-        <span className="usage-tile-value">{hitPct.toFixed(1)}%</span>
+        <span className="usage-tile-label">{tr("Cache efficiency")}</span>
+        <span className="usage-tile-value">{formatFixed(hitPct, 1)}%</span>
         <span className="usage-tile-sub">
-          {compact.format(t.cached_tokens)} hit · {compact.format(uncached)} miss
-        </span>
+        {rich("{0} hit · {1} miss", compact.format(t.cached_tokens), compact.format(uncached))}
+      </span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">Completion tokens</span>
+        <span className="usage-tile-label">{tr("Completion tokens")}</span>
         <span className="usage-tile-value">{compact.format(t.completion_tokens)}</span>
       </div>
       <div className="usage-tile">
-        <span className="usage-tile-label">Work units</span>
+        <span className="usage-tile-label">{tr("Work units")}</span>
         <span className="usage-tile-value">{compact.format(t.task_iterations + t.chat_turns)}</span>
         <span className="usage-tile-sub">
-          {compact.format(t.task_iterations)} task iterations · {compact.format(t.chat_turns)} chat
-          turns
-        </span>
+        {rich("{0} task iterations · {1} chat turns", compact.format(t.task_iterations), compact.format(t.chat_turns))}
+      </span>
       </div>
     </div>
   );
@@ -574,7 +576,7 @@ function measureOf(b: UsageBucket, measure: UsageMeasure): number {
 
 function fmtMeasure(v: number, measure: UsageMeasure): string {
   if (measure === "cost") return fmtUSD(v);
-  if (measure === "cache") return `${v.toFixed(1)}%`;
+  if (measure === "cache") return `${formatFixed(v, 1)}%`;
   return compact.format(v);
 }
 
@@ -609,7 +611,7 @@ function UsageBars({ report, measure }: { report: UsageReport; measure: UsageMea
       otherValue = tail.reduce((sum, b) => sum + measureOf(b, measure), 0);
     }
     rows.push({
-      name: `Other (${tail.length})`,
+      name: tr("Other ({0})", [tail.length]),
       value: otherValue,
     });
   }
@@ -665,13 +667,13 @@ function UsageColumns({ report, measure }: { report: UsageReport; measure: Usage
   const barW = Math.min(Math.max(band - 2, 1), 24); // 2px surface gap, ≤24px thick
   const y = (v: number) => padTop + plotH - (v / max) * plotH;
   const gridValues = [max, max / 2];
-  const measureLabel = measure === "cost" ? "Cost" : measure === "cache" ? "Cache hit %" : "Tokens";
+  const measureLabel = measure === "cost" ? tr("Cost") : measure === "cache" ? tr("Cache hit %") : tr("Tokens");
   return (
     <div className="usage-columns-wrap">
       <svg
         className="usage-columns"
         role="img"
-        aria-label={`${measureLabel} per ${report.group_by}, ${buckets.length} buckets`}
+        aria-label={tr("{0} per {1}, {2} buckets", [measureLabel, report.group_by, buckets.length])}
         viewBox={`0 0 ${W} ${H}`}
       >
         {gridValues.map((v) => (
@@ -716,23 +718,23 @@ function UsageColumns({ report, measure }: { report: UsageReport; measure: Usage
 // UsageTable — the WCAG-clean table twin: every bucket, every column, no
 // hover required.
 function UsageTable({ report }: { report: UsageReport }) {
-  const groupLabel = GROUP_OPTIONS.find((o) => o.value === report.group_by)?.label ?? "Bucket";
+  const groupLabel = GROUP_OPTIONS.find((o) => o.value === report.group_by)?.label ?? tr("Bucket");
   return (
     <div className="table-wrapper">
       <table data-testid="usage-table">
         <thead>
           <tr>
             <th scope="col">{groupLabel}</th>
-            <th scope="col">Cost</th>
-            <th scope="col">Task cost</th>
-            <th scope="col">Chat cost</th>
-            <th scope="col">Prompt tokens</th>
-            <th scope="col">Completion tokens</th>
-            <th scope="col">Cached (chat)</th>
-            <th scope="col">Cache miss</th>
-            <th scope="col">Cache hit %</th>
-            <th scope="col">Iterations</th>
-            <th scope="col">Turns</th>
+            <th scope="col">{tr("Cost")}</th>
+            <th scope="col">{tr("Task cost")}</th>
+            <th scope="col">{tr("Chat cost")}</th>
+            <th scope="col">{tr("Prompt tokens")}</th>
+            <th scope="col">{tr("Completion tokens")}</th>
+            <th scope="col">{tr("Cached (chat)")}</th>
+            <th scope="col">{tr("Cache miss")}</th>
+            <th scope="col">{tr("Cache hit %")}</th>
+            <th scope="col">{tr("Iterations")}</th>
+            <th scope="col">{tr("Turns")}</th>
           </tr>
         </thead>
         <tbody>
@@ -748,7 +750,7 @@ function UsageTable({ report }: { report: UsageReport }) {
               <td className="usage-num">{plain.format(b.completion_tokens)}</td>
               <td className="usage-num">{plain.format(b.cached_tokens)}</td>
               <td className="usage-num">{plain.format(bucketUncachedTokens(b))}</td>
-              <td className="usage-num">{bucketCacheHitPct(b).toFixed(1)}%</td>
+              <td className="usage-num">{formatFixed(bucketCacheHitPct(b), 1)}%</td>
               <td className="usage-num">{plain.format(b.task_iterations)}</td>
               <td className="usage-num">{plain.format(b.chat_turns)}</td>
             </tr>
