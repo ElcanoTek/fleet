@@ -70,6 +70,7 @@ export function RevealButton({
       type="button"
       variant="ghost"
       size="sm"
+      className="border-border"
       aria-expanded={open}
       disabled={disabled}
       data-testid={testId}

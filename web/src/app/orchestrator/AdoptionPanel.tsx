@@ -131,6 +131,7 @@ export function AdoptionPanel() {
           <label htmlFor="adoptionRange">{tr("Range")}</label>
           <NativeSelect
             id="adoptionRange"
+            className="w-auto"
             aria-label={tr("Adoption window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}

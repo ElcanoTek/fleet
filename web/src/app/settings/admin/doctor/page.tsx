@@ -21,6 +21,7 @@ import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { cn } from "@/lib/utils";
 
 type DoctorStatus = "ok" | "warn" | "fail" | "skip";
 
@@ -143,7 +144,7 @@ export default function AdminDoctorPage() {
               aria-label={tr("Re-run checks")}
               className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
             >
-              <Icon name="refresh" className={`size-[0.85rem]${running === "quick" ? " animate-spin" : ""}`} />
+              <Icon name="refresh" className={cn("size-[0.85rem]", running === "quick" && "animate-spin")} />
               {tr("Re-run checks")}
             </button>
             <button
@@ -154,7 +155,7 @@ export default function AdminDoctorPage() {
               title={tr("Also launches a throwaway sandbox container — the definitive smoke, but it can take a minute or two.")}
               className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
             >
-              <Icon name="activity" className={`size-[0.85rem]${running === "deep" ? " animate-pulse" : ""}`} />
+              <Icon name="activity" className={cn("size-[0.85rem]", running === "deep" && "animate-pulse")} />
               {running === "deep" ? tr("Running deep checks…") : tr("Run deep checks")}
             </button>
           </div>

@@ -56,6 +56,7 @@ import { conversationApiPath, conversationApprovalApiUrl } from "@/app/lib/conve
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { cn } from "@/lib/utils";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -853,18 +854,19 @@ export function ApprovalCard({
   // — once a card is finalized the draft/action distinction no longer
   // matters and the success/danger color tells the story.
   const isPendingPreview = isPreviewOnly && approval.status === "pending" && !executing;
-  const borderStyleClass = isPendingPreview ? " border-dashed" : "";
   // No tint override needed for pending send — the inline `background`
   // in statusStyle replaces the default. For all other states keep the
   // existing soft overlay.
-  const bgClass = approval.status === "pending" && !isPreviewOnly && !executing
-    ? ""
-    : " bg-[var(--color-card-bg)]";
+  const useCardBg = !(approval.status === "pending" && !isPreviewOnly && !executing);
 
   return (
     <div
       data-approval-id={approval.id}
-      className={`rounded-[var(--radius-lg)] border px-3 py-2.5 text-[0.8125rem] leading-[1.5]${borderStyleClass}${bgClass}`}
+      className={cn(
+        "rounded-[var(--radius-lg)] border px-3 py-2.5 text-[0.8125rem] leading-[1.5]",
+        isPendingPreview && "border-dashed",
+        useCardBg && "bg-[var(--color-card-bg)]",
+      )}
       style={statusStyle}
     >
       <div className="mb-2 flex items-center justify-between gap-3">

@@ -58,6 +58,7 @@ export function SLAReportPanel() {
           <label htmlFor="slaWindow">{tr("Window")}</label>
           <NativeSelect
             id="slaWindow"
+            className="w-auto"
             aria-label={tr("SLA report window in days")}
             value={days}
             onChange={(e) => setDays(Number.parseInt(e.target.value, 10))}

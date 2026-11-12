@@ -1823,6 +1823,7 @@ export function TaskCreateModal({
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
                     <Tabs
+                      className="gap-0"
                       value={repeatEditor}
                       onValueChange={(v) => {
                         if (v === "simple") showSimpleRepeatEditor();
@@ -1832,7 +1833,7 @@ export function TaskCreateModal({
                       <TabsList className="seg seg--md repeat-editor-tabs" aria-label={tr("Repeat input method")}>
                         <TabsTrigger
                           value="simple"
-                          className="seg-option"
+                          className="seg-option group-data-[variant=default]/tabs-list:px-4 group-data-[variant=default]/tabs-list:py-1.5 group-data-[variant=default]/tabs-list:text-[0.78rem]"
                           disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
                           title={
                             repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
@@ -1842,7 +1843,10 @@ export function TaskCreateModal({
                         >
                           {tr("Simple schedule")}
                         </TabsTrigger>
-                        <TabsTrigger value="cron" className="seg-option">
+                        <TabsTrigger
+                          value="cron"
+                          className="seg-option group-data-[variant=default]/tabs-list:px-4 group-data-[variant=default]/tabs-list:py-1.5 group-data-[variant=default]/tabs-list:text-[0.78rem]"
+                        >
                           {tr("Advanced cron")}
                         </TabsTrigger>
                       </TabsList>
@@ -2454,6 +2458,8 @@ export function TaskCreateModal({
                       </label>
                       <NativeSelect
                         id="runIfOnErrorSelect"
+                        size="sm"
+                        className="w-auto"
                         value={runIfOnError}
                         onChange={(e) => setRunIfOnError(e.target.value as "run" | "skip")}
                       >

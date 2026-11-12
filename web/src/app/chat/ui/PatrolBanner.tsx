@@ -489,7 +489,7 @@ export function PatrolPopover({
                             Math.min(nextMax, Math.max(1, Math.round(prev || 1))),
                           );
                         }}
-                        className="h-9 bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem]"
+                        className="h-9 bg-[var(--color-surface-1)] pr-8 pl-2.5 text-[0.8125rem]"
                       >
                         <NativeSelectOption value="minutes">{tr("Minutes")}</NativeSelectOption>
                         <NativeSelectOption value="hours">{tr("Hours")}</NativeSelectOption>

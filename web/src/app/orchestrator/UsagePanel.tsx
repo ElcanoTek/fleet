@@ -135,6 +135,7 @@ export function UsagePanel() {
           <label htmlFor="usageRange">{tr("Range")}</label>
           <NativeSelect
             id="usageRange"
+            className="w-auto"
             aria-label={tr("Usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
@@ -148,6 +149,7 @@ export function UsagePanel() {
           <label htmlFor="usageGroupBy">{tr("Group by")}</label>
           <NativeSelect
             id="usageGroupBy"
+            className="w-auto"
             aria-label={tr("Usage grouping dimension")}
             value={groupBy}
             onChange={(e) => setGroupBy(e.target.value as UsageGroupBy)}
@@ -161,6 +163,7 @@ export function UsagePanel() {
           <label htmlFor="usageMeasure">{tr("Measure")}</label>
           <NativeSelect
             id="usageMeasure"
+            className="w-auto"
             aria-label={tr("Chart measure")}
             value={measure}
             onChange={(e) => setMeasure(e.target.value as "cost" | "tokens" | "cache")}
