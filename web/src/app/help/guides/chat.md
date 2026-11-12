@@ -75,8 +75,11 @@ than once, so that pattern leaves the card for you to decide. For the built-in
 browser tools, an `action=` pattern also matches the action's usual name, and another name for
 the same action in a pattern stands for it (for `playwright_browser`,
 `action=start_session` also covers `live`). Spaces are allowed in globs, and a
-matching deny takes precedence over approvals. `/approvals` shows the available
-handler-only pattern arguments; this requires a server that supplies them.
+matching deny takes precedence over approvals. In a deny, `*` and `?` also
+match `/`, so `command=rm *` covers `rm -rf /tmp/x`; in an approval they stop at
+`/`, so `command=ls *` covers `ls -la` but not `ls /tmp`. `/approvals` shows
+the available handler-only pattern arguments; this requires a server that
+supplies them.
 Executable-tool policies reset on server restart. Scheduled-task and other
 handler-only card policies last for this terminal session and still resolve each
 card through the server's approval endpoint. `/resume <id>` switches conversation and
