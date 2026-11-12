@@ -296,6 +296,7 @@ function TeamPicker({
   value,
   onChange,
   className,
+  selectClassName,
 }: {
   id: string;
   label: string;
@@ -303,6 +304,7 @@ function TeamPicker({
   value: string;
   onChange: (team: string) => void;
   className?: string;
+  selectClassName?: string;
 }) {
   // Creating a new team is a mode, not a value: the select shows "New team…"
   // while the adjacent input holds the draft. It opens automatically when the
@@ -337,7 +339,7 @@ function TeamPicker({
           onChange(e.target.value);
         }}
         wrapperClassName="min-w-[8rem] flex-1"
-        className={className}
+        className={selectClassName ?? className}
       >
         <NativeSelectOption value="">{tr("— No team")}</NativeSelectOption>
         {teams.map((t) => (
@@ -1271,6 +1273,7 @@ export default function AdminUsersPage() {
                   value={menu.team}
                   onChange={(team) => setMenu({ ...menu, team })}
                   className="h-8 min-w-0 flex-1 px-2.5 text-[0.78rem]"
+                  selectClassName="h-8 min-w-0 flex-1 pr-8 pl-2.5 text-[0.78rem]"
                 />
               </div>
               <div className="mt-[0.05rem] flex justify-end gap-[0.45rem]">

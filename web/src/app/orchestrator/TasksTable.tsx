@@ -234,7 +234,7 @@ export function TasksTable({
             <div className="tag-filter-control">
               <NativeSelect
                 id="taskTagFilter"
-                className="filter-select"
+                className="filter-select w-auto"
                 aria-label={tr("Filter by tag")}
                 // Always "" — this select is an ADD control, not a
                 // selection. Holding the last-added tag would claim the
@@ -666,6 +666,7 @@ export function TasksTable({
           <label htmlFor="pageSizeSelect">{tr("Show")}</label>
           <NativeSelect
             id="pageSizeSelect"
+            className="w-auto"
             aria-label={tr("Items per page")}
             value={pageSize}
             onChange={(e) => onPageSize(Number.parseInt(e.target.value, 10))}

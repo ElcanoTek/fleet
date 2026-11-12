@@ -1902,73 +1902,79 @@ button {
   flex-wrap: wrap;
 }
 
-/* Buttons (shared with the moc class names) */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.9rem;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    opacity var(--transition-fast);
-  background: transparent;
-  color: var(--color-text-primary);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-/* Compact variant for in-card toolbars (Expand all, Prompt library, pager
-   buttons). ~30px tall vs .btn's ~37px. The class was used for a long time
-   before it was defined, so those buttons rendered at full size and the
-   longer labels wrapped to two lines on phones; nowrap pins them to one. */
-.btn-small,
-.btn-sm {
-  padding: 0.3rem 0.65rem;
-  font-size: 0.8125rem;
-  white-space: nowrap;
-}
-/* The measured fill pair (see --color-primary-fill): the raw brand primary
-   can miss 4.5:1 under its label, and --color-primary-hover is LIGHTER than
-   the primary in dark, so hovering to it faded the label (white on fleet's
-   dark #8686c4 is 3.38:1). */
-.btn-primary {
-  background: var(--color-primary-fill);
-  color: var(--color-on-primary-fill);
-}
-.btn-primary:hover:not(:disabled) {
-  background: var(--color-primary-fill-hover);
-}
-.btn-secondary {
-  border-color: var(--color-border);
-  color: var(--color-text-primary);
-}
-.btn-secondary:hover:not(:disabled) {
-  background: var(--color-overlay-soft, rgba(255, 255, 255, 0.06));
-}
-/* Destructive text buttons (Stop / Delete in the task modal). This class was
-   referenced before it existed — .btn's transparent border made those render
-   as bare text — so it now mirrors .btn-secondary's shape on the
-   status-error palette (.btn-danger-hover's tokens). */
-.btn-danger {
-  border-color: var(--color-status-error-border);
-  color: var(--color-status-error-fg);
-}
-.btn-danger:hover:not(:disabled) {
-  background: var(--color-status-error-bg);
-}
-.btn-ghost {
-  color: var(--color-text-secondary);
-}
-.btn-ghost:hover:not(:disabled) {
-  background: var(--color-overlay-soft, rgba(255, 255, 255, 0.06));
-  color: var(--color-text-primary);
+/* Buttons (shared with the moc class names). Kept in @layer components and
+   excluded from @flag/button ([data-slot="button"]) so unlayered transparent
+   backgrounds/borders and vertical padding never clobber Flag Button variants
+   or Tailwind utilities while raw <button class="btn ..."> controls keep their
+   exact styling. */
+@layer components {
+  .btn:where(:not([data-slot="button"])) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      background-color var(--transition-fast),
+      opacity var(--transition-fast);
+    background: transparent;
+    color: var(--color-text-primary);
+  }
+  .btn:where(:not([data-slot="button"])):disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  /* Compact variant for in-card toolbars (Expand all, Prompt library, pager
+     buttons). ~30px tall vs .btn's ~37px. The class was used for a long time
+     before it was defined, so those buttons rendered at full size and the
+     longer labels wrapped to two lines on phones; nowrap pins them to one. */
+  .btn-small:where(:not([data-slot="button"])),
+  .btn-sm:where(:not([data-slot="button"])) {
+    padding: 0.3rem 0.65rem;
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+  /* The measured fill pair (see --color-primary-fill): the raw brand primary
+     can miss 4.5:1 under its label, and --color-primary-hover is LIGHTER than
+     the primary in dark, so hovering to it faded the label (white on fleet's
+     dark #8686c4 is 3.38:1). */
+  .btn-primary:where(:not([data-slot="button"])) {
+    background: var(--color-primary-fill);
+    color: var(--color-on-primary-fill);
+  }
+  .btn-primary:where(:not([data-slot="button"])):hover:not(:disabled) {
+    background: var(--color-primary-fill-hover);
+  }
+  .btn-secondary:where(:not([data-slot="button"])) {
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+  }
+  .btn-secondary:where(:not([data-slot="button"])):hover:not(:disabled) {
+    background: var(--color-overlay-soft, rgba(255, 255, 255, 0.06));
+  }
+  /* Destructive text buttons (Stop / Delete in the task modal). This class was
+     referenced before it existed — .btn's transparent border made those render
+     as bare text — so it now mirrors .btn-secondary's shape on the
+     status-error palette (.btn-danger-hover's tokens). */
+  .btn-danger:where(:not([data-slot="button"])) {
+    border-color: var(--color-status-error-border);
+    color: var(--color-status-error-fg);
+  }
+  .btn-danger:where(:not([data-slot="button"])):hover:not(:disabled) {
+    background: var(--color-status-error-bg);
+  }
+  .btn-ghost:where(:not([data-slot="button"])) {
+    color: var(--color-text-secondary);
+  }
+  .btn-ghost:where(:not([data-slot="button"])):hover:not(:disabled) {
+    background: var(--color-overlay-soft, rgba(255, 255, 255, 0.06));
+    color: var(--color-text-primary);
+  }
 }
 
 /* Auth / login */
@@ -2273,23 +2279,35 @@ button {
 .table-wrapper {
   overflow-x: auto;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
+/* Default styling for raw markdown/GenUI tables. Kept in @layer base (and
+   excluded from @flag/table primitives whose row borders live on <tr>) so
+   Tailwind utilities (`text-right`, `text-center`, cell padding, last-row
+   border removal) win cleanly. */
+@layer base {
+  table:where(:not([data-slot="table"])) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  th:where(:not([data-slot="table-head"])),
+  td:where(:not([data-slot="table-cell"])) {
+    text-align: left;
+    padding: 0.55rem 0.6rem;
+    border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1));
+    color: var(--color-text-secondary);
+  }
+  th:where(:not([data-slot="table-head"])) {
+    color: var(--color-text-muted);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+  }
 }
-th,
-td {
-  text-align: left;
-  padding: 0.55rem 0.6rem;
-  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1));
-  color: var(--color-text-secondary);
-}
-th {
-  color: var(--color-text-muted);
-  font-weight: 600;
-  font-size: 0.75rem;
-  text-transform: uppercase;
+@layer components {
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
 }
 tr.clickable {
   cursor: pointer;
@@ -3154,6 +3172,9 @@ tr.sla-row-fail {
   min-width: 9rem;
   padding-right: 2rem;
 }
+.tasks-filter-bar .filter-select.w-auto {
+  width: auto;
+}
 .tasks-filter-bar .filter-select:focus-visible,
 .tasks-filter-bar .filter-input:focus-visible {
   outline: none;
@@ -3338,7 +3359,8 @@ tr.sla-row-fail {
   color: var(--color-text-secondary);
   font-size: 0.8125rem;
 }
-.pagination-controls {
+.pagination-controls,
+.page-size-selector {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -3976,9 +3998,11 @@ tr.sla-row-fail {
 /* Filled fields to match the design's modal form styling — one rule for EVERY
    text-like control in the large modals (several used to fall through to
    browser defaults). Scoped to the large modals; leaves checkboxes/radios
-   (toggles) and the bare input rule elsewhere untouched. */
+   (toggles), @flag/native-select (which owns its right chevron gutter), and
+   the bare input rule elsewhere untouched. :where() preserves the (0,1,1)
+   specificity that select.mcp-server-picker__account-select ties against. */
 .modal-lg input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-.modal-lg select,
+.modal-lg select:where(:not([data-slot="native-select"])),
 .modal-lg textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -3993,7 +4017,7 @@ tr.sla-row-fail {
   input:not([type="checkbox"]):not([type="radio"]):not(
     [type="file"]
   ):focus-visible,
-.modal-lg select:focus-visible,
+.modal-lg select:where(:not([data-slot="native-select"])):focus-visible,
 .modal-lg textarea:focus-visible {
   outline: none;
   border-color: var(--color-border-strong);
@@ -5397,24 +5421,16 @@ select.mcp-server-picker__account-select {
   padding: 0.31rem 0.56rem;
   font-size: 0.78rem;
 }
-.task-modal .task-gate-options select {
-  width: auto;
-  padding: 0.31rem 0.625rem;
-  font-size: 0.76rem;
-  background: var(--color-surface-1);
-  border-radius: 0.5rem;
-}
 .task-modal .mcp-server-picker__account-select {
   width: auto;
 }
 /* Select chevron inset: the native UA arrow hugs the control's right edge
-   (padding can't move it), so the modal's selects draw their own chevron —
-   same 10px stroke glyph as every other chevron in the design — at a real
-   0.6rem inset, with padding reserving its lane. The glyph color is the
+   (padding can't move it), so the modal's raw account select draws its own
+   chevron — same 10px stroke glyph as every other chevron in the design — at a
+   real 0.6rem inset, with padding reserving its lane. The glyph color is the
    muted-text token's value embedded per theme (a background SVG can't read
-   custom properties); nothing else about the controls changes. */
-.task-modal select.mcp-server-picker__account-select,
-.task-modal .task-gate-options select {
+   custom properties); @flag/native-select controls render their own icon. */
+.task-modal select.mcp-server-picker__account-select {
   appearance: none;
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23beb6cd' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
@@ -5424,8 +5440,7 @@ select.mcp-server-picker__account-select {
   background-color: var(--color-surface-1);
   padding-right: 1.6rem;
 }
-:root[data-theme="light"] .task-modal select.mcp-server-picker__account-select,
-:root[data-theme="light"] .task-modal .task-gate-options select {
+:root[data-theme="light"] .task-modal select.mcp-server-picker__account-select {
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235c6a87' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
 }
 .task-modal .task-gate-command {

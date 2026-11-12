@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { formatBytes, formatUptime } from "../lib";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
+import { cn } from "@/lib/utils";
 
 export type ServerAgentStats = {
   active_agents_total: number;
@@ -306,7 +307,7 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
             onClick={refresh}
             className="ml-auto"
           >
-            <Icon name="refresh" className={`size-[0.95rem]${refreshing ? " animate-spin" : ""}`} />
+            <Icon name="refresh" className={cn("size-[0.95rem]", refreshing && "animate-spin")} />
           </Button>
         </div>
 

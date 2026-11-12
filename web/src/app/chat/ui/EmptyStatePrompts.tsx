@@ -3,6 +3,7 @@ import { useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { iconHref } from "@/app/shared/ui/iconHref";
 import { FormFields } from "@/app/shared/ui/FormFields";
+import { cn } from "@/lib/utils";
 import {
   formInitialValues,
   isPillReady,
@@ -42,7 +43,7 @@ export function EmptyStatePrompts({
   // .suggestions breakpoint) instead of two uneven groups where the lone
   // Optimization card dangled under its own header.
   return (
-    <div className={`grid w-full max-w-[44rem] gap-2.5${singleColumn ? "" : " min-[901px]:grid-cols-2"}`}>
+    <div className={cn("grid w-full max-w-[44rem] gap-2.5", !singleColumn && "min-[901px]:grid-cols-2")}>
       {pills.map((pill) => (
         <PillCard key={pill.id} pill={pill} onPick={onPick} />
       ))}

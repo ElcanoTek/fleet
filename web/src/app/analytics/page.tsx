@@ -601,6 +601,7 @@ function ModelUsageTab() {
           <label htmlFor="modelUsageRange">{tr("Range")}</label>
           <NativeSelect
             id="modelUsageRange"
+            className="w-auto"
             aria-label={tr("Model usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
@@ -715,17 +716,17 @@ function ModelUsageTab() {
               <TableHead>{tr("Model")}</TableHead>
               <TableHead>{tr("Tier")}</TableHead>
               <TableHead>{tr("Token Share")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Total Tokens")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Cache Hit %")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Chat Turns")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Task Steps")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Total Spend")}</TableHead>
-              <TableHead className="num">
+              <TableHead className="num text-right tabular-nums">
                 {tr("Avg / Step")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -776,23 +777,23 @@ function ModelUsageTab() {
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="num" title={plain.format(tok)}>
+                  <TableCell className="num text-right tabular-nums" title={plain.format(tok)}>
                     {fmtTokens(tok)}
                   </TableCell>
                   <TableCell
-                    className="num"
+                    className="num text-right tabular-nums"
                     title={tr("{0} cached / {1} uncached", [plain.format(b.cached_tokens), plain.format(b.uncached_tokens)])}
                   >
                     {b.prompt_tokens > 0 || b.cached_tokens > 0
                       ? `${formatFixed(b.cache_hit_rate_pct, 1)}%`
                       : "—"}
                   </TableCell>
-                  <TableCell className="num">{plain.format(b.chat_turns)}</TableCell>
-                  <TableCell className="num">{plain.format(b.task_iterations)}</TableCell>
-                  <TableCell className="num">
+                  <TableCell className="num text-right tabular-nums">{plain.format(b.chat_turns)}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{plain.format(b.task_iterations)}</TableCell>
+                  <TableCell className="num text-right tabular-nums">
                     {isIncluded ? "$0.00" : isUnpriced ? "—" : fmtUSD(b.cost_usd)}
                   </TableCell>
-                  <TableCell className="num">
+                  <TableCell className="num text-right tabular-nums">
                     {isIncluded ? "$0.00" : isUnpriced || totalSteps === 0 ? "—" : fmtUSD(avgCost)}
                   </TableCell>
                 </TableRow>
@@ -959,6 +960,7 @@ function OutliersAndFrictionTab() {
             <label htmlFor="convSortSelect">{tr("Rank by")}</label>
             <NativeSelect
               id="convSortSelect"
+              className="w-auto"
               aria-label={tr("Rank outlier conversations by")}
               value={convSort}
               onChange={(e) => setConvSort(e.target.value as ConvSort)}
@@ -994,23 +996,23 @@ function OutliersAndFrictionTab() {
                 <TableHead>{tr("Conversation")}</TableHead>
                 <TableHead>{tr("User")}</TableHead>
                 <TableHead>{tr("Model")}</TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Turns")}
                 </TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Tokens")}
                 </TableHead>
                 <TableHead
-                  className="num"
+                  className="num text-right tabular-nums"
                   title={tr("Share of prompt tokens served from the provider prompt cache")}
                 >
                   {tr("Cache Hit %")}</TableHead>
                 <TableHead
-                  className="num"
+                  className="num text-right tabular-nums"
                   title={tr("Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades")}
                 >
                   {tr("Friction")}</TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Spend")}
                 </TableHead>
               </TableRow>
@@ -1051,15 +1053,15 @@ function OutliersAndFrictionTab() {
                     <TableCell className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
                       {c.model || tr("(default model)")}
                     </TableCell>
-                    <TableCell className="num">{plain.format(c.turns)}</TableCell>
-                    <TableCell className="num" title={plain.format(totalTok)}>
+                    <TableCell className="num text-right tabular-nums">{plain.format(c.turns)}</TableCell>
+                    <TableCell className="num text-right tabular-nums" title={plain.format(totalTok)}>
                       {fmtTokens(totalTok)}
                     </TableCell>
-                    <TableCell className="num">
+                    <TableCell className="num text-right tabular-nums">
                       {c.prompt_tokens > 0 ? `${formatFixed(hitRate, 0)}%` : "—"}
                     </TableCell>
                     <TableCell
-                      className="num text-[0.75rem]"
+                      className="num text-right text-[0.75rem] tabular-nums"
                       title={tr("{0} frustrated · {1} struggles · {2} model upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])}
                     >
                       {c.frustrated_messages +
@@ -1069,7 +1071,7 @@ function OutliersAndFrictionTab() {
                         ? tr(c.advanced_switches === 1 ? "{0} frustrated · {1} struggles · {2} upgrade" : "{0} frustrated · {1} struggles · {2} upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])
                         : "—"}
                     </TableCell>
-                    <TableCell className="num">{fmtUSD(c.cost_usd)}</TableCell>
+                    <TableCell className="num text-right tabular-nums">{fmtUSD(c.cost_usd)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -1093,6 +1095,7 @@ function OutliersAndFrictionTab() {
             <label htmlFor="taskSortSelect">{tr("Rank by")}</label>
             <NativeSelect
               id="taskSortSelect"
+              className="w-auto"
               aria-label={tr("Rank background tasks by")}
               value={taskSort}
               onChange={(e) => setTaskSort(e.target.value as TaskSort)}
@@ -1129,13 +1132,13 @@ function OutliersAndFrictionTab() {
                 <TableHead>{tr("Owner")}</TableHead>
                 <TableHead>{tr("Status")}</TableHead>
                 <TableHead>{tr("Model")}</TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Iterations")}
                 </TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Tokens")}
                 </TableHead>
-                <TableHead className="num">
+                <TableHead className="num text-right tabular-nums">
                   {tr("Spend")}
                 </TableHead>
               </TableRow>
@@ -1174,11 +1177,11 @@ function OutliersAndFrictionTab() {
                     <TableCell className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
                       {t.model || tr("(default)")}
                     </TableCell>
-                    <TableCell className="num">{plain.format(t.iterations)}</TableCell>
-                    <TableCell className="num" title={plain.format(tok)}>
+                    <TableCell className="num text-right tabular-nums">{plain.format(t.iterations)}</TableCell>
+                    <TableCell className="num text-right tabular-nums" title={plain.format(tok)}>
                       {fmtTokens(tok)}
                     </TableCell>
-                    <TableCell className="num">{fmtUSD(t.cost_usd)}</TableCell>
+                    <TableCell className="num text-right tabular-nums">{fmtUSD(t.cost_usd)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -1218,32 +1221,32 @@ function OutliersAndFrictionTab() {
               <TableRow>
                 <TableHead>{tr("User")}</TableHead>
                 <TableHead
-                  className="num"
+                  className="num text-right tabular-nums"
                   title={tr("User replies expressing frustration, correction, or pushback")}
                 >
                   {tr("Frustrated")}
                 </TableHead>
                 <TableHead
-                  className="num"
+                  className="num text-right tabular-nums"
                   title={tr("Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts")}
                 >
                   {tr("Struggles")}
                 </TableHead>
                 <TableHead
-                  className="num"
+                  className="num text-right tabular-nums"
                   title={tr("Times the user accepted the in-chat prompt to switch up to the stronger frontier model")}
                 >
                   {tr("Switched up")}
                 </TableHead>
-                <TableHead className="num" title={tr("Live (non-deleted) conversations owned by this user")}>
+                <TableHead className="num text-right tabular-nums" title={tr("Live (non-deleted) conversations owned by this user")}>
                   {tr("Chats")}
                 </TableHead>
-                <TableHead className="num" title={tr("All completed chat turns (including deleted conversations)")}>
+                <TableHead className="num text-right tabular-nums" title={tr("All completed chat turns (including deleted conversations)")}>
                   {tr("Turns")}
                 </TableHead>
-                <TableHead className="num" title={tr("Share of prompt tokens served from the provider prompt cache")}>
+                <TableHead className="num text-right tabular-nums" title={tr("Share of prompt tokens served from the provider prompt cache")}>
                   {tr("Cache Hit %")}</TableHead>
-                <TableHead className="num" title={tr("Total chat spend across all completed turns")}>
+                <TableHead className="num text-right tabular-nums" title={tr("Total chat spend across all completed turns")}>
                   {tr("Chat Spend")}
                 </TableHead>
               </TableRow>
@@ -1254,17 +1257,17 @@ function OutliersAndFrictionTab() {
                   <TableCell className="font-[family-name:var(--font-code)] text-[0.8rem]">
                     {u.email}
                   </TableCell>
-                  <TableCell className="num">{u.frustrated_messages}</TableCell>
-                  <TableCell className="num">{u.struggle_signals}</TableCell>
-                  <TableCell className="num">{u.advanced_switches}</TableCell>
-                  <TableCell className="num">{u.conversation_count}</TableCell>
-                  <TableCell className="num">{plain.format(u.total_turns)}</TableCell>
-                  <TableCell className="num">
+                  <TableCell className="num text-right tabular-nums">{u.frustrated_messages}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{u.struggle_signals}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{u.advanced_switches}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{u.conversation_count}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{plain.format(u.total_turns)}</TableCell>
+                  <TableCell className="num text-right tabular-nums">
                     {u.total_prompt_tokens > 0
                       ? `${formatFixed(u.cache_hit_rate_pct, 0)}%`
                       : "—"}
                   </TableCell>
-                  <TableCell className="num">{fmtUSD(u.total_cost_usd)}</TableCell>
+                  <TableCell className="num text-right tabular-nums">{fmtUSD(u.total_cost_usd)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

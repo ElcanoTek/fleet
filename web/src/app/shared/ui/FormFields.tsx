@@ -97,6 +97,9 @@ function FieldGrid({
 const DENSE_FIELD_CLASS =
   "h-9 bg-[var(--color-bg)] px-2.5 py-2 text-[0.85rem]";
 
+const DENSE_SELECT_CLASS =
+  "h-9 bg-[var(--color-bg)] py-2 pr-8 pl-2.5 text-[0.85rem]";
+
 // text/textarea/daterange want the full row; select/number/toggle pair up.
 function fieldSpansRow(field: PillField): boolean {
   return field.type === "text" || field.type === "textarea" || field.type === "daterange";
@@ -139,7 +142,7 @@ function Field({
 
       {field.type === "select" ? (
         <NativeSelect
-          className={DENSE_FIELD_CLASS}
+          className={DENSE_SELECT_CLASS}
           value={asText(value)}
           onChange={(e) => onChange(e.target.value)}
         >

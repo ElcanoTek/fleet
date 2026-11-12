@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/table";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
+import { cn } from "@/lib/utils";
 
 type HealthSummary = {
   fleet_version: string;
@@ -260,7 +261,7 @@ export default function AdminOverviewPage() {
         onClick={refresh}
         className="ml-auto"
       >
-        <Icon name="refresh" className={`size-[0.95rem]${refreshing ? " animate-spin" : ""}`} />
+        <Icon name="refresh" className={cn("size-[0.95rem]", refreshing && "animate-spin")} />
       </Button>
     </div>
   );

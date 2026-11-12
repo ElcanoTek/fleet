@@ -113,6 +113,9 @@ export function PatrolSchedulePicker({
   const inputClass = compact
     ? "w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
     : "h-9 w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]";
+  const selectClass = compact
+    ? "w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] py-1 pr-7 pl-2 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+    : "h-9 w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] pr-8 pl-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]";
 
   return (
     <div
@@ -159,7 +162,7 @@ export function PatrolSchedulePicker({
             onChange={(e) =>
               handleFrequencyChange(e.target.value as PatrolFrequency)
             }
-            className={inputClass}
+            className={selectClass}
           >
             <NativeSelectOption value="hours">{tr("Every N hours")}</NativeSelectOption>
             <NativeSelectOption value="minutes">{tr("Every N minutes")}</NativeSelectOption>
@@ -181,7 +184,7 @@ export function PatrolSchedulePicker({
               onChange={(e) =>
                 updateState({ intervalHours: Number(e.target.value) })
               }
-              className={inputClass}
+              className={selectClass}
             >
               {HOUR_INTERVAL_OPTIONS.map((hrs) => (
                 <NativeSelectOption key={hrs} value={hrs}>
@@ -203,7 +206,7 @@ export function PatrolSchedulePicker({
               onChange={(e) =>
                 updateState({ intervalMinutes: Number(e.target.value) })
               }
-              className={inputClass}
+              className={selectClass}
             >
               {MINUTE_INTERVAL_OPTIONS.map((mins) => (
                 <NativeSelectOption key={mins} value={mins}>
@@ -326,7 +329,7 @@ export function PatrolSchedulePicker({
               data-testid={`${testIdPrefix}-timezone`}
               value={effectiveTz}
               onChange={(e) => onChangeTimezone(e.target.value)}
-              className={inputClass}
+              className={selectClass}
             >
               {zones.map((z) => (
                 <NativeSelectOption key={z} value={z}>
