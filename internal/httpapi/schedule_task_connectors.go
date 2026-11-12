@@ -75,7 +75,7 @@ type chatTaskConnectors struct {
 // hosted connections.
 func (s *Server) chatTaskConnectorsFor(user, convID string) func(context.Context) (chatTaskConnectors, error) {
 	return func(ctx context.Context) (chatTaskConnectors, error) {
-		conv, err := s.store.Get(ctx, user, convID)
+		conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID)
 		if err != nil {
 			return chatTaskConnectors{}, err
 		}
