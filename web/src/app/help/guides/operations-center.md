@@ -228,10 +228,11 @@ Adoption** has its own **Download CSV**, named the same way
 Below the table, **Budgets** limit one person (by their account email) or one
 API key (by its key ID) per **day**, **week** or **month**. Windows are UTC
 calendar windows; weeks start on Monday. A budget has a soft bound, a hard
-bound or both, in dollars, tokens or both, and its spend includes that
-principal's chats and tasks. Saving is refused, with a message saying why,
-when no account has that email, or when the key does not exist, is revoked or
-expired, or cannot create tasks. There is no edit button: saving a budget for
+bound or both, in dollars, tokens or both. A user budget counts that person's
+chats and tasks; a key budget counts only the tasks created with that key,
+because chat turns are not recorded against an API key. Saving is refused,
+with a message saying why, when no account has that email, or when the key
+does not exist, is revoked or expired, or cannot create tasks. There is no edit button: saving a budget for
 the same person or key and window replaces the old one and re-arms its alert.
 
 - **Soft** bound: the first time a task is created, or one is attempted, for

@@ -271,6 +271,10 @@ mirroring the `priorityCapError` shared-helper discipline:
   occurrence) are not gated — a deliberate deferral; the three issue-named
   create paths are, and rerun/clone, A2A and import were gated later through
   the same helper (table above).
+- **A key budget counts task spend only.** Chat turns have no API-key
+  dimension (they all fall in the empty `key` bucket), so a key budget's
+  spend is the tasks created with that key; a user budget counts both chat
+  and task spend.
 - **User identity is string equality with the part-1 buckets**: the task
   meter groups by the creator's account email, the chat meter by the chat
   email. Since the one identity table (#2049 M4) both are the account email,
