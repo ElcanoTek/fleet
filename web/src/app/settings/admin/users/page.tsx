@@ -23,10 +23,8 @@ import { useRouter } from "@/app/lib/navigation";
 
 import { fetchStats, formatAgo, type UserStat } from "../lib";
 import {
-  btnClass,
   InlineConfirmButton,
   RevealButton,
-  SETTINGS_INPUT,
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
@@ -36,6 +34,22 @@ import type { OwnedSharedProject } from "./DeleteRefusal";
 import { Icon } from "@/app/shared/ui/Icon";
 import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { getGatedJson } from "@/app/settings/lib/getGated";
@@ -309,35 +323,32 @@ function TeamPicker({
   const showInput = creating || !known;
   return (
     <span className="flex min-w-0 flex-1 flex-wrap items-center gap-[0.35rem]">
-      {/* select-wrap draws the chevron inside the text inset (globals.css);
-          pr-8 keeps the label clear of it. */}
-      <span className="select-wrap block min-w-[8rem] flex-1">
-        <select
-          id={id}
-          aria-label={label}
-          value={showInput ? "__new__" : value}
-          onChange={(e) => {
-            if (e.target.value === "__new__") {
-              setCreating(true);
-              onChange("");
-              return;
-            }
-            setCreating(false);
-            onChange(e.target.value);
-          }}
-          className={`${className ?? ""} appearance-none pr-8!`}
-        >
-          <option value="">{tr("— No team")}</option>
-          {teams.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-          <option value="__new__">{tr("New team…")}</option>
-        </select>
-      </span>
+      <NativeSelect
+        id={id}
+        aria-label={label}
+        value={showInput ? "__new__" : value}
+        onChange={(e) => {
+          if (e.target.value === "__new__") {
+            setCreating(true);
+            onChange("");
+            return;
+          }
+          setCreating(false);
+          onChange(e.target.value);
+        }}
+        wrapperClassName="min-w-[8rem] flex-1"
+        className={className}
+      >
+        <NativeSelectOption value="">{tr("— No team")}</NativeSelectOption>
+        {teams.map((t) => (
+          <NativeSelectOption key={t} value={t}>
+            {t}
+          </NativeSelectOption>
+        ))}
+        <NativeSelectOption value="__new__">{tr("New team…")}</NativeSelectOption>
+      </NativeSelect>
       {showInput ? (
-        <input
+        <Input
           id={`${id}New`}
           aria-label={tr("{0}: new team name", [label])}
           placeholder={tr("Team name")}
@@ -430,17 +441,18 @@ function RoleBadge({
   children: string;
 }) {
   return (
-    <span
+    <Badge
+      variant={accent ? "accent" : "secondary"}
       title={title}
       className={[
-        "inline-block rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em]",
+        "rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em]",
         accent
-          ? "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]"
-          : "bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]",
+          ? "border-transparent bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]"
+          : "border-transparent bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]",
       ].join(" ")}
     >
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -929,84 +941,76 @@ export default function AdminUsersPage() {
       ) : (
         <ConnPanel>
           {/* ── discovery toolbar: search on its own bar, filters sharing one
-              row as equal thirds. Each select sits in a select-wrap (the
-              chevron inside the text inset, globals.css) that takes the
-              third; the select fills it (SETTINGS_INPUT carries w-full). ── */}
+              row as equal thirds. ── */}
           <div className="mb-3 grid gap-[0.55rem]">
-            <input
+            <Input
               id="userSearch"
               aria-label={tr("Search users")}
               placeholder={tr("Search email or team…")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className={SETTINGS_INPUT}
             />
             <div className="flex flex-wrap items-center gap-[0.55rem]">
-              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
-                <select
-                  id="filterChatRole"
-                  aria-label={tr("Filter by chat role")}
-                  value={filterRole}
-                  onChange={(e) => setFilterRole(e.target.value)}
-                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
-                >
-                  <option value="all">{tr("Chat: all")}</option>
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {tr("Chat:")}{" "}{CHAT_ROLE_LABELS[r].toLowerCase()}
-                    </option>
-                  ))}
-                </select>
-              </span>
-              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
-                <select
-                  id="filterOpsRole"
-                  aria-label={tr("Filter by Background tasks role")}
-                  value={filterOps}
-                  onChange={(e) => setFilterOps(e.target.value)}
-                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
-                >
-                  <option value="all">{tr("Tasks: all")}</option>
-                  {OPS_SCOPE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {tr("Tasks:")}{" "}{o.label.toLowerCase()}
-                    </option>
-                  ))}
-                </select>
-              </span>
-              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
-                <select
-                  id="filterTeam"
-                  aria-label={tr("Filter by team")}
-                  value={filterTeam}
-                  onChange={(e) => setFilterTeam(e.target.value)}
-                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
-                >
-                  <option value="all">{tr("Team: all")}</option>
-                  <option value="(none)">{tr("Team: none")}</option>
-                  {teams.map((t) => (
-                    <option key={t} value={t}>
-                      {tr("Team:")}{" "}{t}
-                    </option>
-                  ))}
-                </select>
-              </span>
+              <NativeSelect
+                id="filterChatRole"
+                aria-label={tr("Filter by chat role")}
+                value={filterRole}
+                onChange={(e) => setFilterRole(e.target.value)}
+                wrapperClassName="min-w-[7.5rem] flex-1 basis-0"
+              >
+                <NativeSelectOption value="all">{tr("Chat: all")}</NativeSelectOption>
+                {ROLES.map((r) => (
+                  <NativeSelectOption key={r} value={r}>
+                    {tr("Chat:")}{" "}{CHAT_ROLE_LABELS[r].toLowerCase()}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                id="filterOpsRole"
+                aria-label={tr("Filter by Background tasks role")}
+                value={filterOps}
+                onChange={(e) => setFilterOps(e.target.value)}
+                wrapperClassName="min-w-[7.5rem] flex-1 basis-0"
+              >
+                <NativeSelectOption value="all">{tr("Tasks: all")}</NativeSelectOption>
+                {OPS_SCOPE_OPTIONS.map((o) => (
+                  <NativeSelectOption key={o.value} value={o.value}>
+                    {tr("Tasks:")}{" "}{o.label.toLowerCase()}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                id="filterTeam"
+                aria-label={tr("Filter by team")}
+                value={filterTeam}
+                onChange={(e) => setFilterTeam(e.target.value)}
+                wrapperClassName="min-w-[7.5rem] flex-1 basis-0"
+              >
+                <NativeSelectOption value="all">{tr("Team: all")}</NativeSelectOption>
+                <NativeSelectOption value="(none)">{tr("Team: none")}</NativeSelectOption>
+                {teams.map((t) => (
+                  <NativeSelectOption key={t} value={t}>
+                    {tr("Team:")}{" "}{t}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
               {!centralAuth && filterTeam !== "all" && filterTeam !== "(none)" ? (
                 renameDraft === null ? (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setRenameStatus(null);
                       setRenameDraft(filterTeam);
                     }}
-                    className={btnClass({ sm: true, reveal: true })}
                     title={tr("Rename this team for every member and every team-shared project")}
                   >
                     {tr("Rename team")}
-                  </button>
+                  </Button>
                 ) : (
                   <span className="inline-flex items-center gap-[0.35rem]">
-                    <input
+                    <Input
                       ref={renameInputRef}
                       id="renameTeamName"
                       aria-label={tr("New name for team {0}", [filterTeam])}
@@ -1022,26 +1026,28 @@ export default function AdminUsersPage() {
                         }
                         if (e.key === "Escape") setRenameDraft(null);
                       }}
-                      className={`${SETTINGS_INPUT} w-[10rem]`}
+                      className="h-8 w-[10rem]"
                     />
-                    <button
+                    <Button
                       type="button"
+                      size="sm"
                       disabled={
                         !renameDraft.trim() ||
                         renameDraft.trim() === filterTeam ||
                         renameStatus === "saving"
                       }
                       onClick={() => void renameTeam(filterTeam, renameDraft)}
-                      className={btnClass({ variant: "primary", sm: true })}
                     >
                       {renameStatus === "saving" ? tr("Renaming…") : tr("Rename")}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setRenameDraft(null)}
-                      className={btnClass({ sm: true, reveal: true })}
                     >
-                      {tr("Cancel")}</button>
+                      {tr("Cancel")}
+                    </Button>
                   </span>
                 )
               ) : null}
@@ -1058,31 +1064,33 @@ export default function AdminUsersPage() {
               : tr(rows.length === 1 ? "{0} account" : "{0} accounts", [rows.length]), allRows.filter((r) => r.account?.role === "admin").length, tr(teams.length === 1 ? "{0} team" : "{0} teams", [teams.length]))}
       </p>
 
-          <div className="overflow-x-auto [scrollbar-width:thin]">
-            <table className="w-full border-collapse text-[0.85rem] text-[var(--color-text-secondary)]">
-              <thead>
-                <tr>
-                  <th className={TH}>{tr("User")}</th>
-                  <th className={TH_NUM}>{tr("Convs")}</th>
-                  <th className={TH_NUM}>{tr("Tasks")}</th>
-                  {/* The kebab column. A blank header leaves the row-edit
-                      buttons announced with no column name at all, so the
-                      name is given visually-hidden rather than dropped. */}
-                  <th className={`${TH} w-[2.4rem] text-right`}>
-                    <span className="sr-only">{tr("Actions")}</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+          <Table
+            containerClassName="rounded-none border-0 [scrollbar-width:thin]"
+            className="text-[0.85rem] text-[var(--color-text-secondary)]"
+          >
+            <TableHeader>
+              <TableRow className="border-[var(--color-border-subtle)]">
+                <TableHead className={TH}>{tr("User")}</TableHead>
+                <TableHead className={TH_NUM}>{tr("Convs")}</TableHead>
+                <TableHead className={TH_NUM}>{tr("Tasks")}</TableHead>
+                {/* The kebab column. A blank header leaves the row-edit
+                    buttons announced with no column name at all, so the
+                    name is given visually-hidden rather than dropped. */}
+                <TableHead className={`${TH} w-[2.4rem] text-right`}>
+                  <span className="sr-only">{tr("Actions")}</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
                 {loading ? (
-                  <tr className="group/row">
-                    <td
+                  <TableRow className="group/row border-[var(--color-border-subtle)]">
+                    <TableCell
                       colSpan={4}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       {tr("Loading…")}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ) : rows.length > 0 ? (
                   rows.map((row) => {
                     // Consts (not row.account/.stat property accesses) so the
@@ -1090,8 +1098,8 @@ export default function AdminUsersPage() {
                     const { account, stat } = row;
                     const status = rowStatus[row.email];
                     return (
-                      <tr key={row.email} className="group/row">
-                        <td className={`${TD} min-w-0 sm:min-w-[12rem] whitespace-normal`}>
+                      <TableRow key={row.email} className="group/row border-[var(--color-border-subtle)]">
+                        <TableCell className={`${TD} min-w-0 sm:min-w-[12rem] whitespace-normal`}>
                           <span className="flex flex-wrap items-center gap-[0.45rem]">
                             <span
                               className={`text-[0.8rem] text-[var(--color-text-primary)] ${TD_TEXT_WRAP}`}
@@ -1187,45 +1195,46 @@ export default function AdminUsersPage() {
                                   : status}
                             </span>
                           ) : null}
-                        </td>
-                        <td className={TD_NUM}>
+                        </TableCell>
+                        <TableCell className={TD_NUM}>
                           {stat ? stat.conversation_count : "—"}
-                        </td>
-                        <td className={TD_NUM}>
+                        </TableCell>
+                        <TableCell className={TD_NUM}>
                           {stat ? (stat.task_count ?? 0) : "—"}
-                        </td>
-                        <td className={`${TD} w-[2.4rem] text-right`}>
+                        </TableCell>
+                        <TableCell className={`${TD} w-[2.4rem] text-right`}>
                           {account && !centralAuth ? (
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon-sm"
                               aria-label={tr("Edit {0}", [row.email])}
                               aria-haspopup="true"
                               aria-expanded={menu?.email === row.email}
                               onClick={(e) => openMenu(account, e)}
-                              className="inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                              className="size-[1.8rem] border-transparent"
                             >
                               <Icon name="dots" className="size-4" />
-                            </button>
+                            </Button>
                           ) : null}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     );
                   })
                 ) : (
-                  <tr className="group/row">
-                    <td
+                  <TableRow className="group/row border-[var(--color-border-subtle)]">
+                    <TableCell
                       colSpan={4}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
                       {centralAuth
                         ? tr("No users yet. People are added in Auth.")
                         : tr("No users provisioned yet — add one below.")}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 )}
-              </tbody>
-            </table>
-          </div>
+            </TableBody>
+          </Table>
 
           {/* ── row-edit popover (the design's .user-pop) ── */}
           {menu && menuAccount ? (
@@ -1261,18 +1270,21 @@ export default function AdminUsersPage() {
                   teams={teams}
                   value={menu.team}
                   onChange={(team) => setMenu({ ...menu, team })}
-                  className={`${SETTINGS_INPUT} min-h-[2.1rem]! min-w-0 flex-1 px-[0.55rem]! py-[0.3rem]! text-[0.78rem]!`}
+                  className="h-8 min-w-0 flex-1 px-2.5 text-[0.78rem]"
                 />
               </div>
               <div className="mt-[0.05rem] flex justify-end gap-[0.45rem]">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setMenu(null)}
-                  className={btnClass({ sm: true, reveal: true })}
                 >
-                  {tr("Cancel")}</button>
-                <button
+                  {tr("Cancel")}
+                </Button>
+                <Button
                   type="button"
+                  size="sm"
                   disabled={!menuDirty}
                   onClick={() => {
                     setMenu(null);
@@ -1282,11 +1294,11 @@ export default function AdminUsersPage() {
                       ops_scope: menu.opsScope,
                     });
                   }}
-                  className={btnClass({ variant: "primary", sm: true })}
                 >
-                  {tr("Save")}</button>
+                  {tr("Save")}
+                </Button>
               </div>
-              <div className="h-px bg-[var(--color-border)]" />
+              <Separator />
               <div className="flex flex-wrap items-center justify-between gap-[0.45rem]">
                 {/* Rotating a password locks the user out of their current
                     one the moment it lands, so it arms first like Delete
@@ -1349,34 +1361,34 @@ export default function AdminUsersPage() {
               {addOpen ? (
                 <ConnForm className="mt-[0.7rem]">
                   <ConnField label={tr("Email")} grow>
-                    <input
+                    <Input
                       id="newUserEmail"
                       aria-label={tr("New user email")}
                       type="email"
                       value={newEmail}
                       placeholder="email@example.com"
                       onChange={(e) => setNewEmail(e.target.value)}
-                      className={SETTINGS_INPUT}
                     />
                   </ConnField>
                   <ConnField label={tr("Password")} grow>
                     <div className="flex flex-wrap gap-[0.45rem]">
-                      <input
+                      <Input
                         id="newUserPassword"
                         aria-label={tr("New user password")}
                         type="text"
                         value={newPassword}
                         placeholder={tr("min 8 chars")}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        className={`${SETTINGS_INPUT} min-w-[10rem] flex-1 font-[family-name:var(--font-code)] text-[0.85rem]!`}
+                        className="min-w-[10rem] flex-1 font-[family-name:var(--font-code)] text-[0.85rem]"
                       />
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setNewPassword(generatePassword())}
-                        className={btnClass({ sm: true })}
                       >
                         {tr("Generate")}
-                      </button>
+                      </Button>
                     </div>
                   </ConnField>
                   <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-[0.7rem]">
@@ -1397,17 +1409,15 @@ export default function AdminUsersPage() {
                       teams={teams}
                       value={newTeam}
                       onChange={setNewTeam}
-                      className={SETTINGS_INPUT}
                     />
                   </ConnField>
-                  <button
+                  <Button
                     type="button"
                     onClick={() => void addUser()}
                     disabled={addDisabled}
-                    className={btnClass({ variant: "primary" })}
                   >
                     {addStatus === "saving" ? tr("Adding…") : tr("Add user")}
-                  </button>
+                  </Button>
                 </ConnForm>
               ) : null}
               {addStatus && addStatus !== "saving" ? (

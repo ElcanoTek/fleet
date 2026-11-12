@@ -16,6 +16,18 @@ import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "@/app/shared/lib/format";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 // UsagePanel — the Operations Center Usage tab (#601 part 1): cost/token
 // roll-ups over the persisted metering (task iterations + chat turns), grouped
@@ -121,44 +133,46 @@ export function UsagePanel() {
         {/* One filter row scoping everything below; date range first. */}
         <div className="usage-controls">
           <label htmlFor="usageRange">{tr("Range")}</label>
-          <select
+          <NativeSelect
             id="usageRange"
             aria-label={tr("Usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
             {RANGE_OPTIONS.map((d) => (
-              <option key={d} value={d}>
+              <NativeSelectOption key={d} value={d}>
                 {tr("Last")}{" "}{d} {tr("days")}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
           <label htmlFor="usageGroupBy">{tr("Group by")}</label>
-          <select
+          <NativeSelect
             id="usageGroupBy"
             aria-label={tr("Usage grouping dimension")}
             value={groupBy}
             onChange={(e) => setGroupBy(e.target.value as UsageGroupBy)}
           >
             {GROUP_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
+              <NativeSelectOption key={o.value} value={o.value}>
                 {o.label}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
           <label htmlFor="usageMeasure">{tr("Measure")}</label>
-          <select
+          <NativeSelect
             id="usageMeasure"
             aria-label={tr("Chart measure")}
             value={measure}
             onChange={(e) => setMeasure(e.target.value as "cost" | "tokens" | "cache")}
           >
-            <option value="cost">{tr("Cost (USD)")}</option>
-            <option value="tokens">{tr("Tokens")}</option>
-            <option value="cache">{tr("Cache hit %")}</option>
-          </select>
-          <button
+            <NativeSelectOption value="cost">{tr("Cost (USD)")}</NativeSelectOption>
+            <NativeSelectOption value="tokens">{tr("Tokens")}</NativeSelectOption>
+            <NativeSelectOption value="cache">{tr("Cache hit %")}</NativeSelectOption>
+          </NativeSelect>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             className="btn"
             aria-label={tr("Download the current usage report as CSV")}
             data-testid="usage-download-csv"
@@ -177,7 +191,7 @@ export function UsagePanel() {
             }}
           >
             {tr("Download CSV")}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -311,54 +325,54 @@ function BudgetsSection() {
           {tr("No budgets configured. A per-principal rolling budget (soft alert / hard refusal per day, week, or month) refuses new task creation when the window is exhausted.")}
         </p>
       ) : (
-        <div className="table-wrapper">
-          <table data-testid="budgets-table">
-            <thead>
-              <tr>
-                <th scope="col">{tr("Scope")}</th>
-                <th scope="col">{tr("Principal")}</th>
-                <th scope="col">{tr("Window")}</th>
-                <th scope="col">{tr("Spend")}</th>
-                <th scope="col">{tr("Soft / hard (USD)")}</th>
-                <th scope="col">{tr("Soft / hard (tokens)")}</th>
-                <th scope="col">{tr("Status")}</th>
-                <th scope="col">{tr("Actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {budgets.map((b) => (
-                <tr key={b.id} data-testid="budget-row">
-                  <td>{budgetScopeLabel(b.scope)}</td>
-                  <td className="prompt-cell" title={b.principal_id}>
-                    {b.principal_id}
-                  </td>
-                  <td>{budgetWindowLabel(b.window)}</td>
-                  <td>
-                    {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} {tr("tok")}
-                  </td>
-                  <td>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</td>
-                  <td>
-                    {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
-                      compact.format(v),
-                    )}
-                  </td>
-                  <td>{budgetStateLabel(b)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      data-testid="budget-delete"
-                      disabled={deleting === b.id}
-                      onClick={() => void remove(b.id)}
-                    >
-                      {deleting === b.id ? tr("Deleting…") : tr("Delete")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table data-testid="budgets-table" containerClassName="table-wrapper">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{tr("Scope")}</TableHead>
+              <TableHead>{tr("Principal")}</TableHead>
+              <TableHead>{tr("Window")}</TableHead>
+              <TableHead>{tr("Spend")}</TableHead>
+              <TableHead>{tr("Soft / hard (USD)")}</TableHead>
+              <TableHead>{tr("Soft / hard (tokens)")}</TableHead>
+              <TableHead>{tr("Status")}</TableHead>
+              <TableHead>{tr("Actions")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {budgets.map((b) => (
+              <TableRow key={b.id} data-testid="budget-row">
+                <TableCell>{budgetScopeLabel(b.scope)}</TableCell>
+                <TableCell className="prompt-cell whitespace-normal" title={b.principal_id}>
+                  {b.principal_id}
+                </TableCell>
+                <TableCell>{budgetWindowLabel(b.window)}</TableCell>
+                <TableCell>
+                  {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} {tr("tok")}
+                </TableCell>
+                <TableCell>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</TableCell>
+                <TableCell>
+                  {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
+                    compact.format(v),
+                  )}
+                </TableCell>
+                <TableCell>{budgetStateLabel(b)}</TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="btn btn-secondary"
+                    data-testid="budget-delete"
+                    disabled={deleting === b.id}
+                    onClick={() => void remove(b.id)}
+                  >
+                    {deleting === b.id ? tr("Deleting…") : tr("Delete")}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
 
       <form
@@ -372,17 +386,17 @@ function BudgetsSection() {
         <div className="task-eyebrow">{tr("New budget")}</div>
         <div className="budget-form-grid">
           <label htmlFor="budgetScope">{tr("Scope")}</label>
-          <select
+          <NativeSelect
             id="budgetScope"
             aria-label={tr("Budget scope")}
             value={scope}
             onChange={(e) => setScope(e.target.value as BudgetCreate["scope"])}
           >
-            <option value="user">{tr("User")}</option>
-            <option value="key">{tr("API key")}</option>
-          </select>
+            <NativeSelectOption value="user">{tr("User")}</NativeSelectOption>
+            <NativeSelectOption value="key">{tr("API key")}</NativeSelectOption>
+          </NativeSelect>
           <label htmlFor="budgetPrincipal">{tr("Principal")}</label>
-          <input
+          <Input
             id="budgetPrincipal"
             type="text"
             aria-label={tr("Budget principal")}
@@ -391,18 +405,18 @@ function BudgetsSection() {
             onChange={(e) => setPrincipal(e.target.value)}
           />
           <label htmlFor="budgetWindow">{tr("Window")}</label>
-          <select
+          <NativeSelect
             id="budgetWindow"
             aria-label={tr("Budget window")}
             value={windowKind}
             onChange={(e) => setWindowKind(e.target.value as BudgetCreate["window"])}
           >
-            <option value="day">{tr("Day")}</option>
-            <option value="week">{tr("Week")}</option>
-            <option value="month">{tr("Month")}</option>
-          </select>
+            <NativeSelectOption value="day">{tr("Day")}</NativeSelectOption>
+            <NativeSelectOption value="week">{tr("Week")}</NativeSelectOption>
+            <NativeSelectOption value="month">{tr("Month")}</NativeSelectOption>
+          </NativeSelect>
           <label htmlFor="budgetSoftUsd">{tr("Soft USD")}</label>
-          <input
+          <Input
             id="budgetSoftUsd"
             type="number"
             min={0}
@@ -414,7 +428,7 @@ function BudgetsSection() {
             onChange={(e) => setSoftUsd(e.target.value)}
           />
           <label htmlFor="budgetHardUsd">{tr("Hard USD")}</label>
-          <input
+          <Input
             id="budgetHardUsd"
             type="number"
             min={0}
@@ -426,7 +440,7 @@ function BudgetsSection() {
             onChange={(e) => setHardUsd(e.target.value)}
           />
           <label htmlFor="budgetSoftTokens">{tr("Soft tokens")}</label>
-          <input
+          <Input
             id="budgetSoftTokens"
             type="number"
             min={0}
@@ -438,7 +452,7 @@ function BudgetsSection() {
             onChange={(e) => setSoftTokens(e.target.value)}
           />
           <label htmlFor="budgetHardTokens">{tr("Hard tokens")}</label>
-          <input
+          <Input
             id="budgetHardTokens"
             type="number"
             min={0}
@@ -455,9 +469,9 @@ function BudgetsSection() {
             {formError}
           </div>
         ) : null}
-        <button type="submit" className="btn btn-primary" disabled={saving}>
+        <Button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? tr("Saving…") : tr("Save budget")}
-        </button>
+        </Button>
       </form>
       <p className="usage-note">
         {tr("A soft bound fires one alert per window; a hard bound refuses new task creation until the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds cover only priced runs (see the note above) — zero-rated / included models (free: true or $0 pricing override) accrue $0.00 toward USD bounds while counting 100% of tokens toward token bounds.")}
@@ -532,38 +546,38 @@ function UsageTotals({ report }: { report: UsageReport }) {
   const uncached = bucketUncachedTokens(t);
   return (
     <div className="usage-tiles" data-testid="usage-totals">
-      <div className="usage-tile">
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Total cost")}</span>
         <span className="usage-tile-value">{fmtUSD(t.cost_usd)}</span>
         <span className="usage-tile-sub">
         {rich("tasks {0} · chat {1}", fmtUSD(t.task_cost_usd), fmtUSD(t.chat_cost_usd))}
       </span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Prompt tokens")}</span>
         <span className="usage-tile-value">{compact.format(t.prompt_tokens)}</span>
         <span className="usage-tile-sub">
         {rich("{0} cached (chat)", compact.format(t.cached_tokens))}
       </span>
-      </div>
-      <div className="usage-tile" data-testid="usage-cache-tile">
+      </Card>
+      <Card className="usage-tile" data-testid="usage-cache-tile">
         <span className="usage-tile-label">{tr("Cache efficiency")}</span>
         <span className="usage-tile-value">{formatFixed(hitPct, 1)}%</span>
         <span className="usage-tile-sub">
         {rich("{0} hit · {1} miss", compact.format(t.cached_tokens), compact.format(uncached))}
       </span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Completion tokens")}</span>
         <span className="usage-tile-value">{compact.format(t.completion_tokens)}</span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Work units")}</span>
         <span className="usage-tile-value">{compact.format(t.task_iterations + t.chat_turns)}</span>
         <span className="usage-tile-sub">
         {rich("{0} task iterations · {1} chat turns", compact.format(t.task_iterations), compact.format(t.chat_turns))}
       </span>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -720,44 +734,42 @@ function UsageColumns({ report, measure }: { report: UsageReport; measure: Usage
 function UsageTable({ report }: { report: UsageReport }) {
   const groupLabel = GROUP_OPTIONS.find((o) => o.value === report.group_by)?.label ?? tr("Bucket");
   return (
-    <div className="table-wrapper">
-      <table data-testid="usage-table">
-        <thead>
-          <tr>
-            <th scope="col">{groupLabel}</th>
-            <th scope="col">{tr("Cost")}</th>
-            <th scope="col">{tr("Task cost")}</th>
-            <th scope="col">{tr("Chat cost")}</th>
-            <th scope="col">{tr("Prompt tokens")}</th>
-            <th scope="col">{tr("Completion tokens")}</th>
-            <th scope="col">{tr("Cached (chat)")}</th>
-            <th scope="col">{tr("Cache miss")}</th>
-            <th scope="col">{tr("Cache hit %")}</th>
-            <th scope="col">{tr("Iterations")}</th>
-            <th scope="col">{tr("Turns")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.buckets.map((b) => (
-            <tr key={b.key} data-testid="usage-row">
-              <td className="prompt-cell" title={bucketDisplayName(b, report.group_by)}>
-                {bucketDisplayName(b, report.group_by)}
-              </td>
-              <td>{fmtUSD(b.cost_usd)}</td>
-              <td>{fmtUSD(b.task_cost_usd)}</td>
-              <td>{fmtUSD(b.chat_cost_usd)}</td>
-              <td className="usage-num">{plain.format(b.prompt_tokens)}</td>
-              <td className="usage-num">{plain.format(b.completion_tokens)}</td>
-              <td className="usage-num">{plain.format(b.cached_tokens)}</td>
-              <td className="usage-num">{plain.format(bucketUncachedTokens(b))}</td>
-              <td className="usage-num">{formatFixed(bucketCacheHitPct(b), 1)}%</td>
-              <td className="usage-num">{plain.format(b.task_iterations)}</td>
-              <td className="usage-num">{plain.format(b.chat_turns)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table data-testid="usage-table" containerClassName="table-wrapper">
+      <TableHeader>
+        <TableRow>
+          <TableHead>{groupLabel}</TableHead>
+          <TableHead>{tr("Cost")}</TableHead>
+          <TableHead>{tr("Task cost")}</TableHead>
+          <TableHead>{tr("Chat cost")}</TableHead>
+          <TableHead>{tr("Prompt tokens")}</TableHead>
+          <TableHead>{tr("Completion tokens")}</TableHead>
+          <TableHead>{tr("Cached (chat)")}</TableHead>
+          <TableHead>{tr("Cache miss")}</TableHead>
+          <TableHead>{tr("Cache hit %")}</TableHead>
+          <TableHead>{tr("Iterations")}</TableHead>
+          <TableHead>{tr("Turns")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {report.buckets.map((b) => (
+          <TableRow key={b.key} data-testid="usage-row">
+            <TableCell className="prompt-cell whitespace-normal" title={bucketDisplayName(b, report.group_by)}>
+              {bucketDisplayName(b, report.group_by)}
+            </TableCell>
+            <TableCell>{fmtUSD(b.cost_usd)}</TableCell>
+            <TableCell>{fmtUSD(b.task_cost_usd)}</TableCell>
+            <TableCell>{fmtUSD(b.chat_cost_usd)}</TableCell>
+            <TableCell className="usage-num">{plain.format(b.prompt_tokens)}</TableCell>
+            <TableCell className="usage-num">{plain.format(b.completion_tokens)}</TableCell>
+            <TableCell className="usage-num">{plain.format(b.cached_tokens)}</TableCell>
+            <TableCell className="usage-num">{plain.format(bucketUncachedTokens(b))}</TableCell>
+            <TableCell className="usage-num">{formatFixed(bucketCacheHitPct(b), 1)}%</TableCell>
+            <TableCell className="usage-num">{plain.format(b.task_iterations)}</TableCell>
+            <TableCell className="usage-num">{plain.format(b.chat_turns)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 

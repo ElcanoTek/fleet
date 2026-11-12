@@ -8,16 +8,11 @@ import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 
 /* ── Buttons (.btn / .btn-primary / .btn-ghost / .btn-sm / .conn-reveal) ── */
-
-// NOTE on composition: Tailwind v4 emits same-property utilities in a fixed
-// (value-sorted) order, so "base class + appended override" does NOT cascade
-// like inline CSS — the emitted order decides. btnClass therefore computes
-// exactly ONE class per contested property (border-color, text-color,
-// hover background) instead of stacking overrides.
-const BTN_BASE =
-  "inline-flex items-center justify-center gap-[0.4rem] rounded-[var(--radius-md)] border font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
 
 export function btnClass({
   variant = "ghost",
@@ -34,29 +29,23 @@ export function btnClass({
   // hover.
   armed?: boolean;
 } = {}): string {
-  const size = sm
-    ? "px-[0.7rem] py-[0.3rem] text-[0.78rem]"
-    : "px-[0.85rem] py-[0.45rem] text-[0.85rem]";
-  const border = armed
-    ? "border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)]"
-    : reveal
-      ? "border-[var(--color-border)]"
-      : "border-transparent";
-  let color: string;
+  const size = sm ? "sm" : "default";
   if (variant === "primary") {
-    color =
-      "bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] enabled:hover:bg-[var(--color-primary-fill-hover)]";
-  } else if (armed) {
-    color =
-      "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";
-  } else if (danger) {
-    color =
-      "text-[var(--color-text-secondary)] hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]";
-  } else {
-    color =
-      "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]";
+    return buttonVariants({ variant: "default", size });
   }
-  return [BTN_BASE, size, border, color].join(" ");
+  if (armed) {
+    return buttonVariants({ variant: "destructive", size });
+  }
+  if (danger) {
+    return cn(
+      buttonVariants({ variant: "ghost", size }),
+      "border-transparent hover:border-(--color-status-error-border) hover:bg-(--color-status-error-bg) hover:text-(--color-status-error-fg)",
+    );
+  }
+  return cn(
+    buttonVariants({ variant: "ghost", size }),
+    reveal ? "border-border" : "border-transparent",
+  );
 }
 
 // RevealButton — the design's "＋ Add …" / "× Cancel" panel-header toggle
@@ -77,24 +66,25 @@ export function RevealButton({
   testId?: string;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       aria-expanded={open}
       disabled={disabled}
       data-testid={testId}
       onClick={onClick}
-      className={btnClass({ sm: true, reveal: true })}
     >
       <Icon name={open ? "close" : "plus"} className="size-[0.85rem]" />
       {open ? (openLabel ?? tr("Cancel")) : closedLabel}
-    </button>
+    </Button>
   );
 }
 
 /* ── Inputs (.settings-input) ── */
 
 export const SETTINGS_INPUT =
-  "min-h-[2.6rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.7rem] py-2 text-[0.95rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]";
+  "min-h-[2.5rem] w-full rounded-md border border-input bg-(--color-overlay-soft) px-3 py-2 text-body-md text-foreground [transition:var(--transition-fast)] outline-none placeholder:text-muted-foreground focus-visible:border-(--color-accent) focus-visible:shadow-(--focus-ring) disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive";
 
 /* ── Badges (.conn-badge + variants) ── */
 
@@ -172,35 +162,20 @@ export function SetSwitch({
   onToggle: () => void;
   label: string;
   disabled?: boolean;
-  // The bundled-connector cards render the switch at 0.88 scale
+  // The bundled-connector cards render the switch at compact scale
   // (.conn-toggle .set-switch).
   small?: boolean;
   testId?: string;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
+    <Switch
+      checked={on}
+      onCheckedChange={() => onToggle()}
       aria-label={label}
       disabled={disabled}
       data-testid={testId}
-      onClick={onToggle}
-      className={[
-        "relative h-[1.3rem] w-[2.3rem] shrink-0 cursor-pointer rounded-full border-none p-0 transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50",
-        on
-          ? "bg-[var(--color-primary-fill)]"
-          : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]",
-        small ? "origin-left scale-[0.88]" : "",
-      ].join(" ")}
-    >
-      <span
-        className={[
-          "absolute left-[3px] top-[3px] size-[calc(1.3rem-6px)] rounded-full transition",
-          on ? "translate-x-4 bg-[var(--color-on-primary-fill)]" : "bg-[var(--color-text-muted)]",
-        ].join(" ")}
-      />
-    </button>
+      size={small ? "default" : "lg"}
+    />
   );
 }
 
@@ -262,8 +237,10 @@ export function InlineConfirmButton({
 }) {
   const [armed, setArmed] = useState(false);
   return (
-    <button
+    <Button
       type="button"
+      variant={armed ? "destructive" : "ghost"}
+      size="sm"
       disabled={disabled}
       data-testid={testId}
       onClick={() => {
@@ -278,10 +255,14 @@ export function InlineConfirmButton({
       onKeyDown={(e) => {
         if (e.key === "Escape") setArmed(false);
       }}
-      className={btnClass({ sm: true, danger: !armed, armed })}
+      className={
+        armed
+          ? undefined
+          : "border-transparent hover:border-(--color-status-error-border) hover:bg-(--color-status-error-bg) hover:text-(--color-status-error-fg)"
+      }
     >
       {armed ? confirmLabel : label}
-    </button>
+    </Button>
   );
 }
 

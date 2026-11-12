@@ -5,6 +5,7 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { formatTimeFirst } from "@/app/shared/lib/format";
+import { Badge } from "@/components/ui/badge";
 import { taskRunLabel } from "./taskDisplay";
 
 // SleepingTasks — thin list of tasks parked in paused_awaiting_wake
@@ -41,7 +42,9 @@ export function SleepingTasks({ onOpen, refreshKey }: SleepingTasksProps) {
     <div className="sleeping-tasks" data-testid="sleeping-tasks" role="region" aria-label={tr("Sleeping tasks")}>
       <div className="sleeping-tasks-head">
         <h3>{tr("Sleeping")}</h3>
-        <span className="sleeping-tasks-count" data-testid="sleeping-tasks-count">{total}</span>
+        <Badge variant="outline" className="sleeping-tasks-count" data-testid="sleeping-tasks-count">
+          {total}
+        </Badge>
         {total > tasks.length ? (
           <span className="sleeping-tasks-note" data-testid="sleeping-tasks-truncated">
         {rich("showing the first {0} — filter the table by status to see them all", tasks.length)}

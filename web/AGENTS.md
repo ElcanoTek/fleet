@@ -64,21 +64,40 @@ and API sit in front of the Vite dev server (hot reload; open
 | `react`, `react-dom` | the Tier B framework |
 | `react-markdown`, `remark-gfm` | assistant and guide Markdown (GFM tables, task lists) without `dangerouslySetInnerHTML` |
 | `@tanstack/react-virtual` | virtualised long chat transcripts (`ChatTranscript.tsx`) |
+| `radix-ui` | accessible headless primitives backing Flag's `@flag/*` shadcn/ui components (`src/components/ui/`) |
+| `class-variance-authority`, `clsx`, `tailwind-merge` | variant definitions (`cva`) and conflict-safe Tailwind v4 class merging (`src/lib/utils.ts`) for `@flag/*` |
+| `lucide-react` | structural control chrome icons inside `@flag/*` registry primitives (`src/components/ui/`); product UI in `src/app/` uses Flag's `core-icons.svg` sprite |
+| `cmdk` | combobox / command-menu primitive backing `@flag/command` (`src/components/ui/command.tsx`) |
+| `sonner` | accessible toast primitive backing `@flag/sonner` (`src/components/ui/sonner.tsx`) |
+| `tw-animate-css` | CSS keyframe utilities imported by `src/app/globals.css` for `@flag/*` overlays and popovers |
 
 Code highlighting is in-housed (`src/app/chat/ui/highlight/`, see the root
-`AGENTS.md`). Add a runtime dependency only with a row here and a reason.
+`AGENTS.md`). Add a runtime dependency only with a row here and in the root
+`AGENTS.md` with its reason.
 
 ## UI components and design
 
-- **New or replaced base components come from Flag's shadcn/ui registry**
-  (`npx shadcn add <registry-url>/r/<item>.json`; the registry URL is in
-  Flag's README). The existing components are fleet's own and are not being
-  migrated wholesale; build one by hand only when the registry lacks it, then
+- **Base UI components come from Flag's `@flag/*` shadcn/ui registry**
+  (`src/components/ui/*`, configured in `components.json` pointing `@flag` at
+  `https://flag.elcanotek.com/r/{name}.json` and installed via
+  `npx shadcn add @flag/<item>`). Login, No-Access, Settings, Operations Center
+  (`/orchestrator`), Analytics, Chat controls/dialogs, and the Patrol Launchpad
+  use these `@flag/*` primitives (`Button`, `Input`, `Textarea`, `NativeSelect`,
+  `Switch`, `Checkbox`, `Badge`, `Alert`, `Card`, `Table`, `Tabs`, `Avatar`,
+  `Kbd`, `Separator`, …), with overlay z-indices (`z-[1100]` dialogs/sheets,
+  `z-[1300]` floating popovers/menus/selects/tooltips) aligned to fleet's modal
+  stack. Build a base component by hand only when the registry lacks it, then
   upstream it to Flag.
 - Design rules (tokens, contrast, typefaces): [`src/app/DESIGN.md`](src/app/DESIGN.md).
+  `src/app/globals.css` imports `tw-animate-css` and the vendored
+  `src/flag/shadcn/theme.css` bridge while keeping `fonts/fonts.css` imported
+  from `src/main.tsx` (never `@import`ed inside CSS) and keeping `:root`'s raw
+  `--color-primary` literal in `globals.css` for Go's bundle-theming contrast
+  check (`internal/httpapi/theme_contrast_test.go`).
 - **Vendored Flag files** — `src/app/fonts/` (whole dir),
-  `public/icons/core-icons.svg`, `public/logos/fleet-mark.svg` and
-  `src/app/FLAG-LICENSE` — are listed with hashes in the root `flag.lock`.
+  `public/icons/core-icons.svg`, `public/logos/fleet-mark.svg`,
+  `src/flag/shadcn/theme.css` and `src/app/FLAG-LICENSE` — are listed with
+  hashes in the root `flag.lock`.
   Never edit them: `scripts/flag-sync.sh check` (part of `make stack-check`)
   fails on any change. Update with `scripts/flag-sync.sh sync ../flag` from a
   clean sibling Flag checkout, then commit the files and `flag.lock` together.

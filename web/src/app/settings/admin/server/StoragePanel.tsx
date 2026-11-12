@@ -12,6 +12,10 @@ import { Link } from "@/app/lib/Link";
 import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { formatBytes } from "../lib";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { plural } from "@/app/shared/lib/format";
@@ -214,7 +218,8 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
           ) : null}
 
           {allowCleanup ? (
-            <div className="mt-5 border-t border-[var(--color-border)] pt-4">
+            <div className="mt-5">
+              <Separator className="mb-4" />
               <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">{tr("Delete old data")}</h4>
               <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
                 {tr("Permanently deletes chats with no activity, and uploaded files older than, the number of days below. Pinned, archived, shared, and project chats are always kept.")}{" "}
@@ -225,45 +230,47 @@ export function StoragePanel({ allowCleanup = true }: { allowCleanup?: boolean }
                 </span>
               </p>
               <div className="flex flex-wrap items-center gap-3">
-                <label
-                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                <Label
+                  className="flex items-center gap-1.5 text-[0.8rem] font-normal text-[var(--color-text-secondary)]"
                   htmlFor="cleanupDays"
                 >
                   {tr("Cutoff")}
-                  <input
+                  <Input
                     id="cleanupDays"
                     type="number"
                     min={1}
                     value={days}
                     onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-16 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.8rem] text-[var(--color-text-primary)]"
+                    className="h-8 w-16 px-2 py-1 text-[0.8rem]"
                   />
                   {tr("days")}
-                </label>
-                <label
-                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
-                  htmlFor="cleanupDeleteChats"
-                >
-                  <input
+                </Label>
+                <div className="flex items-center gap-1.5">
+                  <Checkbox
                     id="cleanupDeleteChats"
-                    type="checkbox"
                     checked={deleteChats}
-                    onChange={(e) => setDeleteChats(e.target.checked)}
+                    onCheckedChange={(v) => setDeleteChats(v === true)}
                   />
-                  {tr("Delete unpinned chats")}
-                </label>
-                <label
-                  className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
-                  htmlFor="cleanupSweepFiles"
-                >
-                  <input
+                  <Label
+                    htmlFor="cleanupDeleteChats"
+                    className="cursor-pointer text-[0.8rem] font-normal text-[var(--color-text-secondary)]"
+                  >
+                    {tr("Delete unpinned chats")}
+                  </Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Checkbox
                     id="cleanupSweepFiles"
-                    type="checkbox"
                     checked={sweepFiles}
-                    onChange={(e) => setSweepFiles(e.target.checked)}
+                    onCheckedChange={(v) => setSweepFiles(v === true)}
                   />
-                  {tr("Delete old uploaded files")}
-                </label>
+                  <Label
+                    htmlFor="cleanupSweepFiles"
+                    className="cursor-pointer text-[0.8rem] font-normal text-[var(--color-text-secondary)]"
+                  >
+                    {tr("Delete old uploaded files")}
+                  </Label>
+                </div>
                 {/* Cleanup deletes chats and files for good, so it takes the
                     same two-click inline confirmation as every other
                     irreversible action in Settings — no native dialog. */}

@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "../flag/shadcn/theme.css";
 /* The ONE font sheet (fonts/fonts.css: every @font-face in the app, and the
  * only place a family name is written) is imported by src/main.tsx, NOT
  * @imported here: Tailwind inlines an @import without rebasing its url()s, so
@@ -24,6 +26,7 @@
   --font-code: var(--font-code-brand), "SF Mono", "Consolas", ui-monospace, monospace;
   --font-code-ui: var(--font-code-ui-brand), ui-monospace, monospace;
   --font-weight-regular: 400;
+  --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
   --font-size-display: clamp(2rem, 1.75rem + 0.8vw, 2.5rem);
@@ -34,6 +37,7 @@
   --line-height-subtitle: 1.3334;
   --font-size-body-lg: 0.875rem;
   --line-height-body-lg: 1.4286;
+  --font-size-body-md: 0.875rem;
   --font-size-body: 0.8125rem;
   --line-height-body: 1.3847;
   --font-size-caption: 0.75rem;
@@ -76,12 +80,14 @@
   --color-secondary-fill-hover: color-mix(in srgb, var(--color-secondary) 90%, #000);
   --color-accent: #9da7ef;
   --color-white: #ffffff;
+  --color-black: #000000;
   --color-bg: #1a0b1e;
   --color-surface-1: #241b31;
   --color-surface-2: #2f2741;
   --color-border: rgba(114, 114, 171, 0.35);
   --color-border-strong: rgba(114, 114, 171, 0.55);
   --color-border-subtle: rgba(255, 255, 255, 0.14);
+  --color-control-border: #7a7392;
   --color-text-primary: #ffffff;
   --color-text-secondary: #d2d9de;
   --color-text-muted: #beb6cd;
@@ -114,6 +120,8 @@
   --color-danger-border: color-mix(in srgb, #e08080 55%, transparent);
   --color-warning: #e8c97a;
   --color-warning-border: color-mix(in srgb, #e8c97a 50%, transparent);
+  --color-info: #8e8ec2;
+  --color-on-success: #000000;
   /* Usage panel (#601) single-series bar hue. Brand-adjacent purple, nudged
      up in chroma vs --color-primary and validated (dataviz skill six checks)
      against the dark surface: L in-band, C ≥ 0.10, ≥3:1 contrast. */
@@ -236,6 +244,9 @@
   --color-status-proposed-fg: #d6ddff;
   --color-status-proposed-bg: rgba(124, 107, 255, 0.22);
   --color-status-proposed-border: rgba(124, 107, 255, 0.62);
+  --color-status-analyzing-fg: var(--color-status-proposed-fg);
+  --color-status-analyzing-bg: var(--color-status-proposed-bg);
+  --color-status-analyzing-border: var(--color-status-proposed-border);
   --color-status-success-fg: #cbfdd8;
   --color-status-success-bg: rgba(80, 250, 123, 0.14);
   --color-status-success-border: rgba(80, 250, 123, 0.6);
@@ -460,6 +471,8 @@
   --shadow-sm: 0 10px 24px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 12px 24px rgba(0, 0, 0, 0.34);
   --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.52);
+  --shadow-section: 0 6px 16px rgba(0, 0, 0, 0.22);
+  --shadow-control-selected: 0 0 0 2px var(--color-status-running-border);
   /* Motion tokens: every interaction transition and overlay entrance rides
      these two durations — fast for hovers/popovers/tooltips, base for modals
      and larger surface changes. --motion-* are the bare <time> components
@@ -489,8 +502,8 @@
   --color-row-active-border: #9da7ef;
   --color-pill-border: rgba(255, 255, 255, 0.14);
   --color-pill-hover-bg: rgba(255, 255, 255, 0.06);
-  --color-switch-track-on: var(--color-accent-strong);
-  --color-switch-track-off: rgba(255, 255, 255, 0.14);
+  --color-switch-track-on: #7976dd;
+  --color-switch-track-off: #837d9a;
   --color-switch-knob: #f4f5f9;
   /* The knob on a checked track. A bundle whose primary is light (Reklaim's
      yellow) gets its on_primary here, so the knob stays visible. */
@@ -521,6 +534,7 @@
   color-scheme: light;
   --color-bg: #f4f6fb;
   --color-primary-hover: #5f5f97;
+  --primary-hover: var(--color-primary-fill-hover);
   /* Restated per-theme because a bundle may need different foregrounds in each
      mode (e.g. a palette whose primary is deep in light and lifted in dark). */
   --color-on-primary: #ffffff;
@@ -534,6 +548,7 @@
   --color-border: rgba(38, 55, 92, 0.2);
   --color-border-strong: rgba(38, 55, 92, 0.32);
   --color-border-subtle: rgba(38, 55, 92, 0.18);
+  --color-control-border: #586f7c;
   --color-text-primary: #141824;
   --color-text-secondary: #33415f;
   --color-text-muted: #5c6a87;
@@ -552,6 +567,8 @@
   --color-danger-border: color-mix(in srgb, #b02a2a 35%, transparent);
   --color-warning: #9a6a00;
   --color-warning-border: color-mix(in srgb, #9a6a00 35%, transparent);
+  --color-info: #4f5496;
+  --color-on-success: #ffffff;
   /* Usage panel bar hue for the light surface — the same brand-adjacent mix as
      the dark value, stepped darker so the bar reads against a light background
      instead of washing out. Derived, not literal: this was #6363b8, so a themed
@@ -783,6 +800,7 @@
   --shadow-sm: 0 6px 14px rgba(40, 52, 86, 0.12);
   --shadow-md: 0 10px 18px rgba(38, 55, 92, 0.16);
   --shadow-lg: 0 16px 34px rgba(38, 55, 92, 0.2);
+  --shadow-section: 0 4px 10px rgba(40, 52, 86, 0.08);
   --focus-ring: 0 0 0 2px var(--color-white), 0 0 0 4px var(--color-accent);
 
   /* Connection picker components (the chat Tools popover and library):
@@ -800,7 +818,8 @@
   --color-row-active-border: #6262a0;
   --color-pill-border: #d7d5e6;
   --color-pill-hover-bg: #f1f2f8;
-  --color-switch-track-off: #e4e5ee;
+  --color-switch-track-on: var(--color-accent-strong);
+  --color-switch-track-off: #80829e;
   --color-switch-knob: #ffffff;
   --color-switch-knob-on: #ffffff;
   --shadow-switch-knob: 0 1px 2px rgba(26, 11, 30, 0.28);
@@ -3819,7 +3838,7 @@ tr.sla-row-fail {
   font-weight: 600;
   color: var(--color-text-secondary);
 }
-.switch-row:has(.ui-switch:checked) .switch-row-title {
+.switch-row:has(.ui-switch:checked, [data-slot="switch"][data-state="checked"], [data-slot="checkbox"][data-state="checked"]) .switch-row-title {
   color: var(--color-text-primary);
 }
 .switch-row-desc {

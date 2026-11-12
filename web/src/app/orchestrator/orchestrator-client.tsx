@@ -27,6 +27,9 @@ import { UpcomingPanel } from "./UpcomingPanel";
 import { taskRunLabel } from "./taskDisplay";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useRouter } from "@/app/lib/navigation";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -414,7 +417,7 @@ function OrchestratorInner({
     return (
       <div className="container">
         <OrchestratorSlimHeader />
-        <div
+        <Card
           className="auth-section"
           role="region"
           aria-label={tr("Server unreachable")}
@@ -424,15 +427,15 @@ function OrchestratorInner({
             <p className="caption" data-testid="orchestrator-unreachable">
               {tr("The background-tasks server didn't answer — it may be restarting. Your sign-in state is untouched; try again in a moment.")}
             </p>
-            <button
+            <Button
               type="button"
               className="btn btn-primary"
               onClick={() => window.location.reload()}
             >
               {tr("Retry")}
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -448,22 +451,23 @@ function OrchestratorInner({
       <div className="container">
         <OrchestratorSlimHeader />
         {session.noAccess ? (
-          <div className="auth-section" role="region" aria-label={tr("No access")}>
+          <Card className="auth-section" role="region" aria-label={tr("No access")}>
             <div className="auth-fields stack-form">
               <h2>{tr("No access")}</h2>
               <p className="caption" data-testid="orchestrator-no-access">
                 {tr("You're signed in, but that identity isn't provisioned for background tasks. Ask an administrator to provision your account.")}
               </p>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 className="btn btn-ghost"
                 data-testid="orchestrator-no-access-signout"
                 onClick={() => void signOutAfter(session.logout())}
               >
                 {tr("Sign out")}
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
         ) : (
           <OrchestratorLogin magicLinkLoginEnabled={magicLinkLoginEnabled} />
         )}
@@ -555,60 +559,59 @@ function OrchestratorInner({
                 onFilter={applyStatFilter}
               />
 
-              <div
-                className="dashboard-tabs"
-                role="tablist"
-                aria-label={tr("Background tasks view")}
-                ref={tabsRef}
+              <Tabs
+                value={effectiveTab}
+                onValueChange={(v) => switchTab(v as DashTab)}
+                className="gap-0"
               >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={effectiveTab === "tasks"}
-                  className={`tab-btn${effectiveTab === "tasks" ? " tab-btn-active" : ""}`}
-                  onClick={() => switchTab("tasks")}
+                <TabsList
+                  ref={tabsRef}
+                  variant="line"
+                  className="dashboard-tabs w-full justify-start"
+                  aria-label={tr("Background tasks view")}
                 >
-                  {tr("Recent Tasks")}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={effectiveTab === "upcoming"}
-                  className={`tab-btn${effectiveTab === "upcoming" ? " tab-btn-active" : ""}`}
-                  onClick={() => switchTab("upcoming")}
-                >
-                  {tr("Upcoming")}
-                </button>
-                {/* #458 symptom 2: only admins see the SLA tab. The render guard
-                    below mirrors this — a non-admin holding a stale tab === "sla"
-                    still falls back to the tasks view. */}
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={effectiveTab === "sla"}
-                    className={`tab-btn${effectiveTab === "sla" ? " tab-btn-active" : ""}`}
-                    onClick={() => switchTab("sla")}
+                  <TabsTrigger
+                    value="tasks"
+                    className={`tab-btn${effectiveTab === "tasks" ? " tab-btn-active" : ""}`}
                   >
-                    {tr("SLA")}
-                  </button>
-                ) : null}
-                {/* Usage/spend analytics (#601) is admin-only like SLA: the
-                    report is global across all principals. */}
-              </div>
+                    {tr("Recent Tasks")}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="upcoming"
+                    className={`tab-btn${effectiveTab === "upcoming" ? " tab-btn-active" : ""}`}
+                  >
+                    {tr("Upcoming")}
+                  </TabsTrigger>
+                  {/* #458 symptom 2: only admins see the SLA tab. The render guard
+                      below mirrors this — a non-admin holding a stale tab === "sla"
+                      still falls back to the tasks view. */}
+                  {isAdmin ? (
+                    <TabsTrigger
+                      value="sla"
+                      className={`tab-btn${effectiveTab === "sla" ? " tab-btn-active" : ""}`}
+                    >
+                      {tr("SLA")}
+                    </TabsTrigger>
+                  ) : null}
+                  {/* Usage/spend analytics (#601) is admin-only like SLA: the
+                      report is global across all principals. */}
+                </TabsList>
 
-              {/* The tab-panel wrapper keeps a floor under the content: when a
-                  tab switches, the incoming panel briefly renders a tiny
-                  loading state, and without the floor the page's height
-                  collapses under the scroll position — the browser clamps to
-                  the top, which reads as a jarring jump on phones. */}
-              <div className="dashboard-tab-panel">
-                {tab === "upcoming" ? (
-                  <UpcomingPanel />
-                ) : tab === "sla" && isAdmin ? (
-                  <SLAReportPanel />
-                ) : (
-                  <>
+                {/* The tab-panel wrapper keeps a floor under the content: when a
+                    tab switches, the incoming panel briefly renders a tiny
+                    loading state, and without the floor the page's height
+                    collapses under the scroll position — the browser clamps to
+                    the top, which reads as a jarring jump on phones. */}
+                <div className="dashboard-tab-panel">
+                  <TabsContent value="upcoming">
+                    <UpcomingPanel />
+                  </TabsContent>
+                  {isAdmin ? (
+                    <TabsContent value="sla">
+                      <SLAReportPanel />
+                    </TabsContent>
+                  ) : null}
+                  <TabsContent value="tasks">
                     <SleepingTasks
                       onOpen={setLogTask}
                       refreshKey={dashboard.refreshNonce}
@@ -637,11 +640,11 @@ function OrchestratorInner({
                     other tabs fetch once and carry their own Refresh button,
                     so the note is true only here. */}
                     <p className="refresh-note">
-        {rich("Auto-refresh every {0} seconds", dashboard.refreshSeconds)}
-      </p>
-                  </>
-                )}
-              </div>
+                      {rich("Auto-refresh every {0} seconds", dashboard.refreshSeconds)}
+                    </p>
+                  </TabsContent>
+                </div>
+              </Tabs>
             </div>
           </div>
         </div>

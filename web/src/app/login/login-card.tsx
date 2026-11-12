@@ -1,5 +1,10 @@
 import { getLanguage, t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { LanguageSelect } from "@/app/shared/ui/LanguageSelect";
 
@@ -42,25 +47,6 @@ function errorCodeToMessage(
   return tr("Could not sign in.");
 }
 
-// passwordLoginEnabled is false on a Fleet that signs in through central Auth
-// only (FLEET_OIDC_* set, FLEET_OIDC_ALLOW_PASSWORD not): the password form and
-// its divider are omitted and the SSO button becomes the card's primary action.
-// The server refuses the form's endpoint there too; this only stops offering it.
-//
-// magicLinkLoginEnabled is resolved server-side from AUTH_SIGNING_PUBKEY (the same
-// gate the backend uses) and passed in as a prop. When the Elcano-email path
-// isn't configured — e.g. a white-labelled deploy — the secondary button and
-// its divider are omitted entirely so the card shows only the password form
-// and never surfaces the Elcano brand.
-//
-// title/tagline arrive the same way: as props resolved server-side (into the
-// index.html bootstrap) from the bundle's `branding.login_title` / `login_tagline` (#892). They used to be
-// hardcoded literals here, because this card renders before sign-in and
-// /client-config — where those strings are served — is member-gated, so a
-// pre-auth card structurally cannot fetch them. The strings were parsed,
-// defaulted, API-served and typed, and then never rendered: a bundle setting
-// login_title to "Reklaim what's yours." still displayed "Welcome aboard."
-// The login page (page.tsx) reads them from the bootstrap and hands them down.
 export default function LoginCard({
   passwordLoginEnabled = true,
   magicLinkLoginEnabled,
@@ -89,13 +75,6 @@ export default function LoginCard({
 }) {
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Reading the `?e=` query param must happen after hydration — `window` is
-  // undefined during SSR, and a useState lazy initializer would cause a hydrate
-  // mismatch for the initial render. We read synchronously in the effect but
-  // apply the result via a microtask so the setState lands outside the effect's
-  // synchronous phase (otherwise react-hooks/set-state-in-effect flags the
-  // cascading render); a guard cancels the update if we unmount first. The
-  // theme is owned by the shared ThemeToggle (useTheme) below.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const nextError = errorCodeToMessage(params.get("e"), passwordLoginEnabled);
@@ -109,33 +88,20 @@ export default function LoginCard({
     };
   }, [passwordLoginEnabled]);
 
-  const primary =
-    "inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] px-4 py-3 font-bold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px";
-  const secondary =
-    "flex min-h-11 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5 text-sm font-bold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]";
-  const field =
-    "block min-h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[var(--color-text-primary)] outline-none transition hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] focus-visible:[box-shadow:var(--focus-ring)]";
-  const label =
+  const primaryClass =
+    "min-h-11 w-full bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] px-4 py-3 font-bold text-[var(--color-on-primary-fill)] hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))]";
+  const secondaryClass =
+    "min-h-11 w-full bg-[var(--color-surface-1)] px-4 py-2.5 text-sm font-bold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]";
+  const fieldClass =
+    "bg-[var(--color-surface-1)]";
+  const labelClass =
     "mb-2 block text-[0.8125rem] font-bold text-[var(--color-text-secondary)]";
 
-  // The primary action keeps the shape of Auth's button gradient (primary →
-  // a deeper primary) rather than Fleet's app-wide --gradient-action-primary
-  // (primary → secondary), but both stops are the measured fill pair
-  // (--color-primary-fill → -fill-hover), so its label holds 4.5:1 for any
-  // bundle palette. Auth's raw primary_hover is LIGHTER than the primary in
-  // dark (white on fleet's #8686c4 is 3.38:1), and its brightness hover
-  // faded the label further. Hover deepens to the hover fill instead.
-  // The card is Auth's sign-in card, term for term (auth/internal/httpapi/
-  // templates.go: loginHTML + componentCSS): the bundle mark, the wordmark,
-  // the title and tagline, labelled fields on surface_1, one full-width
-  // primary action, then the secondary sign-in(s) under an "or" divider. Same
-  // tokens, same gradients, so a person moving between Auth and Fleet sees
-  // one design. The theme toggle sits at the page corner as it does on Auth.
   return (
     <main className="flex min-h-screen bg-[var(--gradient-bg-home-signature)] px-6 py-10">
       <div className="fixed top-5 left-5"><LanguageSelect /></div>
       <ThemeToggle className="fixed top-5 right-5 inline-flex size-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]" />
-      <div className="m-auto w-full max-w-[25rem] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-10 shadow-[var(--shadow-lg)]">
+      <Card className="m-auto block w-full max-w-[25rem] gap-0 rounded-[var(--radius-xl)] border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-10 shadow-[var(--shadow-lg)]">
         {/* A plain <img>: the bundle mark is served at /api/brand/logo with no
             extension and may be an SVG, which no image optimizer should touch. */}
         <img
@@ -161,61 +127,57 @@ export default function LoginCard({
         </p>
 
         {loginError ? (
-          <div
-            role="alert"
-            className="mb-5 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_14%,transparent)] px-3 py-3 text-[0.8125rem] text-[var(--color-danger)]"
-          >
-            {loginError}
-          </div>
+          <Alert variant="destructive" className="mb-5 block px-3 py-3 text-[0.8125rem]">
+            <AlertDescription className="block text-[0.8125rem] text-inherit">
+              {loginError}
+            </AlertDescription>
+          </Alert>
         ) : null}
 
         {passwordLoginEnabled ? (
           <form action="/api/auth/login" method="post">
-            <label htmlFor="email" className={label}>
+            <Label htmlFor="email" className={labelClass}>
               {tr("Email")}
-            </label>
-            <input
+            </Label>
+            <Input
               id="email"
               name="email"
               type="email"
               autoComplete="email"
               required
               placeholder={tr("you@example.com")}
-              className={`${field} mb-4`}
+              className={`${fieldClass} mb-4`}
             />
-            <label htmlFor="password" className={label}>
+            <Label htmlFor="password" className={labelClass}>
               {tr("Password")}
-            </label>
-            <input
+            </Label>
+            <Input
               id="password"
               name="password"
               type="password"
               autoComplete="current-password"
               required
-              className={field}
+              className={fieldClass}
             />
-            <button type="submit" className={`mt-5 ${primary}`}>
+            <Button type="submit" size="lg" className={`mt-5 ${primaryClass}`}>
               {tr("Sign in")}
-            </button>
+            </Button>
           </form>
         ) : (
-          // Central Auth only: SSO is the one way in, so it takes the primary
-          // action's place. An <a> for the same reason as below. The
-          // `enabled:` hover variant does not match an <a>, so the hover fill
-          // is restated for it.
           <div className="grid gap-3">
             {oidcEnabled ? (
-              <a
-                href={`/api/auth/oidc/start?lang=${getLanguage()}`}
-                className={`${primary} hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))]`}
-              >
-                {oidcLabel}
-              </a>
+              <Button asChild size="lg" className={primaryClass}>
+                <a href={`/api/auth/oidc/start?lang=${getLanguage()}`}>
+                  {oidcLabel}
+                </a>
+              </Button>
             ) : null}
             {magicLinkLoginEnabled ? (
-              <a href={`/api/auth/elcano-login?lang=${getLanguage()}`} className={secondary}>
-                {tr("Use Elcano email")}
-              </a>
+              <Button asChild variant="outline" size="lg" className={secondaryClass}>
+                <a href={`/api/auth/elcano-login?lang=${getLanguage()}`}>
+                  {tr("Use Elcano email")}
+                </a>
+              </Button>
             ) : null}
           </div>
         )}
@@ -228,27 +190,20 @@ export default function LoginCard({
               <span className="h-px flex-1 bg-[var(--color-border)]" />
             </div>
 
-            {/* Secondary sign-in(s): hand off to an external identity flow. Kept
-                visually subordinate to the primary password action above, per the
-                flag design system's primary-semantics rule.
-
-                Both targets are API routes (/api/auth/oidc/start,
-                /api/auth/elcano-login), not pages: each answers with a 303 to a
-                third-party identity provider, and /oidc/start also has to SET the
-                state/nonce/PKCE cookies on that response. A <Link>
-                soft-navigation would never perform the cross-origin document
-                navigation the flow depends on, so a plain <a> is the correct
-                element here — the full page load is the handoff. */}
             <div className="grid gap-3">
               {oidcEnabled ? (
-                <a href={`/api/auth/oidc/start?lang=${getLanguage()}`} className={secondary}>
-                  {oidcLabel}
-                </a>
+                <Button asChild variant="outline" size="lg" className={secondaryClass}>
+                  <a href={`/api/auth/oidc/start?lang=${getLanguage()}`}>
+                    {oidcLabel}
+                  </a>
+                </Button>
               ) : null}
               {magicLinkLoginEnabled ? (
-                <a href={`/api/auth/elcano-login?lang=${getLanguage()}`} className={secondary}>
-                  {tr("Use Elcano email")}
-                </a>
+                <Button asChild variant="outline" size="lg" className={secondaryClass}>
+                  <a href={`/api/auth/elcano-login?lang=${getLanguage()}`}>
+                    {tr("Use Elcano email")}
+                  </a>
+                </Button>
               ) : null}
             </div>
           </>
@@ -257,7 +212,7 @@ export default function LoginCard({
         <p className="mt-6 text-center text-[0.8125rem] text-[var(--color-text-muted)]">
           {tr("Accounts are created by an administrator.")}
         </p>
-      </div>
+      </Card>
     </main>
   );
 }

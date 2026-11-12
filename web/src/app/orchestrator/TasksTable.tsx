@@ -7,6 +7,17 @@ import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   createdByLabel,
   scheduleLabel,
@@ -186,38 +197,34 @@ export function TasksTable({
           <label htmlFor="taskStatusFilter" className="filter-label">
             {tr("Status")}
           </label>
-          <div className="select-wrap">
-            <select
-              id="taskStatusFilter"
-              className="filter-select"
-              aria-label={tr("Filter by status")}
-              value={filters.status}
-              onChange={(e) => onFilters({ status: e.target.value })}
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s || "all"} value={s}>
-                  {s ? s.replaceAll("_", " ") : tr("All")}
-                </option>
-              ))}
-            </select>
-          </div>
+          <NativeSelect
+            id="taskStatusFilter"
+            className="filter-select"
+            aria-label={tr("Filter by status")}
+            value={filters.status}
+            onChange={(e) => onFilters({ status: e.target.value })}
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <NativeSelectOption key={s || "all"} value={s}>
+                {s ? s.replaceAll("_", " ") : tr("All")}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
         </div>
         <div className="filter-group">
           <label htmlFor="createdByFilter" className="filter-label">
             {tr("Created By")}
           </label>
-          <div className="select-wrap">
-            <select
-              id="createdByFilter"
-              className="filter-select"
-              aria-label={tr("Filter by creator")}
-              value={filters.createdBy}
-              onChange={(e) => onFilters({ createdBy: e.target.value })}
-            >
-              <option value="">{tr("All")}</option>
-              <option value="me">{tr("My Tasks")}</option>
-            </select>
-          </div>
+          <NativeSelect
+            id="createdByFilter"
+            className="filter-select"
+            aria-label={tr("Filter by creator")}
+            value={filters.createdBy}
+            onChange={(e) => onFilters({ createdBy: e.target.value })}
+          >
+            <NativeSelectOption value="">{tr("All")}</NativeSelectOption>
+            <NativeSelectOption value="me">{tr("My Tasks")}</NativeSelectOption>
+          </NativeSelect>
         </div>
         {tagOptions.length > 0 || filters.tags.length > 0 ? (
           <div className="filter-group">
@@ -225,28 +232,26 @@ export function TasksTable({
               {tr("Tags")}
             </label>
             <div className="tag-filter-control">
-              <div className="select-wrap">
-                <select
-                  id="taskTagFilter"
-                  className="filter-select"
-                  aria-label={tr("Filter by tag")}
-                  // Always "" — this select is an ADD control, not a
-                  // selection. Holding the last-added tag would claim the
-                  // board is filtered by that one tag when it is filtered by
-                  // every chip beside it.
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) toggleTag(e.target.value);
-                  }}
-                >
-                  <option value="">{filters.tags.length > 0 ? tr("Add tag…") : tr("All")}</option>
-                  {unselectedTags.map((tag) => (
-                    <option key={tag} value={tag}>
-                      {tag}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <NativeSelect
+                id="taskTagFilter"
+                className="filter-select"
+                aria-label={tr("Filter by tag")}
+                // Always "" — this select is an ADD control, not a
+                // selection. Holding the last-added tag would claim the
+                // board is filtered by that one tag when it is filtered by
+                // every chip beside it.
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) toggleTag(e.target.value);
+                }}
+              >
+                <NativeSelectOption value="">{filters.tags.length > 0 ? tr("Add tag…") : tr("All")}</NativeSelectOption>
+                {unselectedTags.map((tag) => (
+                  <NativeSelectOption key={tag} value={tag}>
+                    {tag}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
               {filters.tags.length > 0 ? (
                 <span className="tag-filter-chips" data-testid="tag-filter-chips">
                   {filters.tags.map((tag) => (
@@ -271,7 +276,7 @@ export function TasksTable({
           <label htmlFor="taskSearchFilter" className="filter-label">
             {tr("Search")}
           </label>
-          <input
+          <Input
             id="taskSearchFilter"
             type="text"
             className="filter-input"
@@ -282,8 +287,10 @@ export function TasksTable({
           />
         </div>
         {onClearFilters && anyFilter ? (
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             className="btn btn-secondary btn-small"
             data-testid="tasks-clear-filters"
             onClick={() => {
@@ -296,169 +303,168 @@ export function TasksTable({
             }}
           >
             {tr("Clear filters")}
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="table-wrapper tasks-table-wrapper">
-        <table id="tasksTable">
-          <thead>
-            <tr>
-              <th scope="col">{tr("ID")}</th>
-              <th scope="col">{tr("Task")}</th>
-              <th scope="col">{tr("Status")}</th>
-              <th scope="col">{tr("SLA")}</th>
-              <th scope="col">{tr("Schedule")}</th>
-              <th scope="col">{tr("Created By")}</th>
-              <th scope="col">{tr("Created")}</th>
-              <th scope="col">{tr("Logs")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="table-empty">
-                  <TasksEmptyState
-                    loading={loading}
-                    error={error}
-                    onRetry={onRetry}
-                    anyFilter={anyFilter}
-                    onClearFilters={onClearFilters}
-                  />
-                </td>
-              </tr>
-            ) : (
-              tasks.map((task) => {
-                const hasLogs = !!task.agent_session_id;
-                const badge = slaBadge(task);
-                return (
-                  <tr
-                    key={task.id}
-                    className={`clickable${badge ? ` sla-row-${badge.tone}` : ""}`}
-                    data-task-id={task.id}
-                    data-sla-breached={task.sla_breached ? "true" : undefined}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={taskControlLabel(task, tr("View"))}
-                    onClick={() => onOpenLogs(task)}
-                    onKeyDown={(e) => {
-                      // Only open logs when the row itself is focused, not when
-                      // an event bubbles from a nested control (such as a tag
-                      // chip or action button). Otherwise pressing Enter/Space
-                      // on a focused chip opens the log viewer and preventDefault
-                      // blocks the chip's native activation click.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onOpenLogs(task);
-                      }
-                    }}
-                  >
-                    <td title={task.id}>
-                      <code>{task.id.slice(0, 8)}...</code>
-                    </td>
-                    <td className="prompt-cell" title={task.prompt ?? ""}>
-                      {task.title?.trim() || promptName(task.prompt ?? "") ? (
-                        <>
-                          <span className="task-title-line">
-                            {task.title?.trim() || promptName(task.prompt ?? "")}
-                          </span>
-                          <span className="task-prompt-line">
-                            {truncate((task.prompt ?? "").trim(), 80)}
-                          </span>
-                        </>
-                      ) : (
-                        truncate((task.prompt ?? "").trim(), 80)
-                      )}
-                      <TaskTagChips
-                        tags={task.tags}
-                        selected={filters.tags}
-                        onToggle={toggleTag}
-                      />
-                    </td>
-                    <td>
-                      <TaskStatusBadge task={task} />
-                    </td>
-                    <td>
-                      <TaskSlaBadge task={task} />
-                    </td>
-                    <td title={scheduleTitle(task)}>{scheduleLabel(task)}</td>
-                    <td>{createdByLabel(task)}</td>
-                    <td>{formatTimeFirst(task.created_at)}</td>
-                    <td>
-                      <span className="task-row-actions">
-                        <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
-                          {hasLogs ? tr("View") : tr("None")}
-                        </StatusChip>
-                        {onRunNow && isRunnable(task.status) ? (
-                          <button
-                            type="button"
-                            className="icon-action task-run-now-btn"
-                            aria-label={tr("{0} now", [taskControlLabel(task, tr("Run"))])}
-                            title={tr("Run now")}
-                            data-testid="task-run-now-button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRunNow(task);
-                            }}
-                          >
-                            <Icon name="zap" className="size-3.5" />
-                          </button>
-                        ) : null}
-                        {onEdit && isRunnable(task.status) ? (
-                          <button
-                            type="button"
-                            className="icon-action task-edit-btn"
-                            aria-label={taskControlLabel(task, tr("Edit"))}
-                            title={tr("Edit task")}
-                            data-testid="task-edit-button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onEdit(task);
-                            }}
-                          >
-                            <Icon name="edit" className="size-3.5" />
-                          </button>
-                        ) : null}
-                        {onStop && isStoppable(task.status) ? (
-                          <button
-                            type="button"
-                            className="icon-action task-stop-btn"
-                            aria-label={taskControlLabel(task, stopVerb(task))}
-                            title={stopTitle(task)}
-                            data-testid="task-stop-button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onStop(task);
-                            }}
-                          >
-                            <Icon name="stop" className="size-3.5" />
-                          </button>
-                        ) : null}
-                        {onDelete && isDeletable(task.status) ? (
-                          <button
-                            type="button"
-                            className="icon-action task-delete-btn"
-                            aria-label={taskControlLabel(task, tr("Delete"))}
-                            title={tr("Delete permanently — frees its name for reuse")}
-                            data-testid="task-delete-button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDelete(task);
-                            }}
-                          >
-                            <Icon name="trash" className="size-3.5" />
-                          </button>
-                        ) : null}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      <Table id="tasksTable" containerClassName="table-wrapper tasks-table-wrapper">
+        <TableHeader>
+          <TableRow>
+            <TableHead>{tr("ID")}</TableHead>
+            <TableHead>{tr("Task")}</TableHead>
+            <TableHead>{tr("Status")}</TableHead>
+            <TableHead>{tr("SLA")}</TableHead>
+            <TableHead>{tr("Schedule")}</TableHead>
+            <TableHead>{tr("Created By")}</TableHead>
+            <TableHead>{tr("Created")}</TableHead>
+            <TableHead>{tr("Logs")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tasks.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={8} className="table-empty whitespace-normal">
+                <TasksEmptyState
+                  loading={loading}
+                  error={error}
+                  onRetry={onRetry}
+                  anyFilter={anyFilter}
+                  onClearFilters={onClearFilters}
+                />
+              </TableCell>
+            </TableRow>
+          ) : (
+            tasks.map((task) => {
+              const hasLogs = !!task.agent_session_id;
+              const badge = slaBadge(task);
+              return (
+                <TableRow
+                  key={task.id}
+                  interactive
+                  className={`clickable${badge ? ` sla-row-${badge.tone}` : ""}`}
+                  data-task-id={task.id}
+                  data-sla-breached={task.sla_breached ? "true" : undefined}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={taskControlLabel(task, tr("View"))}
+                  onClick={() => onOpenLogs(task)}
+                  onKeyDown={(e) => {
+                    // Only open logs when the row itself is focused, not when
+                    // an event bubbles from a nested control (such as a tag
+                    // chip or action button). Otherwise pressing Enter/Space
+                    // on a focused chip opens the log viewer and preventDefault
+                    // blocks the chip's native activation click.
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpenLogs(task);
+                    }
+                  }}
+                >
+                  <TableCell title={task.id}>
+                    <code>{task.id.slice(0, 8)}...</code>
+                  </TableCell>
+                  <TableCell className="prompt-cell whitespace-normal" title={task.prompt ?? ""}>
+                    {task.title?.trim() || promptName(task.prompt ?? "") ? (
+                      <>
+                        <span className="task-title-line">
+                          {task.title?.trim() || promptName(task.prompt ?? "")}
+                        </span>
+                        <span className="task-prompt-line">
+                          {truncate((task.prompt ?? "").trim(), 80)}
+                        </span>
+                      </>
+                    ) : (
+                      truncate((task.prompt ?? "").trim(), 80)
+                    )}
+                    <TaskTagChips
+                      tags={task.tags}
+                      selected={filters.tags}
+                      onToggle={toggleTag}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <TaskStatusBadge task={task} />
+                  </TableCell>
+                  <TableCell>
+                    <TaskSlaBadge task={task} />
+                  </TableCell>
+                  <TableCell title={scheduleTitle(task)}>{scheduleLabel(task)}</TableCell>
+                  <TableCell>{createdByLabel(task)}</TableCell>
+                  <TableCell>{formatTimeFirst(task.created_at)}</TableCell>
+                  <TableCell>
+                    <span className="task-row-actions">
+                      <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
+                        {hasLogs ? tr("View") : tr("None")}
+                      </StatusChip>
+                      {onRunNow && isRunnable(task.status) ? (
+                        <button
+                          type="button"
+                          className="icon-action task-run-now-btn"
+                          aria-label={tr("{0} now", [taskControlLabel(task, tr("Run"))])}
+                          title={tr("Run now")}
+                          data-testid="task-run-now-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRunNow(task);
+                          }}
+                        >
+                          <Icon name="zap" className="size-3.5" />
+                        </button>
+                      ) : null}
+                      {onEdit && isRunnable(task.status) ? (
+                        <button
+                          type="button"
+                          className="icon-action task-edit-btn"
+                          aria-label={taskControlLabel(task, tr("Edit"))}
+                          title={tr("Edit task")}
+                          data-testid="task-edit-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEdit(task);
+                          }}
+                        >
+                          <Icon name="edit" className="size-3.5" />
+                        </button>
+                      ) : null}
+                      {onStop && isStoppable(task.status) ? (
+                        <button
+                          type="button"
+                          className="icon-action task-stop-btn"
+                          aria-label={taskControlLabel(task, stopVerb(task))}
+                          title={stopTitle(task)}
+                          data-testid="task-stop-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onStop(task);
+                          }}
+                        >
+                          <Icon name="stop" className="size-3.5" />
+                        </button>
+                      ) : null}
+                      {onDelete && isDeletable(task.status) ? (
+                        <button
+                          type="button"
+                          className="icon-action task-delete-btn"
+                          aria-label={taskControlLabel(task, tr("Delete"))}
+                          title={tr("Delete permanently — frees its name for reuse")}
+                          data-testid="task-delete-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(task);
+                          }}
+                        >
+                          <Icon name="trash" className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
 
       {/* Phone card view: the 8-column table needs sideways scrolling on a
           phone, so <=720px renders each task as a stacked card instead. CSS
@@ -632,40 +638,42 @@ export function TasksTable({
           </span>
         </div>
         <div className="pagination-controls">
-          <button
+          <Button
             type="button"
+            variant="outline"
             className="btn btn-secondary"
             aria-label={tr("Previous page")}
             disabled={page <= 1}
             onClick={() => onPage(page - 1)}
           >
             {tr("Prev")}
-          </button>
+          </Button>
           <span className="page-info">
         {rich("Page {0} of {1}", page, totalPages)}
       </span>
-          <button
+          <Button
             type="button"
+            variant="outline"
             className="btn btn-secondary"
             aria-label={tr("Next page")}
             disabled={page >= totalPages}
             onClick={() => onPage(page + 1)}
           >
             {tr("Next")}
-          </button>
+          </Button>
         </div>
         <div className="page-size-selector">
           <label htmlFor="pageSizeSelect">{tr("Show")}</label>
-          <select
+          <NativeSelect
             id="pageSizeSelect"
             aria-label={tr("Items per page")}
             value={pageSize}
             onChange={(e) => onPageSize(Number.parseInt(e.target.value, 10))}
           >
-            <option value="10">10</option>
-            <option value="20">20</option>
-            <option value="50">50</option>
-          </select>
+            <NativeSelectOption value="10">10</NativeSelectOption>
+            <NativeSelectOption value="20">20</NativeSelectOption>
+            <NativeSelectOption value="50">50</NativeSelectOption>
+          </NativeSelect>
         </div>
       </div>
     </div>
@@ -759,9 +767,9 @@ function TasksEmptyState({
         {rich("Couldn't load tasks: {0}{1}", error, onRetry ? (
           <>
             {" "}
-            <button type="button" className="btn btn-small" onClick={onRetry}>
+            <Button type="button" variant="outline" size="sm" className="btn btn-small" onClick={onRetry}>
               {tr("Retry")}
-            </button>
+            </Button>
           </>
         ) : null)}
       </span>
@@ -776,9 +784,9 @@ function TasksEmptyState({
         {rich("No tasks match the current filters.{0}", onClearFilters ? (
           <>
             {" "}
-            <button type="button" className="btn btn-small" onClick={onClearFilters}>
+            <Button type="button" variant="outline" size="sm" className="btn btn-small" onClick={onClearFilters}>
               {tr("Clear filters")}
-            </button>
+            </Button>
           </>
         ) : null)}
       </span>

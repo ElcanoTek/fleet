@@ -20,6 +20,20 @@ import { UsagePanel } from "@/app/orchestrator/UsagePanel";
 import { AdoptionPanel } from "@/app/orchestrator/AdoptionPanel";
 import { ServerStatsView } from "@/app/settings/admin/server/page";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const ANALYTICS_TABS = ["models", "outliers", "usage", "adoption", "server"] as const;
 export type AnalyticsTab = (typeof ANALYTICS_TABS)[number];
@@ -309,8 +323,9 @@ function MonthlyAllowanceBanner() {
   const limitPct = softLimit > 0 ? (billedCostUSD / softLimit) * 100 : 0;
 
   return (
-    <section
+    <Card
       className="mb-6 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-sm)]"
+      role="region"
       aria-label={tr("Monthly spend allowance and model mix overview")}
       data-testid="analytics-monthly-banner"
     >
@@ -324,8 +339,10 @@ function MonthlyAllowanceBanner() {
         </div>
         <div className="flex items-center gap-2">
           {!editingLimit ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="btn btn-ghost text-[0.78rem]"
               data-testid="edit-monthly-soft-limit"
               onClick={() => {
@@ -335,7 +352,7 @@ function MonthlyAllowanceBanner() {
               }}
             >
               {softLimit > 0 ? tr("Edit monthly spend limit") : tr("Set monthly spend limit")}
-            </button>
+            </Button>
           ) : (
             <form
               className="flex flex-wrap items-center gap-2"
@@ -346,7 +363,7 @@ function MonthlyAllowanceBanner() {
             >
               <label htmlFor="monthlySoftSpendLimitInput" className="sr-only">
                 {tr("Monthly soft spend limit (USD)")}</label>
-              <input
+              <Input
                 id="monthlySoftSpendLimitInput"
                 type="text"
                 inputMode="decimal"
@@ -356,30 +373,37 @@ function MonthlyAllowanceBanner() {
                 className="w-full max-w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 font-[family-name:var(--font-code)] text-[0.8rem] text-[var(--color-text-primary)] sm:w-52"
                 data-testid="monthly-soft-limit-input"
               />
-              <button
+              <Button
                 type="submit"
+                size="sm"
                 disabled={savingLimit}
                 className="btn text-[0.78rem]"
                 data-testid="save-monthly-soft-limit"
               >
                 {savingLimit ? tr("Saving…") : tr("Save")}
-              </button>
+              </Button>
               {softLimit > 0 ? (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   disabled={savingLimit}
                   className="btn btn-ghost text-[0.78rem]"
                   onClick={() => void saveSoftLimit("0")}
                 >
-                  {tr("Clear")}</button>
+                  {tr("Clear")}
+                </Button>
               ) : null}
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 disabled={savingLimit}
                 className="btn btn-ghost text-[0.78rem]"
                 onClick={() => setEditingLimit(false)}
               >
-                {tr("Cancel")}</button>
+                {tr("Cancel")}
+              </Button>
             </form>
           )}
         </div>
@@ -396,7 +420,7 @@ function MonthlyAllowanceBanner() {
       ) : null}
 
       <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
+        <Card className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
             {tr("Monthly Token Usage")}</div>
           <div
@@ -409,9 +433,9 @@ function MonthlyAllowanceBanner() {
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
         {rich("{0} input · {1} output", fmtTokens(monthUsage?.totals?.prompt_tokens ?? 0), fmtTokens(monthUsage?.totals?.completion_tokens ?? 0))}
       </div>
-        </div>
+        </Card>
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
+        <Card className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
             {tr("Included / $0-Cost Share")}</div>
           <div
@@ -423,9 +447,9 @@ function MonthlyAllowanceBanner() {
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
         {rich("{0} included · {1} billed", fmtTokens(includedTokens), fmtTokens(billedTokens))}
       </div>
-        </div>
+        </Card>
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
+        <Card className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
             {tr("Billed Model Spend (MTD)")}</div>
           <div
@@ -468,9 +492,9 @@ function MonthlyAllowanceBanner() {
               ) : null}
             </div>
           ) : null}
-        </div>
+        </Card>
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
+        <Card className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-3.5">
           <div className="text-[0.72rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
             {tr("Prompt Cache Hit Rate")}</div>
           <div
@@ -482,9 +506,9 @@ function MonthlyAllowanceBanner() {
           <div className="mt-1 text-[0.76rem] text-[var(--color-text-secondary)]">
         {rich("{0} cached · {1} uncached", fmtTokens(monthUsage?.totals?.cached_tokens ?? 0), fmtTokens(monthUsage?.totals?.uncached_tokens ?? 0))}
       </div>
-        </div>
+        </Card>
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -575,18 +599,18 @@ function ModelUsageTab() {
         </div>
         <div className="usage-controls">
           <label htmlFor="modelUsageRange">{tr("Range")}</label>
-          <select
+          <NativeSelect
             id="modelUsageRange"
             aria-label={tr("Model usage window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
             {MODEL_RANGES.map((r) => (
-              <option key={r.value} value={r.value}>
+              <NativeSelectOption key={r.value} value={r.value}>
                 {r.label}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       </div>
 
@@ -597,15 +621,16 @@ function ModelUsageTab() {
       ) : null}
 
       <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div
-          className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+        <Card
+          className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
           data-testid="tier-card-included"
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-success)]">
               {tr("Included / $0-Cost Models")}</span>
-            <span className="rounded-full border border-[var(--color-status-success-border)] bg-[var(--color-status-success-bg)] px-2.5 py-0.5 font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-success)]">
-              {tr("$0.00 billed")}</span>
+            <Badge variant="success" className="font-[family-name:var(--font-code)] text-[0.74rem] font-semibold">
+              {tr("$0.00 billed")}
+            </Badge>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
             <span className="font-[family-name:var(--font-code)] text-[1.4rem] font-bold text-[var(--color-text-primary)]">
@@ -618,18 +643,18 @@ function ModelUsageTab() {
           <p className="mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
         {rich("{0} · {1} chat turns & task iterations absorbed at $0 direct cost", tr(includedBuckets.length === 1 ? "{0} model" : "{0} models", [includedBuckets.length]), plain.format(includedRuns))}
       </p>
-        </div>
+        </Card>
 
-        <div
-          className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+        <Card
+          className="gap-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
           data-testid="tier-card-billed"
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[0.76rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
               {tr("Frontier / Billed Models")}</span>
-            <span className="rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2.5 py-0.5 font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-text-primary)]">
+            <Badge variant="outline" className="border-[var(--color-border-strong)] bg-[var(--color-surface-3)] font-[family-name:var(--font-code)] text-[0.74rem] font-semibold text-[var(--color-text-primary)]">
         {rich("{0} billed", fmtUSD(billedCost))}
-      </span>
+      </Badge>
           </div>
           <div className="mt-2 flex items-baseline gap-3">
             <span className="font-[family-name:var(--font-code)] text-[1.4rem] font-bold text-[var(--color-text-primary)]">
@@ -642,7 +667,7 @@ function ModelUsageTab() {
           <p className="mt-1 text-[0.78rem] text-[var(--color-text-secondary)]">
         {rich("{0} · {1} chat turns & task iterations on metered models", tr(billedBuckets.length === 1 ? "{0} model" : "{0} models", [billedBuckets.length]), plain.format(billedRuns))}
       </p>
-        </div>
+        </Card>
       </div>
 
       <div
@@ -680,99 +705,101 @@ function ModelUsageTab() {
       </p>
         </div>
       ) : (
-        <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
-          <table className="tasks-table usage-table" data-testid="model-breakdown-table">
-            <thead>
-              <tr>
-                <th scope="col">{tr("Model")}</th>
-                <th scope="col">{tr("Tier")}</th>
-                <th scope="col">{tr("Token Share")}</th>
-                <th scope="col" className="num">
-                  {tr("Total Tokens")}</th>
-                <th scope="col" className="num">
-                  {tr("Cache Hit %")}</th>
-                <th scope="col" className="num">
-                  {tr("Chat Turns")}</th>
-                <th scope="col" className="num">
-                  {tr("Task Steps")}</th>
-                <th scope="col" className="num">
-                  {tr("Total Spend")}</th>
-                <th scope="col" className="num">
-                  {tr("Avg / Step")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((b) => {
-                const tok = b.prompt_tokens + b.completion_tokens;
-                const share = totalTokens > 0 ? (tok / totalTokens) * 100 : 0;
-                const tier = classifyModelBucket(b, pinnedModels);
-                const isIncluded = tier === "included";
-                const isUnpriced = tier === "unpriced";
-                const totalSteps = b.chat_turns + b.task_iterations;
-                const avgCost = totalSteps > 0 ? b.cost_usd / totalSteps : 0;
-                return (
-                  <tr key={b.key || "__default__"} data-testid="model-breakdown-row">
-                    <td className="usage-key font-[family-name:var(--font-code)] text-[0.8rem]">
-                      {modelDisplayName(b, pinnedModels)}
-                    </td>
-                    <td>
-                      {isIncluded ? (
-                        <span className="inline-flex items-center rounded-full border border-[var(--color-status-success-border)] bg-[var(--color-status-success-bg)] px-2 py-0.5 text-[0.7rem] font-semibold text-[var(--color-success)]">
-                          {tr("Included ($0)")}</span>
-                      ) : isUnpriced ? (
-                        <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                          {tr("No price data")}</span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
-                          {tr("Billed")}</span>
-                      )}
-                    </td>
-                    <td
-                      className="min-w-[8rem]"
-                      aria-label={tr("{0}% token share", [formatFixed(share, 1)])}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-20 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${Math.min(100, Math.max(2, share))}%`,
-                              backgroundColor: isIncluded
-                                ? "var(--color-success)"
-                                : "var(--usage-bar)",
-                            }}
-                          />
-                        </div>
-                        <span className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                          {formatFixed(share, 1)}%
-                        </span>
+        <Table
+          className="tasks-table usage-table"
+          containerClassName="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]"
+          data-testid="model-breakdown-table"
+        >
+          <TableHeader>
+            <TableRow>
+              <TableHead>{tr("Model")}</TableHead>
+              <TableHead>{tr("Tier")}</TableHead>
+              <TableHead>{tr("Token Share")}</TableHead>
+              <TableHead className="num">
+                {tr("Total Tokens")}</TableHead>
+              <TableHead className="num">
+                {tr("Cache Hit %")}</TableHead>
+              <TableHead className="num">
+                {tr("Chat Turns")}</TableHead>
+              <TableHead className="num">
+                {tr("Task Steps")}</TableHead>
+              <TableHead className="num">
+                {tr("Total Spend")}</TableHead>
+              <TableHead className="num">
+                {tr("Avg / Step")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {buckets.map((b) => {
+              const tok = b.prompt_tokens + b.completion_tokens;
+              const share = totalTokens > 0 ? (tok / totalTokens) * 100 : 0;
+              const tier = classifyModelBucket(b, pinnedModels);
+              const isIncluded = tier === "included";
+              const isUnpriced = tier === "unpriced";
+              const totalSteps = b.chat_turns + b.task_iterations;
+              const avgCost = totalSteps > 0 ? b.cost_usd / totalSteps : 0;
+              return (
+                <TableRow key={b.key || "__default__"} data-testid="model-breakdown-row">
+                  <TableCell className="usage-key whitespace-normal font-[family-name:var(--font-code)] text-[0.8rem]">
+                    {modelDisplayName(b, pinnedModels)}
+                  </TableCell>
+                  <TableCell>
+                    {isIncluded ? (
+                      <Badge variant="success" className="text-[0.7rem] font-semibold">
+                        {tr("Included ($0)")}</Badge>
+                    ) : isUnpriced ? (
+                      <Badge variant="outline" className="bg-[var(--color-surface-2)] text-[0.7rem] font-medium text-[var(--color-text-muted)]">
+                        {tr("No price data")}</Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-[var(--color-border-strong)] bg-[var(--color-surface-3)] text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
+                        {tr("Billed")}</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell
+                    className="min-w-[8rem]"
+                    aria-label={tr("{0}% token share", [formatFixed(share, 1)])}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-20 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.min(100, Math.max(2, share))}%`,
+                            backgroundColor: isIncluded
+                              ? "var(--color-success)"
+                              : "var(--usage-bar)",
+                          }}
+                        />
                       </div>
-                    </td>
-                    <td className="num" title={plain.format(tok)}>
-                      {fmtTokens(tok)}
-                    </td>
-                    <td
-                      className="num"
-                      title={tr("{0} cached / {1} uncached", [plain.format(b.cached_tokens), plain.format(b.uncached_tokens)])}
-                    >
-                      {b.prompt_tokens > 0 || b.cached_tokens > 0
-                        ? `${formatFixed(b.cache_hit_rate_pct, 1)}%`
-                        : "—"}
-                    </td>
-                    <td className="num">{plain.format(b.chat_turns)}</td>
-                    <td className="num">{plain.format(b.task_iterations)}</td>
-                    <td className="num">
-                      {isIncluded ? "$0.00" : isUnpriced ? "—" : fmtUSD(b.cost_usd)}
-                    </td>
-                    <td className="num">
-                      {isIncluded ? "$0.00" : isUnpriced || totalSteps === 0 ? "—" : fmtUSD(avgCost)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <span className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
+                        {formatFixed(share, 1)}%
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="num" title={plain.format(tok)}>
+                    {fmtTokens(tok)}
+                  </TableCell>
+                  <TableCell
+                    className="num"
+                    title={tr("{0} cached / {1} uncached", [plain.format(b.cached_tokens), plain.format(b.uncached_tokens)])}
+                  >
+                    {b.prompt_tokens > 0 || b.cached_tokens > 0
+                      ? `${formatFixed(b.cache_hit_rate_pct, 1)}%`
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="num">{plain.format(b.chat_turns)}</TableCell>
+                  <TableCell className="num">{plain.format(b.task_iterations)}</TableCell>
+                  <TableCell className="num">
+                    {isIncluded ? "$0.00" : isUnpriced ? "—" : fmtUSD(b.cost_usd)}
+                  </TableCell>
+                  <TableCell className="num">
+                    {isIncluded ? "$0.00" : isUnpriced || totalSteps === 0 ? "—" : fmtUSD(avgCost)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       )}
     </div>
   );
@@ -881,8 +908,8 @@ function OutliersAndFrictionTab() {
   return (
     <div className="space-y-6" data-testid="analytics-outliers">
       {/* Glossary / Signal Definitions */}
-      <div
-        className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 shadow-[var(--shadow-sm)]"
+      <Card
+        className="gap-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 shadow-[var(--shadow-sm)]"
         data-testid="friction-signals-explainer"
       >
         <h2 className="font-heading text-[0.95rem] font-bold text-[var(--color-text-primary)]">
@@ -915,7 +942,7 @@ function OutliersAndFrictionTab() {
       </p>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Section 1: Top Conversations & Patrols */}
       <div className="section" role="region" aria-labelledby="outlierConvsHeading">
@@ -930,17 +957,17 @@ function OutliersAndFrictionTab() {
           </div>
           <div className="usage-controls">
             <label htmlFor="convSortSelect">{tr("Rank by")}</label>
-            <select
+            <NativeSelect
               id="convSortSelect"
               aria-label={tr("Rank outlier conversations by")}
               value={convSort}
               onChange={(e) => setConvSort(e.target.value as ConvSort)}
             >
-              <option value="cost">{tr("Cost ($ USD)")}</option>
-              <option value="tokens">{tr("Total Tokens")}</option>
-              <option value="turns">{tr("Turn Count")}</option>
-              <option value="friction">{tr("Friction Signals")}</option>
-            </select>
+              <NativeSelectOption value="cost">{tr("Cost ($ USD)")}</NativeSelectOption>
+              <NativeSelectOption value="tokens">{tr("Total Tokens")}</NativeSelectOption>
+              <NativeSelectOption value="turns">{tr("Turn Count")}</NativeSelectOption>
+              <NativeSelectOption value="friction">{tr("Friction Signals")}</NativeSelectOption>
+            </NativeSelect>
           </div>
         </div>
 
@@ -957,99 +984,97 @@ function OutliersAndFrictionTab() {
             <p>{tr("No conversations recorded yet.")}</p>
           </div>
         ) : (
-          <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
-            <table
-              className="tasks-table usage-table"
-              data-testid="outliers-conversations-table"
-            >
-              <thead>
-                <tr>
-                  <th scope="col">{tr("Conversation")}</th>
-                  <th scope="col">{tr("User")}</th>
-                  <th scope="col">{tr("Model")}</th>
-                  <th scope="col" className="num">
-                    {tr("Turns")}
-                  </th>
-                  <th scope="col" className="num">
-                    {tr("Tokens")}
-                  </th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title={tr("Share of prompt tokens served from the provider prompt cache")}
+          <Table
+            className="tasks-table usage-table"
+            containerClassName="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]"
+            data-testid="outliers-conversations-table"
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead>{tr("Conversation")}</TableHead>
+                <TableHead>{tr("User")}</TableHead>
+                <TableHead>{tr("Model")}</TableHead>
+                <TableHead className="num">
+                  {tr("Turns")}
+                </TableHead>
+                <TableHead className="num">
+                  {tr("Tokens")}
+                </TableHead>
+                <TableHead
+                  className="num"
+                  title={tr("Share of prompt tokens served from the provider prompt cache")}
+                >
+                  {tr("Cache Hit %")}</TableHead>
+                <TableHead
+                  className="num"
+                  title={tr("Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades")}
+                >
+                  {tr("Friction")}</TableHead>
+                <TableHead className="num">
+                  {tr("Spend")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedConversations.map((c) => {
+                const totalTok = c.prompt_tokens + c.completion_tokens;
+                const hitRate =
+                  c.prompt_tokens > 0
+                    ? (c.cached_tokens / c.prompt_tokens) * 100
+                    : 0;
+                const isPatrol = /^patrol\b/i.test(c.title.trim());
+                return (
+                  <TableRow
+                    key={c.conversation_id}
+                    data-testid="outliers-conversation-row"
                   >
-                    {tr("Cache Hit %")}</th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title={tr("Combined count of frustrated user messages, assistant struggle signals, and mid-chat model upgrades")}
-                  >
-                    {tr("Friction")}</th>
-                  <th scope="col" className="num">
-                    {tr("Spend")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedConversations.map((c) => {
-                  const totalTok = c.prompt_tokens + c.completion_tokens;
-                  const hitRate =
-                    c.prompt_tokens > 0
-                      ? (c.cached_tokens / c.prompt_tokens) * 100
-                      : 0;
-                  const isPatrol = /^patrol\b/i.test(c.title.trim());
-                  return (
-                    <tr
-                      key={c.conversation_id}
-                      data-testid="outliers-conversation-row"
-                    >
-                      <td className="max-w-[20rem] truncate">
-                        <Link
-                          href={`/chat?c=${encodeURIComponent(c.conversation_id)}`}
-                          className="font-medium text-[var(--color-accent)] hover:underline"
-                        >
-                          {c.title || tr("Chat {0}", [c.conversation_id.slice(0, 8)])}
-                        </Link>
-                        {isPatrol ? (
-                          <span
-                            className="ml-2 inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
-                            title={tr("Automated recurring patrol conversation")}
-                          >
-                            {tr("Patrol")}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="font-[family-name:var(--font-code)] text-[0.78rem]">
-                        {c.user_email || tr("(unattributed)")}
-                      </td>
-                      <td className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                        {c.model || tr("(default model)")}
-                      </td>
-                      <td className="num">{plain.format(c.turns)}</td>
-                      <td className="num" title={plain.format(totalTok)}>
-                        {fmtTokens(totalTok)}
-                      </td>
-                      <td className="num">
-                        {c.prompt_tokens > 0 ? `${formatFixed(hitRate, 0)}%` : "—"}
-                      </td>
-                      <td
-                        className="num text-[0.75rem]"
-                        title={tr("{0} frustrated · {1} struggles · {2} model upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])}
+                    <TableCell className="max-w-[20rem] truncate">
+                      <Link
+                        href={`/chat?c=${encodeURIComponent(c.conversation_id)}`}
+                        className="font-medium text-[var(--color-accent)] hover:underline"
                       >
-                        {c.frustrated_messages +
-                          c.struggle_signals +
-                          c.advanced_switches >
-                        0
-                          ? tr(c.advanced_switches === 1 ? "{0} frustrated · {1} struggles · {2} upgrade" : "{0} frustrated · {1} struggles · {2} upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])
-                          : "—"}
-                      </td>
-                      <td className="num">{fmtUSD(c.cost_usd)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        {c.title || tr("Chat {0}", [c.conversation_id.slice(0, 8)])}
+                      </Link>
+                      {isPatrol ? (
+                        <Badge
+                          variant="outline"
+                          className="ml-2 border-[var(--color-border-strong)] bg-[var(--color-surface-3)] text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
+                          title={tr("Automated recurring patrol conversation")}
+                        >
+                          {tr("Patrol")}
+                        </Badge>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="font-[family-name:var(--font-code)] text-[0.78rem]">
+                      {c.user_email || tr("(unattributed)")}
+                    </TableCell>
+                    <TableCell className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
+                      {c.model || tr("(default model)")}
+                    </TableCell>
+                    <TableCell className="num">{plain.format(c.turns)}</TableCell>
+                    <TableCell className="num" title={plain.format(totalTok)}>
+                      {fmtTokens(totalTok)}
+                    </TableCell>
+                    <TableCell className="num">
+                      {c.prompt_tokens > 0 ? `${formatFixed(hitRate, 0)}%` : "—"}
+                    </TableCell>
+                    <TableCell
+                      className="num text-[0.75rem]"
+                      title={tr("{0} frustrated · {1} struggles · {2} model upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])}
+                    >
+                      {c.frustrated_messages +
+                        c.struggle_signals +
+                        c.advanced_switches >
+                      0
+                        ? tr(c.advanced_switches === 1 ? "{0} frustrated · {1} struggles · {2} upgrade" : "{0} frustrated · {1} struggles · {2} upgrades", [c.frustrated_messages, c.struggle_signals, c.advanced_switches])
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="num">{fmtUSD(c.cost_usd)}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
       </div>
 
@@ -1066,17 +1091,17 @@ function OutliersAndFrictionTab() {
           </div>
           <div className="usage-controls">
             <label htmlFor="taskSortSelect">{tr("Rank by")}</label>
-            <select
+            <NativeSelect
               id="taskSortSelect"
               aria-label={tr("Rank background tasks by")}
               value={taskSort}
               onChange={(e) => setTaskSort(e.target.value as TaskSort)}
             >
-              <option value="cost">{tr("Cost ($ USD)")}</option>
-              <option value="tokens">{tr("Total Tokens")}</option>
-              <option value="iterations">{tr("Iterations Used")}</option>
-              <option value="failures">{tr("Failures & Dead Letters")}</option>
-            </select>
+              <NativeSelectOption value="cost">{tr("Cost ($ USD)")}</NativeSelectOption>
+              <NativeSelectOption value="tokens">{tr("Total Tokens")}</NativeSelectOption>
+              <NativeSelectOption value="iterations">{tr("Iterations Used")}</NativeSelectOption>
+              <NativeSelectOption value="failures">{tr("Failures & Dead Letters")}</NativeSelectOption>
+            </NativeSelect>
           </div>
         </div>
 
@@ -1093,73 +1118,72 @@ function OutliersAndFrictionTab() {
             <p>{tr("No background tasks recorded yet.")}</p>
           </div>
         ) : (
-          <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
-            <table
-              className="tasks-table usage-table"
-              data-testid="outliers-tasks-table"
-            >
-              <thead>
-                <tr>
-                  <th scope="col">{tr("Task")}</th>
-                  <th scope="col">{tr("Owner")}</th>
-                  <th scope="col">{tr("Status")}</th>
-                  <th scope="col">{tr("Model")}</th>
-                  <th scope="col" className="num">
-                    {tr("Iterations")}
-                  </th>
-                  <th scope="col" className="num">
-                    {tr("Tokens")}
-                  </th>
-                  <th scope="col" className="num">
-                    {tr("Spend")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedTasks.map((t) => {
-                  const tok = t.prompt_tokens + t.completion_tokens;
-                  const label =
-                    t.title.trim() || tr("Task {0}", [t.task_id.slice(0, 8)]);
-                  return (
-                    <tr key={t.task_id} data-testid="outliers-task-row">
-                      <td className="max-w-[20rem] truncate">
-                        <Link
-                          href={`/orchestrator?task=${encodeURIComponent(t.task_id)}`}
-                          className="font-medium text-[var(--color-accent)] hover:underline"
-                        >
-                          {label}
-                        </Link>
-                        {t.recurrence ? (
-                          <span className="ml-2 inline-flex items-center rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]">
-                            {t.recurrence}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="font-[family-name:var(--font-code)] text-[0.78rem]">
-                        {t.owner_email || tr("(unattributed)")}
-                      </td>
-                      <td>
-                        <span
-                          className="font-[family-name:var(--font-code)] text-[0.76rem]"
-                          title={t.error_message || undefined}
-                        >
-                          {runStateLabel(t.status)}
-                        </span>
-                      </td>
-                      <td className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
-                        {t.model || tr("(default)")}
-                      </td>
-                      <td className="num">{plain.format(t.iterations)}</td>
-                      <td className="num" title={plain.format(tok)}>
-                        {fmtTokens(tok)}
-                      </td>
-                      <td className="num">{fmtUSD(t.cost_usd)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <Table
+            className="tasks-table usage-table"
+            containerClassName="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]"
+            data-testid="outliers-tasks-table"
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead>{tr("Task")}</TableHead>
+                <TableHead>{tr("Owner")}</TableHead>
+                <TableHead>{tr("Status")}</TableHead>
+                <TableHead>{tr("Model")}</TableHead>
+                <TableHead className="num">
+                  {tr("Iterations")}
+                </TableHead>
+                <TableHead className="num">
+                  {tr("Tokens")}
+                </TableHead>
+                <TableHead className="num">
+                  {tr("Spend")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedTasks.map((t) => {
+                const tok = t.prompt_tokens + t.completion_tokens;
+                const label =
+                  t.title.trim() || tr("Task {0}", [t.task_id.slice(0, 8)]);
+                return (
+                  <TableRow key={t.task_id} data-testid="outliers-task-row">
+                    <TableCell className="max-w-[20rem] truncate">
+                      <Link
+                        href={`/orchestrator?task=${encodeURIComponent(t.task_id)}`}
+                        className="font-medium text-[var(--color-accent)] hover:underline"
+                      >
+                        {label}
+                      </Link>
+                      {t.recurrence ? (
+                        <Badge variant="outline" className="ml-2 border-[var(--color-border-strong)] bg-[var(--color-surface-3)] text-[0.68rem] font-medium text-[var(--color-text-secondary)]">
+                          {t.recurrence}
+                        </Badge>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="font-[family-name:var(--font-code)] text-[0.78rem]">
+                      {t.owner_email || tr("(unattributed)")}
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className="font-[family-name:var(--font-code)] text-[0.76rem]"
+                        title={t.error_message || undefined}
+                      >
+                        {runStateLabel(t.status)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-[family-name:var(--font-code)] text-[0.76rem] text-[var(--color-text-secondary)]">
+                      {t.model || tr("(default)")}
+                    </TableCell>
+                    <TableCell className="num">{plain.format(t.iterations)}</TableCell>
+                    <TableCell className="num" title={plain.format(tok)}>
+                      {fmtTokens(tok)}
+                    </TableCell>
+                    <TableCell className="num">{fmtUSD(t.cost_usd)}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
       </div>
 
@@ -1185,70 +1209,66 @@ function OutliersAndFrictionTab() {
             <p>{tr("No user activity signals recorded yet.")}</p>
           </div>
         ) : (
-          <div className="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]">
-            <table
-              className="tasks-table usage-table"
-              data-testid="outliers-user-signals-table"
-            >
-              <thead>
-                <tr>
-                  <th scope="col">{tr("User")}</th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title={tr("User replies expressing frustration, correction, or pushback")}
-                  >
-                    {tr("Frustrated")}
-                  </th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title={tr("Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts")}
-                  >
-                    {tr("Struggles")}
-                  </th>
-                  <th
-                    scope="col"
-                    className="num"
-                    title={tr("Times the user accepted the in-chat prompt to switch up to the stronger frontier model")}
-                  >
-                    {tr("Switched up")}
-                  </th>
-                  <th scope="col" className="num" title={tr("Live (non-deleted) conversations owned by this user")}>
-                    {tr("Chats")}
-                  </th>
-                  <th scope="col" className="num" title={tr("All completed chat turns (including deleted conversations)")}>
-                    {tr("Turns")}
-                  </th>
-                  <th scope="col" className="num" title={tr("Share of prompt tokens served from the provider prompt cache")}>
-                    {tr("Cache Hit %")}</th>
-                  <th scope="col" className="num" title={tr("Total chat spend across all completed turns")}>
-                    {tr("Chat Spend")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {userSignals.map((u) => (
-                  <tr key={u.email} data-testid="outliers-user-signal-row">
-                    <td className="font-[family-name:var(--font-code)] text-[0.8rem]">
-                      {u.email}
-                    </td>
-                    <td className="num">{u.frustrated_messages}</td>
-                    <td className="num">{u.struggle_signals}</td>
-                    <td className="num">{u.advanced_switches}</td>
-                    <td className="num">{u.conversation_count}</td>
-                    <td className="num">{plain.format(u.total_turns)}</td>
-                    <td className="num">
-                      {u.total_prompt_tokens > 0
-                        ? `${formatFixed(u.cache_hit_rate_pct, 0)}%`
-                        : "—"}
-                    </td>
-                    <td className="num">{fmtUSD(u.total_cost_usd)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table
+            className="tasks-table usage-table"
+            containerClassName="table-wrapper overflow-x-auto [-webkit-overflow-scrolling:touch]"
+            data-testid="outliers-user-signals-table"
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead>{tr("User")}</TableHead>
+                <TableHead
+                  className="num"
+                  title={tr("User replies expressing frustration, correction, or pushback")}
+                >
+                  {tr("Frustrated")}
+                </TableHead>
+                <TableHead
+                  className="num"
+                  title={tr("Turns where the assistant hit repeated tool errors, loop guards, iteration caps, or timeouts")}
+                >
+                  {tr("Struggles")}
+                </TableHead>
+                <TableHead
+                  className="num"
+                  title={tr("Times the user accepted the in-chat prompt to switch up to the stronger frontier model")}
+                >
+                  {tr("Switched up")}
+                </TableHead>
+                <TableHead className="num" title={tr("Live (non-deleted) conversations owned by this user")}>
+                  {tr("Chats")}
+                </TableHead>
+                <TableHead className="num" title={tr("All completed chat turns (including deleted conversations)")}>
+                  {tr("Turns")}
+                </TableHead>
+                <TableHead className="num" title={tr("Share of prompt tokens served from the provider prompt cache")}>
+                  {tr("Cache Hit %")}</TableHead>
+                <TableHead className="num" title={tr("Total chat spend across all completed turns")}>
+                  {tr("Chat Spend")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {userSignals.map((u) => (
+                <TableRow key={u.email} data-testid="outliers-user-signal-row">
+                  <TableCell className="font-[family-name:var(--font-code)] text-[0.8rem]">
+                    {u.email}
+                  </TableCell>
+                  <TableCell className="num">{u.frustrated_messages}</TableCell>
+                  <TableCell className="num">{u.struggle_signals}</TableCell>
+                  <TableCell className="num">{u.advanced_switches}</TableCell>
+                  <TableCell className="num">{u.conversation_count}</TableCell>
+                  <TableCell className="num">{plain.format(u.total_turns)}</TableCell>
+                  <TableCell className="num">
+                    {u.total_prompt_tokens > 0
+                      ? `${formatFixed(u.cache_hit_rate_pct, 0)}%`
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="num">{fmtUSD(u.total_cost_usd)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </div>
     </div>
@@ -1303,8 +1323,8 @@ function AnalyticsInner() {
                   <p>{tr("Loading analytics…")}</p>
                 </div>
               ) : !session.signedIn || !isAdmin ? (
-                <div
-                  className="section"
+                <Card
+                  className="section gap-0"
                   role="region"
                   aria-label={tr("Admin access required")}
                   data-testid="analytics-admin-required"
@@ -1314,92 +1334,89 @@ function AnalyticsInner() {
                     {tr("Workspace usage, model mix, and adoption analytics are visible to workspace administrators.")}
                   </p>
                   <div className="mt-4">
-                    <Link href="/chat" className="btn">
-                      {tr("Back to chat")}
-                    </Link>
+                    <Button asChild variant="outline" className="btn">
+                      <Link href="/chat">
+                        {tr("Back to chat")}
+                      </Link>
+                    </Button>
                   </div>
-                </div>
+                </Card>
               ) : (
                 <>
                   <MonthlyAllowanceBanner />
 
-                  <div
-                    className="dashboard-tabs flex-wrap overflow-x-auto [-webkit-overflow-scrolling:touch]"
-                    role="tablist"
-                    aria-label={tr("Analytics view")}
+                  <Tabs
+                    value={tab}
+                    onValueChange={(v) => switchTab(v as AnalyticsTab)}
+                    className="gap-0"
                   >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "models"}
-                      className={`tab-btn${tab === "models" ? " tab-btn-active" : ""}`}
-                      onClick={() => switchTab("models")}
+                    <TabsList
+                      variant="line"
+                      className="dashboard-tabs w-full flex-wrap justify-start overflow-x-auto [-webkit-overflow-scrolling:touch]"
+                      aria-label={tr("Analytics view")}
                     >
-                      {tr("Models & Cost")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "outliers"}
-                      className={`tab-btn${tab === "outliers" ? " tab-btn-active" : ""}`}
-                      onClick={() => switchTab("outliers")}
-                    >
-                      {tr("Problem Chats & Friction")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "usage"}
-                      className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
-                      onClick={() => switchTab("usage")}
-                    >
-                      {tr("Spend & Budgets")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "adoption"}
-                      className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
-                      onClick={() => switchTab("adoption")}
-                    >
-                      {tr("Team Adoption")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={tab === "server"}
-                      className={`tab-btn${tab === "server" ? " tab-btn-active" : ""}`}
-                      onClick={() => switchTab("server")}
-                    >
-                      {tr("Server & Live Agents")}
-                    </button>
-                  </div>
+                      <TabsTrigger
+                        value="models"
+                        className={`tab-btn${tab === "models" ? " tab-btn-active" : ""}`}
+                      >
+                        {tr("Models & Cost")}
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="outliers"
+                        className={`tab-btn${tab === "outliers" ? " tab-btn-active" : ""}`}
+                      >
+                        {tr("Problem Chats & Friction")}
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="usage"
+                        className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
+                      >
+                        {tr("Spend & Budgets")}
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="adoption"
+                        className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
+                      >
+                        {tr("Team Adoption")}
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="server"
+                        className={`tab-btn${tab === "server" ? " tab-btn-active" : ""}`}
+                      >
+                        {tr("Server & Live Agents")}
+                      </TabsTrigger>
+                    </TabsList>
 
-                  <div className="dashboard-tab-panel">
-                    {tab === "outliers" ? (
-                      <OutliersAndFrictionTab />
-                    ) : tab === "usage" ? (
-                      <UsagePanel />
-                    ) : tab === "adoption" ? (
-                      <AdoptionPanel />
-                    ) : tab === "server" ? (
-                      <div className="section" data-testid="analytics-server-tab">
-                        <div className="section-header mb-4">
-                          <div>
-                            <h2 id="serverAgentsHeading">
-                              {tr("Server Resources & Live Agent Concurrency")}
-                            </h2>
-                            <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
-                              {tr("Real-time bot and sub-agent execution counts, tool & LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.")}
-                            </p>
+                    <div className="dashboard-tab-panel">
+                      <TabsContent value="outliers">
+                        <OutliersAndFrictionTab />
+                      </TabsContent>
+                      <TabsContent value="usage">
+                        <UsagePanel />
+                      </TabsContent>
+                      <TabsContent value="adoption">
+                        <AdoptionPanel />
+                      </TabsContent>
+                      <TabsContent value="server">
+                        <div className="section" data-testid="analytics-server-tab">
+                          <div className="section-header mb-4">
+                            <div>
+                              <h2 id="serverAgentsHeading">
+                                {tr("Server Resources & Live Agent Concurrency")}
+                              </h2>
+                              <p className="mt-0.5 text-[0.82rem] text-[var(--color-text-secondary)]">
+                                {tr("Real-time bot and sub-agent execution counts, tool & LLM activity, warm sandboxes, host CPU/memory/disk, and read-only storage overview.")}
+                              </p>
+                            </div>
                           </div>
+                          <ServerStatsView allowCleanup={false} />
                         </div>
-                        <ServerStatsView allowCleanup={false} />
-                      </div>
-                    ) : (
-                      <ModelUsageTab />
-                    )}
-                  </div>
+                      </TabsContent>
+                      <TabsContent value="models">
+                        <ModelUsageTab />
+                      </TabsContent>
+                    </div>
+                  </Tabs>
                 </>
               )}
             </div>

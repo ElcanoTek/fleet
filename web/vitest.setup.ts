@@ -8,6 +8,26 @@ import { configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { _resetMeForTests } from "@/app/shared/lib/account";
 
+// Radix UI (@floating-ui/dom, ScrollArea, Select, Switch, Dialog) and cmdk
+// rely on browser DOM APIs that jsdom omits by default. Install safe fallbacks
+// only when absent so individual tests that spy on or save/restore them keep
+// working unchanged.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView ??= () => {};
+}
+if (typeof HTMLElement !== "undefined") {
+  HTMLElement.prototype.hasPointerCapture ??= () => false;
+  HTMLElement.prototype.setPointerCapture ??= () => {};
+  HTMLElement.prototype.releasePointerCapture ??= () => {};
+}
+
 // findBy*/waitFor give up after 1 s by default. The full suite runs ~200 jsdom
 // files in parallel, and on a loaded CI runner a multi-request flow (the patrol
 // launchpad's settle-then-roll-back close, for one) can take just over that,

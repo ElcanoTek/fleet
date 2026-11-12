@@ -1,6 +1,8 @@
 import { t as tr } from "@/app/lib/i18n";
 import type { ReactNode } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 // ConfirmDialog is the chat surface's one in-app confirmation panel.
 //
@@ -107,38 +109,41 @@ export function ConfirmDialog({
         </div>
       ) : null}
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <button
+        <Button
           type="button"
-          className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          variant="ghost"
+          size="sm"
           onClick={onCancel}
         >
           {cancelLabel}
-        </button>
+        </Button>
         {secondary ? (
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             disabled={secondary.disabled}
-            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
             onClick={secondary.onClick}
           >
             {secondary.label}
-          </button>
+          </Button>
         ) : null}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           disabled={busy}
-          className={[
-            "rounded-md px-3 py-1.5 text-[0.8rem] font-medium transition disabled:opacity-60",
+          className={
             confirmTone === "danger"
-              ? "text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+              ? "text-[var(--color-danger)] enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] enabled:hover:text-[var(--color-danger)]"
               : confirmTone === "accent"
-                ? "bg-[var(--color-accent)] text-[var(--color-surface-1)] hover:opacity-90"
-                : "bg-[var(--color-text-primary)] text-[var(--color-surface-1)] hover:opacity-80",
-          ].join(" ")}
+                ? "bg-[var(--color-accent)] text-[var(--color-surface-1)] enabled:hover:bg-[var(--color-accent)] enabled:hover:text-[var(--color-surface-1)] enabled:hover:opacity-90"
+                : "bg-[var(--color-text-primary)] text-[var(--color-surface-1)] enabled:hover:bg-[var(--color-text-primary)] enabled:hover:text-[var(--color-surface-1)] enabled:hover:opacity-80"
+          }
           onClick={onConfirm}
         >
           {confirmLabel}
-        </button>
+        </Button>
       </div>
     </DialogShell>
   );
@@ -160,10 +165,14 @@ export function NameChip({
 }) {
   return (
     <span className="whitespace-nowrap">
-      <span data-name-chip className="mx-0.5 inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 align-baseline text-[0.78rem] font-normal text-[var(--color-text-primary)]">
+      <Badge
+        variant="secondary"
+        data-name-chip
+        className="mx-0.5 max-w-[14rem] rounded-full border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 align-baseline text-[0.78rem] font-normal tracking-normal text-[var(--color-text-primary)] normal-case"
+      >
         {icon}
         <span className="min-w-0 truncate">{children}</span>
-      </span>{suffix}
+      </Badge>{suffix}
     </span>
   );
 }

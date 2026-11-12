@@ -143,12 +143,23 @@ observe, so the log records what actually ran.
 **Am I comfortable handing over control?** The agent has no direct power: every
 model-authored local tool call goes through the sandbox under host policy
 (optionally a KVM microVM), credentials stay host-side, sensitive actions raise a
-**default-deny allow/deny card** with no "approve all", and unattended scheduled
-work is fail-closed — network-sealed by default with an end-of-run verifier
-([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). The out-of-process MCP
-address-space boundary is active for bundle MCP servers, inline HTTP tools, and
-per-run hosted MCP clients. Explicit remote-MCP OAuth/connectors HTTP endpoints
-remain parent-side control-plane code
+**default-deny allow/deny card** with scoped session rules (by tool or argument
+pattern), grouped approvals with list-argument narrowing, and an explicit
+human-toggled per-conversation **Auto-approve** (`⚡`) switch (never
+workspace-wide or model-elevated; outbound third-party email, handler-only
+approvals, and `critical_tool_no_session_approval` tools still require an
+explicit card). **Patrols** (`chat_patrol` — chats that check in on a recurring
+schedule or one-shot timer via the Patrol Launchpad or the in-chat Patrol bar)
+keep the chat's transcript, workspace files, Python state, and connectors,
+pre-approve digest emails addressed solely to the conversation owner, and hold
+unapproved sensitive actions on 24-hour cards that automatically resume the
+patrol turn once approved ([`docs/CHAT-PATROLS.md`](docs/CHAT-PATROLS.md),
+[`docs/CONVERSATION-AUTO-APPROVE.md`](docs/CONVERSATION-AUTO-APPROVE.md)).
+Headless background tasks remain fail-closed — network-sealed by default with an
+end-of-run verifier ([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). The
+out-of-process MCP address-space boundary is active for bundle MCP servers,
+inline HTTP tools, and per-run hosted MCP clients. Explicit remote-MCP
+OAuth/connectors HTTP endpoints remain parent-side control-plane code
 ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)). One caveat to respect: the
 bundle's own host-side MCP servers *do* receive brokered credentials by design,
 so treat bundle write access as production access

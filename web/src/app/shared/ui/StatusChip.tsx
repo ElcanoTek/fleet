@@ -1,5 +1,7 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import { t } from "@/app/lib/i18n";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 const RUN_STATE_LABELS: Readonly<Record<string, string>> = {
   pending: t("pending"), scheduled: t("scheduled"), assigned: t("assigned"),
@@ -18,23 +20,9 @@ export function runStateLabel(state: string): string {
 
 // StatusChip — the one pill/badge recipe for small status-tinted labels
 // ("Connected", "Bundled", "Third-party", health pills, task run states, SLA
-// and log badges, …). Pages used to hand-roll this trio (`rounded-full border
-// px-2 py-0.5` + border/tint/text colors) with raw hex values, and the
-// Operations Center kept its own larger, bolder `.status-badge` family; the
-// colors now ride semantic token pairs in globals.css so every chip themes
-// with light/dark automatically, and every chip shares one size. See
-// web/src/app/DESIGN.md.
-//
-// Purely presentational: a <span>, no behavior. Pass `className` for layout
-// concerns or stable test hooks only (margins, truncation, `status-badge`) —
-// not to re-color a tone.
-
-// The general tones (--color-*-strong / --color-*-soft, plus the accent) …
-// ("accent" marks a deliberate non-default: an admin override, a "new" tag.)
+// and log badges, …), backed by Flag's @flag/badge primitive while preserving
+// Fleet's general card-safe -strong/-soft tints and run-blocked lifecycle state.
 export type GeneralTone = "success" | "warning" | "danger" | "neutral" | "accent";
-// … and one per task-lifecycle color family (--color-status-*-fg/-bg/-border).
-// A run has ~10 states the general four cannot tell apart, so these keep the
-// Operations Center's per-state colors on the shared chip.
 export type RunTone =
   | "run-pending"
   | "run-scheduled"
@@ -48,6 +36,21 @@ export type RunTone =
   | "run-blocked"
   | "run-cancelled";
 export type StatusTone = GeneralTone | RunTone;
+
+type BadgeVariant = NonNullable<ComponentProps<typeof Badge>["variant"]>;
+
+const BADGE_VARIANT_BY_TONE: Partial<Record<StatusTone, BadgeVariant>> = {
+  "run-pending": "pending",
+  "run-scheduled": "scheduled",
+  "run-assigned": "assigned",
+  "run-leased": "leased",
+  "run-running": "running",
+  "run-proposed": "analyzing",
+  "run-success": "success",
+  "run-warning": "warning",
+  "run-error": "error",
+  "run-cancelled": "cancelled",
+};
 
 // Spelled out, not built from a template string, so Tailwind's source scan
 // sees every arbitrary class literally.
@@ -150,30 +153,27 @@ export function StatusChip({
   title?: string;
   testId?: string;
 } & Omit<HTMLAttributes<HTMLSpanElement>, "className" | "children" | "title">) {
-  // `rest` carries data-* / aria-* hooks only (data-status, data-flag-code,
-  // aria-label); styling stays with the tone.
+  const mappedVariant = BADGE_VARIANT_BY_TONE[tone];
   return (
-    <span
+    <Badge
       {...rest}
+      variant={mappedVariant ?? "outline"}
       title={title}
       data-testid={testId}
-      className={[
-        "inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-[0.6875rem]",
-        caps ? "font-semibold uppercase tracking-[0.06em]" : "",
-        TONE_CLASS[tone],
-        className ?? "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className={cn(
+        "px-2 py-0.5 text-[0.6875rem]",
+        caps && "font-semibold uppercase tracking-[0.06em]",
+        !mappedVariant && TONE_CLASS[tone],
+        className,
+      )}
     >
       {children}
-    </span>
+    </Badge>
   );
 }
 
 // RunStatusChip is a lifecycle state on the shared chip. The `status-badge
-// status-<state>` classes carry no styling any more; they stay as the stable
-// hooks tests and e2e selectors already use.
+// status-<state>` classes stay as the stable hooks tests and e2e selectors use.
 export function RunStatusChip({
   state,
   children,

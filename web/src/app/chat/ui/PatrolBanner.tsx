@@ -13,6 +13,14 @@ import {
 } from "@/app/shared/lib/cron";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { openedByTouch } from "./toolsPicker";
 
 export function formatScheduleCadence(sc: ChatSchedule): string {
@@ -451,7 +459,7 @@ export function PatrolPopover({
                   <div className="grid grid-cols-2 gap-2">
                     <label className="grid gap-1 text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
                       <span>{tr("Run once in")}</span>
-                      <input
+                      <Input
                         type="number"
                         min={1}
                         max={maxTimerAmount}
@@ -465,12 +473,12 @@ export function PatrolPopover({
                             ),
                           )
                         }
-                        className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                        className="h-9 bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem]"
                       />
                     </label>
                     <label className="grid gap-1 text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
                       <span>{tr("Unit")}</span>
-                      <select
+                      <NativeSelect
                         aria-label={tr("Timer unit")}
                         value={customTimerUnit}
                         onChange={(e) => {
@@ -481,11 +489,11 @@ export function PatrolPopover({
                             Math.min(nextMax, Math.max(1, Math.round(prev || 1))),
                           );
                         }}
-                        className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                        className="h-9 bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem]"
                       >
-                        <option value="minutes">{tr("Minutes")}</option>
-                        <option value="hours">{tr("Hours")}</option>
-                      </select>
+                        <NativeSelectOption value="minutes">{tr("Minutes")}</NativeSelectOption>
+                        <NativeSelectOption value="hours">{tr("Hours")}</NativeSelectOption>
+                      </NativeSelect>
                     </label>
                   </div>
                 </div>
@@ -497,12 +505,12 @@ export function PatrolPopover({
             <span className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
               {tr("Patrol label")}
             </span>
-            <input
+            <Input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={tr("Recurring Patrol")}
-              className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              className="h-9 bg-[var(--color-surface-2)] px-3 text-[0.8125rem]"
             />
           </label>
 
@@ -510,12 +518,12 @@ export function PatrolPopover({
             <span className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
               {tr("What to check & do each run")}
             </span>
-            <textarea
+            <Textarea
               ref={promptInputRef}
               rows={3}
               value={patrolPrompt}
               onChange={(e) => setPatrolPrompt(e.target.value)}
-              className="w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              className="min-h-0 resize-y bg-[var(--color-surface-2)] px-3 py-2 text-[0.8125rem] leading-[1.5]"
             />
           </label>
 
@@ -529,16 +537,11 @@ export function PatrolPopover({
                 {tr("Skip interactive approval cards during unattended patrol runs.")}
               </div>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoApprove}
+            <Switch
+              checked={autoApprove}
+              onCheckedChange={setAutoApprove}
               aria-label={tr("Auto-approve tools while patrolling")}
-              onClick={() => setAutoApprove((v) => !v)}
-              className="switch"
-            >
-              <span className="switch__knob" />
-            </button>
+            />
           </div>
         </div>
 
@@ -549,14 +552,17 @@ export function PatrolPopover({
               : tr("Recurring schedule ({0})", [tz])}
           </span>
           <div className="ml-auto flex items-center gap-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={onClose}
-              className="btn btn-ghost btn-sm"
             >
-              {tr("Cancel")}</button>
-            <button
+              {tr("Cancel")}</Button>
+            <Button
               type="button"
+              variant="default"
+              size="sm"
               disabled={
                 !patrolPrompt.trim() ||
                 (effectiveKind === "patrol" && !effectiveCron) ||
@@ -580,14 +586,13 @@ export function PatrolPopover({
                   setSubmitting(false);
                 }
               }}
-              className="btn btn-primary btn-sm"
             >
               {submitting
                 ? tr("Starting…")
                 : effectiveKind === "timer"
                   ? tr("Start timer")
                   : tr("Start patrol")}
-            </button>
+            </Button>
           </div>
         </footer>
       </div>

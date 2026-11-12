@@ -8,6 +8,8 @@ import { t as tr } from "@/app/lib/i18n";
 // that gate, plus the "Use Elcano email" handoff when magic-link is enabled.
 
 import { Link } from "@/app/lib/Link";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 
 export type OrchestratorLoginProps = {
   magicLinkLoginEnabled: boolean;
@@ -15,7 +17,7 @@ export type OrchestratorLoginProps = {
 
 export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginProps) {
   return (
-    <div className="auth-section" role="region" aria-label={tr("Authentication")}>
+    <Card className="auth-section" role="region" aria-label={tr("Authentication")}>
       <div className="auth-fields stack-form">
         <h2>{tr("Sign in")}</h2>
         <p className="caption">
@@ -28,22 +30,25 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
           // with a 303 to the auth service's magic-link login on another
           // origin, so the full document navigation is the handoff — a <Link>
           // soft-navigation would never perform it.
-          <a
-            className="btn btn-primary"
-            href="/api/orchestrator/auth/elcano-login"
-            aria-label={tr("Sign in with your Elcano email")}
-          >
-            {tr("Use Elcano email")}
-          </a>
+          <Button asChild className="btn btn-primary">
+            <a
+              href="/api/orchestrator/auth/elcano-login"
+              aria-label={tr("Sign in with your Elcano email")}
+            >
+              {tr("Use Elcano email")}
+            </a>
+          </Button>
         ) : (
           // /login IS a real page (app/login/page.tsx), so this is genuine
           // in-app navigation and belongs to the client router.
-          <Link className="btn btn-primary" href="/login">
-            {tr("Sign in via Chat")}
-          </Link>
+          <Button asChild className="btn btn-primary">
+            <Link href="/login">
+              {tr("Sign in via Chat")}
+            </Link>
+          </Button>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 

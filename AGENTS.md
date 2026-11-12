@@ -100,15 +100,27 @@ that Tier A would mean re-implementing by hand.
   | `react-markdown` | Renders assistant replies, run logs, shared transcripts and the `/help` guides (`AssistantContent.tsx`, `LogMarkdown.tsx`, `GuideMarkdown.tsx`, …) as React elements — no HTML strings, no `dangerouslySetInnerHTML`, and no Markdown parser of our own to maintain. |
   | `remark-gfm` | GitHub-flavoured Markdown for `react-markdown`: tables, task lists, autolinks and strikethrough, which agents and the guides use and plain CommonMark renders as text. |
   | `@tanstack/react-virtual` | Virtualises the chat transcript (`ChatTranscript.tsx`) so a conversation with thousands of messages renders only what is on screen. |
+  | `radix-ui` | Accessible headless primitives (dialog, alert-dialog, sheet, popover, select, dropdown-menu, tabs, switch, checkbox, radio-group, tooltip, avatar, progress, scroll-area, slot) backing Flag's `@flag/*` shadcn/ui components in `web/src/components/ui/`. |
+  | `class-variance-authority`, `clsx`, `tailwind-merge` | Variant definitions (`cva`) and conflict-safe Tailwind v4 class merging (`cn` in `web/src/lib/utils.ts`) used by every `@flag/*` component. |
+  | `lucide-react` | Structural control chrome icons (`CheckIcon`, `MinusIcon`, `ChevronDownIcon`, `XIcon`, …) inside `@flag/*` registry primitives (`web/src/components/ui/`); product icons in `web/src/app/` continue to render from Flag's vendored `core-icons.svg` sprite. |
+  | `cmdk` | Accessible combobox / command-menu filtering and keyboard navigation primitive backing `@flag/command` (`web/src/components/ui/command.tsx`). |
+  | `sonner` | Accessible toast region primitive backing `@flag/sonner` (`web/src/components/ui/sonner.tsx`). |
+  | `tw-animate-css` | CSS keyframe utilities (`animate-in`, `animate-out`, `fade-in-0`, `zoom-in-95`, `slide-in-from-*`) imported by `web/src/app/globals.css` for `@flag/*` overlays and popovers. |
 
   Adding another runtime dependency needs a row here with the reason
   (`make stack-check` enforces it); prefer a small in-house module.
-- **New or replaced base UI components come from Flag's shadcn/ui registry**
-  (`npx shadcn add <registry-url>/r/<item>.json`; the URL is in Flag's
-  README). Existing components are not being migrated wholesale.
-- **Vendored Flag files** (fonts, the core icon sprite, the fleet mark, Flag's
-  MIT licence) are pinned in `flag.lock`. Update them with
-  `scripts/flag-sync.sh sync ../flag` (a clean sibling checkout of
+- **Base UI components come from Flag's `@flag/*` shadcn/ui registry**
+  (`web/src/components/ui/*`, configured in `web/components.json` pointing
+  `@flag` at `https://flag.elcanotek.com/r/{name}.json` and installed via
+  `npx shadcn add @flag/<item>`). Login, No-Access, Settings, Operations Center
+  (`/orchestrator`), Analytics, Chat dialogs/controls, and the Patrol Launchpad
+  consume these shared `@flag/*` primitives (`Button`, `Input`, `Textarea`,
+  `NativeSelect`, `Switch`, `Checkbox`, `Badge`, `Alert`, `Card`, `Table`,
+  `Tabs`, `Avatar`, `Kbd`, `Separator`, …). Build a base component by hand only
+  when Flag's registry lacks it, then upstream it to Flag.
+- **Vendored Flag files** (fonts, the core icon sprite, the fleet mark,
+  `web/src/flag/shadcn/theme.css`, and Flag's MIT licence) are pinned in
+  `flag.lock`. Update them with `scripts/flag-sync.sh sync ../flag` (a clean sibling checkout of
   `ElcanoTek/flag`; `scripts/flag-sync.sh status ../flag` previews), never by
   hand. The PR gate is the offline `make stack-check` (CI job `stack-check`);
   the weekly `.github/workflows/flag-drift.yml` reports when upstream Flag

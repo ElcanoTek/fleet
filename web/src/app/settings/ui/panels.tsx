@@ -8,6 +8,11 @@ import { t as tr } from "@/app/lib/i18n";
 import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 import { copyText } from "@/app/shared/lib/clipboard";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState, EmptyStateDescription } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 /* ── Section frame (.set-section / .set-head) ── */
 
@@ -73,14 +78,14 @@ export function ConnPanel({
   children: ReactNode;
 }) {
   return (
-    <div
-      className={[
-        "mb-[0.85rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] pb-[1.15rem] pt-4",
-        className ?? "",
-      ].join(" ")}
+    <Card
+      className={cn(
+        "mb-[0.85rem] gap-0 rounded-md px-[1.15rem] pt-4 pb-[1.15rem] shadow-none",
+        className,
+      )}
     >
       {children}
-    </div>
+    </Card>
   );
 }
 
@@ -109,9 +114,11 @@ export function ConnPanelSub({ children }: { children: ReactNode }) {
 // ConnEmpty — the dashed empty-state slab (.conn-empty).
 export function ConnEmpty({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-[0.2rem] rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-4 py-[1.05rem] text-center text-[0.79rem] text-[var(--color-text-muted)]">
-      {children}
-    </p>
+    <EmptyState className="mt-[0.2rem] rounded-md border-border-strong px-4 py-[1.05rem]">
+      <EmptyStateDescription className="max-w-none text-[0.79rem] text-muted-foreground">
+        {children}
+      </EmptyStateDescription>
+    </EmptyState>
   );
 }
 
@@ -223,12 +230,12 @@ export function DirSearch({
   // useId keeps it unique if a page ever renders more than one DirSearch.
   const inputId = useId();
   return (
-    <div className={["relative", className ?? ""].join(" ")}>
+    <div className={cn("relative", className)}>
       <Icon
         name="search"
         className="pointer-events-none absolute left-3 top-1/2 size-[0.95rem] -translate-y-1/2 text-[var(--color-text-muted)]"
       />
-      <input
+      <Input
         ref={inputRef}
         id={inputId}
         type="text"
@@ -236,20 +243,22 @@ export function DirSearch({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         aria-label={label}
-        className="min-h-[2.45rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.3rem] pr-[2.4rem] text-[0.83rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+        className="min-h-[2.45rem] py-[0.4rem] pr-[2.4rem] pl-[2.3rem] text-[0.83rem]"
       />
       {value ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           aria-label={tr("Clear search")}
           onClick={() => {
             onChange("");
             inputRef.current?.focus();
           }}
-          className="absolute right-[0.45rem] top-1/2 inline-flex size-[1.6rem] -translate-y-1/2 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          className="absolute top-1/2 right-[0.45rem] -translate-y-1/2 border-transparent"
         >
           <Icon name="close" className="size-[0.85rem]" />
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -327,25 +336,24 @@ export function CopyChip({ name }: { name: string }) {
 
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="xs"
         aria-label={tr("Copy /{0} to clipboard", [name])}
         onClick={() => void copy()}
-        className={[
-          "inline-flex items-center gap-[0.4rem] rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium text-[var(--color-text-primary)] transition [overflow-wrap:anywhere]",
-          "hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
-        ].join(" ")}
+        className="h-auto gap-[0.4rem] rounded-[0.45rem] border-border bg-(--color-overlay-soft) px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium whitespace-normal text-foreground [overflow-wrap:anywhere]"
       >
         <span className="text-[var(--color-accent)]">/</span>
         {name}
         <Icon
           name={copied ? "check" : "copy"}
-          className={[
+          className={cn(
             "size-[0.8rem] shrink-0",
             copied ? "text-[var(--color-success)]" : "text-[var(--color-text-muted)]",
-          ].join(" ")}
+          )}
         />
-      </button>
+      </Button>
       <span role="status" aria-live="polite" className="sr-only">
         {copied ? tr("Copied /{0} to clipboard", [name]) : ""}
       </span>
@@ -355,9 +363,7 @@ export function CopyChip({ name }: { name: string }) {
 
 /* ── Admin stat cards (.stats-bar.admin-stats / .stat-card) ── */
 
-// AdminStats — the compact operator stat cards. Markup duplicated from the
-// ops StatsGrid's card by decision (the orchestrator surface stays untouched);
-// metrics are the design's .admin-stats overrides of .stat-card.
+// AdminStats — the compact operator stat cards.
 export type AdminStat = { title: string; value: string; sub?: string };
 
 export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: string }) {
@@ -367,9 +373,9 @@ export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: str
       data-testid={testId}
     >
       {items.map((s) => (
-        <div
+        <Card
           key={s.title}
-          className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] pb-[0.95rem] pt-[0.85rem]"
+          className="min-w-0 gap-0 rounded-md px-[0.95rem] pt-[0.85rem] pb-[0.95rem] shadow-none"
         >
           <div className="mb-[0.55rem] flex items-center gap-2">
             <span className="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
@@ -384,7 +390,7 @@ export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: str
               {s.sub}
             </div>
           ) : null}
-        </div>
+        </Card>
       ))}
     </div>
   );

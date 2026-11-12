@@ -2,6 +2,10 @@ import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { LockGlyph, TeamGlyph } from "./ShareGlyphs";
 
 // New project (B27, decision #52): a focused dialog — name, who can see it,
@@ -268,13 +272,13 @@ export function NewProjectDialog({
       ) : null}
 
       <div className="grid gap-1.5">
-        <label
+        <Label
           htmlFor={nameId}
           className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
         >
           {tr("Name")}
-        </label>
-        <input
+        </Label>
+        <Input
           id={nameId}
           ref={nameRef}
           value={name}
@@ -287,7 +291,6 @@ export function NewProjectDialog({
               void create();
             }
           }}
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
         />
       </div>
 
@@ -305,29 +308,31 @@ export function NewProjectDialog({
 
       {showInstructions ? (
         <div className="grid gap-1.5">
-          <label
+          <Label
             htmlFor={instructionsId}
             className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
           >
             {tr("Instructions (optional)")}
-          </label>
-          <textarea
+          </Label>
+          <Textarea
             id={instructionsId}
             ref={instructionsRef}
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
             placeholder={tr("Standing instructions every chat here follows…")}
-            className="min-h-24 w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+            className="min-h-24 resize-y leading-[1.5]"
           />
         </div>
       ) : (
-        <button
+        <Button
           type="button"
-          className="self-start rounded-[var(--radius-md)] text-[0.82rem] font-medium text-[var(--color-accent)] transition hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          variant="link"
+          size="sm"
+          className="h-auto self-start px-0 py-0 text-[0.82rem] text-[var(--color-accent)]"
           onClick={() => setShowInstructions(true)}
         >
           {tr("+ Add instructions (optional)")}
-        </button>
+        </Button>
       )}
 
       {error ? (
@@ -337,20 +342,20 @@ export function NewProjectDialog({
       ) : null}
 
       <div className="flex items-center justify-end gap-2">
-        <button
+        <Button
           type="button"
-          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          variant="secondary"
           onClick={onClose}
         >
-          {tr("Cancel")}</button>
-        <button
+          {tr("Cancel")}</Button>
+        <Button
           type="button"
+          variant="default"
           disabled={!canCreate}
-          className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
           onClick={() => void create()}
         >
           {busy ? tr("Creating…") : tr("Create project")}
-        </button>
+        </Button>
       </div>
     </DialogShell>
   );

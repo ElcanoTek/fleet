@@ -42,6 +42,13 @@ import { CostForecastPanel } from "./CostForecastPanel";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 
 // TaskCreateModal — the create-task form, matching the elevated New Task design
 // (states: default · filled · advanced · validation · submitting · scrolled ·
@@ -1561,7 +1568,7 @@ export function TaskCreateModal({
                   </label>
                   <span className="task-optional-badge">{tr("Optional")}</span>
                 </div>
-                <input
+                <Input
                   id="titleInput"
                   name="title"
                   type="text"
@@ -1623,7 +1630,7 @@ export function TaskCreateModal({
                     <span className="task-required-badge">{tr("Required")}</span>
                   </span>
                 </div>
-                <textarea
+                <Textarea
                   id="promptTextarea"
                   name="prompt"
                   ref={promptRef}
@@ -1677,7 +1684,7 @@ export function TaskCreateModal({
                   <label className="task-field-label" htmlFor="descriptionTextarea">
                     {tr("Documentation")}
                   </label>
-                  <textarea
+                  <Textarea
                     id="descriptionTextarea"
                     name="description"
                     className="task-doc-input"
@@ -1697,7 +1704,7 @@ export function TaskCreateModal({
                     <label className="task-field-label" htmlFor="tagsInput">
                       {tr("Tags")}
                     </label>
-                    <input
+                    <Input
                       id="tagsInput"
                       name="tags"
                       type="text"
@@ -1714,7 +1721,7 @@ export function TaskCreateModal({
                     <label className="task-field-label" htmlFor="personaInput">
                       {tr("Persona")}
                     </label>
-                    <input
+                    <Input
                       id="personaInput"
                       name="persona"
                       type="text"
@@ -1763,7 +1770,7 @@ export function TaskCreateModal({
                     <div className="schedule-datetime-group">
                       <label className="task-schedule-field" htmlFor="scheduledForDate">
                         <span>{tr("Date")}</span>
-                        <input
+                        <Input
                           id="scheduledForDate"
                           type="date"
                           aria-label={tr("Schedule date")}
@@ -1778,7 +1785,7 @@ export function TaskCreateModal({
                       </label>
                       <label className="task-schedule-field" htmlFor="scheduledForTime">
                         <span>{tr("Time")}</span>
-                        <input
+                        <Input
                           id="scheduledForTime"
                           type="time"
                           aria-label={tr("Schedule time")}
@@ -1815,117 +1822,123 @@ export function TaskCreateModal({
 
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
-                    <div className="seg seg--md repeat-editor-tabs" role="tablist" aria-label={tr("Repeat input method")}>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={repeatEditor === "simple"}
-                        className="seg-option"
-                        disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
-                        title={
-                          repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
-                            ? tr("This cron schedule is too complex for the simple editor")
-                            : undefined
-                        }
-                        onClick={showSimpleRepeatEditor}
-                      >
-                        {tr("Simple schedule")}
-                      </button>
-                      <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className="seg-option" onClick={() => setRepeatEditor("cron")}>
-                        {tr("Advanced cron")}
-                      </button>
-                    </div>
-                    {repeatEditor === "simple" ? (
-                      <div className="simple-schedule-grid" role="tabpanel">
-                        <label className="task-schedule-field">
-                          <span>{tr("Repeat")}</span>
-                          <select
-                            aria-label={tr("Repeat frequency")}
-                            value={simpleFrequency}
-                            onChange={(e) => {
-                              const frequency = e.target.value as SimpleFrequency;
-                              setSimpleFrequency(frequency);
-                              setRecurrence(simpleScheduleCron(frequency, simpleTime, simpleWeekdays));
-                              setFieldError("recurrence", "");
-                            }}
-                          >
-                            <option value="daily">{tr("Every day")}</option>
-                            <option value="weekdays">{tr("Every weekday")}</option>
-                            <option value="weekly">{tr("Every week")}</option>
-                          </select>
-                        </label>
-                        {simpleFrequency === "weekly" ? (
-                          <fieldset className="weekly-days">
-                            <legend>{tr("On")}</legend>
-                            <div role="group" aria-label={tr("Repeat weekdays")}>
-                              {WEEKDAYS.map((day) => {
-                                const selected = simpleWeekdays.includes(day.value);
-                                return (
-                                  <button
-                                    key={day.value}
-                                    type="button"
-                                    aria-label={tr("Run on {0}", [day.label])}
-                                    aria-pressed={selected}
-                                    disabled={selected && simpleWeekdays.length === 1}
-                                    className={selected ? "is-selected" : ""}
-                                    onClick={() => {
-                                      const weekdays = selected
-                                        ? simpleWeekdays.filter((value) => value !== day.value)
-                                        : WEEKDAYS.map((item) => item.value).filter(
-                                            (value) => value === day.value || simpleWeekdays.includes(value),
-                                          );
-                                      setSimpleWeekdays(weekdays);
-                                      setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, weekdays));
-                                      setFieldError("recurrence", "");
-                                    }}
-                                  >
-                                    {day.label.slice(0, 3)}
-                                  </button>
+                    <Tabs
+                      value={repeatEditor}
+                      onValueChange={(v) => {
+                        if (v === "simple") showSimpleRepeatEditor();
+                        else setRepeatEditor("cron");
+                      }}
+                    >
+                      <TabsList className="seg seg--md repeat-editor-tabs" aria-label={tr("Repeat input method")}>
+                        <TabsTrigger
+                          value="simple"
+                          className="seg-option"
+                          disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
+                          title={
+                            repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
+                              ? tr("This cron schedule is too complex for the simple editor")
+                              : undefined
+                          }
+                        >
+                          {tr("Simple schedule")}
+                        </TabsTrigger>
+                        <TabsTrigger value="cron" className="seg-option">
+                          {tr("Advanced cron")}
+                        </TabsTrigger>
+                      </TabsList>
+                      <TabsContent value="simple" asChild>
+                        <div className="simple-schedule-grid">
+                          <label className="task-schedule-field">
+                            <span>{tr("Repeat")}</span>
+                            <NativeSelect
+                              aria-label={tr("Repeat frequency")}
+                              value={simpleFrequency}
+                              onChange={(e) => {
+                                const frequency = e.target.value as SimpleFrequency;
+                                setSimpleFrequency(frequency);
+                                setRecurrence(simpleScheduleCron(frequency, simpleTime, simpleWeekdays));
+                                setFieldError("recurrence", "");
+                              }}
+                            >
+                              <NativeSelectOption value="daily">{tr("Every day")}</NativeSelectOption>
+                              <NativeSelectOption value="weekdays">{tr("Every weekday")}</NativeSelectOption>
+                              <NativeSelectOption value="weekly">{tr("Every week")}</NativeSelectOption>
+                            </NativeSelect>
+                          </label>
+                          {simpleFrequency === "weekly" ? (
+                            <fieldset className="weekly-days">
+                              <legend>{tr("On")}</legend>
+                              <div role="group" aria-label={tr("Repeat weekdays")}>
+                                {WEEKDAYS.map((day) => {
+                                  const selected = simpleWeekdays.includes(day.value);
+                                  return (
+                                    <button
+                                      key={day.value}
+                                      type="button"
+                                      aria-label={tr("Run on {0}", [day.label])}
+                                      aria-pressed={selected}
+                                      disabled={selected && simpleWeekdays.length === 1}
+                                      className={selected ? "is-selected" : ""}
+                                      onClick={() => {
+                                        const weekdays = selected
+                                          ? simpleWeekdays.filter((value) => value !== day.value)
+                                          : WEEKDAYS.map((item) => item.value).filter(
+                                              (value) => value === day.value || simpleWeekdays.includes(value),
+                                            );
+                                        setSimpleWeekdays(weekdays);
+                                        setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, weekdays));
+                                        setFieldError("recurrence", "");
+                                      }}
+                                    >
+                                      {day.label.slice(0, 3)}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </fieldset>
+                          ) : null}
+                          <label className="task-schedule-field">
+                            <span>{tr("At")}</span>
+                            <Input
+                              type="time"
+                              aria-label={tr("Repeat time")}
+                              value={simpleTime}
+                              onChange={(e) => {
+                                setSimpleTime(e.target.value);
+                                setRecurrence(
+                                  simpleScheduleCron(simpleFrequency, e.target.value, simpleWeekdays),
                                 );
-                              })}
-                            </div>
-                          </fieldset>
-                        ) : null}
-                        <label className="task-schedule-field">
-                          <span>{tr("At")}</span>
-                          <input
-                            type="time"
-                            aria-label={tr("Repeat time")}
-                            value={simpleTime}
+                                setFieldError("recurrence", "");
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </TabsContent>
+                      <TabsContent value="cron" asChild>
+                        <label className="task-schedule-field task-cron-field" htmlFor="recurrenceInput">
+                          <span>{tr("Cron expression")}</span>
+                          <Input
+                            id="recurrenceInput"
+                            type="text"
+                            name="recurrence"
+                            className={`task-cron-input${errors.recurrence ? " has-error" : ""}`}
+                            maxLength={100}
+                            placeholder="0 9 * * 1-5"
+                            aria-label={tr("Cron expression")}
+                            aria-describedby={errors.recurrence ? "recurrence-error" : "recurrence-echo"}
+                            value={recurrence}
                             onChange={(e) => {
-                              setSimpleTime(e.target.value);
-                              setRecurrence(
-                                simpleScheduleCron(simpleFrequency, e.target.value, simpleWeekdays),
-                              );
-                              setFieldError("recurrence", "");
+                              setRecurrence(e.target.value);
+                              if (errors.recurrence) {
+                                const v = validateCronExpression(e.target.value);
+                                if (v.valid && e.target.value.trim()) setFieldError("recurrence", "");
+                              }
                             }}
+                            onBlur={blurValidateCron}
                           />
                         </label>
-                      </div>
-                    ) : (
-                      <label className="task-schedule-field task-cron-field" role="tabpanel" htmlFor="recurrenceInput">
-                        <span>{tr("Cron expression")}</span>
-                        <input
-                          id="recurrenceInput"
-                          type="text"
-                          name="recurrence"
-                          className={`task-cron-input${errors.recurrence ? " has-error" : ""}`}
-                          maxLength={100}
-                          placeholder="0 9 * * 1-5"
-                          aria-label={tr("Cron expression")}
-                          aria-describedby={errors.recurrence ? "recurrence-error" : "recurrence-echo"}
-                          value={recurrence}
-                          onChange={(e) => {
-                            setRecurrence(e.target.value);
-                            if (errors.recurrence) {
-                              const v = validateCronExpression(e.target.value);
-                              if (v.valid && e.target.value.trim()) setFieldError("recurrence", "");
-                            }
-                          }}
-                          onBlur={blurValidateCron}
-                        />
-                      </label>
-                    )}
+                      </TabsContent>
+                    </Tabs>
                     {errors.recurrence ? (
                       <div
                         className="task-inline-error"
@@ -1971,18 +1984,18 @@ export function TaskCreateModal({
                     <div className="simple-schedule-grid" data-testid="repeat-timezone">
                       <label className="task-schedule-field">
                         <span>{tr("Time zone")}</span>
-                        <select
+                        <NativeSelect
                           aria-label={tr("Repeat time zone")}
                           aria-describedby={zoneIsViewers ? undefined : "repeat-timezone-hint"}
                           value={timezone}
                           onChange={(e) => setTimezone(e.target.value)}
                         >
                           {timeZoneChoices.map(({ zone, label }) => (
-                            <option key={zone} value={zone}>
+                            <NativeSelectOption key={zone} value={zone}>
                               {label}
-                            </option>
+                            </NativeSelectOption>
                           ))}
-                        </select>
+                        </NativeSelect>
                       </label>
                     </div>
                     {!zoneIsViewers ? (
@@ -2021,7 +2034,7 @@ export function TaskCreateModal({
                     <div className="simple-schedule-grid" data-testid="repeat-end">
                       <label className="task-schedule-field">
                         <span>{tr("End repeat")}</span>
-                        <select
+                        <NativeSelect
                           aria-label={tr("End repeat")}
                           value={endMode}
                           onChange={(e) => {
@@ -2029,15 +2042,15 @@ export function TaskCreateModal({
                             setFieldError("recurrence_end", "");
                           }}
                         >
-                          <option value="never">{tr("Never")}</option>
-                          <option value="date">{tr("On a date")}</option>
-                          <option value="count">{tr("After a number of runs")}</option>
-                        </select>
+                          <NativeSelectOption value="never">{tr("Never")}</NativeSelectOption>
+                          <NativeSelectOption value="date">{tr("On a date")}</NativeSelectOption>
+                          <NativeSelectOption value="count">{tr("After a number of runs")}</NativeSelectOption>
+                        </NativeSelect>
                       </label>
                       {endMode === "date" ? (
                         <label className="task-schedule-field">
                           <span>{tr("Ends on")}</span>
-                          <input
+                          <Input
                             type="date"
                             aria-label={tr("Repeat end date")}
                             value={endDate}
@@ -2051,7 +2064,7 @@ export function TaskCreateModal({
                       {endMode === "count" ? (
                         <label className="task-schedule-field">
                           <span>{tr("Total runs")}</span>
-                          <input
+                          <Input
                             type="number"
                             min={1}
                             max={10000}
@@ -2191,7 +2204,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskMaxIterations">
                         {tr("Max iterations")}
                       </label>
-                      <input
+                      <Input
                         id="taskMaxIterations"
                         type="number"
                         min={1}
@@ -2217,7 +2230,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskMaxCostUSD">
                         {tr("Max cost (USD)")}
                       </label>
-                      <input
+                      <Input
                         id="taskMaxCostUSD"
                         type="number"
                         min={0.01}
@@ -2243,7 +2256,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskExpectedDuration">
                         {tr("Expected duration")}
                       </label>
-                      <input
+                      <Input
                         id="taskExpectedDuration"
                         type="number"
                         min={1}
@@ -2260,7 +2273,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskThinkingBudget">
                         {tr("Thinking budget")}
                       </label>
-                      <input
+                      <Input
                         id="taskThinkingBudget"
                         type="number"
                         min={0}
@@ -2277,7 +2290,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskSandboxMemory">
                         {tr("Sandbox memory")}
                       </label>
-                      <input
+                      <Input
                         id="taskSandboxMemory"
                         type="number"
                         min={128}
@@ -2294,7 +2307,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskSandboxCpus">
                         {tr("Sandbox CPUs")}
                       </label>
-                      <input
+                      <Input
                         id="taskSandboxCpus"
                         type="number"
                         min={0.1}
@@ -2311,7 +2324,7 @@ export function TaskCreateModal({
                       <label className="task-limit-label" htmlFor="taskSandboxPids">
                         {tr("Sandbox PIDs")}
                       </label>
-                      <input
+                      <Input
                         id="taskSandboxPids"
                         type="number"
                         min={16}
@@ -2338,63 +2351,60 @@ export function TaskCreateModal({
                         learning what the switch is called. htmlFor/id makes the
                         association explicit rather than relying on the wrapper. */}
                     <div className="task-switch-list">
-                      <label className="switch-row" htmlFor="taskAllowNetwork">
-                        <input
+                      <div className="switch-row">
+                        <Checkbox
                           id="taskAllowNetwork"
-                          type="checkbox"
-                          className="ui-switch"
+                          className="mt-0.5"
                           aria-labelledby="taskAllowNetwork-title"
                           aria-describedby="taskAllowNetwork-desc"
                           checked={allowNetwork}
-                          onChange={(e) => setAllowNetwork(e.target.checked)}
+                          onCheckedChange={(v) => setAllowNetwork(v === true)}
                         />
-                        <span className="switch-row-text">
+                        <Label htmlFor="taskAllowNetwork" className="switch-row-text cursor-pointer font-normal">
                           <span className="switch-row-title" id="taskAllowNetwork-title">
                             {tr("Allow network egress")}
                           </span>
                           <span className="switch-row-desc" id="taskAllowNetwork-desc">
                             {tr("Off = sealed — the sandbox has no internet access.")}
                           </span>
-                        </span>
-                      </label>
-                      <label className="switch-row" htmlFor="taskAllowDelegation">
-                        <input
+                        </Label>
+                      </div>
+                      <div className="switch-row">
+                        <Checkbox
                           id="taskAllowDelegation"
-                          type="checkbox"
-                          className="ui-switch"
+                          className="mt-0.5"
                           aria-labelledby="taskAllowDelegation-title"
                           aria-describedby="taskAllowDelegation-desc"
                           checked={allowDelegation}
-                          onChange={(e) => setAllowDelegation(e.target.checked)}
+                          onCheckedChange={(v) => setAllowDelegation(v === true)}
                         />
-                        <span className="switch-row-text">
+                        <Label htmlFor="taskAllowDelegation" className="switch-row-text cursor-pointer font-normal">
                           <span className="switch-row-title" id="taskAllowDelegation-title">
                             {tr("Allow sub-agent delegation")}
                           </span>
                           <span className="switch-row-desc" id="taskAllowDelegation-desc">
                             {tr("The agent may fan work out to governed child agents (capped at 5, each ≤10% of the remaining budget). Off = this task never delegates.")}
                           </span>
-                        </span>
-                      </label>
-                      <label className="switch-row" htmlFor="taskCarryContext">
-                        <input
+                        </Label>
+                      </div>
+                      <div className="switch-row">
+                        <Checkbox
                           id="taskCarryContext"
-                          type="checkbox"
-                          className="ui-switch"
+                          className="mt-0.5"
                           aria-labelledby="taskCarryContext-title"
                           aria-describedby="taskCarryContext-desc"
                           checked={carryContext}
-                          onChange={(e) => setCarryContext(e.target.checked)}
+                          onCheckedChange={(v) => setCarryContext(v === true)}
                         />
-                        <span className="switch-row-text">
+                        <Label htmlFor="taskCarryContext" className="switch-row-text cursor-pointer font-normal">
                           <span className="switch-row-title" id="taskCarryContext-title">
                             {tr("Carry context across runs")}
                           </span>
                           <span className="switch-row-desc" id="taskCarryContext-desc">
                             {tr("Each run starts with a bounded summary of the previous run's output. Recurring tasks only.")}
                           </span>
-                        </span>
-                      </label>
+                        </Label>
+                      </div>
                     </div>
                   </div>
 
@@ -2407,7 +2417,7 @@ export function TaskCreateModal({
                     <p className="task-gate-warning">
                       {tr("Runs on the host as the fleet process user — treat the command as trusted.")}
                     </p>
-                    <input
+                    <Input
                       id="runIfCommandInput"
                       type="text"
                       name="run_if_command"
@@ -2423,7 +2433,7 @@ export function TaskCreateModal({
                       <label htmlFor="runIfTimeoutInput" className="task-gate-option-label">
                         {tr("Timeout")}
                       </label>
-                      <input
+                      <Input
                         id="runIfTimeoutInput"
                         type="number"
                         min={1}
@@ -2442,14 +2452,14 @@ export function TaskCreateModal({
                       <label htmlFor="runIfOnErrorSelect" className="task-gate-option-label">
                         {tr("On error")}
                       </label>
-                      <select
+                      <NativeSelect
                         id="runIfOnErrorSelect"
                         value={runIfOnError}
                         onChange={(e) => setRunIfOnError(e.target.value as "run" | "skip")}
                       >
-                        <option value="run">{tr("run anyway")}</option>
-                        <option value="skip">{tr("skip")}</option>
-                      </select>
+                        <NativeSelectOption value="run">{tr("run anyway")}</NativeSelectOption>
+                        <NativeSelectOption value="skip">{tr("skip")}</NativeSelectOption>
+                      </NativeSelect>
                     </div>
                     {errors.run_if ? (
                       <div className="validation-error" data-testid="error-run-if">
@@ -2472,15 +2482,16 @@ export function TaskCreateModal({
           className={`modal-footer task-footer${scrolledBottom ? " is-scrolled" : ""}`}
           inert={discardOpen || scopeOpen ? true : undefined}
         >
-          <button
+          <Button
             type="button"
+            variant="outline"
             className="btn btn-secondary task-estimate-btn"
             aria-label={tr("Estimate cost")}
             disabled={estimating || submitting}
             onClick={() => void estimate()}
           >
             {tr("Estimate Cost")}
-          </button>
+          </Button>
           <span className="task-estimate-slot" role="status" aria-live="polite">
             {estimating ? (
               <span className="task-estimate-value">
@@ -2530,15 +2541,17 @@ export function TaskCreateModal({
               {footerStatus.text}
             </span>
           ) : null}
-          <button
+          <Button
             type="button"
+            variant="outline"
             className="btn btn-secondary"
             aria-label={tr("Cancel")}
             disabled={submitting}
             onClick={requestClose}
           >
-            {tr("Cancel")}</button>
-          <button
+            {tr("Cancel")}
+          </Button>
+          <Button
             type="submit"
             form="createTaskForm"
             className="btn btn-primary task-launch-btn"
@@ -2565,7 +2578,7 @@ export function TaskCreateModal({
             ) : (
               tr("Start schedule")
             )}
-          </button>
+          </Button>
         </div>
 
         {/* Recurring-edit scope chooser: PUT rewrites every future run; the
@@ -2589,15 +2602,17 @@ export function TaskCreateModal({
                 {tr("This task repeats on a schedule. Save the changes for every future run, or run once now with these changes and leave the schedule as it is?")}
               </div>
               <div className="task-discard-actions">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   className="btn btn-secondary"
                   onClick={() => setScopeOpen(false)}
                 >
                   {tr("Back")}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="outline"
                   className="btn btn-secondary"
                   data-testid="edit-scope-once"
                   onClick={() => {
@@ -2606,8 +2621,8 @@ export function TaskCreateModal({
                   }}
                 >
                   {tr("Run once now")}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   className="btn btn-primary"
                   data-testid="edit-scope-definition"
@@ -2617,7 +2632,7 @@ export function TaskCreateModal({
                   }}
                 >
                   {tr("All future runs")}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2641,8 +2656,9 @@ export function TaskCreateModal({
         {rich("You have unsaved changes — {0} will be lost if you close.", dirtyList)}
       </div>
               <div className="task-discard-actions">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   ref={keepEditingRef}
                   className="btn btn-secondary"
                   onClick={() => {
@@ -2651,9 +2667,10 @@ export function TaskCreateModal({
                   }}
                 >
                   {tr("Keep editing")}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="destructive"
                   className="btn task-discard-confirm"
                   onClick={() => {
                     resetForm();
@@ -2661,7 +2678,7 @@ export function TaskCreateModal({
                   }}
                 >
                   {tr("Discard")}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

@@ -8,6 +8,7 @@ import { describeCronExpression } from "@/app/shared/lib/cron";
 import { plural } from "@/app/shared/lib/format";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { readPref, writePref } from "@/app/shared/lib/storage";
+import { Button } from "@/components/ui/button";
 
 // UpcomingPanel — the Operations Center "Upcoming" tab (Scheduler UX 2.0, #504):
 // a forward-looking timeline of the next scheduled runs, grouped by calendar
@@ -104,8 +105,10 @@ export function UpcomingPanel() {
         <h2 id="upcomingHeading">{tr("Upcoming Runs")}</h2>
         {/* This tab does not auto-refresh (only the task list does), so the
             projection is as old as the last click here. */}
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           className="btn btn-secondary btn-small"
           aria-label={tr("Refresh upcoming runs")}
           data-testid="upcoming-refresh"
@@ -113,7 +116,7 @@ export function UpcomingPanel() {
           onClick={() => void reload()}
         >
           {tr("Refresh")}
-        </button>
+        </Button>
         <div className="seg seg--md" role="radiogroup" aria-label={tr("Upcoming view")}>
           {VIEWS.map((v) => (
             <button
@@ -232,8 +235,10 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
   return (
     <div className="upcoming-week-wrapper" data-testid="upcoming-week">
       <div className="upcoming-week-nav">
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           className="btn btn-secondary btn-small"
           aria-label={tr("Previous week")}
           data-tip-top="Previous week"
@@ -242,12 +247,14 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
           onClick={() => setWeekOffset((w) => Math.max(0, w - 1))}
         >
           ‹
-        </button>
+        </Button>
         <span className="upcoming-week-label" data-testid="week-label">
           {weekLabel}
         </span>
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           className="btn btn-secondary btn-small"
           aria-label={tr("Next week")}
           data-tip-top={nextWeekBeyondHorizon ? undefined : "Next week"}
@@ -261,7 +268,7 @@ function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
           onClick={() => setWeekOffset((w) => w + 1)}
         >
           ›
-        </button>
+        </Button>
       </div>
       <div className="upcoming-week">
         {days.map((day, i) => (

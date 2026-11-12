@@ -2,6 +2,7 @@ import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/app/shared/ui/Icon";
+import { Switch } from "@/components/ui/switch";
 import {
   highlightSegments,
   seatOptions,
@@ -53,27 +54,15 @@ export function ToolSwitch({
   testId?: string;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
+    <Switch
+      size={large ? "lg" : "default"}
+      checked={on}
       aria-label={label}
       data-testid={testId}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle();
-      }}
-      className={`hit-area-touch relative shrink-0 rounded-full transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-        large ? "h-[1.375rem] w-[2.375rem]" : "h-[1.125rem] w-[1.875rem]"
-      } ${on ? "bg-[var(--color-switch-track-on)]" : "bg-[var(--color-switch-track-off)]"}`}
-    >
-      <span
-        aria-hidden="true"
-        className={`absolute rounded-full transition-transform ${
-          large ? "left-[3px] top-[3px] size-4" : "left-[2px] top-[2px] size-[0.875rem]"
-        } shadow-[var(--shadow-switch-knob)] ${on ? `bg-[var(--color-switch-knob-on)] ${large ? "translate-x-4" : "translate-x-3"}` : "bg-[var(--color-switch-knob)]"}`}
-      />
-    </button>
+      onCheckedChange={() => onToggle()}
+      onClick={(event) => event.stopPropagation()}
+      className="hit-area-touch"
+    />
   );
 }
 
