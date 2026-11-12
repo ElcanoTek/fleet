@@ -50,15 +50,37 @@ describe("NativeSelect", () => {
     expect(select).toHaveClass("pr-8", "data-[size=sm]:pr-7");
   });
 
-  it("allows callers to override right padding explicitly with pr-* or pe-*", () => {
+  it("allows callers to override right padding explicitly with physical pr-* on default and sm sizes while preserving pr-8 for logical pe-*", () => {
     render(
-      <NativeSelect aria-label="Custom right gutter" className="pr-10" defaultValue="a">
-        <NativeSelectOption value="a">Alpha</NativeSelectOption>
-      </NativeSelect>,
+      <>
+        <NativeSelect aria-label="Custom right gutter" className="pr-10" defaultValue="a">
+          <NativeSelectOption value="a">Alpha</NativeSelectOption>
+        </NativeSelect>
+        <NativeSelect
+          aria-label="Small custom right gutter"
+          size="sm"
+          className="pr-10"
+          defaultValue="a"
+        >
+          <NativeSelectOption value="a">Alpha</NativeSelectOption>
+        </NativeSelect>
+        <NativeSelect aria-label="Logical end padding" className="pe-9" defaultValue="a">
+          <NativeSelectOption value="a">Alpha</NativeSelectOption>
+        </NativeSelect>
+      </>,
     );
 
     const select = screen.getByRole("combobox", { name: "Custom right gutter" });
     expect(select).toHaveClass("pr-10");
     expect(select).not.toHaveClass("pr-8");
+    expect(select).not.toHaveClass("data-[size=sm]:pr-7");
+
+    const smSelect = screen.getByRole("combobox", { name: "Small custom right gutter" });
+    expect(smSelect).toHaveClass("pr-10");
+    expect(smSelect).not.toHaveClass("pr-8");
+    expect(smSelect).not.toHaveClass("data-[size=sm]:pr-7");
+
+    const peSelect = screen.getByRole("combobox", { name: "Logical end padding" });
+    expect(peSelect).toHaveClass("pe-9", "pr-8");
   });
 });
