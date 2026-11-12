@@ -174,14 +174,39 @@ func TestScheduleTaskMultipleCardsDoNotSupersedeEachOther(t *testing.T) {
 	}
 }
 
-// alwaysOnFakeEngine adds the always-on catalog the Manager exposes so the
-// resolver can name the servers every scheduled run binds regardless.
+// alwaysOnFakeEngine adds the always-on and optional catalogs the Manager
+// exposes so the resolver can name the servers every scheduled run binds
+// regardless and filter multiplayer participant selections.
 type alwaysOnFakeEngine struct {
 	*fakeTurnEngine
 	alwaysOn []agent.AlwaysOnServerInfo
+	optional []agent.OptionalServerInfo
 }
 
 func (e *alwaysOnFakeEngine) AlwaysOnMCPServerCatalog() []agent.AlwaysOnServerInfo { return e.alwaysOn }
+func (e *alwaysOnFakeEngine) MCPServerCatalog() []agent.OptionalServerInfo         { return e.optional }
+
+// redactedMultiplayerStore reproduces store.Store.GetMultiplayerConversation's
+// non-owner redaction (OptionalMCPServersEnabled cleared, raw list moved onto
+// ParticipantOptionalMCPServers, MCPAccounts scoped to the participant) without
+// requiring Postgres.
+type redactedMultiplayerStore struct {
+	*fakeChatStore
+	participantAccounts map[string]map[string]string
+}
+
+func (s *redactedMultiplayerStore) GetMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*store.Conversation, error) {
+	conv, err := s.fakeChatStore.GetMultiplayerConversation(ctx, callerEmail, convID)
+	if err != nil || conv == nil {
+		return conv, err
+	}
+	if !strings.EqualFold(conv.UserEmail, callerEmail) {
+		conv.ParticipantOptionalMCPServers = append([]string(nil), conv.OptionalMCPServersEnabled...)
+		conv.OptionalMCPServersEnabled = nil
+		conv.MCPAccounts = s.participantAccounts[strings.ToLower(callerEmail)]
+	}
+	return conv, nil
+}
 
 func TestChatTaskConnectorsFor(t *testing.T) {
 	t.Parallel()
@@ -234,5 +259,90 @@ func TestChatTaskConnectorsFor(t *testing.T) {
 	got, _ = s.chatTaskConnectorsFor(user, conv.ID)(ctx)
 	if got.AlwaysOn != nil {
 		t.Fatalf("always-on = %v, want nil without a catalog provider", got.AlwaysOn)
+	}
+}
+
+func TestChatTaskConnectorsFor_MultiplayerParticipant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	const (
+		owner       = "alice@example.com"
+		participant = "bob@example.com"
+		excluded    = "carol@example.com"
+	)
+	baseStore := newFakeChatStore()
+	conv, err := baseStore.CreateConversation(ctx, owner, "Shared Optimization Report", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv.Multiplayer = true
+	conv.MultiplayerExcluded = []string{excluded}
+	// Include one owner-only private remote connector ("alice_private_mcp")
+	// alongside bundled connectors: the participant's scheduled task must
+	// inherit bundled connectors they can reach while dropping owner-private
+	// connectors and owner-only seat overrides.
+	conv.OptionalMCPServersEnabled = []string{
+		"ses_outbound",
+		"explorer",
+		"pubmatic_mcp",
+		"magnite_mcp",
+		"alice_private_mcp",
+	}
+	conv.MCPAccounts = map[string]string{"magnite_mcp": "owner-seat"}
+
+	st := &redactedMultiplayerStore{
+		fakeChatStore: baseStore,
+		participantAccounts: map[string]map[string]string{
+			participant: {"magnite_mcp": "team-seat"},
+		},
+	}
+	s := &Server{
+		store: st,
+		agent: &alwaysOnFakeEngine{
+			fakeTurnEngine: &fakeTurnEngine{},
+			optional: []agent.OptionalServerInfo{
+				{Name: "explorer"},
+				{Name: "magnite_mcp", Accounts: []string{"owner-seat", "team-seat"}},
+				{Name: "pubmatic_mcp"},
+				{Name: "ses_outbound"},
+			},
+		},
+	}
+
+	got, err := s.chatTaskConnectorsFor(participant, conv.ID)(ctx)
+	if err != nil {
+		t.Fatalf("participant chatTaskConnectorsFor: %v", err)
+	}
+	want := []TaskConnector{
+		{Server: "explorer"},
+		{Server: "magnite_mcp", Account: "team-seat"},
+		{Server: "pubmatic_mcp"},
+		{Server: "ses_outbound"},
+	}
+	if len(got.Selection) != len(want) {
+		t.Fatalf("participant selection = %+v, want %+v", got.Selection, want)
+	}
+	for i := range want {
+		if got.Selection[i] != want[i] {
+			t.Fatalf("participant selection[%d] = %+v, want %+v", i, got.Selection[i], want[i])
+		}
+	}
+
+	// Excluded users and private (non-multiplayer) conversations do not resolve
+	// another user's connector state.
+	gotExcl, err := s.chatTaskConnectorsFor(excluded, conv.ID)(ctx)
+	if err != nil || len(gotExcl.Selection) != 0 {
+		t.Fatalf("excluded selection = %+v, err = %v; want empty", gotExcl.Selection, err)
+	}
+
+	privateConv, err := baseStore.CreateConversation(ctx, owner, "Private chat", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateConv.OptionalMCPServersEnabled = []string{"explorer", "ses_outbound"}
+	gotPriv, err := s.chatTaskConnectorsFor(participant, privateConv.ID)(ctx)
+	if err != nil || len(gotPriv.Selection) != 0 {
+		t.Fatalf("private conversation selection = %+v, err = %v; want empty", gotPriv.Selection, err)
 	}
 }
