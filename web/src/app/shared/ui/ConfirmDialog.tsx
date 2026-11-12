@@ -1,5 +1,6 @@
 import { t as tr } from "@/app/lib/i18n";
 import { useCallback, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { useDialogA11y } from "./useDialogA11y";
 
 // Modal confirm/alert dialog for the orchestrator view. Replaces moc's
@@ -89,24 +90,28 @@ export function ConfirmDialog({
           <p>{message}</p>
           <div className="modal-actions">
             {onCancel ? (
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 ref={safeActionRef}
                 className="btn btn-secondary"
                 onClick={dismiss}
               >
                 {cancelLabel}
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               type="button"
+              variant="default"
+              size="sm"
               ref={isAlert ? safeActionRef : undefined}
               className="btn btn-primary"
               disabled={busy}
               onClick={onConfirm}
             >
               {confirmLabel}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

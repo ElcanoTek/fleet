@@ -1,6 +1,7 @@
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Button } from "@/components/ui/button";
 import { deleteChatsText, useImpact } from "./ProjectSettingsDialog";
 
 // The RAIL kebab's "Delete project" confirmation — B29's copy and counts, the
@@ -53,32 +54,34 @@ export function DeleteProjectConfirmDialog({
       </ul>
       <div className="flex flex-wrap items-center gap-2">
         {projectId ? (
-          <a
-            href={`/api/projects/${encodeURIComponent(projectId)}/export`}
-            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-          >
-            {tr("Export first")}
-          </a>
+          <Button asChild variant="secondary" size="sm">
+            <a href={`/api/projects/${encodeURIComponent(projectId)}/export`}>
+              {tr("Export first")}
+            </a>
+          </Button>
         ) : null}
         <span className="flex-1" />
-        <button
+        <Button
           type="button"
-          className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          variant="ghost"
+          size="sm"
           onClick={onCancel}
         >
-          {tr("Cancel")}</button>
-        <button
+          {tr("Cancel")}</Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           // Waits for the counts the list promises; a failed read still
           // settles, with the honest "what, not how much" wording.
           disabled={!state.settled}
-          className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] disabled:opacity-50"
+          className="text-[var(--color-danger)] enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] enabled:hover:text-[var(--color-danger)]"
           onClick={() => {
             if (state.settled) onConfirm();
           }}
         >
           {tr("Delete project")}
-        </button>
+        </Button>
       </div>
     </DialogShell>
   );

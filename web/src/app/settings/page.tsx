@@ -11,6 +11,7 @@ import { useState } from "react";
 import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
 import { SetSection } from "./ui/panels";
+import { Card } from "@/components/ui/card";
 import { useTheme, type ThemePreference } from "@/app/shared/hooks/useTheme";
 import { readSendOnEnter, writeSendOnEnter } from "@/app/shared/lib/storage";
 import { t } from "@/app/lib/i18n";
@@ -56,7 +57,7 @@ export default function GeneralSettingsPage() {
       title={t("General")}
       intro={t("Your own preferences. They only change things for you.")}
     >
-      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] py-[0.3rem]">
+      <Card className="gap-0 rounded-md px-[1.15rem] py-[0.3rem] shadow-none">
         <SetRow label={t("Language")} desc={t("Choose the language for this app. Changing it reloads the page.")}>
           <LanguageSelect />
         </SetRow>
@@ -73,7 +74,7 @@ export default function GeneralSettingsPage() {
         </SetRow>
         <SendOnEnterRow />
         <BrowserNotificationsRow />
-      </div>
+      </Card>
     </SetSection>
   );
 }

@@ -3,6 +3,9 @@ import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useId, useRef, useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useChatToast } from "./ChatToasts";
 import { LockGlyph } from "./ShareGlyphs";
 import { ProjectVisibilityChoice } from "./NewProjectDialog";
@@ -158,8 +161,6 @@ function useMembers(projectId: string, enabled: boolean, nonce: number) {
   return state;
 }
 
-const pillGhost =
-  "rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillPrimary =
   "rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillDanger =
@@ -308,13 +309,13 @@ export function ProjectSettingsDialog({
       </div>
 
       <div className="grid gap-1.5">
-        <label
+        <Label
           htmlFor={nameId}
           className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
         >
           {tr("Name")}
-        </label>
-        <input
+        </Label>
+        <Input
           id={nameId}
           ref={nameRef}
           value={name}
@@ -322,7 +323,6 @@ export function ProjectSettingsDialog({
           // "Project name" stays the accessible name the e2e specs query by.
           aria-label={tr("Project name")}
           onChange={(e) => setName(e.target.value)}
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
         />
       </div>
 
@@ -448,21 +448,21 @@ export function ProjectSettingsDialog({
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <button
+            <Button
               type="button"
-              className={pillGhost}
+              variant="secondary"
               onClick={() => setPanel(null)}
             >
-              {tr("Cancel")}</button>
+              {tr("Cancel")}</Button>
             {candidates.length > 0 ? (
-              <button
+              <Button
                 type="button"
+                variant="default"
                 disabled={!pick || transferBusy}
-                className={pillPrimary}
                 onClick={() => void transfer()}
               >
                 {transferBusy ? tr("Transferring…") : tr("Transfer ownership")}
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>
@@ -491,21 +491,21 @@ export function ProjectSettingsDialog({
             <li>{tr("Instructions and sharing are removed.")}</li>
           </ul>
           <div className="flex flex-wrap items-center gap-2">
-            <a
-              href={`/api/projects/${encodeURIComponent(project.id)}/export`}
-              className={pillGhost}
-            >
-              {tr("Export first")}
-            </a>
+            <Button asChild variant="secondary">
+              <a href={`/api/projects/${encodeURIComponent(project.id)}/export`}>
+                {tr("Export first")}
+              </a>
+            </Button>
             <span className="flex-1" />
-            <button
+            <Button
               type="button"
-              className={pillGhost}
+              variant="secondary"
               onClick={() => setPanel(null)}
             >
-              {tr("Cancel")}</button>
-            <button
+              {tr("Cancel")}</Button>
+            <Button
               type="button"
+              variant="destructive"
               // The list above promises real counts; the delete waits until
               // they land (a failed count still settles, with honest wording).
               disabled={!impactState.settled}
@@ -517,7 +517,7 @@ export function ProjectSettingsDialog({
               }}
             >
               {tr("Delete project")}
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -530,18 +530,21 @@ export function ProjectSettingsDialog({
 
       {panel === null ? (
         <div className="flex items-center gap-2">
-          <button
+          <Button
             type="button"
-            className="rounded-[var(--radius-md)] px-2 py-1.5 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            variant="ghost"
+            size="sm"
+            className="text-[var(--color-danger)] enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] enabled:hover:text-[var(--color-danger)]"
             onClick={() => setPanel("delete")}
           >
             {tr("Delete project")}
-          </button>
+          </Button>
           <span className="flex-1" />
-          <button type="button" className={pillGhost} onClick={onClose}>
-            {tr("Cancel")}</button>
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {tr("Cancel")}</Button>
+          <Button
             type="button"
+            variant="default"
             // Switching to Only you promises the counts BEFORE Save (B28), so
             // Save waits until they land; a failed count still settles, with
             // its honest "couldn't count" wording.
@@ -550,7 +553,7 @@ export function ProjectSettingsDialog({
             onClick={() => void save()}
           >
             {saving ? tr("Saving…") : tr("Save")}
-          </button>
+          </Button>
         </div>
       ) : null}
     </DialogShell>

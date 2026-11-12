@@ -2,6 +2,7 @@ import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
 import { useEffect, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Button } from "@/components/ui/button";
 import { TeamChip } from "./MoveChatConfirmDialog";
 import { fetchConversationOutputs } from "./teamSharing";
 import { plural } from "@/app/shared/lib/format";
@@ -131,17 +132,17 @@ export function BulkDeleteConfirmModal({
         <SharedLossCopy groups={groups} total={count} files={sharedFiles} />
       ) : null}
       <div className="flex items-center justify-end gap-2">
-        <button
+        <Button
           type="button"
-          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          variant="secondary"
           onClick={onCancel}
         >
-          {tr("Cancel")}</button>
-        <button
+          {tr("Cancel")}</Button>
+        <Button
           type="button"
+          variant="destructive"
           disabled={!ready}
-          className={[
-            "rounded-[var(--radius-md)] px-4 py-2 text-[0.8125rem] font-medium transition",
+          className={
             // The foreground travels with the fill. --color-surface-1 is the
             // theme-aware readable foreground on a saturated fill (dark in the
             // dark theme, white in the light one) — white was 2.77:1 on the
@@ -149,13 +150,13 @@ export function BulkDeleteConfirmModal({
             // disabled control, so it takes the muted treatment rather than a
             // high-contrast label on a half-alpha fill.
             ready
-              ? "bg-[var(--color-danger)] text-[var(--color-surface-1)] hover:opacity-90"
-              : "cursor-not-allowed bg-[var(--color-danger)]/50 text-[var(--color-text-muted)]",
-          ].join(" ")}
+              ? "bg-[var(--color-danger)] text-[var(--color-surface-1)] enabled:hover:bg-[var(--color-danger)] enabled:hover:opacity-90"
+              : "bg-[var(--color-danger)]/50 text-[var(--color-text-muted)] disabled:opacity-100"
+          }
           onClick={onConfirm}
         >
           {ready ? tr("Delete {0}", [count]) : remaining > 0 ? tr("Wait {0}s…", [remaining]) : tr("Checking…")}
-        </button>
+        </Button>
       </div>
     </DialogShell>
   );

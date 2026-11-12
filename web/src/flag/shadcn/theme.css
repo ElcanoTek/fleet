@@ -1,0 +1,197 @@
+/* Flag theme for shadcn/ui (Tailwind CSS v4).
+ *
+ * Maps shadcn's semantic CSS variables (--background, --primary, ...) onto
+ * Flag's semantic tokens, and exposes them to Tailwind with `@theme inline`
+ * so utilities such as `bg-primary`, `text-muted-foreground`, `rounded-lg`
+ * and `font-heading` resolve to Flag values.
+ *
+ * Load order in the app's main stylesheet (see Flag's design-system/SHADCN.md):
+ *   @import "tailwindcss";
+ *   @import "tw-animate-css";
+ *   @import "<vendored flag>/fonts/fonts.css";
+ *   @import "<vendored flag>/tokens/design-tokens.css";
+ *   @import "<vendored flag>/shadcn/theme.css";
+ *
+ * Every value is a var() reference to a Flag token, never a copied hex, so a
+ * token change in Flag reaches Tier B apps with the next flag-sync. The one
+ * exception is --accent-solid-foreground, a label color Flag's token sheet does
+ * not carry: it is set per theme below and measured by Flag's
+ * scripts/check_tokens.py. Flag's
+ * tokens switch on html[data-theme="light"|"dark"] (dark is the base; the
+ * theme controller resolves prefers-color-scheme into the attribute), so the
+ * variables below need a light override only where Flag's own components
+ * paint differently in light (the primary action surface).
+ *
+ * Do not import the tokens into a cascade layer: `@theme inline` emits no
+ * :root variables, so nothing here shadows a Flag token, but a layered token
+ * sheet would lose to Tailwind's own theme layer for the few names both
+ * define (--color-white, --color-black, --shadow-*). Tailwind may echo a mapped
+ * name (--color-primary, --radius-md, ...) into its theme layer when Flag's
+ * sheet references it; the unlayered Flag token always wins that cascade.
+ */
+
+/* Tailwind's `dark:` variant follows Flag's root contract: dark unless the
+ * root says light. Prefer tokens over `dark:` utilities; Flag components
+ * never need them. */
+@custom-variant dark (&:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *));
+
+:root {
+  /* Surfaces and text */
+  --background: var(--color-bg);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-surface-1);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-surface-2);
+  --popover-foreground: var(--color-text-primary);
+
+  /* Filled primary: Flag's measured fill pair (4.5:1+), not the raw
+   * --color-primary (4.46:1 under white). */
+  --primary: var(--color-primary-fill);
+  --primary-foreground: var(--color-on-primary-fill);
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-text-primary);
+  --muted: var(--color-surface-2);
+  --muted-foreground: var(--color-text-muted);
+  /* shadcn's "accent" is the hover/highlight wash of menu items and rows;
+   * Flag's equivalent is the selected-row fill ("accent tone"). */
+  --accent: var(--color-selected-bg);
+  --accent-foreground: var(--color-text-primary);
+  /* Flag's accent as a fill (accent badges, count chips). shadcn has no slot
+   * for it, since its --accent is the wash above. The label is set per theme:
+   * 8.3:1 on the dark accent here, 5.3:1 on the light one below. */
+  --accent-solid: var(--color-accent);
+  --accent-solid-foreground: #1a0b1e;
+  --destructive: var(--color-danger);
+
+  --border: var(--color-border);
+  /* Field edges: the 3:1 control edge (Tier A fields keep --color-border). */
+  --input: var(--color-control-border);
+  --ring: var(--color-accent);
+  --radius: var(--radius-md);
+
+  /* Charts: Flag has no chart palette yet; these are its brand hues. */
+  --chart-1: var(--color-primary);
+  --chart-2: var(--color-accent);
+  --chart-3: var(--color-secondary);
+  --chart-4: var(--color-info);
+  --chart-5: var(--color-warning);
+
+  --sidebar: var(--color-surface-1);
+  --sidebar-foreground: var(--color-text-primary);
+  --sidebar-primary: var(--color-primary-fill);
+  --sidebar-primary-foreground: var(--color-on-primary-fill);
+  --sidebar-accent: var(--color-selected-bg);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
+
+  /* Flag extensions used by the Flag registry components. */
+  --primary-gradient: var(--gradient-action-fill);
+  --primary-gradient-hover: var(--gradient-action-fill-hover);
+  --primary-hover: var(--color-primary-fill-hover);
+}
+
+/* Flag's light primary button is a solid fill with a solid hover; the
+ * accent-fill label flips to white on the deeper light accent. */
+:root[data-theme="light"] {
+  --accent-solid-foreground: #ffffff;
+  --primary-gradient: none;
+  --primary-gradient-hover: none;
+  --primary-hover: var(--color-primary-hover);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-solid: var(--accent-solid);
+  --color-accent-solid-foreground: var(--accent-solid-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Flag-only utilities: border-border-strong, bg-surface-1, text-subtle, ... */
+  --color-border-strong: var(--color-border-strong);
+  --color-surface-1: var(--color-surface-1);
+  --color-surface-2: var(--color-surface-2);
+  --color-surface-inset: var(--color-surface-inset);
+  --color-subtle: var(--color-text-secondary);
+  --color-link: var(--color-link);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-info: var(--color-info);
+
+  /* Flag's radius scale (sm 8px, md 10px, lg 14px, xl 18px). */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  /* Faces come from Flag's fonts.css through the token stacks. */
+  --font-sans: var(--font-body);
+  --font-heading: var(--font-heading);
+  --font-mono: var(--font-code);
+
+  /* Flag's type scale as text-* utilities. */
+  --text-title: var(--font-size-title);
+  --text-title--line-height: var(--line-height-title);
+  --text-subtitle: var(--font-size-subtitle);
+  --text-subtitle--line-height: var(--line-height-subtitle);
+  --text-body: var(--font-size-body);
+  --text-body--line-height: var(--line-height-body);
+  --text-body-md: var(--font-size-body-md);
+  --text-caption: var(--font-size-caption);
+  --text-caption--line-height: var(--line-height-caption);
+  --text-overline: var(--font-size-overline);
+  --text-overline--line-height: var(--line-height-overline);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: var(--ring);
+    outline-color: color-mix(in srgb, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-body);
+  }
+  /* Flag motion rule: respect reduced motion everywhere, including the
+   * tw-animate-css enter/exit animations Radix waits on (kept, but instant). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

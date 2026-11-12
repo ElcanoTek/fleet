@@ -12,6 +12,8 @@ import { StoragePanel } from "./StoragePanel";
 import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { formatBytes, formatUptime } from "../lib";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
@@ -102,7 +104,7 @@ function percent(used: number, total: number): number {
 function UsageBar({ label, used, total }: { label: string; used: number; total: number }) {
   const value = percent(used, total);
   return (
-    <div className="mt-3" aria-label={tr("{0}: {1}% used", [label, formatFixed(value, 1)])}>
+    <div className="mt-3">
       <div className="mb-1.5 flex justify-between gap-3 text-xs text-[var(--color-text-muted)]">
         <span>
         {rich("{0} used", formatBytes(used))}
@@ -111,12 +113,10 @@ function UsageBar({ label, used, total }: { label: string; used: number; total: 
         {rich("{0} total", formatBytes(total))}
       </span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
-        <div
-          className="h-full rounded-full bg-[var(--color-accent)] transition-[width]"
-          style={{ width: `${value}%` }}
-        />
-      </div>
+      <Progress
+        value={value}
+        aria-label={tr("{0}: {1}% used", [label, formatFixed(value, 1)])}
+      />
     </div>
   );
 }
@@ -297,15 +297,17 @@ export function ServerStatsView({ allowCleanup = true }: { allowCleanup?: boolea
             </ConnBadge>
           ) : null}
           <span className="text-xs text-[var(--color-text-muted)]">{tr("auto-refreshes every 10s")}</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             aria-label={tr("Refresh server stats")}
             disabled={refreshing}
             onClick={refresh}
-            className="ml-auto inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+            className="ml-auto"
           >
             <Icon name="refresh" className={`size-[0.95rem]${refreshing ? " animate-spin" : ""}`} />
-          </button>
+          </Button>
         </div>
 
         {/* A failed poll keeps the last good sample on screen under the

@@ -31,6 +31,8 @@ import { ConfirmDialog } from "@/app/chat/ui/ConfirmDialog";
 import { usePathname } from "@/app/lib/navigation";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { useTheme } from "@/app/shared/hooks/useTheme";
+import { Avatar as FlagAvatar, AvatarFallback } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
 import { Icon } from "./Icon";
 import { Menu, MenuItem, MenuSeparator } from "./Menu";
 import { Segmented } from "./Segmented";
@@ -38,15 +40,14 @@ import { Segmented } from "./Segmented";
 function Avatar({ email, className }: { email: string; className?: string }) {
   const initial = (email || "?").charAt(0).toUpperCase();
   return (
-    <span
+    <FlagAvatar
       aria-hidden="true"
-      className={[
-        "grid shrink-0 place-items-center rounded-full bg-[var(--color-primary-fill)] text-[0.78rem] font-semibold text-[var(--color-on-primary-fill)]",
-        className ?? "size-7",
-      ].join(" ")}
+      className={cn("size-7", className)}
     >
-      {initial}
-    </span>
+      <AvatarFallback className="border-0 bg-[var(--color-primary-fill)] text-[0.78rem] font-semibold text-[var(--color-on-primary-fill)]">
+        {initial}
+      </AvatarFallback>
+    </FlagAvatar>
   );
 }
 

@@ -16,6 +16,11 @@ import {
   formatTimeZoneLabel,
   timeZoneOptions,
 } from "@/app/shared/lib/timezones";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 
 type PatrolSchedulePickerProps = {
   cron: string;
@@ -146,7 +151,8 @@ export function PatrolSchedulePicker({
               </button>
             )}
           </span>
-          <select
+          <NativeSelect
+            size={compact ? "sm" : "default"}
             aria-label={tr("Repeat")}
             data-testid={`${testIdPrefix}-frequency`}
             value={frequency}
@@ -155,19 +161,20 @@ export function PatrolSchedulePicker({
             }
             className={inputClass}
           >
-            <option value="hours">{tr("Every N hours")}</option>
-            <option value="minutes">{tr("Every N minutes")}</option>
-            <option value="daily">{tr("Every day")}</option>
-            <option value="weekdays">{tr("Weekdays (Mon–Fri)")}</option>
-            <option value="weekly">{tr("Specific days of the week")}</option>
-            <option value="custom_cron">{tr("Advanced (cron expression)")}</option>
-          </select>
+            <NativeSelectOption value="hours">{tr("Every N hours")}</NativeSelectOption>
+            <NativeSelectOption value="minutes">{tr("Every N minutes")}</NativeSelectOption>
+            <NativeSelectOption value="daily">{tr("Every day")}</NativeSelectOption>
+            <NativeSelectOption value="weekdays">{tr("Weekdays (Mon–Fri)")}</NativeSelectOption>
+            <NativeSelectOption value="weekly">{tr("Specific days of the week")}</NativeSelectOption>
+            <NativeSelectOption value="custom_cron">{tr("Advanced (cron expression)")}</NativeSelectOption>
+          </NativeSelect>
         </label>
 
         {frequency === "hours" ? (
           <label className={labelClass}>
             <span>{tr("Interval")}</span>
-            <select
+            <NativeSelect
+              size={compact ? "sm" : "default"}
               aria-label={tr("Hour interval")}
               data-testid={`${testIdPrefix}-hours`}
               value={state.intervalHours}
@@ -177,18 +184,19 @@ export function PatrolSchedulePicker({
               className={inputClass}
             >
               {HOUR_INTERVAL_OPTIONS.map((hrs) => (
-                <option key={hrs} value={hrs}>
+                <NativeSelectOption key={hrs} value={hrs}>
                   {hrs === 1 ? tr("Every hour") : tr("Every {0} hours", [hrs])}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         ) : null}
 
         {frequency === "minutes" ? (
           <label className={labelClass}>
             <span>{tr("Interval")}</span>
-            <select
+            <NativeSelect
+              size={compact ? "sm" : "default"}
               aria-label={tr("Minute interval")}
               data-testid={`${testIdPrefix}-minutes`}
               value={state.intervalMinutes}
@@ -198,11 +206,11 @@ export function PatrolSchedulePicker({
               className={inputClass}
             >
               {MINUTE_INTERVAL_OPTIONS.map((mins) => (
-                <option key={mins} value={mins}>
+                <NativeSelectOption key={mins} value={mins}>
                   {tr("Every {0} minutes", [mins])}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         ) : null}
 
@@ -211,7 +219,7 @@ export function PatrolSchedulePicker({
         frequency === "weekly" ? (
           <label className={labelClass}>
             <span>{tr("At time")}</span>
-            <input
+            <Input
               type="time"
               aria-label={tr("At time")}
               data-testid={`${testIdPrefix}-time`}
@@ -263,7 +271,7 @@ export function PatrolSchedulePicker({
       {frequency === "custom_cron" ? (
         <label className={labelClass}>
           <span>{tr("Cron expression (5 fields: min hour day month weekday)")}</span>
-          <input
+          <Input
             type="text"
             aria-label={tr("Cron expression")}
             data-testid={`${testIdPrefix}-raw-cron`}
@@ -297,7 +305,7 @@ export function PatrolSchedulePicker({
             </button>
           </span>
           {customTzMode ? (
-            <input
+            <Input
               type="text"
               aria-label={tr("Time zone")}
               data-testid={`${testIdPrefix}-timezone-custom`}
@@ -312,7 +320,8 @@ export function PatrolSchedulePicker({
               className={`${inputClass} font-mono`}
             />
           ) : (
-            <select
+            <NativeSelect
+              size={compact ? "sm" : "default"}
               aria-label={tr("Time zone")}
               data-testid={`${testIdPrefix}-timezone`}
               value={effectiveTz}
@@ -320,11 +329,11 @@ export function PatrolSchedulePicker({
               className={inputClass}
             >
               {zones.map((z) => (
-                <option key={z} value={z}>
+                <NativeSelectOption key={z} value={z}>
                   {formatTimeZoneLabel(z)}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           )}
         </label>
       ) : null}

@@ -1,10 +1,12 @@
 import { t as tr } from "@/app/lib/i18n";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "@/app/shared/ui/Icon";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // DownloadChatDialog — "Download chat…" from a conversation's kebab menu.
 //
@@ -77,6 +79,7 @@ export function DownloadChatDialog({
   const [includeWork, setIncludeWork] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const includeWorkId = useId();
   const modalRef = useRef<HTMLDivElement | null>(null);
 
   useDialogA11y(true, modalRef, onClose);
@@ -175,20 +178,20 @@ export function DownloadChatDialog({
           {/* Raw data always carries the whole run, so the choice would be a
               lie there — hide it rather than show a dead control. */}
           {format === "json" ? null : (
-            <label className="mt-4 flex items-start gap-2 text-sm text-[var(--color-text-primary)]">
-              <input
-                type="checkbox"
-                className="mt-1"
+            <div className="mt-4 flex items-start gap-2 text-sm text-[var(--color-text-primary)]">
+              <Checkbox
+                id={includeWorkId}
+                className="mt-0.5"
                 checked={includeWork}
-                onChange={(e) => setIncludeWork(e.target.checked)}
+                onCheckedChange={(checked) => setIncludeWork(checked === true)}
               />
-              <span className="grid gap-0.5">
+              <label htmlFor={includeWorkId} className="grid cursor-pointer gap-0.5">
                 {tr("Include the agent's work")}
                 <span className="text-xs text-[var(--color-text-muted)]">
                   {tr("Tool calls, their results, and the agent's thinking. Off by default so the file reads like a conversation.")}
                 </span>
-              </span>
-            </label>
+              </label>
+            </div>
           )}
 
           {error ? (
@@ -205,16 +208,16 @@ export function DownloadChatDialog({
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            {tr("Cancel")}</button>
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>
+            {tr("Cancel")}</Button>
+          <Button
             type="button"
-            className="btn btn-primary"
+            variant="default"
             disabled={busy}
             onClick={() => void start()}
           >
             {busy ? tr("Preparing…") : tr("Download")}
-          </button>
+          </Button>
         </footer>
       </div>
     </div>,

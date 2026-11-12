@@ -1,6 +1,6 @@
 import { rich } from "@/app/lib/i18n/rich";
 import { t as tr } from "@/app/lib/i18n";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -12,6 +12,10 @@ import {
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 // SavePromptDialog — "Save as workflow…". It asks the server to turn the
 // WHOLE conversation into a reusable workflow template (a host-side model
@@ -77,6 +81,7 @@ export function SavePromptDialog({
   });
   // Bumped by the Retry button to re-run the distillation effect.
   const [attempt, setAttempt] = useState(0);
+  const shareId = useId();
   const modalRef = useRef<HTMLDivElement | null>(null);
 
   useDialogA11y(true, modalRef, onClose);
@@ -236,9 +241,9 @@ export function SavePromptDialog({
               <p className="m-0 max-w-96 text-sm text-[var(--color-status-error-fg)]">
                 {error}
               </p>
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="secondary"
                 onClick={() => {
                   setPhase("loading");
                   setError(null);
@@ -246,7 +251,7 @@ export function SavePromptDialog({
                 }}
               >
                 {tr("Try again")}
-              </button>
+              </Button>
             </div>
           ) : (
             <div className="grid gap-3">
@@ -304,7 +309,7 @@ export function SavePromptDialog({
                   <span className="text-xs text-[var(--color-text-muted)]">
         {rich("Lowercase kebab-case (a-z, 0-9, hyphens), invoked as {0}", <code>/{skillName || toSkillSlug(draft.name)}</code>)}
       </span>
-                  <input
+                  <Input
                     aria-label={tr("Skill slash-command name")}
                     className={FIELD}
                     maxLength={64}
@@ -315,7 +320,7 @@ export function SavePromptDialog({
               ) : null}
               <label className="grid gap-1 text-sm">
                 {tr("Name")}
-                <input
+                <Input
                   className={FIELD}
                   maxLength={120}
                   value={draft.name}
@@ -333,7 +338,7 @@ export function SavePromptDialog({
                 <span className="text-xs text-[var(--color-text-muted)]">
                   {tr("Optional — helps teammates find it.")}
                 </span>
-                <input
+                <Input
                   className={FIELD}
                   maxLength={1024}
                   value={draft.description}
@@ -344,7 +349,7 @@ export function SavePromptDialog({
               </label>
               <label className="grid gap-1 text-sm">
                 {tr("Workflow")}
-                <textarea
+                <Textarea
                   className={`${FIELD} min-h-80 font-mono text-xs`}
                   value={draft.content}
                   onChange={(e) =>
@@ -352,19 +357,21 @@ export function SavePromptDialog({
                   }
                 />
               </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
+              <div className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id={shareId}
                   checked={draft.visibility === "workspace"}
-                  onChange={(e) =>
+                  onCheckedChange={(checked) =>
                     setDraft({
                       ...draft,
-                      visibility: e.target.checked ? "workspace" : "private",
+                      visibility: checked === true ? "workspace" : "private",
                     })
                   }
-                />{" "}
-                {tr("Share with this workspace")}
-              </label>
+                />
+                <label htmlFor={shareId} className="cursor-pointer">
+                  {tr("Share with this workspace")}
+                </label>
+              </div>
               {error ? (
                 <p className="m-0 text-sm text-[var(--color-status-error-fg)]">
                   {error}
@@ -376,21 +383,21 @@ export function SavePromptDialog({
 
         <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
           {phase === "saved" ? (
-            <button type="button" className="btn btn-primary" onClick={onClose}>
+            <Button type="button" variant="default" onClick={onClose}>
               {tr("Done")}
-            </button>
+            </Button>
           ) : (
             <>
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary"
+                variant="secondary"
                 onClick={onClose}
               >
-                {tr("Cancel")}</button>
+                {tr("Cancel")}</Button>
               {distillFailed ? null : (
-                <button
+                <Button
                   type="button"
-                  className="btn btn-primary"
+                  variant="default"
                   disabled={
                     phase !== "edit" ||
                     saving ||
@@ -407,7 +414,7 @@ export function SavePromptDialog({
                     : targetKind === "skill"
                       ? tr("Save skill")
                       : tr("Save workflow")}
-                </button>
+                </Button>
               )}
             </>
           )}

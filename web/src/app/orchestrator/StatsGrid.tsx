@@ -1,5 +1,6 @@
 import { t as tr } from "@/app/lib/i18n";
 import type { DashboardStats } from "@/app/shared/lib/orchestratorApi";
+import { Card } from "@/components/ui/card";
 
 // StatsGrid — the task-metric cards. Renders the design handoff's segmented
 // stats bar (#169): four cards — Pending / Running / Completed Today / Failed
@@ -60,7 +61,7 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
       aria-label={tr("Dashboard statistics")}
     >
       {agentCards.map((card) => (
-        <div
+        <Card
           key={card.label}
           className={`stat-card stat-card-static stat-tone-${card.tone}${card.live ? " live" : ""}`}
           data-testid={`stat-${card.tone}`}
@@ -73,7 +74,7 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
           <span className="stat-card-val" aria-live="polite">
             {card.value}
           </span>
-        </div>
+        </Card>
       ))}
       {CARDS.map((card) => {
         const value = stats ? stats[card.key] : undefined;

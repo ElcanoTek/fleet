@@ -5,6 +5,16 @@ import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { plural } from "@/app/shared/lib/format";
+import { Button } from "@/components/ui/button";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { SlaChip } from "./taskDisplay";
 
 // SLAReportPanel — the Operations Center SLA tab (#274): a per-task-name table
@@ -32,8 +42,10 @@ export function SLAReportPanel() {
         <h2 id="slaHeading">{tr("SLA Report")}</h2>
         {/* No auto-refresh on this tab (only the task list polls), so the
             report is as fresh as the last click here or a window change. */}
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           className="btn btn-secondary btn-small"
           aria-label={tr("Refresh SLA report")}
           data-testid="sla-refresh"
@@ -41,21 +53,21 @@ export function SLAReportPanel() {
           onClick={() => void reload()}
         >
           {tr("Refresh")}
-        </button>
+        </Button>
         <div className="sla-window-select">
           <label htmlFor="slaWindow">{tr("Window")}</label>
-          <select
+          <NativeSelect
             id="slaWindow"
             aria-label={tr("SLA report window in days")}
             value={days}
             onChange={(e) => setDays(Number.parseInt(e.target.value, 10))}
           >
             {WINDOW_OPTIONS.map((d) => (
-              <option key={d} value={d}>
+              <NativeSelectOption key={d} value={d}>
                 {tr("Last")}{" "}{d} {tr("days")}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       </div>
 
@@ -79,45 +91,45 @@ export function SLAReportPanel() {
 function SLATable({ report }: { report: SLAReport }) {
   return (
     <div className="table-wrapper">
-      <table id="slaReportTable" data-testid="sla-report-table">
-        <thead>
-          <tr>
-            <th scope="col">{tr("Task")}</th>
-            <th scope="col">{tr("Expected")}</th>
-            <th scope="col">{tr("p50 actual")}</th>
-            <th scope="col">{tr("p95 actual")}</th>
-            <th scope="col">{tr("Breach rate")}</th>
-            <th scope="col">{tr("Runs")}</th>
-            <th scope="col">{tr("Distribution")}</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table id="slaReportTable" data-testid="sla-report-table">
+        <TableHeader>
+          <TableRow>
+            <TableHead>{tr("Task")}</TableHead>
+            <TableHead>{tr("Expected")}</TableHead>
+            <TableHead>{tr("p50 actual")}</TableHead>
+            <TableHead>{tr("p95 actual")}</TableHead>
+            <TableHead>{tr("Breach rate")}</TableHead>
+            <TableHead>{tr("Runs")}</TableHead>
+            <TableHead>{tr("Distribution")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {report.tasks.map((row) => {
             const breachTone =
               row.breach_rate_pct >= 50 ? "fail" : row.breach_rate_pct > 0 ? "warn" : "ok";
             return (
-              <tr key={row.task_name} data-testid="sla-report-row">
-                <td className="prompt-cell" title={row.task_name}>{row.task_name}</td>
-                <td>{row.expected_minutes}{tr("m")}</td>
-                <td>{formatFixed(row.p50_actual_minutes, 1)}{tr("m")}</td>
-                <td>{formatFixed(row.p95_actual_minutes, 1)}{tr("m")}</td>
-                <td>
+              <TableRow key={row.task_name} data-testid="sla-report-row">
+                <TableCell className="prompt-cell whitespace-normal" title={row.task_name}>{row.task_name}</TableCell>
+                <TableCell>{row.expected_minutes}{tr("m")}</TableCell>
+                <TableCell>{formatFixed(row.p50_actual_minutes, 1)}{tr("m")}</TableCell>
+                <TableCell>{formatFixed(row.p95_actual_minutes, 1)}{tr("m")}</TableCell>
+                <TableCell>
                   <SlaChip tone={breachTone}>{formatFixed(row.breach_rate_pct, 1)}%</SlaChip>
-                </td>
-                <td>{row.sample_count}</td>
-                <td>
+                </TableCell>
+                <TableCell>{row.sample_count}</TableCell>
+                <TableCell>
                   <SLASparkline
                     expected={row.expected_minutes}
                     p50={row.p50_actual_minutes}
                     p95={row.p95_actual_minutes}
                     tone={breachTone}
                   />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
       <p className="refresh-note">
         {rich("Window: {0} · {1}", report.period, plural(report.tasks.length, "task bucket"))}
       </p>

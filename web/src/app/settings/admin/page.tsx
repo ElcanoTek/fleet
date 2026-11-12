@@ -30,6 +30,16 @@ import { useIsAdmin } from "../useIsAdmin";
 import { AdminGateFallback } from "../AdminGateFallback";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
@@ -241,15 +251,17 @@ export default function AdminOverviewPage() {
       <span className="text-[0.72rem] text-[var(--color-text-muted)]">
         {tr("auto-refreshes every 10s")}
       </span>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-sm"
         aria-label={tr("Refresh now")}
         disabled={refreshing}
         onClick={refresh}
-        className="ml-auto inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+        className="ml-auto"
       >
         <Icon name="refresh" className={`size-[0.95rem]${refreshing ? " animate-spin" : ""}`} />
-      </button>
+      </Button>
     </div>
   );
 
@@ -295,17 +307,18 @@ export default function AdminOverviewPage() {
                   // (the design's .mcp-chip) and the per-chip tooltip carries
                   // the enabled/optional distinction — never a danger tint,
                   // which would wrongly read as broken.
-                  <span
+                  <Badge
                     key={s.name}
+                    variant="outline"
                     title={
                       s.enabled
                         ? tr("On by default for new conversations")
                         : tr("Optional — off by default (users enable it per conversation)")
                     }
-                    className="rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.6rem] py-[0.2rem] font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-secondary)]"
+                    className="bg-[var(--color-surface-1)] px-[0.6rem] py-[0.2rem] font-[family-name:var(--font-code)] text-[0.7rem] font-normal text-[var(--color-text-secondary)]"
                   >
                     {s.name}
-                  </span>
+                  </Badge>
                 ))}
               </div>
             ) : null}
@@ -335,68 +348,68 @@ export default function AdminOverviewPage() {
             </div>
 
             {dailyCache.length > 0 ? (
-              <div className="overflow-x-auto">
+              <div>
                 <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                   {tr("By date (last 14 days, UTC)")}
                 </div>
-                <table className="w-full border-collapse text-left text-[0.78rem]">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-                      <th className="py-1.5 pr-3">{tr("Date")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Turns")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Prompt tok")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Cached")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Cache miss")}</th>
-                      <th className="py-1.5 pl-2 text-right">{tr("Hit %")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="text-[0.78rem]">
+                  <TableHeader>
+                    <TableRow className="text-[0.68rem] tracking-[0.06em]">
+                      <TableHead className="h-8 py-1.5 pr-3">{tr("Date")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Turns")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Prompt tok")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Cached")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Cache miss")}</TableHead>
+                      <TableHead className="h-8 py-1.5 pl-2 text-right">{tr("Hit %")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {[...dailyCache].reverse().map((d) => (
-                      <tr
+                      <TableRow
                         key={d.day}
                         data-testid={`cache-day-${d.day}`}
-                        className="border-b border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
+                        className="border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
                       >
-                        <td className="py-1.5 pr-3 font-[family-name:var(--font-code)] text-[var(--color-text-primary)]">
+                        <TableCell className="py-1.5 pr-3 font-[family-name:var(--font-code)] text-[var(--color-text-primary)]">
                           {d.day}
-                        </td>
-                        <td className="py-1.5 px-2 text-right tabular-nums">{d.turns}</td>
-                        <td className="py-1.5 px-2 text-right tabular-nums">
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5 text-right tabular-nums">{d.turns}</TableCell>
+                        <TableCell className="px-2 py-1.5 text-right tabular-nums">
                           {formatCompactTokens(d.prompt_tokens)}
-                        </td>
-                        <td className="py-1.5 px-2 text-right tabular-nums">
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5 text-right tabular-nums">
                           {formatCompactTokens(d.cached_tokens)}
-                        </td>
-                        <td className="py-1.5 px-2 text-right tabular-nums">
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5 text-right tabular-nums">
                           {formatCompactTokens(d.uncached_prompt_tokens)}
-                        </td>
-                        <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
+                        </TableCell>
+                        <TableCell className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
                           {formatFixed(d.cache_hit_rate_pct, 1)}%
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             ) : null}
 
             {usersWithCache.length > 0 ? (
-              <div className="overflow-x-auto">
+              <div>
                 <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                   {tr("By user (all-time average)")}
                 </div>
-                <table className="w-full border-collapse text-left text-[0.78rem]">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-                      <th className="py-1.5 pr-3">{tr("User")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Turns")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Prompt tok")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Cached")}</th>
-                      <th className="py-1.5 px-2 text-right">{tr("Cache miss")}</th>
-                      <th className="py-1.5 pl-2 text-right">{tr("Hit %")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="text-[0.78rem]">
+                  <TableHeader>
+                    <TableRow className="text-[0.68rem] tracking-[0.06em]">
+                      <TableHead className="h-8 py-1.5 pr-3">{tr("User")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Turns")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Prompt tok")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Cached")}</TableHead>
+                      <TableHead className="h-8 px-2 py-1.5 text-right">{tr("Cache miss")}</TableHead>
+                      <TableHead className="h-8 py-1.5 pl-2 text-right">{tr("Hit %")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {usersWithCache.map((u) => {
                       const promptTok = u.total_prompt_tokens ?? 0;
                       const cachedTok = u.total_cached_tokens ?? 0;
@@ -406,32 +419,32 @@ export default function AdminOverviewPage() {
                         u.cache_hit_rate_pct ??
                         (promptTok > 0 ? (cachedTok / promptTok) * 100 : 0);
                       return (
-                        <tr
+                        <TableRow
                           key={u.email}
                           data-testid={`cache-user-${u.email}`}
-                          className="border-b border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
+                          className="border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
                         >
-                          <td className="py-1.5 pr-3 text-[var(--color-text-primary)]">
+                          <TableCell className="py-1.5 pr-3 text-[var(--color-text-primary)]">
                             {u.email}
-                          </td>
-                          <td className="py-1.5 px-2 text-right tabular-nums">{u.total_turns}</td>
-                          <td className="py-1.5 px-2 text-right tabular-nums">
+                          </TableCell>
+                          <TableCell className="px-2 py-1.5 text-right tabular-nums">{u.total_turns}</TableCell>
+                          <TableCell className="px-2 py-1.5 text-right tabular-nums">
                             {formatCompactTokens(promptTok)}
-                          </td>
-                          <td className="py-1.5 px-2 text-right tabular-nums">
+                          </TableCell>
+                          <TableCell className="px-2 py-1.5 text-right tabular-nums">
                             {formatCompactTokens(cachedTok)}
-                          </td>
-                          <td className="py-1.5 px-2 text-right tabular-nums">
+                          </TableCell>
+                          <TableCell className="px-2 py-1.5 text-right tabular-nums">
                             {formatCompactTokens(uncachedTok)}
-                          </td>
-                          <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
+                          </TableCell>
+                          <TableCell className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
                             {formatFixed(hitPct, 1)}%
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             ) : null}
           </div>

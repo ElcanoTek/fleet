@@ -1,6 +1,8 @@
 import { t as tr } from "@/app/lib/i18n";
 import { useMemo, useRef, useState } from "react";
 import { isMacPlatform } from "@/app/shared/hooks/useKeyboardShortcuts";
+import { Input } from "@/components/ui/input";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { CloseButton } from "./CloseButton";
 import { DialogShell } from "./DialogShell";
 
@@ -105,14 +107,14 @@ export function KeyboardShortcutsOverlay({
           onClick={onClose}
         />
       </div>
-      <input
+      <Input
         ref={inputRef}
         data-testid="shortcuts-filter"
         type="text"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         placeholder={tr("Filter shortcuts…")}
-        className="w-full border-b border-[var(--color-border-strong)] bg-transparent px-4 py-3 text-[0.9rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)]"
+        className="h-auto rounded-none border-x-0 border-t-0 border-b border-[var(--color-border-strong)] bg-transparent px-4 py-3 text-[0.9rem] focus-visible:shadow-none"
         aria-label={tr("Filter shortcuts")}
       />
       <div className="max-h-[55vh] overflow-y-auto px-4 py-2" data-testid="shortcuts-list">
@@ -146,20 +148,20 @@ export function KeyboardShortcutsOverlay({
                     <span className="text-[0.85rem] text-[var(--color-text-secondary)]">
                       {entry.description}
                     </span>
-                    <span
-                      className="flex shrink-0 items-center gap-1"
+                    <KbdGroup
+                      className="shrink-0"
                       aria-label={comboAriaLabel(entry.chips, mac)}
                     >
                       {entry.chips.map((chip, idx) => (
-                        <kbd
+                        <Kbd
                           key={idx}
                           aria-hidden="true"
-                          className="inline-flex min-w-[1.5rem] items-center justify-center rounded-md border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-1.5 py-0.5 text-[0.72rem] font-medium text-[var(--color-text-primary)]"
+                          className="min-w-[1.5rem] border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] text-[0.72rem] text-[var(--color-text-primary)]"
                         >
                           {chipLabel(chip, mac)}
-                        </kbd>
+                        </Kbd>
                       ))}
-                    </span>
+                    </KbdGroup>
                   </li>
                 ))}
               </ul>

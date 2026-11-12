@@ -6,6 +6,17 @@ import { orchestratorApi, type AdoptionReport, type AdoptionUser } from "@/app/s
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 // AdoptionPanel — the Operations Center's executive Adoption view: who is
 // actually using the agents, how often, and is that growing. Driven by
@@ -118,20 +129,22 @@ export function AdoptionPanel() {
         <h2 id="adoptionHeading">{tr("AI Adoption")}</h2>
         <div className="usage-controls">
           <label htmlFor="adoptionRange">{tr("Range")}</label>
-          <select
+          <NativeSelect
             id="adoptionRange"
             aria-label={tr("Adoption window in days")}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number.parseInt(e.target.value, 10))}
           >
             {RANGE_OPTIONS.map((d) => (
-              <option key={d} value={d}>
+              <NativeSelectOption key={d} value={d}>
                 {tr("Last")}{" "}{d} {tr("days")}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
-          <button
+          </NativeSelect>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             className="btn"
             aria-label={tr("Download the per-user adoption report as CSV")}
             data-testid="adoption-download-csv"
@@ -148,7 +161,7 @@ export function AdoptionPanel() {
             }}
           >
             {tr("Download CSV")}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -197,7 +210,7 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
   const adoptionPct = seatsKnown ? Math.round((t.active_users / t.registered_users) * 100) : null;
   return (
     <div className="usage-tiles" data-testid="adoption-totals">
-      <div className="usage-tile">
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Active users")}</span>
         <span className="usage-tile-value">
           {plain.format(t.active_users)}{" "}
@@ -208,13 +221,13 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
             ? tr("of {0} seats · {1}% adoption", [plain.format(t.registered_users), adoptionPct])
             : tr("seat roster unavailable")}
         </span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("New this period")}</span>
         <span className="usage-tile-value">{plain.format(t.new_active_users)}</span>
         <span className="usage-tile-sub">{tr("active now, not in the previous period")}</span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Tokens")}</span>
         <span className="usage-tile-value">
           {compact.format(t.tokens)} <DeltaChip cur={t.tokens} prev={t.prev_tokens} what="tokens" />
@@ -222,8 +235,8 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
         <span className="usage-tile-sub">
         {rich("{0} cached (chat)", compact.format(t.cached_tokens))}
       </span>
-      </div>
-      <div className="usage-tile">
+      </Card>
+      <Card className="usage-tile">
         <span className="usage-tile-label">{tr("Spend")}</span>
         <span className="usage-tile-value">
           {fmtUSD(t.cost_usd)} <DeltaChip cur={t.cost_usd} prev={t.prev_cost_usd} what="spend" />
@@ -231,7 +244,7 @@ function AdoptionTotalsTiles({ report }: { report: AdoptionReport }) {
         <span className="usage-tile-sub">
         {rich("{0} task iterations · {1} chat turns", compact.format(t.task_iterations), compact.format(t.chat_turns))}
       </span>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -373,55 +386,53 @@ function AdoptionLeaderboard({ report }: { report: AdoptionReport }) {
   return (
     <>
       <h3 className="usage-subheading">{tr("Usage by user")}</h3>
-      <div className="table-wrapper">
-        <table data-testid="adoption-table">
-          <thead>
-            <tr>
-              <th scope="col">#</th>
-              <th scope="col">{tr("User")}</th>
-              <th scope="col">{tr("Trend")}</th>
-              <th scope="col">{tr("Tokens")}</th>
-              <th scope="col">{tr("vs prev")}</th>
-              <th scope="col">{tr("Active days")}</th>
-              <th scope="col">{tr("Engagement")}</th>
-              <th scope="col">{tr("Cost")}</th>
-              <th scope="col">{tr("Chat turns")}</th>
-              <th scope="col">{tr("Task iterations")}</th>
-              <th scope="col">{tr("Last active")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.users.map((u, i) => {
-              const tier = engagementTier(u.active_days, windowDays);
-              return (
-                <tr key={u.user || "(unattributed)"} data-testid="adoption-row">
-                  <td className="usage-num">{i + 1}</td>
-                  <td className="prompt-cell" title={u.user || tr("(unattributed)")}>
-                    {u.user || tr("(unattributed)")}
-                  </td>
-                  <td>
-                    <Sparkline user={u} days={report.days} />
-                  </td>
-                  <td className="usage-num">{plain.format(tokensOf(u))}</td>
-                  <td>
-                    <DeltaChip cur={tokensOf(u)} prev={u.prev_tokens} what="tokens" />
-                  </td>
-                  <td className="usage-num">
-                    {u.active_days}/{windowDays}
-                  </td>
-                  <td>
-                    <span className={`adoption-tier adoption-tier-${tier}`}>{tier}</span>
-                  </td>
-                  <td>{fmtUSD(u.cost_usd)}</td>
-                  <td className="usage-num">{plain.format(u.chat_turns)}</td>
-                  <td className="usage-num">{plain.format(u.task_iterations)}</td>
-                  <td>{u.last_active ?? "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <Table data-testid="adoption-table" containerClassName="table-wrapper">
+        <TableHeader>
+          <TableRow>
+            <TableHead>#</TableHead>
+            <TableHead>{tr("User")}</TableHead>
+            <TableHead>{tr("Trend")}</TableHead>
+            <TableHead>{tr("Tokens")}</TableHead>
+            <TableHead>{tr("vs prev")}</TableHead>
+            <TableHead>{tr("Active days")}</TableHead>
+            <TableHead>{tr("Engagement")}</TableHead>
+            <TableHead>{tr("Cost")}</TableHead>
+            <TableHead>{tr("Chat turns")}</TableHead>
+            <TableHead>{tr("Task iterations")}</TableHead>
+            <TableHead>{tr("Last active")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {report.users.map((u, i) => {
+            const tier = engagementTier(u.active_days, windowDays);
+            return (
+              <TableRow key={u.user || "(unattributed)"} data-testid="adoption-row">
+                <TableCell className="usage-num">{i + 1}</TableCell>
+                <TableCell className="prompt-cell whitespace-normal" title={u.user || tr("(unattributed)")}>
+                  {u.user || tr("(unattributed)")}
+                </TableCell>
+                <TableCell>
+                  <Sparkline user={u} days={report.days} />
+                </TableCell>
+                <TableCell className="usage-num">{plain.format(tokensOf(u))}</TableCell>
+                <TableCell>
+                  <DeltaChip cur={tokensOf(u)} prev={u.prev_tokens} what="tokens" />
+                </TableCell>
+                <TableCell className="usage-num">
+                  {u.active_days}/{windowDays}
+                </TableCell>
+                <TableCell>
+                  <span className={`adoption-tier adoption-tier-${tier}`}>{tier}</span>
+                </TableCell>
+                <TableCell>{fmtUSD(u.cost_usd)}</TableCell>
+                <TableCell className="usage-num">{plain.format(u.chat_turns)}</TableCell>
+                <TableCell className="usage-num">{plain.format(u.task_iterations)}</TableCell>
+                <TableCell>{u.last_active ?? "—"}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
       <p className="usage-note">
         {tr("Engagement buckets by share of days active: power ≥ 50%, regular ≥ 20%, light below. Tokens count prompt + completion across chat and scheduled tasks.")}
       </p>

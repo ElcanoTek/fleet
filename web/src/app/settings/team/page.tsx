@@ -30,10 +30,12 @@ import { useCallback, useState } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 
-import { btnClass, SETTINGS_INPUT } from "../ui/atoms";
+import { btnClass } from "../ui/atoms";
 import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -207,9 +209,9 @@ export default function TeamSettingsPage() {
               {tr("You are not in a team yet. Name a team to create it. Teammates are added by an admin in Settings → Admin → Users.")}
             </p>
             <div className="flex flex-wrap items-center gap-[0.55rem]">
-              <input
+              <Input
                 id="teamName"
-                className={`${SETTINGS_INPUT} max-w-[18rem] flex-1`}
+                className="max-w-[18rem] flex-1"
                 placeholder={tr("platform")}
                 aria-label={tr("Team name")}
                 maxLength={64}
@@ -220,14 +222,14 @@ export default function TeamSettingsPage() {
                   if (e.key === "Enter" && draft.trim() && !busy) void write(draft.trim());
                 }}
               />
-              <button
+              <Button
                 type="button"
-                className={btnClass({ variant: "primary", sm: true })}
+                size="sm"
                 disabled={busy || !draft.trim()}
                 onClick={() => void write(draft.trim())}
               >
                 {busy ? tr("Saving…") : me?.admin ? tr("Set team") : tr("Create team")}
-              </button>
+              </Button>
             </div>
             <p className="m-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
               {me?.admin
@@ -345,20 +347,24 @@ function LeaveTeamConfirm({
         </p>
       ) : null}
       <div className="flex items-center justify-end gap-2">
-        <button
+        <Button
           type="button"
-          className={btnClass({ sm: true })}
+          variant="ghost"
+          size="sm"
+          className="border-transparent"
           onClick={onCancel}
         >
-          {tr("Cancel")}</button>
-        <button
+          {tr("Cancel")}
+        </Button>
+        <Button
           type="button"
-          className={btnClass({ sm: true, danger: true })}
+          variant="destructive"
+          size="sm"
           disabled={busy}
           onClick={onConfirm}
         >
           {tr("Leave team")}
-        </button>
+        </Button>
       </div>
     </DialogShell>
   );

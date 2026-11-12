@@ -24,6 +24,13 @@ import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import { btnClass, SETTINGS_INPUT } from "@/app/settings/ui/atoms";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 import { MindArt, type MindLevel } from "./MindArt";
 import {
   CADENCE_PRESETS,
@@ -782,9 +789,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           </div>
           <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pb-3 [&_button]:any-pointer-coarse:min-h-11">
             {stepIndex > 0 ? (
-              <button
+              <Button
                 type="button"
-                className={btnClass({ reveal: true })}
+                variant="secondary"
                 onClick={() => go(-1)}
                 // A draft in flight was asked for this plan; changing the plan
                 // under it would let the stale reply land on the new one.
@@ -792,23 +799,24 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 data-testid="launchpad-back"
               >
                 {tr("Back")}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className={btnClass()} onClick={onClose}>
+              <Button type="button" variant="ghost" onClick={onClose}>
                 {tr("Maybe later")}
-              </button>
+              </Button>
             )}
             <span className="hidden text-xs text-[var(--color-text-muted)] sm:inline">
         {rich("Step {0} of {1}", stepIndex + 1, STEPS.length)}
       </span>
             {readOnly ? (
-              <button type="button" className={`${btnClass({ variant: "primary" })} px-5`} onClick={onClose} data-testid="launchpad-readonly-close">
+              <Button type="button" variant="default" className="px-5" onClick={onClose} data-testid="launchpad-readonly-close">
                 {tr("Got it")}
-              </button>
+              </Button>
             ) : state.step === "launch" ? (
-              <button
+              <Button
                 type="button"
-                className={`${btnClass({ variant: "primary" })} px-5`}
+                variant="default"
+                className="px-5"
                 onClick={() => void doLaunch()}
                 disabled={drafting || !prompt.trim() || !state.cron.trim()}
                 title={drafting ? tr("Waiting for the assistant's draft") : undefined}
@@ -816,18 +824,19 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
               >
                 <Icon name="zap" className="size-4" />
                 {tr("Launch patrol")}
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 type="button"
-                className={`${btnClass({ variant: "primary" })} px-5`}
+                variant="default"
+                className="px-5"
                 onClick={() => go(1)}
                 disabled={!canNext}
                 data-testid="launchpad-next"
               >
                 {state.step === "why" ? tr("Show me the plan") : state.step === "welcome" ? tr("Let’s go") : tr("Next")}
                 <Icon name="arrow-right" className="size-4" />
-              </button>
+              </Button>
             )}
           </footer>
         </>
@@ -1359,25 +1368,25 @@ function RulesStep({
             <Icon name="persona" className="size-4 text-[var(--color-primary)]" />
             {tr("Who’s on watch")}
           </h4>
-          <select
+          <NativeSelect
             aria-label={tr("Persona for this patrol")}
-            className={`${SETTINGS_INPUT} min-h-[2.2rem] w-auto py-1 text-[0.85rem]`}
+            className="min-h-[2.2rem] w-auto py-1 text-[0.85rem]"
             value={persona}
             onChange={(e) => onPersona(e.target.value)}
             data-testid="launchpad-persona"
           >
-            <option value="">{defaultPersona ? tr("{0} (workspace default)", [cap(defaultPersona)]) : tr("Workspace default")}</option>
+            <NativeSelectOption value="">{defaultPersona ? tr("{0} (workspace default)", [cap(defaultPersona)]) : tr("Workspace default")}</NativeSelectOption>
             {others.map((p) => (
-              <option key={p} value={p}>
+              <NativeSelectOption key={p} value={p}>
                 {cap(p)}
-              </option>
+              </NativeSelectOption>
             ))}
             {userPersonas.map((p) => (
-              <option key={p.ref} value={p.ref}>
+              <NativeSelectOption key={p.ref} value={p.ref}>
                 {p.display_name} {tr("(yours)")}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         <p className="mt-1.5 text-[0.8rem] leading-relaxed text-[var(--color-text-secondary)]">
         {rich("A persona shapes how the assistant thinks and writes. The workspace default is a great start; later you can build a {0} that decides the way you do in {1}.", <em>{tr("digital twin")}</em>, <a className="text-[var(--color-link)] underline underline-offset-2" href="/settings/personas" target="_blank" rel="noopener">
@@ -1413,7 +1422,7 @@ function RulesStep({
             void add(draft);
           }}
         >
-          <input
+          <Input
             className={SETTINGS_INPUT}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -1422,9 +1431,9 @@ function RulesStep({
             maxLength={500}
             data-testid="launchpad-memory-input"
           />
-          <button type="submit" className={`${btnClass({ variant: "primary" })} shrink-0`} disabled={busy || !draft.trim()} data-testid="launchpad-memory-add">
+          <Button type="submit" variant="default" className="shrink-0" disabled={busy || !draft.trim()} data-testid="launchpad-memory-add">
             {busy ? tr("Saving…") : tr("Save")}
-          </button>
+          </Button>
         </form>
         {error ? <p className="mt-2 text-[0.8rem] text-[var(--color-danger)]">{error}</p> : null}
         {existing.length > 0 ? (
@@ -1521,7 +1530,7 @@ function WatchStep({
       </ul>
       <label className="mt-4 block">
         <span className="text-[0.85rem] font-medium text-[var(--color-text-primary)]">{tr("Anything else?")}</span>
-        <textarea
+        <Textarea
           className={`${SETTINGS_INPUT} mt-1.5 min-h-[4.5rem] resize-y`}
           value={notes}
           onChange={(e) => onNotes(e.target.value)}
@@ -1770,7 +1779,7 @@ function LaunchStep({
           {tr("Patrol name")}
         </label>
       </div>
-      <input
+      <Input
         id="launchpad-title"
         className={`${SETTINGS_INPUT} mt-1.5`}
         value={title}
@@ -1788,9 +1797,9 @@ function LaunchStep({
           {tr("What it does each run")}
         </label>
         <div className="flex items-center gap-1.5">
-          <button type="button" className={btnClass({ sm: true })} onClick={onReset} disabled={drafting}>
+          <Button type="button" variant="ghost" size="sm" onClick={onReset} disabled={drafting}>
             {tr("Reset to template")}
-          </button>
+          </Button>
           <button
             type="button"
             onClick={() => void draftWithAI()}
@@ -1836,7 +1845,7 @@ function LaunchStep({
           {draftError}
         </p>
       ) : null}
-      <textarea
+      <Textarea
         id="launchpad-prompt"
         className={`${SETTINGS_INPUT} mt-1.5 min-h-[13rem] resize-y font-[family-name:var(--font-code-ui)] text-[0.8rem] leading-relaxed ${drafting ? "opacity-60" : ""}`}
         value={prompt}
@@ -1910,10 +1919,10 @@ function LaunchProgress({
       </p>
             ) : null}
           </div>
-          <button ref={openRef} type="button" className={`${btnClass({ variant: "primary" })} px-5`} onClick={onOpen} data-testid="launchpad-open">
+          <Button ref={openRef} type="button" variant="default" className="px-5" onClick={onOpen} data-testid="launchpad-open">
             {tr("Watch it work")}
             <Icon name="arrow-right" className="size-4" />
-          </button>
+          </Button>
         </>
       ) : (
         <>
@@ -1952,13 +1961,13 @@ function LaunchProgress({
                 {launch.error}
               </p>
               <div className="mt-3 flex justify-center gap-2">
-                <button type="button" className={btnClass({ reveal: true })} onClick={onBack}>
+                <Button type="button" variant="secondary" onClick={onBack}>
                   {tr("Back to the plan")}
-                </button>
+                </Button>
                 {launch.conversationId ? (
-                  <button type="button" className={btnClass({ variant: "primary" })} onClick={onOpen}>
+                  <Button type="button" variant="default" onClick={onOpen}>
                     {tr("Open the chat")}
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </div>
