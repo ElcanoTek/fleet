@@ -14,6 +14,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
+type rolloutPendingFallbackStore interface {
+	PendingFallbackRolloutFrom(ctx context.Context) (string, bool)
+	SetPendingFallbackRolloutFrom(ctx context.Context, from string)
+}
+
 // TaskModelRolloutFunc upgrades primary and/or fallback models across upcoming
 // scheduled and pending tasks (satisfied by (*sched/storage.Storage).RolloutTaskModels).
 type TaskModelRolloutFunc func(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error)
@@ -299,6 +304,9 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 	}
 
 	if !req.DryRun {
+		if req.SyncCurrent || (t.chatTarget != "" && (t.chatFrom == "" || t.chatFrom == s.loadPendingFallbackFromLocked(ctx))) {
+			s.clearPendingFallbackFromLocked(ctx)
+		}
 		logging.From(ctx).Info("Model rollout completed",
 			"actor", safe.LogSafe(userFromCtx(ctx)),
 			"primary_model", safe.LogSafe(out.PrimaryModel),
@@ -375,8 +383,9 @@ func (s *Server) runTaskRolloutPhase(ctx context.Context, t resolvedRolloutTarge
 // rolloutAfterSettingChangeLocked builds and executes the appropriate rollout
 // when an admin updates default_model, advanced_model, or task_model with
 // rollout=true. Caller holds s.acquireModelRolloutLock.
-func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevFallback, prevTask string, notifyChats *bool) (*ModelRolloutResponse, error) {
+func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevFallback, prevTask string, notifyChats *bool) (*ModelRolloutResponse, *ModelRolloutRequest, error) {
 	req := ModelRolloutRequest{NotifyChats: notifyChats}
+	var pendingFallbackCandidate string
 
 	switch key {
 	case "default_model":
@@ -393,25 +402,32 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 		nextFallback := agentcore.CurrentFallbackModel()
 		curDefault := agentcore.CurrentDefaultModel()
 		curTask := agentcore.CurrentTaskModel()
+		fromFallback := prevFallback
+		if pending := s.loadPendingFallbackFromLocked(ctx); pending != "" && pending != nextFallback && pending != curDefault && (fromFallback == "" || fromFallback == nextFallback) {
+			fromFallback = pending
+		}
 		if s.configuredTaskFallbackModel() == "" {
 			// When FLEET_TASK_FALLBACK_MODEL is unset, task fallback follows
 			// advanced_model: update existing tasks that have a fallback_model
 			// configured while preserving NULL on bare API tasks.
 			req.FallbackModel = &nextFallback
 			req.OnlySetFallbacks = true
-			if prevFallback != "" && prevFallback != nextFallback && prevFallback != curDefault {
-				req.UpgradeFromFallback = prevFallback
+			if fromFallback != "" && fromFallback != nextFallback && fromFallback != curDefault {
+				req.UpgradeFromFallback = fromFallback
+				pendingFallbackCandidate = fromFallback
 			}
 		} else {
 			// Explicit FLEET_TASK_FALLBACK_MODEL owns task fallbacks, so do not
 			// overwrite task fallback_model from advanced_model. Still upgrade
-			// chats (and task primaries unless task_model matches prevFallback)
-			// that were explicitly pinned to prevFallback.
-			if prevFallback == "" || prevFallback == nextFallback || prevFallback == curDefault {
-				return nil, nil
+			// chats (and task primaries unless task_model matches fromFallback)
+			// that were explicitly pinned to fromFallback.
+			if fromFallback == "" || fromFallback == nextFallback || fromFallback == curDefault {
+				s.clearPendingFallbackFromLocked(ctx)
+				return nil, nil, nil
 			}
-			req.FromModel = prevFallback
-			if prevFallback != curTask {
+			pendingFallbackCandidate = fromFallback
+			req.FromModel = fromFallback
+			if fromFallback != curTask {
 				req.Model = nextFallback
 			} else {
 				req.ChatModel = nextFallback
@@ -420,19 +436,55 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 	case "task_model":
 		nextTask := agentcore.CurrentTaskModel()
 		if nextTask == "" && prevTask == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		req.TaskModel = nextTask
 	default:
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	res, _, err := s.executeModelRolloutLocked(ctx, req)
 	if err != nil {
-		return nil, err
+		if pendingFallbackCandidate != "" {
+			s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate)
+		}
+		retryCopy := req
+		return nil, &retryCopy, err
 	}
 	if res.PartialError != "" {
-		return &res, errors.New(res.PartialError)
+		if pendingFallbackCandidate != "" {
+			s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate)
+		}
+		retryCopy := req
+		return &res, &retryCopy, errors.New(res.PartialError)
 	}
-	return &res, nil
+	if key == "advanced_model" {
+		s.clearPendingFallbackFromLocked(ctx)
+	}
+	return &res, nil, nil
+}
+
+func (s *Server) loadPendingFallbackFromLocked(ctx context.Context) string {
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		if v, backed := ws.PendingFallbackRolloutFrom(ctx); backed {
+			s.pendingFallbackFrom = v
+			return v
+		}
+	}
+	return s.pendingFallbackFrom
+}
+
+func (s *Server) savePendingFallbackFromLocked(ctx context.Context, from string) {
+	from = strings.TrimSpace(from)
+	s.pendingFallbackFrom = from
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok && from != "" {
+		ws.SetPendingFallbackRolloutFrom(ctx, from)
+	}
+}
+
+func (s *Server) clearPendingFallbackFromLocked(ctx context.Context) {
+	s.pendingFallbackFrom = ""
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		ws.SetPendingFallbackRolloutFrom(ctx, "")
+	}
 }

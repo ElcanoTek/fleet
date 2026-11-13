@@ -291,12 +291,14 @@ type ModelRolloutSummary = {
 type SettingWriteResponse = ResolvedSetting & {
   rollout?: ModelRolloutSummary;
   rollout_error?: string;
+  rollout_retry?: Record<string, unknown>;
 };
 
 type RolloutUiStatus =
   | "idle"
   | "running"
-  | { state: "ok" | "err"; message: string };
+  | { state: "ok"; message: string }
+  | { state: "err"; message: string; retryBody?: Record<string, unknown> };
 
 function formatModelRolloutSummary(r: ModelRolloutSummary): string {
   const lockdownExcluded = Boolean(r.primary_model) && r.lockdown_included === false;
@@ -428,7 +430,12 @@ function FeaturesAdmin() {
         throw new Error(text || tr("Request failed: {0}", [response.status]));
       }
       const updated = (await response.json()) as SettingWriteResponse;
-      const { rollout, rollout_error: rolloutError, ...resolved } = updated;
+      const {
+        rollout,
+        rollout_error: rolloutError,
+        rollout_retry: rolloutRetry,
+        ...resolved
+      } = updated;
       setEdits((prev) => ({ ...prev, [resolved.key]: resolved }));
       setDrafts((prev) => {
         const next = { ...prev };
@@ -440,7 +447,7 @@ function FeaturesAdmin() {
           rollout && (rollout.chats_updated > 0 || rollout.tasks_updated > 0)
             ? `${formatModelRolloutSummary(rollout)} — ${rolloutError}`
             : rolloutError;
-        setRolloutStatus({ state: "err", message: detail });
+        setRolloutStatus({ state: "err", message: detail, retryBody: rolloutRetry });
       } else if (rollout) {
         setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(rollout) });
       }
@@ -481,17 +488,18 @@ function FeaturesAdmin() {
     });
   };
 
-  const runModelRollout = async (dryRun: boolean) => {
+  const runModelRollout = async (dryRun: boolean, retryBody?: Record<string, unknown>) => {
     setRolloutStatus("running");
+    const payload: Record<string, unknown> = retryBody ?? {
+      sync_current: true,
+      notify_chats: notifyChatsOnRollout,
+      dry_run: dryRun,
+    };
     try {
       const response = await fetch("/api/admin/models/rollout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sync_current: true,
-          notify_chats: notifyChatsOnRollout,
-          dry_run: dryRun,
-        }),
+        body: JSON.stringify(payload),
       });
       if (response.status === 401) {
         redirectToLogin();
@@ -505,6 +513,7 @@ function FeaturesAdmin() {
         setRolloutStatus({
           state: "err",
           message: `${formatModelRolloutSummary(result)} — ${result.partial_error}`,
+          retryBody: dryRun ? undefined : payload,
         });
       } else {
         setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(result) });
@@ -513,6 +522,7 @@ function FeaturesAdmin() {
       setRolloutStatus({
         state: "err",
         message: errorMessage(err, tr("Model rollout failed.")),
+        retryBody: dryRun ? undefined : payload,
       });
     }
   };
@@ -611,6 +621,7 @@ function FeaturesAdmin() {
                     status={rolloutStatus}
                     onPreview={() => void runModelRollout(true)}
                     onSyncNow={() => void runModelRollout(false)}
+                    onRetry={(retryBody) => void runModelRollout(false, retryBody)}
                   />
                 ) : null}
               </ConnPanel>
@@ -1094,6 +1105,7 @@ function ModelTierRolloutActions({
   status,
   onPreview,
   onSyncNow,
+  onRetry,
 }: {
   rolloutOnSave: boolean;
   setRolloutOnSave: (next: boolean) => void;
@@ -1102,8 +1114,10 @@ function ModelTierRolloutActions({
   status: RolloutUiStatus;
   onPreview: () => void;
   onSyncNow: () => void;
+  onRetry: (retryBody: Record<string, unknown>) => void;
 }) {
   const busy = status === "running";
+  const retryBody = status !== "idle" && status !== "running" && status.state === "err" ? status.retryBody : undefined;
   return (
     <div
       className="grid gap-[0.75rem] border-t border-[var(--color-border-subtle)] px-[0.1rem] py-[0.95rem]"
@@ -1174,10 +1188,22 @@ function ModelTierRolloutActions({
       </div>
 
       {status !== "idle" && status !== "running" ? (
-        <ActStatus state={status.state}>
-          {status.state === "ok" ? "✓ " : "✕ "}
-          {status.message}
-        </ActStatus>
+        <div className="flex flex-wrap items-center gap-2">
+          <ActStatus state={status.state}>
+            {status.state === "ok" ? "✓ " : "✕ "}
+            {status.message}
+          </ActStatus>
+          {retryBody ? (
+            <button
+              type="button"
+              onClick={() => onRetry(retryBody)}
+              data-testid="model-rollout-retry"
+              className={btnClass({ sm: true, reveal: true })}
+            >
+              {tr("Retry")}
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

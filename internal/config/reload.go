@@ -432,8 +432,12 @@ func reloadWorkspaceDefaultFields(dst *Config) {
 	}
 
 	dst.PIIRedactionEnabled = boolOrKeep(dst.PIIRedactionEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("PII_REDACTION_ENABLED", false) })
-	dst.PIIRedactionMode = strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE")))
-	dst.GuardrailMode = strings.ToLower(strings.TrimSpace(getenvFleet("GUARDRAIL_MODE")))
+	if raw := strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))); raw == "" || raw == "off" || raw == "observe" || raw == "redact" || raw == "block" {
+		dst.PIIRedactionMode = raw
+	}
+	if raw := strings.ToLower(strings.TrimSpace(getenvFleet("GUARDRAIL_MODE"))); raw == "" || raw == "off" || raw == "observe" || raw == "block" {
+		dst.GuardrailMode = raw
+	}
 	dst.GuardrailProfile = strings.TrimSpace(getenvFleet("GUARDRAIL_PROFILE"))
 	dst.GuardrailURL = strings.TrimSpace(getenvFleet("GUARDRAIL_URL"))
 	dst.ApprovalTimeoutSeconds = intOrKeep(dst.ApprovalTimeoutSeconds, func(lp *loadParser) int { return lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 86400) })
@@ -442,7 +446,9 @@ func reloadWorkspaceDefaultFields(dst *Config) {
 	dst.AdvancedModel = getenvFleet("ADVANCED_MODEL")
 	dst.TaskModel = getenvFleet("TASK_MODEL")
 	dst.EscalationSignalsEnabled = boolOrKeep(dst.EscalationSignalsEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("ESCALATION_SIGNALS_ENABLED", true) })
-	dst.EscalationClassifierMode = strings.ToLower(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierSuggest))
+	if raw := strings.ToLower(strings.TrimSpace(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierSuggest))); raw == "off" || raw == "observe" || raw == "suggest" {
+		dst.EscalationClassifierMode = raw
+	}
 	dst.EscalationClassifierModel = getenvFleetDefault("ESCALATION_CLASSIFIER_MODEL", DefaultEscalationClassifierModel)
 	dst.EscalationClassifierThreshold = intOrKeep(dst.EscalationClassifierThreshold, func(lp *loadParser) int {
 		return lp.getenvFleetInt("ESCALATION_CLASSIFIER_THRESHOLD", 80)

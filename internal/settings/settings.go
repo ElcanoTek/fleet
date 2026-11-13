@@ -430,7 +430,10 @@ func (s *Service) RefreshDefaults(defaults map[string]string) {
 		if !ok {
 			continue
 		}
-		nd, _ := normalizeSettingDefault(s.specs[key], d)
+		nd, warnErr := normalizeSettingDefault(s.specs[key], d)
+		if warnErr != nil {
+			continue
+		}
 		s.defaults[key] = nd
 	}
 }

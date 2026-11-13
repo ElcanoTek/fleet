@@ -109,7 +109,8 @@ type Server struct {
 	// modelRolloutMu serializes in-process admin model rollouts across both the
 	// chat and scheduler phases (paired with Postgres advisory locking when
 	// backed by a real store.Store).
-	modelRolloutMu sync.Mutex
+	modelRolloutMu      sync.Mutex
+	pendingFallbackFrom string
 
 	// notifySettings backs the admin Notifications panel (WithNotifySettings).
 	// nil in tests/mock mode: the /admin/notify-settings endpoints answer 501.

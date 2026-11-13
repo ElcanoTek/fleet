@@ -234,3 +234,46 @@ func TestReloadConfigHandler_RefreshesEnvDefaultsWithoutOverridingAdminSettings(
 		t.Errorf("CurrentDefaultModel changed after failed reload = %q, want acme/env-default", got)
 	}
 }
+
+func TestReloadConfigHandler_InvalidGuardrailEnumPreservesActiveGuardrail(t *testing.T) {
+	envPath := filepath.Join(t.TempDir(), "fleet.env")
+	t.Setenv("FLEET_ENV_FILE", envPath)
+	for _, k := range []string{"FLEET_GUARDRAIL_MODE", "FLEET_GUARDRAIL_URL"} {
+		_ = os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		agentcore.SetGuardrail(false, false, "off", "prompt-injection", nil)
+	})
+
+	initialEnv := "FLEET_GUARDRAIL_URL=http://127.0.0.1:19999\nFLEET_GUARDRAIL_MODE=block\n"
+	if err := os.WriteFile(envPath, []byte(initialEnv), 0o600); err != nil {
+		t.Fatalf("write initial env: %v", err)
+	}
+	cfg, err := config.Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	st := &fakeWorkspaceSettingsStore{rows: map[string]store.WorkspaceSetting{}}
+	svc, guard, err := buildWorkspaceSettings(cfg, st)
+	if err != nil {
+		t.Fatalf("buildWorkspaceSettings: %v", err)
+	}
+	if err := svc.ApplyAll(context.Background()); err != nil {
+		t.Fatalf("initial ApplyAll: %v", err)
+	}
+
+	// Reloading a typo in FLEET_GUARDRAIL_MODE must retain "block", never fail open to "off".
+	typoEnv := "FLEET_GUARDRAIL_URL=http://127.0.0.1:19999\nFLEET_GUARDRAIL_MODE=blok\n"
+	if err := os.WriteFile(envPath, []byte(typoEnv), 0o600); err != nil {
+		t.Fatalf("write typo env: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	reloadConfigHandler(cfg, svc)(rec, httptest.NewRequest(http.MethodPost, "/admin/reload-config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	probe := guard.Probe(context.Background())
+	if probe.Mode != "block" {
+		t.Fatalf("guardrail mode after typo reload = %q, want block", probe.Mode)
+	}
+}

@@ -205,6 +205,7 @@ type modelRolloutJSONOutput struct {
 	WorkspaceTiersUpdated map[string]string `json:"workspace_tiers_updated,omitempty"`
 	WorkspaceTiersCleared []string          `json:"workspace_tiers_cleared,omitempty"`
 	ChatTargetModel       string            `json:"chat_target_model,omitempty"`
+	LockdownIncluded      *bool             `json:"lockdown_included,omitempty"`
 	ChatsMatched          int               `json:"chats_matched"`
 	ChatsUpdated          int               `json:"chats_updated"`
 	ChatsNotified         int               `json:"chats_notified"`
@@ -235,7 +236,7 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		return modelRolloutPlan{}, code
 	}
 
-	plan := buildRolloutPlan(curDefault, curTask, curFallback, taskTier.Source == "follows_default", opts, validated)
+	plan := buildRolloutPlan(curDefault, curTask, curFallback, taskTier.Source == "follows_default", opts, validated, errW)
 	effDefault, effFallback := effectivePostTierModels(curDefault, curFallback, plan.tierActions)
 	plan.includeLockdown = resolveRolloutLockdown(ctx, effDefault, effFallback, errW, plan.chatTarget, opts)
 	return plan, 0
@@ -250,6 +251,10 @@ func validateRolloutOptionFlags(errW io.Writer, opts modelRolloutOptions) int {
 		fmt.Fprintln(errW, "--task-model cannot be combined with --tasks=false")
 		return 1
 	}
+	if opts.model != nil && !opts.chats && !opts.tasks {
+		fmt.Fprintln(errW, "--model cannot be combined with both --chats=false and --tasks=false")
+		return 1
+	}
 	if opts.recurringOnly && !opts.tasks {
 		fmt.Fprintln(errW, "--recurring-only cannot be combined with --tasks=false")
 		return 1
@@ -258,7 +263,7 @@ func validateRolloutOptionFlags(errW io.Writer, opts modelRolloutOptions) int {
 		fmt.Fprintln(errW, "nothing to do: --rollout=false requires --set-workspace-tiers (or 'fleet model set')")
 		return 1
 	}
-	if opts.rollout && !opts.chats && !opts.tasks && !opts.setWorkspaceTiers {
+	if !opts.chats && !opts.tasks && (!opts.setWorkspaceTiers || opts.fallbackModel == nil) {
 		fmt.Fprintln(errW, "nothing to do: both --chats=false and --tasks=false")
 		return 1
 	}
@@ -322,7 +327,7 @@ func validateAllModelFlags(errW io.Writer, opts modelRolloutOptions) (validatedM
 	return out, 0
 }
 
-func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefault bool, opts modelRolloutOptions, v validatedModelSlugs) modelRolloutPlan {
+func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefault bool, opts modelRolloutOptions, v validatedModelSlugs, errW io.Writer) modelRolloutPlan {
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
 		taskRollout: models.TaskModelRollout{
@@ -382,7 +387,7 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefau
 		plan.runTasks = true
 	}
 	if v.fallbackModel != nil {
-		applyFallbackToPlan(&plan, curDefault, curTask, curFallback, opts, *v.fallbackModel)
+		applyFallbackToPlan(&plan, curDefault, curTask, curFallback, opts, *v.fallbackModel, errW)
 	}
 	return plan
 }
@@ -415,9 +420,32 @@ func computeWorkspaceTierActions(curDefault, curTask string, taskFollowedDefault
 	return actions
 }
 
-func applyFallbackToPlan(plan *modelRolloutPlan, curDefault, curTask, curFallback string, opts modelRolloutOptions, fb string) {
+func applyFallbackToPlan(plan *modelRolloutPlan, curDefault, curTask, curFallback string, opts modelRolloutOptions, fb string, errW io.Writer) {
+	if opts.setWorkspaceTiers && configuredTaskFallbackEnv() != "" {
+		// In workspace-tier mode (`fleet model set`), FLEET_TASK_FALLBACK_MODEL
+		// explicitly owns scheduled-task fallbacks, so changing advanced_model
+		// must not overwrite task fallback_model (matching PUT /admin/settings/advanced_model).
+		if opts.tasks && !opts.asJSON && errW != nil {
+			fmt.Fprintln(errW, "note: FLEET_TASK_FALLBACK_MODEL is set; leaving scheduled task fallback_model unchanged (use 'fleet model rollout --fallback-model ...' to override existing task rows)")
+		}
+		if fb != "" && curFallback != "" && curFallback != fb && curFallback != curDefault && opts.fromModel == "" {
+			if opts.tasks && plan.taskRollout.Model == nil && curFallback != curTask {
+				plan.taskRollout.Model = &fb
+				plan.taskRollout.FromModel = curFallback
+				plan.runTasks = true
+			}
+			if opts.chats && plan.chatTarget == "" {
+				plan.chatTarget = fb
+				plan.chatFrom = curFallback
+			}
+		}
+		return
+	}
 	if opts.tasks {
 		plan.taskRollout.FallbackModel = &fb
+		if opts.setWorkspaceTiers {
+			plan.taskRollout.OnlySetFallbacks = true
+		}
 		plan.runTasks = true
 		if fb != "" && plan.taskRollout.Model == nil && curFallback != "" && curFallback != fb && curFallback != curTask && opts.fromModel == "" {
 			plan.taskRollout.Model = &fb
@@ -521,6 +549,10 @@ func previewModelRollout(ctx context.Context, chatSt modelRolloutChatStore, task
 
 func populateJSONTierActions(jout *modelRolloutJSONOutput, plan modelRolloutPlan) {
 	jout.ChatTargetModel = plan.chatTarget
+	if plan.chatTarget != "" {
+		inc := plan.includeLockdown
+		jout.LockdownIncluded = &inc
+	}
 	if plan.taskRollout.Model != nil {
 		jout.TaskTargetModel = *plan.taskRollout.Model
 	}
@@ -1051,21 +1083,7 @@ func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool,
 		plan.runTasks = true
 	}
 	if resetKeys["advanced_model"] {
-		fb := nextFB.Value
-		if configuredTaskFallbackEnv() == "" {
-			ropts := modelRolloutOptions{chats: true, tasks: true}
-			applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, fb)
-			plan.taskRollout.OnlySetFallbacks = true
-		} else if curFB != "" && curFB != fb && curFB != curDef {
-			if plan.chatTarget == "" {
-				plan.chatTarget = fb
-				plan.chatFrom = curFB
-			}
-			if plan.taskRollout.Model == nil && curFB != curTask {
-				plan.taskRollout.Model = &fb
-				plan.taskRollout.FromModel = curFB
-				plan.runTasks = true
-			}
-		}
+		ropts := modelRolloutOptions{chats: true, tasks: true, setWorkspaceTiers: true}
+		applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, nextFB.Value, nil)
 	}
 }

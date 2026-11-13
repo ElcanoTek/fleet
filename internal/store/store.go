@@ -1020,6 +1020,36 @@ func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
 	}, nil
 }
 
+const pendingFallbackRolloutSettingKey = "model_rollout_pending_fallback_from"
+
+// PendingFallbackRolloutFrom returns any durably persisted previous fallback
+// tier whose chat/task migration did not yet complete (("", false) when backed
+// by a nil/embedded test Store).
+func (s *Store) PendingFallbackRolloutFrom(ctx context.Context) (string, bool) {
+	if s == nil || s.db == nil {
+		return "", false
+	}
+	ws, err := s.WorkspaceSettings(ctx)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(ws[pendingFallbackRolloutSettingKey].Value), true
+}
+
+// SetPendingFallbackRolloutFrom durably records (or clears when from == "") the
+// previous fallback tier until its rollout succeeds.
+func (s *Store) SetPendingFallbackRolloutFrom(ctx context.Context, from string) {
+	if s == nil || s.db == nil {
+		return
+	}
+	from = strings.TrimSpace(from)
+	if from == "" {
+		_ = s.DeleteWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey)
+		return
+	}
+	_, _ = s.SetWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey, from, "system")
+}
+
 // RolloutConversationModel upgrades the pinned model on matching non-deleted
 // conversations whose model actually differs from `model`, optionally inserting
 // a UI-only model_upgraded notice entry into conversations that already have at

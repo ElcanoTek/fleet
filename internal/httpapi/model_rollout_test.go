@@ -355,3 +355,79 @@ func TestModelRollout_TaskFailureAbortsBeforeChatAndPartialError207(t *testing.T
 		t.Fatalf("unexpected 207 body: %+v", partial)
 	}
 }
+
+func TestAdminSettingFallbackRolloutRetryPreservesOldFallbackTarget(t *testing.T) {
+	prevDefault := agentcore.CurrentDefaultModel()
+	prevFallback := agentcore.CurrentFallbackModel()
+	prevTask := agentcore.CurrentTaskModel()
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel(prevDefault)
+		agentcore.SetFallbackModel(prevFallback)
+		if prevTask == prevDefault {
+			agentcore.SetTaskModel("")
+		} else {
+			agentcore.SetTaskModel(prevTask)
+		}
+	})
+	agentcore.SetDefaultModel("google/gemini-4-hydrogen")
+	agentcore.SetFallbackModel("anthropic/claude-opus-5.5")
+	agentcore.SetTaskModel("")
+
+	baseSt := newFakeChatStore()
+	st := &failingRolloutChatStore{fakeChatStore: baseSt}
+	s := newDefaultChatServer(t, nil, st)
+	s.cfg.AdminEmails = []string{"boss@x.com"}
+	fbConv, _ := baseSt.CreateConversation(context.Background(), "alice@x.com", "Pinned Fallback", "victoria", "anthropic/claude-opus-5.5", false)
+
+	svc := newFakeSettingsService()
+	svc.dflt["default_model"] = "google/gemini-4-hydrogen"
+	svc.dflt["advanced_model"] = "anthropic/claude-opus-5.5"
+	svc.dflt["task_model"] = ""
+	svc.SetHook = func(key, val string) {
+		if key == "advanced_model" {
+			agentcore.SetFallbackModel(val)
+		}
+	}
+	s.workspaceSettings = svc
+
+	var failTasks bool
+	s.taskModelRollout = func(_ context.Context, _ models.TaskModelRollout, _ bool) (models.TaskModelRolloutResult, error) {
+		if failTasks {
+			return models.TaskModelRolloutResult{}, errors.New("transient scheduler outage")
+		}
+		return models.TaskModelRolloutResult{ScannedCount: 1, UpdatedCount: 1, FallbackUpdatedCount: 1}, nil
+	}
+	h := s.Routes()
+
+	// First attempt saves advanced_model = acme/opus-next, but task rollout fails.
+	failTasks = true
+	w := do(t, h, http.MethodPut, "/admin/settings/advanced_model", map[string]any{
+		"value":   "acme/opus-next",
+		"rollout": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var writeResp adminSettingWriteResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &writeResp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if writeResp.RolloutError == "" || writeResp.RolloutRetry == nil || writeResp.RolloutRetry.UpgradeFromFallback != "anthropic/claude-opus-5.5" {
+		t.Fatalf("expected RolloutRetry with UpgradeFromFallback=anthropic/claude-opus-5.5, got %+v", writeResp)
+	}
+
+	// Retrying PUT /admin/settings/advanced_model with the same value still
+	// migrates chats pinned to anthropic/claude-opus-5.5 -> acme/opus-next.
+	failTasks = false
+	w = do(t, h, http.MethodPut, "/admin/settings/advanced_model", map[string]any{
+		"value":   "acme/opus-next",
+		"rollout": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry status = %d: %s", w.Code, w.Body.String())
+	}
+	cur, _ := baseSt.Get(context.Background(), "alice@x.com", fbConv.ID)
+	if cur.Model != "acme/opus-next" {
+		t.Fatalf("expected fallback-pinned chat to migrate to acme/opus-next on retry, got %q", cur.Model)
+	}
+}

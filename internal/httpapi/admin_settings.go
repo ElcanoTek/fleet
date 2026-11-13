@@ -24,6 +24,7 @@ type adminSettingWriteResponse struct {
 	settings.Resolved
 	Rollout      *ModelRolloutResponse `json:"rollout,omitempty"`
 	RolloutError string                `json:"rollout_error,omitempty"`
+	RolloutRetry *ModelRolloutRequest  `json:"rollout_retry,omitempty"`
 }
 
 // workspaceSettingsService is the seam the admin settings endpoints call,
@@ -114,13 +115,17 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 		return
 	}
 	if !wantRollout {
+		if key == "advanced_model" {
+			s.clearPendingFallbackFromLocked(ctx)
+		}
 		writeJSON(w, r, resolved)
 		return
 	}
-	rollout, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
 	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
 	if rerr != nil {
 		resp.RolloutError = rerr.Error()
+		resp.RolloutRetry = retryReq
 	}
 	writeJSON(w, r, resp)
 }
@@ -143,13 +148,17 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 		return
 	}
 	if !wantRollout {
+		if key == "advanced_model" {
+			s.clearPendingFallbackFromLocked(ctx)
+		}
 		writeJSON(w, r, resolved)
 		return
 	}
-	rollout, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
 	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
 	if rerr != nil {
 		resp.RolloutError = rerr.Error()
+		resp.RolloutRetry = retryReq
 	}
 	writeJSON(w, r, resp)
 }

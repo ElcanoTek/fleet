@@ -521,4 +521,61 @@ func TestRunModelRollout_ChatOnlySetPreservesEnvTaskModelOwnership(t *testing.T)
 	if _, pinned := chatSt.settingsWritten["task_model"]; pinned {
 		t.Fatalf("chat-only set unexpectedly persisted FLEET_TASK_MODEL into workspace_settings: %v", chatSt.settingsWritten)
 	}
+
+	// Setting --model with both --chats=false and --tasks=false is rejected.
+	out.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		model:             &chatSlug,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chatsSet:          true,
+		chats:             false,
+		tasksSet:          true,
+		tasks:             false,
+		noConfirm:         true,
+	})
+	if code != 1 {
+		t.Fatalf("expected exit 1 when --model has both --chats=false and --tasks=false, got %d", code)
+	}
+}
+
+func TestRunModelRollout_ExplicitTaskFallbackEnvAndJSONLockdownExclusion(t *testing.T) {
+	t.Setenv("FLEET_TASK_FALLBACK_MODEL", "acme/env-task-fallback")
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "anthropic/claude-opus-5.5")
+
+	chatSt := &fakeRolloutChatStore{
+		entries: []store.ConversationModelEntry{
+			{ID: "c-open", Model: "anthropic/claude-opus-5.5"},
+			{ID: "c-lock", Model: "anthropic/claude-opus-5.5", Lockdown: true},
+		},
+	}
+	taskSt := &fakeRolloutTaskStore{}
+	newFB := "acme/new-fallback"
+	var out, errBuf bytes.Buffer
+	code := runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		fallbackModel:     &newFB,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chats:             true,
+		tasks:             true,
+		notify:            true,
+		noConfirm:         true,
+		asJSON:            true,
+	})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errBuf.String())
+	}
+	if taskSt.lastOpts.FallbackModel != nil {
+		t.Fatalf("fleet model set overwrote explicit FLEET_TASK_FALLBACK_MODEL: %+v", taskSt.lastOpts)
+	}
+	var jout modelRolloutJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &jout); err != nil {
+		t.Fatalf("unmarshal json: %v (raw=%s)", err, out.String())
+	}
+	if jout.LockdownIncluded == nil || *jout.LockdownIncluded {
+		t.Fatalf("expected lockdown_included=false in JSON output, got %+v", jout.LockdownIncluded)
+	}
 }
