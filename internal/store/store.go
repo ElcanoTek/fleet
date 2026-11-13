@@ -13,6 +13,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -994,6 +995,14 @@ func (s *Store) BulkUpdateConversationModel(ctx context.Context, model, fromMode
 
 const modelRolloutAdvisoryLockKey int64 = 0x464c545f4d524f4c // "FLT_MROL"
 
+func discardSQLConn(conn *sql.Conn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.Raw(func(_ any) error { return driver.ErrBadConn })
+	_ = conn.Close()
+}
+
 // AcquireModelRolloutLock acquires a session-scoped PostgreSQL advisory lock on
 // a dedicated connection so concurrent HTTP and CLI model rollouts serialize
 // across both the chat and scheduler phases.
@@ -1006,7 +1015,10 @@ func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
 		return nil, fmt.Errorf("acquire model rollout lock connection: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, modelRolloutAdvisoryLockKey); err != nil {
-		_ = conn.Close()
+		// Context cancellation can race with Postgres granting the session lock;
+		// discard the underlying session so a half-locked connection never returns
+		// to database/sql's idle pool.
+		discardSQLConn(conn)
 		return nil, fmt.Errorf("acquire model rollout advisory lock: %w", err)
 	}
 	var once sync.Once
@@ -1014,7 +1026,11 @@ func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
 		once.Do(func() {
 			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, modelRolloutAdvisoryLockKey)
+			var unlocked bool
+			if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, modelRolloutAdvisoryLockKey).Scan(&unlocked); err != nil || !unlocked {
+				discardSQLConn(conn)
+				return
+			}
 			_ = conn.Close()
 		})
 	}, nil

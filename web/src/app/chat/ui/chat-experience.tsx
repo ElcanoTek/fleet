@@ -799,14 +799,27 @@ export function ChatExperience({
   const serverModelByConvRef = useRef<Map<string, string>>(
     new Map(restoredSession?.serverModelByConv ?? []),
   );
-  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>((value) => {
-    modelTouchedRef.current = true;
-    const convId = activeConversationIdRef.current;
-    if (convId && !isPendingKey(convId)) {
-      serverModelByConvRef.current.delete(convId);
+  const syncServerModelSnapshot = useCallback(() => {
+    const prevSession = readChatSession();
+    if (prevSession) {
+      writeChatSession({
+        ...prevSession,
+        serverModelByConv: new Map(serverModelByConvRef.current),
+      });
     }
-    setSelectedModel(value);
   }, []);
+  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      modelTouchedRef.current = true;
+      const convId = activeConversationIdRef.current;
+      if (convId && !isPendingKey(convId)) {
+        serverModelByConvRef.current.delete(convId);
+        syncServerModelSnapshot();
+      }
+      setSelectedModel(value);
+    },
+    [syncServerModelSnapshot],
+  );
   const [modelRouting, setModelRouting] = useState<ModelRouting>(null);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   // modelError includes local routing and /api/model-check rejections. When set,
@@ -2520,8 +2533,11 @@ export function ChatExperience({
             defaultPersona,
         );
         const hydratedModel = conv.model || currentDefaultModel();
-        serverModelByConvRef.current.set(conversationId, hydratedModel);
-        setSelectedModel(hydratedModel);
+        if (!options.background || serverModelByConvRef.current.has(conversationId)) {
+          serverModelByConvRef.current.set(conversationId, hydratedModel);
+          syncServerModelSnapshot();
+          setSelectedModel(hydratedModel);
+        }
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
       // This navigation just superseded any load still in flight, whose
@@ -2724,6 +2740,7 @@ export function ChatExperience({
         const hydratedModel = hydratedConversation.model || currentDefaultModel();
         if (!options.background || serverModelByConvRef.current.has(hydratedConversation.id)) {
           serverModelByConvRef.current.set(hydratedConversation.id, hydratedModel);
+          syncServerModelSnapshot();
           setSelectedModel(hydratedModel);
         }
         // Reset compaction UI state so the freshly-loaded conversation
