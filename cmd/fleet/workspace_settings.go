@@ -31,12 +31,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// buildWorkspaceSettings constructs the settings service over the chat store.
-// Defaults are snapshotted from the env-derived Config BEFORE any override
-// applies, so "Reset to default" always reverts to what this deployment's env
-// file configures.
-func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Service, *guardrailState, error) {
-	defaults := map[string]string{
+func workspaceSettingsDefaults(cfg *config.Config) map[string]string {
+	if cfg == nil {
+		return nil
+	}
+	return map[string]string{
 		"pii_redaction_mode":        defaultPIIRedactionMode(cfg),
 		"guardrail_url":             cfg.GuardrailURL,
 		"guardrail_mode":            defaultGuardrailMode(cfg),
@@ -64,6 +63,14 @@ func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Se
 		"shared_files_max_total_mb":         strconv.Itoa(cfg.SharedFilesMaxTotalMB),
 		"monthly_soft_spend_limit_usd":      strconv.FormatFloat(cfg.MonthlySoftSpendLimitUSD, 'f', -1, 64),
 	}
+}
+
+// buildWorkspaceSettings constructs the settings service over the chat store.
+// Defaults are snapshotted from the env-derived Config BEFORE any override
+// applies, so "Reset to default" always reverts to what this deployment's env
+// file configures.
+func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Service, *guardrailState, error) {
+	defaults := workspaceSettingsDefaults(cfg)
 	pii := newPIIRedactorState(cfg)
 	guard := newGuardrailState(cfg)
 	hooks := map[string]settings.ApplyFunc{

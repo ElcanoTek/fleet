@@ -73,9 +73,10 @@ type taskModelBucket struct {
 
 type modelStatusReport struct {
 	Tiers struct {
-		DefaultModel  tierInfo `json:"default_model"`
-		TaskModel     tierInfo `json:"task_model"`
-		FallbackModel tierInfo `json:"fallback_model"`
+		DefaultModel      tierInfo `json:"default_model"`
+		TaskModel         tierInfo `json:"task_model"`
+		FallbackModel     tierInfo `json:"fallback_model"`
+		TaskFallbackModel tierInfo `json:"task_fallback_model"`
 	} `json:"tiers"`
 	Conversations struct {
 		Total        int               `json:"total"`
@@ -170,6 +171,10 @@ func runModelStatus(ctx context.Context, chatSt modelRolloutChatStore, taskSt an
 	rep.Tiers.DefaultModel = defTier
 	rep.Tiers.TaskModel = taskTier
 	rep.Tiers.FallbackModel = fbTier
+	rep.Tiers.TaskFallbackModel = tierInfo{Value: fbTier.Value, Source: "follows_fallback"}
+	if tfb := configuredTaskFallbackEnv(); tfb != "" {
+		rep.Tiers.TaskFallbackModel = tierInfo{Value: tfb, Source: "env"}
+	}
 
 	if chatSt != nil {
 		convs, cerr := chatSt.ListConversationsForModelUpdate(ctx, "", true)
@@ -279,6 +284,7 @@ func printModelStatusText(w io.Writer, rep modelStatusReport) {
 	fmt.Fprintf(w, "  default_model (chats):    %s (%s)\n", rep.Tiers.DefaultModel.Value, rep.Tiers.DefaultModel.Source)
 	fmt.Fprintf(w, "  task_model    (tasks):    %s (%s)\n", rep.Tiers.TaskModel.Value, rep.Tiers.TaskModel.Source)
 	fmt.Fprintf(w, "  fallback_model:           %s (%s)\n", rep.Tiers.FallbackModel.Value, rep.Tiers.FallbackModel.Source)
+	fmt.Fprintf(w, "  task_fallback_model:      %s (%s)\n", rep.Tiers.TaskFallbackModel.Value, rep.Tiers.TaskFallbackModel.Source)
 
 	fmt.Fprintf(w, "\nConversations (%d total, %d with messages, %d lockdown):\n",
 		rep.Conversations.Total, rep.Conversations.WithMessages, rep.Conversations.Lockdown)

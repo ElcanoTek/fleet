@@ -128,6 +128,10 @@ type TaskModelRollout struct {
 	// using FromFallbackModel (empty updates all matching tasks whose
 	// fallback_model differs).
 	FromFallbackModel string `json:"from_fallback_model,omitempty"`
+	// OnlySetFallbacks, when true alongside FallbackModel, updates only tasks
+	// that already have a non-empty fallback_model, preserving NULL on bare
+	// API/CLI tasks created without a task fallback.
+	OnlySetFallbacks bool `json:"only_set_fallbacks,omitempty"`
 	// RecurringOnly, when true, restricts updates to tasks with a non-empty
 	// cron recurrence.
 	RecurringOnly bool `json:"recurring_only,omitempty"`
@@ -154,7 +158,7 @@ func (r TaskModelRollout) ApplyToPointers(curModel, curFallback *string) (nextMo
 	if r.FallbackModel != nil {
 		targetFB := strings.TrimSpace(*r.FallbackModel)
 		fromFB := strings.TrimSpace(r.FromFallbackModel)
-		if fromFB == "" || curFB == fromFB {
+		if (!r.OnlySetFallbacks || curFB != "") && (fromFB == "" || curFB == fromFB) {
 			if targetFB == "" {
 				if curFB != "" {
 					nextFallback = nil

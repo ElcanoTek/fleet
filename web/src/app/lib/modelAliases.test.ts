@@ -93,12 +93,19 @@ describe("setModelTiers", () => {
     expect(currentTierModels()[0]).toEqual({ slug: ADVANCED_MODEL, label: ADVANCED_MODEL_LABEL });
   });
 
-  it("carries the operator's scheduler fallback for the task form, else the compiled-in one", () => {
+  it("carries the operator's scheduler fallback for the task form, else follows the live fallback tier", () => {
     expect(currentTaskFallbackModel()).toBe(DEFAULT_TASK_FALLBACK_MODEL);
-    setModelTiers({ default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" });
+    // When FLEET_TASK_FALLBACK_MODEL is unset, task fallback follows advanced_model.
+    setModelTiers({ default_model: "acme/frontier-1", advanced_model: "acme/frontier-fallback" });
+    expect(currentTaskFallbackModel()).toBe("acme/frontier-fallback");
+    // Explicit FLEET_TASK_FALLBACK_MODEL overrides the task fallback without shadowing chat tiers.
+    setModelTiers({
+      default_model: "acme/frontier-1",
+      advanced_model: "acme/frontier-fallback",
+      task_fallback_model: "acme/cheap-1",
+    });
     expect(currentTaskFallbackModel()).toBe("acme/cheap-1");
-    // The task fallback is its own slot: it never shadows the chat tiers.
-    expect(currentAdvancedModel()).toBe(ADVANCED_MODEL);
+    expect(currentAdvancedModel()).toBe("acme/frontier-fallback");
     setModelTiers({ task_fallback_model: "  " });
     expect(currentTaskFallbackModel()).toBe(DEFAULT_TASK_FALLBACK_MODEL);
   });

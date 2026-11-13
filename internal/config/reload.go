@@ -354,6 +354,113 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 	reloadFleetFloat(result, "TEMPERATURE", c.Temperature, func(v float64) { c.Temperature = v })
 }
 
+// ReloadedDefaultsSnapshot returns a read-only Config populated with the
+// current environment-derived defaults for admin-managed workspace settings
+// after a Reload (without any live admin Set* mutations). If an individual
+// typed env variable fails to parse during a reload, its previous valid field
+// value on c is preserved so a typo never flips a safety knob to a zero value.
+func (c *Config) ReloadedDefaultsSnapshot() *Config {
+	if c == nil {
+		return nil
+	}
+	if c.reload != nil {
+		c.reload.serialize.Lock()
+		defer c.reload.serialize.Unlock()
+	}
+
+	var cur Config
+	if c.reload != nil {
+		c.reload.mu.RLock()
+	}
+	cur = Config{
+		MaxCostUSD:                      c.MaxCostUSD,
+		MaxTotalTokens:                  c.MaxTotalTokens,
+		PIIRedactionEnabled:             c.PIIRedactionEnabled,
+		PIIRedactionMode:                c.PIIRedactionMode,
+		GuardrailMode:                   c.GuardrailMode,
+		GuardrailProfile:                c.GuardrailProfile,
+		GuardrailURL:                    c.GuardrailURL,
+		ApprovalTimeoutSeconds:          c.ApprovalTimeoutSeconds,
+		SubagentsEnabled:                c.SubagentsEnabled,
+		DefaultModel:                    c.DefaultModel,
+		AdvancedModel:                   c.AdvancedModel,
+		TaskModel:                       c.TaskModel,
+		EscalationSignalsEnabled:        c.EscalationSignalsEnabled,
+		EscalationClassifierMode:        c.EscalationClassifierMode,
+		EscalationClassifierModel:       c.EscalationClassifierModel,
+		EscalationClassifierThreshold:   c.EscalationClassifierThreshold,
+		MemoryAutoIndexEnabled:          c.MemoryAutoIndexEnabled,
+		ErrorAnalysisEnabled:            c.ErrorAnalysisEnabled,
+		AutoTitle:                       c.AutoTitle,
+		ConnectorRecommendationsEnabled: c.ConnectorRecommendationsEnabled,
+		ContextHandlesEnabled:           c.ContextHandlesEnabled,
+		TeamChatsSharedByDefault:        c.TeamChatsSharedByDefault,
+		SharedFilesMaxTotalMB:           c.SharedFilesMaxTotalMB,
+		MonthlySoftSpendLimitUSD:        c.MonthlySoftSpendLimitUSD,
+	}
+	if c.reload != nil {
+		c.reload.mu.RUnlock()
+		reloadWorkspaceDefaultFields(&cur)
+	}
+	return &cur
+}
+
+func reloadWorkspaceDefaultFields(dst *Config) {
+	boolOrKeep := func(cur bool, read func(*loadParser) bool) bool {
+		lp := &loadParser{}
+		v := read(lp)
+		if lp.err() != nil {
+			return cur
+		}
+		return v
+	}
+	intOrKeep := func(cur int, read func(*loadParser) int) int {
+		lp := &loadParser{}
+		v := read(lp)
+		if lp.err() != nil {
+			return cur
+		}
+		return v
+	}
+	floatOrKeep := func(cur float64, read func(*loadParser) float64) float64 {
+		lp := &loadParser{}
+		v := read(lp)
+		if lp.err() != nil {
+			return cur
+		}
+		return v
+	}
+
+	dst.PIIRedactionEnabled = boolOrKeep(dst.PIIRedactionEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("PII_REDACTION_ENABLED", false) })
+	dst.PIIRedactionMode = strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE")))
+	dst.GuardrailMode = strings.ToLower(strings.TrimSpace(getenvFleet("GUARDRAIL_MODE")))
+	dst.GuardrailProfile = strings.TrimSpace(getenvFleet("GUARDRAIL_PROFILE"))
+	dst.GuardrailURL = strings.TrimSpace(getenvFleet("GUARDRAIL_URL"))
+	dst.ApprovalTimeoutSeconds = intOrKeep(dst.ApprovalTimeoutSeconds, func(lp *loadParser) int { return lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 86400) })
+	dst.SubagentsEnabled = boolOrKeep(dst.SubagentsEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("SUBAGENTS_ENABLED", true) })
+	dst.DefaultModel = getenvFleet("DEFAULT_MODEL")
+	dst.AdvancedModel = getenvFleet("ADVANCED_MODEL")
+	dst.TaskModel = getenvFleet("TASK_MODEL")
+	dst.EscalationSignalsEnabled = boolOrKeep(dst.EscalationSignalsEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("ESCALATION_SIGNALS_ENABLED", true) })
+	dst.EscalationClassifierMode = strings.ToLower(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierSuggest))
+	dst.EscalationClassifierModel = getenvFleetDefault("ESCALATION_CLASSIFIER_MODEL", DefaultEscalationClassifierModel)
+	dst.EscalationClassifierThreshold = intOrKeep(dst.EscalationClassifierThreshold, func(lp *loadParser) int {
+		return lp.getenvFleetInt("ESCALATION_CLASSIFIER_THRESHOLD", 80)
+	})
+	dst.MemoryAutoIndexEnabled = boolOrKeep(dst.MemoryAutoIndexEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", true) })
+	dst.ErrorAnalysisEnabled = boolOrKeep(dst.ErrorAnalysisEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("ERROR_ANALYSIS_ENABLED", true) })
+	dst.AutoTitle = boolOrKeep(dst.AutoTitle, func(lp *loadParser) bool { return lp.getenvFleetBool("AUTO_TITLE", true) })
+	dst.ConnectorRecommendationsEnabled = boolOrKeep(dst.ConnectorRecommendationsEnabled, func(lp *loadParser) bool {
+		return lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", true)
+	})
+	dst.ContextHandlesEnabled = boolOrKeep(dst.ContextHandlesEnabled, func(lp *loadParser) bool { return lp.getenvFleetBool("CONTEXT_HANDLES_ENABLED", false) })
+	dst.TeamChatsSharedByDefault = boolOrKeep(dst.TeamChatsSharedByDefault, func(lp *loadParser) bool { return lp.getenvFleetBool("TEAM_CHATS_SHARED_BY_DEFAULT", false) })
+	dst.SharedFilesMaxTotalMB = intOrKeep(dst.SharedFilesMaxTotalMB, func(lp *loadParser) int { return lp.getenvFleetInt("SHARED_FILES_MAX_TOTAL_MB", 10240) })
+	dst.MonthlySoftSpendLimitUSD = floatOrKeep(dst.MonthlySoftSpendLimitUSD, func(lp *loadParser) float64 {
+		return lp.getenvFleetFloat("MONTHLY_SOFT_SPEND_LIMIT_USD", 0)
+	})
+}
+
 // restoreBootSecrets re-pins every registered per-request auth-secret env var
 // to its boot value after the env-file re-apply (#584). Webhook/Slack signing
 // secrets are read via os.Getenv on every verification, so a drifted .env copy

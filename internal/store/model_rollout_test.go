@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
@@ -116,5 +117,48 @@ func TestRolloutConversationModel(t *testing.T) {
 	}
 	if res2.UpdatedCount != 0 || res2.NotifiedCount != 0 {
 		t.Errorf("idempotent re-run mutated %+v, want 0 updates and 0 notices", res2)
+	}
+}
+
+func TestAcquireModelRolloutLock_SerializesAcrossConnections(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	release1, err := s.AcquireModelRolloutLock(ctx)
+	if err != nil {
+		t.Fatalf("AcquireModelRolloutLock(1): %v", err)
+	}
+	defer release1()
+
+	acquired2 := make(chan func(), 1)
+	errCh := make(chan error, 1)
+	go func() {
+		r2, lerr := s.AcquireModelRolloutLock(ctx)
+		if lerr != nil {
+			errCh <- lerr
+			return
+		}
+		acquired2 <- r2
+	}()
+
+	select {
+	case r2 := <-acquired2:
+		r2()
+		t.Fatal("second AcquireModelRolloutLock succeeded while first lock was still held")
+	case lerr := <-errCh:
+		t.Fatalf("second AcquireModelRolloutLock errored: %v", lerr)
+	case <-time.After(100 * time.Millisecond):
+		// Expected: second caller is blocked on pg_advisory_lock.
+	}
+
+	release1()
+
+	select {
+	case r2 := <-acquired2:
+		r2()
+	case lerr := <-errCh:
+		t.Fatalf("second AcquireModelRolloutLock errored after release: %v", lerr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("second AcquireModelRolloutLock did not unblock after first lock released")
 	}
 }

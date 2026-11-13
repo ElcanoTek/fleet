@@ -82,49 +82,76 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 		if !decodeJSONBody(w, r, &body) {
 			return
 		}
-		prevFallback := agentcore.CurrentFallbackModel()
-		prevTask := agentcore.CurrentTaskModel()
-		resolved, err := s.workspaceSettings.Set(r.Context(), key, body.Value, userFromCtx(r.Context()))
-		if err != nil {
-			httpErrorForSetting(w, err)
-			return
-		}
-		if !body.Rollout {
-			writeJSON(w, r, resolved)
-			return
-		}
-		rollout, rerr := s.rolloutAfterSettingChange(r.Context(), key, prevFallback, prevTask, body.NotifyChats)
-		resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
-		if rerr != nil {
-			resp.RolloutError = rerr.Error()
-		}
-		writeJSON(w, r, resp)
+		s.writeAdminSettingItem(w, r, key, body.Value, body.Rollout, body.NotifyChats)
 	case http.MethodDelete:
-		prevFallback := agentcore.CurrentFallbackModel()
-		prevTask := agentcore.CurrentTaskModel()
-		resolved, err := s.workspaceSettings.Reset(r.Context(), key, userFromCtx(r.Context()))
-		if err != nil {
-			httpErrorForSetting(w, err)
-			return
-		}
-		if r.URL.Query().Get("rollout") != "true" {
-			writeJSON(w, r, resolved)
-			return
-		}
+		rollout := r.URL.Query().Get("rollout") == "true"
 		var notifyChats *bool
 		if raw := r.URL.Query().Get("notify_chats"); raw == "true" || raw == "false" {
 			v := raw == "true"
 			notifyChats = &v
 		}
-		rollout, rerr := s.rolloutAfterSettingChange(r.Context(), key, prevFallback, prevTask, notifyChats)
-		resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
-		if rerr != nil {
-			resp.RolloutError = rerr.Error()
-		}
-		writeJSON(w, r, resp)
+		s.resetAdminSettingItem(w, r, key, rollout, notifyChats)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, key, value string, wantRollout bool, notifyChats *bool) {
+	ctx := r.Context()
+	if wantRollout && isModelTierSettingKey(key) {
+		release, err := s.acquireModelRolloutLock(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer release()
+	}
+	prevFallback := agentcore.CurrentFallbackModel()
+	prevTask := agentcore.CurrentTaskModel()
+	resolved, err := s.workspaceSettings.Set(ctx, key, value, userFromCtx(ctx))
+	if err != nil {
+		httpErrorForSetting(w, err)
+		return
+	}
+	if !wantRollout {
+		writeJSON(w, r, resolved)
+		return
+	}
+	rollout, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+	if rerr != nil {
+		resp.RolloutError = rerr.Error()
+	}
+	writeJSON(w, r, resp)
+}
+
+func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, key string, wantRollout bool, notifyChats *bool) {
+	ctx := r.Context()
+	if wantRollout && isModelTierSettingKey(key) {
+		release, err := s.acquireModelRolloutLock(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer release()
+	}
+	prevFallback := agentcore.CurrentFallbackModel()
+	prevTask := agentcore.CurrentTaskModel()
+	resolved, err := s.workspaceSettings.Reset(ctx, key, userFromCtx(ctx))
+	if err != nil {
+		httpErrorForSetting(w, err)
+		return
+	}
+	if !wantRollout {
+		writeJSON(w, r, resolved)
+		return
+	}
+	rollout, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+	if rerr != nil {
+		resp.RolloutError = rerr.Error()
+	}
+	writeJSON(w, r, resp)
 }
 
 // httpErrorForSetting maps service errors: unknown key → 404, a validation

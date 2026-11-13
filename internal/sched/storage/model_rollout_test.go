@@ -35,6 +35,17 @@ func TestRecurrenceModelOverrideApplyToPointers(t *testing.T) {
 	if curM != "google/gemini-4-argon" {
 		t.Errorf("caller pointer mutated to %q", curM)
 	}
+
+	// OnlySetFallbacks preserves nil fallbacks on bare API tasks while updating
+	// tasks that already have a fallback_model configured.
+	fbTarget := "anthropic/claude-opus-5.5"
+	r := models.TaskModelRollout{FallbackModel: &fbTarget, OnlySetFallbacks: true}
+	if _, nextNilFB, _, fbChanged := r.ApplyToPointers(&curM, nil); nextNilFB != nil || fbChanged {
+		t.Errorf("OnlySetFallbacks mutated nil fallback: next=%v changed=%v", nextNilFB, fbChanged)
+	}
+	if _, nextSetFB, _, fbChanged := r.ApplyToPointers(&curM, &curFB); nextSetFB == nil || *nextSetFB != fbTarget || !fbChanged {
+		t.Errorf("OnlySetFallbacks did not update set fallback: next=%v changed=%v", nextSetFB, fbChanged)
+	}
 }
 
 func TestRolloutTaskModels_DurableAcrossRestartAndPreservesPostRolloutEdits(t *testing.T) {

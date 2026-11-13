@@ -392,23 +392,45 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 		if !ok {
 			return nil, fmt.Errorf("settings: no boot default for %q", spec.Key)
 		}
-		nd, err := Validate(spec, d)
-		if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
-			nd, err = "", nil
-		}
-		if err != nil {
-			// Out-of-bounds env default: keep it verbatim. It is what the runtime
-			// actually does and what a reset must revert to; only NEW admin writes
-			// are held to the registry bounds.
-			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(err.Error()))
-			nd = strings.TrimSpace(d)
-		}
-		s.defaults[spec.Key] = nd
+		s.defaults[spec.Key] = normalizeSettingDefault(spec, d, true)
 		if _, ok := hooks[spec.Key]; !ok {
 			return nil, fmt.Errorf("settings: no apply hook for %q", spec.Key)
 		}
 	}
 	return s, nil
+}
+
+func normalizeSettingDefault(spec Spec, d string, warn bool) string {
+	nd, err := Validate(spec, d)
+	if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
+		nd, err = "", nil
+	}
+	if err != nil {
+		// Out-of-bounds env default: keep it verbatim. It is what the runtime
+		// actually does and what a reset must revert to; only NEW admin writes
+		// are held to the registry bounds.
+		if warn {
+			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(err.Error()))
+		}
+		nd = strings.TrimSpace(d)
+	}
+	return nd
+}
+
+// RefreshDefaults updates the env-derived fallback defaults from a freshly
+// reloaded Config before ApplyAll runs on hot-reload (#286), so settings
+// without a persisted workspace_settings override keep their newly reloaded
+// values instead of reverting to boot-time snapshots.
+func (s *Service) RefreshDefaults(defaults map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range s.order {
+		d, ok := defaults[key]
+		if !ok {
+			continue
+		}
+		s.defaults[key] = normalizeSettingDefault(s.specs[key], d, false)
+	}
 }
 
 // Snapshot returns every setting's resolved state in registry order — the

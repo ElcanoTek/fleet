@@ -43,6 +43,7 @@ func reloadConfigHandler(cfg *config.Config, workspaceSettings ...*settings.Serv
 			return
 		}
 		if wsSvc != nil {
+			wsSvc.RefreshDefaults(workspaceSettingsDefaults(cfg.ReloadedDefaultsSnapshot()))
 			if err := wsSvc.ApplyAll(r.Context()); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -57,6 +58,7 @@ func reloadRuntimeConfig(ctx context.Context, cfg *config.Config, wsSvc *setting
 	res, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
 	logConfigReload(ctx, res, err)
 	if wsSvc != nil {
+		wsSvc.RefreshDefaults(workspaceSettingsDefaults(cfg.ReloadedDefaultsSnapshot()))
 		if err := wsSvc.ApplyAll(ctx); err != nil {
 			logging.From(ctx).Error("workspace settings reload (SIGUSR2): failed", "err", err)
 		}

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -989,6 +990,34 @@ func (s *Store) BulkUpdateConversationModel(ctx context.Context, model, fromMode
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+const modelRolloutAdvisoryLockKey int64 = 0x464c545f4d524f4c // "FLT_MROL"
+
+// AcquireModelRolloutLock acquires a session-scoped PostgreSQL advisory lock on
+// a dedicated connection so concurrent HTTP and CLI model rollouts serialize
+// across both the chat and scheduler phases.
+func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
+	if s == nil || s.db == nil {
+		return func() {}, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire model rollout lock connection: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, modelRolloutAdvisoryLockKey); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("acquire model rollout advisory lock: %w", err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, modelRolloutAdvisoryLockKey)
+			_ = conn.Close()
+		})
+	}, nil
 }
 
 // RolloutConversationModel upgrades the pinned model on matching non-deleted

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -148,5 +150,75 @@ func TestReloadConfigHandler_ReappliesWorkspaceSettings(t *testing.T) {
 	}
 	if got := agentcore.CurrentFallbackModel(); got != "acme/live-cli-fallback" {
 		t.Errorf("CurrentFallbackModel = %q, want acme/live-cli-fallback", got)
+	}
+}
+
+func TestReloadConfigHandler_RefreshesEnvDefaultsWithoutOverridingAdminSettings(t *testing.T) {
+	envPath := filepath.Join(t.TempDir(), "fleet.env")
+	t.Setenv("FLEET_ENV_FILE", envPath)
+	// Ensure process env does not shadow the file keys under test.
+	for _, k := range []string{
+		"FLEET_SUBAGENTS_ENABLED",
+		"FLEET_APPROVAL_TIMEOUT_SECONDS",
+		"FLEET_MAX_COST_USD",
+		"FLEET_DEFAULT_MODEL",
+	} {
+		_ = os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetFallbackModel("")
+		agentcore.SetTaskModel("")
+	})
+
+	initialEnv := "FLEET_SUBAGENTS_ENABLED=true\nFLEET_APPROVAL_TIMEOUT_SECONDS=86400\nFLEET_MAX_COST_USD=50\n"
+	if err := os.WriteFile(envPath, []byte(initialEnv), 0o600); err != nil {
+		t.Fatalf("write initial env: %v", err)
+	}
+	cfg, err := config.Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	st := &fakeWorkspaceSettingsStore{rows: map[string]store.WorkspaceSetting{
+		"default_model": {Key: "default_model", Value: "acme/cli-override", UpdatedBy: "cli"},
+	}}
+	svc, _, err := buildWorkspaceSettings(cfg, st)
+	if err != nil {
+		t.Fatalf("buildWorkspaceSettings: %v", err)
+	}
+	if err := svc.ApplyAll(context.Background()); err != nil {
+		t.Fatalf("initial ApplyAll: %v", err)
+	}
+
+	updatedEnv := "FLEET_SUBAGENTS_ENABLED=false\nFLEET_APPROVAL_TIMEOUT_SECONDS=120\nFLEET_MAX_COST_USD=25\nFLEET_DEFAULT_MODEL=acme/env-default\n"
+	if err := os.WriteFile(envPath, []byte(updatedEnv), 0o600); err != nil {
+		t.Fatalf("write updated env: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	reloadConfigHandler(cfg, svc)(rec, httptest.NewRequest(http.MethodPost, "/admin/reload-config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if cfg.LiveSubagentsEnabled() {
+		t.Error("LiveSubagentsEnabled = true after reloading FLEET_SUBAGENTS_ENABLED=false, want false")
+	}
+	if got := cfg.LiveApprovalTimeoutSeconds(); got != 120 {
+		t.Errorf("LiveApprovalTimeoutSeconds = %d, want 120", got)
+	}
+	if got := cfg.LiveMaxCostUSD(); got != 25 {
+		t.Errorf("LiveMaxCostUSD = %v, want 25", got)
+	}
+	if got := agentcore.CurrentDefaultModel(); got != "acme/cli-override" {
+		t.Errorf("persisted override lost: CurrentDefaultModel = %q, want acme/cli-override", got)
+	}
+
+	// Clearing the persisted override and running SIGUSR2 reloadRuntimeConfig
+	// reverts to the newly reloaded env default (not the boot-time constant).
+	_ = st.DeleteWorkspaceSetting(context.Background(), "default_model")
+	reloadRuntimeConfig(context.Background(), cfg, svc)
+	if got := agentcore.CurrentDefaultModel(); got != "acme/env-default" {
+		t.Errorf("CurrentDefaultModel after clearing override = %q, want acme/env-default", got)
 	}
 }

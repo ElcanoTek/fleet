@@ -360,8 +360,13 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, opts modelRollout
 			plan.chatTarget = curDefault
 		}
 		if opts.tasks {
+			fb := configuredTaskFallbackEnv()
+			if fb == "" {
+				fb = curFallback
+			}
 			plan.taskRollout.Model = &curTask
-			plan.taskRollout.FallbackModel = &curFallback
+			plan.taskRollout.FallbackModel = &fb
+			plan.taskRollout.OnlySetFallbacks = true
 			plan.runTasks = true
 		}
 		return plan
@@ -662,6 +667,27 @@ func rolloutPromptSummary(plan modelRolloutPlan) string {
 	return strings.Join(parts, ", ")
 }
 
+type modelRolloutAdvisoryLocker interface {
+	AcquireModelRolloutLock(ctx context.Context) (func(), error)
+}
+
+func configuredTaskFallbackEnv() string {
+	return strings.TrimSpace(envOrFile("FLEET_TASK_FALLBACK_MODEL"))
+}
+
+func acquireCLIModelRolloutLock(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer) (func(), int) {
+	locker, ok := chatSt.(modelRolloutAdvisoryLocker)
+	if !ok {
+		return func() {}, 0
+	}
+	release, err := locker.AcquireModelRolloutLock(ctx)
+	if err != nil {
+		fmt.Fprintf(errW, "acquire model rollout lock: %v\n", err)
+		return nil, 5
+	}
+	return release, 0
+}
+
 func runModelRollout(
 	ctx context.Context,
 	chatSt modelRolloutChatStore,
@@ -674,17 +700,6 @@ func runModelRollout(
 	if code != 0 {
 		return code
 	}
-	return executeModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, opts)
-}
-
-func executeModelRolloutPlan(
-	ctx context.Context,
-	chatSt modelRolloutChatStore,
-	taskSt modelRolloutTaskStore,
-	outW, errW io.Writer,
-	plan modelRolloutPlan,
-	opts modelRolloutOptions,
-) int {
 	if opts.dryRun {
 		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, opts)
 	}
@@ -693,6 +708,30 @@ func executeModelRolloutPlan(
 	if code := confirmBulkMutation(opts.noConfirm, prompt); code != 0 {
 		return code
 	}
+
+	release, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	if code != 0 {
+		return code
+	}
+	defer release()
+
+	// Re-resolve effective box tiers under the cross-store lock so concurrent
+	// rollouts never compute tier actions against stale pre-lock settings.
+	plan, code = resolveModelRolloutPlan(ctx, chatSt, errW, opts)
+	if code != 0 {
+		return code
+	}
+	return executeLockedModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, opts)
+}
+
+func executeLockedModelRolloutPlan(
+	ctx context.Context,
+	chatSt modelRolloutChatStore,
+	taskSt modelRolloutTaskStore,
+	outW, errW io.Writer,
+	plan modelRolloutPlan,
+	opts modelRolloutOptions,
+) int {
 	if len(plan.tierActions) > 0 {
 		if code := applyWorkspaceTierActions(ctx, chatSt, errW, plan.tierActions, opts.serverAddr, opts.adminKey, opts.offline); code != 0 {
 			return code
@@ -816,20 +855,11 @@ func resetKeysForTier(raw string) ([]string, error) {
 	}
 }
 
-func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt modelRolloutTaskStore, outW, errW io.Writer, opts modelResetOptions) int {
-	keys, err := resetKeysForTier(opts.tier)
-	if err != nil {
-		fmt.Fprintln(errW, err)
-		return 1
-	}
-	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
-		fmt.Fprintf(errW, "admin key required for live tier reload: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
-		return 1
-	}
+func buildResetRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, keys []string, ropts modelRolloutOptions) (modelRolloutPlan, int) {
 	curDef, curTask, curFB, err := resolveEffectiveBoxTiers(ctx, chatSt)
 	if err != nil {
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
-		return 5
+		return modelRolloutPlan{}, 5
 	}
 	ignore := make(map[string]bool, len(keys))
 	var actions []tierAction
@@ -840,12 +870,25 @@ func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt mod
 	nextDef, nextTask, nextFB, err := resolveBoxTierDetails(ctx, chatSt, ignore)
 	if err != nil {
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
-		return 5
+		return modelRolloutPlan{}, 5
 	}
-
 	plan := modelRolloutPlan{tierActions: actions}
-	if opts.rollout {
+	if ropts.rollout {
 		populateResetRolloutPlan(&plan, ignore, curDef, curTask, curFB, nextDef, nextTask, nextFB)
+	}
+	plan.includeLockdown = resolveRolloutLockdown(ctx, nextDef.Value, nextFB.Value, errW, plan.chatTarget, ropts)
+	return plan, 0
+}
+
+func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt modelRolloutTaskStore, outW, errW io.Writer, opts modelResetOptions) int {
+	keys, err := resetKeysForTier(opts.tier)
+	if err != nil {
+		fmt.Fprintln(errW, err)
+		return 1
+	}
+	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
+		fmt.Fprintf(errW, "admin key required for live tier reload: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
+		return 1
 	}
 	ropts := modelRolloutOptions{
 		chats:      true,
@@ -859,8 +902,27 @@ func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt mod
 		noConfirm:  opts.noConfirm,
 		asJSON:     opts.asJSON,
 	}
-	plan.includeLockdown = resolveRolloutLockdown(ctx, nextDef.Value, nextFB.Value, errW, plan.chatTarget, ropts)
-	return executeModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, ropts)
+	plan, code := buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
+	if code != 0 {
+		return code
+	}
+	if opts.dryRun {
+		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, ropts)
+	}
+	prompt := fmt.Sprintf("Apply model update (%s)?", rolloutPromptSummary(plan))
+	if code := confirmBulkMutation(opts.noConfirm, prompt); code != 0 {
+		return code
+	}
+	release, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	if code != 0 {
+		return code
+	}
+	defer release()
+	plan, code = buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
+	if code != 0 {
+		return code
+	}
+	return executeLockedModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, ropts)
 }
 
 func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool, curDef, curTask, curFB string, nextDef, nextTask, nextFB tierInfo) {
@@ -879,7 +941,20 @@ func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool,
 	}
 	if resetKeys["advanced_model"] {
 		fb := nextFB.Value
-		ropts := modelRolloutOptions{chats: true, tasks: true}
-		applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, fb)
+		if configuredTaskFallbackEnv() == "" {
+			ropts := modelRolloutOptions{chats: true, tasks: true}
+			applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, fb)
+			plan.taskRollout.OnlySetFallbacks = true
+		} else if curFB != "" && curFB != fb && curFB != curDef {
+			if plan.chatTarget == "" {
+				plan.chatTarget = fb
+				plan.chatFrom = curFB
+			}
+			if plan.taskRollout.Model == nil && curFB != curTask {
+				plan.taskRollout.Model = &fb
+				plan.taskRollout.FromModel = curFB
+				plan.runTasks = true
+			}
+		}
 	}
 }
