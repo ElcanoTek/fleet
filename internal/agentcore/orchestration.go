@@ -949,13 +949,16 @@ func reportsAsyncInProgress(resultText string) bool {
 }
 
 // isInProgressState reports whether raw is a JSON string naming an
-// asyncInProgressStates value (case-insensitive; "in-progress" matches too).
+// asyncInProgressStates value (case-insensitive; "in-progress" matches too, as
+// do A2A's protocol-prefixed wire spellings TASK_STATE_SUBMITTED /
+// TASK_STATE_WORKING, docs/A2A.md).
 func isInProgressState(raw json.RawMessage) bool {
 	var v string
 	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
 		return false
 	}
 	v = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v)), "-", "_")
+	v = strings.TrimPrefix(v, "task_state_")
 	return asyncInProgressStates[v]
 }
 
