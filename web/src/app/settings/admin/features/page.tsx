@@ -285,6 +285,7 @@ type ModelRolloutSummary = {
   tasks_primary_updated: number;
   tasks_fallback_updated: number;
   tasks_recurring_updated: number;
+  partial_error?: string;
 };
 
 type SettingWriteResponse = ResolvedSetting & {
@@ -298,9 +299,12 @@ type RolloutUiStatus =
   | { state: "ok" | "err"; message: string };
 
 function formatModelRolloutSummary(r: ModelRolloutSummary): string {
+  const lockdownExcluded = Boolean(r.primary_model) && r.lockdown_included === false;
   if (r.dry_run) {
     if (r.chats_updated === 0 && r.tasks_updated === 0) {
-      return tr("Preview: all existing chats and scheduled tasks are already on the current tiers.");
+      return lockdownExcluded
+        ? tr("Preview: all non-lockdown chats and scheduled tasks are already on the current tiers (lockdown chats excluded).")
+        : tr("Preview: all existing chats and scheduled tasks are already on the current tiers.");
     }
     const parts: string[] = [];
     if (r.primary_model) {
@@ -317,10 +321,15 @@ function formatModelRolloutSummary(r: ModelRolloutSummary): string {
           : tr("{0} scheduled tasks", [r.tasks_updated]),
       );
     }
+    if (lockdownExcluded) {
+      parts.push(tr("lockdown chats excluded"));
+    }
     return tr("Preview: {0} would be updated.", [parts.join(" · ")]);
   }
   if (r.chats_updated === 0 && r.tasks_updated === 0) {
-    return tr("All existing chats and scheduled tasks are already on the current tiers.");
+    return lockdownExcluded
+      ? tr("All non-lockdown chats and scheduled tasks are already on the current tiers (lockdown chats excluded).")
+      : tr("All existing chats and scheduled tasks are already on the current tiers.");
   }
   const parts: string[] = [];
   if (r.primary_model || r.chats_updated > 0) {
@@ -336,6 +345,9 @@ function formatModelRolloutSummary(r: ModelRolloutSummary): string {
         ? tr("{0} scheduled tasks updated ({1} recurring)", [r.tasks_updated, r.tasks_recurring_updated])
         : tr("{0} scheduled tasks updated", [r.tasks_updated]),
     );
+  }
+  if (lockdownExcluded) {
+    parts.push(tr("lockdown chats excluded"));
   }
   return parts.join(" · ");
 }
@@ -424,7 +436,11 @@ function FeaturesAdmin() {
         return next;
       });
       if (rolloutError) {
-        setRolloutStatus({ state: "err", message: rolloutError });
+        const detail =
+          rollout && (rollout.chats_updated > 0 || rollout.tasks_updated > 0)
+            ? `${formatModelRolloutSummary(rollout)} — ${rolloutError}`
+            : rolloutError;
+        setRolloutStatus({ state: "err", message: detail });
       } else if (rollout) {
         setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(rollout) });
       }
@@ -485,7 +501,14 @@ function FeaturesAdmin() {
         throw new Error(await responseErrorText(response, tr("Model rollout failed.")));
       }
       const result = (await response.json()) as ModelRolloutSummary;
-      setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(result) });
+      if (result.partial_error) {
+        setRolloutStatus({
+          state: "err",
+          message: `${formatModelRolloutSummary(result)} — ${result.partial_error}`,
+        });
+      } else {
+        setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(result) });
+      }
     } catch (err) {
       setRolloutStatus({
         state: "err",

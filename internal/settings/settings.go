@@ -392,7 +392,14 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 		if !ok {
 			return nil, fmt.Errorf("settings: no boot default for %q", spec.Key)
 		}
-		s.defaults[spec.Key] = normalizeSettingDefault(spec, d, true)
+		nd, warnErr := normalizeSettingDefault(spec, d)
+		if warnErr != nil {
+			// Out-of-bounds env default: keep it verbatim. It is what the runtime
+			// actually does and what a reset must revert to; only NEW admin writes
+			// are held to the registry bounds.
+			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(warnErr.Error()))
+		}
+		s.defaults[spec.Key] = nd
 		if _, ok := hooks[spec.Key]; !ok {
 			return nil, fmt.Errorf("settings: no apply hook for %q", spec.Key)
 		}
@@ -400,21 +407,15 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 	return s, nil
 }
 
-func normalizeSettingDefault(spec Spec, d string, warn bool) string {
+func normalizeSettingDefault(spec Spec, d string) (string, error) {
 	nd, err := Validate(spec, d)
 	if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
-		nd, err = "", nil
+		return "", nil
 	}
 	if err != nil {
-		// Out-of-bounds env default: keep it verbatim. It is what the runtime
-		// actually does and what a reset must revert to; only NEW admin writes
-		// are held to the registry bounds.
-		if warn {
-			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(err.Error()))
-		}
-		nd = strings.TrimSpace(d)
+		return strings.TrimSpace(d), err
 	}
-	return nd
+	return nd, nil
 }
 
 // RefreshDefaults updates the env-derived fallback defaults from a freshly
@@ -429,7 +430,8 @@ func (s *Service) RefreshDefaults(defaults map[string]string) {
 		if !ok {
 			continue
 		}
-		s.defaults[key] = normalizeSettingDefault(s.specs[key], d, false)
+		nd, _ := normalizeSettingDefault(s.specs[key], d)
+		s.defaults[key] = nd
 	}
 }
 

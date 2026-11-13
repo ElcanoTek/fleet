@@ -215,6 +215,7 @@ type modelRolloutJSONOutput struct {
 	TasksPrimaryUpdated   int               `json:"tasks_primary_updated"`
 	TasksFallbackUpdated  int               `json:"tasks_fallback_updated"`
 	RecurringTasksUpdated int               `json:"recurring_tasks_updated"`
+	PartialError          string            `json:"partial_error,omitempty"`
 }
 
 func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, opts modelRolloutOptions) (modelRolloutPlan, int) {
@@ -688,6 +689,83 @@ func acquireCLIModelRolloutLock(ctx context.Context, chatSt modelRolloutChatStor
 	return release, 0
 }
 
+func rolloutPlansEqual(a, b modelRolloutPlan) bool {
+	if len(a.tierActions) != len(b.tierActions) {
+		return false
+	}
+	for i := range a.tierActions {
+		if a.tierActions[i] != b.tierActions[i] {
+			return false
+		}
+	}
+	if a.chatTarget != b.chatTarget || a.chatFrom != b.chatFrom || a.includeLockdown != b.includeLockdown || a.runTasks != b.runTasks {
+		return false
+	}
+	return optModelStr(a.taskRollout.Model) == optModelStr(b.taskRollout.Model) &&
+		a.taskRollout.FromModel == b.taskRollout.FromModel &&
+		(a.taskRollout.FallbackModel == nil) == (b.taskRollout.FallbackModel == nil) &&
+		(a.taskRollout.FallbackModel == nil || *a.taskRollout.FallbackModel == *b.taskRollout.FallbackModel) &&
+		a.taskRollout.FromFallbackModel == b.taskRollout.FromFallbackModel &&
+		a.taskRollout.OnlySetFallbacks == b.taskRollout.OnlySetFallbacks &&
+		a.taskRollout.RecurringOnly == b.taskRollout.RecurringOnly
+}
+
+func confirmAndLockRolloutPlan(
+	ctx context.Context,
+	chatSt modelRolloutChatStore,
+	errW io.Writer,
+	noConfirm bool,
+	confirm func(bool, string) int,
+	resolve func() (modelRolloutPlan, int),
+) (modelRolloutPlan, func(), int) {
+	initialPlan, code := resolve()
+	if code != 0 {
+		return modelRolloutPlan{}, nil, code
+	}
+	prompt := fmt.Sprintf("Apply model update (%s)?", rolloutPromptSummary(initialPlan))
+	if code := confirm(noConfirm, prompt); code != 0 {
+		return modelRolloutPlan{}, nil, code
+	}
+
+	release, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	if code != 0 {
+		return modelRolloutPlan{}, nil, code
+	}
+	plan, code := resolve()
+	if code != 0 {
+		release()
+		return modelRolloutPlan{}, nil, code
+	}
+	if noConfirm || rolloutPlansEqual(initialPlan, plan) {
+		return plan, release, 0
+	}
+
+	// Another operator mutated workspace_settings while waiting on interactive
+	// confirmation: release the lock before reading stdin again, ask the
+	// operator to confirm the updated plan, and verify once more under the lock.
+	release()
+	fmt.Fprintln(errW, "note: workspace model tiers changed while waiting for confirmation")
+	prompt2 := fmt.Sprintf("Apply updated model plan (%s)?", rolloutPromptSummary(plan))
+	if code := confirm(false, prompt2); code != 0 {
+		return modelRolloutPlan{}, nil, code
+	}
+	release2, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	if code != 0 {
+		return modelRolloutPlan{}, nil, code
+	}
+	plan2, code := resolve()
+	if code != 0 {
+		release2()
+		return modelRolloutPlan{}, nil, code
+	}
+	if !rolloutPlansEqual(plan, plan2) {
+		release2()
+		fmt.Fprintln(errW, "workspace model tiers changed again during confirmation; re-run command")
+		return modelRolloutPlan{}, nil, 5
+	}
+	return plan2, release2, 0
+}
+
 func runModelRollout(
 	ctx context.Context,
 	chatSt modelRolloutChatStore,
@@ -696,31 +774,21 @@ func runModelRollout(
 	opts modelRolloutOptions,
 ) int {
 	opts.normalizeDefaults()
-	plan, code := resolveModelRolloutPlan(ctx, chatSt, errW, opts)
-	if code != 0 {
-		return code
-	}
 	if opts.dryRun {
+		plan, code := resolveModelRolloutPlan(ctx, chatSt, errW, opts)
+		if code != 0 {
+			return code
+		}
 		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, opts)
 	}
 
-	prompt := fmt.Sprintf("Apply model update (%s)?", rolloutPromptSummary(plan))
-	if code := confirmBulkMutation(opts.noConfirm, prompt); code != 0 {
-		return code
-	}
-
-	release, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	plan, release, code := confirmAndLockRolloutPlan(ctx, chatSt, errW, opts.noConfirm, confirmBulkMutation, func() (modelRolloutPlan, int) {
+		return resolveModelRolloutPlan(ctx, chatSt, errW, opts)
+	})
 	if code != 0 {
 		return code
 	}
 	defer release()
-
-	// Re-resolve effective box tiers under the cross-store lock so concurrent
-	// rollouts never compute tier actions against stale pre-lock settings.
-	plan, code = resolveModelRolloutPlan(ctx, chatSt, errW, opts)
-	if code != 0 {
-		return code
-	}
 	return executeLockedModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, opts)
 }
 
@@ -738,22 +806,40 @@ func executeLockedModelRolloutPlan(
 		}
 	}
 
-	var chatRes store.ConversationModelRolloutResult
-	if plan.chatTarget != "" && chatSt != nil {
-		var err error
-		chatRes, err = chatSt.RolloutConversationModel(ctx, plan.chatTarget, plan.chatFrom, plan.includeLockdown, opts.notify)
-		if err != nil {
-			fmt.Fprintf(errW, "rollout conversations: %v\n", err)
-			return 5
-		}
-	}
-
+	// Execute task rollout BEFORE chat rollout so a scheduler failure aborts
+	// before conversations are updated or chat upgrade notices are inserted.
 	var taskRes models.TaskModelRolloutResult
 	if plan.runTasks && taskSt != nil {
 		var err error
 		taskRes, err = taskSt.RolloutTaskModels(ctx, plan.taskRollout, false)
 		if err != nil {
 			fmt.Fprintf(errW, "rollout tasks: %v\n", err)
+			return 5
+		}
+	}
+
+	var chatRes store.ConversationModelRolloutResult
+	if plan.chatTarget != "" && chatSt != nil {
+		var err error
+		chatRes, err = chatSt.RolloutConversationModel(ctx, plan.chatTarget, plan.chatFrom, plan.includeLockdown, opts.notify)
+		if err != nil {
+			if taskRes.UpdatedCount > 0 {
+				partialMsg := fmt.Sprintf("rollout conversations: %v (%d task(s) updated before chat rollout failed)", err, taskRes.UpdatedCount)
+				if opts.asJSON {
+					var jout modelRolloutJSONOutput
+					populateJSONTierActions(&jout, plan)
+					jout.TasksScanned = taskRes.ScannedCount
+					jout.TasksUpdated = taskRes.UpdatedCount
+					jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
+					jout.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
+					jout.RecurringTasksUpdated = taskRes.RecurringUpdatedCount
+					jout.PartialError = partialMsg
+					emitRolloutJSON(outW, jout)
+				}
+				fmt.Fprintln(errW, partialMsg)
+				return 5
+			}
+			fmt.Fprintf(errW, "rollout conversations: %v\n", err)
 			return 5
 		}
 	}
@@ -902,26 +988,20 @@ func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt mod
 		noConfirm:  opts.noConfirm,
 		asJSON:     opts.asJSON,
 	}
-	plan, code := buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
-	if code != 0 {
-		return code
-	}
 	if opts.dryRun {
+		plan, code := buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
+		if code != 0 {
+			return code
+		}
 		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, ropts)
 	}
-	prompt := fmt.Sprintf("Apply model update (%s)?", rolloutPromptSummary(plan))
-	if code := confirmBulkMutation(opts.noConfirm, prompt); code != 0 {
-		return code
-	}
-	release, code := acquireCLIModelRolloutLock(ctx, chatSt, errW)
+	plan, release, code := confirmAndLockRolloutPlan(ctx, chatSt, errW, opts.noConfirm, confirmBulkMutation, func() (modelRolloutPlan, int) {
+		return buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
+	})
 	if code != 0 {
 		return code
 	}
 	defer release()
-	plan, code = buildResetRolloutPlan(ctx, chatSt, errW, keys, ropts)
-	if code != 0 {
-		return code
-	}
 	return executeLockedModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, ropts)
 }
 

@@ -18,12 +18,20 @@ import (
 type fakeRolloutChatStore struct {
 	entries         []store.ConversationModelEntry
 	rolloutCalls    int
+	rolloutErr      error
 	lastModel       string
 	lastFrom        string
 	lastLockdown    bool
 	lastNotify      bool
 	settingsWritten map[string]string
 	settingsErr     error
+	lockAcquires    int
+	lockReleases    int
+}
+
+func (f *fakeRolloutChatStore) AcquireModelRolloutLock(context.Context) (func(), error) {
+	f.lockAcquires++
+	return func() { f.lockReleases++ }, nil
 }
 
 func (f *fakeRolloutChatStore) ListConversationsForModelUpdate(_ context.Context, fromModel string, includeLockdown bool) ([]store.ConversationModelEntry, error) {
@@ -41,6 +49,9 @@ func (f *fakeRolloutChatStore) ListConversationsForModelUpdate(_ context.Context
 
 func (f *fakeRolloutChatStore) RolloutConversationModel(_ context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error) {
 	f.rolloutCalls++
+	if f.rolloutErr != nil {
+		return store.ConversationModelRolloutResult{}, f.rolloutErr
+	}
 	f.lastModel = model
 	f.lastFrom = fromModel
 	f.lastLockdown = includeLockdown
@@ -90,6 +101,7 @@ func (f *fakeRolloutChatStore) DeleteWorkspaceSetting(_ context.Context, key str
 
 type fakeRolloutTaskStore struct {
 	calls       int
+	rolloutErr  error
 	lastOpts    models.TaskModelRollout
 	lastDry     bool
 	statusTasks []*models.Task
@@ -101,6 +113,9 @@ func (f *fakeRolloutTaskStore) ListTasksForModelStatus(_ context.Context) ([]*mo
 
 func (f *fakeRolloutTaskStore) RolloutTaskModels(_ context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error) {
 	f.calls++
+	if f.rolloutErr != nil {
+		return models.TaskModelRolloutResult{}, f.rolloutErr
+	}
 	f.lastOpts = opts
 	f.lastDry = dryRun
 	return models.TaskModelRolloutResult{
@@ -353,5 +368,100 @@ func TestModelStatusSplitChatTaskAndReset(t *testing.T) {
 	}
 	if taskSt.lastOpts.Model == nil || *taskSt.lastOpts.Model != chatSlug {
 		t.Errorf("expected task reset rollout target %q, got %+v", chatSlug, taskSt.lastOpts.Model)
+	}
+}
+
+func TestConfirmAndLockRolloutPlan_RepromptsOnConcurrentTierChange(t *testing.T) {
+	t.Parallel()
+
+	chatSt := &fakeRolloutChatStore{
+		settingsWritten: map[string]string{"default_model": "google/gemini-4-argon"},
+	}
+	opts := modelRolloutOptions{chats: true, tasks: true, notify: true}
+	opts.normalizeDefaults()
+	var prompts []string
+	confirm := func(noConfirm bool, warning string) int {
+		if noConfirm {
+			t.Fatalf("expected interactive prompt (noConfirm=false)")
+		}
+		prompts = append(prompts, warning)
+		if len(prompts) == 1 {
+			// Simulate a concurrent operator updating default_model while stdin waits.
+			chatSt.settingsWritten["default_model"] = "google/gemini-4-hydrogen"
+		}
+		return 0
+	}
+
+	var errBuf bytes.Buffer
+	plan, release, code := confirmAndLockRolloutPlan(context.Background(), chatSt, &errBuf, false, confirm, func() (modelRolloutPlan, int) {
+		return resolveModelRolloutPlan(context.Background(), chatSt, &errBuf, opts)
+	})
+	if code != 0 {
+		t.Fatalf("confirmAndLockRolloutPlan exit=%d stderr=%s", code, errBuf.String())
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompts = %d, want 2: %v", len(prompts), prompts)
+	}
+	if !strings.Contains(prompts[0], "google/gemini-4-argon") || !strings.Contains(prompts[1], "google/gemini-4-hydrogen") {
+		t.Fatalf("expected initial and updated prompts, got %v", prompts)
+	}
+	if chatSt.lockAcquires != 2 || chatSt.lockReleases != 1 {
+		t.Fatalf("expected lock release before second prompt and re-acquire: acquires=%d releases=%d", chatSt.lockAcquires, chatSt.lockReleases)
+	}
+	if plan.chatTarget != "google/gemini-4-hydrogen" {
+		t.Fatalf("plan.chatTarget = %q, want google/gemini-4-hydrogen", plan.chatTarget)
+	}
+	release()
+	if chatSt.lockReleases != 2 {
+		t.Fatalf("final lockReleases = %d, want 2", chatSt.lockReleases)
+	}
+}
+
+func TestRunModelRollout_TaskFirstAndPartialError(t *testing.T) {
+	t.Parallel()
+
+	// 1. Task rollout failure aborts before mutating chats.
+	chatSt := &fakeRolloutChatStore{
+		entries: []store.ConversationModelEntry{{ID: "c1", Model: "anthropic/claude-opus-5.5", HasMessages: true}},
+	}
+	taskSt := &fakeRolloutTaskStore{rolloutErr: errors.New("sched db down")}
+	var out, errBuf bytes.Buffer
+	targetSlug := "google/gemini-4-hydrogen"
+	code := runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		model:     &targetSlug,
+		chats:     true,
+		tasks:     true,
+		notify:    true,
+		noConfirm: true,
+	})
+	if code != 5 {
+		t.Fatalf("exit=%d, want 5", code)
+	}
+	if chatSt.rolloutCalls != 0 {
+		t.Fatalf("chat rollout ran despite task failure: rolloutCalls=%d", chatSt.rolloutCalls)
+	}
+
+	// 2. Tasks succeed and chat rollout fails -> partial counts emitted in --json and stderr.
+	taskSt.rolloutErr = nil
+	chatSt.rolloutErr = errors.New("chat db down")
+	out.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		model:     &targetSlug,
+		chats:     true,
+		tasks:     true,
+		notify:    true,
+		noConfirm: true,
+		asJSON:    true,
+	})
+	if code != 5 {
+		t.Fatalf("exit=%d, want 5", code)
+	}
+	var jout modelRolloutJSONOutput
+	if err := json.Unmarshal(out.Bytes(), &jout); err != nil {
+		t.Fatalf("unmarshal partial json: %v (raw=%s)", err, out.String())
+	}
+	if jout.TasksUpdated != 4 || !strings.Contains(jout.PartialError, "4 task(s) updated") {
+		t.Fatalf("unexpected partial json: %+v", jout)
 	}
 }

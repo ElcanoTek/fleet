@@ -1012,7 +1012,7 @@ func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, modelRolloutAdvisoryLockKey)
 			_ = conn.Close()

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -113,6 +114,7 @@ type ModelRolloutResponse struct {
 	TasksPrimaryUpdated   int    `json:"tasks_primary_updated"`
 	TasksFallbackUpdated  int    `json:"tasks_fallback_updated"`
 	TasksRecurringUpdated int    `json:"tasks_recurring_updated"`
+	PartialError          string `json:"partial_error,omitempty"`
 }
 
 func validateRolloutModelSlug(field, raw string) (string, error) {
@@ -145,7 +147,7 @@ func (s *Server) handleAdminModelRollout(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeJSON(w, r, res)
+	writeJSONStatus(w, r, status, res)
 }
 
 type resolvedRolloutTargets struct {
@@ -275,10 +277,24 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 		out.FallbackModel = *t.taskFallback
 	}
 
-	if err := s.runChatRolloutPhase(ctx, t, req.DryRun, &out); err != nil {
+	// Run the scheduler task phase BEFORE the chat phase so a scheduler failure
+	// rolls back cleanly without having mutated conversations or posted chat
+	// upgrade notices. If the task phase commits changes and the subsequent chat
+	// phase fails, return HTTP 207 Multi-Status with the committed task counts
+	// and PartialError so operators know tasks succeeded and can safely re-run.
+	if err := s.runTaskRolloutPhase(ctx, t, req.RecurringOnly, req.DryRun, &out); err != nil {
 		return ModelRolloutResponse{}, http.StatusInternalServerError, err
 	}
-	if err := s.runTaskRolloutPhase(ctx, t, req.RecurringOnly, req.DryRun, &out); err != nil {
+	if err := s.runChatRolloutPhase(ctx, t, req.DryRun, &out); err != nil {
+		if !req.DryRun && out.TasksUpdated > 0 {
+			out.PartialError = fmt.Sprintf("%s (%d scheduled task(s) updated before chat rollout failed)", err.Error(), out.TasksUpdated)
+			logging.From(ctx).Warn("Model rollout partially completed",
+				"actor", safe.LogSafe(userFromCtx(ctx)),
+				"tasks_updated", out.TasksUpdated,
+				"err", safe.LogSafe(err.Error()),
+			)
+			return out, http.StatusMultiStatus, nil
+		}
 		return ModelRolloutResponse{}, http.StatusInternalServerError, err
 	}
 
@@ -414,6 +430,9 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 	res, _, err := s.executeModelRolloutLocked(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if res.PartialError != "" {
+		return &res, errors.New(res.PartialError)
 	}
 	return &res, nil
 }

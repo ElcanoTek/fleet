@@ -3,13 +3,16 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 func TestAdminModelRolloutEndpointAndSettingsRollout(t *testing.T) {
@@ -225,21 +228,21 @@ func TestAdminModelRollout_FallbackTierAndSerialization(t *testing.T) {
 		t.Fatalf("sync_current did not honor TaskFallbackModel: %+v", lastTaskRollout)
 	}
 
-	// 3. Concurrent unfiltered rollouts serialize across chat + task phases so
+	// 3. Concurrent unfiltered rollouts serialize across task + chat phases so
 	// chats and tasks never finish on divergent models.
 	phase1Entered := make(chan struct{})
 	unblockPhase1 := make(chan struct{})
 	var firstOnce sync.Once
 	s.taskModelRollout = func(_ context.Context, opts models.TaskModelRollout, _ bool) (models.TaskModelRolloutResult, error) {
-		firstOnce.Do(func() {
-			close(phase1Entered)
-			<-unblockPhase1
-		})
 		mu.Lock()
 		if opts.Model != nil {
 			liveTaskModel = *opts.Model
 		}
 		mu.Unlock()
+		firstOnce.Do(func() {
+			close(phase1Entered)
+			<-unblockPhase1
+		})
 		return models.TaskModelRolloutResult{ScannedCount: 1, UpdatedCount: 1, PrimaryUpdatedCount: 1}, nil
 	}
 
@@ -256,10 +259,10 @@ func TestAdminModelRollout_FallbackTierAndSerialization(t *testing.T) {
 		do(t, h, http.MethodPost, "/admin/models/rollout", map[string]any{"model": "acme/model-b"}, "boss@x.com")
 		close(secondDone)
 	}()
-	// While rollout A is paused between its chat phase and task phase, rollout B
-	// must block on the rollout lock rather than mutating chats to model-b early.
-	if cur, _ := st.Get(context.Background(), "alice@x.com", conv.ID); cur.Model != "acme/model-a" {
-		t.Errorf("chat model while A holds lock = %q, want acme/model-a", cur.Model)
+	// While rollout A is paused in its task phase, rollout B must block on the
+	// rollout lock rather than mutating chats or tasks to model-b early.
+	if cur, _ := st.Get(context.Background(), "alice@x.com", conv.ID); cur.Model == "acme/model-b" {
+		t.Errorf("chat model mutated to model-b while A holds lock")
 	}
 	close(unblockPhase1)
 	<-secondDone
@@ -271,5 +274,65 @@ func TestAdminModelRollout_FallbackTierAndSerialization(t *testing.T) {
 	mu.Unlock()
 	if finalConv.Model != finalTask || finalConv.Model != "acme/model-b" {
 		t.Fatalf("divergent cross-store rollout: chat=%q task=%q (want both acme/model-b)", finalConv.Model, finalTask)
+	}
+}
+
+type failingRolloutChatStore struct {
+	*fakeChatStore
+	rolloutErr error
+}
+
+func (f *failingRolloutChatStore) RolloutConversationModel(ctx context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error) {
+	if f.rolloutErr != nil {
+		return store.ConversationModelRolloutResult{}, f.rolloutErr
+	}
+	return f.fakeChatStore.RolloutConversationModel(ctx, model, fromModel, includeLockdown, notify)
+}
+
+func TestModelRollout_TaskFailureAbortsBeforeChatAndPartialError207(t *testing.T) {
+	baseSt := newFakeChatStore()
+	st := &failingRolloutChatStore{fakeChatStore: baseSt}
+	s := newDefaultChatServer(t, nil, st)
+	s.cfg.AdminEmails = []string{"boss@x.com"}
+	conv, _ := baseSt.CreateConversation(context.Background(), "alice@x.com", "Active Chat", "victoria", "anthropic/claude-opus-5.5", false)
+	msgBytes, _ := json.Marshal(agent.TextContent{Text: "hello"})
+	_, _ = baseSt.AppendHistory(context.Background(), conv.ID, []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: msgBytes},
+	})
+	h := s.Routes()
+
+	// 1. Scheduler failure aborts BEFORE mutating conversations or posting notices.
+	s.taskModelRollout = func(_ context.Context, _ models.TaskModelRollout, _ bool) (models.TaskModelRolloutResult, error) {
+		return models.TaskModelRolloutResult{}, errors.New("scheduler db unavailable")
+	}
+	w := do(t, h, http.MethodPost, "/admin/models/rollout", map[string]any{"model": "google/gemini-4-hydrogen"}, "boss@x.com")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	cur, _ := baseSt.Get(context.Background(), "alice@x.com", conv.ID)
+	if cur.Model != "anthropic/claude-opus-5.5" {
+		t.Fatalf("chat model mutated despite task failure: got %q", cur.Model)
+	}
+	hist, _ := baseSt.LoadHistory(context.Background(), conv.ID)
+	if len(hist) != 1 {
+		t.Fatalf("unexpected upgrade notice posted despite task failure: len=%d", len(hist))
+	}
+
+	// 2. If tasks commit updates and chat rollout subsequently fails, return 207
+	// Multi-Status with committed task counts and PartialError.
+	s.taskModelRollout = func(_ context.Context, _ models.TaskModelRollout, _ bool) (models.TaskModelRolloutResult, error) {
+		return models.TaskModelRolloutResult{ScannedCount: 3, UpdatedCount: 2, PrimaryUpdatedCount: 2}, nil
+	}
+	st.rolloutErr = errors.New("chat db unavailable")
+	w = do(t, h, http.MethodPost, "/admin/models/rollout", map[string]any{"model": "google/gemini-4-hydrogen"}, "boss@x.com")
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("status = %d, want 207: %s", w.Code, w.Body.String())
+	}
+	var partial ModelRolloutResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &partial); err != nil {
+		t.Fatalf("decode 207 response: %v", err)
+	}
+	if partial.TasksUpdated != 2 || !strings.Contains(partial.PartialError, "2 scheduled task(s) updated") {
+		t.Fatalf("unexpected 207 body: %+v", partial)
 	}
 }

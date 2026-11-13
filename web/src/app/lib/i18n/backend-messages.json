@@ -347,7 +347,7 @@
     "skill unreadable",
     "source changed during copy",
     "source task has an invalid recurrence",
-    "specify model, task_model, fallback_model, or sync_current=true",
+    "specify model, chat_model, task_model, fallback_model, or sync_current=true",
     "staged path is occupied by a non-regular file",
     "stat failed",
     "store returned nil approval",
