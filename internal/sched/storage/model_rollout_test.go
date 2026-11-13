@@ -445,3 +445,61 @@ func assertSuccessorModels(t *testing.T, st *Storage, prevID uuid.UUID, wantMode
 	}
 	t.Errorf("no successor spawned for %s", prevID)
 }
+
+func TestRolloutTaskModels_ImportOverwriteClearsChangedOverrideFields(t *testing.T) {
+	t.Parallel()
+
+	st, rawDB := newTestStore(t)
+	st.SetTimezone("UTC")
+	ctx := context.Background()
+
+	tk := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "Import overwrite test",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 8 * * *",
+		CreatedAt:     time.Now().Add(-2 * time.Minute).UTC(),
+	}
+	if _, err := st.AddTask(tk); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	if _, err := st.leaseTaskToOwner(tk.ID, uuid.New()); err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+
+	primary := "google/gemini-4-hydrogen"
+	fallback := "anthropic/claude-opus-5.5"
+	if _, err := st.RolloutTaskModels(ctx, models.TaskModelRollout{
+		Model:         &primary,
+		FallbackModel: &fallback,
+	}, false); err != nil {
+		t.Fatalf("RolloutTaskModels: %v", err)
+	}
+
+	// Recover to pending, then import-overwrite (AddTaskWithContext -> AddTaskTx)
+	// changing primary model while keeping fallback_model unchanged.
+	if _, err := rawDB.UpdateTasksStatusBatch(ctx, []uuid.UUID{tk.ID}, models.TaskStatusLeased, models.TaskStatusPending); err != nil {
+		t.Fatalf("leased->pending: %v", err)
+	}
+	imported := *tk
+	imported.Status = models.TaskStatusPending
+	imported.Model = strPtr("openai/gpt-6-luna-pro")
+	if _, err := st.AddTaskWithContext(ctx, &imported); err != nil {
+		t.Fatalf("AddTaskWithContext: %v", err)
+	}
+
+	wk := uuid.New()
+	if _, err := st.leaseTaskToOwner(tk.ID, wk); err != nil {
+		t.Fatalf("lease imported: %v", err)
+	}
+	if _, err := st.UpdateTaskStatusAtomic(tk.ID, wk, &models.StatusUpdate{
+		Status:  models.TaskStatusSuccess,
+		Message: strPtr("done"),
+	}); err != nil {
+		t.Fatalf("complete imported: %v", err)
+	}
+
+	assertSuccessorModels(t, st, tk.ID, "openai/gpt-6-luna-pro", fallback)
+}

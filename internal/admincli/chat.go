@@ -148,6 +148,26 @@ func runChatSetModelWithNotify(ctx context.Context, st chatModelStore, outW, err
 			fmt.Fprintf(errW, "list conversations: %v\n", err)
 			return 5
 		}
+		_, rolloutCapable := st.(chatModelRolloutStore)
+		if notify && rolloutCapable {
+			var updated, notified int
+			for _, c := range convs {
+				if strings.TrimSpace(c.Model) == model {
+					continue
+				}
+				updated++
+				if c.HasMessages {
+					notified++
+				}
+				cur := c.Model
+				if cur == "" {
+					cur = "<none>"
+				}
+				fmt.Fprintf(outW, "%s\t%s\tmodel %s → %s\n", c.ID, c.UserEmail, cur, model)
+			}
+			fmt.Fprintf(errW, "dry-run: %d conversation(s) would be re-assigned (%d notified)\n", updated, notified)
+			return 0
+		}
 		for _, c := range convs {
 			cur := c.Model
 			if cur == "" {
