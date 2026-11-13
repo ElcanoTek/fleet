@@ -39,21 +39,39 @@ func (s *Server) configuredTaskFallbackModel() string {
 }
 
 func (s *Server) acquireModelRolloutLock(ctx context.Context) (func(), error) {
-	s.modelRolloutMu.Lock()
+	s.modelRolloutQueueMu.Lock()
 	if locker, ok := s.store.(modelRolloutAdvisoryLocker); ok {
 		releaseDB, err := locker.AcquireModelRolloutLock(ctx)
 		if err != nil {
-			s.modelRolloutMu.Unlock()
+			s.modelRolloutQueueMu.Unlock()
 			return nil, err
 		}
+		s.modelRolloutMu.Lock()
 		return func() {
-			releaseDB()
 			s.modelRolloutMu.Unlock()
+			releaseDB()
+			s.modelRolloutQueueMu.Unlock()
 		}, nil
 	}
+	s.modelRolloutMu.Lock()
 	return func() {
 		s.modelRolloutMu.Unlock()
+		s.modelRolloutQueueMu.Unlock()
 	}, nil
+}
+
+// WithModelTierReloadLock runs fn under the server's in-process model-rollout
+// mutex without acquiring the PostgreSQL advisory lock (which an external CLI
+// caller already holds). Because acquireModelRolloutLock acquires the DB
+// advisory lock BEFORE modelRolloutMu, this lock order is deadlock-free while
+// serializing tier refreshes against in-process rollouts (e.g. sync_current).
+func (s *Server) WithModelTierReloadLock(fn func() error) error {
+	if s == nil {
+		return fn()
+	}
+	s.modelRolloutMu.Lock()
+	defer s.modelRolloutMu.Unlock()
+	return fn()
 }
 
 // WithTaskModelRollout wires the scheduler storage's task model rollout into
@@ -106,20 +124,20 @@ type ModelRolloutRequest struct {
 // ModelRolloutResponse summarizes a dry-run or executed model rollout across
 // chats and scheduled/recurring tasks.
 type ModelRolloutResponse struct {
-	DryRun                bool   `json:"dry_run"`
-	PrimaryModel          string `json:"primary_model,omitempty"`
-	TaskModel             string `json:"task_model,omitempty"`
-	FallbackModel         string `json:"fallback_model,omitempty"`
-	LockdownIncluded      bool   `json:"lockdown_included"`
-	ChatsMatched          int    `json:"chats_matched"`
-	ChatsUpdated          int    `json:"chats_updated"`
-	ChatsNotified         int    `json:"chats_notified"`
-	TasksScanned          int    `json:"tasks_scanned"`
-	TasksUpdated          int    `json:"tasks_updated"`
-	TasksPrimaryUpdated   int    `json:"tasks_primary_updated"`
-	TasksFallbackUpdated  int    `json:"tasks_fallback_updated"`
-	TasksRecurringUpdated int    `json:"tasks_recurring_updated"`
-	PartialError          string `json:"partial_error,omitempty"`
+	DryRun                bool    `json:"dry_run"`
+	PrimaryModel          string  `json:"primary_model,omitempty"`
+	TaskModel             string  `json:"task_model,omitempty"`
+	FallbackModel         *string `json:"fallback_model,omitempty"`
+	LockdownIncluded      bool    `json:"lockdown_included"`
+	ChatsMatched          int     `json:"chats_matched"`
+	ChatsUpdated          int     `json:"chats_updated"`
+	ChatsNotified         int     `json:"chats_notified"`
+	TasksScanned          int     `json:"tasks_scanned"`
+	TasksUpdated          int     `json:"tasks_updated"`
+	TasksPrimaryUpdated   int     `json:"tasks_primary_updated"`
+	TasksFallbackUpdated  int     `json:"tasks_fallback_updated"`
+	TasksRecurringUpdated int     `json:"tasks_recurring_updated"`
+	PartialError          string  `json:"partial_error,omitempty"`
 }
 
 func validateRolloutModelSlug(field, raw string) (string, error) {
@@ -279,7 +297,8 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 		out.TaskModel = *t.taskPrimaryTarget
 	}
 	if t.taskFallback != nil {
-		out.FallbackModel = *t.taskFallback
+		fbCopy := *t.taskFallback
+		out.FallbackModel = &fbCopy
 	}
 
 	// Run the scheduler task phase BEFORE the chat phase so a scheduler failure
@@ -321,11 +340,15 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 				return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
 			}
 		}
+		fbLog := ""
+		if out.FallbackModel != nil {
+			fbLog = *out.FallbackModel
+		}
 		logging.From(ctx).Info("Model rollout completed",
 			"actor", safe.LogSafe(userFromCtx(ctx)),
 			"primary_model", safe.LogSafe(out.PrimaryModel),
 			"task_model", safe.LogSafe(out.TaskModel),
-			"fallback_model", safe.LogSafe(out.FallbackModel),
+			"fallback_model", safe.LogSafe(fbLog),
 			"chats_updated", out.ChatsUpdated,
 			"chats_notified", out.ChatsNotified,
 			"tasks_updated", out.TasksUpdated,

@@ -106,9 +106,11 @@ type Server struct {
 	// taskModelRollout upgrades upcoming scheduled/pending tasks during admin
 	// model rollouts (WithTaskModelRollout). nil in chat-only tests.
 	taskModelRollout TaskModelRolloutFunc
-	// modelRolloutMu serializes in-process admin model rollouts across both the
-	// chat and scheduler phases (paired with Postgres advisory locking when
-	// backed by a real store.Store).
+	// modelRolloutQueueMu and modelRolloutMu serialize in-process admin model
+	// rollouts across both the chat and scheduler phases (queue -> DB advisory
+	// lock -> modelRolloutMu so an external CLI caller holding the DB advisory
+	// lock can refresh in-memory tiers under modelRolloutMu without deadlocking).
+	modelRolloutQueueMu sync.Mutex
 	modelRolloutMu      sync.Mutex
 	pendingFallbackFrom string
 

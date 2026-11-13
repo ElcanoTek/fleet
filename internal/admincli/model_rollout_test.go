@@ -157,7 +157,7 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get("X-API-Key") != "test-admin-key" {
+		if r.Header.Get("X-API-Key") != "test-admin-key" || r.Header.Get("X-Fleet-Reload-Scope") != "model_tiers" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -293,7 +293,9 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 func TestModelStatusSplitChatTaskAndReset(t *testing.T) {
 	var reloadCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/admin/reload-config" && r.Header.Get("X-API-Key") == "test-admin-key" {
+		if r.Method == http.MethodPost && r.URL.Path == "/admin/reload-config" &&
+			r.Header.Get("X-API-Key") == "test-admin-key" &&
+			r.Header.Get("X-Fleet-Reload-Scope") == "model_tiers" {
 			reloadCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"changed":[],"skipped":[],"errors":[]}`))

@@ -392,12 +392,16 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 		if !ok {
 			return nil, fmt.Errorf("settings: no boot default for %q", spec.Key)
 		}
-		nd, warnErr := normalizeSettingDefault(spec, d)
-		if warnErr != nil {
+		nd, err := Validate(spec, d)
+		if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
+			nd, err = "", nil
+		}
+		if err != nil {
 			// Out-of-bounds env default: keep it verbatim. It is what the runtime
 			// actually does and what a reset must revert to; only NEW admin writes
 			// are held to the registry bounds.
-			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(warnErr.Error()))
+			slog.Warn("workspace settings: env default is outside the admin-settable bounds; keeping it as the default", "key", safe.LogSafe(spec.Key), "err", safe.LogSafe(err.Error()))
+			nd = strings.TrimSpace(d)
 		}
 		s.defaults[spec.Key] = nd
 		if _, ok := hooks[spec.Key]; !ok {
@@ -407,35 +411,34 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 	return s, nil
 }
 
-func normalizeSettingDefault(spec Spec, d string) (string, error) {
-	nd, err := Validate(spec, d)
-	if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
-		return "", nil
-	}
-	if err != nil {
-		return strings.TrimSpace(d), err
-	}
-	return nd, nil
-}
-
-// RefreshDefaults updates the env-derived fallback defaults from a freshly
-// reloaded Config before ApplyAll runs on hot-reload (#286), so settings
-// without a persisted workspace_settings override keep their newly reloaded
-// values instead of reverting to boot-time snapshots.
-func (s *Service) RefreshDefaults(defaults map[string]string) {
+// ApplyKeys re-reads persisted workspace_settings rows and applies only the
+// specified setting keys in-memory (using their boot-time defaults when no
+// override row exists).
+func (s *Service) ApplyKeys(ctx context.Context, keys ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, key := range s.order {
-		d, ok := defaults[key]
-		if !ok {
-			continue
-		}
-		nd, warnErr := normalizeSettingDefault(s.specs[key], d)
-		if warnErr != nil {
-			continue
-		}
-		s.defaults[key] = nd
+	overrides, err := s.st.WorkspaceSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrLoadFailed, err)
 	}
+	var errs []string
+	for _, key := range keys {
+		if _, ok := s.specs[key]; !ok {
+			return fmt.Errorf("%w: %s", ErrUnknownKey, key)
+		}
+		r := s.resolve(key, overrides)
+		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err != nil {
+			s.applyErrs[key] = err.Error()
+			errs = append(errs, fmt.Sprintf("%s: %v", key, err))
+		} else {
+			delete(s.applyErrs, key)
+		}
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return fmt.Errorf("apply workspace settings: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // Snapshot returns every setting's resolved state in registry order — the

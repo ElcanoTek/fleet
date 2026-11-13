@@ -53,7 +53,7 @@ Conversations and scheduled/recurring tasks persist their chosen `model` (and `f
   fleet model status --json
 
   # 2. Upgrade primary + fallback everywhere in one command (persists workspace_settings,
-  #    hot-reloads the running server via POST /admin/reload-config, updates all chats +
+  #    refreshes the running server's live model tiers, updates all chats +
   #    upcoming/recurring tasks, and posts the upgrade notice in active chats):
   fleet model set --model google/gemini-4-hydrogen --fallback-model anthropic/claude-opus-5.5 --yes --json
 

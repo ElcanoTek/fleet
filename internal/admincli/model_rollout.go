@@ -745,6 +745,7 @@ func notifyRunningServerConfigReload(ctx context.Context, addrFlag, adminKey str
 		return err
 	}
 	req.Header.Set("X-API-Key", adminKey)
+	req.Header.Set("X-Fleet-Reload-Scope", "model_tiers")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

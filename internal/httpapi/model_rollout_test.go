@@ -574,4 +574,23 @@ func TestPostChatBaseModelPreservesRolledOutConversationModel(t *testing.T) {
 	if !ok2 || resolved2.Model != "anthropic/claude-opus-5.5" {
 		t.Fatalf("explicit model pick failed: ok=%v model=%q", ok2, resolved2.Model)
 	}
+
+	// Clearing fallback_model via {"fallback_model":""} preserves an explicit empty
+	// "fallback_model":"" in the JSON response (omitting it only when fallback was not targeted).
+	s.taskModelRollout = func(_ context.Context, opts models.TaskModelRollout, _ bool) (models.TaskModelRolloutResult, error) {
+		if opts.FallbackModel == nil || *opts.FallbackModel != "" {
+			t.Fatalf("expected empty FallbackModel clear, got %+v", opts.FallbackModel)
+		}
+		return models.TaskModelRolloutResult{ScannedCount: 2, UpdatedCount: 2, FallbackUpdatedCount: 2}, nil
+	}
+	wClear := do(t, h, http.MethodPost, "/admin/models/rollout", map[string]any{
+		"fallback_model": "",
+		"dry_run":        true,
+	}, "boss@x.com")
+	if wClear.Code != http.StatusOK {
+		t.Fatalf("fallback clear dry-run status = %d: %s", wClear.Code, wClear.Body.String())
+	}
+	if !strings.Contains(wClear.Body.String(), `"fallback_model":""`) {
+		t.Fatalf("expected explicit fallback_model:\"\" in JSON body, got %s", wClear.Body.String())
+	}
 }
