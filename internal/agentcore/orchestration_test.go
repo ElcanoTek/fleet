@@ -804,3 +804,194 @@ func TestRepeatedCallGuard_FailingDeferredDispatchStillTrips(t *testing.T) {
 		t.Fatal("changed wrapper input must not be blocked")
 	}
 }
+
+// pollOnce runs one guarded call the way runGovernedToolCall does — the guard
+// BEFORE the call, the result recorded AFTER — and reports whether the guard
+// refused it (a refused call records no result).
+func pollOnce(o *orchestrationState, toolName, args, result string) (bool, string) {
+	if blocked, msg := o.checkRepeatedCall(toolName, args); blocked {
+		return true, msg
+	}
+	o.recordToolResult(toolName, args, result, true)
+	return false, ""
+}
+
+// An async tool (Optable's propose_audiences) is polled by re-issuing the
+// byte-identical call while its result says "working". Those polls must pass
+// the cap-3 guard, yet a job that never finishes still trips the poll cap.
+func TestRepeatedCallGuard_AsyncPollsPassCapUntilPollCap(t *testing.T) {
+	o := newOrchStateForTest()
+	o.repeatGuardNoun = repeatGuardNounReplyToUser
+	const tool = "mcp_optable-audience-agent_propose_audiences"
+	args := `{"context":{"status":"working","id":"audience-agent-ctx-1"}}`
+	working := `{"context":{"id":"audience-agent-ctx-1","status":"working"},"message":"Audience Agent is processing…"}`
+
+	// The first call plus maxConsecutiveAsyncPolls polls all run.
+	for i := 0; i <= maxConsecutiveAsyncPolls; i++ {
+		if blocked, msg := pollOnce(o, tool, args, working); blocked {
+			t.Fatalf("poll %d blocked: %s", i+1, msg)
+		}
+	}
+	blocked, msg := pollOnce(o, tool, args, working)
+	if !blocked {
+		t.Fatal("expected the poll cap to block a job that stays working")
+	}
+	if !strings.HasPrefix(msg, "LOOP_GUARD") || !strings.Contains(msg, "still running after 20 polls") || !strings.Contains(msg, repeatGuardNounReplyToUser) {
+		t.Fatalf("unexpected poll-cap message: %s", msg)
+	}
+	// Further identical repeats stay blocked; they do not fall back to a
+	// fresh cap-3 run.
+	if blocked, msg2 := o.checkRepeatedCall(tool, args); !blocked || msg2 == msg {
+		t.Fatalf("expected a fresh block after the poll cap, got blocked=%v msg=%s", blocked, msg2)
+	}
+	// Changed arguments reset everything.
+	if blocked, _ := pollOnce(o, tool, `{"brief":"new"}`, working); blocked {
+		t.Fatal("changed args must not be blocked")
+	}
+}
+
+// Once the job reports a terminal status — or the result is not a status
+// object at all — identical repeats are capped at maxConsecutiveIdenticalCalls
+// again, counting from the terminal call.
+func TestRepeatedCallGuard_TerminalResultRestoresCap(t *testing.T) {
+	const tool = "mcp_optable-audience-agent_propose_audiences"
+	args := `{"context":{"status":"working","id":"ctx-1"}}`
+	working := `{"context":{"id":"ctx-1","status":"working"}}`
+	for _, terminal := range []string{
+		`{"context":{"id":"ctx-1","status":"completed"},"audiences":[]}`,
+		`{"status":"working","error":"upstream 500"}`, // a reported failure is not a poll
+		`Audience Agent is working on it`,             // free text never counts
+	} {
+		o := newOrchStateForTest()
+		for i := 0; i < 5; i++ {
+			if blocked, msg := pollOnce(o, tool, args, working); blocked {
+				t.Fatalf("%q: poll %d blocked: %s", terminal, i+1, msg)
+			}
+		}
+		if blocked, msg := pollOnce(o, tool, args, terminal); blocked {
+			t.Fatalf("%q: final poll blocked: %s", terminal, msg)
+		}
+		for i := 1; i < maxConsecutiveIdenticalCalls; i++ {
+			if blocked, msg := pollOnce(o, tool, args, terminal); blocked {
+				t.Fatalf("%q: repeat %d after terminal blocked early: %s", terminal, i, msg)
+			}
+		}
+		blocked, msg := pollOnce(o, tool, args, terminal)
+		if !blocked || !strings.Contains(msg, "execution cap: 3") {
+			t.Fatalf("%q: expected the normal cap after a terminal result, got blocked=%v msg=%s", terminal, blocked, msg)
+		}
+	}
+}
+
+// A deferred poll crosses the guard twice (tool_call wrapper, then the real
+// tool) and records twice (real result, then the wrapper's). Both slots must
+// admit polls, and both must cap again after a terminal result.
+func TestRepeatedCallGuard_DeferredAsyncPolls(t *testing.T) {
+	o := newOrchStateForTest()
+	const tool = "mcp_optable-audience-agent_propose_audiences"
+	inner := `{"context":{"status":"working","id":"ctx-1"}}`
+	wrapper := `{"name":"` + tool + `","arguments":` + inner + `}`
+	working := `{"context":{"id":"ctx-1","status":"working"}}`
+	done := `{"context":{"id":"ctx-1","status":"completed"}}`
+
+	deferred := func(result string) (bool, string) {
+		if blocked, msg := o.checkRepeatedCall(toolNameToolCall, wrapper); blocked {
+			return true, msg
+		}
+		if blocked, msg := o.checkRepeatedCall(tool, inner); blocked {
+			// The wrapper relays the real tool's refusal as a failed result.
+			o.recordToolResult(toolNameToolCall, wrapper, msg, false)
+			return true, msg
+		}
+		o.recordToolResult(tool, inner, result, true)
+		o.recordToolResult(toolNameToolCall, wrapper, result, true)
+		return false, ""
+	}
+	for i := 0; i < 6; i++ {
+		if blocked, msg := deferred(working); blocked {
+			t.Fatalf("deferred poll %d blocked: %s", i+1, msg)
+		}
+	}
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, msg := deferred(done); blocked {
+			t.Fatalf("deferred repeat %d after completion blocked early: %s", i+1, msg)
+		}
+	}
+	blocked, msg := deferred(done)
+	if !blocked || !strings.Contains(msg, "tool_call") {
+		t.Fatalf("expected the wrapper slot to cap after completion, got blocked=%v msg=%s", blocked, msg)
+	}
+
+	// The wrapper slot on its own: polls pass the cap, and the poll cap trips.
+	w := newOrchStateForTest()
+	for i := 0; i <= maxConsecutiveAsyncPolls; i++ {
+		if blocked, msg := pollOnce(w, toolNameToolCall, wrapper, working); blocked {
+			t.Fatalf("wrapper poll %d blocked: %s", i+1, msg)
+		}
+	}
+	if blocked, msg := pollOnce(w, toolNameToolCall, wrapper, working); !blocked || !strings.Contains(msg, "still running") {
+		t.Fatalf("expected the wrapper poll cap to block, got blocked=%v msg=%s", blocked, msg)
+	}
+}
+
+// A poll that is admitted but never records a result (refused by a later
+// gate) does not license the next repeat; and an email send whose payload
+// reads "queued" is a duplicate write, never a poll.
+func TestRepeatedCallGuard_AsyncPollNeedsFreshResult(t *testing.T) {
+	o := newOrchStateForTest()
+	const tool = "mcp_jobs_status"
+	args := `{"id":"j1"}`
+	if blocked, _ := pollOnce(o, tool, args, `{"status":{"state":"working"}}`); blocked {
+		t.Fatal("first call blocked")
+	}
+	// Admitted as a poll, but no result recorded.
+	if blocked, _ := o.checkRepeatedCall(tool, args); blocked {
+		t.Fatal("poll blocked")
+	}
+	for i := 2; i <= maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := o.checkRepeatedCall(tool, args); blocked {
+			t.Fatalf("repeat %d blocked early", i)
+		}
+	}
+	if blocked, _ := o.checkRepeatedCall(tool, args); !blocked {
+		t.Fatal("expected the normal cap once no in-progress result was recorded")
+	}
+
+	e := newOrchStateForTest()
+	send := `{"to":"a@b.com","subject":"s"}`
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := pollOnce(e, "mcp_sendgrid_send_email", send, `{"status":"queued"}`); blocked {
+			t.Fatalf("send %d blocked early", i+1)
+		}
+	}
+	if blocked, _ := e.checkRepeatedCall("mcp_sendgrid_send_email", send); !blocked {
+		t.Fatal("a queued email send must not be treated as an async poll")
+	}
+}
+
+func TestReportsAsyncInProgress(t *testing.T) {
+	cases := map[string]bool{
+		`{"status":"working"}`:                        true,
+		`{"state":"RUNNING"}`:                         true,
+		`{"status":"in-progress"}`:                    true,
+		`{"context":{"status":"submitted","id":"x"}}`: true,
+		`{"context":{"state":"queued"}}`:              true,
+		`{"id":"t","status":{"state":"working"}}`:     true,
+		`{"status":"pending"}` + "\n\nhook fragment":  true,
+		`{"status":"completed"}`:                      false,
+		`{"status":{"state":"input-required"}}`:       false,
+		`{"context":{"status":"failed"}}`:             false,
+		`{"result":{"status":"working"}}`:             false,
+		`{"status":["working"]}`:                      false,
+		`[{"status":"working"}]`:                      false,
+		`the job is still working`:                    false,
+		`{"message":"Audience Agent is working"}`:     false,
+		``:                    false,
+		`{"status":"working"`: false,
+	}
+	for in, want := range cases {
+		if got := reportsAsyncInProgress(in); got != want {
+			t.Errorf("reportsAsyncInProgress(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
