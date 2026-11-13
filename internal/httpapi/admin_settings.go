@@ -98,7 +98,7 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, key, value string, wantRollout bool, notifyChats *bool) {
 	ctx := r.Context()
-	if wantRollout && isModelTierSettingKey(key) {
+	if isModelTierSettingKey(key) {
 		release, err := s.acquireModelRolloutLock(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -127,7 +127,7 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 
 func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, key string, wantRollout bool, notifyChats *bool) {
 	ctx := r.Context()
-	if wantRollout && isModelTierSettingKey(key) {
+	if isModelTierSettingKey(key) {
 		release, err := s.acquireModelRolloutLock(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

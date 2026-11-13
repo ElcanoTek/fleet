@@ -57,6 +57,9 @@ func reloadConfigHandler(cfg *config.Config, workspaceSettings ...*settings.Serv
 func reloadRuntimeConfig(ctx context.Context, cfg *config.Config, wsSvc *settings.Service) {
 	res, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
 	logConfigReload(ctx, res, err)
+	if err != nil {
+		return
+	}
 	if wsSvc != nil {
 		wsSvc.RefreshDefaults(workspaceSettingsDefaults(cfg.ReloadedDefaultsSnapshot()))
 		if err := wsSvc.ApplyAll(ctx); err != nil {

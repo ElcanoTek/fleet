@@ -800,10 +800,12 @@ func executeLockedModelRolloutPlan(
 	plan modelRolloutPlan,
 	opts modelRolloutOptions,
 ) int {
+	tiersCommitted := false
 	if len(plan.tierActions) > 0 {
 		if code := applyWorkspaceTierActions(ctx, chatSt, errW, plan.tierActions, opts.serverAddr, opts.adminKey, opts.offline); code != 0 {
 			return code
 		}
+		tiersCommitted = true
 	}
 
 	// Execute task rollout BEFORE chat rollout so a scheduler failure aborts
@@ -813,6 +815,11 @@ func executeLockedModelRolloutPlan(
 		var err error
 		taskRes, err = taskSt.RolloutTaskModels(ctx, plan.taskRollout, false)
 		if err != nil {
+			if tiersCommitted {
+				partialMsg := fmt.Sprintf("rollout tasks: %v (workspace model tier(s) updated before task rollout failed; re-run 'fleet model rollout' once resolved)", err)
+				emitPartialRolloutFailure(outW, errW, opts.asJSON, plan, taskRes, partialMsg)
+				return 5
+			}
 			fmt.Fprintf(errW, "rollout tasks: %v\n", err)
 			return 5
 		}
@@ -823,20 +830,9 @@ func executeLockedModelRolloutPlan(
 		var err error
 		chatRes, err = chatSt.RolloutConversationModel(ctx, plan.chatTarget, plan.chatFrom, plan.includeLockdown, opts.notify)
 		if err != nil {
-			if taskRes.UpdatedCount > 0 {
-				partialMsg := fmt.Sprintf("rollout conversations: %v (%d task(s) updated before chat rollout failed)", err, taskRes.UpdatedCount)
-				if opts.asJSON {
-					var jout modelRolloutJSONOutput
-					populateJSONTierActions(&jout, plan)
-					jout.TasksScanned = taskRes.ScannedCount
-					jout.TasksUpdated = taskRes.UpdatedCount
-					jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
-					jout.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
-					jout.RecurringTasksUpdated = taskRes.RecurringUpdatedCount
-					jout.PartialError = partialMsg
-					emitRolloutJSON(outW, jout)
-				}
-				fmt.Fprintln(errW, partialMsg)
+			if tiersCommitted || taskRes.UpdatedCount > 0 {
+				partialMsg := formatChatRolloutPartialError(err, tiersCommitted, taskRes.UpdatedCount)
+				emitPartialRolloutFailure(outW, errW, opts.asJSON, plan, taskRes, partialMsg)
 				return 5
 			}
 			fmt.Fprintf(errW, "rollout conversations: %v\n", err)
@@ -862,6 +858,38 @@ func executeLockedModelRolloutPlan(
 	fmt.Fprintf(errW, "rolled out models: %d chat(s) updated (%d notified), %d task(s) updated (%d recurring)\n",
 		chatRes.UpdatedCount, chatRes.NotifiedCount, taskRes.UpdatedCount, taskRes.RecurringUpdatedCount)
 	return 0
+}
+
+func emitPartialRolloutFailure(
+	outW, errW io.Writer,
+	asJSON bool,
+	plan modelRolloutPlan,
+	taskRes models.TaskModelRolloutResult,
+	partialMsg string,
+) {
+	if asJSON {
+		var jout modelRolloutJSONOutput
+		populateJSONTierActions(&jout, plan)
+		jout.TasksScanned = taskRes.ScannedCount
+		jout.TasksUpdated = taskRes.UpdatedCount
+		jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
+		jout.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
+		jout.RecurringTasksUpdated = taskRes.RecurringUpdatedCount
+		jout.PartialError = partialMsg
+		emitRolloutJSON(outW, jout)
+	}
+	fmt.Fprintln(errW, partialMsg)
+}
+
+func formatChatRolloutPartialError(err error, tiersCommitted bool, tasksUpdated int) string {
+	switch {
+	case tiersCommitted && tasksUpdated > 0:
+		return fmt.Sprintf("rollout conversations: %v (workspace model tier(s) and %d task(s) updated before chat rollout failed)", err, tasksUpdated)
+	case tiersCommitted:
+		return fmt.Sprintf("rollout conversations: %v (workspace model tier(s) updated before chat rollout failed)", err)
+	default:
+		return fmt.Sprintf("rollout conversations: %v (%d task(s) updated before chat rollout failed)", err, tasksUpdated)
+	}
 }
 
 func modelResetCmd(argv []string) int {

@@ -186,7 +186,10 @@ func TestAdminModelRollout_FallbackTierAndSerialization(t *testing.T) {
 	svc.dflt["advanced_model"] = "anthropic/claude-opus-5.5"
 	svc.dflt["task_model"] = ""
 	svc.SetHook = func(key, val string) {
-		if key == "advanced_model" {
+		switch key {
+		case "default_model":
+			agentcore.SetDefaultModel(val)
+		case "advanced_model":
 			agentcore.SetFallbackModel(val)
 		}
 	}
@@ -259,13 +262,29 @@ func TestAdminModelRollout_FallbackTierAndSerialization(t *testing.T) {
 		do(t, h, http.MethodPost, "/admin/models/rollout", map[string]any{"model": "acme/model-b"}, "boss@x.com")
 		close(secondDone)
 	}()
-	// While rollout A is paused in its task phase, rollout B must block on the
-	// rollout lock rather than mutating chats or tasks to model-b early.
+	// While rollout A is paused in its task phase, rollout B AND a non-rollout
+	// tier write (rollout: false) must both block on the rollout lock.
+	nonRolloutDone := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		do(t, h, http.MethodPut, "/admin/settings/default_model", map[string]any{
+			"value":   "acme/non-rollout-tier",
+			"rollout": false,
+		}, "boss@x.com")
+		close(nonRolloutDone)
+	}()
+	select {
+	case <-nonRolloutDone:
+		t.Errorf("non-rollout PUT default_model completed while rollout A held the rollout lock")
+	default:
+	}
 	if cur, _ := st.Get(context.Background(), "alice@x.com", conv.ID); cur.Model == "acme/model-b" {
 		t.Errorf("chat model mutated to model-b while A holds lock")
 	}
 	close(unblockPhase1)
 	<-secondDone
+	<-nonRolloutDone
 	wg.Wait()
 
 	finalConv, _ := st.Get(context.Background(), "alice@x.com", conv.ID)

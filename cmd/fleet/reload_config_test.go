@@ -221,4 +221,16 @@ func TestReloadConfigHandler_RefreshesEnvDefaultsWithoutOverridingAdminSettings(
 	if got := agentcore.CurrentDefaultModel(); got != "acme/env-default" {
 		t.Errorf("CurrentDefaultModel after clearing override = %q, want acme/env-default", got)
 	}
+
+	// If cfg.Reload fails (e.g. a malformed line exceeding the scanner buffer
+	// after an earlier line), reloadRuntimeConfig must stop immediately without
+	// refreshing/applying partially scanned env defaults.
+	badEnv := "FLEET_DEFAULT_MODEL=acme/partial-scan\nBROKEN=" + strings.Repeat("x", 200*1024) + "\n"
+	if err := os.WriteFile(envPath, []byte(badEnv), 0o600); err != nil {
+		t.Fatalf("write bad env: %v", err)
+	}
+	reloadRuntimeConfig(context.Background(), cfg, svc)
+	if got := agentcore.CurrentDefaultModel(); got != "acme/env-default" {
+		t.Errorf("CurrentDefaultModel changed after failed reload = %q, want acme/env-default", got)
+	}
 }

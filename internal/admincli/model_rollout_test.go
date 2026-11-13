@@ -464,4 +464,32 @@ func TestRunModelRollout_TaskFirstAndPartialError(t *testing.T) {
 	if jout.TasksUpdated != 4 || !strings.Contains(jout.PartialError, "4 task(s) updated") {
 		t.Fatalf("unexpected partial json: %+v", jout)
 	}
+
+	// 3. `fleet model set --offline` commits workspace_settings and then task
+	// rollout fails -> partial JSON reports tier_updates + PartialError.
+	taskSt.rolloutErr = errors.New("sched db down after tier write")
+	chatSt.rolloutErr = nil
+	out.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		model:             &targetSlug,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chats:             true,
+		tasks:             true,
+		notify:            true,
+		noConfirm:         true,
+		asJSON:            true,
+	})
+	if code != 5 {
+		t.Fatalf("exit=%d, want 5", code)
+	}
+	jout = modelRolloutJSONOutput{}
+	if err := json.Unmarshal(out.Bytes(), &jout); err != nil {
+		t.Fatalf("unmarshal tier-committed partial json: %v (raw=%s)", err, out.String())
+	}
+	if jout.WorkspaceTiersUpdated["default_model"] != targetSlug || !strings.Contains(jout.PartialError, "workspace model tier(s) updated before task rollout failed") {
+		t.Fatalf("unexpected tier-committed partial json: %+v", jout)
+	}
 }
