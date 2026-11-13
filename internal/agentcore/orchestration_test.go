@@ -967,25 +967,42 @@ func TestRepeatedCallGuard_AsyncPollNeedsFreshResult(t *testing.T) {
 	if blocked, _ := e.checkRepeatedCall("mcp_sendgrid_send_email", send); !blocked {
 		t.Fatal("a queued email send must not be treated as an async poll")
 	}
+
+	// A manifest-declared (per-run) critical write is never a poll either,
+	// even when its name matches no bundle-wide critical suffix.
+	c := newOrchStateForTest()
+	c.runCriticalTools = map[string]string{"mcp_jobs_submit_job": "submit_job"}
+	submit := `{"job":"j1"}`
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := pollOnce(c, "mcp_jobs_submit_job", submit, `{"status":"pending"}`); blocked {
+			t.Fatalf("submit %d blocked early", i+1)
+		}
+	}
+	if blocked, _ := c.checkRepeatedCall("mcp_jobs_submit_job", submit); !blocked {
+		t.Fatal("a per-run critical write reporting pending must not be treated as an async poll")
+	}
 }
 
 func TestReportsAsyncInProgress(t *testing.T) {
 	cases := map[string]bool{
-		`{"status":"working"}`:                        true,
-		`{"state":"RUNNING"}`:                         true,
-		`{"status":"in-progress"}`:                    true,
-		`{"context":{"status":"submitted","id":"x"}}`: true,
-		`{"context":{"state":"queued"}}`:              true,
-		`{"id":"t","status":{"state":"working"}}`:     true,
-		`{"status":"pending"}` + "\n\nhook fragment":  true,
-		`{"status":"completed"}`:                      false,
-		`{"status":{"state":"input-required"}}`:       false,
-		`{"context":{"status":"failed"}}`:             false,
-		`{"result":{"status":"working"}}`:             false,
-		`{"status":["working"]}`:                      false,
-		`[{"status":"working"}]`:                      false,
-		`the job is still working`:                    false,
-		`{"message":"Audience Agent is working"}`:     false,
+		`{"status":"working"}`:                                              true,
+		`{"state":"RUNNING"}`:                                               true,
+		`{"status":"in-progress"}`:                                          true,
+		`{"context":{"status":"submitted","id":"x"}}`:                       true,
+		`{"context":{"state":"queued"}}`:                                    true,
+		`{"id":"t","status":{"state":"working"}}`:                           true,
+		`{"status":"pending"}` + "\n\nhook fragment":                        true,
+		`{"status":"completed"}`:                                            false,
+		`{"status":"working","error":"upstream 500"}` + "\n\nhook fragment": false,
+		`{"status":"working","success":false}` + "\n\nhook fragment":        false,
+		`{"status":"working","error":null}`:                                 true,
+		`{"status":{"state":"input-required"}}`:                             false,
+		`{"context":{"status":"failed"}}`:                                   false,
+		`{"result":{"status":"working"}}`:                                   false,
+		`{"status":["working"]}`:                                            false,
+		`[{"status":"working"}]`:                                            false,
+		`the job is still working`:                                          false,
+		`{"message":"Audience Agent is working"}`:                           false,
 		``:                    false,
 		`{"status":"working"`: false,
 	}

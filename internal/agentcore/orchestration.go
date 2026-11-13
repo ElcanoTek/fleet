@@ -875,7 +875,9 @@ func (o *orchestrationState) admitAsyncPoll(toolName string, polling *bool, poll
 // tool's result into its slot, then the tool_call wrapper's (the same content)
 // into the wrapper slot, so both slots admit the next poll.
 //
-// Bundle-declared critical tools and email sends are never polls: their
+// Critical tools (bundle-wide or this run's manifest-declared ones, the same
+// isRunCriticalTool classification the approval and audit gates use) and
+// email sends are never polls: their
 // identical repeat is a duplicate write, and a payload such as
 // {"status":"pending"} or {"status":"queued"} describes the record written,
 // not a job to wait on. Callers must hold o.mu.
@@ -889,7 +891,7 @@ func (o *orchestrationState) noteAsyncPollResult(toolName, rawInput, resultText 
 	if toolName+":"+hashString(rawInput) != o.lastCallKey {
 		return
 	}
-	o.lastCallPolling = succeeded && !isCriticalTool(toolName) && !isEmailTool(toolName) &&
+	o.lastCallPolling = succeeded && !o.isRunCriticalTool(toolName) && !isEmailTool(toolName) &&
 		reportsAsyncInProgress(resultText)
 }
 
@@ -911,7 +913,10 @@ var asyncInProgressStates = map[string]bool{
 // top-level "status" or "state" string, the same under "context" (Optable's
 // Audience Agent), or "status.state" (an A2A Task). Free text never counts —
 // a result merely mentioning "working" is not a poll instruction. Trailing
-// text after the object (a post_tool_use hook fragment) is ignored.
+// text after the object (a post_tool_use hook fragment) is ignored, so the
+// failure markers mcpReportedFailure reads ("success": false, a non-empty
+// "error") are checked on that same decoded object: with a hook suffix,
+// mcpReportedFailure's whole-text parse fails and cannot be relied on here.
 func reportsAsyncInProgress(resultText string) bool {
 	s := strings.TrimSpace(resultText)
 	if s == "" || s[0] != '{' {
@@ -919,6 +924,12 @@ func reportsAsyncInProgress(resultText string) bool {
 	}
 	var top map[string]json.RawMessage
 	if err := json.NewDecoder(strings.NewReader(s)).Decode(&top); err != nil {
+		return false
+	}
+	if raw, ok := top["success"]; ok && strings.TrimSpace(string(raw)) == "false" {
+		return false
+	}
+	if e := strings.TrimSpace(string(top["error"])); e != "" && e != "null" && e != `""` {
 		return false
 	}
 	if isInProgressState(top["status"]) || isInProgressState(top["state"]) {
