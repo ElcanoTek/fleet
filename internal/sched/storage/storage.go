@@ -1243,6 +1243,7 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 	priorPriority := task.Priority
 	priorModel := cloneOptModelPtr(task.Model)
 	priorFallback := cloneOptModelPtr(task.FallbackModel)
+	priorRecurrence := strings.TrimSpace(task.Recurrence)
 	if err := mutate(task); err != nil {
 		return nil, err
 	}
@@ -1251,7 +1252,11 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 	}
 	modelChanged := !sameOptModelPtr(priorModel, task.Model)
 	fallbackChanged := !sameOptModelPtr(priorFallback, task.FallbackModel)
-	if (modelChanged || fallbackChanged) && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled) {
+	recurrenceRemoved := priorRecurrence != "" && strings.TrimSpace(task.Recurrence) == ""
+	if recurrenceRemoved {
+		modelChanged, fallbackChanged = true, true
+	}
+	if (modelChanged || fallbackChanged) && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled || recurrenceRemoved) {
 		if err := s.db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, task.ID, modelChanged, fallbackChanged); err != nil {
 			return nil, err
 		}

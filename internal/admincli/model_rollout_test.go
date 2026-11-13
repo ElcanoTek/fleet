@@ -493,3 +493,32 @@ func TestRunModelRollout_TaskFirstAndPartialError(t *testing.T) {
 		t.Fatalf("unexpected tier-committed partial json: %+v", jout)
 	}
 }
+
+func TestRunModelRollout_ChatOnlySetPreservesEnvTaskModelOwnership(t *testing.T) {
+	t.Setenv("FLEET_TASK_MODEL", "acme/env-task-model")
+
+	chatSt := &fakeRolloutChatStore{}
+	taskSt := &fakeRolloutTaskStore{}
+	chatSlug := "google/gemini-4-hydrogen"
+	var out, errBuf bytes.Buffer
+	code := runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		chatModel:         &chatSlug,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chats:             true,
+		tasksSet:          true,
+		tasks:             false,
+		notify:            true,
+		noConfirm:         true,
+	})
+	if code != 0 {
+		t.Fatalf("chat-only set exit=%d stderr=%s", code, errBuf.String())
+	}
+	if got := chatSt.settingsWritten["default_model"]; got != chatSlug {
+		t.Fatalf("default_model = %q, want %q", got, chatSlug)
+	}
+	if _, pinned := chatSt.settingsWritten["task_model"]; pinned {
+		t.Fatalf("chat-only set unexpectedly persisted FLEET_TASK_MODEL into workspace_settings: %v", chatSt.settingsWritten)
+	}
+}

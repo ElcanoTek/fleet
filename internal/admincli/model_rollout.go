@@ -223,18 +223,19 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 	if code := validateRolloutOptionFlags(errW, opts); code != 0 {
 		return modelRolloutPlan{}, code
 	}
-	curDefault, curTask, curFallback, err := resolveEffectiveBoxTiers(ctx, chatSt)
+	defTier, taskTier, fbTier, err := resolveBoxTierDetails(ctx, chatSt, nil)
 	if err != nil {
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
 		return modelRolloutPlan{}, 5
 	}
+	curDefault, curTask, curFallback := defTier.Value, taskTier.Value, fbTier.Value
 
 	validated, code := validateAllModelFlags(errW, opts)
 	if code != 0 {
 		return modelRolloutPlan{}, code
 	}
 
-	plan := buildRolloutPlan(curDefault, curTask, curFallback, opts, validated)
+	plan := buildRolloutPlan(curDefault, curTask, curFallback, taskTier.Source == "follows_default", opts, validated)
 	effDefault, effFallback := effectivePostTierModels(curDefault, curFallback, plan.tierActions)
 	plan.includeLockdown = resolveRolloutLockdown(ctx, effDefault, effFallback, errW, plan.chatTarget, opts)
 	return plan, 0
@@ -321,7 +322,7 @@ func validateAllModelFlags(errW io.Writer, opts modelRolloutOptions) (validatedM
 	return out, 0
 }
 
-func buildRolloutPlan(curDefault, curTask, curFallback string, opts modelRolloutOptions, v validatedModelSlugs) modelRolloutPlan {
+func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefault bool, opts modelRolloutOptions, v validatedModelSlugs) modelRolloutPlan {
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
 		taskRollout: models.TaskModelRollout{
@@ -349,7 +350,7 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, opts modelRollout
 	}
 
 	if opts.setWorkspaceTiers {
-		plan.tierActions = computeWorkspaceTierActions(curDefault, curTask, wantChat, wantTask, v.fallbackModel)
+		plan.tierActions = computeWorkspaceTierActions(curDefault, curTask, taskFollowedDefault, wantChat, wantTask, v.fallbackModel)
 	}
 
 	if !opts.rollout {
@@ -386,7 +387,7 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, opts modelRollout
 	return plan
 }
 
-func computeWorkspaceTierActions(curDefault, curTask string, wantChat, wantTask, wantFallback *string) []tierAction {
+func computeWorkspaceTierActions(curDefault, curTask string, taskFollowedDefault bool, wantChat, wantTask, wantFallback *string) []tierAction {
 	var actions []tierAction
 	newDefault := curDefault
 	if wantChat != nil {
@@ -401,9 +402,11 @@ func computeWorkspaceTierActions(curDefault, curTask string, wantChat, wantTask,
 		} else {
 			actions = append(actions, tierAction{key: "task_model", set: true, value: *wantTask})
 		}
-	case wantChat != nil && curTask != newDefault:
-		// Operator changed ONLY the chat model (--chat-model or --tasks=false);
-		// pin task_model to curTask so newly created tasks keep their current tier.
+	case wantChat != nil && taskFollowedDefault && curTask != newDefault:
+		// Operator changed ONLY the chat model (--chat-model or --tasks=false)
+		// while task_model was implicitly following default_model: pin task_model
+		// to curTask so newly created tasks keep their current tier without
+		// overriding an explicit FLEET_TASK_MODEL env var or existing setting.
 		actions = append(actions, tierAction{key: "task_model", set: true, value: curTask})
 	}
 	if wantFallback != nil && *wantFallback != "" {

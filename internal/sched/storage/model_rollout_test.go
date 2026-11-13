@@ -514,3 +514,68 @@ func TestRolloutTaskModels_ImportOverwriteClearsChangedOverrideFields(t *testing
 
 	assertSuccessorModels(t, st, tk.ID, "openai/gpt-6-luna-pro", fallback)
 }
+
+func TestRolloutTaskModels_RemovingRecurrenceClearsRolloutOverride(t *testing.T) {
+	t.Parallel()
+
+	st, rawDB := newTestStore(t)
+	st.SetTimezone("UTC")
+	ctx := context.Background()
+
+	tk := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "Recurrence removal clears rollout override",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 8 * * *",
+		CreatedAt:     time.Now().Add(-2 * time.Minute).UTC(),
+	}
+	if _, err := st.AddTask(tk); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	if _, err := st.leaseTaskToOwner(tk.ID, uuid.New()); err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+
+	primary := "google/gemini-4-hydrogen"
+	fallback := "anthropic/claude-opus-5.5"
+	if _, err := st.RolloutTaskModels(ctx, models.TaskModelRollout{
+		Model:         &primary,
+		FallbackModel: &fallback,
+	}, false); err != nil {
+		t.Fatalf("RolloutTaskModels: %v", err)
+	}
+
+	// Recover to pending, edit the task to remove recurrence WITHOUT changing
+	// its physical model columns, then re-enable recurrence on the same task.
+	// Its successor must inherit the task's physical models (not the stale rollout).
+	if _, err := rawDB.UpdateTasksStatusBatch(ctx, []uuid.UUID{tk.ID}, models.TaskStatusLeased, models.TaskStatusPending); err != nil {
+		t.Fatalf("leased->pending: %v", err)
+	}
+	if _, err := st.editTaskLocked(ctx, tk.ID, func(cur *models.Task) error {
+		cur.Recurrence = ""
+		return nil
+	}); err != nil {
+		t.Fatalf("editTaskLocked clear recurrence: %v", err)
+	}
+	if _, err := st.editTaskLocked(ctx, tk.ID, func(cur *models.Task) error {
+		cur.Recurrence = "0 9 * * *"
+		return nil
+	}); err != nil {
+		t.Fatalf("editTaskLocked restore recurrence: %v", err)
+	}
+
+	wk := uuid.New()
+	if _, err := st.leaseTaskToOwner(tk.ID, wk); err != nil {
+		t.Fatalf("lease restored: %v", err)
+	}
+	if _, err := st.UpdateTaskStatusAtomic(tk.ID, wk, &models.StatusUpdate{
+		Status:  models.TaskStatusSuccess,
+		Message: strPtr("done"),
+	}); err != nil {
+		t.Fatalf("complete restored: %v", err)
+	}
+
+	assertSuccessorModels(t, st, tk.ID, "google/gemini-4-argon", "anthropic/claude-opus-5")
+}
