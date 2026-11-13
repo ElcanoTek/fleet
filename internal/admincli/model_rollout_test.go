@@ -3,7 +3,10 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -74,6 +77,11 @@ func (f *fakeRolloutChatStore) SetWorkspaceSetting(_ context.Context, key, value
 	return store.WorkspaceSetting{Key: key, Value: value, UpdatedBy: updatedBy}, nil
 }
 
+func (f *fakeRolloutChatStore) DeleteWorkspaceSetting(_ context.Context, key string) error {
+	delete(f.settingsWritten, key)
+	return nil
+}
+
 type fakeRolloutTaskStore struct {
 	calls    int
 	lastOpts models.TaskModelRollout
@@ -94,6 +102,22 @@ func (f *fakeRolloutTaskStore) RolloutTaskModels(_ context.Context, opts models.
 }
 
 func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
+	var reloadCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/admin/reload-config" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-API-Key") != "test-admin-key" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		reloadCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"changed":[],"skipped":[],"errors":[]}`))
+	}))
+	defer srv.Close()
+
 	chatSt := &fakeRolloutChatStore{
 		entries: []store.ConversationModelEntry{
 			{ID: "c1", UserEmail: "alice@example.com", Model: "google/gemini-4-argon", HasMessages: true},
@@ -123,7 +147,8 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 		t.Errorf("unexpected dry-run summary: %s", errBuf.String())
 	}
 
-	// 2. Apply with --set-workspace-tiers updates chats, tasks, notices, and workspace settings.
+	// 2. Apply with --set-workspace-tiers notifies the running server via
+	// POST /admin/reload-config and updates chats, tasks, notices, and settings.
 	outBuf.Reset()
 	errBuf.Reset()
 	code = runModelRollout(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelRolloutOptions{
@@ -131,10 +156,15 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 		fallbackModel:     &fallback,
 		notify:            true,
 		setWorkspaceTiers: true,
+		serverAddr:        srv.URL,
+		adminKey:          "test-admin-key",
 		noConfirm:         true,
 	})
 	if code != 0 {
 		t.Fatalf("apply code = %d, stderr=%s", code, errBuf.String())
+	}
+	if reloadCalls.Load() != 1 {
+		t.Fatalf("reloadCalls = %d, want 1", reloadCalls.Load())
 	}
 	if chatSt.rolloutCalls != 1 || !chatSt.lastNotify || chatSt.lastModel != "google/gemini-4-hydrogen" {
 		t.Fatalf("unexpected chat rollout call: %+v", chatSt)
@@ -147,5 +177,32 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "rolled out models: 2 chat(s) updated (1 notified), 4 task(s) updated (4 recurring)") {
 		t.Errorf("apply stderr = %s", errBuf.String())
+	}
+
+	// 3. When the live server rejects or fails reload, workspace_settings is
+	// rolled back and neither chats nor tasks are partially mutated.
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	badModel := "openai/gpt-6-luna-pro"
+	outBuf.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelRolloutOptions{
+		model:             &badModel,
+		setWorkspaceTiers: true,
+		serverAddr:        failSrv.URL,
+		adminKey:          "test-admin-key",
+		noConfirm:         true,
+	})
+	if code != 5 {
+		t.Fatalf("expected exit 5 on live server reload failure, got %d (stderr=%s)", code, errBuf.String())
+	}
+	if chatSt.settingsWritten["default_model"] != "google/gemini-4-hydrogen" {
+		t.Errorf("default_model not rolled back after reload failure: got %q", chatSt.settingsWritten["default_model"])
+	}
+	if chatSt.rolloutCalls != 1 {
+		t.Errorf("chat rollout ran despite tier reload failure: calls=%d", chatSt.rolloutCalls)
 	}
 }

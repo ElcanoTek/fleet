@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -10,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // TestReloadConfigHandler_NilCfg: a route-walking/test build passes a nil cfg, so
@@ -86,5 +89,62 @@ func TestLogConfigReloadLevels(t *testing.T) {
 	}
 	if strings.Contains(out, "level=ERROR") {
 		t.Fatalf("reload with a per-setting error logged at Error:\n%s", out)
+	}
+}
+
+type fakeWorkspaceSettingsStore struct {
+	rows map[string]store.WorkspaceSetting
+}
+
+func (f *fakeWorkspaceSettingsStore) WorkspaceSettings(_ context.Context) (map[string]store.WorkspaceSetting, error) {
+	out := make(map[string]store.WorkspaceSetting, len(f.rows))
+	for k, v := range f.rows {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeWorkspaceSettingsStore) SetWorkspaceSetting(_ context.Context, key, value, updatedBy string) (store.WorkspaceSetting, error) {
+	ws := store.WorkspaceSetting{Key: key, Value: value, UpdatedBy: updatedBy}
+	f.rows[key] = ws
+	return ws, nil
+}
+
+func (f *fakeWorkspaceSettingsStore) DeleteWorkspaceSetting(_ context.Context, key string) error {
+	delete(f.rows, key)
+	return nil
+}
+
+func TestReloadConfigHandler_ReappliesWorkspaceSettings(t *testing.T) {
+	t.Setenv("FLEET_ENV_FILE", "")
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetFallbackModel("")
+		agentcore.SetTaskModel("")
+	})
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	st := &fakeWorkspaceSettingsStore{rows: map[string]store.WorkspaceSetting{
+		"default_model":  {Key: "default_model", Value: "acme/live-cli-default", UpdatedBy: "cli"},
+		"advanced_model": {Key: "advanced_model", Value: "acme/live-cli-fallback", UpdatedBy: "cli"},
+	}}
+	svc, _, err := buildWorkspaceSettings(cfg, st)
+	if err != nil {
+		t.Fatalf("buildWorkspaceSettings: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	reloadConfigHandler(cfg, svc)(rec, httptest.NewRequest(http.MethodPost, "/admin/reload-config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := agentcore.CurrentDefaultModel(); got != "acme/live-cli-default" {
+		t.Errorf("CurrentDefaultModel = %q, want acme/live-cli-default", got)
+	}
+	if got := agentcore.CurrentFallbackModel(); got != "acme/live-cli-fallback" {
+		t.Errorf("CurrentFallbackModel = %q, want acme/live-cli-fallback", got)
 	}
 }

@@ -5,17 +5,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/settings"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 func cmdModel(argv []string) int {
 	if len(argv) == 0 {
-		return errf(1, "usage: fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--from-fallback-model <slug>] [--notify=true] [--recurring-only] [--set-workspace-tiers] [--dry-run] [--no-confirm]")
+		return errf(1, "usage: fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--from-fallback-model <slug>] [--notify=true] [--recurring-only] [--set-workspace-tiers [--server <addr>] [--admin-key <key>] [--offline]] [--dry-run] [--no-confirm]")
 	}
 	switch argv[0] {
 	case "rollout", "upgrade":
@@ -33,6 +36,7 @@ type modelRolloutChatStore interface {
 type modelRolloutWorkspaceStore interface {
 	WorkspaceSettings(ctx context.Context) (map[string]store.WorkspaceSetting, error)
 	SetWorkspaceSetting(ctx context.Context, key, value, updatedBy string) (store.WorkspaceSetting, error)
+	DeleteWorkspaceSetting(ctx context.Context, key string) error
 }
 
 type modelRolloutTaskStore interface {
@@ -70,11 +74,8 @@ func resolveEffectiveBoxTiers(ctx context.Context, chatSt any) (defaultModel, ta
 }
 
 func validateCLIModelSlug(flagName, raw string) (string, error) {
-	v := strings.TrimSpace(raw)
-	if v == "" || len(v) > 200 || strings.ContainsAny(v, " \t\n") {
-		return "", fmt.Errorf("--%s: want a model slug like provider/model, got %q", flagName, raw)
-	}
-	if i := strings.Index(v, "/"); i <= 0 || i == len(v)-1 {
+	v, err := settings.Validate(settings.Spec{Key: flagName, Kind: settings.KindModel}, raw)
+	if err != nil || len(v) > 200 {
 		return "", fmt.Errorf("--%s: want a model slug like provider/model, got %q", flagName, raw)
 	}
 	return v, nil
@@ -91,7 +92,10 @@ func modelRollout(argv []string) int {
 	fromFallback := fs.String("from-fallback-model", "", "only update task fallback_model currently pinned to this slug")
 	notify := fs.Bool("notify", true, "insert a UI-only model upgrade notice into non-empty chats whose model changes")
 	recurringOnly := fs.Bool("recurring-only", false, "restrict task updates to recurring cron tasks")
-	setTiers := fs.Bool("set-workspace-tiers", false, "also persist --model / --fallback-model as workspace_settings overrides")
+	setTiers := fs.Bool("set-workspace-tiers", false, "also persist --model / --fallback-model as workspace_settings overrides and reload the running server")
+	serverAddr := fs.String("server", "", "orchestrator address for live --set-workspace-tiers reload (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
+	adminKey := fs.String("admin-key", "", "admin API key for live --set-workspace-tiers reload (default ADMIN_API_KEY env or fleet.env)")
+	offline := fs.Bool("offline", false, "persist --set-workspace-tiers without notifying a running server (use only when fleet serve is stopped)")
 	dryRun := fs.Bool("dry-run", false, "preview chats and tasks that would update without writing")
 	noConfirm := fs.Bool("no-confirm", false, "skip interactive confirmation")
 	if err := fs.Parse(argv); err != nil {
@@ -128,6 +132,9 @@ func modelRollout(argv []string) int {
 		notify:            *notify,
 		recurringOnly:     *recurringOnly,
 		setWorkspaceTiers: *setTiers,
+		serverAddr:        *serverAddr,
+		adminKey:          *adminKey,
+		offline:           *offline,
 		dryRun:            *dryRun,
 		noConfirm:         *noConfirm,
 	})
@@ -141,6 +148,9 @@ type modelRolloutOptions struct {
 	notify            bool
 	recurringOnly     bool
 	setWorkspaceTiers bool
+	serverAddr        string
+	adminKey          string
+	offline           bool
 	dryRun            bool
 	noConfirm         bool
 }
@@ -153,6 +163,9 @@ type modelRolloutPlan struct {
 }
 
 func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, opts modelRolloutOptions) (modelRolloutPlan, int) {
+	if code := validateWorkspaceTierFlags(errW, opts); code != 0 {
+		return modelRolloutPlan{}, code
+	}
 	curDefault, curTask, curFallback := resolveEffectiveBoxTiers(ctx, chatSt)
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
@@ -186,6 +199,21 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 
 	plan.includeLockdown = resolveRolloutLockdown(ctx, chatSt, errW, plan.chatTarget, opts)
 	return plan, 0
+}
+
+func validateWorkspaceTierFlags(errW io.Writer, opts modelRolloutOptions) int {
+	if !opts.setWorkspaceTiers {
+		return 0
+	}
+	if opts.model == nil && opts.fallbackModel == nil {
+		fmt.Fprintln(errW, "--set-workspace-tiers requires --model and/or --fallback-model")
+		return 1
+	}
+	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
+		fmt.Fprintf(errW, "admin key required for --set-workspace-tiers against a running server: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
+		return 1
+	}
+	return 0
 }
 
 func applyFallbackPlanFlag(plan *modelRolloutPlan, curDefault, curFallback string, errW io.Writer, opts modelRolloutOptions) int {
@@ -281,19 +309,67 @@ func persistRolloutWorkspaceTiers(ctx context.Context, chatSt modelRolloutChatSt
 		fmt.Fprintln(errW, "chat store does not support workspace_settings writes")
 		return 5
 	}
+	prev, err := ws.WorkspaceSettings(ctx)
+	if err != nil {
+		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
+		return 5
+	}
+	var touched []string
 	if opts.model != nil {
 		if _, err := ws.SetWorkspaceSetting(ctx, "default_model", strings.TrimSpace(*opts.model), "cli"); err != nil {
 			fmt.Fprintf(errW, "save workspace default_model: %v\n", err)
 			return 5
 		}
+		touched = append(touched, "default_model")
 	}
 	if opts.fallbackModel != nil {
 		if _, err := ws.SetWorkspaceSetting(ctx, "advanced_model", strings.TrimSpace(*opts.fallbackModel), "cli"); err != nil {
+			restoreWorkspaceSettings(ctx, ws, prev, touched)
 			fmt.Fprintf(errW, "save workspace advanced_model: %v\n", err)
 			return 5
 		}
+		touched = append(touched, "advanced_model")
+	}
+	if opts.offline {
+		return 0
+	}
+	if err := notifyRunningServerConfigReload(ctx, opts.serverAddr, resolveAdminKey(opts.adminKey)); err != nil {
+		restoreWorkspaceSettings(ctx, ws, prev, touched)
+		fmt.Fprintf(errW, "apply workspace tiers on running server failed: %v (rolled back workspace_settings; pass --offline if fleet serve is stopped)\n", err)
+		return 5
 	}
 	return 0
+}
+
+func restoreWorkspaceSettings(ctx context.Context, ws modelRolloutWorkspaceStore, prev map[string]store.WorkspaceSetting, keys []string) {
+	for _, k := range keys {
+		if old, had := prev[k]; had {
+			_, _ = ws.SetWorkspaceSetting(ctx, k, old.Value, old.UpdatedBy)
+		} else {
+			_ = ws.DeleteWorkspaceSetting(ctx, k)
+		}
+	}
+}
+
+func notifyRunningServerConfigReload(ctx context.Context, addrFlag, adminKey string) error {
+	url := resolveOrchestratorURL(addrFlag) + "/admin/reload-config"
+	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", adminKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 func rolloutPromptSummary(plan modelRolloutPlan) string {

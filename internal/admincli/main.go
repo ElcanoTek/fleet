@@ -249,7 +249,7 @@ Users, credentials, notes:
   fleet chat user del <email>
   fleet chat user list
   fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
-  fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--notify=true] [--set-workspace-tiers] [--dry-run] [--no-confirm]
+  fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--notify=true] [--set-workspace-tiers [--offline]] [--dry-run] [--no-confirm]
                                                       (upgrade chats + recurring/scheduled tasks in one step; omit --model and
                                                        --fallback-model to sync everything to the box's effective tiers)
   fleet sched user add <username> --role admin|client|readonly --password -

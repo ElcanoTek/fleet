@@ -664,3 +664,17 @@ func TestMultiplayerRoutesPassthrough(t *testing.T) {
 		t.Fatalf("POST multiplayer upstream %s %q body %q ct %q", got.Method, got.URI, got.Body, got.Header.Get("Content-Type"))
 	}
 }
+
+func TestAdminSettingsResetForwardsRolloutQuery(t *testing.T) {
+	e := newTestEnv(t)
+	origin := []string{"Origin", "http://fleet.example.com"}
+
+	res := e.do(signedIn(t, req("DELETE", "/api/admin/settings/default_model?rollout=true&notify_chats=false", "", origin...)))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE /api/admin/settings/default_model status %d", res.StatusCode)
+	}
+	got := e.chat.last(t)
+	if got.Method != "DELETE" || got.URI != "/admin/settings/default_model?rollout=true&notify_chats=false" {
+		t.Fatalf("DELETE admin setting upstream %s %q", got.Method, got.URI)
+	}
+}

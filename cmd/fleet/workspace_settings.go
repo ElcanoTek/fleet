@@ -35,7 +35,7 @@ import (
 // Defaults are snapshotted from the env-derived Config BEFORE any override
 // applies, so "Reset to default" always reverts to what this deployment's env
 // file configures.
-func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Service, *guardrailState, error) {
+func buildWorkspaceSettings(cfg *config.Config, st settings.Store) (*settings.Service, *guardrailState, error) {
 	defaults := map[string]string{
 		"pii_redaction_mode":        defaultPIIRedactionMode(cfg),
 		"guardrail_url":             cfg.GuardrailURL,
@@ -422,7 +422,7 @@ func applyEnvShadowedInt(set func(int), clearSentinel int) settings.ApplyFunc {
 // behavior serves either way. A construction failure (a registry key without a
 // default or hook — a programming error, also caught by
 // TestBuildWorkspaceSettingsCoversRegistry) degrades the same way.
-func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st *store.Store) []httpapi.Option {
+func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st *store.Store) ([]httpapi.Option, *settings.Service) {
 	// Seed the live tier holders from the env-derived config FIRST, so the
 	// operator's FLEET_DEFAULT_MODEL / FLEET_ADVANCED_MODEL are in effect even
 	// when the settings service cannot be built or its boot load fails below
@@ -435,7 +435,7 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	svc, guard, err := buildWorkspaceSettings(cfg, st)
 	if err != nil {
 		slog.Error("workspace settings: DISABLED — service construction failed (this is a wiring bug)", "err", err)
-		return opts
+		return opts, nil
 	}
 	// The store just served migrations, so a load failure here is a transient
 	// blip at worst — retry briefly. Only a LOAD failure degrades the panel to
@@ -452,7 +452,7 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	}
 	if applyErr != nil && errors.Is(applyErr, settings.ErrLoadFailed) {
 		slog.Error("workspace settings: DISABLED — boot load failed, serving env-derived defaults (admin overrides NOT in effect)", "err", applyErr)
-		return opts
+		return opts, nil
 	}
 	if applyErr != nil {
 		slog.Error("workspace settings: some overrides NOT in effect (env-derived behavior serves for those keys; fix or Reset them from the admin panel)", "err", applyErr)
@@ -461,7 +461,7 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	// hooks maintain, so it is only honest when the panel is live too.
 	return append(opts,
 		httpapi.WithWorkspaceSettings(svc),
-		httpapi.WithGuardrailProbe(guard.Probe))
+		httpapi.WithGuardrailProbe(guard.Probe)), svc
 }
 
 // gatedErrorAnalyzer wraps the Manager's post-failure diagnosis (#317) so the

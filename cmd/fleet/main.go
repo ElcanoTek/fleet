@@ -715,7 +715,7 @@ func run() error {
 	// from the workspace_settings table and apply LIVE (PII redactor swap,
 	// config live setters, agentcore holders) — both now, at boot, and after
 	// every admin edit.
-	chatOpts = appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
+	chatOpts, workspaceSettingsSvc := appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
 
 	// Admin-managed task notification settings (internal/notifyadmin): the
 	// admin Notifications panel. A persisted admin row hot-swaps the shared
@@ -830,7 +830,7 @@ func run() error {
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
-	orchHandler := buildOrchestratorMux(h, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
+	orchHandler := buildOrchestratorMux(h, reloadConfigHandler(cfg, workspaceSettingsSvc), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
 	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
@@ -1070,7 +1070,7 @@ func run() error {
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
 	defer onSignal(ctx, syscall.SIGUSR2, "cmd.config-reload", func() {
-		logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
+		reloadRuntimeConfig(ctx, cfg, workspaceSettingsSvc)
 	})()
 
 	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply

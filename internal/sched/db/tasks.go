@@ -325,104 +325,18 @@ func (db *Database) UpdateTasksModelBatch(ctx context.Context, model string, fal
 	if err != nil {
 		return 0, err
 	}
+	if ready, rerr := chatWorkspaceSettingsReady(ctx, db.conn); rerr == nil && ready {
+		_, _ = db.conn.ExecContext(ctx, `
+			DELETE FROM chat.workspace_settings ws
+			WHERE ws.key LIKE 'sched_recurrence_rollout:%'
+			  AND EXISTS (
+				SELECT 1 FROM tasks t
+				WHERE ('sched_recurrence_rollout:' || t.id::text) = ws.key
+				  AND t.status = $1
+			  )`, status)
+	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
-}
-
-// RolloutTaskModels upgrades the primary model and/or fallback_model across
-// upcoming unstarted tasks (scheduled and pending, optionally restricted to
-// recurring cron tasks). Status-preserving: only model and fallback_model are
-// written, leaving status, leases, and completed run history untouched.
-func (db *Database) RolloutTaskModels(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error) {
-	res := models.TaskModelRolloutResult{DryRun: dryRun}
-	q := `SELECT ` + taskColumns + ` FROM tasks WHERE status IN ($1, $2)`
-	if opts.RecurringOnly {
-		q += ` AND COALESCE(recurrence, '') <> ''`
-	}
-	q += ` ORDER BY created_at ASC, id ASC`
-
-	if dryRun {
-		rows, err := db.conn.QueryContext(ctx, q, string(models.TaskStatusScheduled), string(models.TaskStatusPending))
-		if err != nil {
-			return res, err
-		}
-		defer rows.Close()
-		tasks, err := db.rowsToTasks(ctx, rows)
-		if err != nil {
-			return res, err
-		}
-		res.ScannedCount = len(tasks)
-		for _, t := range tasks {
-			_, _, pChanged, fbChanged := opts.ApplyToPointers(t.Model, t.FallbackModel)
-			if !pChanged && !fbChanged {
-				continue
-			}
-			res.UpdatedCount++
-			if pChanged {
-				res.PrimaryUpdatedCount++
-			}
-			if fbChanged {
-				res.FallbackUpdatedCount++
-			}
-			if strings.TrimSpace(t.Recurrence) != "" {
-				res.RecurringUpdatedCount++
-			}
-			res.Tasks = append(res.Tasks, t)
-		}
-		return res, nil
-	}
-
-	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return res, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	rows, err := tx.QueryContext(ctx, q+` FOR UPDATE`, string(models.TaskStatusScheduled), string(models.TaskStatusPending))
-	if err != nil {
-		return res, err
-	}
-	tasks, err := db.rowsToTasks(ctx, rows)
-	_ = rows.Close()
-	if err != nil {
-		return res, err
-	}
-
-	res.ScannedCount = len(tasks)
-	for _, t := range tasks {
-		nextM, nextFB, pChanged, fbChanged := opts.ApplyToPointers(t.Model, t.FallbackModel)
-		if !pChanged && !fbChanged {
-			continue
-		}
-		var mVal, fbVal any
-		if nextM != nil {
-			mVal = nullableString(*nextM)
-		}
-		if nextFB != nil {
-			fbVal = nullableString(*nextFB)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET model = $1, fallback_model = $2 WHERE id = $3`,
-			mVal, fbVal, t.ID,
-		); err != nil {
-			return res, err
-		}
-		res.UpdatedCount++
-		if pChanged {
-			res.PrimaryUpdatedCount++
-		}
-		if fbChanged {
-			res.FallbackUpdatedCount++
-		}
-		if strings.TrimSpace(t.Recurrence) != "" {
-			res.RecurringUpdatedCount++
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return res, err
-	}
-	return res, nil
 }
 
 // SetErrorAnalysis persists the post-failure LLM diagnosis (#317) as a narrow,

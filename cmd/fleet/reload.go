@@ -17,15 +17,21 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/settings"
 )
 
 // reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
-// reloadable settings from the env file + process environment and returns a JSON
-// diff of what changed / was skipped (non-reloadable) / errored. cfg may be nil
-// in route-walking tests (the route only needs to exist there); a real request
-// against a nil cfg returns 503.
-func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+// reloadable settings from the env file + process environment, re-applies any
+// persisted workspace_settings overrides (such as CLI model tier writes), and
+// returns a JSON diff of what changed / was skipped (non-reloadable) / errored.
+// cfg may be nil in route-walking tests (the route only needs to exist there);
+// a real request against a nil cfg returns 503.
+func reloadConfigHandler(cfg *config.Config, workspaceSettings ...*settings.Service) http.HandlerFunc {
+	var wsSvc *settings.Service
+	if len(workspaceSettings) > 0 {
+		wsSvc = workspaceSettings[0]
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
 		if cfg == nil {
 			http.Error(w, "config reload unavailable", http.StatusServiceUnavailable)
 			return
@@ -35,8 +41,23 @@ func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if wsSvc != nil {
+			if err := wsSvc.ApplyAll(r.Context()); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
+	}
+}
+
+func reloadRuntimeConfig(ctx context.Context, cfg *config.Config, wsSvc *settings.Service) {
+	logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
+	if wsSvc != nil {
+		if err := wsSvc.ApplyAll(ctx); err != nil {
+			slog.Error("workspace settings reload (SIGUSR2): failed", "err", err)
+		}
 	}
 }
 

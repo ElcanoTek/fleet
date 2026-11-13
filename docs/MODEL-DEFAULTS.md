@@ -52,10 +52,10 @@ Conversations and scheduled/recurring tasks persist their chosen `model` (and `f
   fleet model rollout --dry-run
   fleet model rollout --no-confirm
 
-  # Or specify explicit slugs (and optionally persist workspace admin tier overrides):
+  # Or specify explicit slugs (and optionally persist + live-apply workspace admin tier overrides via POST /admin/reload-config):
   fleet model rollout --model google/gemini-4-hydrogen --fallback-model anthropic/claude-opus-5.5 --set-workspace-tiers --no-confirm
   ```
-  If a recurring cron task happens to be `running` during a rollout, its historical run record keeps the model it actually executed on, while the scheduler records the rollout so the next spawned `scheduled` occurrence automatically inherits the upgraded primary/fallback model.
+  If a recurring cron task happens to be mid-run (`leased`, `running`, or `paused`) during a rollout, its historical run record keeps the model it actually executed on, while a durable per-occurrence override is committed in PostgreSQL inside the rollout transaction so its next spawned `scheduled` occurrence automatically inherits the upgraded primary/fallback model across restarts — without overriding any subsequent operator edits to scheduled tasks.
 
 ## 2026-11-13: Gemini 4 Hydrogen as primary default tier, Claude Opus 5.5 as fallback frontier tier
 
