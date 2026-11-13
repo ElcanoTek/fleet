@@ -15,8 +15,8 @@ import (
 )
 
 type rolloutPendingFallbackStore interface {
-	PendingFallbackRolloutFrom(ctx context.Context) (string, bool)
-	SetPendingFallbackRolloutFrom(ctx context.Context, from string)
+	PendingFallbackRolloutFrom(ctx context.Context) (string, bool, error)
+	SetPendingFallbackRolloutFrom(ctx context.Context, from string) error
 }
 
 // TaskModelRolloutFunc upgrades primary and/or fallback models across upcoming
@@ -304,8 +304,22 @@ func (s *Server) executeModelRolloutLocked(ctx context.Context, req ModelRollout
 	}
 
 	if !req.DryRun {
-		if req.SyncCurrent || (t.chatTarget != "" && (t.chatFrom == "" || t.chatFrom == s.loadPendingFallbackFromLocked(ctx))) {
-			s.clearPendingFallbackFromLocked(ctx)
+		pending, perr := s.loadPendingFallbackFromLocked(ctx)
+		if perr != nil {
+			if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
+				out.PartialError = fmt.Sprintf("read pending fallback rollout state: %s", perr.Error())
+				return out, http.StatusMultiStatus, nil
+			}
+			return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("read pending fallback rollout state: %w", perr)
+		}
+		if req.SyncCurrent || (t.chatTarget != "" && (t.chatFrom == "" || (pending != "" && t.chatFrom == pending))) {
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				if out.TasksUpdated > 0 || out.ChatsUpdated > 0 {
+					out.PartialError = fmt.Sprintf("clear pending fallback rollout state: %s", cerr.Error())
+					return out, http.StatusMultiStatus, nil
+				}
+				return ModelRolloutResponse{}, http.StatusInternalServerError, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+			}
 		}
 		logging.From(ctx).Info("Model rollout completed",
 			"actor", safe.LogSafe(userFromCtx(ctx)),
@@ -402,8 +416,12 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 		nextFallback := agentcore.CurrentFallbackModel()
 		curDefault := agentcore.CurrentDefaultModel()
 		curTask := agentcore.CurrentTaskModel()
+		pending, perr := s.loadPendingFallbackFromLocked(ctx)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("read pending fallback rollout state: %w", perr)
+		}
 		fromFallback := prevFallback
-		if pending := s.loadPendingFallbackFromLocked(ctx); pending != "" && pending != nextFallback && pending != curDefault && (fromFallback == "" || fromFallback == nextFallback) {
+		if pending != "" && pending != nextFallback && pending != curDefault && (fromFallback == "" || fromFallback == nextFallback) {
 			fromFallback = pending
 		}
 		if s.configuredTaskFallbackModel() == "" {
@@ -422,7 +440,9 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 			// chats (and task primaries unless task_model matches fromFallback)
 			// that were explicitly pinned to fromFallback.
 			if fromFallback == "" || fromFallback == nextFallback || fromFallback == curDefault {
-				s.clearPendingFallbackFromLocked(ctx)
+				if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+					return nil, nil, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+				}
 				return nil, nil, nil
 			}
 			pendingFallbackCandidate = fromFallback
@@ -446,45 +466,83 @@ func (s *Server) rolloutAfterSettingChangeLocked(ctx context.Context, key, prevF
 	res, _, err := s.executeModelRolloutLocked(ctx, req)
 	if err != nil {
 		if pendingFallbackCandidate != "" {
-			s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate)
+			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
+				err = fmt.Errorf("%w (also failed saving fallback retry state: %w)", err, serr)
+			}
 		}
 		retryCopy := req
 		return nil, &retryCopy, err
 	}
 	if res.PartialError != "" {
 		if pendingFallbackCandidate != "" {
-			s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate)
+			if serr := s.savePendingFallbackFromLocked(ctx, pendingFallbackCandidate); serr != nil {
+				res.PartialError = fmt.Sprintf("%s (also failed saving fallback retry state: %v)", res.PartialError, serr)
+			}
 		}
 		retryCopy := req
 		return &res, &retryCopy, errors.New(res.PartialError)
 	}
 	if key == "advanced_model" {
-		s.clearPendingFallbackFromLocked(ctx)
+		if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+			retryCopy := req
+			return &res, &retryCopy, fmt.Errorf("clear pending fallback rollout state: %w", cerr)
+		}
 	}
 	return &res, nil, nil
 }
 
-func (s *Server) loadPendingFallbackFromLocked(ctx context.Context) string {
-	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
-		if v, backed := ws.PendingFallbackRolloutFrom(ctx); backed {
-			s.pendingFallbackFrom = v
-			return v
+func (s *Server) preparePendingFallbackBeforeTierWriteLocked(ctx context.Context, prevFallback, targetFallback string) error {
+	pending, err := s.loadPendingFallbackFromLocked(ctx)
+	if err != nil {
+		return fmt.Errorf("read pending fallback rollout state: %w", err)
+	}
+	curDefault := agentcore.CurrentDefaultModel()
+	fromFallback := prevFallback
+	if pending != "" && pending != targetFallback && pending != curDefault && (fromFallback == "" || fromFallback == targetFallback) {
+		fromFallback = pending
+	}
+	if fromFallback != "" && fromFallback != targetFallback && fromFallback != curDefault {
+		if err := s.savePendingFallbackFromLocked(ctx, fromFallback); err != nil {
+			return fmt.Errorf("save pending fallback rollout state: %w", err)
 		}
 	}
-	return s.pendingFallbackFrom
+	return nil
 }
 
-func (s *Server) savePendingFallbackFromLocked(ctx context.Context, from string) {
-	from = strings.TrimSpace(from)
-	s.pendingFallbackFrom = from
-	if ws, ok := s.store.(rolloutPendingFallbackStore); ok && from != "" {
-		ws.SetPendingFallbackRolloutFrom(ctx, from)
-	}
-}
-
-func (s *Server) clearPendingFallbackFromLocked(ctx context.Context) {
-	s.pendingFallbackFrom = ""
+func (s *Server) loadPendingFallbackFromLocked(ctx context.Context) (string, error) {
 	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
-		ws.SetPendingFallbackRolloutFrom(ctx, "")
+		v, backed, err := ws.PendingFallbackRolloutFrom(ctx)
+		if err != nil {
+			return "", err
+		}
+		if backed {
+			s.pendingFallbackFrom = v
+			return v, nil
+		}
 	}
+	return s.pendingFallbackFrom, nil
+}
+
+func (s *Server) savePendingFallbackFromLocked(ctx context.Context, from string) error {
+	from = strings.TrimSpace(from)
+	if from == "" {
+		return nil
+	}
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		if err := ws.SetPendingFallbackRolloutFrom(ctx, from); err != nil {
+			return err
+		}
+	}
+	s.pendingFallbackFrom = from
+	return nil
+}
+
+func (s *Server) clearPendingFallbackFromLocked(ctx context.Context) error {
+	if ws, ok := s.store.(rolloutPendingFallbackStore); ok {
+		if err := ws.SetPendingFallbackRolloutFrom(ctx, ""); err != nil {
+			return err
+		}
+	}
+	s.pendingFallbackFrom = ""
+	return nil
 }

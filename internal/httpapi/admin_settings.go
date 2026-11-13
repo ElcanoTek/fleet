@@ -109,6 +109,14 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	}
 	prevFallback := agentcore.CurrentFallbackModel()
 	prevTask := agentcore.CurrentTaskModel()
+	if key == "advanced_model" && wantRollout {
+		if normVal, verr := validateRolloutModelSlug(key, value); verr == nil {
+			if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, normVal); perr != nil {
+				http.Error(w, perr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	resolved, err := s.workspaceSettings.Set(ctx, key, value, userFromCtx(ctx))
 	if err != nil {
 		httpErrorForSetting(w, err)
@@ -116,7 +124,10 @@ func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	}
 	if !wantRollout {
 		if key == "advanced_model" {
-			s.clearPendingFallbackFromLocked(ctx)
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		writeJSON(w, r, resolved)
 		return
@@ -142,6 +153,24 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	}
 	prevFallback := agentcore.CurrentFallbackModel()
 	prevTask := agentcore.CurrentTaskModel()
+	if key == "advanced_model" && wantRollout {
+		snap, serr := s.workspaceSettings.Snapshot(ctx)
+		if serr != nil {
+			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			return
+		}
+		var resetDefault string
+		for _, item := range snap {
+			if item.Key == "advanced_model" {
+				resetDefault = item.Default
+				break
+			}
+		}
+		if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, resetDefault); perr != nil {
+			http.Error(w, perr.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	resolved, err := s.workspaceSettings.Reset(ctx, key, userFromCtx(ctx))
 	if err != nil {
 		httpErrorForSetting(w, err)
@@ -149,7 +178,10 @@ func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, k
 	}
 	if !wantRollout {
 		if key == "advanced_model" {
-			s.clearPendingFallbackFromLocked(ctx)
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		writeJSON(w, r, resolved)
 		return

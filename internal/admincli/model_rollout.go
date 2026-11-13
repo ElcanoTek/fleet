@@ -192,12 +192,34 @@ type tierAction struct {
 }
 
 type modelRolloutPlan struct {
-	tierActions     []tierAction
-	chatTarget      string
-	chatFrom        string
-	includeLockdown bool
-	runTasks        bool
-	taskRollout     models.TaskModelRollout
+	tierActions          []tierAction
+	pendingFallbackFrom  string
+	clearPendingFallback bool
+	chatTarget           string
+	chatFrom             string
+	includeLockdown      bool
+	runTasks             bool
+	taskRollout          models.TaskModelRollout
+}
+
+type cliPendingFallbackStore interface {
+	PendingFallbackRolloutFrom(ctx context.Context) (string, bool, error)
+	SetPendingFallbackRolloutFrom(ctx context.Context, from string) error
+}
+
+func loadCLIPendingFallback(ctx context.Context, chatSt modelRolloutChatStore) (string, error) {
+	if ps, ok := chatSt.(cliPendingFallbackStore); ok {
+		v, _, err := ps.PendingFallbackRolloutFrom(ctx)
+		return v, err
+	}
+	return "", nil
+}
+
+func saveCLIPendingFallback(ctx context.Context, chatSt modelRolloutChatStore, from string) error {
+	if ps, ok := chatSt.(cliPendingFallbackStore); ok {
+		return ps.SetPendingFallbackRolloutFrom(ctx, from)
+	}
+	return nil
 }
 
 type modelRolloutJSONOutput struct {
@@ -229,6 +251,11 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
 		return modelRolloutPlan{}, 5
 	}
+	pendingFB, err := loadCLIPendingFallback(ctx, chatSt)
+	if err != nil {
+		fmt.Fprintf(errW, "read pending fallback rollout state: %v\n", err)
+		return modelRolloutPlan{}, 5
+	}
 	curDefault, curTask, curFallback := defTier.Value, taskTier.Value, fbTier.Value
 
 	validated, code := validateAllModelFlags(errW, opts)
@@ -236,10 +263,44 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		return modelRolloutPlan{}, code
 	}
 
-	plan := buildRolloutPlan(curDefault, curTask, curFallback, taskTier.Source == "follows_default", opts, validated, errW)
+	plan := buildRolloutPlan(curDefault, curTask, curFallback, pendingFB, taskTier.Source == "follows_default", opts, validated, errW)
+	if code := validatePlanSlugs(errW, plan); code != 0 {
+		return modelRolloutPlan{}, code
+	}
 	effDefault, effFallback := effectivePostTierModels(curDefault, curFallback, plan.tierActions)
 	plan.includeLockdown = resolveRolloutLockdown(ctx, effDefault, effFallback, errW, plan.chatTarget, opts)
 	return plan, 0
+}
+
+func validatePlanSlugs(errW io.Writer, plan modelRolloutPlan) int {
+	for _, a := range plan.tierActions {
+		if !a.set {
+			continue
+		}
+		if _, err := validateCLIModelSlug(a.key, a.value); err != nil {
+			fmt.Fprintln(errW, err)
+			return 1
+		}
+	}
+	if plan.chatTarget != "" {
+		if _, err := validateCLIModelSlug("chat_model", plan.chatTarget); err != nil {
+			fmt.Fprintln(errW, err)
+			return 1
+		}
+	}
+	if plan.taskRollout.Model != nil {
+		if _, err := validateCLIModelSlug("task_model", *plan.taskRollout.Model); err != nil {
+			fmt.Fprintln(errW, err)
+			return 1
+		}
+	}
+	if plan.taskRollout.FallbackModel != nil && strings.TrimSpace(*plan.taskRollout.FallbackModel) != "" {
+		if _, err := validateCLIModelSlug("fallback_model", *plan.taskRollout.FallbackModel); err != nil {
+			fmt.Fprintln(errW, err)
+			return 1
+		}
+	}
+	return 0
 }
 
 func validateRolloutOptionFlags(errW io.Writer, opts modelRolloutOptions) int {
@@ -327,7 +388,7 @@ func validateAllModelFlags(errW io.Writer, opts modelRolloutOptions) (validatedM
 	return out, 0
 }
 
-func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefault bool, opts modelRolloutOptions, v validatedModelSlugs, errW io.Writer) modelRolloutPlan {
+func buildRolloutPlan(curDefault, curTask, curFallback, pendingFallback string, taskFollowedDefault bool, opts modelRolloutOptions, v validatedModelSlugs, errW io.Writer) modelRolloutPlan {
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
 		taskRollout: models.TaskModelRollout{
@@ -357,14 +418,19 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefau
 	if opts.setWorkspaceTiers {
 		plan.tierActions = computeWorkspaceTierActions(curDefault, curTask, taskFollowedDefault, wantChat, wantTask, v.fallbackModel)
 	}
+	effDefault, _ := effectivePostTierModels(curDefault, curFallback, plan.tierActions)
 
 	if !opts.rollout {
+		if opts.setWorkspaceTiers && v.fallbackModel != nil {
+			plan.clearPendingFallback = true
+		}
 		return plan
 	}
 
 	if !opts.hasAnyModelFlag() {
 		if opts.chats {
 			plan.chatTarget = curDefault
+			plan.clearPendingFallback = true
 		}
 		if opts.tasks {
 			fb := configuredTaskFallbackEnv()
@@ -387,7 +453,20 @@ func buildRolloutPlan(curDefault, curTask, curFallback string, taskFollowedDefau
 		plan.runTasks = true
 	}
 	if v.fallbackModel != nil {
-		applyFallbackToPlan(&plan, curDefault, curTask, curFallback, opts, *v.fallbackModel, errW)
+		fromFB := curFallback
+		if (fromFB == "" || fromFB == *v.fallbackModel) && pendingFallback != "" && pendingFallback != *v.fallbackModel && pendingFallback != effDefault {
+			fromFB = pendingFallback
+		}
+		applyFallbackToPlan(&plan, effDefault, curTask, fromFB, opts, *v.fallbackModel, errW)
+		if opts.setWorkspaceTiers {
+			if *v.fallbackModel != "" && fromFB != "" && fromFB != *v.fallbackModel && fromFB != effDefault && opts.fromModel == "" {
+				plan.pendingFallbackFrom = fromFB
+			}
+			plan.clearPendingFallback = true
+		}
+	}
+	if plan.chatTarget != "" && (plan.chatFrom == "" || (pendingFallback != "" && plan.chatFrom == pendingFallback)) {
+		plan.clearPendingFallback = true
 	}
 	return plan
 }
@@ -733,7 +812,8 @@ func rolloutPlansEqual(a, b modelRolloutPlan) bool {
 			return false
 		}
 	}
-	if a.chatTarget != b.chatTarget || a.chatFrom != b.chatFrom || a.includeLockdown != b.includeLockdown || a.runTasks != b.runTasks {
+	if a.chatTarget != b.chatTarget || a.chatFrom != b.chatFrom || a.includeLockdown != b.includeLockdown || a.runTasks != b.runTasks ||
+		a.pendingFallbackFrom != b.pendingFallbackFrom || a.clearPendingFallback != b.clearPendingFallback {
 		return false
 	}
 	return optModelStr(a.taskRollout.Model) == optModelStr(b.taskRollout.Model) &&
@@ -835,6 +915,12 @@ func executeLockedModelRolloutPlan(
 	plan modelRolloutPlan,
 	opts modelRolloutOptions,
 ) int {
+	if plan.pendingFallbackFrom != "" {
+		if err := saveCLIPendingFallback(ctx, chatSt, plan.pendingFallbackFrom); err != nil {
+			fmt.Fprintf(errW, "save pending fallback rollout state: %v\n", err)
+			return 5
+		}
+	}
 	tiersCommitted := false
 	if len(plan.tierActions) > 0 {
 		if code := applyWorkspaceTierActions(ctx, chatSt, errW, plan.tierActions, opts.serverAddr, opts.adminKey, opts.offline); code != 0 {
@@ -851,7 +937,7 @@ func executeLockedModelRolloutPlan(
 		taskRes, err = taskSt.RolloutTaskModels(ctx, plan.taskRollout, false)
 		if err != nil {
 			if tiersCommitted {
-				partialMsg := fmt.Sprintf("rollout tasks: %v (workspace model tier(s) updated before task rollout failed; re-run 'fleet model rollout' once resolved)", err)
+				partialMsg := fmt.Sprintf("rollout tasks: %v (workspace model tier(s) updated before task rollout failed; re-run the same command once resolved)", err)
 				emitPartialRolloutFailure(outW, errW, opts.asJSON, plan, taskRes, partialMsg)
 				return 5
 			}
@@ -871,6 +957,18 @@ func executeLockedModelRolloutPlan(
 				return 5
 			}
 			fmt.Fprintf(errW, "rollout conversations: %v\n", err)
+			return 5
+		}
+	}
+
+	if plan.clearPendingFallback {
+		if err := saveCLIPendingFallback(ctx, chatSt, ""); err != nil {
+			if tiersCommitted || taskRes.UpdatedCount > 0 || chatRes.UpdatedCount > 0 {
+				partialMsg := fmt.Sprintf("clear pending fallback rollout state: %v (rollout updates committed; re-run the same command once resolved)", err)
+				emitPartialRolloutFailureWithChats(outW, errW, opts.asJSON, plan, taskRes, chatRes, partialMsg)
+				return 5
+			}
+			fmt.Fprintf(errW, "clear pending fallback rollout state: %v\n", err)
 			return 5
 		}
 	}
@@ -902,9 +1000,23 @@ func emitPartialRolloutFailure(
 	taskRes models.TaskModelRolloutResult,
 	partialMsg string,
 ) {
+	emitPartialRolloutFailureWithChats(outW, errW, asJSON, plan, taskRes, store.ConversationModelRolloutResult{}, partialMsg)
+}
+
+func emitPartialRolloutFailureWithChats(
+	outW, errW io.Writer,
+	asJSON bool,
+	plan modelRolloutPlan,
+	taskRes models.TaskModelRolloutResult,
+	chatRes store.ConversationModelRolloutResult,
+	partialMsg string,
+) {
 	if asJSON {
 		var jout modelRolloutJSONOutput
 		populateJSONTierActions(&jout, plan)
+		jout.ChatsMatched = chatRes.MatchedCount
+		jout.ChatsUpdated = chatRes.UpdatedCount
+		jout.ChatsNotified = chatRes.NotifiedCount
 		jout.TasksScanned = taskRes.ScannedCount
 		jout.TasksUpdated = taskRes.UpdatedCount
 		jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
@@ -1005,9 +1117,14 @@ func resetKeysForTier(raw string) ([]string, error) {
 }
 
 func buildResetRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, keys []string, ropts modelRolloutOptions) (modelRolloutPlan, int) {
-	curDef, curTask, curFB, err := resolveEffectiveBoxTiers(ctx, chatSt)
+	_, curTask, curFB, err := resolveEffectiveBoxTiers(ctx, chatSt)
 	if err != nil {
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
+		return modelRolloutPlan{}, 5
+	}
+	pendingFB, err := loadCLIPendingFallback(ctx, chatSt)
+	if err != nil {
+		fmt.Fprintf(errW, "read pending fallback rollout state: %v\n", err)
 		return modelRolloutPlan{}, 5
 	}
 	ignore := make(map[string]bool, len(keys))
@@ -1023,7 +1140,12 @@ func buildResetRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, er
 	}
 	plan := modelRolloutPlan{tierActions: actions}
 	if ropts.rollout {
-		populateResetRolloutPlan(&plan, ignore, curDef, curTask, curFB, nextDef, nextTask, nextFB)
+		populateResetRolloutPlan(&plan, ignore, curTask, curFB, pendingFB, nextDef, nextTask, nextFB)
+	} else if ignore["advanced_model"] {
+		plan.clearPendingFallback = true
+	}
+	if code := validatePlanSlugs(errW, plan); code != 0 {
+		return modelRolloutPlan{}, code
 	}
 	plan.includeLockdown = resolveRolloutLockdown(ctx, nextDef.Value, nextFB.Value, errW, plan.chatTarget, ropts)
 	return plan, 0
@@ -1068,9 +1190,10 @@ func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt mod
 	return executeLockedModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, ropts)
 }
 
-func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool, curDef, curTask, curFB string, nextDef, nextTask, nextFB tierInfo) {
+func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool, curTask, curFB, pendingFB string, nextDef, nextTask, nextFB tierInfo) {
 	if resetKeys["default_model"] {
 		plan.chatTarget = nextDef.Value
+		plan.clearPendingFallback = true
 		if nextTask.Source == "follows_default" || resetKeys["task_model"] {
 			v := nextTask.Value
 			plan.taskRollout.Model = &v
@@ -1083,7 +1206,15 @@ func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool,
 		plan.runTasks = true
 	}
 	if resetKeys["advanced_model"] {
+		fromFB := curFB
+		if (fromFB == "" || fromFB == nextFB.Value) && pendingFB != "" && pendingFB != nextFB.Value && pendingFB != nextDef.Value {
+			fromFB = pendingFB
+		}
 		ropts := modelRolloutOptions{chats: true, tasks: true, setWorkspaceTiers: true}
-		applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, nextFB.Value, nil)
+		applyFallbackToPlan(plan, nextDef.Value, curTask, fromFB, ropts, nextFB.Value, nil)
+		if nextFB.Value != "" && fromFB != "" && fromFB != nextFB.Value && fromFB != nextDef.Value {
+			plan.pendingFallbackFrom = fromFB
+		}
+		plan.clearPendingFallback = true
 	}
 }

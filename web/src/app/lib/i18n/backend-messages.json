@@ -590,6 +590,13 @@
       ]
     },
     {
+      "message": "{0} (also failed saving fallback retry state: {1})",
+      "fields": [
+        "%w",
+        "%w"
+      ]
+    },
+    {
       "message": "{0} (preparing it had failed too: {1})",
       "fields": [
         "%w",
@@ -846,6 +853,12 @@
       "fields": [
         "%d",
         "%d"
+      ]
+    },
+    {
+      "message": "clear pending fallback rollout state: {0}",
+      "fields": [
+        "%w"
       ]
     },
     {
@@ -1386,6 +1399,12 @@
       ]
     },
     {
+      "message": "read pending fallback rollout state: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
       "message": "recurrence {0} never fires",
       "fields": [
         "%q"
@@ -1505,6 +1524,12 @@
     },
     {
       "message": "sanitize xlsx: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "save pending fallback rollout state: {0}",
       "fields": [
         "%w"
       ]

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -429,5 +430,148 @@ func TestAdminSettingFallbackRolloutRetryPreservesOldFallbackTarget(t *testing.T
 	cur, _ := baseSt.Get(context.Background(), "alice@x.com", fbConv.ID)
 	if cur.Model != "acme/opus-next" {
 		t.Fatalf("expected fallback-pinned chat to migrate to acme/opus-next on retry, got %q", cur.Model)
+	}
+}
+
+type failingPendingFallbackStore struct {
+	*fakeChatStore
+	pending    string
+	failRead   bool
+	failSave   bool
+	failClear  bool
+	saveCalls  int
+	clearCalls int
+}
+
+func (f *failingPendingFallbackStore) PendingFallbackRolloutFrom(context.Context) (string, bool, error) {
+	if f.failRead {
+		return "", true, errors.New("db read pending fallback failed")
+	}
+	return f.pending, true, nil
+}
+
+func (f *failingPendingFallbackStore) SetPendingFallbackRolloutFrom(_ context.Context, from string) error {
+	if from == "" {
+		f.clearCalls++
+		if f.failClear {
+			return errors.New("db clear pending fallback failed")
+		}
+		f.pending = ""
+		return nil
+	}
+	f.saveCalls++
+	if f.failSave {
+		return errors.New("db save pending fallback failed")
+	}
+	f.pending = from
+	return nil
+}
+
+func TestPendingFallbackRolloutFromPropagatesStoreErrors(t *testing.T) {
+	prevDefault := agentcore.CurrentDefaultModel()
+	prevFallback := agentcore.CurrentFallbackModel()
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel(prevDefault)
+		agentcore.SetFallbackModel(prevFallback)
+	})
+	agentcore.SetDefaultModel("google/gemini-4-hydrogen")
+	agentcore.SetFallbackModel("anthropic/claude-opus-5.5")
+
+	st := &failingPendingFallbackStore{fakeChatStore: newFakeChatStore()}
+	s := newDefaultChatServer(t, nil, st)
+	s.cfg.AdminEmails = []string{"boss@x.com"}
+
+	svc := newFakeSettingsService()
+	svc.dflt["default_model"] = "google/gemini-4-hydrogen"
+	svc.dflt["advanced_model"] = "anthropic/claude-opus-5.5"
+	svc.SetHook = func(key, val string) {
+		if key == "advanced_model" {
+			agentcore.SetFallbackModel(val)
+		}
+	}
+	s.workspaceSettings = svc
+	h := s.Routes()
+
+	// 1) A DB error saving the pending fallback marker aborts BEFORE advanced_model mutates.
+	st.failSave = true
+	w := do(t, h, http.MethodPut, "/admin/settings/advanced_model", map[string]any{
+		"value":   "acme/opus-next",
+		"rollout": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when saving pending fallback marker fails, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := agentcore.CurrentFallbackModel(); got != "anthropic/claude-opus-5.5" {
+		t.Fatalf("advanced_model mutated despite pre-write marker failure: %q", got)
+	}
+
+	// 2) A DB error clearing the pending fallback marker after rollout surfaces in rollout_error.
+	st.failSave = false
+	st.failClear = true
+	w = do(t, h, http.MethodPut, "/admin/settings/advanced_model", map[string]any{
+		"value":   "acme/opus-next",
+		"rollout": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var resp adminSettingWriteResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(resp.RolloutError, "clear pending fallback rollout state") {
+		t.Fatalf("expected RolloutError to surface clear failure, got %+v", resp)
+	}
+}
+
+func TestPostChatBaseModelPreservesRolledOutConversationModel(t *testing.T) {
+	st := newFakeChatStore()
+	s := newDefaultChatServer(t, nil, st)
+	s.cfg.AdminEmails = []string{"boss@x.com"}
+	conv, _ := st.CreateConversation(context.Background(), "alice@x.com", "Open Tab", "victoria", "anthropic/claude-opus-5.5", false)
+
+	h := s.Routes()
+	// Admin rolls out Gemini 4 Hydrogen across chats while Alice still has the conversation open in a tab.
+	w := do(t, h, http.MethodPost, "/admin/models/rollout", ModelRolloutRequest{
+		Model: "google/gemini-4-hydrogen",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("rollout status = %d: %s", w.Code, w.Body.String())
+	}
+
+	// Open tab submits its next message echoing the stale hydrated model as both model and base_model:
+	// resolveExistingChatConversation must preserve the rolled-out model instead of reverting it.
+	reqBody := chatRequest{
+		ConversationID: conv.ID,
+		Message:        "hello after rollout",
+		Model:          "anthropic/claude-opus-5.5",
+		BaseModel:      "anthropic/claude-opus-5.5",
+	}
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/chat", nil)
+	resolved, unlock, ok := s.resolveExistingChatConversation(rec, httpReq, "alice@x.com", &reqBody, reqBody.Model)
+	unlock()
+	if !ok {
+		t.Fatalf("resolveExistingChatConversation failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if resolved.Model != "google/gemini-4-hydrogen" {
+		t.Fatalf("stale tab echo reverted rolled-out model: got %q, want google/gemini-4-hydrogen", resolved.Model)
+	}
+	stored, _ := st.Get(context.Background(), "alice@x.com", conv.ID)
+	if stored.Model != "google/gemini-4-hydrogen" {
+		t.Fatalf("stored conversation model = %q, want google/gemini-4-hydrogen", stored.Model)
+	}
+
+	// An explicit user model selection omits base_model and DOES override conv.Model.
+	explicitReq := chatRequest{
+		ConversationID: conv.ID,
+		Message:        "switch back explicitly",
+		Model:          "anthropic/claude-opus-5.5",
+	}
+	rec2 := httptest.NewRecorder()
+	resolved2, unlock2, ok2 := s.resolveExistingChatConversation(rec2, httpReq, "alice@x.com", &explicitReq, explicitReq.Model)
+	unlock2()
+	if !ok2 || resolved2.Model != "anthropic/claude-opus-5.5" {
+		t.Fatalf("explicit model pick failed: ok=%v model=%q", ok2, resolved2.Model)
 	}
 }

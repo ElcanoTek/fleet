@@ -1023,31 +1023,31 @@ func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
 const pendingFallbackRolloutSettingKey = "model_rollout_pending_fallback_from"
 
 // PendingFallbackRolloutFrom returns any durably persisted previous fallback
-// tier whose chat/task migration did not yet complete (("", false) when backed
-// by a nil/embedded test Store).
-func (s *Store) PendingFallbackRolloutFrom(ctx context.Context) (string, bool) {
+// tier whose chat/task migration did not yet complete. Backed reports false
+// only when s or s.db is nil (embedded test Store).
+func (s *Store) PendingFallbackRolloutFrom(ctx context.Context) (string, bool, error) {
 	if s == nil || s.db == nil {
-		return "", false
+		return "", false, nil
 	}
 	ws, err := s.WorkspaceSettings(ctx)
 	if err != nil {
-		return "", false
+		return "", true, err
 	}
-	return strings.TrimSpace(ws[pendingFallbackRolloutSettingKey].Value), true
+	return strings.TrimSpace(ws[pendingFallbackRolloutSettingKey].Value), true, nil
 }
 
 // SetPendingFallbackRolloutFrom durably records (or clears when from == "") the
 // previous fallback tier until its rollout succeeds.
-func (s *Store) SetPendingFallbackRolloutFrom(ctx context.Context, from string) {
+func (s *Store) SetPendingFallbackRolloutFrom(ctx context.Context, from string) error {
 	if s == nil || s.db == nil {
-		return
+		return nil
 	}
 	from = strings.TrimSpace(from)
 	if from == "" {
-		_ = s.DeleteWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey)
-		return
+		return s.DeleteWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey)
 	}
-	_, _ = s.SetWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey, from, "system")
+	_, err := s.SetWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey, from, "system")
+	return err
 }
 
 // RolloutConversationModel upgrades the pinned model on matching non-deleted

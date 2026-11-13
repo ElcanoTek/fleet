@@ -43,6 +43,12 @@ type chatRequest struct {
 	// persisted; on an existing one it overrides whatever was stored. Empty
 	// = use whatever the conversation already has, or the configured default.
 	Model string `json:"model"`
+	// BaseModel is the server-stored model slug an open browser tab passively
+	// hydrated for this conversation before the user sent the message (omitted
+	// whenever the user explicitly picked a model). If a server-side model
+	// rollout or another tab updated conv.Model in the meantime and Model still
+	// equals BaseModel, the stale echo is ignored so conv.Model is preserved.
+	BaseModel string `json:"base_model,omitempty"`
 	// Attachments carries the metadata returned by a prior POST /attachments
 	// call. Paths are re-validated against the uploads root before use; any
 	// entry that fails validation is silently dropped.
@@ -488,7 +494,8 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	if s.replayAcceptedInput(w, r, user, conv.ID, *req) {
 		return nil, unlockFirst, false
 	}
-	if reqModel == conv.Model {
+	baseModel := strings.TrimSpace(req.BaseModel)
+	if reqModel == conv.Model || (conv.Model != "" && baseModel != "" && reqModel == baseModel && conv.Model != baseModel) {
 		reqModel = ""
 	}
 	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {

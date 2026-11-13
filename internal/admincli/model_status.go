@@ -111,17 +111,23 @@ func resolveBoxTierDetails(ctx context.Context, chatSt any, ignoreKeys map[strin
 		}
 		if !ignoreKeys["default_model"] {
 			if v, ok := ws["default_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				defTier = tierInfo{Value: strings.TrimSpace(v.Value), Source: "workspace_settings"}
+				if norm, verr := validateCLIModelSlug("default_model", v.Value); verr == nil {
+					defTier = tierInfo{Value: norm, Source: "workspace_settings"}
+				}
 			}
 		}
 		if !ignoreKeys["advanced_model"] {
 			if v, ok := ws["advanced_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				fbTier = tierInfo{Value: strings.TrimSpace(v.Value), Source: "workspace_settings"}
+				if norm, verr := validateCLIModelSlug("advanced_model", v.Value); verr == nil {
+					fbTier = tierInfo{Value: norm, Source: "workspace_settings"}
+				}
 			}
 		}
 		if !ignoreKeys["task_model"] {
 			if v, ok := ws["task_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				taskOverride = tierInfo{Value: strings.TrimSpace(v.Value), Source: "workspace_settings"}
+				if norm, verr := validateCLIModelSlug("task_model", v.Value); verr == nil {
+					taskOverride = tierInfo{Value: norm, Source: "workspace_settings"}
+				}
 			}
 		}
 	}

@@ -99,6 +99,29 @@ func (f *fakeRolloutChatStore) DeleteWorkspaceSetting(_ context.Context, key str
 	return nil
 }
 
+func (f *fakeRolloutChatStore) PendingFallbackRolloutFrom(context.Context) (string, bool, error) {
+	if f.settingsErr != nil {
+		return "", true, f.settingsErr
+	}
+	return strings.TrimSpace(f.settingsWritten["model_rollout_pending_fallback_from"]), true, nil
+}
+
+func (f *fakeRolloutChatStore) SetPendingFallbackRolloutFrom(_ context.Context, from string) error {
+	if f.settingsErr != nil {
+		return f.settingsErr
+	}
+	from = strings.TrimSpace(from)
+	if from == "" {
+		delete(f.settingsWritten, "model_rollout_pending_fallback_from")
+		return nil
+	}
+	if f.settingsWritten == nil {
+		f.settingsWritten = map[string]string{}
+	}
+	f.settingsWritten["model_rollout_pending_fallback_from"] = from
+	return nil
+}
+
 type fakeRolloutTaskStore struct {
 	calls       int
 	rolloutErr  error
@@ -577,5 +600,120 @@ func TestRunModelRollout_ExplicitTaskFallbackEnvAndJSONLockdownExclusion(t *test
 	}
 	if jout.LockdownIncluded == nil || *jout.LockdownIncluded {
 		t.Fatalf("expected lockdown_included=false in JSON output, got %+v", jout.LockdownIncluded)
+	}
+}
+
+func TestRunModelRollout_IgnoresInvalidWorkspaceSettingAndRejectsMalformedEnv(t *testing.T) {
+	t.Setenv("FLEET_DEFAULT_MODEL", "")
+	t.Setenv("FLEET_TASK_MODEL", "")
+	t.Setenv("FLEET_ADVANCED_MODEL", "")
+	t.Setenv("FLEET_TASK_FALLBACK_MODEL", "")
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "")
+
+	chatSt := &fakeRolloutChatStore{
+		entries: []store.ConversationModelEntry{
+			{ID: "c1", Model: "anthropic/claude-opus-5.5"},
+		},
+		settingsWritten: map[string]string{
+			"default_model":  "stale-invalid-slug-without-slash",
+			"advanced_model": "also invalid",
+			"task_model":     "bad_task_slug",
+		},
+	}
+	taskSt := &fakeRolloutTaskStore{}
+	var out, errBuf bytes.Buffer
+	code := runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		chats:     true,
+		tasks:     true,
+		rollout:   true,
+		notify:    true,
+		noConfirm: true,
+	})
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errBuf.String())
+	}
+	if chatSt.lastModel != "google/gemini-4-hydrogen" {
+		t.Fatalf("unfiltered rollout used invalid workspace_settings row %q instead of valid default", chatSt.lastModel)
+	}
+	if taskSt.lastOpts.Model == nil || *taskSt.lastOpts.Model != "google/gemini-4-hydrogen" {
+		t.Fatalf("task rollout model = %v, want google/gemini-4-hydrogen", taskSt.lastOpts.Model)
+	}
+
+	// Malformed env default must fail fast with exit 1 instead of bulk-updating chats/tasks.
+	t.Setenv("FLEET_DEFAULT_MODEL", "malformed-env-slug")
+	out.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		chats:     true,
+		tasks:     true,
+		rollout:   true,
+		noConfirm: true,
+	})
+	if code != 1 {
+		t.Fatalf("expected exit 1 on malformed FLEET_DEFAULT_MODEL, got %d (stderr=%s)", code, errBuf.String())
+	}
+}
+
+func TestRunModelRollout_FallbackSetRetryPreservesPreviousFallback(t *testing.T) {
+	t.Setenv("FLEET_DEFAULT_MODEL", "google/gemini-4-hydrogen")
+	t.Setenv("FLEET_TASK_MODEL", "")
+	t.Setenv("FLEET_ADVANCED_MODEL", "anthropic/claude-opus-5.5")
+	t.Setenv("FLEET_TASK_FALLBACK_MODEL", "")
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "")
+
+	chatSt := &fakeRolloutChatStore{
+		entries: []store.ConversationModelEntry{
+			{ID: "c-fb", Model: "anthropic/claude-opus-5.5", HasMessages: true},
+			{ID: "c-def", Model: "google/gemini-4-hydrogen", HasMessages: true},
+		},
+	}
+	taskSt := &fakeRolloutTaskStore{rolloutErr: errors.New("scheduler DB timeout")}
+	newFB := "x-ai/grok-4"
+	var out, errBuf bytes.Buffer
+
+	// Attempt 1: workspace_settings["advanced_model"] commits x-ai/grok-4, then task phase fails.
+	code := runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		fallbackModel:     &newFB,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chats:             true,
+		tasks:             true,
+		notify:            true,
+		noConfirm:         true,
+	})
+	if code != 5 {
+		t.Fatalf("attempt 1 exit=%d, want 5 (stderr=%s)", code, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "re-run the same command once resolved") {
+		t.Fatalf("expected retry same command hint, got %q", errBuf.String())
+	}
+	if got := chatSt.settingsWritten["model_rollout_pending_fallback_from"]; got != "anthropic/claude-opus-5.5" {
+		t.Fatalf("pending fallback marker = %q, want anthropic/claude-opus-5.5", got)
+	}
+
+	// Attempt 2: operator re-runs the exact same `fleet model set --fallback-model x-ai/grok-4`
+	// after scheduler recovers; chats/tasks pinned to anthropic/claude-opus-5.5 still migrate!
+	taskSt.rolloutErr = nil
+	out.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &out, &errBuf, modelRolloutOptions{
+		fallbackModel:     &newFB,
+		setWorkspaceTiers: true,
+		rollout:           true,
+		offline:           true,
+		chats:             true,
+		tasks:             true,
+		notify:            true,
+		noConfirm:         true,
+	})
+	if code != 0 {
+		t.Fatalf("attempt 2 exit=%d, want 0 (stderr=%s)", code, errBuf.String())
+	}
+	if chatSt.lastModel != "x-ai/grok-4" || chatSt.lastFrom != "anthropic/claude-opus-5.5" {
+		t.Fatalf("retry lost previous fallback: lastModel=%q lastFrom=%q", chatSt.lastModel, chatSt.lastFrom)
+	}
+	if _, stillSet := chatSt.settingsWritten["model_rollout_pending_fallback_from"]; stillSet {
+		t.Fatalf("expected pending fallback marker cleared after successful retry")
 	}
 }
