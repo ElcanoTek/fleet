@@ -336,8 +336,9 @@ folds it. Hovering a project shows its menu: **Open project**, **New chat**,
 owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
-and **System** appearance and opens **Settings** and **Guides** (these user
-guides). Its **Sign out** asks you to
+and **System** appearance and opens **Settings**, **Guides** (these user
+guides) and **Context & Connections**; administrators also find **Admin
+Settings** and **Analytics** there. Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
 

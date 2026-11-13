@@ -13,7 +13,7 @@ Two guides, written for users rather than contributors:
 | Guide | Covers |
 | --- | --- |
 | **Chat** | The rail, transcript and composer; asking well; picking a model; getting data in (attachments, connectors, shared files); approval cards; memory and projects; sharing, branching and compacting; the prompt library; turning a conversation into a scheduled task; triage when a turn goes wrong; keyboard shortcuts. |
-| **Background tasks** (formerly the Operations Center; file `operations-center.md`, URL `/help/operations-center`) | Reading the board and its counters; the anatomy of a task; every run state; running, editing, answering and rating a run; the five-step path when a run goes wrong; conventions for a shared board. |
+| **Background tasks** (formerly the Operations Center; file `operations-center.md`, URL `/help/operations-center`) | Reading the board and its counters; the anatomy of a task; every run state; running, editing, answering and rating a run; the five-step path when a run goes wrong; conventions for a shared board; the admin Analytics page (spend, usage, CSV downloads, budgets). |
 
 They reach users two ways, from one source:
 
