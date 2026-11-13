@@ -3,6 +3,7 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,7 @@ type fakeRolloutChatStore struct {
 	lastLockdown    bool
 	lastNotify      bool
 	settingsWritten map[string]string
+	settingsErr     error
 }
 
 func (f *fakeRolloutChatStore) ListConversationsForModelUpdate(_ context.Context, fromModel string, includeLockdown bool) ([]store.ConversationModelEntry, error) {
@@ -62,6 +64,9 @@ func (f *fakeRolloutChatStore) RolloutConversationModel(_ context.Context, model
 }
 
 func (f *fakeRolloutChatStore) WorkspaceSettings(context.Context) (map[string]store.WorkspaceSetting, error) {
+	if f.settingsErr != nil {
+		return nil, f.settingsErr
+	}
 	out := map[string]store.WorkspaceSetting{}
 	for k, v := range f.settingsWritten {
 		out[k] = store.WorkspaceSetting{Key: k, Value: v}
@@ -179,12 +184,22 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 		t.Errorf("apply stderr = %s", errBuf.String())
 	}
 
-	// 3. When the live server rejects or fails reload, workspace_settings is
-	// rolled back and neither chats nor tasks are partially mutated.
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
+	// 3. When the live server applies the new setting and then fails a later hook
+	// on call 1, workspace_settings is rolled back AND a compensating reload is
+	// triggered on call 2 so the running server re-applies the restored tier.
+	var liveServerDefault string
+	var flakyCalls atomic.Int32
+	flakySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := flakyCalls.Add(1)
+		liveServerDefault = chatSt.settingsWritten["default_model"]
+		if n == 1 {
+			http.Error(w, "later hook boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"changed":[],"skipped":[],"errors":[]}`))
 	}))
-	defer failSrv.Close()
+	defer flakySrv.Close()
 
 	badModel := "openai/gpt-6-luna-pro"
 	outBuf.Reset()
@@ -192,17 +207,41 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 	code = runModelRollout(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelRolloutOptions{
 		model:             &badModel,
 		setWorkspaceTiers: true,
-		serverAddr:        failSrv.URL,
+		serverAddr:        flakySrv.URL,
 		adminKey:          "test-admin-key",
 		noConfirm:         true,
 	})
 	if code != 5 {
 		t.Fatalf("expected exit 5 on live server reload failure, got %d (stderr=%s)", code, errBuf.String())
 	}
+	if flakyCalls.Load() != 2 {
+		t.Fatalf("expected 2 reload calls (initial + compensating rollback reload), got %d", flakyCalls.Load())
+	}
 	if chatSt.settingsWritten["default_model"] != "google/gemini-4-hydrogen" {
 		t.Errorf("default_model not rolled back after reload failure: got %q", chatSt.settingsWritten["default_model"])
 	}
+	if liveServerDefault != "google/gemini-4-hydrogen" {
+		t.Errorf("live server in-memory default_model after compensating reload = %q, want google/gemini-4-hydrogen", liveServerDefault)
+	}
 	if chatSt.rolloutCalls != 1 {
 		t.Errorf("chat rollout ran despite tier reload failure: calls=%d", chatSt.rolloutCalls)
+	}
+
+	// 4. Sync mode (no explicit flags) aborts with exit 5 if WorkspaceSettings fails,
+	// rather than silently falling back to env/compiled defaults.
+	chatSt.settingsErr = errors.New("transient postgres timeout")
+	outBuf.Reset()
+	errBuf.Reset()
+	code = runModelRollout(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelRolloutOptions{
+		noConfirm: true,
+	})
+	if code != 5 {
+		t.Fatalf("expected exit 5 when WorkspaceSettings fails, got %d (stderr=%s)", code, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "read workspace_settings: transient postgres timeout") {
+		t.Errorf("unexpected stderr on WorkspaceSettings failure: %s", errBuf.String())
+	}
+	if chatSt.rolloutCalls != 1 {
+		t.Errorf("chat rollout ran despite WorkspaceSettings read failure: calls=%d", chatSt.rolloutCalls)
 	}
 }

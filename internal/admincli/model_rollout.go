@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/settings"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -43,7 +45,7 @@ type modelRolloutTaskStore interface {
 	RolloutTaskModels(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error)
 }
 
-func resolveEffectiveBoxTiers(ctx context.Context, chatSt any) (defaultModel, taskModel, fallbackModel string) {
+func resolveEffectiveBoxTiers(ctx context.Context, chatSt any) (defaultModel, taskModel, fallbackModel string, err error) {
 	defaultModel = agentcore.DefaultCoreModel
 	if v := strings.TrimSpace(envOrFile("FLEET_DEFAULT_MODEL")); v != "" {
 		defaultModel = v
@@ -54,23 +56,25 @@ func resolveEffectiveBoxTiers(ctx context.Context, chatSt any) (defaultModel, ta
 	}
 	taskOverride := strings.TrimSpace(envOrFile("FLEET_TASK_MODEL"))
 	if r, ok := chatSt.(chatWorkspaceSettingsReader); ok {
-		if ws, err := r.WorkspaceSettings(ctx); err == nil {
-			if v, ok := ws["default_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				defaultModel = strings.TrimSpace(v.Value)
-			}
-			if v, ok := ws["advanced_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				fallbackModel = strings.TrimSpace(v.Value)
-			}
-			if v, ok := ws["task_model"]; ok && strings.TrimSpace(v.Value) != "" {
-				taskOverride = strings.TrimSpace(v.Value)
-			}
+		ws, err := r.WorkspaceSettings(ctx)
+		if err != nil {
+			return "", "", "", err
+		}
+		if v, ok := ws["default_model"]; ok && strings.TrimSpace(v.Value) != "" {
+			defaultModel = strings.TrimSpace(v.Value)
+		}
+		if v, ok := ws["advanced_model"]; ok && strings.TrimSpace(v.Value) != "" {
+			fallbackModel = strings.TrimSpace(v.Value)
+		}
+		if v, ok := ws["task_model"]; ok && strings.TrimSpace(v.Value) != "" {
+			taskOverride = strings.TrimSpace(v.Value)
 		}
 	}
 	taskModel = defaultModel
 	if taskOverride != "" {
 		taskModel = taskOverride
 	}
-	return defaultModel, taskModel, fallbackModel
+	return defaultModel, taskModel, fallbackModel, nil
 }
 
 func validateCLIModelSlug(flagName, raw string) (string, error) {
@@ -166,7 +170,11 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 	if code := validateWorkspaceTierFlags(errW, opts); code != 0 {
 		return modelRolloutPlan{}, code
 	}
-	curDefault, curTask, curFallback := resolveEffectiveBoxTiers(ctx, chatSt)
+	curDefault, curTask, curFallback, err := resolveEffectiveBoxTiers(ctx, chatSt)
+	if err != nil {
+		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
+		return modelRolloutPlan{}, 5
+	}
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
 		taskRollout: models.TaskModelRollout{
@@ -197,7 +205,7 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		}
 	}
 
-	plan.includeLockdown = resolveRolloutLockdown(ctx, chatSt, errW, plan.chatTarget, opts)
+	plan.includeLockdown = resolveRolloutLockdown(ctx, curDefault, curFallback, errW, plan.chatTarget, opts)
 	return plan, 0
 }
 
@@ -242,18 +250,16 @@ func applyFallbackPlanFlag(plan *modelRolloutPlan, curDefault, curFallback strin
 	return 0
 }
 
-func resolveRolloutLockdown(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, chatTarget string, opts modelRolloutOptions) bool {
+func resolveRolloutLockdown(ctx context.Context, curDefault, curFallback string, errW io.Writer, chatTarget string, opts modelRolloutOptions) bool {
 	if chatTarget == "" {
 		return true
 	}
 	includeLockdown := true
 	writingTier := opts.setWorkspaceTiers && (opts.model != nil || (opts.fallbackModel != nil && strings.TrimSpace(*opts.fallbackModel) != ""))
-	if writingTier {
-		if raw := strings.TrimSpace(envOrFile("FLEET_LOCKDOWN_ALLOWED_MODELS")); raw != "" {
-			includeLockdown = chatLockdownAllowsModel(ctx, nil, chatTarget)
-		}
-	} else {
-		includeLockdown = chatLockdownAllowsModel(ctx, chatSt, chatTarget)
+	if raw := strings.TrimSpace(envOrFile("FLEET_LOCKDOWN_ALLOWED_MODELS")); raw != "" {
+		includeLockdown = chatLockdownAllowsModel(ctx, nil, chatTarget)
+	} else if !writingTier {
+		includeLockdown = config.ModelAllowed(chatTarget, []string{curDefault, curFallback})
 	}
 	if !includeLockdown {
 		fmt.Fprintf(errW, "note: %s is not in the lockdown allow-list; excluding lockdown conversations\n", chatTarget)
@@ -324,8 +330,11 @@ func persistRolloutWorkspaceTiers(ctx context.Context, chatSt modelRolloutChatSt
 	}
 	if opts.fallbackModel != nil {
 		if _, err := ws.SetWorkspaceSetting(ctx, "advanced_model", strings.TrimSpace(*opts.fallbackModel), "cli"); err != nil {
-			restoreWorkspaceSettings(ctx, ws, prev, touched)
-			fmt.Fprintf(errW, "save workspace advanced_model: %v\n", err)
+			if rerr := restoreWorkspaceSettings(ctx, ws, prev, touched); rerr != nil {
+				fmt.Fprintf(errW, "save workspace advanced_model: %v (rollback also failed: %v)\n", err, rerr)
+			} else {
+				fmt.Fprintf(errW, "save workspace advanced_model: %v\n", err)
+			}
 			return 5
 		}
 		touched = append(touched, "advanced_model")
@@ -333,22 +342,48 @@ func persistRolloutWorkspaceTiers(ctx context.Context, chatSt modelRolloutChatSt
 	if opts.offline {
 		return 0
 	}
-	if err := notifyRunningServerConfigReload(ctx, opts.serverAddr, resolveAdminKey(opts.adminKey)); err != nil {
-		restoreWorkspaceSettings(ctx, ws, prev, touched)
-		fmt.Fprintf(errW, "apply workspace tiers on running server failed: %v (rolled back workspace_settings; pass --offline if fleet serve is stopped)\n", err)
+	adminKey := resolveAdminKey(opts.adminKey)
+	if err := notifyRunningServerConfigReload(ctx, opts.serverAddr, adminKey); err != nil {
+		rollbackLiveTierReload(ctx, ws, prev, touched, opts.serverAddr, adminKey, err, errW)
 		return 5
 	}
 	return 0
 }
 
-func restoreWorkspaceSettings(ctx context.Context, ws modelRolloutWorkspaceStore, prev map[string]store.WorkspaceSetting, keys []string) {
+func rollbackLiveTierReload(
+	ctx context.Context,
+	ws modelRolloutWorkspaceStore,
+	prev map[string]store.WorkspaceSetting,
+	keys []string,
+	serverAddr, adminKey string,
+	reloadErr error,
+	errW io.Writer,
+) {
+	if rerr := restoreWorkspaceSettings(ctx, ws, prev, keys); rerr != nil {
+		fmt.Fprintf(errW, "apply workspace tiers on running server failed: %v (also failed to restore workspace_settings: %v)\n", reloadErr, rerr)
+		return
+	}
+	if reapplyErr := notifyRunningServerConfigReload(ctx, serverAddr, adminKey); reapplyErr != nil {
+		fmt.Fprintf(errW, "apply workspace tiers on running server failed: %v (rolled back workspace_settings in DB, but re-applying restored tiers on server failed: %v; pass --offline if fleet serve is stopped)\n", reloadErr, reapplyErr)
+		return
+	}
+	fmt.Fprintf(errW, "apply workspace tiers on running server failed: %v (rolled back workspace_settings and re-applied previous tiers on server)\n", reloadErr)
+}
+
+func restoreWorkspaceSettings(ctx context.Context, ws modelRolloutWorkspaceStore, prev map[string]store.WorkspaceSetting, keys []string) error {
+	var errs []error
 	for _, k := range keys {
 		if old, had := prev[k]; had {
-			_, _ = ws.SetWorkspaceSetting(ctx, k, old.Value, old.UpdatedBy)
+			if _, err := ws.SetWorkspaceSetting(ctx, k, old.Value, old.UpdatedBy); err != nil {
+				errs = append(errs, err)
+			}
 		} else {
-			_ = ws.DeleteWorkspaceSetting(ctx, k)
+			if err := ws.DeleteWorkspaceSetting(ctx, k); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func notifyRunningServerConfigReload(ctx context.Context, addrFlag, adminKey string) error {

@@ -184,3 +184,127 @@ func TestRolloutTaskModels_DurableAcrossRestartAndPreservesPostRolloutEdits(t *t
 		t.Errorf("editedSuccessor fallback = %v, want anthropic/claude-haiku-5.5", editedSuccessor.FallbackModel)
 	}
 }
+
+func TestRolloutTaskModels_PreservesRecurrenceOverrideAcrossUnrelatedEdits(t *testing.T) {
+	t.Parallel()
+
+	st, rawDB := newTestStore(t)
+	st.SetTimezone("UTC")
+	ctx := context.Background()
+
+	// Two recurring tasks that are leased during the rollout.
+	tagEditedTask := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "recurring tag edit check",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 8 * * *",
+		CreatedAt:     time.Now().Add(-5 * time.Minute).UTC(),
+	}
+	if _, err := st.AddTask(tagEditedTask); err != nil {
+		t.Fatalf("AddTask(tagEditedTask): %v", err)
+	}
+	partialModelTask := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "recurring partial model edit check",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 9 * * *",
+		CreatedAt:     time.Now().Add(-5 * time.Minute).UTC(),
+	}
+	if _, err := st.AddTask(partialModelTask); err != nil {
+		t.Fatalf("AddTask(partialModelTask): %v", err)
+	}
+
+	deadWorker := uuid.New()
+	if _, err := st.leaseTaskToOwner(tagEditedTask.ID, deadWorker); err != nil {
+		t.Fatalf("lease tagEditedTask: %v", err)
+	}
+	if _, err := st.leaseTaskToOwner(partialModelTask.ID, deadWorker); err != nil {
+		t.Fatalf("lease partialModelTask: %v", err)
+	}
+
+	primary := "google/gemini-4-hydrogen"
+	fallback := "anthropic/claude-opus-5.5"
+	if _, err := st.RolloutTaskModels(ctx, models.TaskModelRollout{
+		Model:         &primary,
+		FallbackModel: &fallback,
+	}, false); err != nil {
+		t.Fatalf("RolloutTaskModels: %v", err)
+	}
+
+	// Simulate recovery/resume back to pending while the row still carries the pre-rollout models.
+	if _, err := rawDB.UpdateTasksStatusBatch(ctx, []uuid.UUID{tagEditedTask.ID, partialModelTask.ID}, models.TaskStatusLeased, models.TaskStatusPending); err != nil {
+		t.Fatalf("recover leased->pending: %v", err)
+	}
+
+	// 1) Unrelated tag + description edits on tagEditedTask must NOT drop its rollout override.
+	if _, err := st.UpdateTaskTags(ctx, tagEditedTask.ID, []string{"ops"}, nil); err != nil {
+		t.Fatalf("UpdateTaskTags: %v", err)
+	}
+	if _, err := st.UpdateTaskDescription(ctx, tagEditedTask.ID, "operator runbook note"); err != nil {
+		t.Fatalf("UpdateTaskDescription: %v", err)
+	}
+
+	// 2) Editing ONLY the primary model on partialModelTask clears HasModel while keeping HasFallback.
+	curPartial, err := st.GetTask(partialModelTask.ID)
+	if err != nil {
+		t.Fatalf("GetTask(partialModelTask): %v", err)
+	}
+	edit := TaskEditFromTask(curPartial)
+	edit.Model = strPtr("openai/gpt-6-luna-pro")
+	if _, err := st.UpdateEditableTask(ctx, partialModelTask.ID, edit); err != nil {
+		t.Fatalf("UpdateEditableTask(partialModelTask): %v", err)
+	}
+
+	// Run and complete both occurrences.
+	for _, id := range []uuid.UUID{tagEditedTask.ID, partialModelTask.ID} {
+		w := uuid.New()
+		if _, err := st.leaseTaskToOwner(id, w); err != nil {
+			t.Fatalf("lease %s: %v", id, err)
+		}
+		if _, err := st.UpdateTaskStatusAtomic(id, w, &models.StatusUpdate{
+			Status:  models.TaskStatusSuccess,
+			Message: strPtr("ok"),
+		}); err != nil {
+			t.Fatalf("complete %s: %v", id, err)
+		}
+	}
+
+	all, err := listAllTasks(st)
+	if err != nil {
+		t.Fatalf("listAllTasks: %v", err)
+	}
+	var tagSucc, partialSucc *models.Task
+	for _, tk := range all {
+		if tk.PreviousOccurrenceID == nil {
+			continue
+		}
+		switch *tk.PreviousOccurrenceID {
+		case tagEditedTask.ID:
+			tagSucc = tk
+		case partialModelTask.ID:
+			partialSucc = tk
+		}
+	}
+	if tagSucc == nil {
+		t.Fatal("expected successor for tagEditedTask")
+	}
+	if tagSucc.Model == nil || *tagSucc.Model != primary {
+		t.Errorf("tagSucc model = %v, want %q", tagSucc.Model, primary)
+	}
+	if tagSucc.FallbackModel == nil || *tagSucc.FallbackModel != fallback {
+		t.Errorf("tagSucc fallback = %v, want %q", tagSucc.FallbackModel, fallback)
+	}
+	if partialSucc == nil {
+		t.Fatal("expected successor for partialModelTask")
+	}
+	if partialSucc.Model == nil || *partialSucc.Model != "openai/gpt-6-luna-pro" {
+		t.Errorf("partialSucc model = %v, want openai/gpt-6-luna-pro", partialSucc.Model)
+	}
+	if partialSucc.FallbackModel == nil || *partialSucc.FallbackModel != fallback {
+		t.Errorf("partialSucc fallback = %v, want %q", partialSucc.FallbackModel, fallback)
+	}
+}

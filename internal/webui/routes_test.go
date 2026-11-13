@@ -669,7 +669,7 @@ func TestAdminSettingsResetForwardsRolloutQuery(t *testing.T) {
 	e := newTestEnv(t)
 	origin := []string{"Origin", "http://fleet.example.com"}
 
-	res := e.do(signedIn(t, req("DELETE", "/api/admin/settings/default_model?rollout=true&notify_chats=false", "", origin...)))
+	res := e.do(signedIn(t, req("DELETE", "/api/admin/settings/default_model?rollout=true&notify_chats=false&junk=1", "", origin...)))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("DELETE /api/admin/settings/default_model status %d", res.StatusCode)
 	}

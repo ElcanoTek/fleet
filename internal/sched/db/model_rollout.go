@@ -84,15 +84,56 @@ func chatWorkspaceSettingsReady(ctx context.Context, q rowQuerier) (bool, error)
 }
 
 // ClearRecurrenceModelOverrideTx deletes any pending recurrence model override
-// for taskID inside tx (called when an editable task is modified so post-rollout
-// operator edits take precedence).
+// for taskID inside tx.
 func (db *Database) ClearRecurrenceModelOverrideTx(ctx context.Context, tx *sql.Tx, taskID uuid.UUID) error {
+	return db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, taskID, true, true)
+}
+
+// ClearRecurrenceModelOverrideFieldsTx clears the primary and/or fallback slot
+// of any pending recurrence model override for taskID inside tx. Unrelated
+// edits (such as tag, description, credential, or sandbox-limit edits on a
+// recovered/resumed occurrence) leave both flags false and preserve the rollout
+// override intact.
+func (db *Database) ClearRecurrenceModelOverrideFieldsTx(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, clearModel, clearFallback bool) error {
+	if !clearModel && !clearFallback {
+		return nil
+	}
 	ready, err := chatWorkspaceSettingsReady(ctx, tx)
 	if err != nil || !ready {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM chat.workspace_settings WHERE key = $1`, recurrenceRolloutKey(taskID))
-	return err
+	if clearModel && clearFallback {
+		_, err = tx.ExecContext(ctx, `DELETE FROM chat.workspace_settings WHERE key = $1`, recurrenceRolloutKey(taskID))
+		return err
+	}
+	var raw string
+	err = tx.QueryRowContext(ctx,
+		`SELECT value FROM chat.workspace_settings WHERE key = $1 FOR UPDATE`,
+		recurrenceRolloutKey(taskID),
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var ov RecurrenceModelOverride
+	if err := json.Unmarshal([]byte(raw), &ov); err != nil {
+		return fmt.Errorf("decode recurrence model override for %s: %w", taskID, err)
+	}
+	if clearModel {
+		ov.HasModel = false
+		ov.Model = nil
+	}
+	if clearFallback {
+		ov.HasFallback = false
+		ov.FallbackModel = nil
+	}
+	if !ov.HasModel && !ov.HasFallback {
+		_, err = tx.ExecContext(ctx, `DELETE FROM chat.workspace_settings WHERE key = $1`, recurrenceRolloutKey(taskID))
+		return err
+	}
+	return upsertRecurrenceModelOverrideTx(ctx, tx, taskID, ov)
 }
 
 // ConsumeRecurrenceModelOverrideTx atomically deletes and returns any pending

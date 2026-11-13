@@ -1235,14 +1235,18 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 		return nil, err
 	}
 	priorPriority := task.Priority
+	priorModel := cloneOptModelPtr(task.Model)
+	priorFallback := cloneOptModelPtr(task.FallbackModel)
 	if err := mutate(task); err != nil {
 		return nil, err
 	}
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
 	}
-	if task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled {
-		if err := s.db.ClearRecurrenceModelOverrideTx(ctx, tx, task.ID); err != nil {
+	modelChanged := !sameOptModelPtr(priorModel, task.Model)
+	fallbackChanged := !sameOptModelPtr(priorFallback, task.FallbackModel)
+	if (modelChanged || fallbackChanged) && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled) {
+		if err := s.db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, task.ID, modelChanged, fallbackChanged); err != nil {
 			return nil, err
 		}
 	}
@@ -1253,6 +1257,25 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 		return nil, err
 	}
 	return task, nil
+}
+
+func cloneOptModelPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func sameOptModelPtr(a, b *string) bool {
+	var av, bv string
+	if a != nil {
+		av = strings.TrimSpace(*a)
+	}
+	if b != nil {
+		bv = strings.TrimSpace(*b)
+	}
+	return av == bv
 }
 
 // TaskOwnerCheckError is SetTaskOwner's refusal: the caller's check rejected

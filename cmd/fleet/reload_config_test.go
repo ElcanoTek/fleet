@@ -60,8 +60,9 @@ func TestReloadConfigHandler_OK(t *testing.T) {
 // TestLogConfigReload exercises both branches of the SIGUSR2 reload logger (it
 // only writes to the log, so we assert it does not panic on either path).
 func TestLogConfigReload(_ *testing.T) {
-	logConfigReload(config.ReloadResult{}, errors.New("boom"))
-	logConfigReload(config.ReloadResult{
+	ctx := context.Background()
+	logConfigReload(ctx, config.ReloadResult{}, errors.New("boom"))
+	logConfigReload(ctx, config.ReloadResult{
 		Changed: []config.FieldChange{{Key: "FLEET_MAX_COST_USD", Old: "50", New: "25"}},
 		Skipped: []config.SkippedField{{Key: "FLEET_SERVER_ADDR", Reason: "restart required"}},
 	}, nil)
@@ -71,18 +72,19 @@ func TestLogConfigReload(_ *testing.T) {
 // (it is not an error), while each per-setting error is logged at Warn so it
 // still shows at FLEET_LOG_LEVEL=warn.
 func TestLogConfigReloadLevels(t *testing.T) {
+	ctx := context.Background()
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	logConfigReload(config.ReloadResult{Changed: []config.FieldChange{{Key: "FLEET_X", Old: "1", New: "2"}}}, nil)
+	logConfigReload(ctx, config.ReloadResult{Changed: []config.FieldChange{{Key: "FLEET_X", Old: "1", New: "2"}}}, nil)
 	if out := buf.String(); strings.Contains(out, "level=ERROR") || strings.Contains(out, "level=WARN") {
 		t.Fatalf("clean reload logged above Info:\n%s", out)
 	}
 
 	buf.Reset()
-	logConfigReload(config.ReloadResult{Errors: []config.ReloadError{{Key: "FLEET_Y", Error: "bad value"}}}, nil)
+	logConfigReload(ctx, config.ReloadResult{Errors: []config.ReloadError{{Key: "FLEET_Y", Error: "bad value"}}}, nil)
 	out := buf.String()
 	if !strings.Contains(out, `level=WARN msg="config reload: setting not applied" key=FLEET_Y`) {
 		t.Fatalf("per-setting reload error not logged at Warn:\n%s", out)

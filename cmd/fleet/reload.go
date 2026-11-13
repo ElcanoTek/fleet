@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/settings"
@@ -53,10 +54,11 @@ func reloadConfigHandler(cfg *config.Config, workspaceSettings ...*settings.Serv
 }
 
 func reloadRuntimeConfig(ctx context.Context, cfg *config.Config, wsSvc *settings.Service) {
-	logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
+	res, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
+	logConfigReload(ctx, res, err)
 	if wsSvc != nil {
 		if err := wsSvc.ApplyAll(ctx); err != nil {
-			slog.Error("workspace settings reload (SIGUSR2): failed", "err", err)
+			logging.From(ctx).Error("workspace settings reload (SIGUSR2): failed", "err", err)
 		}
 	}
 }
@@ -162,16 +164,17 @@ func logMCPReload(summary *mcp.ReloadSummary, err error) {
 }
 
 // logConfigReload logs the outcome of a SIGUSR2-triggered reload.
-func logConfigReload(result config.ReloadResult, err error) {
+func logConfigReload(ctx context.Context, result config.ReloadResult, err error) {
+	log := logging.From(ctx)
 	if err != nil {
-		slog.Error("config reload (SIGUSR2): failed", "err", err)
+		log.Error("config reload (SIGUSR2): failed", "err", err)
 		return
 	}
-	slog.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
+	log.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
 	for _, ch := range result.Changed {
-		slog.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
+		log.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
 	}
 	for _, e := range result.Errors {
-		slog.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
+		log.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
 	}
 }
