@@ -2,12 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
+	"github.com/ElcanoTek/fleet/internal/approvalglob"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -123,9 +123,10 @@ func (r *SessionApprovalRegistry) ForgetUser(userEmail string) {
 
 // Match returns the first policy covering (convID, toolName, rawInput), or
 // ok=false when none applies. A "" pattern matches every call; "argName=glob"
-// matches when the call's argName argument matches glob (filepath.Match), the
-// name read ignoring case (policyMatches). DENY policies are evaluated before
-// APPROVE so an explicit pre-denial always wins.
+// matches when the call's argName argument matches glob, the name read
+// ignoring case and the glob as approvalglob reads it for the policy's mode
+// (policyMatches). DENY policies are evaluated before APPROVE so an explicit
+// pre-denial always wins.
 func (r *SessionApprovalRegistry) Match(convID, toolName, rawInput string) (SessionApprovalPolicy, bool) {
 	return r.MatchForUser(convID, "", toolName, rawInput)
 }
@@ -213,6 +214,10 @@ func parseCallInput(rawInput string) callInput {
 // only when all of them do. Whichever spelling the tool reads, a deny that
 // names it applies, and an approve covers only a value it was given for.
 //
+// The glob is read the same way round (approvalglob): in a deny, '*' and '?'
+// may match '/' ("rm *" covers "rm -rf /tmp/x"); in an approve they stop at
+// '/', as path.Match reads them.
+//
 // For the browser tools, whose actions have aliases ("live" runs
 // "start_session"), an action pattern also matches the call's canonical
 // action, and an alias in the pattern stands for its canonical action, so a
@@ -231,8 +236,12 @@ func policyMatches(p SessionApprovalPolicy, in callInput, toolName string) bool 
 		return false
 	}
 	deny := p.Mode == "deny"
+	covers := approvalglob.ApproveCovers
+	if deny {
+		covers = approvalglob.DenyCovers
+	}
 	for _, v := range values {
-		matched := valueMatches(v, argName, glob, toolName)
+		matched := valueMatches(v, argName, glob, toolName, covers)
 		if deny && matched {
 			return true
 		}
@@ -287,14 +296,15 @@ func foldName(name string) string {
 	return b.String()
 }
 
-// valueMatches reports whether one spelling's value matches glob. Only a
-// string can: any other value fails an approve and never matches a deny.
-func valueMatches(v any, argName, glob, toolName string) bool {
+// valueMatches reports whether one spelling's value matches glob, as covers
+// reads it. Only a string can: any other value fails an approve and never
+// matches a deny.
+func valueMatches(v any, argName, glob, toolName string, covers func(glob, value string) bool) bool {
 	s, ok := v.(string)
 	if !ok {
 		return false
 	}
-	if matched, err := filepath.Match(glob, s); err == nil && matched {
+	if covers(glob, s) {
 		return true
 	}
 	if !strings.EqualFold(argName, "action") {
@@ -311,8 +321,7 @@ func valueMatches(v any, argName, glob, toolName string) bool {
 	if c := normalize(glob); c != "" {
 		glob = c
 	}
-	matched, err := filepath.Match(glob, canonical)
-	return err == nil && matched
+	return covers(glob, canonical)
 }
 
 // browserActionNormalizer returns the action normalizer of a browser tool,

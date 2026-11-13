@@ -7,13 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/ElcanoTek/fleet/internal/approvalglob"
 )
 
 type approvalsLoadedMsg struct {
@@ -140,8 +141,12 @@ func policyMatchesCard(d ApprovalDecision, a pendingApproval) bool {
 	if !present {
 		return false
 	}
-	matched, err := filepath.Match(glob, val)
-	return err == nil && matched
+	// Read as the server reads a session pattern: in a deny, '*' and '?'
+	// may match '/'; in an approve they stop at it.
+	if d.Approved {
+		return approvalglob.ApproveCovers(glob, val)
+	}
+	return approvalglob.DenyCovers(glob, val)
 }
 
 // matchCardPolicy returns the terminal session decision that covers this card.
@@ -405,7 +410,7 @@ func (m *model) decideApproval(fields []string, approve bool) tea.Cmd {
 			if !ok || key == "" {
 				return m.reviewNote("Invalid arg=glob pattern.")
 			}
-			if _, err := filepath.Match(glob, ""); err != nil {
+			if approvalglob.Check(glob) != nil {
 				return m.reviewNote("Invalid arg=glob pattern.")
 			}
 			if handlerOnlyCard(m.pending[idx].tool) && m.pending[idx].patternArgs == nil {

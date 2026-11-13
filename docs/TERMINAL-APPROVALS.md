@@ -85,7 +85,13 @@ raw result for scripts.
   `live`). The terminal shows the
   handler-only argument strings supplied by the server; older servers without
   that metadata cannot support handler-only patterns. Spaces are allowed in a
-  pattern, such as `/approve pattern cron=0 9 * * *`.
+  pattern, such as `/approve pattern cron=0 9 * * *`. A glob must match the
+  whole value; `[...]` matches one character of a class (`[^...]` one outside
+  it), and `\` makes the next character literal. In a deny, `*` and `?` match
+  `/` too, so `command=rm *` covers `rm -rf /tmp/x`. In an approve they stop
+  at `/`, as in a file name: `command=ls *` covers `ls -la` but not `ls /tmp`,
+  and `cron=*` does not cover `*/15 * * * *`, so those cards wait for you. The
+  terminal refuses a malformed glob before sending anything.
 - `/resume <conversation-id>` switches to an owned conversation and reloads its
   cards. Starting with `--conversation` also loads cards. It does not load the
   historical transcript into the terminal; server-side model context is retained.
