@@ -61,6 +61,7 @@ import {
 import {
   historyToMessages,
   hydrateResolvedApproval,
+  isNoticeOnlyMessage,
   parseApprovalCardData,
   parseApprovalNarrowable,
   type Approval,
@@ -790,10 +791,35 @@ export function ChatExperience({
   // (picker, nudge, the transcript's switch card), cleared when a new chat
   // resets the composer.
   const modelTouchedRef = useRef(false);
-  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>((value) => {
-    modelTouchedRef.current = true;
-    setSelectedModel(value);
+  // Tracks the model slug passively hydrated from the server for each
+  // conversation. When the user explicitly picks a model, the entry is cleared
+  // so submitPrompt omits `base_model` and overrides conv.Model on the server;
+  // when untouched, submitPrompt includes `base_model` so an open tab does not
+  // accidentally revert a server-side model rollout on the next message.
+  const serverModelByConvRef = useRef<Map<string, string>>(
+    new Map(restoredSession?.serverModelByConv ?? []),
+  );
+  const syncServerModelSnapshot = useCallback(() => {
+    const prevSession = readChatSession();
+    if (prevSession) {
+      writeChatSession({
+        ...prevSession,
+        serverModelByConv: new Map(serverModelByConvRef.current),
+      });
+    }
   }, []);
+  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      modelTouchedRef.current = true;
+      const convId = activeConversationIdRef.current;
+      if (convId && !isPendingKey(convId)) {
+        serverModelByConvRef.current.delete(convId);
+        syncServerModelSnapshot();
+      }
+      setSelectedModel(value);
+    },
+    [syncServerModelSnapshot],
+  );
   const [modelRouting, setModelRouting] = useState<ModelRouting>(null);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   // modelError includes local routing and /api/model-check rejections. When set,
@@ -1341,6 +1367,7 @@ export function ChatExperience({
       defaultPersona,
       selectedPersona,
       pendingPersonaByConv: new Map(pendingPersonaByConvRef.current),
+      serverModelByConv: new Map(serverModelByConvRef.current),
       selectedModel,
       skills,
       serverConfig,
@@ -2505,7 +2532,12 @@ export function ChatExperience({
             conv.persona ||
             defaultPersona,
         );
-        setSelectedModel(conv.model || currentDefaultModel());
+        const hydratedModel = conv.model || currentDefaultModel();
+        if (!options.background || serverModelByConvRef.current.has(conversationId)) {
+          serverModelByConvRef.current.set(conversationId, hydratedModel);
+          syncServerModelSnapshot();
+          setSelectedModel(hydratedModel);
+        }
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
       // This navigation just superseded any load still in flight, whose
@@ -2705,7 +2737,12 @@ export function ChatExperience({
         // Enter-to-open shortcut armed after the user has already landed somewhere.
         setFocusedConversationId(null);
         setSelectedPersona(effectiveConvPersona);
-        setSelectedModel(hydratedConversation.model || currentDefaultModel());
+        const hydratedModel = hydratedConversation.model || currentDefaultModel();
+        if (!options.background || serverModelByConvRef.current.has(hydratedConversation.id)) {
+          serverModelByConvRef.current.set(hydratedConversation.id, hydratedModel);
+          syncServerModelSnapshot();
+          setSelectedModel(hydratedModel);
+        }
         // Reset compaction UI state so the freshly-loaded conversation
         // starts with pre-summary turns collapsed (when present) and
         // any prior error from another chat does not leak into this one.
@@ -3185,7 +3222,10 @@ export function ChatExperience({
 
   const lastAssistantMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id;
+      const m = messages[i];
+      if (m.role === "assistant" && m.kind !== "summary" && !isNoticeOnlyMessage(m)) {
+        return m.id;
+      }
     }
     return null;
   }, [messages]);
@@ -5440,6 +5480,7 @@ export function ChatExperience({
     activeConversationIdRef,
     messagesByConvRef,
     pendingApprovalScrollRef,
+    serverModelByConvRef,
     selectedModel,
     selectedPersona,
     mcpServers,

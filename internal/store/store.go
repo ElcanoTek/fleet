@@ -13,12 +13,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -922,26 +924,36 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 }
 
 // ConversationModelEntry is a lightweight summary returned by
-// ListConversationsForModelUpdate for `fleet chat set-model --dry-run`.
+// ListConversationsForModelUpdate for `fleet chat set-model --dry-run` and
+// operator model rollouts.
 type ConversationModelEntry struct {
-	ID        string
-	UserEmail string
-	Model     string
-	Title     string
-	Lockdown  bool
+	ID          string `json:"id"`
+	UserEmail   string `json:"user_email"`
+	Model       string `json:"model"`
+	Title       string `json:"title"`
+	Lockdown    bool   `json:"lockdown"`
+	HasMessages bool   `json:"has_messages"`
+}
+
+// ConversationModelRolloutResult summarizes a conversation model rollout.
+type ConversationModelRolloutResult struct {
+	MatchedCount  int `json:"matched_count"`
+	UpdatedCount  int `json:"updated_count"`
+	NotifiedCount int `json:"notified_count"`
 }
 
 // ListConversationsForModelUpdate lists non-deleted conversations that would be
-// updated by BulkUpdateConversationModel(ctx, ..., fromModel, includeLockdown).
+// inspected by BulkUpdateConversationModel / RolloutConversationModel.
 // When includeLockdown is false, lockdown conversations are excluded.
 func (s *Store) ListConversationsForModelUpdate(ctx context.Context, fromModel string, includeLockdown bool) ([]ConversationModelEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, COALESCE(model, ''), COALESCE(title, ''), COALESCE(lockdown, FALSE)
-		 FROM conversations
-		 WHERE deleted_at IS NULL
-		   AND ($1 = '' OR model = $1)
-		   AND ($2 OR NOT COALESCE(lockdown, FALSE))
-		 ORDER BY updated_at DESC, id ASC`,
+		`SELECT c.id, c.user_email, COALESCE(c.model, ''), COALESCE(c.title, ''), COALESCE(c.lockdown, FALSE),
+		        EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+		 FROM conversations c
+		 WHERE c.deleted_at IS NULL
+		   AND ($1 = '' OR c.model = $1)
+		   AND ($2 OR NOT COALESCE(c.lockdown, FALSE))
+		 ORDER BY c.updated_at DESC, c.id ASC`,
 		strings.TrimSpace(fromModel), includeLockdown,
 	)
 	if err != nil {
@@ -951,7 +963,7 @@ func (s *Store) ListConversationsForModelUpdate(ctx context.Context, fromModel s
 	var out []ConversationModelEntry
 	for rows.Next() {
 		var e ConversationModelEntry
-		if err := rows.Scan(&e.ID, &e.UserEmail, &e.Model, &e.Title, &e.Lockdown); err != nil {
+		if err := rows.Scan(&e.ID, &e.UserEmail, &e.Model, &e.Title, &e.Lockdown, &e.HasMessages); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -979,6 +991,188 @@ func (s *Store) BulkUpdateConversationModel(ctx context.Context, model, fromMode
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+const modelRolloutAdvisoryLockKey int64 = 0x464c545f4d524f4c // "FLT_MROL"
+
+func discardSQLConn(conn *sql.Conn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.Raw(func(_ any) error { return driver.ErrBadConn })
+	_ = conn.Close()
+}
+
+// AcquireModelRolloutLock acquires a session-scoped PostgreSQL advisory lock on
+// a dedicated connection so concurrent HTTP and CLI model rollouts serialize
+// across both the chat and scheduler phases.
+func (s *Store) AcquireModelRolloutLock(ctx context.Context) (func(), error) {
+	if s == nil || s.db == nil {
+		return func() {}, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire model rollout lock connection: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, modelRolloutAdvisoryLockKey); err != nil {
+		// Context cancellation can race with Postgres granting the session lock;
+		// discard the underlying session so a half-locked connection never returns
+		// to database/sql's idle pool.
+		discardSQLConn(conn)
+		return nil, fmt.Errorf("acquire model rollout advisory lock: %w", err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			var unlocked bool
+			if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, modelRolloutAdvisoryLockKey).Scan(&unlocked); err != nil || !unlocked {
+				discardSQLConn(conn)
+				return
+			}
+			_ = conn.Close()
+		})
+	}, nil
+}
+
+const pendingFallbackRolloutSettingKey = "model_rollout_pending_fallback_from"
+
+// PendingFallbackRolloutFrom returns any durably persisted previous fallback
+// tier whose chat/task migration did not yet complete. Backed reports false
+// only when s or s.db is nil (embedded test Store).
+func (s *Store) PendingFallbackRolloutFrom(ctx context.Context) (string, bool, error) {
+	if s == nil || s.db == nil {
+		return "", false, nil
+	}
+	ws, err := s.WorkspaceSettings(ctx)
+	if err != nil {
+		return "", true, err
+	}
+	return strings.TrimSpace(ws[pendingFallbackRolloutSettingKey].Value), true, nil
+}
+
+// SetPendingFallbackRolloutFrom durably records (or clears when from == "") the
+// previous fallback tier until its rollout succeeds.
+func (s *Store) SetPendingFallbackRolloutFrom(ctx context.Context, from string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	from = strings.TrimSpace(from)
+	if from == "" {
+		return s.DeleteWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey)
+	}
+	_, err := s.SetWorkspaceSetting(ctx, pendingFallbackRolloutSettingKey, from, "system")
+	return err
+}
+
+// RolloutConversationModel upgrades the pinned model on matching non-deleted
+// conversations whose model actually differs from `model`, optionally inserting
+// a UI-only model_upgraded notice entry into conversations that already have at
+// least one message. Conversations already on `model` are left untouched (so
+// repeating a rollout is idempotent and never posts duplicate notices), empty
+// unused conversations update silently without cluttering an empty screen, and
+// conversations.updated_at is preserved so sidebar order and retention TTLs
+// stay intact.
+func (s *Store) RolloutConversationModel(ctx context.Context, model, fromModel string, includeLockdown, notify bool) (ConversationModelRolloutResult, error) {
+	target := strings.TrimSpace(model)
+	from := strings.TrimSpace(fromModel)
+	if target == "" {
+		return ConversationModelRolloutResult{}, fmt.Errorf("target model is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ConversationModelRolloutResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT c.id, COALESCE(c.model, ''),
+		        EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+		 FROM conversations c
+		 WHERE c.deleted_at IS NULL
+		   AND ($1 = '' OR c.model = $1)
+		   AND ($2 OR NOT COALESCE(c.lockdown, FALSE))
+		 ORDER BY c.id ASC
+		 FOR UPDATE`,
+		from, includeLockdown,
+	)
+	if err != nil {
+		return ConversationModelRolloutResult{}, err
+	}
+	type candidate struct {
+		id          string
+		prevModel   string
+		hasMessages bool
+	}
+	var changed []candidate
+	matched := 0
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.prevModel, &c.hasMessages); err != nil {
+			_ = rows.Close()
+			return ConversationModelRolloutResult{}, err
+		}
+		matched++
+		if strings.TrimSpace(c.prevModel) != target {
+			changed = append(changed, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return ConversationModelRolloutResult{}, err
+	}
+	_ = rows.Close()
+
+	if len(changed) == 0 {
+		if err := tx.Commit(); err != nil {
+			return ConversationModelRolloutResult{}, err
+		}
+		return ConversationModelRolloutResult{MatchedCount: matched}, nil
+	}
+
+	ids := make([]string, len(changed))
+	for i, c := range changed {
+		ids[i] = c.id
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET model = $1 WHERE id = ANY($2::text[])`,
+		target, ids,
+	); err != nil {
+		return ConversationModelRolloutResult{}, err
+	}
+
+	notified := 0
+	if notify {
+		now := time.Now().Unix()
+		for _, c := range changed {
+			if !c.hasMessages {
+				continue
+			}
+			payload, err := json.Marshal(agent.FormatModelUpgradeNotice(c.prevModel, target))
+			if err != nil {
+				return ConversationModelRolloutResult{}, err
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO messages (conversation_id, role, type, content, created_at, injected_context)
+				 VALUES ($1, 'system', $2, $3, $4, '')`,
+				c.id, agent.EntryTypeNotice, string(payload), now,
+			); err != nil {
+				return ConversationModelRolloutResult{}, err
+			}
+			notified++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ConversationModelRolloutResult{}, err
+	}
+	return ConversationModelRolloutResult{
+		MatchedCount:  matched,
+		UpdatedCount:  len(changed),
+		NotifiedCount: notified,
+	}, nil
 }
 
 // SetPersona updates the conversation's persona before any messages have been

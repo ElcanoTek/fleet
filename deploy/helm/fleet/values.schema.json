@@ -365,7 +365,7 @@
             "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT": { "type": ["string", "number", "boolean"], "description": "New chats are shared with the creator's team by default. Also an admin setting. Default: false." },
             "FLEET_TEMPERATURE": { "type": ["string", "number", "boolean"], "description": "Sampling temperature for chat and scheduled runs. Hot-reloadable. Default: 0.3." },
             "FLEET_TIMEZONE": { "type": ["string", "number", "boolean"], "description": "IANA timezone of the server clock used by the scheduler. Default: UTC." },
-            "FLEET_TITLE_MODEL": { "type": ["string", "number", "boolean"], "description": "Model that titles conversations. Default: google/gemini-4-argon." },
+            "FLEET_TITLE_MODEL": { "type": ["string", "number", "boolean"], "description": "Model that titles conversations. Default: google/gemini-4-hydrogen." },
             "FLEET_TLS_ACME_DIR": { "type": ["string", "number", "boolean"], "description": "ACME certificate cache directory. Default: /var/lib/fleet/acme-cache." },
             "FLEET_TLS_ACME_EMAIL": { "type": ["string", "number", "boolean"], "description": "Contact email registered with the ACME CA." },
             "FLEET_TLS_CERT_FILE": { "type": ["string", "number", "boolean"], "description": "Certificate file for FLEET_TLS_MODE=manual." },

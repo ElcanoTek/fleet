@@ -29,8 +29,8 @@ import (
 //     (default fast/low-cost CI tier: anthropic/claude-haiku-5.5 and
 //     google/gemini-3.8-flash, which exercise both explicit cache-control
 //     wire families; pass FLEET_CACHE_LIVE_MODELS=all for the full 5-model
-//     flagship matrix including anthropic/claude-opus-5.5,
-//     google/gemini-4-argon, and openai/gpt-6-luna-pro, or a comma-separated
+//     flagship matrix including google/gemini-4-hydrogen,
+//     anthropic/claude-opus-5.5, and openai/gpt-6-luna-pro, or a comma-separated
 //     model list). For each model, it executes a
 //     realistic 3-turn production conversation with a 6-tool Fleet roster:
 //     - Turn 1: a 3-step sequential tool chain (tool_search -> query_metrics
@@ -60,10 +60,10 @@ var defaultLiveCacheModels = []string{
 }
 
 var fullLiveCacheModels = []string{
-	DefaultCoreModel,             // anthropic/claude-opus-5.5 (Anthropic flagship, explicit rolling 4-breakpoint cache)
+	DefaultCoreModel,             // google/gemini-4-hydrogen (Google implicit prefix cache, default frontier tier)
 	"anthropic/claude-haiku-5.5", // Anthropic fast tier (explicit rolling 4-breakpoint cache)
 	"google/gemini-3.8-flash",    // Google Gemini explicit stable-prefix + implicit cache
-	DefaultMaxModel,              // google/gemini-4-argon (Google implicit prefix cache)
+	DefaultMaxModel,              // anthropic/claude-opus-5.5 (Anthropic flagship, explicit rolling 4-breakpoint cache)
 	"openai/gpt-6-luna-pro",      // OpenAI implicit prefix cache + sticky provider routing
 }
 
@@ -519,10 +519,11 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 }
 
 // liveImplicitOnly lists models that take fleet's stable-prefix breakpoint but
-// have no explicit cache upstream (cache.go: "Gemini 4 Argon has no explicit
-// caching (implicit only)"); see their use in TestPromptCacheLive.
+// have no explicit cache upstream (cache.go: Gemini 4 Hydrogen / Argon use
+// Google Vertex implicit prefix caching); see their use in TestPromptCacheLive.
 var liveImplicitOnly = map[string]bool{
-	"google/gemini-4-argon": true,
+	"google/gemini-4-hydrogen": true,
+	"google/gemini-4-argon":    true,
 }
 
 func assertLiveExplicitRollingCacheGrowth(t *testing.T, slug string, records []liveCacheRecord, warmHitPct float64) {

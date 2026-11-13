@@ -278,7 +278,7 @@ var table = []Entry{
 		Description: "Env default of the fallback frontier model tier (admin setting advanced_model)."},
 	{Name: "FLEET_PINNED_MODELS", Group: GroupModels, Scope: ScopeServer, Type: TypeString,
 		Description: "JSON array of `{\"slug\",\"label\",\"tag\",\"free\",\"input_price_per_mtok\",\"output_price_per_mtok\"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. The real slug is sent and recorded; setting `free: true` (or both prices to `0`) also installs a runtime `$0.00` pricing override unless overridden in `manifest.yaml`. A malformed value refuses to boot (docs/PINNED-MODELS.md)."},
-	{Name: "FLEET_TITLE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "google/gemini-4-argon",
+	{Name: "FLEET_TITLE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "google/gemini-4-hydrogen",
 		Description: "Model that titles conversations."},
 	{Name: "FLEET_METADATA_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, DefaultFrom: "FLEET_TITLE_MODEL",
 		Description: "Model for auxiliary metadata jobs."},

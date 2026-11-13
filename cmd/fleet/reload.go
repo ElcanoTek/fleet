@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -15,19 +16,55 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/settings"
 )
+
+const reloadScopeHeader = "X-Fleet-Reload-Scope"
+const reloadScopeModelTiers = "model_tiers"
+
+type reloadConfigOption func(*reloadConfigDeps)
+
+type reloadConfigDeps struct {
+	wsSvc      *settings.Service
+	inTierLock func(func() error) error
+}
+
+func withReloadWorkspaceSettings(wsSvc *settings.Service, inTierLock func(func() error) error) reloadConfigOption {
+	return func(d *reloadConfigDeps) {
+		d.wsSvc = wsSvc
+		d.inTierLock = inTierLock
+	}
+}
 
 // reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
 // reloadable settings from the env file + process environment and returns a JSON
-// diff of what changed / was skipped (non-reloadable) / errored. cfg may be nil
-// in route-walking tests (the route only needs to exist there); a real request
-// against a nil cfg returns 503.
-func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+// diff of what changed / was skipped (non-reloadable) / errored. When called
+// with X-Fleet-Reload-Scope: model_tiers by `fleet model set`/`reset`, it
+// instead refreshes only persisted model-tier rows from workspace_settings under
+// the server's in-process model-rollout lock. cfg may be nil in route-walking
+// tests (the route only needs to exist there); a real request against a nil cfg
+// returns 503.
+func reloadConfigHandler(cfg *config.Config, opts ...reloadConfigOption) http.HandlerFunc {
+	var deps reloadConfigDeps
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&deps)
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
 		if cfg == nil {
 			http.Error(w, "config reload unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if scope := strings.TrimSpace(r.Header.Get(reloadScopeHeader)); scope != "" {
+			if scope != reloadScopeModelTiers {
+				http.Error(w, "unknown reload scope", http.StatusBadRequest)
+				return
+			}
+			reloadModelTiersOnly(w, r, deps)
 			return
 		}
 		result, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
@@ -38,6 +75,46 @@ func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	}
+}
+
+func reloadModelTiersOnly(w http.ResponseWriter, r *http.Request, deps reloadConfigDeps) {
+	if deps.wsSvc == nil {
+		http.Error(w, "workspace settings unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	runLocked := deps.inTierLock
+	if runLocked == nil {
+		runLocked = func(fn func() error) error { return fn() }
+	}
+	result := config.ReloadResult{
+		ReloadedAt: time.Now().UTC(),
+		Changed:    []config.FieldChange{},
+		Skipped:    []config.SkippedField{},
+		Errors:     []config.ReloadError{},
+	}
+	if err := runLocked(func() error {
+		oldDef := agentcore.CurrentDefaultModel()
+		oldTask := agentcore.CurrentTaskModel()
+		oldFB := agentcore.CurrentFallbackModel()
+		if err := deps.wsSvc.ApplyKeys(r.Context(), "default_model", "advanced_model", "task_model"); err != nil {
+			return err
+		}
+		if nextDef := agentcore.CurrentDefaultModel(); nextDef != oldDef {
+			result.Changed = append(result.Changed, config.FieldChange{Key: "default_model", Old: oldDef, New: nextDef})
+		}
+		if nextTask := agentcore.CurrentTaskModel(); nextTask != oldTask {
+			result.Changed = append(result.Changed, config.FieldChange{Key: "task_model", Old: oldTask, New: nextTask})
+		}
+		if nextFB := agentcore.CurrentFallbackModel(); nextFB != oldFB {
+			result.Changed = append(result.Changed, config.FieldChange{Key: "advanced_model", Old: oldFB, New: nextFB})
+		}
+		return nil
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // onSignal runs fn on every sig until ctx is cancelled, and returns a stop func
@@ -141,16 +218,17 @@ func logMCPReload(summary *mcp.ReloadSummary, err error) {
 }
 
 // logConfigReload logs the outcome of a SIGUSR2-triggered reload.
-func logConfigReload(result config.ReloadResult, err error) {
+func logConfigReload(ctx context.Context, result config.ReloadResult, err error) {
+	log := logging.From(ctx)
 	if err != nil {
-		slog.Error("config reload (SIGUSR2): failed", "err", err)
+		log.Error("config reload (SIGUSR2): failed", "err", err)
 		return
 	}
-	slog.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
+	log.Info("config reload (SIGUSR2): done", "changed", len(result.Changed), "skipped", len(result.Skipped), "errors", len(result.Errors))
 	for _, ch := range result.Changed {
-		slog.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
+		log.Info("config reload: key changed", "key", ch.Key, "old", ch.Old, "new", ch.New)
 	}
 	for _, e := range result.Errors {
-		slog.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
+		log.Warn("config reload: setting not applied", "key", e.Key, "err", e.Error)
 	}
 }

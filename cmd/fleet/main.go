@@ -698,6 +698,7 @@ func run() error {
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
 	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
+	chatOpts = append(chatOpts, httpapi.WithTaskModelRollout(schedStorage.RolloutTaskModels))
 	chatOpts = append(chatOpts, httpapi.WithSchedPing(schedStorage.DB().Ping))
 	chatOpts = append(chatOpts, httpapi.WithTaskWorkspaceSweeper(schedStorage.SweepTaskWorkspaces))
 	chatOpts = append(chatOpts, httpapi.WithTaskOutlierProvider(taskOutlierProvider(schedStorage)))
@@ -714,7 +715,7 @@ func run() error {
 	// from the workspace_settings table and apply LIVE (PII redactor swap,
 	// config live setters, agentcore holders) — both now, at boot, and after
 	// every admin edit.
-	chatOpts = appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
+	chatOpts, workspaceSettingsSvc := appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
 
 	// Admin-managed task notification settings (internal/notifyadmin): the
 	// admin Notifications panel. A persisted admin row hot-swaps the shared
@@ -829,7 +830,12 @@ func run() error {
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
-	orchHandler := buildOrchestratorMux(h, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
+	orchHandler := buildOrchestratorMux(
+		h,
+		reloadConfigHandler(cfg, withReloadWorkspaceSettings(workspaceSettingsSvc, chatSrv.WithModelTierReloadLock)),
+		mcpReloadHandler(mgr),
+		cfg.TrustedProxies,
+	)
 
 	// ── scheduler ticker (promote scheduled→pending, recover leases, fire chat schedules) ──
 	sch.SetTickInterval(cfg.SchedTickSeconds)
@@ -1069,7 +1075,8 @@ func run() error {
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
 	defer onSignal(ctx, syscall.SIGUSR2, "cmd.config-reload", func() {
-		logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
+		res, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
+		logConfigReload(ctx, res, err)
 	})()
 
 	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply

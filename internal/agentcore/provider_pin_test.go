@@ -19,7 +19,7 @@ func TestUpstreamPinFor(t *testing.T) {
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		{DefaultCoreModel, "Google", false},        // default frontier tier (Gemini 4 Argon): soft pin to Google, official-weights pool (Google + Google AI Studio)
+		{DefaultCoreModel, "Google", false},        // default frontier tier (Gemini 4 Hydrogen): soft pin to Google, official-weights pool (Google + Google AI Studio)
 		{"openai/gpt-6-luna-pro", "OpenAI", false}, // previous everyday default: soft pin to OpenAI
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
@@ -405,10 +405,12 @@ func TestUpstreamPinFor_GemmaIsNotPinnedToGoogle(t *testing.T) {
 	if got := upstreamPinFor("google/gemma-4-31b-it"); got != nil {
 		t.Fatalf("upstreamPinFor(gemma-4-31b) = %+v, want nil", got)
 	}
-	// Gemini 4 Argon has a soft pin preferring Google with official-pool allow-list [Google, Google AI Studio].
-	g := upstreamPinFor("google/gemini-4-argon")
-	if g == nil || len(g.Order) != 1 || g.Order[0] != "Google" || len(g.Only) != 2 || g.Only[0] != "Google" || g.Only[1] != "Google AI Studio" || g.AllowFallbacks == nil || !*g.AllowFallbacks {
-		t.Fatalf("Gemini 4 Argon pin = %+v, want Order=[Google] Only=[Google, Google AI Studio] AllowFallbacks=true", g)
+	// Gemini 4 Hydrogen and Argon both have soft pins preferring Google with official-pool allow-list [Google, Google AI Studio].
+	for _, slug := range []string{"google/gemini-4-hydrogen", "google/gemini-4-argon"} {
+		g := upstreamPinFor(slug)
+		if g == nil || len(g.Order) != 1 || g.Order[0] != "Google" || len(g.Only) != 2 || g.Only[0] != "Google" || g.Only[1] != "Google AI Studio" || g.AllowFallbacks == nil || !*g.AllowFallbacks {
+			t.Fatalf("%s pin = %+v, want Order=[Google] Only=[Google, Google AI Studio] AllowFallbacks=true", slug, g)
+		}
 	}
 	// No preferred upstream, so a step served by any host is not a "fallback".
 	if got := preferredUpstreamFor("google/gemma-4-26b-a4b-it"); got != "" {

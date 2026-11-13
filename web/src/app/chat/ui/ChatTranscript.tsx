@@ -1306,7 +1306,7 @@ export function ChatTranscript({
                                 </div>
                               ) : null}
 
-                              <FleetNotices notices={message.notices} />
+                              <FleetNotices notices={message.notices} items={message.noticeItems} />
 
                               {message.memoryProposals && message.memoryProposals.length > 0 ? (
                                 <div className="grid gap-1.5">

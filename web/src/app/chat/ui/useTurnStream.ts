@@ -575,6 +575,7 @@ export interface TurnStreamDeps {
   activeConversationIdRef: RefObject<string | null>;
   messagesByConvRef: RefObject<ReadonlyMap<string, Message[]>>;
   pendingApprovalScrollRef: RefObject<string | null>;
+  serverModelByConvRef?: RefObject<Map<string, string>>;
   // Component state values (read-only in the loop).
   selectedModel: string;
   selectedPersona: string;
@@ -747,6 +748,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     activeConversationIdRef,
     messagesByConvRef,
     pendingApprovalScrollRef,
+    serverModelByConvRef,
     selectedModel,
     selectedPersona,
     mcpServers,
@@ -2311,6 +2313,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // POST, so by the time this event lands the user's slot is either
       // still pk (match the second branch) or they moved on (don't
       // touch their view).
+      if (typeof p.model === "string") {
+        serverModelByConvRef?.current.set(
+          p.id,
+          p.model || currentDefaultModel(),
+        );
+      }
       if (currentActive === p.id || currentActive === oldTarget) {
         activeConversationIdRef.current = p.id;
         setActiveConversationId(p.id);
@@ -2328,13 +2336,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // dot never painted.
       setConversations((curr) => {
         if (curr.some((c) => c.id === p.id)) {
-          return curr.map((c) =>
-            c.id === p.id &&
-            p.title &&
-            (!c.title || c.title === "New conversation")
-              ? { ...c, title: p.title }
-              : c,
-          );
+          return curr.map((c) => {
+            if (c.id !== p.id) return c;
+            const nextTitle =
+              p.title && (!c.title || c.title === "New conversation")
+                ? p.title
+                : c.title;
+            const nextModel =
+              typeof p.model === "string" ? p.model : c.model;
+            return nextTitle !== c.title || nextModel !== c.model
+              ? { ...c, title: nextTitle, model: nextModel }
+              : c;
+          });
         }
         const optimistic: ConversationSummary = {
           id: p.id,
@@ -3888,12 +3901,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           activeConvKey: activeConversationIdRef.current,
           target,
         });
-        if (adoption.adoptIntoPicker) setSelectedModel(refusal.model);
+        if (adoption.adoptIntoPicker) {
+          if (target && !isPendingKey(target)) {
+            serverModelByConvRef?.current.set(target, refusal.model);
+          }
+          setSelectedModel(refusal.model);
+        }
         if (adoption.resend) {
+          const { base_model: _droppedBaseModel, ...retryBody } = body;
+          void _droppedBaseModel;
           return streamTurn(
             assistantId,
             abortController,
-            { ...body, model: refusal.model },
+            { ...retryBody, model: refusal.model },
             target,
             accepted,
             true,
@@ -4561,6 +4581,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
     if (convId && !isPendingKey(convId)) {
       body.conversation_id = convId;
+      if (opts?.model === undefined) {
+        const baseModel = serverModelByConvRef?.current.get(convId)?.trim();
+        if (baseModel && baseModel === trimmedModel) {
+          body.base_model = baseModel;
+        }
+      }
     } else {
       body.title = value.length > 80 ? value.slice(0, 80) + "…" : value;
       // Pre-chat tool toggles — the backend persists these onto the

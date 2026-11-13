@@ -37,8 +37,8 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-4-argon";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Argon";
+export const DEFAULT_MODEL = "google/gemini-4-hydrogen";
+export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Hydrogen";
 
 export const FALLBACK_MODEL = "anthropic/claude-opus-5.5";
 export const FALLBACK_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
@@ -48,11 +48,9 @@ export const ADVANCED_MODEL_LABEL = FALLBACK_MODEL_LABEL;
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback
-// only — the effective slug is the operator's FLEET_TASK_FALLBACK_MODEL,
-// which arrives as `task_fallback_model` on /api/client-config. Read it via
-// currentTaskFallbackModel(). (The form's pre-filled PRIMARY is the live
-// task tier, currentTaskModel(): the admin "Task model" setting, which
-// follows the default frontier tier unless overridden.)
+// only — the effective slug is the operator's FLEET_TASK_FALLBACK_MODEL
+// (`task_fallback_model` on /api/client-config) when set, else the workspace's
+// live fallback tier (`advanced_model`). Read it via currentTaskFallbackModel().
 export const DEFAULT_TASK_FALLBACK_MODEL = FALLBACK_MODEL;
 
 // Display names for slugs we know by heart. An admin-configured tier
@@ -61,6 +59,11 @@ export const DEFAULT_TASK_FALLBACK_MODEL = FALLBACK_MODEL;
 const KNOWN_LABELS: Readonly<Record<string, string>> = {
   [DEFAULT_MODEL]: DEFAULT_MODEL_LABEL,
   [ADVANCED_MODEL]: ADVANCED_MODEL_LABEL,
+  "google/gemini-4-argon": "Google: Gemini 4 Argon",
+  "google/gemini-3.8-flash": "Google: Gemini 3.8 Flash",
+  "anthropic/claude-sonnet-4-6": "Anthropic: Claude Sonnet 4.6",
+  "anthropic/claude-haiku-5.5": "Anthropic: Claude Haiku 5.5",
+  "openai/gpt-6-luna-pro": "OpenAI: GPT-6 Luna Pro",
 };
 
 // The live tier pair. Module scope, same lifecycle as useClientConfig's
@@ -162,7 +165,10 @@ export function setModelTiers(cfg: ModelTiersConfig | null | undefined): void {
     // An older server sends no task_model; the task tier then follows the
     // default frontier tier, which is what the server resolves too.
     taskModel: task || defaultModel,
-    taskFallbackModel: fb || DEFAULT_TASK_FALLBACK_MODEL,
+    // When FLEET_TASK_FALLBACK_MODEL is unset, newly created tasks follow the
+    // workspace's live fallback tier (advancedModel) rather than reverting to
+    // the static compiled-in constant.
+    taskFallbackModel: fb || advancedModel,
   };
   livePinned = parsePinned(cfg?.pinned);
 }
@@ -185,8 +191,8 @@ export function pinnedLabelFor(slug: string): string | undefined {
 }
 
 // currentTaskFallbackModel is the fallback slug the task-create form pre-fills:
-// the operator's scheduler fallback when one is configured, else the
-// compiled-in DEFAULT_TASK_FALLBACK_MODEL.
+// the operator's scheduler fallback (FLEET_TASK_FALLBACK_MODEL) when one is
+// configured, else the workspace's live fallback tier (advanced_model).
 export function currentTaskFallbackModel(): string {
   return liveTiers.taskFallbackModel;
 }

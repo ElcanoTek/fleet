@@ -329,6 +329,63 @@ func (s *fakeChatStore) LoadHistory(_ context.Context, convID string) ([]agent.H
 	return append([]agent.HistoryEntry(nil), s.history[convID]...), nil
 }
 
+func (s *fakeChatStore) ListConversationsForModelUpdate(_ context.Context, fromModel string, includeLockdown bool) ([]store.ConversationModelEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	from := strings.TrimSpace(fromModel)
+	var out []store.ConversationModelEntry
+	for _, c := range s.convs {
+		if !includeLockdown && c.Lockdown {
+			continue
+		}
+		if from != "" && strings.TrimSpace(c.Model) != from {
+			continue
+		}
+		out = append(out, store.ConversationModelEntry{
+			ID:          c.ID,
+			UserEmail:   c.UserEmail,
+			Model:       c.Model,
+			Title:       c.Title,
+			Lockdown:    c.Lockdown,
+			HasMessages: len(s.history[c.ID]) > 0,
+		})
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) RolloutConversationModel(_ context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	target := strings.TrimSpace(model)
+	from := strings.TrimSpace(fromModel)
+	var res store.ConversationModelRolloutResult
+	for _, c := range s.convs {
+		if !includeLockdown && c.Lockdown {
+			continue
+		}
+		if from != "" && strings.TrimSpace(c.Model) != from {
+			continue
+		}
+		res.MatchedCount++
+		prev := strings.TrimSpace(c.Model)
+		if prev == target {
+			continue
+		}
+		c.Model = target
+		res.UpdatedCount++
+		if notify && len(s.history[c.ID]) > 0 {
+			raw, _ := json.Marshal(agent.FormatModelUpgradeNotice(prev, target))
+			s.history[c.ID] = append(s.history[c.ID], agent.HistoryEntry{
+				Role:    "system",
+				Type:    agent.EntryTypeNotice,
+				Content: raw,
+			})
+			res.NotifiedCount++
+		}
+	}
+	return res, nil
+}
+
 func (s *fakeChatStore) AppendHistory(_ context.Context, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -60,7 +60,6 @@ var bareSlogAllowed = map[string]string{
 	"cmd/fleet.performShutdown":                         reasonSignal,
 	"cmd/fleet.logApprovalDrain":                        reasonSignal,
 	"cmd/fleet.logChatDrain":                            reasonSignal,
-	"cmd/fleet.logConfigReload":                         reasonSignal,
 	"cmd/fleet.logMCPReload":                            reasonSignal,
 	"internal/agent.RegisterA2APeers":                   reasonBoot,
 	"internal/agent.RegisterHTTPTools":                  reasonBoot,

@@ -16,8 +16,16 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/settings"
 )
+
+type adminSettingWriteResponse struct {
+	settings.Resolved
+	Rollout      *ModelRolloutResponse `json:"rollout,omitempty"`
+	RolloutError string                `json:"rollout_error,omitempty"`
+	RolloutRetry *ModelRolloutRequest  `json:"rollout_retry,omitempty"`
+}
 
 // workspaceSettingsService is the seam the admin settings endpoints call,
 // satisfied by *settings.Service and injected via WithWorkspaceSettings.
@@ -68,27 +76,123 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodPut:
 		var body struct {
-			Value string `json:"value"`
+			Value       string `json:"value"`
+			Rollout     bool   `json:"rollout"`
+			NotifyChats *bool  `json:"notify_chats"`
 		}
 		if !decodeJSONBody(w, r, &body) {
 			return
 		}
-		resolved, err := s.workspaceSettings.Set(r.Context(), key, body.Value, userFromCtx(r.Context()))
-		if err != nil {
-			httpErrorForSetting(w, err)
-			return
-		}
-		writeJSON(w, r, resolved)
+		s.writeAdminSettingItem(w, r, key, body.Value, body.Rollout, body.NotifyChats)
 	case http.MethodDelete:
-		resolved, err := s.workspaceSettings.Reset(r.Context(), key, userFromCtx(r.Context()))
-		if err != nil {
-			httpErrorForSetting(w, err)
-			return
+		rollout := r.URL.Query().Get("rollout") == "true"
+		var notifyChats *bool
+		if raw := r.URL.Query().Get("notify_chats"); raw == "true" || raw == "false" {
+			v := raw == "true"
+			notifyChats = &v
 		}
-		writeJSON(w, r, resolved)
+		s.resetAdminSettingItem(w, r, key, rollout, notifyChats)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) writeAdminSettingItem(w http.ResponseWriter, r *http.Request, key, value string, wantRollout bool, notifyChats *bool) {
+	ctx := r.Context()
+	if isModelTierSettingKey(key) {
+		release, err := s.acquireModelRolloutLock(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer release()
+	}
+	prevFallback := agentcore.CurrentFallbackModel()
+	prevTask := agentcore.CurrentTaskModel()
+	if key == "advanced_model" && wantRollout {
+		if normVal, verr := validateRolloutModelSlug(key, value); verr == nil {
+			if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, normVal); perr != nil {
+				http.Error(w, perr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	resolved, err := s.workspaceSettings.Set(ctx, key, value, userFromCtx(ctx))
+	if err != nil {
+		httpErrorForSetting(w, err)
+		return
+	}
+	if !wantRollout {
+		if key == "advanced_model" {
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		writeJSON(w, r, resolved)
+		return
+	}
+	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+	if rerr != nil {
+		resp.RolloutError = rerr.Error()
+		resp.RolloutRetry = retryReq
+	}
+	writeJSON(w, r, resp)
+}
+
+func (s *Server) resetAdminSettingItem(w http.ResponseWriter, r *http.Request, key string, wantRollout bool, notifyChats *bool) {
+	ctx := r.Context()
+	if isModelTierSettingKey(key) {
+		release, err := s.acquireModelRolloutLock(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer release()
+	}
+	prevFallback := agentcore.CurrentFallbackModel()
+	prevTask := agentcore.CurrentTaskModel()
+	if key == "advanced_model" && wantRollout {
+		snap, serr := s.workspaceSettings.Snapshot(ctx)
+		if serr != nil {
+			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			return
+		}
+		var resetDefault string
+		for _, item := range snap {
+			if item.Key == "advanced_model" {
+				resetDefault = item.Default
+				break
+			}
+		}
+		if perr := s.preparePendingFallbackBeforeTierWriteLocked(ctx, prevFallback, resetDefault); perr != nil {
+			http.Error(w, perr.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	resolved, err := s.workspaceSettings.Reset(ctx, key, userFromCtx(ctx))
+	if err != nil {
+		httpErrorForSetting(w, err)
+		return
+	}
+	if !wantRollout {
+		if key == "advanced_model" {
+			if cerr := s.clearPendingFallbackFromLocked(ctx); cerr != nil {
+				http.Error(w, cerr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		writeJSON(w, r, resolved)
+		return
+	}
+	rollout, retryReq, rerr := s.rolloutAfterSettingChangeLocked(ctx, key, prevFallback, prevTask, notifyChats)
+	resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+	if rerr != nil {
+		resp.RolloutError = rerr.Error()
+		resp.RolloutRetry = retryReq
+	}
+	writeJSON(w, r, resp)
 }
 
 // httpErrorForSetting maps service errors: unknown key → 404, a validation

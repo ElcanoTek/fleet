@@ -441,6 +441,20 @@ func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model string
 	return s.db.UpdateTasksModelBatch(ctx, model, fallbackModel, fromModel)
 }
 
+// RolloutTaskModels upgrades primary and/or fallback models across upcoming
+// scheduled and pending tasks, and durably records pending overrides for any
+// recurring tasks currently mid-run so their next spawned occurrence inherits
+// the rollout across restarts without clobbering subsequent edits.
+func (s *Storage) RolloutTaskModels(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error) {
+	return s.db.RolloutTaskModels(ctx, opts, dryRun)
+}
+
+// ListTasksForModelStatus returns upcoming and active recurring tasks with
+// effective post-rollout models overlaid for read-only CLI inspection.
+func (s *Storage) ListTasksForModelStatus(ctx context.Context) ([]*models.Task, error) {
+	return s.db.ListTasksForModelStatus(ctx)
+}
+
 // ListScheduledTasks returns all scheduled tasks.
 func (s *Storage) ListScheduledTasks(ctx context.Context) ([]*models.Task, error) {
 	return s.db.GetAllScheduledTasks(ctx)
@@ -1227,11 +1241,25 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 		return nil, err
 	}
 	priorPriority := task.Priority
+	priorModel := cloneOptModelPtr(task.Model)
+	priorFallback := cloneOptModelPtr(task.FallbackModel)
+	priorRecurrence := strings.TrimSpace(task.Recurrence)
 	if err := mutate(task); err != nil {
 		return nil, err
 	}
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
+	}
+	modelChanged := !sameOptModelPtr(priorModel, task.Model)
+	fallbackChanged := !sameOptModelPtr(priorFallback, task.FallbackModel)
+	recurrenceRemoved := priorRecurrence != "" && strings.TrimSpace(task.Recurrence) == ""
+	if recurrenceRemoved {
+		modelChanged, fallbackChanged = true, true
+	}
+	if (modelChanged || fallbackChanged) && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled || recurrenceRemoved) {
+		if err := s.db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, task.ID, modelChanged, fallbackChanged); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
@@ -1240,6 +1268,25 @@ func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate f
 		return nil, err
 	}
 	return task, nil
+}
+
+func cloneOptModelPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func sameOptModelPtr(a, b *string) bool {
+	var av, bv string
+	if a != nil {
+		av = strings.TrimSpace(*a)
+	}
+	if b != nil {
+		bv = strings.TrimSpace(*b)
+	}
+	return av == bv
 }
 
 // TaskOwnerCheckError is SetTaskOwner's refusal: the caller's check rejected
@@ -2127,9 +2174,20 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		}
 	}
 
+	// Consume any pending model rollout override only after parking checks pass,
+	// so a parked occurrence retains its upgrade if replayed later.
+	rolloutOv, hasRolloutOv, err := s.db.ConsumeRecurrenceModelOverrideTx(ctx, tx, current.ID)
+	if err != nil {
+		logging.From(ctx).Warn("Error reading recurrence model override (the reconciliation sweep will retry)", "task_id", current.ID, "err", err)
+		return false
+	}
+
 	// Build the next occurrence from the CURRENT definition (re-read under the
 	// claim lock), via TaskToCreate — the single canonical Task→TaskCreate clone.
 	tc := models.TaskToCreate(current)
+	if hasRolloutOv {
+		tc.Model, tc.FallbackModel = rolloutOv.ApplyToPointers(tc.Model, tc.FallbackModel)
+	}
 	if current.RecurrenceRemaining != nil {
 		remaining := *current.RecurrenceRemaining - 1
 		tc.RecurrenceRemaining = &remaining

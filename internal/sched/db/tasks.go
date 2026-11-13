@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -153,8 +154,8 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 		return err
 	}
 	var existingStatus models.TaskStatus
-	var existingRecurrence sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT status, recurrence FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus, &existingRecurrence)
+	var existingRecurrence, existingModel, existingFallback sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT status, recurrence, model, fallback_model FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus, &existingRecurrence, &existingModel, &existingFallback)
 	existed := true
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -164,6 +165,18 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 	}
 	if _, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...); err != nil {
 		return err
+	}
+	if existed {
+		clearPrimary := !nullStringSameAsModelPtr(existingModel, task.Model)
+		clearFallback := !nullStringSameAsModelPtr(existingFallback, task.FallbackModel)
+		if strings.TrimSpace(task.Recurrence) == "" {
+			clearPrimary, clearFallback = true, true
+		}
+		if clearPrimary || clearFallback {
+			if err := db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, task.ID, clearPrimary, clearFallback); err != nil {
+				return err
+			}
+		}
 	}
 	existingTerminal := existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus})
 	// A freshly inserted successor proves its predecessor's chain continued:
@@ -235,6 +248,17 @@ func liveTaskStatus(s models.TaskStatus) bool {
 	return s == models.TaskStatusPending || s == models.TaskStatusScheduled
 }
 
+func nullStringSameAsModelPtr(ns sql.NullString, p *string) bool {
+	var a, b string
+	if ns.Valid {
+		a = strings.TrimSpace(ns.String)
+	}
+	if p != nil {
+		b = strings.TrimSpace(*p)
+	}
+	return a == b
+}
+
 // scanTask scans one tasks row into a models.Task. The scan destinations and
 // the per-column conversions both come from taskColumnRegistry's read set —
 // the SAME ordered slice taskColumns is joined from — so the SELECT list and
@@ -297,36 +321,71 @@ func (db *Database) UpdateTask(ctx context.Context, task *models.Task) error {
 // non-empty string sets them. Callers must distinguish "flag not
 // provided" from "explicitly clear" (#1120).
 func (db *Database) UpdateTasksModelBatch(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
-	var res sql.Result
-	var err error
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	status := string(models.TaskStatusScheduled)
+	var rows *sql.Rows
 	switch {
 	case fallbackModel == nil && fromModel != "":
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1
-			WHERE status = $2 AND model = $3`,
+			WHERE status = $2 AND model = $3
+			RETURNING id`,
 			model, status, fromModel)
 	case fallbackModel == nil:
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1
-			WHERE status = $2`,
+			WHERE status = $2
+			RETURNING id`,
 			model, status)
 	case fromModel != "":
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
-			WHERE status = $3 AND model = $4`,
+			WHERE status = $3 AND model = $4
+			RETURNING id`,
 			model, nullableString(*fallbackModel), status, fromModel)
 	default:
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
-			WHERE status = $3`,
+			WHERE status = $3
+			RETURNING id`,
 			model, nullableString(*fallbackModel), status)
 	}
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	var updatedIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if serr := rows.Scan(&id); serr != nil {
+			_ = rows.Close()
+			return 0, serr
+		}
+		updatedIDs = append(updatedIDs, id)
+	}
+	if rerr := rows.Err(); rerr != nil {
+		_ = rows.Close()
+		return 0, rerr
+	}
+	_ = rows.Close()
+
+	slices.SortFunc(updatedIDs, func(a, b uuid.UUID) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	clearFallback := fallbackModel != nil
+	for _, id := range updatedIDs {
+		if cerr := db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, id, true, clearFallback); cerr != nil {
+			return 0, cerr
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(updatedIDs), nil
 }
 
 // SetErrorAnalysis persists the post-failure LLM diagnosis (#317) as a narrow,
