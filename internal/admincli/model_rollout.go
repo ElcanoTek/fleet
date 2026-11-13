@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/settings"
@@ -20,13 +20,23 @@ import (
 
 func cmdModel(argv []string) int {
 	if len(argv) == 0 {
-		return errf(1, "usage: fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--from-fallback-model <slug>] [--notify=true] [--recurring-only] [--set-workspace-tiers [--server <addr>] [--admin-key <key>] [--offline]] [--dry-run] [--no-confirm]")
+		fmt.Fprint(os.Stderr, modelUsageText)
+		return 1
 	}
 	switch argv[0] {
+	case "help", "-h", "--help":
+		fmt.Print(modelUsageText)
+		return 0
+	case "status", "show", "list":
+		return modelStatus(argv[1:])
+	case "set":
+		return modelRolloutCmd("model set", true, argv[1:])
 	case "rollout", "upgrade":
-		return modelRollout(argv[1:])
+		return modelRolloutCmd("model rollout", false, argv[1:])
+	case "reset":
+		return modelResetCmd(argv[1:])
 	default:
-		return errf(1, "unknown model subcommand %q (want rollout)", argv[0])
+		return errf(1, "unknown model subcommand %q (want status, set, rollout, or reset; see 'fleet model help')", argv[0])
 	}
 }
 
@@ -46,35 +56,11 @@ type modelRolloutTaskStore interface {
 }
 
 func resolveEffectiveBoxTiers(ctx context.Context, chatSt any) (defaultModel, taskModel, fallbackModel string, err error) {
-	defaultModel = agentcore.DefaultCoreModel
-	if v := strings.TrimSpace(envOrFile("FLEET_DEFAULT_MODEL")); v != "" {
-		defaultModel = v
+	defTier, taskTier, fbTier, err := resolveBoxTierDetails(ctx, chatSt, nil)
+	if err != nil {
+		return "", "", "", err
 	}
-	fallbackModel = agentcore.DefaultFallbackModel
-	if v := strings.TrimSpace(envOrFile("FLEET_ADVANCED_MODEL")); v != "" {
-		fallbackModel = v
-	}
-	taskOverride := strings.TrimSpace(envOrFile("FLEET_TASK_MODEL"))
-	if r, ok := chatSt.(chatWorkspaceSettingsReader); ok {
-		ws, err := r.WorkspaceSettings(ctx)
-		if err != nil {
-			return "", "", "", err
-		}
-		if v, ok := ws["default_model"]; ok && strings.TrimSpace(v.Value) != "" {
-			defaultModel = strings.TrimSpace(v.Value)
-		}
-		if v, ok := ws["advanced_model"]; ok && strings.TrimSpace(v.Value) != "" {
-			fallbackModel = strings.TrimSpace(v.Value)
-		}
-		if v, ok := ws["task_model"]; ok && strings.TrimSpace(v.Value) != "" {
-			taskOverride = strings.TrimSpace(v.Value)
-		}
-	}
-	taskModel = defaultModel
-	if taskOverride != "" {
-		taskModel = taskOverride
-	}
-	return defaultModel, taskModel, fallbackModel, nil
+	return defTier.Value, taskTier.Value, fbTier.Value, nil
 }
 
 func validateCLIModelSlug(flagName, raw string) (string, error) {
@@ -85,23 +71,29 @@ func validateCLIModelSlug(flagName, raw string) (string, error) {
 	return v, nil
 }
 
-// modelRollout implements `fleet model rollout`: one-shot upgrade across chats
-// (with optional upgrade notices) and scheduled/recurring tasks.
-func modelRollout(argv []string) int {
-	fs := flag.NewFlagSet("model rollout", flag.ContinueOnError)
+func modelRolloutCmd(name string, defaultSetTiers bool, argv []string) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "Postgres DSN (default: DATABASE_URL)")
-	model := fs.String("model", "", "primary model slug to roll out (omit with --fallback-model omitted to sync to the box's effective tiers)")
-	fallback := fs.String("fallback-model", "", "fallback model slug to roll out ('' clears task fallback_model to NULL)")
+	model := fs.String("model", "", "primary model slug for both live chats and scheduled/recurring tasks")
+	chatModel := fs.String("chat-model", "", "primary model slug for live chats only (overrides --model for chats)")
+	taskModel := fs.String("task-model", "", "primary model slug for scheduled/recurring tasks only (overrides --model for tasks)")
+	fallback := fs.String("fallback-model", "", "fallback model slug ('' clears task fallback_model to NULL when --set-workspace-tiers=false)")
 	fromModel := fs.String("from-model", "", "only update chats and task primary models currently pinned to this slug")
 	fromFallback := fs.String("from-fallback-model", "", "only update task fallback_model currently pinned to this slug")
-	notify := fs.Bool("notify", true, "insert a UI-only model upgrade notice into non-empty chats whose model changes")
+	chats := fs.Bool("chats", true, "include live chat conversations in the rollout")
+	tasks := fs.Bool("tasks", true, "include scheduled and recurring tasks in the rollout")
+	rollout := fs.Bool("rollout", true, "roll out model changes to existing chats and/or tasks (false updates workspace_settings tiers only)")
+	notify := fs.Bool("notify", true, "insert a UI-only model upgrade notice into active (non-empty) chats whose model changes")
 	recurringOnly := fs.Bool("recurring-only", false, "restrict task updates to recurring cron tasks")
-	setTiers := fs.Bool("set-workspace-tiers", false, "also persist --model / --fallback-model as workspace_settings overrides and reload the running server")
-	serverAddr := fs.String("server", "", "orchestrator address for live --set-workspace-tiers reload (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
-	adminKey := fs.String("admin-key", "", "admin API key for live --set-workspace-tiers reload (default ADMIN_API_KEY env or fleet.env)")
-	offline := fs.Bool("offline", false, "persist --set-workspace-tiers without notifying a running server (use only when fleet serve is stopped)")
-	dryRun := fs.Bool("dry-run", false, "preview chats and tasks that would update without writing")
+	setTiers := fs.Bool("set-workspace-tiers", defaultSetTiers, "persist tier overrides in workspace_settings and hot-reload the running server")
+	serverAddr := fs.String("server", "", "orchestrator address for live tier reload (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
+	adminKey := fs.String("admin-key", "", "admin API key for live tier reload (default ADMIN_API_KEY env or fleet.env)")
+	offline := fs.Bool("offline", false, "persist workspace_settings without notifying a running server (use only when fleet serve is stopped)")
+	dryRun := fs.Bool("dry-run", false, "preview changes without writing")
 	noConfirm := fs.Bool("no-confirm", false, "skip interactive confirmation")
+	yes := fs.Bool("yes", false, "skip interactive confirmation (alias for --no-confirm)")
+	shortYes := fs.Bool("y", false, "skip interactive confirmation (shorthand for --yes)")
+	asJSON := fs.Bool("json", false, "emit structured JSON result on stdout")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -109,8 +101,29 @@ func modelRollout(argv []string) int {
 		return errf(1, "unexpected positional argument %q", fs.Arg(0))
 	}
 
-	modelOpt := optionalFlag(fs, "model", model)
-	fallbackOpt := optionalFlag(fs, "fallback-model", fallback)
+	opts := modelRolloutOptions{
+		model:             optionalFlag(fs, "model", model),
+		chatModel:         optionalFlag(fs, "chat-model", chatModel),
+		taskModel:         optionalFlag(fs, "task-model", taskModel),
+		fallbackModel:     optionalFlag(fs, "fallback-model", fallback),
+		fromModel:         strings.TrimSpace(*fromModel),
+		fromFallbackModel: strings.TrimSpace(*fromFallback),
+		chatsSet:          flagWasSet(fs, "chats"),
+		chats:             *chats,
+		tasksSet:          flagWasSet(fs, "tasks"),
+		tasks:             *tasks,
+		rolloutSet:        flagWasSet(fs, "rollout"),
+		rollout:           *rollout,
+		notify:            *notify,
+		recurringOnly:     *recurringOnly,
+		setWorkspaceTiers: *setTiers,
+		serverAddr:        *serverAddr,
+		adminKey:          *adminKey,
+		offline:           *offline,
+		dryRun:            *dryRun,
+		noConfirm:         *noConfirm || *yes || *shortYes,
+		asJSON:            *asJSON,
+	}
 
 	dsn, err := chatDSN(*dbURL)
 	if err != nil {
@@ -128,27 +141,22 @@ func modelRollout(argv []string) int {
 	}
 	defer schedSt.Close()
 
-	return runModelRollout(context.Background(), chatSt, schedSt, os.Stdout, os.Stderr, modelRolloutOptions{
-		model:             modelOpt,
-		fallbackModel:     fallbackOpt,
-		fromModel:         strings.TrimSpace(*fromModel),
-		fromFallbackModel: strings.TrimSpace(*fromFallback),
-		notify:            *notify,
-		recurringOnly:     *recurringOnly,
-		setWorkspaceTiers: *setTiers,
-		serverAddr:        *serverAddr,
-		adminKey:          *adminKey,
-		offline:           *offline,
-		dryRun:            *dryRun,
-		noConfirm:         *noConfirm,
-	})
+	return runModelRollout(context.Background(), chatSt, schedSt, os.Stdout, os.Stderr, opts)
 }
 
 type modelRolloutOptions struct {
 	model             *string
+	chatModel         *string
+	taskModel         *string
 	fallbackModel     *string
 	fromModel         string
 	fromFallbackModel string
+	chatsSet          bool
+	chats             bool
+	tasksSet          bool
+	tasks             bool
+	rolloutSet        bool
+	rollout           bool
 	notify            bool
 	recurringOnly     bool
 	setWorkspaceTiers bool
@@ -157,17 +165,61 @@ type modelRolloutOptions struct {
 	offline           bool
 	dryRun            bool
 	noConfirm         bool
+	asJSON            bool
+}
+
+func (o *modelRolloutOptions) normalizeDefaults() {
+	if !o.chatsSet {
+		o.chats = true
+	}
+	if !o.tasksSet {
+		o.tasks = true
+	}
+	if !o.rolloutSet {
+		o.rollout = true
+	}
+}
+
+func (o modelRolloutOptions) hasAnyModelFlag() bool {
+	return o.model != nil || o.chatModel != nil || o.taskModel != nil || o.fallbackModel != nil
+}
+
+// tierAction describes a single workspace_settings write (set==true) or delete (set==false).
+type tierAction struct {
+	key   string
+	set   bool
+	value string
 }
 
 type modelRolloutPlan struct {
+	tierActions     []tierAction
 	chatTarget      string
 	chatFrom        string
 	includeLockdown bool
+	runTasks        bool
 	taskRollout     models.TaskModelRollout
 }
 
+type modelRolloutJSONOutput struct {
+	DryRun                bool              `json:"dry_run"`
+	WorkspaceTiersUpdated map[string]string `json:"workspace_tiers_updated,omitempty"`
+	WorkspaceTiersCleared []string          `json:"workspace_tiers_cleared,omitempty"`
+	ChatTargetModel       string            `json:"chat_target_model,omitempty"`
+	ChatsMatched          int               `json:"chats_matched"`
+	ChatsUpdated          int               `json:"chats_updated"`
+	ChatsNotified         int               `json:"chats_notified"`
+	TaskTargetModel       string            `json:"task_target_model,omitempty"`
+	TaskTargetFallback    *string           `json:"task_target_fallback,omitempty"`
+	TasksScanned          int               `json:"tasks_scanned"`
+	TasksUpdated          int               `json:"tasks_updated"`
+	TasksPrimaryUpdated   int               `json:"tasks_primary_updated"`
+	TasksFallbackUpdated  int               `json:"tasks_fallback_updated"`
+	RecurringTasksUpdated int               `json:"recurring_tasks_updated"`
+}
+
 func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, opts modelRolloutOptions) (modelRolloutPlan, int) {
-	if code := validateWorkspaceTierFlags(errW, opts); code != 0 {
+	opts.normalizeDefaults()
+	if code := validateRolloutOptionFlags(errW, opts); code != 0 {
 		return modelRolloutPlan{}, code
 	}
 	curDefault, curTask, curFallback, err := resolveEffectiveBoxTiers(ctx, chatSt)
@@ -175,6 +227,100 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
 		return modelRolloutPlan{}, 5
 	}
+
+	validated, code := validateAllModelFlags(errW, opts)
+	if code != 0 {
+		return modelRolloutPlan{}, code
+	}
+
+	plan := buildRolloutPlan(curDefault, curTask, curFallback, opts, validated)
+	effDefault, effFallback := effectivePostTierModels(curDefault, curFallback, plan.tierActions)
+	plan.includeLockdown = resolveRolloutLockdown(ctx, effDefault, effFallback, errW, plan.chatTarget, opts)
+	return plan, 0
+}
+
+func validateRolloutOptionFlags(errW io.Writer, opts modelRolloutOptions) int {
+	if opts.chatModel != nil && !opts.chats {
+		fmt.Fprintln(errW, "--chat-model cannot be combined with --chats=false")
+		return 1
+	}
+	if opts.taskModel != nil && !opts.tasks {
+		fmt.Fprintln(errW, "--task-model cannot be combined with --tasks=false")
+		return 1
+	}
+	if opts.recurringOnly && !opts.tasks {
+		fmt.Fprintln(errW, "--recurring-only cannot be combined with --tasks=false")
+		return 1
+	}
+	if !opts.rollout && !opts.setWorkspaceTiers {
+		fmt.Fprintln(errW, "nothing to do: --rollout=false requires --set-workspace-tiers (or 'fleet model set')")
+		return 1
+	}
+	if opts.rollout && !opts.chats && !opts.tasks && !opts.setWorkspaceTiers {
+		fmt.Fprintln(errW, "nothing to do: both --chats=false and --tasks=false")
+		return 1
+	}
+	if !opts.setWorkspaceTiers {
+		return 0
+	}
+	if !opts.hasAnyModelFlag() {
+		fmt.Fprintln(errW, "--set-workspace-tiers (and 'fleet model set') requires at least one of --model, --chat-model, --task-model, or --fallback-model")
+		return 1
+	}
+	if opts.fallbackModel != nil && strings.TrimSpace(*opts.fallbackModel) == "" {
+		fmt.Fprintln(errW, "--set-workspace-tiers requires a non-empty --fallback-model (use 'fleet model reset --tier fallback' to clear an override)")
+		return 1
+	}
+	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
+		fmt.Fprintf(errW, "admin key required for live tier reload: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
+		return 1
+	}
+	return 0
+}
+
+type validatedModelSlugs struct {
+	model         *string
+	chatModel     *string
+	taskModel     *string
+	fallbackModel *string
+}
+
+func validateAllModelFlags(errW io.Writer, opts modelRolloutOptions) (validatedModelSlugs, int) {
+	var out validatedModelSlugs
+	check := func(name string, src *string) (*string, int) {
+		if src == nil {
+			return nil, 0
+		}
+		v, err := validateCLIModelSlug(name, *src)
+		if err != nil {
+			fmt.Fprintln(errW, err)
+			return nil, 1
+		}
+		return &v, 0
+	}
+	var code int
+	if out.model, code = check("model", opts.model); code != 0 {
+		return out, code
+	}
+	if out.chatModel, code = check("chat-model", opts.chatModel); code != 0 {
+		return out, code
+	}
+	if out.taskModel, code = check("task-model", opts.taskModel); code != 0 {
+		return out, code
+	}
+	if opts.fallbackModel != nil {
+		trimmed := strings.TrimSpace(*opts.fallbackModel)
+		if trimmed == "" {
+			empty := ""
+			out.fallbackModel = &empty
+		} else if out.fallbackModel, code = check("fallback-model", opts.fallbackModel); code != 0 {
+			return out, code
+		}
+	}
+	return out, 0
+}
+
+func buildRolloutPlan(curDefault, curTask, curFallback string, opts modelRolloutOptions, v validatedModelSlugs) modelRolloutPlan {
 	plan := modelRolloutPlan{
 		chatFrom: opts.fromModel,
 		taskRollout: models.TaskModelRollout{
@@ -184,132 +330,217 @@ func resolveModelRolloutPlan(ctx context.Context, chatSt modelRolloutChatStore, 
 		},
 	}
 
-	if opts.model == nil && opts.fallbackModel == nil {
-		plan.chatTarget = curDefault
-		plan.taskRollout.Model = &curTask
-		plan.taskRollout.FallbackModel = &curFallback
-	} else {
-		if opts.model != nil {
-			v, err := validateCLIModelSlug("model", *opts.model)
-			if err != nil {
-				fmt.Fprintln(errW, err)
-				return modelRolloutPlan{}, 1
-			}
-			plan.chatTarget = v
-			plan.taskRollout.Model = &v
+	// Effective desired chat primary and task primary when flags are supplied.
+	var wantChat, wantTask *string
+	if opts.chats {
+		if v.chatModel != nil {
+			wantChat = v.chatModel
+		} else if v.model != nil {
+			wantChat = v.model
 		}
-		if opts.fallbackModel != nil {
-			if code := applyFallbackPlanFlag(&plan, curDefault, curFallback, errW, opts); code != 0 {
-				return modelRolloutPlan{}, code
-			}
+	}
+	if opts.tasks {
+		if v.taskModel != nil {
+			wantTask = v.taskModel
+		} else if v.model != nil {
+			wantTask = v.model
 		}
 	}
 
-	plan.includeLockdown = resolveRolloutLockdown(ctx, curDefault, curFallback, errW, plan.chatTarget, opts)
-	return plan, 0
+	if opts.setWorkspaceTiers {
+		plan.tierActions = computeWorkspaceTierActions(curDefault, curTask, wantChat, wantTask, v.fallbackModel)
+	}
+
+	if !opts.rollout {
+		return plan
+	}
+
+	if !opts.hasAnyModelFlag() {
+		if opts.chats {
+			plan.chatTarget = curDefault
+		}
+		if opts.tasks {
+			plan.taskRollout.Model = &curTask
+			plan.taskRollout.FallbackModel = &curFallback
+			plan.runTasks = true
+		}
+		return plan
+	}
+
+	if wantChat != nil {
+		plan.chatTarget = *wantChat
+	}
+	if wantTask != nil {
+		plan.taskRollout.Model = wantTask
+		plan.runTasks = true
+	}
+	if v.fallbackModel != nil {
+		applyFallbackToPlan(&plan, curDefault, curTask, curFallback, opts, *v.fallbackModel)
+	}
+	return plan
 }
 
-func validateWorkspaceTierFlags(errW io.Writer, opts modelRolloutOptions) int {
-	if !opts.setWorkspaceTiers {
-		return 0
+func computeWorkspaceTierActions(curDefault, curTask string, wantChat, wantTask, wantFallback *string) []tierAction {
+	var actions []tierAction
+	newDefault := curDefault
+	if wantChat != nil {
+		newDefault = *wantChat
+		actions = append(actions, tierAction{key: "default_model", set: true, value: newDefault})
 	}
-	if opts.model == nil && opts.fallbackModel == nil {
-		fmt.Fprintln(errW, "--set-workspace-tiers requires --model and/or --fallback-model")
-		return 1
+	envTask := strings.TrimSpace(envOrFile("FLEET_TASK_MODEL"))
+	switch {
+	case wantTask != nil:
+		if *wantTask == newDefault && envTask == "" {
+			actions = append(actions, tierAction{key: "task_model", set: false})
+		} else {
+			actions = append(actions, tierAction{key: "task_model", set: true, value: *wantTask})
+		}
+	case wantChat != nil && curTask != newDefault:
+		// Operator changed ONLY the chat model (--chat-model or --tasks=false);
+		// pin task_model to curTask so newly created tasks keep their current tier.
+		actions = append(actions, tierAction{key: "task_model", set: true, value: curTask})
 	}
-	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
-		fmt.Fprintf(errW, "admin key required for --set-workspace-tiers against a running server: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
-		return 1
+	if wantFallback != nil && *wantFallback != "" {
+		actions = append(actions, tierAction{key: "advanced_model", set: true, value: *wantFallback})
 	}
-	return 0
+	return actions
 }
 
-func applyFallbackPlanFlag(plan *modelRolloutPlan, curDefault, curFallback string, errW io.Writer, opts modelRolloutOptions) int {
-	trimmed := strings.TrimSpace(*opts.fallbackModel)
-	if trimmed == "" {
-		if opts.setWorkspaceTiers {
-			fmt.Fprintln(errW, "--set-workspace-tiers requires a non-empty --fallback-model")
-			return 1
+func applyFallbackToPlan(plan *modelRolloutPlan, curDefault, curTask, curFallback string, opts modelRolloutOptions, fb string) {
+	if opts.tasks {
+		plan.taskRollout.FallbackModel = &fb
+		plan.runTasks = true
+		if fb != "" && plan.taskRollout.Model == nil && curFallback != "" && curFallback != fb && curFallback != curTask && opts.fromModel == "" {
+			plan.taskRollout.Model = &fb
+			plan.taskRollout.FromModel = curFallback
 		}
-		empty := ""
-		plan.taskRollout.FallbackModel = &empty
-		return 0
 	}
-	v, err := validateCLIModelSlug("fallback-model", trimmed)
-	if err != nil {
-		fmt.Fprintln(errW, err)
-		return 1
-	}
-	plan.taskRollout.FallbackModel = &v
-	if plan.chatTarget == "" && curFallback != "" && curFallback != v && curFallback != curDefault && opts.fromModel == "" {
-		plan.chatTarget = v
+	if opts.chats && fb != "" && plan.chatTarget == "" && curFallback != "" && curFallback != fb && curFallback != curDefault && opts.fromModel == "" {
+		plan.chatTarget = fb
 		plan.chatFrom = curFallback
-		plan.taskRollout.Model = &v
-		plan.taskRollout.FromModel = curFallback
 	}
-	return 0
 }
 
-func resolveRolloutLockdown(ctx context.Context, curDefault, curFallback string, errW io.Writer, chatTarget string, opts modelRolloutOptions) bool {
+func effectivePostTierModels(curDefault, curFallback string, actions []tierAction) (effDefault, effFallback string) {
+	effDefault, effFallback = curDefault, curFallback
+	for _, a := range actions {
+		if !a.set {
+			continue
+		}
+		switch a.key {
+		case "default_model":
+			effDefault = a.value
+		case "advanced_model":
+			effFallback = a.value
+		}
+	}
+	return effDefault, effFallback
+}
+
+func resolveRolloutLockdown(ctx context.Context, effDefault, effFallback string, errW io.Writer, chatTarget string, opts modelRolloutOptions) bool {
 	if chatTarget == "" {
 		return true
 	}
-	includeLockdown := true
-	writingTier := opts.setWorkspaceTiers && (opts.model != nil || (opts.fallbackModel != nil && strings.TrimSpace(*opts.fallbackModel) != ""))
+	var includeLockdown bool
 	if raw := strings.TrimSpace(envOrFile("FLEET_LOCKDOWN_ALLOWED_MODELS")); raw != "" {
 		includeLockdown = chatLockdownAllowsModel(ctx, nil, chatTarget)
-	} else if !writingTier {
-		includeLockdown = config.ModelAllowed(chatTarget, []string{curDefault, curFallback})
+	} else {
+		includeLockdown = config.ModelAllowed(chatTarget, []string{effDefault, effFallback})
 	}
-	if !includeLockdown {
+	if !includeLockdown && !opts.asJSON {
 		fmt.Fprintf(errW, "note: %s is not in the lockdown allow-list; excluding lockdown conversations\n", chatTarget)
 	}
 	return includeLockdown
 }
 
-func previewModelRollout(ctx context.Context, chatSt modelRolloutChatStore, taskSt modelRolloutTaskStore, outW, errW io.Writer, plan modelRolloutPlan, notify bool) int {
-	chatsToUpdate, chatsToNotify := 0, 0
+func previewModelRollout(ctx context.Context, chatSt modelRolloutChatStore, taskSt modelRolloutTaskStore, outW, errW io.Writer, plan modelRolloutPlan, opts modelRolloutOptions) int {
+	var jout modelRolloutJSONOutput
+	jout.DryRun = true
+	populateJSONTierActions(&jout, plan)
+
 	if plan.chatTarget != "" && chatSt != nil {
 		convs, err := chatSt.ListConversationsForModelUpdate(ctx, plan.chatFrom, plan.includeLockdown)
 		if err != nil {
 			fmt.Fprintf(errW, "list conversations: %v\n", err)
 			return 5
 		}
+		jout.ChatsMatched = len(convs)
 		for _, c := range convs {
 			if strings.TrimSpace(c.Model) == plan.chatTarget {
 				continue
 			}
-			chatsToUpdate++
-			if notify && c.HasMessages {
-				chatsToNotify++
+			jout.ChatsUpdated++
+			if opts.notify && c.HasMessages {
+				jout.ChatsNotified++
 			}
-			cur := c.Model
-			if cur == "" {
-				cur = "<none>"
+			if !opts.asJSON {
+				cur := c.Model
+				if cur == "" {
+					cur = "<none>"
+				}
+				fmt.Fprintf(outW, "chat\t%s\t%s\tmodel %s → %s\n", c.ID, c.UserEmail, cur, plan.chatTarget)
 			}
-			fmt.Fprintf(outW, "chat\t%s\t%s\tmodel %s → %s\n", c.ID, c.UserEmail, cur, plan.chatTarget)
 		}
 	}
-	var taskRes models.TaskModelRolloutResult
-	if taskSt != nil && (plan.taskRollout.Model != nil || plan.taskRollout.FallbackModel != nil) {
-		var err error
-		taskRes, err = taskSt.RolloutTaskModels(ctx, plan.taskRollout, true)
+	if plan.runTasks && taskSt != nil {
+		taskRes, err := taskSt.RolloutTaskModels(ctx, plan.taskRollout, true)
 		if err != nil {
 			fmt.Fprintf(errW, "list tasks for rollout: %v\n", err)
 			return 5
 		}
-		for _, t := range taskRes.Tasks {
-			nextM, nextFB, _, _ := plan.taskRollout.ApplyToPointers(t.Model, t.FallbackModel)
-			fmt.Fprintf(outW, "task\t%s\t%s\tmodel %s → %s\tfallback %s → %s\n",
-				t.ID, taskLabel(t), optModelStr(t.Model), optModelStr(nextM), optModelStr(t.FallbackModel), optModelStr(nextFB))
+		jout.TasksScanned = taskRes.ScannedCount
+		jout.TasksUpdated = taskRes.UpdatedCount
+		jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
+		jout.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
+		jout.RecurringTasksUpdated = taskRes.RecurringUpdatedCount
+		if !opts.asJSON {
+			for _, t := range taskRes.Tasks {
+				nextM, nextFB, _, _ := plan.taskRollout.ApplyToPointers(t.Model, t.FallbackModel)
+				fmt.Fprintf(outW, "task\t%s\t%s\tmodel %s → %s\tfallback %s → %s\n",
+					t.ID, taskLabel(t), optModelStr(t.Model), optModelStr(nextM), optModelStr(t.FallbackModel), optModelStr(nextFB))
+			}
 		}
 	}
+	if opts.asJSON {
+		emitRolloutJSON(outW, jout)
+		return 0
+	}
 	fmt.Fprintf(errW, "dry-run: %d chat(s) (%d notified) and %d task(s) (%d recurring) would be updated\n",
-		chatsToUpdate, chatsToNotify, taskRes.UpdatedCount, taskRes.RecurringUpdatedCount)
+		jout.ChatsUpdated, jout.ChatsNotified, jout.TasksUpdated, jout.RecurringTasksUpdated)
 	return 0
 }
 
-func persistRolloutWorkspaceTiers(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, opts modelRolloutOptions) int {
+func populateJSONTierActions(jout *modelRolloutJSONOutput, plan modelRolloutPlan) {
+	jout.ChatTargetModel = plan.chatTarget
+	if plan.taskRollout.Model != nil {
+		jout.TaskTargetModel = *plan.taskRollout.Model
+	}
+	if plan.taskRollout.FallbackModel != nil {
+		v := *plan.taskRollout.FallbackModel
+		jout.TaskTargetFallback = &v
+	}
+	for _, a := range plan.tierActions {
+		if a.set {
+			if jout.WorkspaceTiersUpdated == nil {
+				jout.WorkspaceTiersUpdated = map[string]string{}
+			}
+			jout.WorkspaceTiersUpdated[a.key] = a.value
+		} else {
+			jout.WorkspaceTiersCleared = append(jout.WorkspaceTiersCleared, a.key)
+		}
+	}
+}
+
+func emitRolloutJSON(outW io.Writer, jout modelRolloutJSONOutput) {
+	enc := json.NewEncoder(outW)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(jout)
+}
+
+func applyWorkspaceTierActions(ctx context.Context, chatSt modelRolloutChatStore, errW io.Writer, actions []tierAction, serverAddr, adminKeyFlag string, offline bool) int {
+	if len(actions) == 0 {
+		return 0
+	}
 	ws, ok := chatSt.(modelRolloutWorkspaceStore)
 	if !ok {
 		fmt.Fprintln(errW, "chat store does not support workspace_settings writes")
@@ -321,30 +552,29 @@ func persistRolloutWorkspaceTiers(ctx context.Context, chatSt modelRolloutChatSt
 		return 5
 	}
 	var touched []string
-	if opts.model != nil {
-		if _, err := ws.SetWorkspaceSetting(ctx, "default_model", strings.TrimSpace(*opts.model), "cli"); err != nil {
-			fmt.Fprintf(errW, "save workspace default_model: %v\n", err)
-			return 5
+	for _, a := range actions {
+		var werr error
+		if a.set {
+			_, werr = ws.SetWorkspaceSetting(ctx, a.key, a.value, "cli")
+		} else {
+			werr = ws.DeleteWorkspaceSetting(ctx, a.key)
 		}
-		touched = append(touched, "default_model")
-	}
-	if opts.fallbackModel != nil {
-		if _, err := ws.SetWorkspaceSetting(ctx, "advanced_model", strings.TrimSpace(*opts.fallbackModel), "cli"); err != nil {
+		if werr != nil {
 			if rerr := restoreWorkspaceSettings(ctx, ws, prev, touched); rerr != nil {
-				fmt.Fprintf(errW, "save workspace advanced_model: %v (rollback also failed: %v)\n", err, rerr)
+				fmt.Fprintf(errW, "save workspace %s: %v (rollback also failed: %v)\n", a.key, werr, rerr)
 			} else {
-				fmt.Fprintf(errW, "save workspace advanced_model: %v\n", err)
+				fmt.Fprintf(errW, "save workspace %s: %v\n", a.key, werr)
 			}
 			return 5
 		}
-		touched = append(touched, "advanced_model")
+		touched = append(touched, a.key)
 	}
-	if opts.offline {
+	if offline {
 		return 0
 	}
-	adminKey := resolveAdminKey(opts.adminKey)
-	if err := notifyRunningServerConfigReload(ctx, opts.serverAddr, adminKey); err != nil {
-		rollbackLiveTierReload(ctx, ws, prev, touched, opts.serverAddr, adminKey, err, errW)
+	adminKey := resolveAdminKey(adminKeyFlag)
+	if err := notifyRunningServerConfigReload(ctx, serverAddr, adminKey); err != nil {
+		rollbackLiveTierReload(ctx, ws, prev, touched, serverAddr, adminKey, err, errW)
 		return 5
 	}
 	return 0
@@ -409,6 +639,13 @@ func notifyRunningServerConfigReload(ctx context.Context, addrFlag, adminKey str
 
 func rolloutPromptSummary(plan modelRolloutPlan) string {
 	var parts []string
+	for _, a := range plan.tierActions {
+		if a.set {
+			parts = append(parts, a.key+"="+a.value)
+		} else {
+			parts = append(parts, a.key+"=<reset>")
+		}
+	}
 	if plan.chatTarget != "" {
 		parts = append(parts, "chats→"+plan.chatTarget)
 	}
@@ -432,20 +669,32 @@ func runModelRollout(
 	outW, errW io.Writer,
 	opts modelRolloutOptions,
 ) int {
+	opts.normalizeDefaults()
 	plan, code := resolveModelRolloutPlan(ctx, chatSt, errW, opts)
 	if code != 0 {
 		return code
 	}
+	return executeModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, opts)
+}
+
+func executeModelRolloutPlan(
+	ctx context.Context,
+	chatSt modelRolloutChatStore,
+	taskSt modelRolloutTaskStore,
+	outW, errW io.Writer,
+	plan modelRolloutPlan,
+	opts modelRolloutOptions,
+) int {
 	if opts.dryRun {
-		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, opts.notify)
+		return previewModelRollout(ctx, chatSt, taskSt, outW, errW, plan, opts)
 	}
 
-	prompt := fmt.Sprintf("Roll out model upgrade (%s)? [y/N]: ", rolloutPromptSummary(plan))
+	prompt := fmt.Sprintf("Apply model update (%s)?", rolloutPromptSummary(plan))
 	if code := confirmBulkMutation(opts.noConfirm, prompt); code != 0 {
 		return code
 	}
-	if opts.setWorkspaceTiers {
-		if code := persistRolloutWorkspaceTiers(ctx, chatSt, errW, opts); code != 0 {
+	if len(plan.tierActions) > 0 {
+		if code := applyWorkspaceTierActions(ctx, chatSt, errW, plan.tierActions, opts.serverAddr, opts.adminKey, opts.offline); code != 0 {
 			return code
 		}
 	}
@@ -461,7 +710,7 @@ func runModelRollout(
 	}
 
 	var taskRes models.TaskModelRolloutResult
-	if taskSt != nil && (plan.taskRollout.Model != nil || plan.taskRollout.FallbackModel != nil) {
+	if plan.runTasks && taskSt != nil {
 		var err error
 		taskRes, err = taskSt.RolloutTaskModels(ctx, plan.taskRollout, false)
 		if err != nil {
@@ -470,14 +719,167 @@ func runModelRollout(
 		}
 	}
 
+	if opts.asJSON {
+		var jout modelRolloutJSONOutput
+		populateJSONTierActions(&jout, plan)
+		jout.ChatsMatched = chatRes.MatchedCount
+		jout.ChatsUpdated = chatRes.UpdatedCount
+		jout.ChatsNotified = chatRes.NotifiedCount
+		jout.TasksScanned = taskRes.ScannedCount
+		jout.TasksUpdated = taskRes.UpdatedCount
+		jout.TasksPrimaryUpdated = taskRes.PrimaryUpdatedCount
+		jout.TasksFallbackUpdated = taskRes.FallbackUpdatedCount
+		jout.RecurringTasksUpdated = taskRes.RecurringUpdatedCount
+		emitRolloutJSON(outW, jout)
+		return 0
+	}
+
 	fmt.Fprintf(errW, "rolled out models: %d chat(s) updated (%d notified), %d task(s) updated (%d recurring)\n",
 		chatRes.UpdatedCount, chatRes.NotifiedCount, taskRes.UpdatedCount, taskRes.RecurringUpdatedCount)
 	return 0
 }
 
-func optModelStr(p *string) string {
-	if p == nil || strings.TrimSpace(*p) == "" {
-		return "<none>"
+func modelResetCmd(argv []string) int {
+	fs := flag.NewFlagSet("model reset", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "Postgres DSN (default: DATABASE_URL)")
+	tier := fs.String("tier", "all", "tier to reset: all, default (chats), task (tasks), or fallback")
+	rollout := fs.Bool("rollout", true, "also sync existing chats/tasks to the reverted effective tier(s)")
+	notify := fs.Bool("notify", true, "insert a UI-only model upgrade notice into active chats whose model changes")
+	serverAddr := fs.String("server", "", "orchestrator address for live tier reload (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
+	adminKey := fs.String("admin-key", "", "admin API key for live tier reload (default ADMIN_API_KEY env or fleet.env)")
+	offline := fs.Bool("offline", false, "reset workspace_settings without notifying a running server (use only when fleet serve is stopped)")
+	dryRun := fs.Bool("dry-run", false, "preview changes without writing")
+	noConfirm := fs.Bool("no-confirm", false, "skip interactive confirmation")
+	yes := fs.Bool("yes", false, "skip interactive confirmation (alias for --no-confirm)")
+	shortYes := fs.Bool("y", false, "skip interactive confirmation (shorthand for --yes)")
+	asJSON := fs.Bool("json", false, "emit structured JSON result on stdout")
+	if err := fs.Parse(argv); err != nil {
+		return 1
 	}
-	return strings.TrimSpace(*p)
+	if fs.NArg() > 0 {
+		return errf(1, "unexpected positional argument %q", fs.Arg(0))
+	}
+
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	chatSt, err := openChatStoreDSN(dsn)
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer chatSt.Close()
+
+	schedSt, code := openSchedStorage(*dbURL)
+	if schedSt == nil {
+		return code
+	}
+	defer schedSt.Close()
+
+	return runModelReset(context.Background(), chatSt, schedSt, os.Stdout, os.Stderr, modelResetOptions{
+		tier:       *tier,
+		rollout:    *rollout,
+		notify:     *notify,
+		serverAddr: *serverAddr,
+		adminKey:   *adminKey,
+		offline:    *offline,
+		dryRun:     *dryRun,
+		noConfirm:  *noConfirm || *yes || *shortYes,
+		asJSON:     *asJSON,
+	})
+}
+
+type modelResetOptions struct {
+	tier       string
+	rollout    bool
+	notify     bool
+	serverAddr string
+	adminKey   string
+	offline    bool
+	dryRun     bool
+	noConfirm  bool
+	asJSON     bool
+}
+
+func resetKeysForTier(raw string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "all":
+		return []string{"default_model", "task_model", "advanced_model"}, nil
+	case "default", "chat", "chats", "default_model":
+		return []string{"default_model"}, nil
+	case "task", "tasks", "task_model":
+		return []string{"task_model"}, nil
+	case "fallback", "advanced", "advanced_model":
+		return []string{"advanced_model"}, nil
+	default:
+		return nil, fmt.Errorf("unknown --tier %q (want all, default, task, or fallback)", raw)
+	}
+}
+
+func runModelReset(ctx context.Context, chatSt modelRolloutChatStore, taskSt modelRolloutTaskStore, outW, errW io.Writer, opts modelResetOptions) int {
+	keys, err := resetKeysForTier(opts.tier)
+	if err != nil {
+		fmt.Fprintln(errW, err)
+		return 1
+	}
+	if !opts.dryRun && !opts.offline && resolveAdminKey(opts.adminKey) == "" {
+		fmt.Fprintf(errW, "admin key required for live tier reload: pass --admin-key, set ADMIN_API_KEY (in the shell or in %s), or pass --offline if fleet serve is stopped\n", serverEnvFile(""))
+		return 1
+	}
+	curDef, curTask, curFB, err := resolveEffectiveBoxTiers(ctx, chatSt)
+	if err != nil {
+		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
+		return 5
+	}
+	ignore := make(map[string]bool, len(keys))
+	var actions []tierAction
+	for _, k := range keys {
+		ignore[k] = true
+		actions = append(actions, tierAction{key: k, set: false})
+	}
+	nextDef, nextTask, nextFB, err := resolveBoxTierDetails(ctx, chatSt, ignore)
+	if err != nil {
+		fmt.Fprintf(errW, "read workspace_settings: %v\n", err)
+		return 5
+	}
+
+	plan := modelRolloutPlan{tierActions: actions}
+	if opts.rollout {
+		populateResetRolloutPlan(&plan, ignore, curDef, curTask, curFB, nextDef, nextTask, nextFB)
+	}
+	ropts := modelRolloutOptions{
+		chats:      true,
+		tasks:      true,
+		rollout:    opts.rollout,
+		notify:     opts.notify,
+		serverAddr: opts.serverAddr,
+		adminKey:   opts.adminKey,
+		offline:    opts.offline,
+		dryRun:     opts.dryRun,
+		noConfirm:  opts.noConfirm,
+		asJSON:     opts.asJSON,
+	}
+	plan.includeLockdown = resolveRolloutLockdown(ctx, nextDef.Value, nextFB.Value, errW, plan.chatTarget, ropts)
+	return executeModelRolloutPlan(ctx, chatSt, taskSt, outW, errW, plan, ropts)
+}
+
+func populateResetRolloutPlan(plan *modelRolloutPlan, resetKeys map[string]bool, curDef, curTask, curFB string, nextDef, nextTask, nextFB tierInfo) {
+	if resetKeys["default_model"] {
+		plan.chatTarget = nextDef.Value
+		if nextTask.Source == "follows_default" || resetKeys["task_model"] {
+			v := nextTask.Value
+			plan.taskRollout.Model = &v
+			plan.runTasks = true
+		}
+	}
+	if resetKeys["task_model"] && plan.taskRollout.Model == nil {
+		v := nextTask.Value
+		plan.taskRollout.Model = &v
+		plan.runTasks = true
+	}
+	if resetKeys["advanced_model"] {
+		fb := nextFB.Value
+		ropts := modelRolloutOptions{chats: true, tasks: true}
+		applyFallbackToPlan(plan, curDef, curTask, curFB, ropts, fb)
+	}
 }

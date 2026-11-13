@@ -3,6 +3,7 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -88,9 +89,14 @@ func (f *fakeRolloutChatStore) DeleteWorkspaceSetting(_ context.Context, key str
 }
 
 type fakeRolloutTaskStore struct {
-	calls    int
-	lastOpts models.TaskModelRollout
-	lastDry  bool
+	calls       int
+	lastOpts    models.TaskModelRollout
+	lastDry     bool
+	statusTasks []*models.Task
+}
+
+func (f *fakeRolloutTaskStore) ListTasksForModelStatus(_ context.Context) ([]*models.Task, error) {
+	return f.statusTasks, nil
 }
 
 func (f *fakeRolloutTaskStore) RolloutTaskModels(_ context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error) {
@@ -243,5 +249,109 @@ func TestRunModelRollout_DryRunAndSyncAndWorkspaceTiers(t *testing.T) {
 	}
 	if chatSt.rolloutCalls != 1 {
 		t.Errorf("chat rollout ran despite WorkspaceSettings read failure: calls=%d", chatSt.rolloutCalls)
+	}
+}
+
+func TestModelStatusSplitChatTaskAndReset(t *testing.T) {
+	var reloadCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/admin/reload-config" && r.Header.Get("X-API-Key") == "test-admin-key" {
+			reloadCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"changed":[],"skipped":[],"errors":[]}`))
+			return
+		}
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	m1 := "google/gemini-4-argon"
+	fb1 := "anthropic/claude-opus-5.5"
+	chatSt := &fakeRolloutChatStore{
+		entries: []store.ConversationModelEntry{
+			{ID: "c1", UserEmail: "alice@example.com", Model: "google/gemini-4-argon", HasMessages: true},
+			{ID: "c2", UserEmail: "bob@example.com", Model: "google/gemini-4-argon", HasMessages: true, Lockdown: true},
+		},
+	}
+	taskSt := &fakeRolloutTaskStore{
+		statusTasks: []*models.Task{
+			{Prompt: "daily", Model: &m1, FallbackModel: &fb1, Recurrence: "@daily"},
+		},
+	}
+
+	// 1. Split --chat-model vs --task-model with --json output.
+	chatSlug := "google/gemini-4-hydrogen"
+	taskSlug := "anthropic/claude-sonnet-4-6"
+	var outBuf, errBuf bytes.Buffer
+	code := runModelRollout(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelRolloutOptions{
+		chatModel:         &chatSlug,
+		taskModel:         &taskSlug,
+		fallbackModel:     &fb1,
+		notify:            true,
+		setWorkspaceTiers: true,
+		serverAddr:        srv.URL,
+		adminKey:          "test-admin-key",
+		noConfirm:         true,
+		asJSON:            true,
+	})
+	if code != 0 {
+		t.Fatalf("split set code = %d, stderr=%s", code, errBuf.String())
+	}
+	var jout modelRolloutJSONOutput
+	if err := json.Unmarshal(outBuf.Bytes(), &jout); err != nil {
+		t.Fatalf("decode JSON output: %v\nraw=%s", err, outBuf.String())
+	}
+	if jout.ChatTargetModel != chatSlug || jout.TaskTargetModel != taskSlug || jout.ChatsUpdated != 2 || jout.ChatsNotified != 2 {
+		t.Fatalf("unexpected split JSON output: %+v", jout)
+	}
+	if chatSt.settingsWritten["default_model"] != chatSlug || chatSt.settingsWritten["task_model"] != taskSlug {
+		t.Fatalf("expected split workspace_settings tiers, got %+v", chatSt.settingsWritten)
+	}
+
+	// 2. fleet model status --json reflects workspace_settings provenance + counts.
+	outBuf.Reset()
+	errBuf.Reset()
+	if code := runModelStatus(context.Background(), chatSt, taskSt, &outBuf, &errBuf, true); code != 0 {
+		t.Fatalf("runModelStatus code = %d, stderr=%s", code, errBuf.String())
+	}
+	var statusRep modelStatusReport
+	if err := json.Unmarshal(outBuf.Bytes(), &statusRep); err != nil {
+		t.Fatalf("decode status JSON: %v", err)
+	}
+	if statusRep.Tiers.DefaultModel.Value != chatSlug || statusRep.Tiers.DefaultModel.Source != "workspace_settings" {
+		t.Errorf("unexpected default_model status: %+v", statusRep.Tiers.DefaultModel)
+	}
+	if statusRep.Tiers.TaskModel.Value != taskSlug || statusRep.Tiers.TaskModel.Source != "workspace_settings" {
+		t.Errorf("unexpected task_model status: %+v", statusRep.Tiers.TaskModel)
+	}
+	if statusRep.Conversations.Total != 2 || statusRep.Tasks.Total != 1 || statusRep.Tasks.Recurring != 1 {
+		t.Errorf("unexpected status counts: convs=%+v tasks=%+v", statusRep.Conversations, statusRep.Tasks)
+	}
+
+	// 3. fleet model reset --tier task clears task_model override, reloads server,
+	// and syncs tasks back to default_model without touching chats.
+	prevChatCalls := chatSt.rolloutCalls
+	outBuf.Reset()
+	errBuf.Reset()
+	code = runModelReset(context.Background(), chatSt, taskSt, &outBuf, &errBuf, modelResetOptions{
+		tier:       "task",
+		rollout:    true,
+		notify:     true,
+		serverAddr: srv.URL,
+		adminKey:   "test-admin-key",
+		noConfirm:  true,
+		asJSON:     true,
+	})
+	if code != 0 {
+		t.Fatalf("reset --tier task code = %d, stderr=%s", code, errBuf.String())
+	}
+	if _, exists := chatSt.settingsWritten["task_model"]; exists {
+		t.Errorf("expected task_model deleted from workspace_settings, got %+v", chatSt.settingsWritten)
+	}
+	if chatSt.rolloutCalls != prevChatCalls {
+		t.Errorf("reset --tier task should not touch chats: calls=%d want %d", chatSt.rolloutCalls, prevChatCalls)
+	}
+	if taskSt.lastOpts.Model == nil || *taskSt.lastOpts.Model != chatSlug {
+		t.Errorf("expected task reset rollout target %q, got %+v", chatSlug, taskSt.lastOpts.Model)
 	}
 }

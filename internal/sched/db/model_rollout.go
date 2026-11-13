@@ -168,7 +168,7 @@ func loadRecurrenceModelOverrides(ctx context.Context, q rowQuerier, forUpdate b
 	if err != nil || !ready {
 		return nil, ready, err
 	}
-	stmt := `SELECT key, value FROM chat.workspace_settings WHERE key LIKE 'sched_recurrence_rollout:%'`
+	stmt := `SELECT key, value FROM chat.workspace_settings WHERE key LIKE 'sched_recurrence_rollout:%' ORDER BY key ASC`
 	if forUpdate {
 		stmt += ` FOR UPDATE`
 	}
@@ -217,7 +217,7 @@ func rolloutCandidateQuery(recurringOnly, forUpdate bool) string {
 	if recurringOnly {
 		dispatchPred += ` AND COALESCE(recurrence, '') <> ''`
 	}
-	inFlightRecurrencePred := `(COALESCE(recurrence, '') <> '' AND NOT recurrence_spawned AND status NOT IN ($1, $2, $3))`
+	inFlightRecurrencePred := `(COALESCE(recurrence, '') <> '' AND (NOT recurrence_spawned OR recurrence_parked_at IS NOT NULL) AND status NOT IN ($1, $2, $3))`
 	q := `SELECT ` + taskColumns + ` FROM tasks WHERE (` + dispatchPred + `) OR ` + inFlightRecurrencePred + ` ORDER BY created_at ASC, id ASC`
 	if forUpdate {
 		q += ` FOR UPDATE`
@@ -296,14 +296,12 @@ func applyRolloutTaskRowTx(
 		effM, effFB = ov.ApplyToPointers(effM, effFB)
 	}
 	nextM, nextFB, pChanged, fbChanged := opts.ApplyToPointers(effM, effFB)
+	if !pChanged && !fbChanged {
+		return nil
+	}
 
 	if liveTaskStatus(t.Status) {
-		rowPChanged := !optStrEqual(t.Model, nextM)
-		rowFBChanged := !optStrEqual(t.FallbackModel, nextFB)
-		if !rowPChanged && !rowFBChanged && !hadOv {
-			return nil
-		}
-		if rowPChanged || rowFBChanged {
+		if !optStrEqual(t.Model, nextM) || !optStrEqual(t.FallbackModel, nextFB) {
 			if err := updateTaskModelColumnsTx(ctx, tx, t.ID, nextM, nextFB); err != nil {
 				return err
 			}
@@ -313,15 +311,10 @@ func applyRolloutTaskRowTx(
 				return err
 			}
 		}
-		if pChanged || fbChanged {
-			recordRolloutCounts(res, pChanged, fbChanged, t.Recurrence)
-		}
+		recordRolloutCounts(res, pChanged, fbChanged, t.Recurrence)
 		return nil
 	}
 
-	if !pChanged && !fbChanged {
-		return nil
-	}
 	if !wsReady {
 		return errors.New("chat.workspace_settings table unavailable for durable recurring task rollout")
 	}
@@ -361,14 +354,49 @@ func pruneOrphanRecurrenceModelOverridesTx(ctx context.Context, tx *sql.Tx) erro
 			SELECT 1 FROM tasks t
 			WHERE ('sched_recurrence_rollout:' || t.id::text) = ws.key
 			  AND COALESCE(t.recurrence, '') <> ''
-			  AND NOT t.recurrence_spawned
-			  AND t.status NOT IN ($1, $2, $3)
+			  AND (NOT t.recurrence_spawned OR t.recurrence_parked_at IS NOT NULL)
+			  AND t.status <> $1
 		  )`,
-		string(models.TaskStatusScheduled),
-		string(models.TaskStatusPending),
 		string(models.TaskStatusCancelled),
 	)
 	return err
+}
+
+func lockRolloutCandidateTasksTx(ctx context.Context, db *Database, tx *sql.Tx, recurringOnly bool, q string, args []any) ([]*models.Task, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := db.rowsToTasks(ctx, rows)
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]struct{}, len(tasks))
+	for _, t := range tasks {
+		seen[t.ID] = struct{}{}
+	}
+	// Second pass catches any brand-new scheduled/pending successor inserted by
+	// a concurrent scheduleNextRecurrence that committed while Pass 1 waited on
+	// the completing predecessor's row lock.
+	rows2, err := tx.QueryContext(ctx, dispatchableRolloutQuery(recurringOnly),
+		string(models.TaskStatusScheduled), string(models.TaskStatusPending))
+	if err != nil {
+		return nil, err
+	}
+	extraTasks, err := db.rowsToTasks(ctx, rows2)
+	_ = rows2.Close()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range extraTasks {
+		if _, ok := seen[t.ID]; ok {
+			continue
+		}
+		seen[t.ID] = struct{}{}
+		tasks = append(tasks, t)
+	}
+	return tasks, nil
 }
 
 // RolloutTaskModels upgrades the primary model and/or fallback_model across
@@ -409,48 +437,20 @@ func (db *Database) RolloutTaskModels(ctx context.Context, opts models.TaskModel
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Lock candidate tasks rows BEFORE locking recurrence override rows in
+	// chat.workspace_settings so our lock order matches scheduleNextRecurrence
+	// and editTaskLocked (tasks -> workspace_settings) and cannot deadlock.
+	tasks, err := lockRolloutCandidateTasksTx(ctx, db, tx, opts.RecurringOnly, q, args)
+	if err != nil {
+		return res, err
+	}
 	existing, wsReady, err := loadRecurrenceModelOverrides(ctx, tx, true)
 	if err != nil {
 		return res, err
 	}
 
-	rows, err := tx.QueryContext(ctx, q, args...)
-	if err != nil {
-		return res, err
-	}
-	tasks, err := db.rowsToTasks(ctx, rows)
-	_ = rows.Close()
-	if err != nil {
-		return res, err
-	}
-
-	seen := make(map[uuid.UUID]struct{}, len(tasks))
 	res.ScannedCount = len(tasks)
 	for _, t := range tasks {
-		seen[t.ID] = struct{}{}
-		if err := applyRolloutTaskRowTx(ctx, tx, wsReady, existing, t, opts, &res); err != nil {
-			return res, err
-		}
-	}
-
-	// Second pass catches any brand-new scheduled/pending successor inserted by
-	// a concurrent scheduleNextRecurrence that committed while Pass 1 waited on
-	// the completing predecessor's row lock.
-	rows2, err := tx.QueryContext(ctx, dispatchableRolloutQuery(opts.RecurringOnly),
-		string(models.TaskStatusScheduled), string(models.TaskStatusPending))
-	if err != nil {
-		return res, err
-	}
-	extraTasks, err := db.rowsToTasks(ctx, rows2)
-	_ = rows2.Close()
-	if err != nil {
-		return res, err
-	}
-	for _, t := range extraTasks {
-		if _, ok := seen[t.ID]; ok {
-			continue
-		}
-		res.ScannedCount++
 		if err := applyRolloutTaskRowTx(ctx, tx, wsReady, existing, t, opts, &res); err != nil {
 			return res, err
 		}
@@ -466,4 +466,34 @@ func (db *Database) RolloutTaskModels(ctx context.Context, opts models.TaskModel
 		return res, err
 	}
 	return res, nil
+}
+
+// ListTasksForModelStatus returns all upcoming (scheduled, pending) and active
+// recurring tasks with any pending recurrence model overrides overlaid onto
+// each returned task's Model and FallbackModel pointers (read-only).
+func (db *Database) ListTasksForModelStatus(ctx context.Context) ([]*models.Task, error) {
+	existing, _, err := loadRecurrenceModelOverrides(ctx, db.conn, false)
+	if err != nil {
+		return nil, err
+	}
+	q := rolloutCandidateQuery(false, false)
+	rows, err := db.conn.QueryContext(ctx, q,
+		string(models.TaskStatusScheduled),
+		string(models.TaskStatusPending),
+		string(models.TaskStatusCancelled),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks, err := db.rowsToTasks(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tasks {
+		if ov, ok := existing[t.ID]; ok {
+			t.Model, t.FallbackModel = ov.ApplyToPointers(t.Model, t.FallbackModel)
+		}
+	}
+	return tasks, nil
 }

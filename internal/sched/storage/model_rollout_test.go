@@ -308,3 +308,140 @@ func TestRolloutTaskModels_PreservesRecurrenceOverrideAcrossUnrelatedEdits(t *te
 		t.Errorf("partialSucc fallback = %v, want %q", partialSucc.FallbackModel, fallback)
 	}
 }
+
+func TestRolloutTaskModels_PreservesOverrideAcrossParkedDeadLetterAndSelectiveBatchUpdate(t *testing.T) {
+	t.Parallel()
+
+	st, rawDB := newTestStore(t)
+	st.SetTimezone("UTC")
+	ctx := context.Background()
+
+	// 1) A recurring task leased during rollout that dead-letters into a parked
+	// state (malformed execution requirements) must retain its rollout override
+	// when replayed with a corrected prompt.
+	parkedTask := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        malformedParkPrompt,
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "@daily",
+		CreatedAt:     time.Now().Add(-5 * time.Minute).UTC(),
+	}
+	if _, err := st.AddTask(parkedTask); err != nil {
+		t.Fatalf("AddTask(parkedTask): %v", err)
+	}
+	w1 := uuid.New()
+	if _, err := st.leaseTaskToOwner(parkedTask.ID, w1); err != nil {
+		t.Fatalf("lease parkedTask: %v", err)
+	}
+
+	// 2) Two scheduled tasks leased during rollout, then recovered to scheduled;
+	// UpdateScheduledTaskModels(--from-model other, fallbackModel=nil) must leave
+	// non-matching overrides untouched and keep fallback overrides on matching rows.
+	schedKeep := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "Keep override",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("google/gemini-4-argon"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 6 * * *",
+		CreatedAt:     time.Now().Add(-4 * time.Minute).UTC(),
+	}
+	schedMatch := &models.Task{
+		ID:            uuid.New(),
+		Prompt:        "Match batch primary only",
+		Status:        models.TaskStatusPending,
+		Model:         strPtr("openai/gpt-4o"),
+		FallbackModel: strPtr("anthropic/claude-opus-5"),
+		Recurrence:    "0 7 * * *",
+		CreatedAt:     time.Now().Add(-3 * time.Minute).UTC(),
+	}
+	for _, tk := range []*models.Task{schedKeep, schedMatch} {
+		if _, err := st.AddTask(tk); err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+		if _, err := st.leaseTaskToOwner(tk.ID, uuid.New()); err != nil {
+			t.Fatalf("lease %s: %v", tk.ID, err)
+		}
+	}
+
+	primary := "google/gemini-4-hydrogen"
+	fallback := "anthropic/claude-opus-5.5"
+	if _, err := st.RolloutTaskModels(ctx, models.TaskModelRollout{
+		Model:         &primary,
+		FallbackModel: &fallback,
+	}, false); err != nil {
+		t.Fatalf("RolloutTaskModels: %v", err)
+	}
+
+	// Dead-letter parkedTask -> parks chain (recurrence_parked_at set).
+	if _, err := st.DeadLetterTaskWithContext(ctx, parkedTask.ID, w1, "non-retryable failure (terminal): execution requirements: …", 1); err != nil {
+		t.Fatalf("DeadLetterTaskWithContext(parkedTask): %v", err)
+	}
+	afterPark, err := st.GetTask(parkedTask.ID)
+	if err != nil || afterPark.RecurrenceParkedAt == nil {
+		t.Fatalf("expected parkedTask to be parked, got %+v (err=%v)", afterPark, err)
+	}
+
+	// Replay parkedTask with corrected prompt, run to success -> successor must inherit Hydrogen + Opus 5.5.
+	if _, err := st.ReplayDeadLetteredTaskWithPrompt(ctx, parkedTask.ID, "Daily sync fixed"); err != nil {
+		t.Fatalf("ReplayDeadLetteredTaskWithPrompt: %v", err)
+	}
+	wReplay := uuid.New()
+	if _, err := st.leaseTaskToOwner(parkedTask.ID, wReplay); err != nil {
+		t.Fatalf("lease replayed parkedTask: %v", err)
+	}
+	if _, err := st.UpdateTaskStatusAtomic(parkedTask.ID, wReplay, &models.StatusUpdate{
+		Status:  models.TaskStatusSuccess,
+		Message: strPtr("recovered"),
+	}); err != nil {
+		t.Fatalf("complete replayed parkedTask: %v", err)
+	}
+
+	// Move schedKeep and schedMatch to scheduled, then run selective BulkUpdateScheduledTaskModel
+	// targeting only openai/gpt-4o with fallbackModel=nil.
+	if _, err := rawDB.UpdateTasksStatusBatch(ctx, []uuid.UUID{schedKeep.ID, schedMatch.ID}, models.TaskStatusLeased, models.TaskStatusScheduled); err != nil {
+		t.Fatalf("leased->scheduled: %v", err)
+	}
+	updated, err := st.BulkUpdateScheduledTaskModel(ctx, "openai/gpt-6-luna-pro", nil, "openai/gpt-4o")
+	if err != nil || updated != 1 {
+		t.Fatalf("BulkUpdateScheduledTaskModel = (%d, %v), want (1, nil)", updated, err)
+	}
+	if _, err := rawDB.UpdateTasksStatusBatch(ctx, []uuid.UUID{schedKeep.ID, schedMatch.ID}, models.TaskStatusScheduled, models.TaskStatusPending); err != nil {
+		t.Fatalf("scheduled->pending: %v", err)
+	}
+	for _, id := range []uuid.UUID{schedKeep.ID, schedMatch.ID} {
+		wk := uuid.New()
+		if _, err := st.leaseTaskToOwner(id, wk); err != nil {
+			t.Fatalf("lease %s: %v", id, err)
+		}
+		if _, err := st.UpdateTaskStatusAtomic(id, wk, &models.StatusUpdate{
+			Status:  models.TaskStatusSuccess,
+			Message: strPtr("done"),
+		}); err != nil {
+			t.Fatalf("complete %s: %v", id, err)
+		}
+	}
+
+	assertSuccessorModels(t, st, parkedTask.ID, primary, fallback)
+	assertSuccessorModels(t, st, schedKeep.ID, primary, fallback)
+	assertSuccessorModels(t, st, schedMatch.ID, "openai/gpt-6-luna-pro", fallback)
+}
+
+func assertSuccessorModels(t *testing.T, st *Storage, prevID uuid.UUID, wantModel, wantFallback string) {
+	t.Helper()
+	all, err := listAllTasks(st)
+	if err != nil {
+		t.Fatalf("listAllTasks: %v", err)
+	}
+	for _, tk := range all {
+		if tk.PreviousOccurrenceID != nil && *tk.PreviousOccurrenceID == prevID {
+			if tk.Model == nil || *tk.Model != wantModel || tk.FallbackModel == nil || *tk.FallbackModel != wantFallback {
+				t.Errorf("successor of %s = %+v, want %s / %s", prevID, tk, wantModel, wantFallback)
+			}
+			return
+		}
+	}
+	t.Errorf("no successor spawned for %s", prevID)
+}

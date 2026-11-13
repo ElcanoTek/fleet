@@ -46,14 +46,30 @@ Conversations and scheduled/recurring tasks persist their chosen `model` (and `f
   - **"Update existing chats & recurring tasks on save"** (on by default) automatically upgrades existing conversations, patrols, and upcoming `scheduled`/`pending` tasks whenever `default_model`, `advanced_model`, or `task_model` is saved or reset.
   - **"Add an upgrade note to active chats"** (on by default) writes a UI-only `model_upgraded` notice entry (`agent.EntryTypeNotice`) into non-empty conversations whose model changed. `replayHistory` skips `notice` entries, so the banner never consumes prompt tokens or invalidates prompt caches.
   - **"Sync all chats & tasks to current tiers"** (plus **Preview** dry-run) upgrades pre-existing conversations and tasks in one click after deploying a binary with new compiled-in defaults.
-- **On a box via the CLI (`fleet model rollout`):**
+- **On a box via the CLI (`fleet model` — designed for SSH operators and autonomous agents):**
   ```sh
-  # Preview or apply a one-shot sync to the box's effective primary + task + fallback tiers:
-  fleet model rollout --dry-run
-  fleet model rollout --no-confirm
+  # 1. Inspect effective box tiers (with provenance) + active chat and task model counts:
+  fleet model status
+  fleet model status --json
 
-  # Or specify explicit slugs (and optionally persist + live-apply workspace admin tier overrides via POST /admin/reload-config):
-  fleet model rollout --model google/gemini-4-hydrogen --fallback-model anthropic/claude-opus-5.5 --set-workspace-tiers --no-confirm
+  # 2. Upgrade primary + fallback everywhere in one command (persists workspace_settings,
+  #    hot-reloads the running server via POST /admin/reload-config, updates all chats +
+  #    upcoming/recurring tasks, and posts the upgrade notice in active chats):
+  fleet model set --model google/gemini-4-hydrogen --fallback-model anthropic/claude-opus-5.5 --yes --json
+
+  # 3. Set DIFFERENT models for live chats vs scheduled/recurring tasks when needed:
+  fleet model set --chat-model google/gemini-4-hydrogen --task-model anthropic/claude-sonnet-4-6 --fallback-model anthropic/claude-opus-5.5 --yes
+
+  # 4. Target ONLY live chats (or ONLY recurring tasks), or skip chat banners (--notify=false):
+  fleet model set --chat-model google/gemini-4-hydrogen --tasks=false --notify=false --yes
+  fleet model set --task-model google/gemini-4-hydrogen --chats=false --recurring-only --yes
+
+  # 5. Sync existing chats + tasks to the box's effective tiers after 'fleet update --yes':
+  fleet model rollout --dry-run
+  fleet model rollout --yes --json
+
+  # 6. Revert workspace_settings overrides back to env/compiled defaults and sync chats + tasks:
+  fleet model reset --yes
   ```
   If a recurring cron task happens to be mid-run (`leased`, `running`, or `paused`) during a rollout, its historical run record keeps the model it actually executed on, while a durable per-occurrence override is committed in PostgreSQL inside the rollout transaction so its next spawned `scheduled` occurrence automatically inherits the upgraded primary/fallback model across restarts — without overriding any subsequent operator edits to scheduled tasks.
 

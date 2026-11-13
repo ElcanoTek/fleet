@@ -449,6 +449,12 @@ func (s *Storage) RolloutTaskModels(ctx context.Context, opts models.TaskModelRo
 	return s.db.RolloutTaskModels(ctx, opts, dryRun)
 }
 
+// ListTasksForModelStatus returns upcoming and active recurring tasks with
+// effective post-rollout models overlaid for read-only CLI inspection.
+func (s *Storage) ListTasksForModelStatus(ctx context.Context) ([]*models.Task, error) {
+	return s.db.ListTasksForModelStatus(ctx)
+}
+
 // ListScheduledTasks returns all scheduled tasks.
 func (s *Storage) ListScheduledTasks(ctx context.Context) ([]*models.Task, error) {
 	return s.db.GetAllScheduledTasks(ctx)
@@ -2083,11 +2089,6 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	if current.Status != observed {
 		return false
 	}
-	rolloutOv, hasRolloutOv, err := s.db.ConsumeRecurrenceModelOverrideTx(ctx, tx, current.ID)
-	if err != nil {
-		logging.From(ctx).Warn("Error reading recurrence model override (the reconciliation sweep will retry)", "task_id", current.ID, "err", err)
-		return false
-	}
 
 	// Evaluate the cron expression in the task's own timezone so a "9am" task
 	// fires at 9am local, not 9am UTC, falling back to the server-global
@@ -2166,6 +2167,14 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 			task.RecurrenceParkedReason = &parkReason
 			return false
 		}
+	}
+
+	// Consume any pending model rollout override only after parking checks pass,
+	// so a parked occurrence retains its upgrade if replayed later.
+	rolloutOv, hasRolloutOv, err := s.db.ConsumeRecurrenceModelOverrideTx(ctx, tx, current.ID)
+	if err != nil {
+		logging.From(ctx).Warn("Error reading recurrence model override (the reconciliation sweep will retry)", "task_id", current.ID, "err", err)
+		return false
 	}
 
 	// Build the next occurrence from the CURRENT definition (re-read under the

@@ -249,9 +249,13 @@ Users, credentials, notes:
   fleet chat user del <email>
   fleet chat user list
   fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
-  fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--notify=true] [--set-workspace-tiers [--offline]] [--dry-run] [--no-confirm]
-                                                      (upgrade chats + recurring/scheduled tasks in one step; omit --model and
-                                                       --fallback-model to sync everything to the box's effective tiers)
+  fleet model status [--json]                         (effective workspace model tiers + chat & task counts by model)
+  fleet model set [--model <slug>] [--chat-model <slug>] [--task-model <slug>] [--fallback-model <slug>] [--chats=true] [--tasks=true] [--notify=true] [--rollout=true] [--offline] [--dry-run] [--yes] [--json]
+                                                      (persist workspace_settings tiers, hot-reload live server, update chats + recurring/scheduled tasks, and post chat upgrade notices)
+  fleet model rollout [--model <slug>] [--chat-model <slug>] [--task-model <slug>] [--fallback-model <slug>] [--chats=true] [--tasks=true] [--notify=true] [--set-workspace-tiers] [--dry-run] [--yes] [--json]
+                                                      (roll out model upgrades across chats + recurring/scheduled tasks; omit model flags to sync everything to the box's effective tiers)
+  fleet model reset [--tier all|default|task|fallback] [--rollout=true] [--notify=true] [--offline] [--dry-run] [--yes] [--json]
+                                                      (revert workspace_settings overrides to env/compiled defaults, hot-reload, and sync existing chats + tasks)
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly

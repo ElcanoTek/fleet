@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -297,46 +298,71 @@ func (db *Database) UpdateTask(ctx context.Context, task *models.Task) error {
 // non-empty string sets them. Callers must distinguish "flag not
 // provided" from "explicitly clear" (#1120).
 func (db *Database) UpdateTasksModelBatch(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
-	var res sql.Result
-	var err error
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	status := string(models.TaskStatusScheduled)
+	var rows *sql.Rows
 	switch {
 	case fallbackModel == nil && fromModel != "":
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1
-			WHERE status = $2 AND model = $3`,
+			WHERE status = $2 AND model = $3
+			RETURNING id`,
 			model, status, fromModel)
 	case fallbackModel == nil:
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1
-			WHERE status = $2`,
+			WHERE status = $2
+			RETURNING id`,
 			model, status)
 	case fromModel != "":
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
-			WHERE status = $3 AND model = $4`,
+			WHERE status = $3 AND model = $4
+			RETURNING id`,
 			model, nullableString(*fallbackModel), status, fromModel)
 	default:
-		res, err = db.conn.ExecContext(ctx, `
+		rows, err = tx.QueryContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
-			WHERE status = $3`,
+			WHERE status = $3
+			RETURNING id`,
 			model, nullableString(*fallbackModel), status)
 	}
 	if err != nil {
 		return 0, err
 	}
-	if ready, rerr := chatWorkspaceSettingsReady(ctx, db.conn); rerr == nil && ready {
-		_, _ = db.conn.ExecContext(ctx, `
-			DELETE FROM chat.workspace_settings ws
-			WHERE ws.key LIKE 'sched_recurrence_rollout:%'
-			  AND EXISTS (
-				SELECT 1 FROM tasks t
-				WHERE ('sched_recurrence_rollout:' || t.id::text) = ws.key
-				  AND t.status = $1
-			  )`, status)
+	var updatedIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if serr := rows.Scan(&id); serr != nil {
+			_ = rows.Close()
+			return 0, serr
+		}
+		updatedIDs = append(updatedIDs, id)
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	if rerr := rows.Err(); rerr != nil {
+		_ = rows.Close()
+		return 0, rerr
+	}
+	_ = rows.Close()
+
+	slices.SortFunc(updatedIDs, func(a, b uuid.UUID) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	clearFallback := fallbackModel != nil
+	for _, id := range updatedIDs {
+		if cerr := db.ClearRecurrenceModelOverrideFieldsTx(ctx, tx, id, true, clearFallback); cerr != nil {
+			return 0, cerr
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(updatedIDs), nil
 }
 
 // SetErrorAnalysis persists the post-failure LLM diagnosis (#317) as a narrow,
