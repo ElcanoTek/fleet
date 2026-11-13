@@ -198,6 +198,14 @@ type orchestrationState struct {
 	// identical repeats or that failure loops until the run's timeout.
 	lastWrapperKey     string
 	lastWrapperRepeats int
+	// Async-poll state per slot (see admitAsyncPoll). *Polling is set by
+	// recordToolResult when the slot's current call returned an in-progress
+	// async status, and consumed by the next checkRepeatedCall; *Polls counts
+	// the identical repeats admitted as polls since the key last changed.
+	lastCallPolling    bool
+	lastCallPolls      int
+	lastWrapperPolling bool
+	lastWrapperPolls   int
 	// repeatGuardNoun parameterizes the single word that differs between the
 	// two front-ends' loop-guard message: chat says "reply to the user", cutlass
 	// says "finish the task". See checkRepeatedCall.
@@ -767,7 +775,12 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 		if key != o.lastWrapperKey {
 			o.lastWrapperKey = key
 			o.lastWrapperRepeats = 1
+			o.lastWrapperPolling = false
+			o.lastWrapperPolls = 0
 			return false, ""
+		}
+		if polled, blocked, msg := o.admitAsyncPoll(toolName, &o.lastWrapperPolling, &o.lastWrapperPolls, &o.lastWrapperRepeats); polled {
+			return blocked, msg
 		}
 		o.lastWrapperRepeats++
 		if o.lastWrapperRepeats <= maxConsecutiveIdenticalCalls {
@@ -785,8 +798,13 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 	if key != o.lastCallKey {
 		o.lastCallKey = key
 		o.lastCallRepeats = 1
+		o.lastCallPolling = false
+		o.lastCallPolls = 0
 		o.loopGuardTrips = 0
 		return false, ""
+	}
+	if polled, blocked, msg := o.admitAsyncPoll(toolName, &o.lastCallPolling, &o.lastCallPolls, &o.lastCallRepeats); polled {
+		return blocked, msg
 	}
 	o.lastCallRepeats++
 	if o.lastCallRepeats <= maxConsecutiveIdenticalCalls {
@@ -800,6 +818,148 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 	o.log().Info("Enforcement: loop guard blocked tool — too many consecutive identical calls", "tool", toolName, "repeats", o.lastCallRepeats, "cap", maxConsecutiveIdenticalCalls, "trip", o.loopGuardTrips)
 	return true, fmt.Sprintf("LOOP_GUARD (block #%d): this exact %s call with these exact arguments has now been issued %d times in a row (execution cap: %d). Re-running identical code cannot produce new information. Change your approach: print() or inspect intermediate values, write your work to a workspace file, alter the arguments — or %s with what you have.",
 		o.loopGuardTrips, toolName, o.lastCallRepeats, maxConsecutiveIdenticalCalls, noun)
+}
+
+// maxConsecutiveAsyncPolls bounds how many identical repeats checkRepeatedCall
+// admits as polls of an async job (admitAsyncPoll) before it blocks anyway, so
+// a server that answers "working" forever still trips the guard.
+const maxConsecutiveAsyncPolls = 20
+
+// admitAsyncPoll is the async-poll exemption to the repeat-call guard. Some
+// tools are asynchronous: the first call starts a job and returns an
+// in-progress status (Optable's propose_audiences answers
+// {"context":{"id":…,"status":"working"}}), and the caller is meant to poll by
+// re-issuing the byte-identical call until the status turns terminal. Such a
+// job legitimately takes more than maxConsecutiveIdenticalCalls polls, and a
+// poll is not a degenerate loop — the server told the caller to ask again — so
+// a repeat whose previous identical call reported in-progress
+// (reportsAsyncInProgress, recorded by noteAsyncPollResult) does not count
+// toward the cap: it restarts the identical-call run at 1, so once a result is
+// terminal the normal cap applies from that call on. Polls are themselves
+// capped at maxConsecutiveAsyncPolls per key.
+//
+// The in-progress flag is consumed here, before the call runs, and only this
+// call's own recorded result can set it again — so a poll that never records a
+// result (refused by a later gate) does not license the next repeat. A poll
+// refused for exceeding the poll cap leaves the flag set so every further
+// identical repeat stays refused rather than falling back to a fresh cap-3 run.
+//
+// handled=false means no poll was pending and the caller applies the normal
+// cap. Callers must hold o.mu.
+func (o *orchestrationState) admitAsyncPoll(toolName string, polling *bool, polls, repeats *int) (handled, blocked bool, msg string) {
+	if !*polling {
+		return false, false, ""
+	}
+	if *polls < maxConsecutiveAsyncPolls {
+		*polls++
+		*polling = false
+		*repeats = 1
+		return true, false, ""
+	}
+	o.loopGuardTrips++
+	noun := o.repeatGuardNoun
+	if noun == "" {
+		noun = repeatGuardNounFinishTask
+	}
+	o.log().Info("Enforcement: loop guard blocked tool — async job still in progress after poll cap", "tool", toolName, "polls", *polls, "cap", maxConsecutiveAsyncPolls, "trip", o.loopGuardTrips)
+	return true, true, fmt.Sprintf("LOOP_GUARD (block #%d): this exact %s call has polled an async job %d times in a row and the job still reports it is in progress (poll cap: %d). The async job is still running after %d polls; stop polling it — %s, saying the job had not finished.",
+		o.loopGuardTrips, toolName, *polls, maxConsecutiveAsyncPolls, *polls, noun)
+}
+
+// noteAsyncPollResult records, for the repeat-guard slot whose current key
+// this call holds, whether its result reported an in-progress async status
+// (see admitAsyncPoll). The guard runs BEFORE a call and this runs AFTER, so
+// the key is re-derived from the same inputs and a result is credited only to
+// the slot still holding that key — a result for a different call (parallel
+// tool calls) leaves the slot alone. A deferred call records twice: the real
+// tool's result into its slot, then the tool_call wrapper's (the same content)
+// into the wrapper slot, so both slots admit the next poll.
+//
+// Critical tools (bundle-wide or this run's manifest-declared ones, the same
+// isRunCriticalTool classification the approval and audit gates use) and
+// email sends are never polls: their
+// identical repeat is a duplicate write, and a payload such as
+// {"status":"pending"} or {"status":"queued"} describes the record written,
+// not a job to wait on. Callers must hold o.mu.
+func (o *orchestrationState) noteAsyncPollResult(toolName, rawInput, resultText string, succeeded bool) {
+	if toolName == toolNameToolCall {
+		if hashString(rawInput) == o.lastWrapperKey {
+			o.lastWrapperPolling = succeeded && reportsAsyncInProgress(resultText)
+		}
+		return
+	}
+	if toolName+":"+hashString(rawInput) != o.lastCallKey {
+		return
+	}
+	o.lastCallPolling = succeeded && !o.isRunCriticalTool(toolName) && !isEmailTool(toolName) &&
+		reportsAsyncInProgress(resultText)
+}
+
+// asyncInProgressStates are the status values that mean "the job is not done,
+// ask again": A2A's submitted/working TaskStates plus the common synonyms.
+// Terminal and interactive states (completed, failed, canceled,
+// input-required, …) are deliberately absent.
+var asyncInProgressStates = map[string]bool{
+	"working":     true,
+	"submitted":   true,
+	"pending":     true,
+	"running":     true,
+	"in_progress": true,
+	"queued":      true,
+}
+
+// reportsAsyncInProgress reports whether a tool result is a JSON object whose
+// status says an async job is still in progress. Only these shapes count: a
+// top-level "status" or "state" string, the same under "context" (Optable's
+// Audience Agent), or "status.state" (an A2A Task). Free text never counts —
+// a result merely mentioning "working" is not a poll instruction. Trailing
+// text after the object (a post_tool_use hook fragment) is ignored, so the
+// failure markers mcpReportedFailure reads ("success": false, a non-empty
+// "error") are checked on that same decoded object: with a hook suffix,
+// mcpReportedFailure's whole-text parse fails and cannot be relied on here.
+func reportsAsyncInProgress(resultText string) bool {
+	s := strings.TrimSpace(resultText)
+	if s == "" || s[0] != '{' {
+		return false
+	}
+	var top map[string]json.RawMessage
+	if err := json.NewDecoder(strings.NewReader(s)).Decode(&top); err != nil {
+		return false
+	}
+	if raw, ok := top["success"]; ok && strings.TrimSpace(string(raw)) == "false" {
+		return false
+	}
+	if e := strings.TrimSpace(string(top["error"])); e != "" && e != "null" && e != `""` {
+		return false
+	}
+	if isInProgressState(top["status"]) || isInProgressState(top["state"]) {
+		return true
+	}
+	var ctx map[string]json.RawMessage
+	if raw, ok := top["context"]; ok && json.Unmarshal(raw, &ctx) == nil {
+		if isInProgressState(ctx["status"]) || isInProgressState(ctx["state"]) {
+			return true
+		}
+	}
+	var status map[string]json.RawMessage
+	if raw, ok := top["status"]; ok && json.Unmarshal(raw, &status) == nil {
+		return isInProgressState(status["state"])
+	}
+	return false
+}
+
+// isInProgressState reports whether raw is a JSON string naming an
+// asyncInProgressStates value (case-insensitive; "in-progress" matches too, as
+// do A2A's protocol-prefixed wire spellings TASK_STATE_SUBMITTED /
+// TASK_STATE_WORKING, docs/A2A.md).
+func isInProgressState(raw json.RawMessage) bool {
+	var v string
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	v = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v)), "-", "_")
+	v = strings.TrimPrefix(v, "task_state_")
+	return asyncInProgressStates[v]
 }
 
 // ── interactive approval / memory gates ──
@@ -1182,6 +1342,10 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 	// answered with a non-2xx status_code delivered nothing either (#1714).
 	effectiveSucceeded := succeeded && !mcpReportedFailure(resultText) &&
 		!emailProviderRejected(toolName, resultText)
+
+	// Whether this call's result tells the caller to poll again
+	// (checkRepeatedCall's async-poll exemption).
+	o.noteAsyncPollResult(toolName, rawInput, resultText, effectiveSucceeded)
 
 	if isEmailTool(toolName) && succeeded {
 		if sendEmailSucceeded(strings.TrimSpace(resultText)) {
