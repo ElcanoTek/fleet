@@ -1,7 +1,7 @@
-# Model defaults: Gemini 4 Argon as primary default, Claude Opus 5.5 as fallback frontier tier
+# Model defaults: Gemini 4 Hydrogen as primary default, Claude Opus 5.5 as fallback frontier tier
 
-**Status:** shipped 2026-11-09 (previous swaps 2026-10-28, 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
-note for the default-model swaps, and the checklist for the next one.
+**Status:** shipped 2026-11-13 (previous swaps 2026-11-09, 2026-10-28, 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
+note for the default-model swaps, operator rollout across existing chats and tasks, and the checklist for the next one.
 
 ## Changing the defaults (checklist)
 
@@ -36,7 +36,38 @@ hold the slugs, plus data that has to be checked by hand:
    until the two match.
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
-tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+tiers, keep their overrides until reset or updated.
+
+## Rolling out model upgrades to existing chats and recurring tasks
+
+Conversations and scheduled/recurring tasks persist their chosen `model` (and `fallback_model` on tasks), so changing a compiled-in default or env var only moves *new* chats and tasks unless an operator rolls the upgrade out:
+
+- **In the Admin UI (`Settings → Admin → Features → Model tiers`):**
+  - **"Update existing chats & recurring tasks on save"** (on by default) automatically upgrades existing conversations, patrols, and upcoming `scheduled`/`pending` tasks whenever `default_model`, `advanced_model`, or `task_model` is saved or reset.
+  - **"Add an upgrade note to active chats"** (on by default) writes a UI-only `model_upgraded` notice entry (`agent.EntryTypeNotice`) into non-empty conversations whose model changed. `replayHistory` skips `notice` entries, so the banner never consumes prompt tokens or invalidates prompt caches.
+  - **"Sync all chats & tasks to current tiers"** (plus **Preview** dry-run) upgrades pre-existing conversations and tasks in one click after deploying a binary with new compiled-in defaults.
+- **On a box via the CLI (`fleet model rollout`):**
+  ```sh
+  # Preview or apply a one-shot sync to the box's effective primary + task + fallback tiers:
+  fleet model rollout --dry-run
+  fleet model rollout --no-confirm
+
+  # Or specify explicit slugs (and optionally persist workspace admin tier overrides):
+  fleet model rollout --model google/gemini-4-hydrogen --fallback-model anthropic/claude-opus-5.5 --set-workspace-tiers --no-confirm
+  ```
+  If a recurring cron task happens to be `running` during a rollout, its historical run record keeps the model it actually executed on, while the scheduler records the rollout so the next spawned `scheduled` occurrence automatically inherits the upgraded primary/fallback model.
+
+## 2026-11-13: Gemini 4 Hydrogen as primary default tier, Claude Opus 5.5 as fallback frontier tier
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (chat default, pre-filled `task_model` tier, and auxiliary calls) | `google/gemini-4-argon` | `google/gemini-4-hydrogen` |
+| `DefaultFallbackModel` / `DefaultMaxModel` (fallback frontier model for in-chat patrols, Operations Center task form pre-fill, and `suggest_advanced_model`) | `anthropic/claude-opus-5.5` | unchanged (`anthropic/claude-opus-5.5`) |
+
+- **Why: Gemini 4 Hydrogen upgrades our default frontier model while cutting input/output/cache-read cost by another 25% vs Argon (`$1.50/M` in, `$7.50/M` out, `$0.075/M` cache reads — a 95% cache discount), with a 1,048,576-token context window (up to 943,718 output tokens) and Claude Opus 5.5 retained as the cross-provider frontier fallback.**
+- **Endpoints & live prompt caching verified (2026-11-13):**
+  - OpenRouter serves `google/gemini-4-hydrogen` across 7 first-party Google endpoints (`Google` ×4: `google-vertex/global`, `google-vertex/eu`, `google-vertex/us`, `google-vertex/global/priority`; `Google AI Studio` ×3: `google-ai-studio`, `google-ai-studio/flex`, `google-ai-studio/priority`), all reporting `quantization: "unknown"` and pinned in `officialPoolSlugs` (`Order=["Google"], Only=["Google", "Google AI Studio"], AllowFallbacks=true`).
+  - Live `TestPromptCacheLive` verification against `google/gemini-4-hydrogen` passed with **6/6 warm requests hitting cache (`75.4%` warm hit rate across turns, peaking at `89.9%` on Turn 3 — `19,605 / 21,808` tokens)**, alongside `anthropic/claude-opus-5.5` (**6/6 warm requests hitting cache, `86.2%` warm hit rate, peaking at `99.0%` on Turn 3**).
 
 ## 2026-11-09: Gemini 4 Argon as primary default tier, Claude Opus 5.5 as fallback frontier tier
 

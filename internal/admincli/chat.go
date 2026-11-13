@@ -59,6 +59,10 @@ type chatModelStore interface {
 	BulkUpdateConversationModel(ctx context.Context, model, fromModel string, includeLockdown bool) (int, error)
 }
 
+type chatModelRolloutStore interface {
+	RolloutConversationModel(ctx context.Context, model, fromModel string, includeLockdown, notify bool) (store.ConversationModelRolloutResult, error)
+}
+
 type chatWorkspaceSettingsReader interface {
 	WorkspaceSettings(ctx context.Context) (map[string]store.WorkspaceSetting, error)
 }
@@ -67,7 +71,7 @@ type chatWorkspaceSettingsReader interface {
 // way the server does (FLEET_LOCKDOWN_ALLOWED_MODELS when set, else the
 // workspace default and fallback model tiers with any workspace_settings DB
 // overrides) and reports whether model is permitted in lockdown conversations.
-func chatLockdownAllowsModel(ctx context.Context, st chatModelStore, model string) bool {
+func chatLockdownAllowsModel(ctx context.Context, st any, model string) bool {
 	if raw := strings.TrimSpace(envOrFile("FLEET_LOCKDOWN_ALLOWED_MODELS")); raw != "" {
 		var patterns []string
 		for _, p := range strings.Split(raw, ",") {
@@ -102,12 +106,13 @@ func chatLockdownAllowsModel(ctx context.Context, st chatModelStore, model strin
 
 // chatSetModel implements `fleet chat set-model`:
 //
-//	fleet chat set-model --model <slug> [--from-model <slug>] [--dry-run] [--no-confirm]
+//	fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
 func chatSetModel(argv []string) int {
 	fs := flag.NewFlagSet("chat set-model", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
 	model := fs.String("model", "", "the model slug to set (required)")
 	fromModel := fs.String("from-model", "", "only re-assign conversations currently pinned to this slug")
+	notify := fs.Bool("notify", false, "insert a UI-only model upgrade notice into non-empty conversations whose model changes")
 	dryRun := fs.Bool("dry-run", false, "print the conversations that would change without writing")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted bulk updates)")
 	if err := fs.Parse(argv); err != nil {
@@ -125,10 +130,14 @@ func chatSetModel(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	return runChatSetModel(context.Background(), st, os.Stdout, os.Stderr, strings.TrimSpace(*model), strings.TrimSpace(*fromModel), *dryRun, *noConfirm)
+	return runChatSetModelWithNotify(context.Background(), st, os.Stdout, os.Stderr, strings.TrimSpace(*model), strings.TrimSpace(*fromModel), *notify, *dryRun, *noConfirm)
 }
 
 func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Writer, model, fromModel string, dryRun, noConfirm bool) int {
+	return runChatSetModelWithNotify(ctx, st, outW, errW, model, fromModel, false, dryRun, noConfirm)
+}
+
+func runChatSetModelWithNotify(ctx context.Context, st chatModelStore, outW, errW io.Writer, model, fromModel string, notify, dryRun, noConfirm bool) int {
 	includeLockdown := chatLockdownAllowsModel(ctx, st, model)
 	if !includeLockdown {
 		fmt.Fprintf(errW, "note: %s is not in the lockdown allow-list; excluding lockdown conversations\n", model)
@@ -163,6 +172,18 @@ func runChatSetModel(ctx context.Context, st chatModelStore, outW, errW io.Write
 	prompt := fmt.Sprintf("Set model=%s on %s? [y/N]: ", model, scope)
 	if code := confirmBulkMutation(noConfirm, prompt); code != 0 {
 		return code
+	}
+
+	if notify {
+		if rs, ok := st.(chatModelRolloutStore); ok {
+			res, err := rs.RolloutConversationModel(ctx, model, fromModel, includeLockdown, true)
+			if err != nil {
+				fmt.Fprintf(errW, "re-assign conversation model: %v\n", err)
+				return 5
+			}
+			fmt.Fprintf(errW, "re-assigned model on %d conversation(s) (%d notified)\n", res.UpdatedCount, res.NotifiedCount)
+			return 0
+		}
 	}
 
 	updated, err := st.BulkUpdateConversationModel(ctx, model, fromModel, includeLockdown)

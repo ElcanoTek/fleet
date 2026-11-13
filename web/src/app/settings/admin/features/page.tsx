@@ -172,17 +172,17 @@ const META: Record<string, SettingMeta> = {
   default_model: {
     label: tr("Default model"),
     description:
-      tr("Our smartest frontier model, which every new conversation starts on by default and which appears first in each model picker. Users can switch to a cheaper or free model in the picker when they want to optimize spend. Conversations that already chose a model keep it."),
+      tr("Our smartest frontier model, which every new conversation starts on by default and which appears first in each model picker. Users can switch to a cheaper or free model in the picker when they want to optimize spend. When rollout on save is enabled below, saving also upgrades existing chats and tasks."),
   },
   advanced_model: {
     label: tr("Fallback model"),
     description:
-      tr("Our alternative smart frontier model from a different provider family — offered when a chat turn struggles, and used as the fallback for tasks and patrols if their primary model fails. Shown second in each model picker."),
+      tr("Our alternative smart frontier model from a different provider family — offered when a chat turn struggles, and used as the fallback for tasks and patrols if their primary model fails. Shown second in each model picker. When rollout on save is enabled below, saving updates task fallbacks and upgrades chats pinned to the previous fallback."),
   },
   task_model: {
     label: tr("Task model"),
     description:
-      tr("The model background tasks use unless a task picks its own. Leave it empty to use the default model. Tasks that already have a model keep it."),
+      tr("The model background tasks use unless a task picks its own. Leave it empty to use the default model. When rollout on save is enabled below, saving updates upcoming scheduled and recurring tasks."),
     emptyDefault: tr("Follows the default model"),
   },
   escalation_signals_enabled: {
@@ -220,6 +220,8 @@ const META: Record<string, SettingMeta> = {
 };
 
 const PRIVACY_GROUP = tr("Privacy & data protection");
+const MODEL_TIERS_GROUP = tr("Model tiers");
+const MODEL_TIER_KEYS = new Set(["default_model", "advanced_model", "task_model"]);
 
 const GROUPS: { title: string; keys: string[] }[] = [
   {
@@ -238,7 +240,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
     ],
   },
   {
-    title: tr("Model tiers"),
+    title: MODEL_TIERS_GROUP,
     keys: ["default_model", "advanced_model", "task_model"],
   },
   {
@@ -264,9 +266,79 @@ const GROUPS: { title: string; keys: string[] }[] = [
   },
 ];
 
-// The guardrail action block has no setting row of its own; this is the
-// haystack the filter matches so "probe", "detector", etc. keep it visible.
+// The guardrail and model-rollout action blocks have no setting row of their
+// own; these haystacks keep them visible when filtering by related keywords.
 const GUARDRAIL_ACTIONS_SEARCH_TEXT = "guardrail test prompt-injection detector probe";
+const MODEL_ROLLOUT_SEARCH_TEXT = "model upgrade rollout chats recurring tasks sync notify preview";
+
+type ModelRolloutSummary = {
+  dry_run: boolean;
+  primary_model?: string;
+  task_model?: string;
+  fallback_model?: string;
+  lockdown_included: boolean;
+  chats_matched: number;
+  chats_updated: number;
+  chats_notified: number;
+  tasks_scanned: number;
+  tasks_updated: number;
+  tasks_primary_updated: number;
+  tasks_fallback_updated: number;
+  tasks_recurring_updated: number;
+};
+
+type SettingWriteResponse = ResolvedSetting & {
+  rollout?: ModelRolloutSummary;
+  rollout_error?: string;
+};
+
+type RolloutUiStatus =
+  | "idle"
+  | "running"
+  | { state: "ok" | "err"; message: string };
+
+function formatModelRolloutSummary(r: ModelRolloutSummary): string {
+  if (r.dry_run) {
+    if (r.chats_updated === 0 && r.tasks_updated === 0) {
+      return tr("Preview: all existing chats and scheduled tasks are already on the current tiers.");
+    }
+    const parts: string[] = [];
+    if (r.primary_model) {
+      parts.push(
+        r.chats_notified > 0
+          ? tr("{0} chats ({1} active chats notified)", [r.chats_updated, r.chats_notified])
+          : tr("{0} chats", [r.chats_updated]),
+      );
+    }
+    if (r.task_model !== undefined || r.fallback_model !== undefined) {
+      parts.push(
+        r.tasks_recurring_updated > 0
+          ? tr("{0} scheduled tasks ({1} recurring)", [r.tasks_updated, r.tasks_recurring_updated])
+          : tr("{0} scheduled tasks", [r.tasks_updated]),
+      );
+    }
+    return tr("Preview: {0} would be updated.", [parts.join(" · ")]);
+  }
+  if (r.chats_updated === 0 && r.tasks_updated === 0) {
+    return tr("All existing chats and scheduled tasks are already on the current tiers.");
+  }
+  const parts: string[] = [];
+  if (r.primary_model || r.chats_updated > 0) {
+    parts.push(
+      r.chats_notified > 0
+        ? tr("{0} chats updated ({1} notified)", [r.chats_updated, r.chats_notified])
+        : tr("{0} chats updated", [r.chats_updated]),
+    );
+  }
+  if (r.task_model !== undefined || r.fallback_model !== undefined || r.tasks_updated > 0) {
+    parts.push(
+      r.tasks_recurring_updated > 0
+        ? tr("{0} scheduled tasks updated ({1} recurring)", [r.tasks_updated, r.tasks_recurring_updated])
+        : tr("{0} scheduled tasks updated", [r.tasks_updated]),
+    );
+  }
+  return parts.join(" · ");
+}
 
 async function fetchSettings(): Promise<ResolvedSetting[] | null> {
   const data = await getGatedJson<{ settings: ResolvedSetting[] }>("/api/admin/settings", {
@@ -310,6 +382,9 @@ function FeaturesAdmin() {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [rolloutOnSave, setRolloutOnSave] = useState(true);
+  const [notifyChatsOnRollout, setNotifyChatsOnRollout] = useState(true);
+  const [rolloutStatus, setRolloutStatus] = useState<RolloutUiStatus>("idle");
   const [q, setQ] = useState("");
 
   const settings = loaded ? loaded.map((s) => edits[s.key] ?? s) : null;
@@ -325,11 +400,11 @@ function FeaturesAdmin() {
     return reload();
   };
 
-  const write = async (key: string, init: RequestInit) => {
+  const write = async (key: string, path: string, init: RequestInit) => {
     setSaving((prev) => ({ ...prev, [key]: true }));
     setRowErrors((prev) => ({ ...prev, [key]: "" }));
     try {
-      const response = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, init);
+      const response = await fetch(path, init);
       if (response.status === 401) {
         // Session expired mid-edit: re-authenticate instead of surfacing a raw
         // 401 body as a row error (mirrors fetchSettings).
@@ -340,13 +415,19 @@ function FeaturesAdmin() {
         const text = (await response.text()).trim();
         throw new Error(text || tr("Request failed: {0}", [response.status]));
       }
-      const updated = (await response.json()) as ResolvedSetting;
-      setEdits((prev) => ({ ...prev, [updated.key]: updated }));
+      const updated = (await response.json()) as SettingWriteResponse;
+      const { rollout, rollout_error: rolloutError, ...resolved } = updated;
+      setEdits((prev) => ({ ...prev, [resolved.key]: resolved }));
       setDrafts((prev) => {
         const next = { ...prev };
-        delete next[updated.key];
+        delete next[resolved.key];
         return next;
       });
+      if (rolloutError) {
+        setRolloutStatus({ state: "err", message: rolloutError });
+      } else if (rollout) {
+        setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(rollout) });
+      }
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
@@ -361,14 +442,57 @@ function FeaturesAdmin() {
     }
   };
 
-  const save = (key: string, value: string) =>
-    write(key, {
+  const save = (key: string, value: string) => {
+    const withRollout = MODEL_TIER_KEYS.has(key) && rolloutOnSave;
+    return write(key, `/api/admin/settings/${encodeURIComponent(key)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value }),
+      body: JSON.stringify(
+        withRollout
+          ? { value, rollout: true, notify_chats: notifyChatsOnRollout }
+          : { value },
+      ),
     });
+  };
 
-  const reset = (key: string) => write(key, { method: "DELETE" });
+  const reset = (key: string) => {
+    const withRollout = MODEL_TIER_KEYS.has(key) && rolloutOnSave;
+    const qs = withRollout
+      ? `?rollout=true&notify_chats=${notifyChatsOnRollout ? "true" : "false"}`
+      : "";
+    return write(key, `/api/admin/settings/${encodeURIComponent(key)}${qs}`, {
+      method: "DELETE",
+    });
+  };
+
+  const runModelRollout = async (dryRun: boolean) => {
+    setRolloutStatus("running");
+    try {
+      const response = await fetch("/api/admin/models/rollout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sync_current: true,
+          notify_chats: notifyChatsOnRollout,
+          dry_run: dryRun,
+        }),
+      });
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(await responseErrorText(response, tr("Model rollout failed.")));
+      }
+      const result = (await response.json()) as ModelRolloutSummary;
+      setRolloutStatus({ state: "ok", message: formatModelRolloutSummary(result) });
+    } catch (err) {
+      setRolloutStatus({
+        state: "err",
+        message: errorMessage(err, tr("Model rollout failed.")),
+      });
+    }
+  };
 
   const byKey = new Map((settings ?? []).map((s) => [s.key, s]));
   const grouped = GROUPS.map((g) => ({
@@ -381,21 +505,23 @@ function FeaturesAdmin() {
   if (other.length > 0) grouped.push({ title: tr("Other"), settings: other });
 
   // Live filtering over label + description + env var + key (plus the guardrail
-  // action block's search text); a group with nothing visible hides entirely.
+  // and model-rollout action blocks' search text); a group with nothing visible hides entirely.
   const ql = q.trim().toLowerCase();
   const rowMatches = (s: ResolvedSetting) => {
     if (!ql) return true;
     const meta = metaFor(s.key);
     return `${meta.label} ${meta.description} ${s.env_var} ${s.key}`.toLowerCase().includes(ql);
   };
-  const actionsMatch = !ql || GUARDRAIL_ACTIONS_SEARCH_TEXT.includes(ql);
+  const guardrailActionsMatch = !ql || GUARDRAIL_ACTIONS_SEARCH_TEXT.includes(ql);
+  const modelRolloutActionsMatch = !ql || MODEL_ROLLOUT_SEARCH_TEXT.includes(ql);
   const visibleGroups = grouped
     .map((g) => ({
       title: g.title,
       settings: g.settings.filter(rowMatches),
-      actions: g.title === PRIVACY_GROUP && actionsMatch,
+      guardrailActions: g.title === PRIVACY_GROUP && guardrailActionsMatch,
+      modelRolloutActions: g.title === MODEL_TIERS_GROUP && modelRolloutActionsMatch,
     }))
-    .filter((g) => g.settings.length > 0 || g.actions);
+    .filter((g) => g.settings.length > 0 || g.guardrailActions || g.modelRolloutActions);
 
   return (
     <SetSection
@@ -452,7 +578,18 @@ function FeaturesAdmin() {
                     onReset={() => void reset(s.key)}
                   />
                 ))}
-                {group.actions ? <GuardrailActions /> : null}
+                {group.guardrailActions ? <GuardrailActions /> : null}
+                {group.modelRolloutActions ? (
+                  <ModelTierRolloutActions
+                    rolloutOnSave={rolloutOnSave}
+                    setRolloutOnSave={setRolloutOnSave}
+                    notifyChats={notifyChatsOnRollout}
+                    setNotifyChats={setNotifyChatsOnRollout}
+                    status={rolloutStatus}
+                    onPreview={() => void runModelRollout(true)}
+                    onSyncNow={() => void runModelRollout(false)}
+                  />
+                ) : null}
               </ConnPanel>
             </ConnGroup>
           ))
@@ -918,6 +1055,105 @@ function GuardrailActions() {
           {probe.ok ? ` — ${probe.flagged ? tr("flagged") : tr("not flagged")}` : ""}
           {probe.detail ? ` — ${probe.detail}` : ""}
           {probe.latency_ms > 0 ? tr(" ({0} ms)", [probe.latency_ms]) : ""}
+        </ActStatus>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Model rollout actions (Model tiers group): roll out upgrades across chats & tasks ── */
+
+function ModelTierRolloutActions({
+  rolloutOnSave,
+  setRolloutOnSave,
+  notifyChats,
+  setNotifyChats,
+  status,
+  onPreview,
+  onSyncNow,
+}: {
+  rolloutOnSave: boolean;
+  setRolloutOnSave: (next: boolean) => void;
+  notifyChats: boolean;
+  setNotifyChats: (next: boolean) => void;
+  status: RolloutUiStatus;
+  onPreview: () => void;
+  onSyncNow: () => void;
+}) {
+  const busy = status === "running";
+  return (
+    <div
+      className="grid gap-[0.75rem] border-t border-[var(--color-border-subtle)] px-[0.1rem] py-[0.95rem]"
+      data-testid="model-rollout-controls"
+    >
+      <div className="grid gap-[0.55rem]">
+        <div className="flex items-center justify-between gap-4">
+          <div className="grid min-w-0 gap-[0.15rem]">
+            <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
+              {tr("Update existing chats & recurring tasks on save")}
+            </span>
+            <span className="text-[0.73rem] leading-[1.45] text-[var(--color-text-muted)]">
+              {tr("Automatically upgrades existing conversations, patrols, and scheduled/recurring tasks whenever you save or reset a model tier above.")}
+            </span>
+          </div>
+          <SetSwitch
+            on={rolloutOnSave}
+            onToggle={() => setRolloutOnSave(!rolloutOnSave)}
+            label={tr("Update existing chats & recurring tasks on save")}
+            small
+            testId="toggle-model-rollout-on-save"
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="grid min-w-0 gap-[0.15rem]">
+            <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
+              {tr("Add an upgrade note to active chats")}
+            </span>
+            <span className="text-[0.73rem] leading-[1.45] text-[var(--color-text-muted)]">
+              {tr("Adds a subtle inline banner in existing conversations when their model changes (never sent to the model or counted against cache).")}
+            </span>
+          </div>
+          <SetSwitch
+            on={notifyChats}
+            onToggle={() => setNotifyChats(!notifyChats)}
+            label={tr("Add an upgrade note to active chats")}
+            small
+            testId="toggle-model-rollout-notify"
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <button
+          type="button"
+          onClick={onSyncNow}
+          disabled={busy}
+          data-testid="model-rollout-sync-now"
+          className={btnClass({ sm: true, reveal: true })}
+        >
+          {tr("Sync all chats & tasks to current tiers")}
+        </button>
+        <button
+          type="button"
+          onClick={onPreview}
+          disabled={busy}
+          data-testid="model-rollout-preview"
+          className={btnClass({ sm: true })}
+        >
+          {tr("Preview")}
+        </button>
+        {status === "running" ? (
+          <ActStatus state="running">{tr("Rolling out model tiers…")}</ActStatus>
+        ) : status === "idle" ? (
+          <ActNote>{tr("one-click sync aligns pre-existing chats and recurring tasks after a binary upgrade")}</ActNote>
+        ) : null}
+      </div>
+
+      {status !== "idle" && status !== "running" ? (
+        <ActStatus state={status.state}>
+          {status.state === "ok" ? "✓ " : "✕ "}
+          {status.message}
         </ActStatus>
       ) : null}
     </div>

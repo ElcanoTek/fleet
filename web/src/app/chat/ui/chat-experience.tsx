@@ -61,6 +61,7 @@ import {
 import {
   historyToMessages,
   hydrateResolvedApproval,
+  isNoticeOnlyMessage,
   parseApprovalCardData,
   parseApprovalNarrowable,
   type Approval,
@@ -3185,7 +3186,10 @@ export function ChatExperience({
 
   const lastAssistantMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id;
+      const m = messages[i];
+      if (m.role === "assistant" && m.kind !== "summary" && !isNoticeOnlyMessage(m)) {
+        return m.id;
+      }
     }
     return null;
   }, [messages]);

@@ -534,9 +534,11 @@ frontier model, which every new conversation starts on so you get the best
 reasoning and tool use out of the box — and the second is the **fallback model**,
 another smart frontier model from a different provider family that tasks and
 patrols fail over to automatically and that the assistant offers to switch to if
-a turn struggles. By default those two are **Gemini 4 Argon** (new conversations
+a turn struggles. By default those two are **Gemini 4 Hydrogen** (new conversations
 start on it) and **Claude Opus 5.5** (the frontier fallback model); your admin
-can point either slot at a different model. When you want to optimize your spend
+can point either slot at a different model, and when your admin upgrades the
+workspace's primary or fallback model, existing conversations and recurring
+tasks can move to the new model automatically with a short note in active chats. When you want to optimize your spend
 on routine pulls, checks, or formatting, you can switch to a cheaper or free
 model in the picker. Your admin can also pin models just below the two
 recommended frontier models, sometimes under their own name and with a tag such

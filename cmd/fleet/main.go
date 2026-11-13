@@ -698,6 +698,7 @@ func run() error {
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
 	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
+	chatOpts = append(chatOpts, httpapi.WithTaskModelRollout(schedStorage.RolloutTaskModels))
 	chatOpts = append(chatOpts, httpapi.WithSchedPing(schedStorage.DB().Ping))
 	chatOpts = append(chatOpts, httpapi.WithTaskWorkspaceSweeper(schedStorage.SweepTaskWorkspaces))
 	chatOpts = append(chatOpts, httpapi.WithTaskOutlierProvider(taskOutlierProvider(schedStorage)))

@@ -202,6 +202,7 @@ func chatRoutes() []chatRoute {
 		{"GET /api/admin/settings", fixed("/admin/settings"), noBody, passthroughJSON},
 		{"PUT /api/admin/settings/{key}", func(r *http.Request) string { return "/admin/settings/" + p(r, "key") }, jsonBodyIfAny, passthroughJSON},
 		{"DELETE /api/admin/settings/{key}", func(r *http.Request) string { return "/admin/settings/" + p(r, "key") }, noBody, passthroughJSON},
+		{"POST /api/admin/models/rollout", fixed("/admin/models/rollout"), jsonBodyAlways, passthroughJSON},
 		{"GET /api/admin/stats", fixed("/admin/stats"), noBody, textJSON},
 		{"GET /api/admin/storage", fixed("/admin/storage"), noBody, passthroughJSON},
 		{"POST /api/admin/storage/cleanup", fixed("/admin/storage/cleanup"), jsonBodyAlways, passthroughJSON},

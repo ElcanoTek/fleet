@@ -138,6 +138,7 @@
     "catwalk providers response is not an array",
     "changes must include at least one of pinned, labels",
     "chat schedule store is not configured",
+    "chat store unavailable",
     "chat turn panicked",
     "client_id must be a valid Microsoft Entra Application (client) UUID",
     "client_request_id must be at most 128 characters",
@@ -346,6 +347,7 @@
     "skill unreadable",
     "source changed during copy",
     "source task has an invalid recurrence",
+    "specify model, task_model, fallback_model, or sync_current=true",
     "staged path is occupied by a non-regular file",
     "stat failed",
     "store returned nil approval",
@@ -578,6 +580,13 @@
       "message": "{0}: appears twice in this upload",
       "fields": [
         "%s"
+      ]
+    },
+    {
+      "message": "{0}: want a model slug like provider/model, got {1}",
+      "fields": [
+        "%s",
+        "%q"
       ]
     },
     {
@@ -1117,6 +1126,12 @@
       ]
     },
     {
+      "message": "list conversations: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
       "message": "list shared files: {0}",
       "fields": [
         "%w"
@@ -1427,6 +1442,18 @@
     },
     {
       "message": "retry_policy: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "rollout conversations: {0}",
+      "fields": [
+        "%w"
+      ]
+    },
+    {
+      "message": "rollout tasks: {0}",
       "fields": [
         "%w"
       ]

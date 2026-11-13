@@ -1074,6 +1074,17 @@ export type ContextCompactedEventPayload = {
   summary_tokens?: number;
 };
 
+/** NoticeContent.kind when an operator rolls out a model upgrade to existing chats. */
+export const MODEL_UPGRADED_NOTICE_KIND = "model_upgraded";
+
+/** Structured form of an agent.EntryTypeNotice entry attached to a message. */
+export type NoticeItem = {
+  kind?: string;
+  text: string;
+  fromModel?: string;
+  toModel?: string;
+};
+
 export type Message = {
   id: number;
   /**
@@ -1099,11 +1110,12 @@ export type Message = {
   kind?: "text" | "summary" | "approval_resume" | "chat_patrol";
   /**
    * Notices fleet wrote into the conversation that are not a turn — e.g. an
-   * automatic continue that was skipped or dropped by a restart
-   * (history entries of type "notice"). Attached to the assistant message
-   * they follow and rendered as muted lines under it.
+   * automatic continue that was skipped or dropped by a restart, or an
+   * operator model upgrade (history entries of type "notice"). Attached to the
+   * assistant message they follow and rendered under it.
    */
   notices?: string[];
+  noticeItems?: NoticeItem[];
   content: string;
   /**
    * Email of the user who sent this turn in a multiplayer chat. Present only
@@ -1545,15 +1557,39 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
     }
     if (e.type === NOTICE_ENTRY_TYPE) {
       // A UI-only note fleet wrote (agent.EntryTypeNotice), e.g. an automatic
-      // continue that was skipped. It is not a turn and not the user's words,
-      // so it never opens a user row: it rides on the assistant message it
-      // follows, which keeps every user-turn count unchanged.
-      const text = String((e.content as { text?: string }).text ?? "").trim();
+      // continue that was skipped or a model upgrade rollout. It is not a turn
+      // and not the user's words, so it never opens a user row: it rides on the
+      // assistant message it follows, which keeps every user-turn count unchanged.
+      const noticeContent = e.content as {
+        kind?: string;
+        text?: string;
+        from_model?: string;
+        to_model?: string;
+      };
+      const text = String(noticeContent.text ?? "").trim();
       if (!text) continue;
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      const kind = typeof noticeContent.kind === "string" && noticeContent.kind.trim()
+        ? noticeContent.kind.trim()
+        : undefined;
+      const fromModel = typeof noticeContent.from_model === "string" && noticeContent.from_model.trim()
+        ? noticeContent.from_model.trim()
+        : undefined;
+      const toModel = typeof noticeContent.to_model === "string" && noticeContent.to_model.trim()
+        ? noticeContent.to_model.trim()
+        : undefined;
       current.notices = [...(current.notices ?? []), text];
+      current.noticeItems = [
+        ...(current.noticeItems ?? []),
+        {
+          ...(kind ? { kind } : {}),
+          text,
+          ...(fromModel ? { fromModel } : {}),
+          ...(toModel ? { toModel } : {}),
+        },
+      ];
       continue;
     }
     if (e.type === "text" && e.role === "assistant") {
@@ -1897,6 +1933,28 @@ export function safePretty(raw: string): string {
 // word block or pay to parse 100+ KB of GFM inline delimiters until requested.
 export const USER_BUBBLE_COLLAPSE_CHARS = 4_000;
 export const USER_BUBBLE_PREVIEW_CHARS = 1_200;
+
+/**
+ * isNoticeOnlyMessage reports whether an assistant Message exists solely to
+ * carry UI-only `notice` entries (for example, a model-upgrade notice appended
+ * right after a compaction summary or an unanswered user turn). Such rows are
+ * not assistant replies and should not steal Regenerate/Retry from the last
+ * real assistant turn.
+ */
+export function isNoticeOnlyMessage(message: Message): boolean {
+  return (
+    message.role === "assistant" &&
+    message.kind !== "summary" &&
+    !message.content.trim() &&
+    !message.cancelled &&
+    !message.failed &&
+    !message.modelRequired &&
+    !message.retrying &&
+    !(message.toolCalls && message.toolCalls.length > 0) &&
+    !(message.approvals && message.approvals.length > 0) &&
+    Boolean(message.notices && message.notices.length > 0)
+  );
+}
 
 /**
  * Truncates a large user message preview to `maxUnits` UTF-16 code units

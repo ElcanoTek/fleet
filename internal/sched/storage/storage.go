@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +84,15 @@ var ErrTaskNotReportableStatus = errors.New("status is not worker-reportable")
 // definite failures and must never borrow another worker's terminal result.
 var ErrTaskCommitOutcomeUnknown = errors.New("task transaction commit outcome unknown")
 
+// recordedTaskModelRollout remembers an in-process operator model rollout so
+// recurring tasks that happened to be running when the rollout executed apply
+// the upgraded primary/fallback models when spawning their next occurrence,
+// without mutating the historical model recorded on the already-started run.
+type recordedTaskModelRollout struct {
+	at   time.Time
+	opts models.TaskModelRollout
+}
+
 // Storage provides persistent storage for scheduled tasks.
 type Storage struct {
 	db       *db.Database
@@ -93,6 +103,9 @@ type Storage struct {
 	// per-task zone from this default, and EnqueueTask must do the same so
 	// agent/chat-created recurring tasks don't drift to UTC after occurrence #1.
 	defaultTaskTZ string
+
+	rolloutMu      sync.RWMutex
+	rolloutHistory []recordedTaskModelRollout
 }
 
 // New creates a new Storage instance.
@@ -439,6 +452,53 @@ func (s *Storage) UpdateTask(task *models.Task) (*models.Task, error) {
 // untouched; a non-nil empty string clears them to NULL (#1120).
 func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
 	return s.db.UpdateTasksModelBatch(ctx, model, fallbackModel, fromModel)
+}
+
+// RolloutTaskModels upgrades primary and/or fallback models across upcoming
+// scheduled and pending tasks, and records the rollout so any recurring task
+// currently running when the rollout executes picks up the new models when it
+// spawns its next occurrence.
+func (s *Storage) RolloutTaskModels(ctx context.Context, opts models.TaskModelRollout, dryRun bool) (models.TaskModelRolloutResult, error) {
+	res, err := s.db.RolloutTaskModels(ctx, opts, dryRun)
+	if err != nil || dryRun {
+		return res, err
+	}
+	// Clone pointer fields so caller mutations cannot alter recorded history.
+	recorded := opts
+	if opts.Model != nil {
+		v := strings.TrimSpace(*opts.Model)
+		recorded.Model = &v
+	}
+	if opts.FallbackModel != nil {
+		v := strings.TrimSpace(*opts.FallbackModel)
+		recorded.FallbackModel = &v
+	}
+	s.rolloutMu.Lock()
+	s.rolloutHistory = append(s.rolloutHistory, recordedTaskModelRollout{
+		at:   time.Now().UTC(),
+		opts: recorded,
+	})
+	if len(s.rolloutHistory) > 32 {
+		s.rolloutHistory = append([]recordedTaskModelRollout(nil), s.rolloutHistory[len(s.rolloutHistory)-32:]...)
+	}
+	s.rolloutMu.Unlock()
+	return res, nil
+}
+
+// applyRecordedModelRollouts applies any operator model rollouts that ran after
+// current was created (i.e. while current was already leased/running/paused)
+// onto the next recurring occurrence's TaskCreate without rewriting current's
+// own historical run record.
+func (s *Storage) applyRecordedModelRollouts(current *models.Task, tc *models.TaskCreate) {
+	s.rolloutMu.RLock()
+	history := append([]recordedTaskModelRollout(nil), s.rolloutHistory...)
+	s.rolloutMu.RUnlock()
+	for _, rec := range history {
+		if !current.CreatedAt.IsZero() && current.CreatedAt.After(rec.at) {
+			continue
+		}
+		tc.Model, tc.FallbackModel, _, _ = rec.opts.ApplyToPointers(tc.Model, tc.FallbackModel)
+	}
 }
 
 // ListScheduledTasks returns all scheduled tasks.
@@ -2130,6 +2190,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Build the next occurrence from the CURRENT definition (re-read under the
 	// claim lock), via TaskToCreate — the single canonical Task→TaskCreate clone.
 	tc := models.TaskToCreate(current)
+	s.applyRecordedModelRollouts(current, &tc)
 	if current.RecurrenceRemaining != nil {
 		remaining := *current.RecurrenceRemaining - 1
 		tc.RecurrenceRemaining = &remaining

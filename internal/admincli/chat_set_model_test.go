@@ -48,14 +48,14 @@ func TestChatSetModel_DryRunAndApply(t *testing.T) {
 	}
 
 	var outBuf, errBuf bytes.Buffer
-	code := runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-argon", "", true, false)
+	code := runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-hydrogen", "", true, false)
 	if code != 0 {
 		t.Fatalf("dry-run code = %d, want 0 (stderr=%s)", code, errBuf.String())
 	}
-	if !strings.Contains(outBuf.String(), "conv-1\talice@example.com\tmodel anthropic/claude-opus-5.5 → google/gemini-4-argon") {
+	if !strings.Contains(outBuf.String(), "conv-1\talice@example.com\tmodel anthropic/claude-opus-5.5 → google/gemini-4-hydrogen") {
 		t.Errorf("dry-run stdout missing conv-1 line: %s", outBuf.String())
 	}
-	if !strings.Contains(outBuf.String(), "conv-2\tbob@example.com\tmodel <none> → google/gemini-4-argon") {
+	if !strings.Contains(outBuf.String(), "conv-2\tbob@example.com\tmodel <none> → google/gemini-4-hydrogen") {
 		t.Errorf("dry-run stdout missing conv-2 line: %s", outBuf.String())
 	}
 	if !strings.Contains(errBuf.String(), "dry-run: 2 conversation(s) would be re-assigned") {
@@ -67,12 +67,12 @@ func TestChatSetModel_DryRunAndApply(t *testing.T) {
 
 	outBuf.Reset()
 	errBuf.Reset()
-	code = runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-argon", "anthropic/claude-opus-5.5", false, true)
+	code = runChatSetModel(context.Background(), st, &outBuf, &errBuf, "google/gemini-4-hydrogen", "anthropic/claude-opus-5.5", false, true)
 	if code != 0 {
 		t.Fatalf("apply code = %d, want 0 (stderr=%s)", code, errBuf.String())
 	}
-	if st.lastModel != "google/gemini-4-argon" || st.lastFrom != "anthropic/claude-opus-5.5" {
-		t.Errorf("store call = (%q, %q), want (google/gemini-4-argon, anthropic/claude-opus-5.5)", st.lastModel, st.lastFrom)
+	if st.lastModel != "google/gemini-4-hydrogen" || st.lastFrom != "anthropic/claude-opus-5.5" {
+		t.Errorf("store call = (%q, %q), want (google/gemini-4-hydrogen, anthropic/claude-opus-5.5)", st.lastModel, st.lastFrom)
 	}
 	if !strings.Contains(errBuf.String(), "re-assigned model on 2 conversation(s)") {
 		t.Errorf("apply stderr = %s", errBuf.String())

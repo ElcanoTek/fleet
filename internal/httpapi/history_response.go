@@ -43,9 +43,16 @@ type historyEntryResponse struct {
 
 // isPrivateTurnTraceEntry reports whether e is a working-trace entry
 // (tool_call, tool_result, reasoning, …) rather than a rendered message:
-// anything but text, a compaction summary or its content-free boundary. Those
-// are private to the turn's sender and dropped for every other participant.
+// anything but text, a compaction summary or its content-free boundary, or a
+// conversation-wide model upgrade notice. Working-trace entries are private to
+// the turn's sender and dropped for every other participant.
 func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
+	if e.Type == agent.EntryTypeNotice {
+		var c agent.NoticeContent
+		if json.Unmarshal(e.Content, &c) == nil && c.Kind == agent.NoticeKindModelUpgraded {
+			return false
+		}
+	}
 	return e.Type != "text" && e.Type != "summary" && e.Type != agent.EntryTypeSummaryBoundary
 }
 

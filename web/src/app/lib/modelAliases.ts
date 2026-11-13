@@ -37,8 +37,8 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-4-argon";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Argon";
+export const DEFAULT_MODEL = "google/gemini-4-hydrogen";
+export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Hydrogen";
 
 export const FALLBACK_MODEL = "anthropic/claude-opus-5.5";
 export const FALLBACK_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
@@ -61,6 +61,11 @@ export const DEFAULT_TASK_FALLBACK_MODEL = FALLBACK_MODEL;
 const KNOWN_LABELS: Readonly<Record<string, string>> = {
   [DEFAULT_MODEL]: DEFAULT_MODEL_LABEL,
   [ADVANCED_MODEL]: ADVANCED_MODEL_LABEL,
+  "google/gemini-4-argon": "Google: Gemini 4 Argon",
+  "google/gemini-3.8-flash": "Google: Gemini 3.8 Flash",
+  "anthropic/claude-sonnet-4-6": "Anthropic: Claude Sonnet 4.6",
+  "anthropic/claude-haiku-5.5": "Anthropic: Claude Haiku 5.5",
+  "openai/gpt-6-luna-pro": "OpenAI: GPT-6 Luna Pro",
 };
 
 // The live tier pair. Module scope, same lifecycle as useClientConfig's

@@ -103,6 +103,10 @@ type Server struct {
 	// nil in tests/mock mode: the /admin/settings endpoints answer 501.
 	workspaceSettings workspaceSettingsService
 
+	// taskModelRollout upgrades upcoming scheduled/pending tasks during admin
+	// model rollouts (WithTaskModelRollout). nil in chat-only tests.
+	taskModelRollout TaskModelRolloutFunc
+
 	// notifySettings backs the admin Notifications panel (WithNotifySettings).
 	// nil in tests/mock mode: the /admin/notify-settings endpoints answer 501.
 	notifySettings notifySettingsService

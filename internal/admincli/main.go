@@ -110,6 +110,8 @@ func Run(argv []string) int {
 		return cmdMOTD(argv[1:])
 	case "chat":
 		return cmdChat(argv[1:])
+	case "model":
+		return cmdModel(argv[1:])
 	case "acp":
 		return acp.Run(argv[1:])
 	case "sched":
@@ -246,7 +248,10 @@ Users, credentials, notes:
   fleet chat user role <email>   --role member|viewer|admin [--team <id>]
   fleet chat user del <email>
   fleet chat user list
-  fleet chat set-model --model <slug> [--from-model <slug>] [--dry-run] [--no-confirm]
+  fleet chat set-model --model <slug> [--from-model <slug>] [--notify] [--dry-run] [--no-confirm]
+  fleet model rollout [--model <slug>] [--fallback-model <slug>] [--from-model <slug>] [--notify=true] [--set-workspace-tiers] [--dry-run] [--no-confirm]
+                                                      (upgrade chats + recurring/scheduled tasks in one step; omit --model and
+                                                       --fallback-model to sync everything to the box's effective tiers)
   fleet sched user add <username> --role admin|client|readonly --password -
   fleet sched user update <username> --password -
   fleet sched user set-role <username> --role admin|client|readonly

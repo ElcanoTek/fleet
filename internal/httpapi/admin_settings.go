@@ -16,8 +16,15 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/settings"
 )
+
+type adminSettingWriteResponse struct {
+	settings.Resolved
+	Rollout      *ModelRolloutResponse `json:"rollout,omitempty"`
+	RolloutError string                `json:"rollout_error,omitempty"`
+}
 
 // workspaceSettingsService is the seam the admin settings endpoints call,
 // satisfied by *settings.Service and injected via WithWorkspaceSettings.
@@ -68,24 +75,53 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodPut:
 		var body struct {
-			Value string `json:"value"`
+			Value       string `json:"value"`
+			Rollout     bool   `json:"rollout"`
+			NotifyChats *bool  `json:"notify_chats"`
 		}
 		if !decodeJSONBody(w, r, &body) {
 			return
 		}
+		prevFallback := agentcore.CurrentFallbackModel()
+		prevTask := agentcore.CurrentTaskModel()
 		resolved, err := s.workspaceSettings.Set(r.Context(), key, body.Value, userFromCtx(r.Context()))
 		if err != nil {
 			httpErrorForSetting(w, err)
 			return
 		}
-		writeJSON(w, r, resolved)
+		if !body.Rollout {
+			writeJSON(w, r, resolved)
+			return
+		}
+		rollout, rerr := s.rolloutAfterSettingChange(r.Context(), key, prevFallback, prevTask, body.NotifyChats)
+		resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+		if rerr != nil {
+			resp.RolloutError = rerr.Error()
+		}
+		writeJSON(w, r, resp)
 	case http.MethodDelete:
+		prevFallback := agentcore.CurrentFallbackModel()
+		prevTask := agentcore.CurrentTaskModel()
 		resolved, err := s.workspaceSettings.Reset(r.Context(), key, userFromCtx(r.Context()))
 		if err != nil {
 			httpErrorForSetting(w, err)
 			return
 		}
-		writeJSON(w, r, resolved)
+		if r.URL.Query().Get("rollout") != "true" {
+			writeJSON(w, r, resolved)
+			return
+		}
+		var notifyChats *bool
+		if raw := r.URL.Query().Get("notify_chats"); raw == "true" || raw == "false" {
+			v := raw == "true"
+			notifyChats = &v
+		}
+		rollout, rerr := s.rolloutAfterSettingChange(r.Context(), key, prevFallback, prevTask, notifyChats)
+		resp := adminSettingWriteResponse{Resolved: resolved, Rollout: rollout}
+		if rerr != nil {
+			resp.RolloutError = rerr.Error()
+		}
+		writeJSON(w, r, resp)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

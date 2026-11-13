@@ -18,8 +18,9 @@ import (
 // fakeSettingsService implements workspaceSettingsService in-memory; the real
 // service logic is covered in internal/settings.
 type fakeSettingsService struct {
-	values map[string]string // key → override
-	dflt   map[string]string
+	values  map[string]string // key → override
+	dflt    map[string]string
+	SetHook func(key, val string)
 }
 
 func newFakeSettingsService() *fakeSettingsService {
@@ -60,6 +61,9 @@ func (f *fakeSettingsService) Set(_ context.Context, key, value, _ string) (sett
 		return settings.Resolved{}, fmt.Errorf("%w: junk", settings.ErrInvalidValue)
 	}
 	f.values[key] = value
+	if f.SetHook != nil {
+		f.SetHook(key, value)
+	}
 	return f.resolved(key), nil
 }
 
