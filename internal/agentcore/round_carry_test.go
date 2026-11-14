@@ -363,6 +363,12 @@ func TestRunFinalizeInputCarriesRoundTranscriptAndToolEvents(t *testing.T) {
 	if got.RoundToolEvents != 2 {
 		t.Errorf("RoundToolEvents = %d, want 2 (the round's committed tool call + result)", got.RoundToolEvents)
 	}
+	if got.RunToolEvents != 2 {
+		t.Errorf("RunToolEvents = %d, want 2 (the run's committed tool call + result)", got.RunToolEvents)
+	}
+	if got.CarryResult == nil {
+		t.Error("FinalizeInput.CarryResult was not wired by Run")
+	}
 	var sawUser, sawCall, sawResult bool
 	for _, m := range got.Messages {
 		if m.Role == fantasy.MessageRoleUser && strings.Contains(msgText(m), "pull the report") {
