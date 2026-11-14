@@ -9,4 +9,4 @@ python-docx
 python-pptx
 soupsieve
 pygments
-tornado>=6.5.8
+tornado>=6.6.1
