@@ -844,6 +844,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				finInput.StablePrefixTokens = eng.modelContextPrefix.toolTokens
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finInput, observerBoundary)
 				if err != nil {
+					sink.replaceFinalTextFrom(roundMark.finalText, finalText)
 					return streamErrorResult(ctx, err, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round+1)
 				}
 			}

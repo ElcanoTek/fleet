@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
@@ -924,5 +926,181 @@ func TestInteractiveFinalize_PriorRoundToolExecutionSuppressesWithToolsRetry(t *
 	}
 	if res.FinalText != "summary from round 0 tool" {
 		t.Fatalf("FinalText = %q, want degraded tool-less summary", res.FinalText)
+	}
+}
+
+// TestInteractiveFinalize_EmptyTurnRetryPropagatesCommittedToolFailure verifies
+// that when an empty-turn with-tools retry executes a governed tool and then
+// fails on a subsequent step, finalizeWithPanicBoundary propagates the error to
+// agentcore.Run's streamErrorResult instead of swallowing it into a blank
+// completed turn, preserving the committed tool_call and tool_result entries
+// alongside the returned error (ADR-0065 / #798).
+func TestInteractiveFinalize_EmptyTurnRetryPropagatesCommittedToolFailure(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	upstreamErr := errors.New("upstream stream reset after write")
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			switch n {
+			case 1:
+				return func(yield func(fantasy.StreamPart) bool) {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}, nil
+			case 2:
+				return func(yield func(fantasy.StreamPart) bool) {
+					if !yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "write-call-1",
+						ToolCallName:  "mcp_bundle_update_floor",
+						ToolCallInput: `{"floor":0.75}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				}, nil
+			default:
+				return nil, upstreamErr
+			}
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("apply floor 0.75")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "update_floor", Description: "updates floor"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if !errors.Is(err, upstreamErr) {
+		t.Fatalf("RunInteractiveTurn err = %v, want %v (must not swallow retry failure into a blank success)", err, upstreamErr)
+	}
+	if res.Cancelled {
+		t.Fatal("res.Cancelled = true on non-cancelled retry failure")
+	}
+	var sawCall, sawResult bool
+	for _, entry := range res.Entries {
+		if entry.ToolCallID != "write-call-1" {
+			continue
+		}
+		if entry.Type == "tool_call" {
+			sawCall = true
+		}
+		if entry.Type == "tool_result" {
+			sawResult = true
+		}
+	}
+	if !sawCall || !sawResult {
+		t.Fatalf("committed retry tool entries missing from partial Result (call=%v result=%v): %+v", sawCall, sawResult, res.Entries)
+	}
+}
+
+// TestInteractiveFinalize_EmptyTurnRetryPropagatesBudgetStop verifies that when
+// an empty-turn retry hits the run's token/cost ceiling via GuardStep, the
+// ErrCostCeilingExceeded error propagates through finalizeWithPanicBoundary to
+// streamErrorResult so the turn ends with StoppedByBudget == true rather than a
+// silent blank completion.
+func TestInteractiveFinalize_EmptyTurnRetryPropagatesBudgetStop(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var calls atomic.Int32
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			n := calls.Add(1)
+			return func(yield func(fantasy.StreamPart) bool) {
+				if n == 1 {
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 120, OutputTokens: 30, TotalTokens: 150},
+					})
+					return
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "unreachable past budget"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:   "sys",
+		Messages:       []fantasy.Message{fantasy.NewUserMessage("check schedule")},
+		Model:          model,
+		MaxTokens:      1024,
+		MaxIterations:  4,
+		MaxTotalTokens: 100,
+		MCPBroker:      broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn err = %v, want clean budget stop", err)
+	}
+	if !res.StoppedByBudget || res.BudgetStopReason == "" {
+		t.Fatalf("StoppedByBudget=%v BudgetStopReason=%q, want budget stop surfaced from finalize retry", res.StoppedByBudget, res.BudgetStopReason)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("model calls = %d, want 1 (GuardStep must abort before the second paid completion)", calls.Load())
+	}
+}
+
+// TestInteractiveFinalize_EmptyTurnRetryPropagatesCancellation verifies that
+// cancelling ctx during an empty-turn finalize retry surfaces Cancelled == true
+// and preserves any partial prose streamed during the retry.
+func TestInteractiveFinalize_EmptyTurnRetryPropagatesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	broker := &interactiveRecordingBroker{}
+	var calls atomic.Int32
+	model := &itMockModel{
+		streamFunc: func(callCtx context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			n := calls.Add(1)
+			if n == 1 {
+				return func(yield func(fantasy.StreamPart) bool) {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}, nil
+			}
+			return func(yield func(fantasy.StreamPart) bool) {
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "Checking floor "}) {
+					return
+				}
+				cancel()
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: callCtx.Err()})
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("check floor")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 4,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(ctx, tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn err = %v, want nil on cancellation", err)
+	}
+	if !res.Cancelled {
+		t.Fatal("res.Cancelled = false, want true when ctx is cancelled during finalize retry")
+	}
+	if res.FinalText != "Checking floor" {
+		t.Fatalf("res.FinalText = %q, want partial retry text preserved", res.FinalText)
 	}
 }

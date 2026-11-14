@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -381,6 +382,7 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 		// Like ADR-0035's own mark, the count is deliberately coarse: read-only
 		// and staged (never-executed) tool events also suppress the re-drive.
 		committedTools := max(in.RoundToolEvents, in.RunToolEvents)
+		completedToolWork := committedTools > 0
 		hasLeakedCall := strings.Contains(in.FinalText, "call:")
 		if committedTools == 0 && (hasLeakedCall || len(in.Tools) > 0) {
 			nudge := interactiveEmptyTurnRetryNudge
@@ -394,26 +396,50 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 			if len(retryCarry) > 0 {
 				in.Messages = append(append([]fantasy.Message{}, in.Messages...), retryCarry...)
 			}
-			if retryTools == 0 && len(retryCarry) == 0 {
+			switch {
+			case retryTools == 0 && len(retryCarry) == 0:
 				// Neither the main round nor the with-tools retry executed a
 				// tool. On an empty-turn retry (or a cancelled/budget-stopped
 				// leaked-call retry), do not run a third tool-less call asking
 				// the model to summarize "the work you already did above".
 				if err != nil {
-					if !hasLeakedCall || ctx.Err() != nil || errors.Is(err, agentcore.ErrCostCeilingExceeded) {
-						return "", err
+					if !hasLeakedCall || isFatalFinalizeError(ctx, err) {
+						return recovered, err
 					}
 				} else if !hasLeakedCall {
 					return "", nil
 				}
-			} else if err != nil {
-				return "", err
+			case err != nil:
+				return recovered, err
+			default:
+				completedToolWork = true
 			}
 		}
 
 		// Otherwise force a tool-less written answer from the work already done.
-		return streamForceFinalSummary(ctx, tc, in)
+		return streamBestEffortForceSummary(ctx, tc, in, completedToolWork)
 	}
+}
+
+func isFatalFinalizeError(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, agentcore.ErrCostCeilingExceeded)
+}
+
+func streamBestEffortForceSummary(
+	ctx context.Context,
+	tc TurnConfig,
+	in agentcore.FinalizeInput,
+	completedToolWork bool,
+) (string, error) {
+	summary, err := streamForceFinalSummary(ctx, tc, in)
+	if err != nil {
+		if completedToolWork && !isFatalFinalizeError(ctx, err) {
+			logging.From(ctx).Error("finalize summary error", "err", err)
+			return "", nil
+		}
+		return summary, err
+	}
+	return summary, nil
 }
 
 // finalizeModel picks the model a finalize recovery call runs on: the model
@@ -522,10 +548,11 @@ func streamWithToolsRetry(ctx context.Context, tc TurnConfig, in agentcore.Final
 	if in.CarryResult != nil && res != nil {
 		carried = in.CarryResult(res)
 	}
+	cleaned := stripLeakedToolCalls(strings.TrimSpace(sb.String()))
 	if err != nil {
-		return "", carried, int(retryEvents.Load()), err
+		return cleaned, carried, int(retryEvents.Load()), err
 	}
-	return stripLeakedToolCalls(strings.TrimSpace(sb.String())), carried, int(retryEvents.Load()), nil
+	return cleaned, carried, int(retryEvents.Load()), nil
 }
 
 // streamForceFinalSummary makes one tool-less call with the force-summary nudge
@@ -591,10 +618,11 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 			return nil
 		},
 	})
+	cleaned := stripLeakedToolCalls(strings.TrimSpace(sb.String()))
 	if err != nil {
-		return "", err
+		return cleaned, err
 	}
-	return stripLeakedToolCalls(strings.TrimSpace(sb.String())), nil
+	return cleaned, nil
 }
 
 // interactiveLeakedToolCallNudge / interactiveForceFinalSummaryNudge mirror the
