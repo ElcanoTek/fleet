@@ -594,3 +594,335 @@ func TestRunInteractiveTurn_UsesInjectedMCPBrokerAndCatalog(t *testing.T) {
 		t.Fatalf("broker calls = %d (%q.%q), want one bundle.lookup", broker.calls, broker.server, broker.tool)
 	}
 }
+
+// TestInteractiveFinalize_EmptyTurnRetriesWithToolsInsteadOfStrippingThem is the
+// regression test for an empty zero-tool-call step (production: Gemini 4
+// Hydrogen spending hidden thinking tokens on a 268k-token patrol conversation
+// and closing the stream with FinalText == "" and zero tool calls). Previously
+// buildInteractiveFinalize fell straight into streamForceFinalSummary with nil
+// tools and forceFinalSummaryNudge ("Do not call any tools"), causing Step 2 to
+// answer "not executed (tool calls disabled for this turn)". It must instead
+// retry once WITH the governed tool roster (including out-of-roster deferred
+// MCP repair) so the intended tool work executes and persists.
+func TestInteractiveFinalize_EmptyTurnRetriesWithToolsInsteadOfStrippingThem(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "1")
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu             sync.Mutex
+		calls          int
+		step2WithTools bool
+		step2Prompt    []fantasy.Message
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			if n == 2 {
+				step2WithTools = len(call.Tools) > 0
+				step2Prompt = append([]fantasy.Message(nil), call.Prompt...)
+			}
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch n {
+				case 1:
+					// Step 1: hidden thinking tokens billed, zero visible text,
+					// zero tool calls, clean stream finish.
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 100, OutputTokens: 1900},
+					})
+				case 2:
+					// Step 2 (empty-turn retry WITH tools): calls the deferred MCP tool.
+					if !yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "mcp-1",
+						ToolCallName:  "mcp_bundle_lookup",
+						ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonToolCalls,
+						Usage:        fantasy.Usage{InputTokens: 120, OutputTokens: 40},
+					})
+				default:
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "7:00 PM ET · floor updated (verified)"}) {
+						return
+					}
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 140, OutputTokens: 20},
+					})
+				}
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("run patrol #18")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup", Description: "lookup"}},
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "other", Description: "other"}},
+		},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	mu.Lock()
+	gotTools := step2WithTools
+	prompt := step2Prompt
+	mu.Unlock()
+	if !gotTools {
+		t.Fatal("Step 2 ran without tools; empty zero-tool turn fell into tool-less streamForceFinalSummary")
+	}
+	if promptHasUserText(prompt, "Do not call any tools") {
+		t.Fatal("Step 2 received forceFinalSummaryNudge forbidding tool calls when no tool work had executed")
+	}
+	if !promptHasUserText(prompt, emptyTurnRetryNudge) {
+		t.Error("Step 2 prompt lacks emptyTurnRetryNudge")
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker calls = %d, want 1", broker.calls)
+	}
+	if res.FinalText != "7:00 PM ET · floor updated (verified)" {
+		t.Fatalf("FinalText = %q, want verified patrol output", res.FinalText)
+	}
+	var sawCall, sawResult bool
+	for _, e := range res.Entries {
+		if e.Type == "tool_call" && e.ToolCallID == "mcp-1" {
+			sawCall = true
+		}
+		if e.Type == "tool_result" && e.ToolCallID == "mcp-1" {
+			sawResult = true
+		}
+	}
+	if !sawCall || !sawResult {
+		t.Errorf("Result.Entries missing retry tool transcript (call=%v result=%v): %+v", sawCall, sawResult, res.Entries)
+	}
+	if res.Usage.PromptTokens != 360 || res.Usage.CompletionTokens != 1960 {
+		t.Errorf("Usage = %+v, want PromptTokens=360 CompletionTokens=1960 across initial + retry steps", res.Usage)
+	}
+}
+
+// TestInteractiveFinalize_EmptyTurnRetryCarriesToolsIntoForcedSummary verifies
+// that when an empty-turn retry executes tools and then ends its own final step
+// without prose, the degraded tool-less summary receives the retry's completed
+// tool transcript (CarryResult) rather than stale pre-retry messages.
+func TestInteractiveFinalize_EmptyTurnRetryCarriesToolsIntoForcedSummary(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu            sync.Mutex
+		calls         int
+		summaryPrompt []fantasy.Message
+		summaryTools  int
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			if n == 4 {
+				summaryPrompt = append([]fantasy.Message(nil), call.Prompt...)
+				summaryTools = len(call.Tools)
+			}
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch n {
+				case 1:
+					// Main round: empty response, zero tool calls.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				case 2:
+					// Retry step 1: executes the governed MCP tool.
+					if !yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "mcp-retry-1",
+						ToolCallName:  "mcp_bundle_lookup",
+						ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				case 3:
+					// Retry step 2: stops without prose after executing the tool.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				default:
+					// Degraded forced summary writes up the retry's tool result.
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "summarized from retry tool result"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("look it up")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker calls = %d, want 1 (forced summary must not re-run tools)", broker.calls)
+	}
+	if res.FinalText != "summarized from retry tool result" {
+		t.Fatalf("FinalText = %q, want degraded summary text", res.FinalText)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 4 {
+		t.Fatalf("model calls = %d, want 4 (empty + retry call + retry empty stop + forced summary)", calls)
+	}
+	if summaryTools != 0 {
+		t.Errorf("forced summary call carried %d tools, want 0", summaryTools)
+	}
+	assertWellFormedToolPairs(t, summaryPrompt)
+	if got, _, ok := toolResultTextFor(t, summaryPrompt, "mcp-retry-1"); !ok || !contains([]byte(got), "broker-result") {
+		t.Errorf("forced-summary prompt lacks the retry's tool result: got=%q ok=%v", got, ok)
+	}
+}
+
+// TestInteractiveFinalize_DoubleEmptyTurnDoesNotFabricateToollessSummary checks
+// that when both the initial round and the with-tools retry produce empty text
+// and zero tool calls, finalize stops cleanly rather than firing a third
+// tool-less call asking to summarize non-existent work.
+func TestInteractiveFinalize_DoubleEmptyTurnDoesNotFabricateToollessSummary(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("hello")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	mu.Lock()
+	gotCalls := calls
+	mu.Unlock()
+	if gotCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 (initial + single with-tools retry, no third tool-less summary)", gotCalls)
+	}
+	if res.FinalText != "" {
+		t.Errorf("FinalText = %q, want empty", res.FinalText)
+	}
+}
+
+// TestInteractiveFinalize_PriorRoundToolExecutionSuppressesWithToolsRetry pins
+// ADR-0035 across rounds: when Round 0 executed a tool and then continued into
+// Round 1 after FinishReasonLength, an empty Round 1 (RoundToolEvents == 0,
+// RunToolEvents == 2) must NOT re-drive with tools and risk repeating the MCP
+// side effect; it must degrade to the tool-less forced summary.
+func TestInteractiveFinalize_PriorRoundToolExecutionSuppressesWithToolsRetry(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu                sync.Mutex
+		calls             int
+		finalizeWithTools bool
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			if n == 4 {
+				finalizeWithTools = len(call.Tools) > 0
+			}
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch n {
+				case 1:
+					// Round 0, step 1: execute the governed MCP tool.
+					if !yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "mcp-r0",
+						ToolCallName:  "mcp_bundle_lookup",
+						ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				case 2:
+					// Round 0, step 2: cut off by max_output_tokens -> triggers Round 1 continuation.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonLength})
+				case 3:
+					// Round 1: stops with empty text and zero tool calls in Round 1.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				default:
+					// Finalize recovery: must be tool-less forced summary because Round 0 ran a tool.
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "summary from round 0 tool"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("lookup and summarize")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	mu.Lock()
+	gotWithTools := finalizeWithTools
+	mu.Unlock()
+	if gotWithTools {
+		t.Fatal("finalize retried WITH tools despite Round 0 having already committed a tool execution (ADR-0035)")
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker calls = %d, want 1", broker.calls)
+	}
+	if res.FinalText != "summary from round 0 tool" {
+		t.Fatalf("FinalText = %q, want degraded tool-less summary", res.FinalText)
+	}
+}

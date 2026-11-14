@@ -844,7 +844,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				finInput.StablePrefixTokens = eng.modelContextPrefix.toolTokens
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finInput, observerBoundary)
 				if err != nil {
-					return Result{}, err
+					return streamErrorResult(ctx, err, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round+1)
 				}
 			}
 			res, cerr := completeRun(ctx, runCompletion{
@@ -1215,12 +1215,16 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 		// run's: no request here needs a Gemini signature.
 		Messages:        withoutGeminiSignatures(messages),
 		RoundToolEvents: roundToolEvents,
-		Tools:           fantasyTools,
-		Observer:        observer,
-		SystemPrompt:    systemPrompt,
-		Model:           activeModel,
-		OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
-		OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
+		RunToolEvents:   sink.toolEventCount(),
+		CarryResult: func(r *fantasy.AgentResult) []fantasy.Message {
+			return withoutGeminiSignatures(outOfRoster.explain(carryRoundMessages(r)))
+		},
+		Tools:        fantasyTools,
+		Observer:     observer,
+		SystemPrompt: systemPrompt,
+		Model:        activeModel,
+		OnToolCall:   finalizeToolCallCallback(sink, panicAttribution),
+		OnToolResult: finalizeToolResultCallback(sink, panicAttribution),
 		GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
 			// Refused out-of-roster calls are explained before the retry's own
 			// steps (context budget, cache markers) see the history (#1744).

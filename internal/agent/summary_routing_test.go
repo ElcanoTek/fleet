@@ -200,12 +200,13 @@ func TestFinalizeRecoveryCalls_CarryActiveModelRoutingPolicy(t *testing.T) {
 	tc := TurnConfig{Model: primary, MaxTokens: 512}
 	hook := buildInteractiveFinalize(tc)
 
-	// 1. Forced final summary (FinalText == "") uses in.Model (fallback) and sends its routing policy.
+	// 1. Forced final summary (FinalText == "" after tool execution) uses in.Model (fallback) and sends its routing policy.
 	got, err := hook(context.Background(), agentcore.FinalizeInput{
-		FinalText:    "",
-		Messages:     []fantasy.Message{fantasy.NewUserMessage("summarize tool results")},
-		SystemPrompt: "sys",
-		Model:        fallback,
+		FinalText:       "",
+		RoundToolEvents: 2,
+		Messages:        []fantasy.Message{fantasy.NewUserMessage("summarize tool results")},
+		SystemPrompt:    "sys",
+		Model:           fallback,
 	})
 	if err != nil {
 		t.Fatalf("forced summary finalize failed: %v", err)
@@ -243,5 +244,32 @@ func TestFinalizeRecoveryCalls_CarryActiveModelRoutingPolicy(t *testing.T) {
 	}
 	if or, ok := fallback.opts[0][openrouter.Name].(*openrouter.ProviderOptions); !ok || or.Provider == nil || len(or.Provider.Quantizations) == 0 {
 		t.Errorf("leaked call retry provider options = %#v, want precision floor routing policy", fallback.opts[0])
+	}
+
+	// 3. Empty-turn retry (FinalText == "", zero tool events, tools present) also uses in.Model and routing policy.
+	fallback.opts = nil
+	nopTool := fantasy.NewAgentTool("nop", "no-op", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse("ok"), nil
+	})
+	gotEmptyRetry, err := hook(context.Background(), agentcore.FinalizeInput{
+		FinalText:       "",
+		RoundToolEvents: 0,
+		RunToolEvents:   0,
+		Tools:           []fantasy.AgentTool{nopTool},
+		Messages:        []fantasy.Message{fantasy.NewUserMessage("run patrol")},
+		SystemPrompt:    "sys",
+		Model:           fallback,
+	})
+	if err != nil {
+		t.Fatalf("empty turn retry finalize failed: %v", err)
+	}
+	if gotEmptyRetry != "recovered summary" {
+		t.Fatalf("empty turn retry text = %q, want %q", gotEmptyRetry, "recovered summary")
+	}
+	if len(fallback.opts) != 1 {
+		t.Fatalf("fallback model received %d empty-retry calls, want 1", len(fallback.opts))
+	}
+	if or, ok := fallback.opts[0][openrouter.Name].(*openrouter.ProviderOptions); !ok || or.Provider == nil || len(or.Provider.Quantizations) == 0 {
+		t.Errorf("empty turn retry provider options = %#v, want precision floor routing policy", fallback.opts[0])
 	}
 }
