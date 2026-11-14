@@ -290,8 +290,8 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 			return
 		}
 	case p == "/login":
-		if shouldAutoStartLogin(r.URL.Query(), g.cfg.OIDC) {
-			temporaryRedirect(w, g.redirectURL(r, "/api/auth/oidc/start?silent=1"+loginLanguageQuery(r)))
+		if target, ok := g.loginAutoStartTarget(r); ok {
+			temporaryRedirect(w, g.redirectURL(r, target))
 			return
 		}
 		boot.Login.TeamLink = r.URL.Query().Get("team_link") == "1" || parkedTeamLink(r) != ""

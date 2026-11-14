@@ -272,19 +272,51 @@ func (g *Gateway) redirectURI(r *http.Request) string {
 	return g.redirectURL(r, "/api/auth/oidc/callback")
 }
 
-// shouldAutoStartLogin decides whether an anonymous /login visit starts a
-// silent SSO attempt instead of rendering the card. Never with auto-start
-// off, on a login error (?e=), after a silent attempt came back empty
-// (?sso=none), or on ?manual=1 — so the password form is always one URL away
-// and a failed attempt cannot loop.
-func shouldAutoStartLogin(q url.Values, cfg *OIDCConfig) bool {
-	if cfg == nil || !cfg.AutoStart {
-		return false
+// loginAutoStart decides whether an anonymous /login visit goes to the IdP
+// instead of rendering the card, and whether that attempt is silent
+// (prompt=none). Never on a login error (?e=) or ?manual=1, so a failed
+// attempt cannot loop and the card is always one URL away.
+//
+// When SSO is the only way in (ssoOnly) the card would offer nothing but the
+// SSO button, so the visit goes straight to the IdP's own sign-in page, with
+// or without FLEET_OIDC_AUTO_START and also after an empty silent attempt
+// (?sso=none, which old links still carry): an interactive request never
+// comes back with login_required. Otherwise FLEET_OIDC_AUTO_START tries
+// silently once and ?sso=none renders the card.
+func loginAutoStart(q url.Values, cfg *OIDCConfig, ssoOnly bool) (start, silent bool) {
+	if cfg == nil || q.Has("e") || q.Has("manual") {
+		return false, false
 	}
-	if q.Has("e") || q.Has("manual") {
-		return false
+	if ssoOnly {
+		return true, false
 	}
-	return q.Get("sso") != "none"
+	if !cfg.AutoStart || q.Get("sso") == "none" {
+		return false, false
+	}
+	return true, true
+}
+
+// ssoOnly reports whether SSO is the only sign-in this Fleet offers: OIDC is
+// configured, passwords are off (central Auth without the break-glass) and
+// Elcano email links are off.
+func (g *Gateway) ssoOnly() bool {
+	return g.cfg.OIDC != nil && g.cfg.PasswordLoginDisabled && g.cfg.ElcanoPubKeyB64 == ""
+}
+
+// loginAutoStartTarget is where an anonymous /login visit goes instead of the
+// card (see loginAutoStart), keeping the visitor's language.
+func (g *Gateway) loginAutoStartTarget(r *http.Request) (string, bool) {
+	start, silent := loginAutoStart(r.URL.Query(), g.cfg.OIDC, g.ssoOnly())
+	switch {
+	case !start:
+		return "", false
+	case silent:
+		return "/api/auth/oidc/start?silent=1" + loginLanguageQuery(r), true
+	}
+	if language := requestLanguage(r); language != "" {
+		return "/api/auth/oidc/start?lang=" + language, true // supported enum only
+	}
+	return "/api/auth/oidc/start", true
 }
 
 // handleOIDCStart is GET /api/auth/oidc/start: mint state + nonce + PKCE

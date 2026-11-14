@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -250,6 +251,46 @@ func TestChatMembershipGate(t *testing.T) {
 		if c.Path == "/auth/membership" {
 			t.Fatal("password session probed membership")
 		}
+	}
+}
+
+// A Fleet whose only sign-in is SSO (central Auth, passwords off, no Elcano
+// email links) never shows a card with just an SSO button: /login goes
+// straight to Auth's sign-in page. A login error or ?manual=1 still renders
+// the card, so a failed attempt cannot loop.
+func TestSSOOnlyLoginGoesStraightToAuth(t *testing.T) {
+	idp := &OIDCConfig{Issuer: "https://auth.example.com", ClientID: "c", ClientSecret: "s"}
+	e := newTestEnv(t, withOrigin(testOrigin), withOIDC(idp))
+	e.g.cfg.PasswordLoginDisabled = true
+	e.g.cfg.ElcanoPubKeyB64 = ""
+	for _, auto := range []bool{false, true} {
+		idp.AutoStart = auto
+		for _, q := range []string{"", "?sso=none", "?team_link=1"} {
+			res := e.do(req("GET", "/login"+q, ""))
+			if res.StatusCode != 307 || res.Header.Get("Location") != testOrigin+"/api/auth/oidc/start" {
+				t.Errorf("auto-start=%v /login%s: %d %q", auto, q, res.StatusCode, res.Header.Get("Location"))
+			}
+		}
+		for _, q := range []string{"?e=oidc_denied", "?e=oidc_error", "?manual=1"} {
+			res := e.do(req("GET", "/login"+q, ""))
+			if b := bootstrapOf(t, readBody(t, res)); res.StatusCode != 200 || !b.Login.OIDCEnabled || b.Login.PasswordLoginEnabled {
+				t.Errorf("auto-start=%v /login%s: %d %+v", auto, q, res.StatusCode, b.Login)
+			}
+		}
+	}
+	res := e.do(req("GET", "/login?lang=pt", ""))
+	if loc, _ := url.Parse(res.Header.Get("Location")); loc == nil || loc.Path != "/api/auth/oidc/start" || loc.Query().Get("lang") != "pt" || loc.Query().Has("silent") {
+		t.Errorf("language lost on the way to Auth: %q", res.Header.Get("Location"))
+	}
+	// Another way in keeps the card: a password break-glass or email links.
+	idp.AutoStart = false
+	e.g.cfg.PasswordLoginDisabled = false
+	if res := e.do(req("GET", "/login", "")); res.StatusCode != 200 {
+		t.Errorf("break-glass passwords: %d", res.StatusCode)
+	}
+	e.g.cfg.PasswordLoginDisabled, e.g.cfg.ElcanoPubKeyB64 = true, e.pubB64
+	if res := e.do(req("GET", "/login", "")); res.StatusCode != 200 {
+		t.Errorf("email links on: %d", res.StatusCode)
 	}
 }
 
