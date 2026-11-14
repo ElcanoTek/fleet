@@ -100,7 +100,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_OIDC_ALLOWED_DOMAINS` | csv | — | server | Comma-separated email domains allowed to sign in through OIDC; empty allows any. |
 | `FLEET_OIDC_BUTTON_LABEL` | string | — | server | Label of the SSO button on the sign-in page. |
 | `FLEET_OIDC_REDIRECT_URI` | url | inherited from `FLEET_PUBLIC_BASE_URL` (derived); else (the request's own origin — local development only) | server | OIDC redirect URI, when it must differ from the one derived from the public origin. |
-| `FLEET_OIDC_AUTO_START` | bool | `false` | server | An anonymous /login first tries SSO silently (prompt=none). |
+| `FLEET_OIDC_AUTO_START` | bool | `false` | server | An anonymous /login first tries SSO silently (prompt=none). Where SSO is the only sign-in, /login always goes straight to the IdP. |
 | `FLEET_OIDC_ALLOW_PASSWORD` | bool | `false` | server | Break-glass: keep Fleet passwords working while central Auth SSO is configured. *Validated at boot*. |
 | `FLEET_OIDC_GENERIC` | bool | `false` | server | Marks the OIDC provider as a generic identity provider (Okta, Entra, …) rather than central Auth, so Fleet keeps its own passwords and account management. *Validated at boot*. |
 | `CATWALK_URL` | url | — | server | URL of the Catwalk app linked from the browser tier. |

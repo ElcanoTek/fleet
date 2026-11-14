@@ -49,19 +49,29 @@ func TestOIDCConfigFromEnv(t *testing.T) {
 	}
 }
 
-func TestShouldAutoStartLogin(t *testing.T) {
-	on := &OIDCConfig{AutoStart: true}
-	if shouldAutoStartLogin(url.Values{}, nil) || shouldAutoStartLogin(url.Values{}, &OIDCConfig{}) {
-		t.Fatal("auto-started with the flag off")
-	}
-	if !shouldAutoStartLogin(url.Values{}, on) {
-		t.Fatal("plain anonymous visit did not auto-start")
-	}
-	for _, q := range []string{"e=invalid", "manual=1", "sso=none"} {
+func TestLoginAutoStart(t *testing.T) {
+	on, off := &OIDCConfig{AutoStart: true}, &OIDCConfig{}
+	check := func(name, q string, cfg *OIDCConfig, ssoOnly, wantStart, wantSilent bool) {
+		t.Helper()
 		v, _ := url.ParseQuery(q)
-		if shouldAutoStartLogin(v, on) {
-			t.Errorf("%s auto-started", q)
+		if start, silent := loginAutoStart(v, cfg, ssoOnly); start != wantStart || silent != wantSilent {
+			t.Errorf("%s: start=%v silent=%v, want %v %v", name, start, silent, wantStart, wantSilent)
 		}
+	}
+	check("no OIDC", "", nil, false, false, false)
+	check("no OIDC, sso-only flag", "", nil, true, false, false)
+	check("auto-start off", "", off, false, false, false)
+	check("auto-start", "", on, false, true, true)
+	for _, q := range []string{"e=invalid", "manual=1", "sso=none"} {
+		check("auto-start "+q, q, on, false, false, false)
+	}
+	// SSO-only: straight to the IdP's sign-in page, auto-start or not, and
+	// even from an old ?sso=none link; never on an error or ?manual=1.
+	check("sso-only", "", off, true, true, false)
+	check("sso-only with auto-start", "", on, true, true, false)
+	check("sso-only sso=none", "sso=none", on, true, true, false)
+	for _, q := range []string{"e=invalid", "e=oidc_denied", "manual=1"} {
+		check("sso-only "+q, q, on, true, false, false)
 	}
 }
 
