@@ -256,7 +256,7 @@
             "FLEET_NOTIFY_TIMEOUT": { "type": ["string", "number", "boolean"], "description": "Timeout of one notification delivery. Default: 10s." },
             "FLEET_OIDC_ALLOWED_DOMAINS": { "type": ["string", "number", "boolean"], "description": "Comma-separated email domains allowed to sign in through OIDC; empty allows any." },
             "FLEET_OIDC_ALLOW_PASSWORD": { "type": ["string", "number", "boolean"], "description": "Break-glass: keep Fleet passwords working while central Auth SSO is configured. Default: false." },
-            "FLEET_OIDC_AUTO_START": { "type": ["string", "number", "boolean"], "description": "An anonymous /login first tries SSO silently (prompt=none). Default: false." },
+            "FLEET_OIDC_AUTO_START": { "type": ["string", "number", "boolean"], "description": "An anonymous /login first tries SSO silently (prompt=none). Where SSO is the only sign-in, /login always goes straight to the IdP. Default: false." },
             "FLEET_OIDC_BUTTON_LABEL": { "type": ["string", "number", "boolean"], "description": "Label of the SSO button on the sign-in page." },
             "FLEET_OIDC_CLIENT_ID": { "type": ["string", "number", "boolean"], "description": "OIDC client ID." },
             "FLEET_OIDC_CLIENT_SECRET": { "type": ["string", "number", "boolean"], "description": "OIDC client secret. Secret: set it through config.existingSecret, not config.env." },

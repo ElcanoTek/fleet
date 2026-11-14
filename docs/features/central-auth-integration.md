@@ -112,12 +112,21 @@ applies it. The boot log says when passwords are off.
 
 ## Auto-start
 
-With `FLEET_OIDC_AUTO_START=1`, an anonymous visit to `/login` first sends the
-browser to Auth with `prompt=none`. A browser that already holds an Auth
-session comes back with a code and lands in Fleet without a click; one that
-does not is returned with `error=login_required` and Fleet shows its normal
-login card with no error banner: just the SSO button, or the SSO button and
-the password form where `FLEET_OIDC_ALLOW_PASSWORD=1`. `/login?manual=1`
+Where SSO is the only way in (central Auth, no `FLEET_OIDC_ALLOW_PASSWORD`, no
+`AUTH_SIGNING_PUBKEY`), the login card would offer nothing but the SSO button,
+so an anonymous visit to `/login` goes straight to Auth's sign-in page
+(interactive, no `prompt=none`), whatever `FLEET_OIDC_AUTO_START` says. A
+browser that already holds an Auth session comes straight back signed in. Old
+`/login?sso=none` links do the same. The card still renders after a failed
+attempt (`?e=`), with the error and a button to try again, and at
+`/login?manual=1`, so a failure cannot loop.
+
+Otherwise, with `FLEET_OIDC_AUTO_START=1`, an anonymous visit to `/login`
+first sends the browser to Auth with `prompt=none`. A browser that already
+holds an Auth session comes back with a code and lands in Fleet without a
+click; one that does not is returned with `error=login_required` and Fleet
+shows its normal login card with no error banner: the SSO button next to the
+password form (`FLEET_OIDC_ALLOW_PASSWORD=1`) or the email sign-in. `/login?manual=1`
 always shows the card, and a page carrying `?e=` (a login error) never
 auto-starts, so a failed attempt cannot loop. Auth supports `prompt=none` from
 `1521760`+; an older Auth ignores it and shows its own login form instead.

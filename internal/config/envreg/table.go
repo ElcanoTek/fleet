@@ -144,7 +144,7 @@ var table = []Entry{
 		Default:     "(the request's own origin — local development only)",
 		Description: "OIDC redirect URI, when it must differ from the one derived from the public origin."},
 	{Name: "FLEET_OIDC_AUTO_START", Group: GroupAuth, Scope: ScopeServer, Type: TypeBool, Default: "false",
-		Description: "An anonymous /login first tries SSO silently (prompt=none)."},
+		Description: "An anonymous /login first tries SSO silently (prompt=none). Where SSO is the only sign-in, /login always goes straight to the IdP."},
 	{Name: "FLEET_OIDC_ALLOW_PASSWORD", Group: GroupAuth, Scope: ScopeServer, Type: TypeBool, Default: "false",
 		Knob:        loader,
 		Description: "Break-glass: keep Fleet passwords working while central Auth SSO is configured."},
