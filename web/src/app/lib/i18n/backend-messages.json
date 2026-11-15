@@ -169,6 +169,7 @@
     "custom_tools is required and must define at least one tool",
     "direction must be 'asc' or 'desc'",
     "email required",
+    "email template not found",
     "empty approval id",
     "empty card",
     "empty output",

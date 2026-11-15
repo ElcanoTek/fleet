@@ -4501,6 +4501,7 @@
   "earlier message": "mensaje anterior",
   "egress allowed": "salida de red permitida",
   "email required": "Se requiere el correo electrónico",
+  "email template not found": "no se encontró la plantilla de correo",
   "email validation failed:\n  - {0}": "Falló la validación del correo:\n  - {0}",
   "empty approval id": "Identificador de aprobación vacío",
   "empty card": "Tarjeta vacía",
