@@ -35,7 +35,8 @@ describe("MessageMinimap", () => {
       <MessageMinimap entries={entries} activeId={null} onJump={vi.fn()} />,
     );
     const rail = screen.getByTestId("message-minimap");
-    // Rail spans 3 × 18px slots; a pointer at y≈27 lands on the middle dash.
+    // Three equal slots over the rail's height (stubbed at 54px below); a
+    // pointer at y≈27 lands on the middle dash.
     rail.getBoundingClientRect = () =>
       ({
         top: 0,

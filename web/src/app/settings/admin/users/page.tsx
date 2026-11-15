@@ -417,8 +417,11 @@ function joinRows(users: AdminUser[] | null, stats: UserStat[] | null): Row[] {
 // Design table metrics (.users-table on the base table styles): th/td
 // 0.55rem/0.5rem padding, subtle bottom rule dropped on the last row, numeric
 // columns right-aligned tabular-nums.
+// max-sm:px-1 (here and on TH): on a phone the four columns were a few pixels
+// wider than the card in Spanish and Portuguese, which pushed the row's
+// actions button out of view; tighter side padding buys the room back.
 const TD =
-  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left group-last/row:border-b-0";
+  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left group-last/row:border-b-0 max-sm:px-1";
 // Wrap-safety for anything server-authored that lands inside a table cell.
 // Table layout sizes a column to its content, so one long unbroken token (a
 // server sentence, a project name, a generated password, a long email) both
@@ -429,7 +432,7 @@ const TD_TEXT_WRAP =
   "block max-w-[26rem] whitespace-normal [overflow-wrap:anywhere]";
 const TD_NUM = `${TD} text-right [font-variant-numeric:tabular-nums]`;
 const TH =
-  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left text-[0.7rem] font-semibold uppercase text-[var(--color-text-muted)]";
+  "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left text-[0.7rem] font-semibold uppercase text-[var(--color-text-muted)] max-sm:px-1";
 const TH_NUM = `${TH} text-right`;
 
 // The design's .admin-badge (accent) and its neutral sibling for Viewer/ops.
@@ -447,7 +450,9 @@ function RoleBadge({
       variant={accent ? "accent" : "secondary"}
       title={title}
       className={[
-        "rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em]",
+        // On a phone a long badge ("TAREAS: CONTRIBUTOR") may take two
+        // lines: unbroken, it alone set the User column's minimum width.
+        "rounded-[0.35rem] px-[0.4rem] py-[0.12rem] text-[0.56rem] font-bold uppercase tracking-[0.08em] max-sm:shrink max-sm:whitespace-normal",
         accent
           ? "border-transparent bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]"
           : "border-transparent bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]",

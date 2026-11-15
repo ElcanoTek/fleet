@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils"
 // Flag COMPONENTS.md "Switch": 30x18 (lg 38x22), on/off track tokens that
 // hold 3:1, a 14px (16px) knob inset 2px (3px), a hover halo, a dimmed
 // pressed track and --focus-ring-picker. Tier A: .switch / .switch--lg.
+// The transparent ::after extends the click target 3px past the track on
+// every side, so the 18px switch is a 24px target without looking bigger.
 function Switch({
   className,
   size = "default",
@@ -20,7 +22,7 @@ function Switch({
       data-slot="switch"
       data-size={size}
       className={cn(
-        "peer group/switch relative inline-flex shrink-0 cursor-pointer items-center rounded-full border-0 [transition:var(--transition-fast)] outline-none enabled:hover:shadow-[0_0_0_3px_var(--color-pill-hover-bg)] focus-visible:shadow-(--focus-ring-picker) enabled:active:brightness-[0.92] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-[18px] data-[size=default]:w-[30px] data-[size=lg]:h-[22px] data-[size=lg]:w-[38px] data-[state=checked]:bg-(--color-switch-track-on) data-[state=unchecked]:bg-(--color-switch-track-off)",
+        "peer group/switch relative inline-flex shrink-0 cursor-pointer items-center rounded-full border-0 after:absolute after:-inset-[3px] after:content-[''] [transition:var(--transition-fast)] outline-none enabled:hover:shadow-[0_0_0_3px_var(--color-pill-hover-bg)] focus-visible:shadow-(--focus-ring-picker) enabled:active:brightness-[0.92] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-[18px] data-[size=default]:w-[30px] data-[size=lg]:h-[22px] data-[size=lg]:w-[38px] data-[state=checked]:bg-(--color-switch-track-on) data-[state=unchecked]:bg-(--color-switch-track-off)",
         className
       )}
       {...props}

@@ -31,6 +31,7 @@ import {
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { fetchMe } from "@/app/shared/lib/account";
 import { redirectToLogin } from "@/app/settings/lib/getGated";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
 type ProjectSummary = {
   id: string;
@@ -239,18 +240,19 @@ export default function MemoriesPage() {
                     >
                       {tr("Kind")}
                     </label>
-                    <select
+                    <NativeSelect
                       id="settings-memory-kind"
+                      size="sm"
+                      className="w-auto"
                       value={kindDraft}
                       onChange={(e) => setKindDraft(e.target.value)}
-                      className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                     >
                       {MEMORY_KINDS.map((k) => (
-                        <option key={k} value={k}>
+                        <NativeSelectOption key={k} value={k}>
                           {memoryKindLabel(k)}
-                        </option>
+                        </NativeSelectOption>
                       ))}
-                    </select>
+                    </NativeSelect>
                   </div>
                   <div className="flex items-center gap-2">
                     {editingId ? (

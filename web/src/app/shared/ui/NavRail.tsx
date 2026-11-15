@@ -123,11 +123,13 @@ function navTileClass(active: boolean): string {
   ].join(" ");
 }
 
-// RailLabel — a rail item's name with its one-line subtitle (hidden in the
-// collapsed strip, where the data-tip carries both).
+// RailLabel — a rail item's name with its one-line subtitle. In the collapsed
+// strip it is hidden from sight only (sm:sr-only): the hover data-tip is drawn
+// by the stylesheet, which a screen reader does not announce, so with the
+// label removed outright the icon was an unnamed link.
 function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: string; collapsed: boolean }) {
   return (
-    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:hidden" : ""].join(" ")}>
+    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:sr-only" : ""].join(" ")}>
       <span className="truncate">{title}</span>
       <span className="truncate text-[0.7rem] font-normal text-[var(--color-text-muted)]">{subtitle}</span>
     </span>
@@ -178,6 +180,22 @@ export function NavRail({
   const overlay = isNarrow && !collapsed;
   const collapseToggleRef = useRef<HTMLButtonElement | null>(null);
   const asideRef = useRef<HTMLElement | null>(null);
+
+  // The closed phone drawer is invisible, so whatever held focus inside it
+  // would lose it to <body> and the next Tab would start from the top of the
+  // page. Closing it — its own Close button, Escape, choosing a destination —
+  // returns focus to the button that opens it. From sm up that button is
+  // hidden and the rail never closes, so nothing happens there.
+  const wasOpenRef = useRef(sidebarOpen);
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = sidebarOpen;
+    if (!wasOpen || sidebarOpen) return;
+    if (!asideRef.current?.contains(document.activeElement)) return;
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-sidebar-toggle]"))
+      .find((button) => button.offsetParent !== null)
+      ?.focus();
+  }, [sidebarOpen]);
 
   // Modal-drawer keyboard behavior while the narrow overlay is up, on ONE
   // window listener:
@@ -254,8 +272,15 @@ export function NavRail({
           // background-image (the un-hinted arbitrary-value form emits
           // background-color, which drops gradient values); --color-bg
           // underneath keeps the drawer opaque over scrolled content.
-          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-transform duration-base max-sm:overflow-hidden",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-[translate,visibility] duration-base max-sm:overflow-hidden",
+          // Closed on a phone it is also invisible, not only slid off-screen:
+          // an off-screen drawer still took keyboard focus (the first Tab
+          // stops on every page were its hidden items) and was still read
+          // out. Visibility joins the transition, so it stays painted until
+          // the slide-out has finished. (The property that moves it is
+          // `translate`, which is what Tailwind's translate-x-* sets; naming
+          // `transform` here left the slide with nothing to animate.)
+          sidebarOpen ? "translate-x-0" : "-translate-x-full max-sm:invisible",
           // ≥sm: in-flow sticky column (or the fixed narrow overlay), design
           // widths: 300px expanded / 4.25rem collapsed strip. The design's
           // rail surface is the semi-transparent --sidebar-surface gradient
@@ -264,7 +289,9 @@ export function NavRail({
           overlay
             ? "sm:fixed sm:inset-y-0 sm:left-0 sm:z-[390] sm:shadow-[var(--shadow-md)]"
             : "sm:sticky sm:top-0 sm:h-screen sm:shadow-none",
-          collapsed ? "sm:w-[4.25rem]" : "sm:w-[300px]",
+          // 300px at the default text size; it grows with the reader's own
+          // font size (18.75rem), up to a third of the window.
+          collapsed ? "sm:w-[4.25rem]" : "sm:w-[clamp(300px,18.75rem,34vw)]",
           railReady ? "sm:transition-[width,padding] sm:duration-fast" : "",
         ].join(" ")}
         style={{
@@ -306,7 +333,7 @@ export function NavRail({
             ref={collapseToggleRef}
             aria-label={collapsed ? tr("Expand sidebar") : tr("Collapse sidebar")}
             aria-expanded={!collapsed}
-            data-tip={collapsed ? "Expand" : "Collapse"}
+            data-tip={collapsed ? tr("Expand") : tr("Collapse")}
             className={[
               "hidden shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex",
               collapsed ? "size-10" : "ml-auto size-[1.9rem]",
@@ -326,7 +353,7 @@ export function NavRail({
         {/* Primary navigation */}
         <nav
           aria-label={tr("Switch surface")}
-          className={["grid gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
+          className={["grid grid-cols-[minmax(0,1fr)] gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
         >
           {/* The three ways of working, each with a subtitle that says what
               makes it different — patrols and background tasks both run on a

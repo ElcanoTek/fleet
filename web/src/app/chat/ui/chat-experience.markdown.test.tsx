@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 // Imported from AssistantContent directly: chat-experience no longer re-exports
 // the markdown API — a static re-export would drag the lazy-loaded markdown
@@ -134,6 +134,49 @@ describe("renderAssistantContent — link rewriting", () => {
 // ReactMarkdown silently drops the HTML and the user sees a gap with
 // no preview. These guard the regression reported when Victoria's
 // inventory-recommendation mockups rendered as nothing in chat.
+describe("renderAssistantContent — blocks", () => {
+  it("gives lists, quotes and deep headings the classes their styles hang on", () => {
+    const { container } = renderMarkdown(
+      "- one\n- two\n\n1. first\n2. second\n\n> quoted\n\n#### Fourth level",
+    );
+    expect(container.querySelector("ul")).toHaveClass("assistant-markdown-ul");
+    expect(container.querySelector("ol")).toHaveClass("assistant-markdown-ol");
+    expect(container.querySelector("blockquote")).toHaveClass("assistant-markdown-quote");
+    expect(container.querySelector("h4")).toHaveClass("assistant-markdown-h3");
+  });
+
+  it("names a task-list checkbox and keeps it read-only", () => {
+    renderMarkdown("- [x] shipped\n- [ ] pending");
+    const boxes = screen.getAllByRole("checkbox", { name: "Task" });
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0]).toBeChecked();
+    expect(boxes[1]).not.toBeChecked();
+    expect(boxes[0]).toBeDisabled();
+  });
+
+  // jsdom lays nothing out, so widths are stubbed: a block wider than its box
+  // becomes a named keyboard stop; one that fits stays out of the Tab order.
+  it("makes a code block or table a keyboard stop only while it scrolls sideways", () => {
+    const client = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(900);
+    try {
+      const { container, unmount } = renderMarkdown("```\nlong line\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |");
+      expect(container.querySelector("pre")).toHaveAttribute("tabindex", "0");
+      expect(screen.getByRole("region", { name: "Code, scrolls sideways" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Table, scrolls sideways" })).toBeInTheDocument();
+      unmount();
+
+      scroll.mockReturnValue(300);
+      const fits = renderMarkdown("```\nshort\n```");
+      expect(fits.container.querySelector("pre")).not.toHaveAttribute("tabindex");
+      expect(screen.queryByRole("region")).toBeNull();
+    } finally {
+      client.mockRestore();
+      scroll.mockRestore();
+    }
+  });
+});
+
 describe("autoFenceRawHtmlDocument", () => {
   it("wraps an unfenced <!DOCTYPE html> document so InlineHtmlPreview can mount", () => {
     const raw = [

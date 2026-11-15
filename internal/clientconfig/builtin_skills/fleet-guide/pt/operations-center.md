@@ -46,7 +46,7 @@ Os administradores atribuem o acesso em **Definições → Administração → U
 
 ### Anatomia de uma linha de tarefa
 
-Cada linha de **Tarefas recentes** mostra o **ID** curto da tarefa, o **título** a negrito com o início do prompt por baixo em texto esbatido, um **indicador de estado**, o **agendamento**, **quem a criou** e **quando**. Ao clicar na linha abre-se o registo completo da tarefa.
+Cada linha de **Tarefas recentes** mostra o **título** da tarefa a negrito com o início do prompt em texto esbatido e o **ID** curto por baixo, um **indicador de estado**, o **agendamento** e **quando** foi criada, com **quem a criou** por baixo. Ao clicar na linha abre-se o registo completo da tarefa.
 
 À direita de cada linha há quatro ações:
 

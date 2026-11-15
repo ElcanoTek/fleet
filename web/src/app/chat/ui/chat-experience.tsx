@@ -6960,6 +6960,7 @@ export function ChatExperience({
                   aria-label={tr("Keyboard shortcuts")}
                   className="group/tbtn hidden size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex sm:size-8"
                   data-tip-bottom="Keyboard shortcuts"
+                  data-tip-align="end"
                   data-testid="shortcuts-button"
                   type="button"
                   onClick={() => setShortcutsOpen(true)}

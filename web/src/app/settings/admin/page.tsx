@@ -93,7 +93,7 @@ function healthItems(d: HealthSummary): AdminStat[] {
     items.push(
       {
         title: tr("Tasks"),
-        value: `${d.workers.running_tasks} running`,
+        value: tr("{0} running", [d.workers.running_tasks]),
         sub: tr("{0} queued", [d.workers.queued_tasks]),
       },
       {
@@ -338,7 +338,9 @@ export default function AdminOverviewPage() {
 
       {!statsErr && (dailyCache.length > 0 || usersWithCache.length > 0) ? (
         <ConnGroup>
-          <div data-testid="cache-efficiency-panel" className="grid gap-[0.85rem]">
+          {/* minmax(0,1fr): the tables below scroll inside their own frame
+              instead of widening the whole page. */}
+          <div data-testid="cache-efficiency-panel" className="grid grid-cols-[minmax(0,1fr)] gap-[0.85rem]">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
                 {tr("Prompt cache efficiency")}

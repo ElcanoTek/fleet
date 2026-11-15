@@ -11,7 +11,7 @@ import { getLanguage } from "@/app/lib/i18n";
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, memo, useContext, useMemo, useState } from "react";
+import { Children, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
@@ -109,6 +109,51 @@ export function renderAssistantContent(
   return <AssistantMarkdown content={content} isStreaming={isStreaming} conversationId={conversationId} />;
 }
 
+// ScrollRegion is a block that scrolls sideways when its content is too wide
+// (a code block's long line, a many-column table). While it overflows it is a
+// keyboard stop with a name, so the hidden part can be reached with the arrow
+// keys; while everything fits it is not a stop, so a reply full of short code
+// blocks does not fill the Tab order with places where nothing happens.
+// Module-level on purpose: see the note on `components` below.
+function ScrollRegion({
+  as: Tag,
+  className,
+  label,
+  children,
+}: {
+  as: "div" | "pre";
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // One element type for the JSX below; the tag itself is still `as`.
+  const Region = Tag as "div";
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    // The box and its content: streamed text widens the content without
+    // resizing the box that scrolls it.
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <Region
+      ref={ref}
+      className={className}
+      {...(overflows ? { tabIndex: 0, role: "region", "aria-label": label } : {})}
+    >
+      {children}
+    </Region>
+  );
+}
+
 const AssistantMarkdown = memo(function AssistantMarkdown({
   content,
   isStreaming = false,
@@ -132,6 +177,26 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
     h3: ({ children }) => (
       <h3 className="assistant-markdown-h3">{children}</h3>
     ),
+    // Deeper levels keep their tag and take the third level's look, so they
+    // wrap long words like the others instead of falling back to bare text.
+    h4: ({ children }) => (
+      <h4 className="assistant-markdown-h3">{children}</h4>
+    ),
+    h5: ({ children }) => (
+      <h5 className="assistant-markdown-h3">{children}</h5>
+    ),
+    h6: ({ children }) => (
+      <h6 className="assistant-markdown-h3">{children}</h6>
+    ),
+    blockquote: ({ children }) => (
+      <blockquote className="assistant-markdown-quote">{children}</blockquote>
+    ),
+    // A task-list checkbox ("- [x] done"): read-only, and named so a screen
+    // reader says "Task, checked" rather than an unlabelled checkbox.
+    input: ({ type, checked }) =>
+      type === "checkbox" ? (
+        <input type="checkbox" checked={Boolean(checked)} disabled readOnly aria-label={tr("Task")} />
+      ) : null,
     p: ({ children }) => <p className="assistant-markdown-p">{children}</p>,
     ul: ({ children }) => (
       <ul className="assistant-markdown-ul">{children}</ul>
@@ -144,9 +209,9 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
     ),
     hr: () => <hr className="assistant-markdown-hr" />,
     table: ({ children }) => (
-      <div className="assistant-markdown-table-shell">
+      <ScrollRegion as="div" className="assistant-markdown-table-shell" label={tr("Table, scrolls sideways")}>
         <table className="assistant-markdown-table">{children}</table>
-      </div>
+      </ScrollRegion>
     ),
     thead: ({ children }) => (
       <thead className="assistant-markdown-thead">{children}</thead>
@@ -233,7 +298,9 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
               variant="compact"
             />
           </div>
-          <pre className="assistant-markdown-pre">{children}</pre>
+          <ScrollRegion as="pre" className="assistant-markdown-pre" label={tr("Code, scrolls sideways")}>
+            {children}
+          </ScrollRegion>
         </div>
       );
     },

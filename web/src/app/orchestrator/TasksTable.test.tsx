@@ -128,9 +128,37 @@ describe("TasksTable SLA badge (#274)", () => {
     const recurring: Task = { ...baseTask, recurrence: "0 9 * * 6,0" };
     renderWithTasks([recurring]);
     // Rendered in both the table row and the phone card; raw cron only in title.
-    const labels = screen.getAllByText(/9:00 AM · Sat, Sun/);
-    expect(labels.length).toBe(2);
+    // The table cell holds the label's two halves in separate spans (so a
+    // narrow table can stack them), so it is read as the cell's whole text.
+    expect(document.querySelector("#tasksTable")?.textContent).toMatch(/9:00 AM · Sat, Sun/);
+    expect(screen.getAllByText(/9:00 AM · Sat, Sun/).length).toBe(1);
     expect(screen.queryByText(/0 9 \* \* 6,0/)).toBeNull();
+  });
+
+  // On a narrow window the table is wider than its card. jsdom performs no
+  // layout, so the box's scroll metrics are stubbed.
+  it("becomes a labelled, focusable scroll region and shades the edge with hidden columns", () => {
+    renderWithTasks([baseTask]);
+    const box = document.querySelector("#tasksTable")!.parentElement as HTMLElement;
+    const frame = box.parentElement as HTMLElement;
+    expect(box).not.toHaveAttribute("role");
+    expect(box).not.toHaveAttribute("tabindex");
+    expect(frame).toHaveClass("tasks-table-frame");
+    expect(frame).not.toHaveClass("has-more-end");
+
+    Object.defineProperty(box, "scrollWidth", { value: 863, configurable: true });
+    Object.defineProperty(box, "clientWidth", { value: 648, configurable: true });
+    fireEvent.scroll(box);
+    expect(screen.getByRole("region", { name: "Recent tasks, scrolls sideways" })).toBe(box);
+    expect(box).toHaveAttribute("tabindex", "0");
+    // Columns are hidden to the right only; none to the left yet.
+    expect(frame).toHaveClass("has-more-end");
+    expect(frame).not.toHaveClass("has-more-start");
+
+    box.scrollLeft = 215;
+    fireEvent.scroll(box);
+    expect(frame).toHaveClass("has-more-start");
+    expect(frame).not.toHaveClass("has-more-end");
   });
 
   it("phone cards click through to the log viewer", () => {

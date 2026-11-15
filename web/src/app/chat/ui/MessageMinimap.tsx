@@ -29,10 +29,11 @@ export type MessageMinimapProps = {
   onJump: (id: number) => void;
 };
 
-// Vertical rhythm of the rail: each dash owns an 18px slot (dash + gap),
+// Vertical rhythm of the rail: each dash owns a 24px slot (dash + gap),
 // used both for layout and for mapping a pointer Y to an entry while
-// scrubbing.
-const DASH_PITCH = 18;
+// scrubbing. 24px because the slot is the dash's whole click target, and
+// that is the smallest a pointer target may be; it was 18px.
+const DASH_PITCH = 24;
 
 export function MessageMinimap({
   entries,

@@ -16,13 +16,15 @@ import { t as tr } from "@/app/lib/i18n";
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Children, lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { getPill, type ProtocolPill } from "./protocolPills";
 import { Icon } from "./Icon";
+import { createPortal } from "react-dom";
+import { useNarrowScreen } from "./useNarrowScreen";
 import { PythonOutput, ToolChip, isStagedForApproval, stagedApprovalIds, taskTrackerDisplayForMessage } from "./ToolChips";
 import { CopyButton, OtherUserTurnDetailsPill, SummaryBanner, TurnSummaryChip } from "./ChatChips";
 import {
@@ -336,11 +338,6 @@ export function ChatTranscript({
   );
   const turnSenderMap = useMemo(() => turnSendersByMessageId(messages), [messages]);
 
-  // Keep the transcript pinned to its end, guarded against the measure →
-  // follow-scroll → measure oscillation a dynamically-measured virtual list
-  // invites (QA finding #11). See stickToBottom.ts for the three rules.
-  useStickToBottom({ conversationRef, streamEndRef, messages, isStreaming });
-
   // Message ids whose entrance animation has already been accounted for. Marked
   // after every render (see below), so a row re-mounting on scroll never
   // replays its slide-in — only genuinely new turns animate. See
@@ -442,6 +439,20 @@ export function ChatTranscript({
           return `row:message:${row.message.id}`;
       }
     },
+  });
+
+  // Keep the transcript pinned to its end, guarded against the measure →
+  // follow-scroll → measure oscillation a dynamically-measured virtual list
+  // invites (QA finding #11). See stickToBottom.ts for the rules. It sits
+  // below the virtualizer because the measured total height is one of its
+  // triggers: a row re-measured after the last message update (a finished
+  // reply's action row) must still pull a pinned reader down.
+  useStickToBottom({
+    conversationRef,
+    streamEndRef,
+    messages,
+    isStreaming,
+    contentHeight: virtualizer.getTotalSize(),
   });
 
   // ── Message minimap (Codex-style jump rail) ────────────────────────────────
@@ -548,6 +559,8 @@ export function ChatTranscript({
     setMinimapActiveId(id);
   };
 
+  const showJumpRail = minimapEntries.length >= 2 && !dashboard;
+
   return (
           <GenUiContext.Provider value={genUi}>
           <section
@@ -567,13 +580,24 @@ export function ChatTranscript({
             // from fighting TanStack Virtual's scrollTop compensation when
             // VirtualTranscriptRow translateY offsets update as tall turns
             // (such as email patrol digests) are measured above the fold.
-            className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto pr-0 sm:pr-1 [overflow-anchor:none]"
+            // -ml-3 pl-3: the reply actions hang 7px left of the reply text
+            // (so their first label lines up with it) and this scroller clips
+            // sideways; where the column sits flush against its left edge the
+            // overhang, with Copy's hover wash and focus ring, was cut off.
+            // The scroller reaches 12px into its parent's gutter and pads the
+            // same amount back, so nothing moves and the overhang has room.
+            className="-ml-3 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto pl-3 pr-0 sm:pr-1 [overflow-anchor:none]"
           >
             {/* Jump rail: sticky (height 0, so the column below is unshifted)
                 pinned to the scroller's visible top; the rail hangs in the
                 left gutter from ~18vh down. Desktop-only — hover previews and
-                press-drag scrubbing have no touch equivalent. */}
-            {minimapEntries.length >= 2 ? (
+                press-drag scrubbing have no touch equivalent. Not in
+                Dashboard view either: the chat column there is a narrow side
+                pane with no gutter, so the rail landed on top of the reply
+                text and its Copy action. In the ordinary view the column
+                below makes room for it where the window leaves no gutter
+                (.transcript-column-railed). */}
+            {showJumpRail ? (
               <div className="pointer-events-none sticky top-0 z-10 hidden h-0 sm:block">
                 <div className="pointer-events-auto absolute left-0 top-[18vh]">
                   <MessageMinimap
@@ -584,7 +608,9 @@ export function ChatTranscript({
                 </div>
               </div>
             ) : null}
-            <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6">
+            <div
+              className={`mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6${showJumpRail ? " transcript-column-railed" : ""}`}
+            >
               {isLoadingHistory ? (
                 <div className="flex min-h-full items-center justify-center pb-8 text-[0.875rem] text-[var(--color-text-muted)]">
                   {tr("Loading conversation...")}
@@ -837,7 +863,7 @@ export function ChatTranscript({
                           ) : (
                             <div className="relative min-h-[1.75rem] min-w-0">
                             <div
-                              className="grid min-w-0 gap-2 text-[0.9rem] leading-[1.55] text-[var(--color-text-primary)] sm:gap-2.5 sm:text-[0.96875rem] sm:leading-[1.6]"
+                              className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[0.9rem] leading-[1.55] text-[var(--color-text-primary)] sm:gap-2.5 sm:text-[0.96875rem] sm:leading-[1.6]"
                             >
                               {/*
                                 Render order is chronological-then-actionable:
@@ -1118,7 +1144,11 @@ export function ChatTranscript({
                                       </span>
                                     ) : null}
                                   </div>
-                                  <p>{message.modelRequired.message}</p>
+                                  {/* The server also stores this sentence as the reply's
+                                      own text, shown just above; say it once. */}
+                                  {message.modelRequired.message.trim() !== (message.content ?? "").trim() ? (
+                                    <p>{message.modelRequired.message}</p>
+                                  ) : null}
                                   {isConversationOwner ? (
                                   <div className="flex flex-wrap items-center gap-3 pt-0.5">
                                     {creditsExhausted ? (
@@ -1332,17 +1362,23 @@ export function ChatTranscript({
                               ) : null}
 
                               {message.state === "done" && message.content ? (
-                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.7rem]">
-                                  <CopyButton text={message.content} />
+                                <div className="reply-actions">
+                                  <CopyButton text={message.content} variant="action" />
                                   {!message.cancelled && !message.failed && canRetry ? (
                                     <button
                                       type="button"
-                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      className="reply-action"
+                                      title={tr("Ask again and replace this reply")}
                                       onClick={() => void regenerateLastAssistant()}
                                     >
                                       {tr("Regenerate")}
                                     </button>
                                   ) : null}
+                                  {/* Copy and Regenerate stay in view; on a phone the
+                                      rest open from a "more actions" menu, so the row
+                                      is one line instead of six text links wrapped
+                                      over two. */}
+                                  <ReplyMoreActions>
                                   {/* One click from "that's wrong" to a stronger answer
                                       (docs/CHAT-ESCALATION.md): the same retry, on the
                                       advanced model, which the conversation then keeps.
@@ -1353,7 +1389,7 @@ export function ChatTranscript({
                                   {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() && !switchSuggestionPending ? (
                                     <button
                                       type="button"
-                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      className="reply-action"
                                       title={tr("Run your last message again on the fallback model, and keep it for this chat")}
                                       data-testid="retry-with-advanced"
                                       onClick={() => {
@@ -1362,8 +1398,12 @@ export function ChatTranscript({
                                         void retryLastUserMessage({ model: advanced });
                                       }}
                                     >
-        {rich("Retry with {0}", shortModelName(currentAdvancedModel()))}
-      </button>
+                                      <ReplyActionBody
+                                        icon="model"
+                                        label={rich("Retry with {0}", shortModelName(currentAdvancedModel()))}
+                                        hint={tr("Run your last message again on the fallback model, and keep it for this chat")}
+                                      />
+                                    </button>
                                   ) : null}
                                   {/* Fork the conversation at this (persisted) message into a
                                       new thread (#454). Only persisted messages carry a dbId;
@@ -1371,10 +1411,15 @@ export function ChatTranscript({
                                   {message.dbId && !isStreaming ? (
                                     <button
                                       type="button"
-                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      className="reply-action"
+                                      title={tr("Start a new chat from this point and keep this one as it is")}
                                       onClick={() => void branchFromMessage(message)}
                                     >
-                                      {tr("Branch")}
+                                      <ReplyActionBody
+                                        icon="message"
+                                        label={tr("Branch")}
+                                        hint={tr("Start a new chat from this point and keep this one as it is")}
+                                      />
                                     </button>
                                   ) : null}
                                   {/* The capture point for a session worth keeping. It sits
@@ -1386,11 +1431,15 @@ export function ChatTranscript({
                                   {!isStreaming && isConversationOwner ? (
                                     <button
                                       type="button"
-                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      className="reply-action"
                                       title={tr("Save this whole chat as a reusable workflow")}
                                       onClick={() => savePromptFromMessage()}
                                     >
-                                      {tr("Save as workflow")}
+                                      <ReplyActionBody
+                                        icon="book"
+                                        label={tr("Save as workflow")}
+                                        hint={tr("Save this whole chat as a reusable workflow")}
+                                      />
                                     </button>
                                   ) : null}
                                   {/* Capture what the agent just said, without
@@ -1405,6 +1454,7 @@ export function ChatTranscript({
                                       onSaved={() => void loadMemories()}
                                     />
                                   ) : null}
+                                  </ReplyMoreActions>
                                 </div>
                               ) : null}
                             </div>
@@ -1624,7 +1674,7 @@ function UserBubble({
         {/* mirror's text grows and the wrapper grows with it; the       */}
         {/* textarea fills the same grid cell so the user only ever sees */}
         {/* one bubble.                                                  */}
-        <div className="relative inline-grid min-w-0 max-w-full rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] ring-1 ring-[var(--color-accent)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]">
+        <div className="relative inline-grid min-w-0 max-w-full rounded-[1.1rem] bg-[var(--chat-bubble-user)] px-3 py-2.5 text-[0.875rem] leading-[1.55] ring-1 ring-[var(--color-accent)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]">
           <span
             aria-hidden="true"
             // Trailing space matters: when the draft ends with '\n', the
@@ -1707,7 +1757,7 @@ function UserBubble({
         // element (QA finding #6).
         id={bubbleId}
         data-testid="user-message-bubble"
-        className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]"
+        className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--chat-bubble-user)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]"
       >
         <MessageMarkdown content={displayedContent} />
       </div>
@@ -1848,6 +1898,284 @@ function SummarizeProgressCard({
 }
 
 
+// ── The reply footer's secondary actions ─────────────────────────────────
+//
+// Copy and Regenerate are what a reader reaches for on every reply; Retry
+// with, Branch, Save as workflow and Save to memory are occasional. On a
+// desktop they all sit in one row and this wrapper adds nothing. On a phone
+// six text actions wrapped over two rows, so there the occasional ones move
+// into a menu: a "more actions" button beside Copy / Regenerate opens a sheet
+// (the same surface the composer's own More options menu uses), where each
+// action is a row with an icon, its label and a line saying what it does — a
+// phone has no tooltips to say it otherwise. The sheet opens ABOVE the reply
+// it belongs to, so the reply stays readable while its actions are chosen
+// (placeReplyMenu has the fallbacks).
+//
+// The sheet is portalled to <body>: a transcript row is positioned with a
+// transform, which would capture a position:fixed child. It stays mounted
+// (hidden) while closed, so an action's own state — "Saved ✓" — survives
+// reopening. Renders nothing when no secondary action applies (a streaming or
+// cancelled reply).
+
+// placeReplyMenu picks the sheet's top edge (viewport px). In order:
+//   1. above the reply, when the whole sheet fits between the transcript's
+//      top edge and the reply — the reply and its action row stay uncovered;
+//   2. otherwise below the reply's action row, when it fits above the composer;
+//   3. otherwise (a reply taller than the screen, its actions at the bottom)
+//      above the action row, kept inside the transcript — the one case where
+//      the end of the reply is covered, because nowhere else is on screen.
+export function placeReplyMenu(m: {
+  messageTop: number;
+  rowTop: number;
+  rowBottom: number;
+  menuHeight: number;
+  limitTop: number;
+  limitBottom: number;
+  gap: number;
+}): number {
+  const above = m.messageTop - m.gap - m.menuHeight;
+  if (above >= m.limitTop) return above;
+  const below = m.rowBottom + m.gap;
+  if (below + m.menuHeight <= m.limitBottom) return below;
+  return Math.max(m.limitTop, Math.min(m.rowTop - m.gap - m.menuHeight, m.limitBottom - m.menuHeight));
+}
+
+export function ReplyMoreActions({ children }: { children: ReactNode }) {
+  const narrowScreen = useNarrowScreen();
+  const count = Children.toArray(children).length;
+  // Off a phone the actions sit inline while the row holds them, and fold
+  // into the same menu when it does not: a small window, or a mid-sized one
+  // with the sidebar open, has a column too narrow for six labels (longer
+  // still in Spanish, or with a long model name). The row never wraps
+  // (.reply-actions), so "does not fit" is simply the row overflowing; the
+  // width it needed is kept, and the actions return inline once the row is
+  // that wide again.
+  const [neededWidth, setNeededWidth] = useState<number | null>(null);
+  const probeRef = useRef<HTMLSpanElement | null>(null);
+  // A different set of actions needs a different width: measure afresh.
+  // (Render-time reset, so the stale verdict never paints.)
+  const [seenCount, setSeenCount] = useState(count);
+  if (count !== seenCount) {
+    setSeenCount(count);
+    setNeededWidth(null);
+  }
+  useLayoutEffect(() => {
+    if (narrowScreen) return;
+    const row = probeRef.current?.closest<HTMLElement>(".reply-actions");
+    if (!row) return;
+    // Decided when the row's WIDTH changes, never when its content does: an
+    // action that answers in place (Save to memory's destination choice, its
+    // "Save failed" label) must not send itself into the menu, which would
+    // remount it and lose that state.
+    let lastWidth = -1;
+    const check = () => {
+      const width = row.clientWidth;
+      if (width === 0 || width === lastWidth) return;
+      lastWidth = width;
+      if (neededWidth === null) {
+        if (row.scrollWidth > width + 1) setNeededWidth(row.scrollWidth);
+      } else if (width >= neededWidth) {
+        setNeededWidth(null);
+      }
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(check);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [narrowScreen, neededWidth, count]);
+  const narrow = narrowScreen || neededWidth !== null;
+  const [open, setOpen] = useState(false);
+  // The menu belongs to the folded row. When the actions go back inline (the
+  // phone turned sideways, the window widened) an open menu closes with it;
+  // left open it came back unplaced, at the top of the page, the next time
+  // the row folded. (Render-time, like the reset above.)
+  if (!narrow && open) setOpen(false);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
+
+  // Position before paint, so the sheet never flashes somewhere else first.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const toggle = toggleRef.current;
+    if (!menu || !toggle) return;
+    const gap = 8;
+    const bounds = toggle.closest("section")?.getBoundingClientRect();
+    const limitTop = (bounds?.top ?? 0) + gap;
+    const limitBottom = (bounds?.bottom ?? window.innerHeight) - gap;
+    menu.style.maxHeight = `${Math.max(120, Math.round(limitBottom - limitTop))}px`;
+    // Sideways: over the reply's own column. On a phone that is the whole
+    // screen less a margin; in a wider window the sheet keeps a menu's width
+    // and starts at the reply's left edge instead of spanning the window.
+    const article = (toggle.closest("article") ?? toggle).getBoundingClientRect();
+    const width = Math.min(window.innerWidth - 2 * gap, 416);
+    const left = Math.max(gap, Math.min(article.left - gap, window.innerWidth - gap - width));
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.width = `${Math.round(width)}px`;
+    const row = toggle.getBoundingClientRect();
+    const top = placeReplyMenu({
+      messageTop: (toggle.closest("article") ?? toggle).getBoundingClientRect().top,
+      rowTop: row.top,
+      rowBottom: row.bottom,
+      menuHeight: menu.offsetHeight,
+      limitTop,
+      limitBottom,
+      gap,
+    });
+    menu.style.top = `${Math.round(top)}px`;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>(".reply-action")?.focus({ preventScroll: true });
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || toggleRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        // The sheet owns this Escape: the page's own shortcut for the key
+        // (stop the turn, close a panel) must not fire as well.
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        toggleRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      // The sheet is portalled to <body>, so Tab from its last item would
+      // carry on to the top of the page and leave it open behind. Tabbing
+      // off either end closes it and returns to the button that opened it,
+      // from where Tab continues through the transcript.
+      const menuEl = menuRef.current;
+      const active = document.activeElement;
+      if (!menuEl || !active) return;
+      if (!menuEl.contains(active)) {
+        // Focus fell out of the open sheet: an action that answers in place
+        // (Save to memory) replaces its own button with a "Saved" note, and
+        // the focus it held drops to <body>. Tab from there closes the sheet
+        // and lands on the button that opened it, the same as tabbing off
+        // either end.
+        if (active === document.body) {
+          event.preventDefault();
+          setOpen(false);
+          toggleRef.current?.focus();
+        }
+        return;
+      }
+      const stops = Array.from(
+        menuEl.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]"),
+      ).filter((el) => !el.hasAttribute("disabled") && el.tabIndex >= 0 && el.offsetParent !== null);
+      const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+      if (stops.length > 0 && active !== edge) return;
+      event.preventDefault();
+      setOpen(false);
+      toggleRef.current?.focus();
+    };
+    // Choosing an action closes the sheet — except one that answers in place
+    // (Save to memory: its destination choice, then "Saved ✓").
+    const menu = menuRef.current;
+    const onMenuClick = (event: MouseEvent) => {
+      const action = (event.target as HTMLElement).closest(".reply-action");
+      if (!action || action.hasAttribute("data-keep-open")) return;
+      // Focus goes back to the button before the sheet hides, or it would
+      // fall to <body> with the hidden item. An action that opens a dialog
+      // moves focus on from here, and gets it returned here on close.
+      toggleRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+    };
+    // The sheet is placed against where the reply sits now; once the
+    // transcript scrolls it would be pointing at the wrong place.
+    const scroller = toggleRef.current?.closest("section");
+    const onScroll = () => setOpen(false);
+    document.addEventListener("pointerdown", onPointerDown);
+    // Capture phase: ahead of the page's own document-level key handlers.
+    document.addEventListener("keydown", onKeyDown, true);
+    menu?.addEventListener("click", onMenuClick);
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+      menu?.removeEventListener("click", onMenuClick);
+      scroller?.removeEventListener("scroll", onScroll);
+    };
+  }, [open]);
+
+  if (Children.toArray(children).length === 0) return null;
+  if (!narrow) {
+    return (
+      <>
+        <span ref={probeRef} hidden />
+        {children}
+      </>
+    );
+  }
+  return (
+    <>
+      <span ref={probeRef} hidden />
+      <button
+        ref={toggleRef}
+        type="button"
+        className="reply-action reply-more-toggle"
+        aria-label={tr("More actions")}
+        aria-expanded={open}
+        aria-controls={menuId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="dots" className="size-4 rotate-90" />
+      </button>
+      {createPortal(
+        <div
+          ref={menuRef}
+          id={menuId}
+          role="group"
+          aria-label={tr("More actions")}
+          className="reply-menu"
+          data-testid="reply-more-menu"
+          hidden={!open}
+        >
+          {children}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// ReplyActionBody is what a secondary action puts inside its button: on a
+// desktop only the label shows (the stylesheet hides the rest); in the phone
+// menu the icon tile and the hint line show too. The hint is aria-hidden
+// because the button's title already carries the same sentence as its
+// description, and it must not become part of the button's name.
+export function ReplyActionBody({
+  icon,
+  label,
+  hint,
+}: {
+  icon: string;
+  label: ReactNode;
+  hint?: string;
+}) {
+  return (
+    <>
+      <span className="reply-action-icon" aria-hidden="true">
+        <Icon name={icon} className="size-3.5" />
+      </span>
+      <span className="reply-action-text">
+        <span className="reply-action-label">{label}</span>
+        {hint ? (
+          <span className="reply-action-hint" aria-hidden="true">
+            {hint}
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
+}
+
 // ── "Save" under a reply (Item D1, second path) ──────────────────────────────
 //
 // The approval card only appears when the MODEL proposes a memory. This is the
@@ -1916,7 +2244,9 @@ export function SaveToMemoryAction({
 
   if (state === "saved") {
     return (
-      <span className="text-[var(--color-text-muted)]">{tr("Saved ✓")}</span>
+      <span className="reply-action-note">
+        <ReplyActionBody icon="brain" label={tr("Saved ✓")} />
+      </span>
     );
   }
 
@@ -1924,28 +2254,38 @@ export function SaveToMemoryAction({
     return (
       <button
         type="button"
-        className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        className="reply-action"
+        data-keep-open=""
         title={tr("Save this answer to your memory")}
         onClick={() => void save("personal")}
       >
-        {state === "saving" ? tr("Saving…") : state === "error" ? tr("Save failed") : tr("Save")}
+        <ReplyActionBody
+          icon="brain"
+          label={state === "saving" ? tr("Saving…") : state === "error" ? tr("Save failed") : tr("Save to memory")}
+          hint={tr("Save this answer to your memory")}
+        />
       </button>
     );
   }
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-2">
+    <span className="reply-save inline-flex flex-wrap items-center gap-2">
       <button
         type="button"
         aria-expanded={open}
-        className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        className="reply-action"
+        data-keep-open=""
         title={tr("Save this answer as a memory")}
         onClick={() => setOpen((o) => !o)}
       >
-        {state === "error" ? tr("Save failed — retry") : tr("Save")}
+        <ReplyActionBody
+          icon="brain"
+          label={state === "error" ? tr("Save failed — retry") : tr("Save to memory")}
+          hint={tr("Save this answer as a memory")}
+        />
       </button>
       {open ? (
-        <span className="inline-flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-border)] px-2 py-1">
+        <span className="reply-save-picker inline-flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-border)] px-2 py-1">
           <MemoryDestinationPicker
             project={project}
             value={destination}

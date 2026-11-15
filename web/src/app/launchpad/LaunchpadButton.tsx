@@ -299,10 +299,16 @@ export function LaunchpadButton({
                   // The dialog hands the focus back to this item. On a phone
                   // the drawer it sits in was closed when the wizard opened,
                   // so the item is now off-screen: move the focus to the
-                  // visible control that reopens the drawer instead.
+                  // visible control that reopens the drawer instead. The
+                  // closed drawer is also invisible, so the hand-back cannot
+                  // land on the item at all and the focus is left on <body>:
+                  // that counts too. Focus anywhere else was put there on
+                  // purpose and is left alone.
                   requestAnimationFrame(() => {
                     const anchor = anchorRef.current;
-                    if (!anchor || document.activeElement !== anchor || onScreen(anchor)) return;
+                    if (!anchor || onScreen(anchor)) return;
+                    const active = document.activeElement;
+                    if (active && active !== anchor && active !== document.body) return;
                     const opener = Array.from(
                       document.querySelectorAll<HTMLButtonElement>('button[data-sidebar-toggle]'),
                     ).find(onScreen);

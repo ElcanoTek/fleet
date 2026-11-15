@@ -97,6 +97,11 @@
   --color-connector-always-on-track: color-mix(in srgb, var(--color-text-muted) 38%, transparent);
   --color-connector-always-on-knob: var(--color-text-muted);
   --color-overlay-soft: rgba(0, 0, 0, 0.2);
+  /* The sender's own message bubble. Its own token because the soft overlay
+     above is a BLACK wash in this theme: over an almost-black page it leaves
+     the bubble with no visible edge (1.02:1). A light wash lifts it off any
+     dark surface it sits on (the page, the Dashboard chat column). */
+  --chat-bubble-user: rgba(255, 255, 255, 0.07);
   --color-overlay-strong: rgba(0, 0, 0, 0.4);
   /* Recessed in-flow surface: code/output wells, preview toolbars, tool-result
      panels. Distinct from --color-overlay-strong, which is the modal SCRIM: in
@@ -554,6 +559,7 @@
   --color-text-muted: #5c6a87;
   --color-text-disabled: rgba(92, 106, 135, 0.6);
   --color-overlay-soft: rgba(114, 114, 171, 0.05);
+  --chat-bubble-user: rgba(114, 114, 171, 0.05);
   --color-overlay-strong: rgba(20, 24, 36, 0.16);
   --color-surface-inset: rgba(38, 55, 92, 0.045);
   --rail-hover: rgba(38, 55, 92, 0.07);
@@ -964,7 +970,10 @@
    icons); data-tip-top centers it above (bulk bar, composer tools);
    data-tip-bottom centers it below (top-bar icons, where "above" would be
    clipped off the top of the page). No JS, so any element can carry one; set
-   the attribute conditionally to disable. */
+   the attribute conditionally to disable. A control that sits against the
+   right edge of the window adds data-tip-align="end": the label then lines up
+   with the control's right edge instead of centering, so it is not cut off
+   (and, being absolutely positioned, does not widen its scroll container). */
 [data-tip],
 [data-tip-top],
 [data-tip-bottom] {
@@ -1007,6 +1016,12 @@
   left: 50%;
   top: calc(100% + 0.45rem);
   transform: translateX(-50%);
+}
+[data-tip-top][data-tip-align="end"]::after,
+[data-tip-bottom][data-tip-align="end"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after,
@@ -1276,6 +1291,177 @@ body:has(> .shared-page)::before {
   }
 }
 
+/* The jump rail hangs at the left edge of the transcript scroller. Where the
+   window leaves less than its width beside the centred 53rem column, the
+   column gives up that much on the left, so the rail's dashes sit beside the
+   reply text and its actions instead of on top of them. 100% is the
+   scroller's width: with a full gutter either side this resolves to 0. */
+@media (min-width: 640px) {
+  .transcript-column-railed {
+    padding-left: clamp(0px, calc(2.25rem - (100% - 53rem) / 2), 2.25rem);
+  }
+}
+
+/* ── Reply footer actions ────────────────────────────────────────────────
+   The row under a finished reply (Copy, Regenerate, Branch, …). Each action
+   is a quiet text button with a real target: 12px label, 28px tall, a hover
+   wash — they used to be 11px links in an 18px row. The negative margin keeps
+   the first label on the reply's left edge despite the button padding. */
+.reply-actions {
+  display: flex;
+  /* One row, always. When the labels do not fit, ReplyMoreActions folds the
+     occasional ones into its menu; it tells by this row overflowing, which
+     is why nothing here may wrap or shrink. */
+  flex-wrap: nowrap;
+  /* Its grid parent would otherwise widen to fit the unwrapped row, and the
+     row would never be seen to overflow. */
+  min-width: 0;
+  align-items: center;
+  gap: 0.125rem;
+  margin-left: -0.45rem;
+  font-size: 0.75rem;
+}
+.reply-action,
+.reply-action-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+}
+.reply-actions > * {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+/* The one exception: Save to memory's destination choice, opened in place
+   inside a project, may take a second row rather than run off the side. */
+.reply-actions:has(.reply-save-picker) {
+  flex-wrap: wrap;
+}
+.reply-actions:has(.reply-save-picker) > .reply-save {
+  flex-shrink: 1;
+  min-width: 0;
+}
+.reply-action {
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+/* Hover only where there is a pointer to hover with: on a touch screen the
+   state sticks to whatever lands under the finger after a tap (opening More
+   left the action beneath it looking pressed). */
+@media (hover: hover) {
+  .reply-action:hover {
+    color: var(--color-text-primary);
+    background: var(--color-overlay-soft);
+  }
+}
+.reply-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* What a secondary action carries besides its label (ReplyActionBody): an
+   icon tile and a hint line. Both show only inside the phone menu below. */
+.reply-action-icon,
+.reply-action-hint {
+  display: none;
+}
+.reply-action-text {
+  display: contents;
+}
+@media (hover: none) and (pointer: coarse) {
+  .reply-action,
+  .reply-action-note {
+    min-height: 2.5rem;
+    padding-inline: 0.55rem;
+  }
+}
+/* The phone's "more actions" sheet (ReplyMoreActions): the composer menu's
+   surface, one row per action. Its top edge and height cap are set inline by
+   the component, which places it above the reply it belongs to. */
+.reply-menu {
+  position: fixed;
+  left: 0.5rem;
+  top: 0;
+  width: calc(100vw - 1rem);
+  max-width: 26rem;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.1rem;
+  overflow-y: auto;
+  padding: 0.3rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.75rem;
+  background: var(--color-surface-2);
+  box-shadow: var(--shadow-md);
+}
+.reply-menu[hidden] {
+  display: none;
+}
+/* The sheet is not attached to its button, so the button that opened it
+   stays lit to show which reply the actions are for. */
+.reply-more-toggle[aria-expanded="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-soft);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .reply-menu {
+    animation: pop-up var(--motion-fast) ease both;
+  }
+}
+.reply-menu .reply-action,
+.reply-menu .reply-action-note {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.75rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.5rem;
+  text-align: left;
+}
+.reply-menu .reply-action:active {
+  background: var(--rail-hover);
+}
+.reply-menu .reply-action-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-md);
+  background: var(--color-overlay-soft);
+  color: var(--color-text-secondary);
+}
+.reply-menu .reply-action-text {
+  display: grid;
+  min-width: 0;
+}
+.reply-menu .reply-action-label {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.reply-menu .reply-action-hint {
+  display: block;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  text-wrap: pretty;
+  color: var(--color-text-muted);
+}
+/* Save to memory inside a project: the destination choice opens under its
+   row rather than beside it. */
+.reply-menu .reply-save {
+  display: grid;
+  gap: 0.3rem;
+}
+.reply-menu .reply-save-picker {
+  margin: 0 0.6rem 0.4rem;
+}
+
 button {
   cursor: pointer;
 }
@@ -1389,6 +1575,15 @@ button {
 }
 
 /* ── Assistant markdown ──────────────────────────────────────── */
+/* A heading wraps a long link or path like a paragraph does; left alone it
+   stayed on one line and made the whole reply as wide as itself. */
+.assistant-markdown-h1,
+.assistant-markdown-h2,
+.assistant-markdown-h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .assistant-markdown-h1,
 .assistant-markdown-h2 {
   font-family: inherit;
@@ -1431,11 +1626,41 @@ button {
 .assistant-markdown-ul,
 .assistant-markdown-ol {
   display: grid;
+  /* One column that may shrink: an auto column grows to its longest item. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.16rem;
   margin: 0.2rem 0 0.3rem;
   padding-left: 1.15rem;
   min-width: 0;
   color: var(--color-text-secondary);
+}
+
+/* The markers have to be asked for: the base reset turns every list's off,
+   and without them a numbered list reads as loose lines. */
+.assistant-markdown-ul {
+  list-style: disc;
+}
+.assistant-markdown-ul .assistant-markdown-ul {
+  list-style: circle;
+}
+.assistant-markdown-ol {
+  list-style: decimal;
+  /* Room for a two-digit number. */
+  padding-left: 1.5rem;
+}
+/* A task-list item shows its checkbox instead of a bullet. */
+.assistant-markdown-li:has(> input[type="checkbox"]),
+.assistant-markdown-li:has(> .assistant-markdown-p > input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.15rem;
+}
+
+.assistant-markdown-quote {
+  margin: 0.3rem 0;
+  padding: 0.05rem 0 0.05rem 0.8rem;
+  border-left: 3px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  color: var(--color-text-secondary);
+  min-width: 0;
 }
 
 .assistant-markdown-li {
@@ -1570,6 +1795,14 @@ button {
   color: var(--color-text-muted);
 }
 
+/* A code block or table that scrolls sideways takes keyboard focus
+   (ScrollRegion in AssistantContent.tsx); show where it is. */
+.assistant-markdown-pre:focus-visible,
+.assistant-markdown-table-shell:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .assistant-markdown-pre-copy {
   font-family: var(--font-code-ui);
   font-size: 0.65rem;
@@ -1577,6 +1810,8 @@ button {
   text-transform: uppercase;
   color: var(--color-text-muted);
   padding: 0.15rem 0.45rem;
+  /* 24px: the smallest touch target. */
+  min-height: 1.5rem;
   border-radius: 0.4rem;
   transition:
     color var(--transition-fast),
@@ -1592,8 +1827,15 @@ button {
    UUIDs, stack-trace lines) instead of forcing horizontal scroll. */
 .assistant-markdown-p,
 .assistant-markdown-li,
-.assistant-markdown-td,
 .assistant-markdown-code-inline {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* A table cell does this only when it holds a link or code. "anywhere" also
+   lets the column shrink to one letter, so in a wide table ordinary words
+   were split ("Alexand / ra") while the table still scrolled sideways. Plain
+   cells keep their words whole and the table's own scroller takes the rest. */
+.assistant-markdown-td:has(a, code) {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -2016,7 +2258,10 @@ button {
   width: 100%;
   padding: 0.5rem 0.7rem;
   border-radius: 0.5rem;
-  border: 1px solid var(--color-border);
+  /* The control edge every @flag input uses (border-input), not the fainter
+     panel border: these fields used to sit at about 1.5:1 against the page
+     while inputs on other screens were at 3.7:1 or more. */
+  border: 1px solid var(--color-control-border);
   background: transparent;
   color: var(--color-text-primary);
   font-size: 1rem;
@@ -2104,10 +2349,31 @@ button {
   cursor: pointer;
   position: relative;
   overflow: hidden;
+  /* A filter card is a button, so it sits raised at rest and lifts further on
+     hover; the display-only agent cards below are flat (.stat-card-static). */
+  box-shadow: var(--shadow-section);
   transition:
     border-color var(--transition-fast),
     transform var(--transition-fast),
     box-shadow var(--transition-fast);
+}
+/* Dark theme (the default; the light theme resets it just below). A shadow
+   cannot say "raised" on a near-black page, so here the difference between a
+   card you can press and one you cannot is carried by the surface instead:
+   the filter cards get a lighter fill and a firmer edge, the display-only
+   ones drop their fill and keep a plain outline. :where() keeps the reset at
+   the same specificity, so .stat-card.active and :hover below still win. */
+.stat-card:not(.stat-card-static) {
+  background: color-mix(in srgb, var(--color-surface-2) 80%, transparent);
+  border-color: var(--color-border-strong);
+}
+.stat-card-static {
+  background: transparent;
+}
+:where(:root[data-theme="light"]) .stat-card:not(.stat-card-static),
+:where(:root[data-theme="light"]) .stat-card-static {
+  background: var(--gradient-surface-card);
+  border-color: var(--color-border);
 }
 /* MOC-style colored top accent bar: each card reads as a tile in its
    status hue (bar + dot + value share the tone). */
@@ -2176,6 +2442,10 @@ button {
   letter-spacing: 0.08em;
   color: var(--color-text-muted);
   font-weight: 500;
+  /* Beside the dot it may shrink, and a word longer than the card breaks
+     rather than being cut off by the card's edge. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .stat-card-val {
   font-size: 2.1rem;
@@ -2217,6 +2487,11 @@ button {
    not a state. */
 .stat-card-static {
   cursor: default;
+  /* Rendered with <Card>, whose own gap and shadow would make these two the
+     only raised, taller-spaced tiles in the row — the opposite of what a
+     non-clickable card should say. */
+  gap: 0;
+  box-shadow: none;
 }
 .stat-card-static:hover {
   transform: none;
@@ -2241,14 +2516,53 @@ button {
 .stats-bar-agents {
   grid-template-columns: repeat(3, 1fr);
 }
-@media (min-width: 1100px) {
+/* In rem (1100px at the default size): a media query's rem is the reader's
+   own browser font size, so with larger text the six cards stay three across
+   instead of squeezing their titles. */
+@media (min-width: 68.75rem) {
   .stats-bar-agents {
     grid-template-columns: repeat(6, 1fr);
   }
 }
 @media (max-width: 720px) {
+  /* Compact tiles on a phone so the task list starts on the first screen:
+     the six-card row goes three-up (two rows), the four-card row two-up. */
   .stats-bar {
     grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .stats-bar-agents {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .stat-card {
+    padding: 0.7rem 0.5rem 0.75rem;
+    /* Two-line titles ("Completed today") push the value down; keep the
+       values on one baseline across a row. */
+    justify-content: space-between;
+  }
+  /* A three-up tile is about 110px wide at 390px. The dot stays beside the
+     title, so the tile's side padding, the dot, its gap and the title's size
+     are all trimmed until the longest single word ("COMPLETADAS") fits beside
+     it down to 375px; narrower than that it breaks rather than run past the
+     tile's edge. */
+  .stat-card-head {
+    gap: 0.25rem;
+    margin-bottom: 0.45rem;
+  }
+  .stat-card-head .stat-dot {
+    width: 0.375rem;
+    height: 0.375rem;
+  }
+  .stat-card-title {
+    min-width: 0;
+    font-size: 0.6rem;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .stat-card-val {
+    font-size: 1.6rem;
   }
 }
 
@@ -2679,6 +2993,11 @@ tr.sla-row-fail {
 }
 .adoption-delta-up {
   color: var(--color-success-strong);
+}
+/* The strong green is 3.5:1 on the light card, short of 4.5:1 for 11.5px
+   text; the plain success green is the darker one in light. */
+:root[data-theme="light"] .adoption-delta-up {
+  color: var(--color-success);
 }
 .adoption-delta-down {
   color: var(--color-danger-strong);
@@ -3160,7 +3479,8 @@ tr.sla-row-fail {
   min-height: 2.5rem;
   width: 100%;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  /* The control edge, as on every other screen's inputs (see .filter-input). */
+  border: 1px solid var(--color-control-border);
   background: var(--color-overlay-soft);
   color: var(--color-text-primary);
   padding: 0 0.7rem;
@@ -3179,7 +3499,7 @@ tr.sla-row-fail {
 .tasks-filter-bar .filter-input:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-  border-color: var(--color-border-strong);
+  border-color: var(--ring);
 }
 .select-wrap {
   position: relative;
@@ -3308,7 +3628,10 @@ tr.sla-row-fail {
   line-height: 1;
   white-space: nowrap;
   text-overflow: ellipsis;
-  padding: 0.18rem 0.45rem;
+  /* 24px tall: the smallest target a finger (or an unsteady pointer) can be
+     asked to hit. The chip was 18px. */
+  min-height: 1.5rem;
+  padding: 0.18rem 0.5rem;
   border: 1px solid color-mix(in srgb, var(--chip) 38%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--chip) 12%, transparent);
@@ -3611,9 +3934,10 @@ tr.sla-row-fail {
 }
 .task-label-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.6rem;
+  gap: 0.3rem 0.6rem;
   margin-bottom: 0.45rem;
 }
 .task-label {
@@ -3629,9 +3953,10 @@ tr.sla-row-fail {
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
+/* No opacity on top of the muted colour: at 75% this 10.6px label measured
+   3.2:1 on the light theme. */
 .task-optional-badge {
   font-weight: 500;
-  opacity: 0.75;
 }
 .task-field-label {
   display: block;
@@ -3744,7 +4069,12 @@ tr.sla-row-fail {
     display: none;
   }
 }
+/* May be cut short with an ellipsis: uncapped, a long summary (the Spanish
+   "Solo entorno aislado, sin herramientas") made the dialog scroll sideways. */
 .task-reveal-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.76rem;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -3904,9 +4234,27 @@ tr.sla-row-fail {
   line-height: 1.45;
   color: var(--color-text-muted);
 }
+/* On a phone three columns do not fit (the first two alone are 290px): the
+   label and its field share a row and the helper takes the next one. */
+@media (max-width: 560px) {
+  .task-limits-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 8.75rem);
+  }
+  .task-limit-help {
+    grid-column: 1 / -1;
+    margin-top: -0.35rem;
+  }
+}
 .task-limits-error {
   grid-column: 2 / -1;
   margin-top: -0.25rem;
+}
+/* After the base rule above, which it has to override: on a phone a
+   validation message spans the row like the helper text does. */
+@media (max-width: 560px) {
+  .task-limits-error {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Pre-run gate (run_if, #269): the one host-side, security-sensitive field —
@@ -4006,7 +4354,8 @@ tr.sla-row-fail {
 .modal-lg textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-border);
+  /* Same control edge as inputs outside the modals (see .filter-input). */
+  border: 1px solid var(--color-control-border);
   border-radius: 0.55rem;
   background: var(--color-overlay-soft);
   color: var(--color-text-primary);
@@ -4020,7 +4369,7 @@ tr.sla-row-fail {
 .modal-lg select:where(:not([data-slot="native-select"])):focus-visible,
 .modal-lg textarea:focus-visible {
   outline: none;
-  border-color: var(--color-border-strong);
+  border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
 .modal-lg input::placeholder,
@@ -4320,6 +4669,8 @@ tr.sla-row-fail {
     border-radius: var(--radius-pill);
   }
   .seg-option {
+    /* 24px tall, the minimum pointer target (it was 22px). */
+    min-height: 1.5rem;
     padding: 0.18rem 0.6rem;
     border: 0;
     background: transparent;
@@ -4363,6 +4714,13 @@ tr.sla-row-fail {
   .seg--md .seg-option {
     padding: 0.375rem 1rem;
     font-size: 0.78rem;
+  }
+  /* On a phone the three schedule modes ("Ejecutar ahora · Ejecutar una vez ·
+     Repetir") were wider than the form at the full side padding. */
+  @media (max-width: 480px) {
+    .seg--md .seg-option {
+      padding-inline: 0.6rem;
+    }
   }
 
   /* ── Flag picker & tool-window modal components (ElcanoTek/flag COMPONENTS.md) ── */
@@ -5625,7 +5983,9 @@ select.mcp-server-picker__account-select {
   gap: 0.35rem;
 }
 .task-edit-btn,
-.task-run-now-btn {
+.task-run-now-btn,
+.task-stop-btn,
+.task-delete-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5642,13 +6002,17 @@ select.mcp-server-picker__account-select {
     background var(--transition-fast);
 }
 .task-edit-btn:hover,
-.task-run-now-btn:hover {
+.task-run-now-btn:hover,
+.task-stop-btn:hover,
+.task-delete-btn:hover {
   color: var(--color-text-primary);
   border-color: var(--color-border);
   background: var(--color-overlay-soft);
 }
 .task-edit-btn:focus-visible,
-.task-run-now-btn:focus-visible {
+.task-run-now-btn:focus-visible,
+.task-stop-btn:focus-visible,
+.task-delete-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -5656,6 +6020,100 @@ select.mcp-server-picker__account-select {
    accent rather than the neutral text color the pencil settles on. */
 .task-run-now-btn:hover {
   color: var(--color-accent);
+}
+.task-delete-btn:hover {
+  color: var(--color-status-error-fg);
+}
+
+/* Recent Tasks column budget. Every cell but Task is nowrap, so with eight
+   columns the browser squeezed Task to its longest word (titles wrapped to
+   four lines) and still overflowed the card on a laptop, pushing the row
+   actions out of view. The table now has six: the short ID sits under the
+   title and the creator under the creation time, and Task keeps a floor.
+   When the table's own box is narrower than 62rem a "time · date" schedule
+   stacks its two halves (ScheduleStamp). Below about 54rem (a tablet, or a
+   small laptop) the table is still wider than its card and scrolls sideways
+   as a whole; the frame around it shades whichever edge has columns out of
+   view (.tasks-table-frame, classes set by TasksTable). */
+.tasks-table-wrapper {
+  container-type: inline-size;
+}
+#tasksTable .task-col-task {
+  min-width: 15rem;
+}
+#tasksTable .task-id-inline {
+  display: flex;
+  width: fit-content;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+/* TaskShortId: "ID 60e91ec0..." — a small label, then the cropped ID. */
+.task-short-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.task-short-id-label {
+  font-size: 0.9em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.task-short-id code {
+  font-size: inherit;
+}
+#tasksTable .task-owner-inline {
+  display: block;
+  max-width: 13rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+@container (max-width: 62rem) {
+  #tasksTable .task-when-sep {
+    display: none;
+  }
+  #tasksTable .task-when-rest {
+    display: block;
+  }
+}
+/* The edge cue has to contrast with the surface it sits on: a dark shade on
+   the light theme, and on the dark theme — where a black fade over a
+   near-black surface cannot be seen — a soft light band. Dark first. */
+.tasks-table-frame {
+  position: relative;
+  --table-edge-shade: rgb(255 255 255 / 0.16);
+}
+:root[data-theme="light"] .tasks-table-frame {
+  --table-edge-shade: rgb(18 18 44 / 0.2);
+}
+.tasks-table-frame::before,
+.tasks-table-frame::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 1rem;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+.tasks-table-frame::before {
+  left: 1px;
+  border-radius: calc(var(--radius-md) - 1px) 0 0 calc(var(--radius-md) - 1px);
+  background: linear-gradient(to left, transparent, var(--table-edge-shade));
+}
+.tasks-table-frame::after {
+  right: 1px;
+  border-radius: 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0;
+  background: linear-gradient(to right, transparent, var(--table-edge-shade));
+}
+.tasks-table-frame.has-more-start::before,
+.tasks-table-frame.has-more-end::after {
+  opacity: 1;
 }
 
 /* Log viewer — moc-style task detail modal. The log modal is the ops
@@ -5732,9 +6190,13 @@ select.mcp-server-picker__account-select {
   font-size: 0.82rem;
   color: var(--color-text-secondary);
 }
+/* Up to six buttons. They wrap: on a phone the row used to run off the side
+   of the dialog with "Discuss in chat" and "Download logs" out of view. */
 .task-detail-actions {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 /* Run-history panel: other runs sharing this task's prompt, newest first. */
@@ -6706,8 +7168,11 @@ select.mcp-server-picker__account-select {
   border-radius: var(--radius-md);
 }
 .lt-strip-tick {
+  /* Deliberately narrow: the strip is a whole run at a glance (130 steps on
+     one or two lines), and every step it jumps to has a full-size row in the
+     timeline below. Full target height, at least. */
   width: 9px;
-  height: 18px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: 3px;
@@ -6728,7 +7193,7 @@ select.mcp-server-picker__account-select {
 }
 .lt-strip-gap {
   width: 2px;
-  height: 18px;
+  height: 24px;
   margin: 0 4px;
   background: var(--color-border-strong);
 }
@@ -6933,12 +7398,23 @@ select.mcp-server-picker__account-select {
 }
 
 .guide-prose code {
+  /* A long command or JSON sample breaks inside the line instead of pushing
+     the guide wider than a small phone. Fenced blocks keep their own
+     scroller (pre, below). */
+  overflow-wrap: anywhere;
   border-radius: 0.3rem;
   background: color-mix(in srgb, var(--color-overlay-soft) 42%, transparent);
   padding: 0.05rem 0.28rem;
   font-family: var(--font-code-ui);
   font-size: 0.88em;
   color: var(--color-text-primary);
+}
+/* Not inside a table: "anywhere" also tells the table that the column may be
+   one letter wide, and a column holding only a status name (SCHEDULED,
+   PAUSED_AWAITING_INPUT) collapsed until the names broke mid-word. A table has
+   its own sideways scroller (.guide-table-shell) for the narrow case. */
+.guide-prose :is(td, th) code {
+  overflow-wrap: normal;
 }
 
 /* Tables carry most of the guides' detail (every control list is one), so they
@@ -7529,5 +8005,60 @@ select.mcp-server-picker__account-select {
   .dash-panel,
   .dash-panel-flash {
     animation: none !important;
+  }
+}
+
+/* ── Forced colors (Windows high contrast) ─────────────────────────────
+   That mode replaces every background with the system's, so anything that
+   says its state with a fill alone goes blank. These restate it with system
+   colours, which the mode leaves alone. */
+@media (forced-colors: active) {
+  /* Switch: the track and knob are fills only. */
+  [data-slot="switch"] {
+    forced-color-adjust: none;
+    background: Canvas;
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
+  [data-slot="switch"][data-state="checked"] {
+    background: Highlight;
+    outline-color: Highlight;
+  }
+  [data-slot="switch-thumb"] {
+    background: ButtonText;
+    box-shadow: none;
+  }
+  [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+    background: HighlightText;
+  }
+  [data-slot="switch"]:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  /* Segmented control: the chosen option. */
+  .seg-option[aria-pressed="true"],
+  .seg-option[aria-checked="true"],
+  .seg-option[aria-selected="true"] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+  /* Line tabs: an unselected tab's transparent underline becomes a visible
+     border in this mode, so every tab looked selected. */
+  [data-slot="tabs-trigger"][data-state="inactive"] {
+    border-color: Canvas;
+  }
+  [data-slot="tabs-trigger"][data-state="active"] {
+    border-color: Highlight;
+  }
+  /* Pill tabs: the selected one is a fill. */
+  [data-slot="tabs-list"][data-variant="default"] [data-slot="tabs-trigger"][data-state="active"] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+  /* Status dots keep their own colours. */
+  .stat-dot {
+    forced-color-adjust: none;
   }
 }

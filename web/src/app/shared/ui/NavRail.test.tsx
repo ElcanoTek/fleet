@@ -72,3 +72,57 @@ describe("NavRail account menu", () => {
     );
   });
 });
+
+describe("NavRail phone drawer", () => {
+  // The closed drawer is invisible, so focus left inside it would fall to
+  // <body>. Closing it hands focus to the button that opens it.
+  it("returns focus to the visible sidebar button when it closes with focus inside", () => {
+    // jsdom lays nothing out: every element reports no offsetParent, which the
+    // hand-back reads as "hidden".
+    const offsetParent = vi
+      .spyOn(HTMLElement.prototype, "offsetParent", "get")
+      .mockReturnValue(document.body);
+    try {
+      const rail = (open: boolean) => (
+        <>
+          <button type="button" data-sidebar-toggle="">Open sidebar</button>
+          <NavRail
+            activeView="chat"
+            brandName="Acme"
+            sidebarOpen={open}
+            setSidebarOpen={() => {}}
+            collapse={collapse}
+            account={{ email: "someone@example.com", onSignOut: () => {} }}
+          />
+        </>
+      );
+      const { rerender } = render(rail(true));
+      screen.getByRole("button", { name: "Close sidebar" }).focus();
+      rerender(rail(false));
+      expect(screen.getByRole("button", { name: "Open sidebar" })).toHaveFocus();
+    } finally {
+      offsetParent.mockRestore();
+    }
+  });
+
+  it("leaves focus alone when the drawer closes with focus elsewhere", () => {
+    const rail = (open: boolean) => (
+      <>
+        <button type="button" data-sidebar-toggle="">Open sidebar</button>
+        <input aria-label="Message" />
+        <NavRail
+          activeView="chat"
+          brandName="Acme"
+          sidebarOpen={open}
+          setSidebarOpen={() => {}}
+          collapse={collapse}
+          account={{ email: "someone@example.com", onSignOut: () => {} }}
+        />
+      </>
+    );
+    const { rerender } = render(rail(true));
+    screen.getByLabelText("Message").focus();
+    rerender(rail(false));
+    expect(screen.getByLabelText("Message")).toHaveFocus();
+  });
+});

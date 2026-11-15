@@ -1598,7 +1598,9 @@ export function TaskCreateModal({
                   <label className="task-label" htmlFor="promptTextarea">
                     {tr("Prompt")}
                   </label>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {/* Wraps: in Spanish the library button, the expand toggle
+                      and "OBLIGATORIO" are together wider than a phone. */}
+                  <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                     <PromptLibrary
                       currentText={prompt}
                       // Seed the title from the library entry's name — for a
@@ -1619,6 +1621,10 @@ export function TaskCreateModal({
                       aria-controls="promptTextarea"
                       aria-label={promptExpanded ? tr("Collapse prompt editor") : tr("Expand prompt editor")}
                       data-tip-top={promptExpanded ? "Collapse the editor" : "Expand the editor"}
+                      // The button sits near the dialog's right edge; a centred
+                      // label would hang past it and make the form scroll
+                      // sideways on a small phone.
+                      data-tip-align="end"
                       onClick={togglePromptExpanded}
                     >
                       {promptExpanded ? (

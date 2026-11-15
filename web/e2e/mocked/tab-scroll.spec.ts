@@ -43,10 +43,20 @@ test("switching tabs on mobile keeps the scroll position", async ({ browser }) =
   });
   await page.goto("/orchestrator");
   await page.waitForSelector(".task-card");
+  // Scroll until the tab row sits 100px below the scroller's top edge: still
+  // on screen to tap, clearly not at the page top. A fixed 500px only worked
+  // while the stat cards above the tabs were taller than that — with the
+  // compact phone cards the row scrolled off screen, the click's own
+  // scroll-into-view returned the page to the top, and there was nothing left
+  // to pin (switchTab leaves a scroller that is already at the top alone).
   await page.evaluate(() => {
     const el = document.querySelector("main .overflow-y-auto") as HTMLElement;
-    el.scrollTop = 500;
+    const bar = document.querySelector(".dashboard-tabs") as HTMLElement;
+    el.scrollTop = bar.getBoundingClientRect().top - el.getBoundingClientRect().top - 100;
   });
+  expect(
+    await page.evaluate(() => (document.querySelector("main .overflow-y-auto") as HTMLElement).scrollTop),
+  ).toBeGreaterThan(100);
   await page.waitForTimeout(100);
   await page.getByRole("tab", { name: "Upcoming" }).click();
   const barDelta = () =>
@@ -58,7 +68,7 @@ test("switching tabs on mobile keeps the scroll position", async ({ browser }) =
   // The tab bar gets pinned to (or very near) the top of the scroller. Poll
   // rather than sleep — under a loaded worker pool the rAF pin can land a few
   // frames later. On the pre-fix code this never converges: the scroller
-  // clamps to the page top and the bar stays ~500px down.
+  // clamps to the page top and the bar stays where the page top puts it.
   await expect.poll(barDelta, { timeout: 3000 }).toBeLessThan(60);
   await expect.poll(barDelta, { timeout: 3000 }).toBeGreaterThan(-60);
   // …and it still holds after the new tab's data lands.

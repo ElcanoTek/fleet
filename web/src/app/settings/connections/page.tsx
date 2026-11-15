@@ -71,7 +71,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { responseErrorText } from "@/app/lib/responseError";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
-import { getGatedJson } from "@/app/settings/lib/getGated";
+import { gatedFailure, redirectToLogin } from "@/app/settings/lib/getGated";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -238,13 +238,44 @@ function provenanceVariant(provenance: string): BadgeVariant {
   return PROVENANCE_VARIANTS[label] ?? "neutral";
 }
 
+// RemoteMcpOffError is the one failure of the connections read that is a
+// steady state, not an event: the server has no remote-MCP bridge configured
+// (503 remote_mcp_disabled). The page says so inline, in words chosen for the
+// reader (RemoteMcpOffNote), instead of raising an error toast on every visit
+// that named two server variables to people who cannot set them.
+class RemoteMcpOffError extends Error {}
+
 async function fetchServers(): Promise<ListResponse | null> {
-  return getGatedJson<ListResponse>("/api/remote-mcp-servers", {
-    label: tr("Connections"),
-    statusText: {
-      503: tr("Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL)."),
-    },
-  });
+  const res = await fetch("/api/remote-mcp-servers", { cache: "no-store" });
+  if (res.status === 401) {
+    redirectToLogin();
+    return null;
+  }
+  if (res.status === 503) {
+    const body = (await res
+      .clone()
+      .json()
+      .catch(() => null)) as { error?: string } | null;
+    if (body?.error === "remote_mcp_disabled") throw new RemoteMcpOffError();
+  }
+  if (!res.ok) throw await gatedFailure(res, { label: tr("Connections") });
+  return (await res.json()) as ListResponse;
+}
+
+// RemoteMcpOffNote explains why hosted servers cannot be connected yet: an
+// admin gets the two settings to set, everyone else is pointed at their admin.
+function RemoteMcpOffNote({ isAdmin }: { isAdmin: boolean }) {
+  return isAdmin ? (
+    <>
+      {tr("Connecting hosted servers is off because remote MCP isn’t configured. To enable it, set")}{" "}
+      <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> {tr("(a 32-byte base64 key) and")}{" "}
+      <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> {tr("on the server, then restart — see docs/MCP-CATALOG.md in the fleet repository for the walkthrough.")}
+    </>
+  ) : (
+    <>
+      {tr("Connecting hosted servers isn’t enabled on this workspace yet — ask your administrator to turn on remote MCP connections.")}
+    </>
+  );
 }
 
 // granteeLabel renders the everyone wildcard readably.
@@ -748,7 +779,10 @@ function DirectoryCard({
         </p>
       ) : null}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-x-[0.6rem] gap-y-2 pt-1 text-[0.72rem] text-[var(--color-text-muted)]">
-        <span className="min-w-[8rem] flex-1 truncate">
+        {/* Wraps rather than truncates: cut short, the links at its end
+            (docs, source, setup guide) were out of reach in longer languages
+            and on a phone. */}
+        <span className="min-w-[8rem] flex-1 [overflow-wrap:anywhere]">
           {entry.vendor || entry.url}
           {entry.category ? ` · ${categoryLabel(entry.category)}` : ""}
           {entry.docs_url ? (
@@ -1400,6 +1434,9 @@ function ConnectionsPageInner() {
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
+  // True while the server answers the connections read with
+  // remote_mcp_disabled; drives the inline note in "Added by you".
+  const [remoteOff, setRemoteOff] = useState(false);
   const [bundledAnchor, setBundledAnchor] = useState(readConnectorAnchor);
   // A link to a connector outside the preview opens its full list as soon as
   // the catalog arrives. An explicit open/close choice wins after that.
@@ -1503,12 +1540,17 @@ function ConnectionsPageInner() {
     fetchServers()
       .then((data) => {
         if (isStale() || data === null) return;
+        setRemoteOff(false);
         setServers(data.servers ?? []);
         setShares(data.shares ?? {});
         setSharedWithMe(data.shared_with_me ?? []);
       })
       .catch((e: unknown) => {
         if (isStale()) return;
+        if (e instanceof RemoteMcpOffError) {
+          setRemoteOff(true);
+          return;
+        }
         setError(errMessage(e));
       })
       .finally(() => {
@@ -2863,7 +2905,11 @@ function ConnectionsPageInner() {
             </div>
           ) : (
             <ConnEmpty>
-              {tr("Nothing added yet. Pick one from the list below, or add one by URL.")}
+              {remoteOff ? (
+                <RemoteMcpOffNote isAdmin={adminState === "admin"} />
+              ) : (
+                tr("Nothing added yet. Pick one from the list below, or add one by URL.")
+              )}
             </ConnEmpty>
           )}
         </ConnPanel>
@@ -3310,17 +3356,7 @@ function ConnectionsPageInner() {
                 ) : null}
                 {!catalog.remote_mcp_enabled ? (
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
-                    {adminState === "admin" ? (
-                      <>
-                        {tr("Connecting hosted servers is off because remote MCP isn’t configured. To enable it, set")}{" "}
-                        <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> {tr("(a 32-byte base64 key) and")}{" "}
-                        <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> {tr("on the server, then restart — see docs/MCP-CATALOG.md in the fleet repository for the walkthrough.")}
-                      </>
-                    ) : (
-                      <>
-                        {tr("Connecting hosted servers isn’t enabled on this workspace yet — ask your administrator to turn on remote MCP connections.")}
-                      </>
-                    )}
+                    <RemoteMcpOffNote isAdmin={adminState === "admin"} />
                   </p>
                 ) : null}
               </div>

@@ -85,7 +85,9 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
             type="button"
             className={`stat-card stat-tone-${card.tone}${card.live ? " live" : ""}${isActive ? " active" : ""}`}
             data-filter={card.filter}
-            aria-label={card.label}
+            // No aria-label: the button is named by what it shows, title and
+            // count ("Pending Tasks 3"). A label of the title alone hid the
+            // count from a screen reader and differed from the visible text.
             aria-pressed={isActive}
             onClick={() => onFilter(card.filter)}
           >

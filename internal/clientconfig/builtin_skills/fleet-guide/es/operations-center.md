@@ -46,7 +46,7 @@ Los administradores asignan el acceso en **Configuración → Administración �
 
 ### Anatomía de una fila de tarea
 
-Cada fila de **Tareas recientes** muestra el **ID** corto de la tarea, su **título** en negrita con el inicio del prompt debajo en texto atenuado, un **indicador de estado**, su **programación**, **quién la creó** y **cuándo**. Al pulsar la fila se abre el registro completo de la tarea.
+Cada fila de **Tareas recientes** muestra el **título** de la tarea en negrita con el inicio del prompt en texto atenuado y su **ID** corto debajo, un **indicador de estado**, su **programación** y **cuándo** se creó, con **quién la creó** debajo. Al pulsar la fila se abre el registro completo de la tarea.
 
 A la derecha de cada fila hay cuatro acciones:
 

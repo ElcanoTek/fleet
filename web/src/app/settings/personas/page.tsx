@@ -295,7 +295,7 @@ export default function PersonasPage() {
             />
           </ConnField>
           <label className="flex cursor-pointer items-center gap-2 text-[0.78rem] text-[var(--color-text-secondary)]">
-            <input type="checkbox" checked={useHistory} onChange={(e) => setUseHistory(e.target.checked)} />
+            <input type="checkbox" className="size-4 shrink-0" checked={useHistory} onChange={(e) => setUseHistory(e.target.checked)} />
             <span>
               {tr("Learn from my recent chats — the assistant reads only the messages you typed (not its replies, and never lockdown chats)")}
             </span>

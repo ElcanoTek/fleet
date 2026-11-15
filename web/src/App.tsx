@@ -53,19 +53,38 @@ const settingsPages: Record<string, () => ReactNode> = {
   "/settings/admin/users": () => <AdminUsers />,
 };
 
+// The tab title of each settings page: its own name, then the section, so
+// several Fleet tabs (and the browser's history) can be told apart.
+const SETTINGS_TITLES: Record<string, [name: string, section: string]> = {
+  "/settings": [tr("General"), tr("Settings")],
+  "/settings/connections": [tr("Connections"), tr("Settings")],
+  "/settings/shared-files": [tr("Shared files"), tr("Settings")],
+  "/settings/skills": [tr("Skills"), tr("Settings")],
+  "/settings/personas": [tr("Personas"), tr("Settings")],
+  "/settings/memories": [tr("Memories"), tr("Settings")],
+  "/settings/prompts": [tr("Prompts"), tr("Settings")],
+  "/settings/team": [tr("Team"), tr("Settings")],
+  "/settings/admin": [tr("Overview"), tr("Admin")],
+  "/settings/admin/doctor": [tr("System checks"), tr("Admin")],
+  "/settings/admin/features": [tr("Features"), tr("Admin")],
+  "/settings/admin/providers": [tr("Providers"), tr("Admin")],
+  "/settings/admin/server": [tr("Server"), tr("Admin")],
+  "/settings/admin/users": [tr("Users"), tr("Admin")],
+};
+
 const GUIDE_TITLES: Record<string, string> = {
   chat: tr("Chat guide"),
   "operations-center": tr("Background tasks guide"),
 };
 
-/** route resolves a pathname to its page and (for /help) its title. */
+/** route resolves a pathname to its page and its tab title (chat sets its own). */
 export function route(pathname: string): { page: ReactNode; title?: string } {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   if (getBootstrap().notFound && path === initialPath) return { page: <NotFound /> };
   if (path === "/chat") return { page: <ChatPage /> };
   if (path === "/login") return { page: <LoginPage /> };
   if (path === "/no-access") return { page: <NoAccessPage /> };
-  if (path === "/orchestrator") return { page: <OrchestratorPage /> };
+  if (path === "/orchestrator") return { page: <OrchestratorPage />, title: tr("Background tasks") };
   if (path === "/analytics") return { page: <AnalyticsPage />, title: tr("Analytics") };
   if (path.startsWith("/shared/")) return { page: <SharedPage /> };
   if (path === "/help") return { page: <HelpLayout><HelpIndex /></HelpLayout>, title: tr("Guides") };
@@ -74,7 +93,13 @@ export function route(pathname: string): { page: ReactNode; title?: string } {
     return { page: <HelpLayout><GuidePage slug={guide[1]} /></HelpLayout>, title: GUIDE_TITLES[guide[1]] };
   }
   const settings = settingsPages[path];
-  if (settings) return { page: <SettingsLayout>{settings()}</SettingsLayout> };
+  if (settings) {
+    const [name, section] = SETTINGS_TITLES[path] ?? [tr("Settings"), ""];
+    return {
+      page: <SettingsLayout>{settings()}</SettingsLayout>,
+      title: section ? `${name} — ${section}` : name,
+    };
+  }
   return { page: <NotFound /> };
 }
 

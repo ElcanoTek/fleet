@@ -515,7 +515,7 @@ function OrchestratorInner({
               onClick={() => setTaskModalOpen(true)}
             >
               <Icon name="plus" className="size-4" />
-              <span className={railCollapse.collapsed ? "sm:hidden" : ""}>
+              <span className={railCollapse.collapsed ? "sm:sr-only" : ""}>
                 {tr("New task")}
               </span>
             </button>

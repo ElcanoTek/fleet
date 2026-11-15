@@ -344,14 +344,17 @@ export function PromptLibrary({
                                 </span>
                               ) : null}
                               <span className="mt-0.5 flex items-center gap-1.5 text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-                                <span>
+                                {/* shrink-0 + nowrap: beside a long path these two
+                                    labels used to be squeezed until "· Form"
+                                    broke over two lines. The path truncates. */}
+                                <span className="shrink-0 whitespace-nowrap">
                                   {kind === "git"
                                     ? "Git"
                                     : kind === "workspace"
                                       ? tr("Workspace")
                                       : tr("Private")}
                                 </span>
-                                {isFormPrompt(p) ? <span>{tr("· Form")}</span> : null}
+                                {isFormPrompt(p) ? <span className="shrink-0 whitespace-nowrap">{tr("· Form")}</span> : null}
                                 {p.path ? (
                                   <span className="truncate normal-case tracking-normal">
                                     {p.path}
