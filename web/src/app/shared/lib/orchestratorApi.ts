@@ -686,7 +686,10 @@ export const orchestratorApi = {
 
   // Hybrid prompt library shared by chat + Operations Center.
   prompts: async () => (await request<PromptLibraryItem[]>("/prompts")).map(localizePrompt),
+  // The list carries no preview_html; one template is read for its preview.
   emailTemplates: async () => (await request<EmailTemplate[]>("/email-templates")).map(localizeEmailTemplate),
+  emailTemplate: async (id: string) =>
+    localizeEmailTemplate(await request<EmailTemplate>(`/email-templates/${encodeURIComponent(id)}`)),
   createPrompt: (body: PromptLibraryWrite) =>
     request<PromptLibraryItem>("/prompts", { method: "POST", body: JSON.stringify(body) }),
   updatePrompt: (id: string, body: PromptLibraryWrite) =>

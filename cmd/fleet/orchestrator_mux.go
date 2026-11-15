@@ -208,6 +208,7 @@ func buildOrchestratorMux(h *handlers.Handlers, reloadConfig, reloadMCP http.Han
 		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
 		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
 		r.Get("/email-templates", h.EmailTemplateLibrary)
+		r.Get("/email-templates/{template_id}", h.EmailTemplateLibraryItem)
 	})
 
 	// The two high-cost endpoints carry the sliding-window rate limiter

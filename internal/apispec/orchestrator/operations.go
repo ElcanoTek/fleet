@@ -1460,12 +1460,23 @@ var Operations = map[string]apispec.Operation{
 	"GET /email-templates": {
 		Summary: "List the bundle's email templates.",
 		Description: "The read-only email template library: live-read files from the client " +
-			"bundle's email_templates/ directory, each with its sections, rules and the " +
-			"bundle's pre-rendered preview. Shared with chat like the prompt library.\n",
+			"bundle's email_templates/ directory, each with its sections and rules. " +
+			"preview_html is never included here (has_preview says one exists); " +
+			"read one template for it. Shared with chat like the prompt library.\n",
 		Security:   adminScopedOrSession,
 		Permission: "view_tasks",
 		Responses: []apispec.Response{
 			apispec.OK("200", "The email templates, by name.", apispec.JSON(apispec.ArrayOf(apispec.Ref("EmailTemplate")))),
+		},
+	},
+	"GET /email-templates/{template_id}": {
+		Summary:     "Read one email template with its rendered preview.",
+		Description: "The template as listed, plus preview_html when the bundle ships a preview for it.\n",
+		Security:    adminScopedOrSession,
+		Permission:  "view_tasks",
+		Responses: []apispec.Response{
+			apispec.OK("200", "The email template.", apispec.JSON(apispec.Ref("EmailTemplate"))),
+			apispec.RefResponse("404", "Error"),
 		},
 	},
 	"POST /keys": {

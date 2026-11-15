@@ -210,7 +210,7 @@ components:
         One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed
         shape of an email a team sends repeatedly. The bundle's mail connector
         enforces the same file when it renders an email; fleet only presents it.
-      required: [id, name, path, subject, sections]
+      required: [id, name, path, subject, sections, has_preview]
       properties:
         id: { type: string }
         name: { type: string }
@@ -236,11 +236,15 @@ components:
         sections:
           type: array
           items: { $ref: "#/components/schemas/EmailTemplateSection" }
+        has_preview:
+          type: boolean
+          description: The bundle ships a rendered sample of this template.
         preview_html:
           type: string
           description: >
             The bundle's rendered sample of the template, a complete HTML
-            document. Untrusted markup: show it only in a sandboxed frame.
+            document. Only on a single-template read, never in the list.
+            Untrusted markup: show it only in a sandboxed frame.
         fields:
           type: array
           description: The optional form, in the form-prompt schema.
@@ -1445,7 +1449,7 @@ paths:
     get:
       summary: List the bundle's email templates.
       description: |
-        The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections, rules and the bundle's pre-rendered preview. Shared with chat like the prompt library.
+        The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections and rules. preview_html is never included here (has_preview says one exists); read one template for it. Shared with chat like the prompt library.
       security:
         - adminApiKey: []
         - scopedApiKey: []
@@ -1460,6 +1464,31 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/EmailTemplate"
+  /email-templates/{template_id}:
+    parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Read one email template with its rendered preview.
+      description: |
+        The template as listed, plus preview_html when the bundle ships a preview for it.
+      security:
+        - adminApiKey: []
+        - scopedApiKey: []
+        - elcanoAuthCookie: []
+      x-fleet-permission: view_tasks
+      responses:
+        "200":
+          description: The email template.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailTemplate"
+        "404":
+          $ref: "#/components/responses/Error"
   /files/{filename}:
     parameters:
       - name: filename

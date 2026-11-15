@@ -108,6 +108,10 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
   // The rules are what the library is for, so they are what a template opens
   // on; its form takes their place only once someone chooses to use it.
   const [using, setUsing] = useState(false);
+  // Previews by template id, read one at a time for the template on screen:
+  // the list never carries them, so opening the menu or the library does not
+  // download every example. null = the read failed or found none.
+  const [previews, setPreviews] = useState<Record<string, string | null>>({});
   const modalRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -122,6 +126,8 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
     try {
       const next = await orchestratorApi.emailTemplates();
       setItems(next);
+      // A reopened library reads its examples again: the bundle may have changed.
+      setPreviews({});
       setSelectedID((id) => (id && next.some((t) => t.id === id) ? id : (next[0]?.id ?? null)));
     } catch (err) {
       setError(errorMessage(err, tr("Could not load email templates")));
@@ -139,6 +145,23 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
   }, [items, query]);
   const selected = items.find((t) => t.id === selectedID) ?? null;
   const form = selected ? asFormPrompt(selected) : null;
+
+  const wantPreview = open && selected?.has_preview ? selected.id : null;
+  useEffect(() => {
+    if (!wantPreview || wantPreview in previews) return;
+    let live = true;
+    void orchestratorApi
+      .emailTemplate(wantPreview)
+      .then((t) => t.preview_html || null)
+      .catch(() => null)
+      .then((html) => {
+        if (live) setPreviews((prev) => ({ ...prev, [wantPreview]: html }));
+      });
+    return () => {
+      live = false;
+    };
+  }, [wantPreview, previews]);
+  const preview = selected ? previews[selected.id] : undefined;
 
   const use = (text: string) => {
     onInsert(text);
@@ -254,13 +277,15 @@ export function EmailTemplateLibrary({ onInsert, renderTrigger, returnFocusRef }
                             {tr("Sample data. Your email uses the campaign's real numbers.")}
                           </span>
                         </div>
-                        {selected.preview_html ? (
+                        {selected.has_preview && preview === undefined ? (
+                          <p className="m-0 p-2 text-sm text-[var(--color-text-muted)]">{tr("Loading…")}</p>
+                        ) : preview ? (
                           <iframe
                             title={tr("Example of {0}", [selected.name])}
                             /* The bundle's own rendered sample. An empty sandbox:
                                no scripts, no same-origin, no navigation. */
                             sandbox=""
-                            srcDoc={selected.preview_html}
+                            srcDoc={preview}
                             className="min-h-0 w-full flex-1 rounded-lg border border-[var(--color-border)] bg-white"
                           />
                         ) : (

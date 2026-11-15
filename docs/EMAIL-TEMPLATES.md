@@ -53,13 +53,17 @@ library's do.
 
 **API.** `GET /email-templates` on the Operations API (browser path
 `/api/orchestrator/email-templates`) returns the templates sorted by name, each
-with its sections, rules, `preview_html` and form. It is read-only and needs
-the view permission. Like `/prompts` it is shared with chat, so a signed-in
+with its sections, rules and form, and `has_preview`. It never carries a
+preview, so it stays small: the composer reads it to decide whether to show its
+menu entry. `GET /email-templates/{id}` returns one template with
+`preview_html`; the id is matched against the templates the bundle holds, never
+used as a path. Both are read-only and need the view permission. Like `/prompts` it is shared with chat, so a signed-in
 member without Operations Center access reads it by their Fleet role.
 
 **UI.** Chat's composer menu (**More options**) lists **Email templates** when
 the bundle has any; the composer asks once, the first time the menu opens. The
-dialog has three columns: the list with search, the example email, and the
+dialog reads the example of the template on screen, one at a time. It has
+three columns: the list with search, the example email, and the
 template's rules (sections in order with their limits in words, then the rules
 for the whole email and the phrases it never uses). **Use this template** opens
 the template's form in place of the rules, and **Use prompt** puts the rendered

@@ -9,7 +9,7 @@ import {
 import { orchestratorApi, type EmailTemplate } from "@/app/shared/lib/orchestratorApi";
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
-  orchestratorApi: { emailTemplates: vi.fn() },
+  orchestratorApi: { emailTemplates: vi.fn(), emailTemplate: vi.fn() },
 }));
 
 const weekly: EmailTemplate = {
@@ -34,7 +34,7 @@ const weekly: EmailTemplate = {
     },
     { id: "trend", title: "Trend chart", block: "chart", required: false, instruction: "One chart." },
   ],
-  preview_html: "<!doctype html><html><body><p>Hi Team,</p></body></html>",
+  has_preview: true,
   fields: [
     { key: "campaign", label: "Campaign", type: "text", required: true },
     { key: "notes", label: "Notes", type: "textarea", advanced: true },
@@ -47,6 +47,7 @@ const brief: EmailTemplate = {
   name: "Internal brief",
   audience: "internal",
   path: "email_templates/internal-brief.yaml",
+  has_preview: false,
   subject: {},
   sections: [{ id: "flags", title: "Red flags", block: "text", required: true }],
 };
@@ -70,6 +71,10 @@ describe("EmailTemplateLibrary", () => {
   beforeEach(() => {
     resetEmailTemplateAvailabilityForTests();
     vi.mocked(orchestratorApi.emailTemplates).mockResolvedValue([weekly, brief]);
+    vi.mocked(orchestratorApi.emailTemplate).mockResolvedValue({
+      ...weekly,
+      preview_html: "<!doctype html><html><body><p>Hi Team,</p></body></html>",
+    });
   });
   afterEach(() => {
     cleanup();
@@ -82,6 +87,9 @@ describe("EmailTemplateLibrary", () => {
     const frame = await within(dialog).findByTitle("Example of Weekly optimization update");
     expect(frame).toHaveAttribute("sandbox", "");
     expect(frame.getAttribute("srcdoc")).toContain("Hi Team,");
+    // Only the template on screen is read for its example.
+    expect(orchestratorApi.emailTemplate).toHaveBeenCalledTimes(1);
+    expect(orchestratorApi.emailTemplate).toHaveBeenCalledWith("weekly-optimization-update");
 
     const sections = within(dialog).getByTestId("email-template-sections");
     expect(within(sections).getByText("1. Summary")).toBeInTheDocument();
@@ -120,6 +128,7 @@ describe("EmailTemplateLibrary", () => {
     const dialog = await screen.findByRole("dialog", { name: "Email templates" });
     fireEvent.click(await within(dialog).findByRole("button", { name: /Internal brief/ }));
     expect(within(dialog).getByText(/has no example to show/)).toBeInTheDocument();
+    expect(orchestratorApi.emailTemplate).not.toHaveBeenCalledWith("internal-brief");
     expect(within(dialog).getByText("Internal only")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Use this template" }));
     expect(onInsert).toHaveBeenCalledWith(defaultTemplatePrompt(brief));
@@ -139,6 +148,14 @@ describe("EmailTemplateLibrary", () => {
     vi.mocked(orchestratorApi.emailTemplates).mockResolvedValue([]);
     open();
     expect(await screen.findByText("This workspace has no email templates yet.")).toBeInTheDocument();
+  });
+
+  it("says there is no example when its read fails", async () => {
+    vi.mocked(orchestratorApi.emailTemplate).mockRejectedValue(new Error("gone"));
+    open();
+    const dialog = await screen.findByRole("dialog", { name: "Email templates" });
+    expect(await within(dialog).findByText(/has no example to show/)).toBeInTheDocument();
+    expect(within(dialog).getByTestId("email-template-sections")).toBeInTheDocument();
   });
 
   it("reports a load failure", async () => {

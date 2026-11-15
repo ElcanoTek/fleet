@@ -89,13 +89,22 @@ func TestReadEmailTemplates(t *testing.T) {
 	if untitled.Title != "untitled" || !untitled.Required {
 		t.Errorf("a section with no title is shown by its id: %+v", untitled)
 	}
-	if w.PreviewHTML != "<!doctype html><p>Hi Team,</p>" {
-		t.Errorf("preview = %q", w.PreviewHTML)
+	if !w.HasPreview || w.PreviewHTML != "" {
+		t.Errorf("the list notes a preview without reading it: has=%v html=%q", w.HasPreview, w.PreviewHTML)
+	}
+	one, ok, problems := ReadEmailTemplate(dir, "weekly-update")
+	if !ok || len(problems) != 0 || one.PreviewHTML != "<!doctype html><p>Hi Team,</p>" || one.Name != w.Name {
+		t.Errorf("ReadEmailTemplate = %+v ok=%v problems=%v", one, ok, problems)
+	}
+	for _, id := range []string{"missing", "../weekly-update", "previews/weekly-update", "README", ""} {
+		if _, ok, _ := ReadEmailTemplate(dir, id); ok {
+			t.Errorf("ReadEmailTemplate(%q) found a template; an id is matched, never used as a path", id)
+		}
 	}
 	if len(w.Fields) != 1 || w.PromptTemplate != "Write the update for {campaign}." {
 		t.Errorf("form = %+v / %q", w.Fields, w.PromptTemplate)
 	}
-	if got[0].PreviewHTML != "" || got[0].Fields != nil {
+	if got[0].HasPreview || got[0].Fields != nil {
 		t.Errorf("a template without a preview or form carries neither: %+v", got[0])
 	}
 }
@@ -157,7 +166,8 @@ func TestReadEmailTemplatesPreviewBounds(t *testing.T) {
 		t.Fatalf("both templates are still served: %+v", got)
 	}
 	for _, tpl := range got {
-		if tpl.PreviewHTML != "" {
+		one, ok, _ := ReadEmailTemplate(dir, tpl.ID)
+		if tpl.HasPreview || !ok || one.HasPreview || one.PreviewHTML != "" {
 			t.Errorf("%s: an oversized or symlinked preview must not be served", tpl.ID)
 		}
 	}
@@ -173,5 +183,8 @@ func TestReadEmailTemplatesMissingDirAndNilBundle(t *testing.T) {
 	var b *Bundle
 	if got, problems := b.EmailTemplates(); got != nil || problems != nil {
 		t.Errorf("nil bundle: %v %v", got, problems)
+	}
+	if _, ok, _ := b.EmailTemplate("x"); ok {
+		t.Error("nil bundle has no template")
 	}
 }

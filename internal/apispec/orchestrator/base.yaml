@@ -210,7 +210,7 @@ components:
         One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed
         shape of an email a team sends repeatedly. The bundle's mail connector
         enforces the same file when it renders an email; fleet only presents it.
-      required: [id, name, path, subject, sections]
+      required: [id, name, path, subject, sections, has_preview]
       properties:
         id: { type: string }
         name: { type: string }
@@ -236,11 +236,15 @@ components:
         sections:
           type: array
           items: { $ref: "#/components/schemas/EmailTemplateSection" }
+        has_preview:
+          type: boolean
+          description: The bundle ships a rendered sample of this template.
         preview_html:
           type: string
           description: >
             The bundle's rendered sample of the template, a complete HTML
-            document. Untrusted markup: show it only in a sandboxed frame.
+            document. Only on a single-template read, never in the list.
+            Untrusted markup: show it only in a sandboxed frame.
         fields:
           type: array
           description: The optional form, in the form-prompt schema.

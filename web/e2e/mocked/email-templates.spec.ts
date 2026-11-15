@@ -39,8 +39,7 @@ const weekly = {
     },
     { id: "trend", title: "Trend chart", block: "chart", required: false, instruction: "One chart." },
   ],
-  preview_html:
-    '<!doctype html><html><body style="font-family:sans-serif"><h1>Acme Outfitters</h1><p>Hi Team,</p><script>document.title="ran"</script></body></html>',
+  has_preview: true,
   fields: [
     { key: "campaign", label: "Campaign", type: "text", required: true },
     { key: "notes", label: "Anything to stress or leave out", type: "textarea", advanced: true },
@@ -48,6 +47,10 @@ const weekly = {
   prompt_template:
     "Write this week's client optimization update for {campaign} with the email template weekly-optimization-update.\nNotes: {notes}",
 };
+
+// The list carries no preview; the dialog reads the one on screen.
+const weeklyPreview =
+  '<!doctype html><html><body style="font-family:sans-serif"><h1>Acme Outfitters</h1><p>Hi Team,</p><script>document.title="ran"</script></body></html>';
 
 test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
@@ -65,6 +68,9 @@ test("the composer menu has no Email templates entry when the bundle ships none"
 test("an email template shows its example and rules, and its form fills the composer", async ({ page }) => {
   await mockChatBoot(page);
   await page.route("**/api/orchestrator/email-templates", (r: Route) => r.fulfill({ json: [weekly] }));
+  await page.route("**/api/orchestrator/email-templates/weekly-optimization-update", (r: Route) =>
+    r.fulfill({ json: { ...weekly, preview_html: weeklyPreview } }),
+  );
 
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });

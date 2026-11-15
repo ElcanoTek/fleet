@@ -23,7 +23,7 @@ const (
 // here is what the renderer checks (docs/EMAIL-TEMPLATES.md).
 //
 // Fleet only presents a template. It never renders or checks an email itself:
-// PreviewHTML is the bundle's own pre-rendered sample, shown in a sandboxed
+// the preview is the bundle's own pre-rendered sample, shown in a sandboxed
 // frame, and PromptTemplate is text for the composer like any library prompt.
 type EmailTemplate struct {
 	ID          string `json:"id"`
@@ -42,8 +42,11 @@ type EmailTemplate struct {
 	Rules    []string               `json:"rules,omitempty"`
 	NeverSay []string               `json:"never_say,omitempty"`
 	Sections []EmailTemplateSection `json:"sections"`
-	// PreviewHTML is the bundle's rendered sample
-	// (email_templates/previews/<id>.html); empty when the bundle ships none.
+	// HasPreview reports that the bundle ships a rendered sample
+	// (email_templates/previews/<id>.html). PreviewHTML is that file; only
+	// ReadEmailTemplate fills it, so listing the library never reads or sends
+	// every preview.
+	HasPreview  bool   `json:"has_preview"`
 	PreviewHTML string `json:"preview_html,omitempty"`
 	// Fields and PromptTemplate are the optional form, in the form-prompt
 	// schema (docs/PROMPT-LIBRARY.md, "Form prompts").
@@ -96,9 +99,10 @@ type emailTemplateFile struct {
 }
 
 // ReadEmailTemplates loads the optional email_templates/ content directory:
-// one regular .yaml/.yml file per template, plus previews/<id>.html beside
-// them. Symlinks and README files are skipped. A bad file is reported and
-// omitted without hiding the rest, as ReadPrompts does.
+// one regular .yaml/.yml file per template. Symlinks and README files are
+// skipped. A bad file is reported and omitted without hiding the rest, as
+// ReadPrompts does. Previews are only noted (HasPreview), not read: see
+// ReadEmailTemplate.
 //
 // The bundle's mail connector owns the template schema and validates it
 // strictly; this reader takes only what the library displays, so a key it does
@@ -173,17 +177,11 @@ func ReadEmailTemplates(dir string) (templates []EmailTemplate, problems []strin
 			template.Fields, template.PromptTemplate = fields, promptTemplate
 		}
 
-		previewPath := filepath.Join(dir, "previews", id+".html")
 		// Lstat, not Stat: a symlinked preview could point outside the bundle.
-		if info, statErr := os.Lstat(previewPath); statErr == nil && info.Mode().IsRegular() {
-			if info.Size() > maxBundleEmailTemplatePreview {
+		if info, statErr := os.Lstat(emailTemplatePreviewPath(dir, id)); statErr == nil && info.Mode().IsRegular() {
+			template.HasPreview = info.Size() <= maxBundleEmailTemplatePreview
+			if !template.HasPreview {
 				problems = append(problems, fmt.Sprintf("email template %s: preview exceeds %d bytes; served without one", filename, maxBundleEmailTemplatePreview))
-			} else if preview, readErr := os.ReadFile(previewPath); readErr != nil { // #nosec G304 -- a fixed child of the operator-owned bundle directory.
-				problems = append(problems, fmt.Sprintf("email template %s: preview: %v", filename, readErr))
-			} else if !utf8.Valid(preview) {
-				problems = append(problems, fmt.Sprintf("email template %s: preview is not UTF-8; served without one", filename))
-			} else {
-				template.PreviewHTML = string(preview)
 			}
 		}
 		templates = append(templates, template)
@@ -193,6 +191,37 @@ func ReadEmailTemplates(dir string) (templates []EmailTemplate, problems []strin
 		return strings.ToLower(templates[i].Name) < strings.ToLower(templates[j].Name)
 	})
 	return templates, problems
+}
+
+func emailTemplatePreviewPath(dir, id string) string {
+	return filepath.Join(dir, "previews", id+".html")
+}
+
+// ReadEmailTemplate returns one template with its preview. The id is matched
+// against the templates the directory actually holds, never joined into a
+// path as given, so it cannot name a file outside the library.
+func ReadEmailTemplate(dir, id string) (EmailTemplate, bool, []string) {
+	templates, problems := ReadEmailTemplates(dir)
+	for _, template := range templates {
+		if template.ID != id {
+			continue
+		}
+		if template.HasPreview {
+			preview, err := os.ReadFile(emailTemplatePreviewPath(dir, template.ID)) // #nosec G304 -- the id is one ReadEmailTemplates found in the operator-owned bundle directory.
+			switch {
+			case err != nil:
+				problems = append(problems, fmt.Sprintf("email template %s: preview: %v", template.ID, err))
+				template.HasPreview = false
+			case len(preview) > maxBundleEmailTemplatePreview || !utf8.Valid(preview):
+				problems = append(problems, fmt.Sprintf("email template %s: preview is too large or not UTF-8; served without one", template.ID))
+				template.HasPreview = false
+			default:
+				template.PreviewHTML = string(preview)
+			}
+		}
+		return template, true, problems
+	}
+	return EmailTemplate{}, false, problems
 }
 
 // readBundleFile reads one regular, non-empty, UTF-8 file of at most limit
@@ -240,4 +269,13 @@ func (b *Bundle) EmailTemplates() ([]EmailTemplate, []string) {
 		return nil, nil
 	}
 	return ReadEmailTemplates(b.EmailTemplatesDir)
+}
+
+// EmailTemplate returns one template with its preview; false when the bundle
+// has no template of that id.
+func (b *Bundle) EmailTemplate(id string) (EmailTemplate, bool, []string) {
+	if b == nil || b.EmailTemplatesDir == "" {
+		return EmailTemplate{}, false, nil
+	}
+	return ReadEmailTemplate(b.EmailTemplatesDir, id)
 }

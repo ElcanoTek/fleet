@@ -864,7 +864,7 @@ export interface paths {
         };
         /**
          * List the bundle's email templates.
-         * @description The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections, rules and the bundle's pre-rendered preview. Shared with chat like the prompt library.
+         * @description The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections and rules. preview_html is never included here (has_preview says one exists); read one template for it. Shared with chat like the prompt library.
          */
         get: {
             parameters: {
@@ -884,6 +884,50 @@ export interface paths {
                         "application/json": components["schemas"]["EmailTemplate"][];
                     };
                 };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read one email template with its rendered preview.
+         * @description The template as listed, plus preview_html when the bundle ships a preview for it.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    template_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The email template. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailTemplate"];
+                    };
+                };
+                404: components["responses"]["Error"];
             };
         };
         put?: never;
@@ -3405,7 +3449,9 @@ export interface components {
             /** @description Phrases the renderer refuses. A "re:" prefix marks a regular expression. */
             never_say?: string[];
             sections: components["schemas"]["EmailTemplateSection"][];
-            /** @description The bundle's rendered sample of the template, a complete HTML document. Untrusted markup: show it only in a sandboxed frame. */
+            /** @description The bundle ships a rendered sample of this template. */
+            has_preview: boolean;
+            /** @description The bundle's rendered sample of the template, a complete HTML document. Only on a single-template read, never in the list. Untrusted markup: show it only in a sandboxed frame. */
             preview_html?: string;
             /** @description The optional form, in the form-prompt schema. */
             fields?: components["schemas"]["PromptField"][];
