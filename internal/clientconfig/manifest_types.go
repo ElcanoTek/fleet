@@ -152,7 +152,10 @@ type Bundle struct {
 	// Entries are read on demand so a config-repo pull is visible without a
 	// fleet restart. See ReadPrompts and Bundle.Prompts.
 	PromptsDir string
-	SkillsDir  string
+	// EmailTemplatesDir is the bundle-owned email template library, read on
+	// demand like PromptsDir. See ReadEmailTemplates and Bundle.EmailTemplates.
+	EmailTemplatesDir string
+	SkillsDir         string
 	// BundleSkillsDir is the bundle's OWN skills/ dir (the author-owned
 	// source). SkillsDir may point at the merged bundle+builtin dir instead —
 	// see builtin_skills.go. Validation always runs against this one.

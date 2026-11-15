@@ -188,6 +188,7 @@ v1 GET /v1/admin/usage/adoption
 v1 GET /v1/api-info
 v1 GET /v1/api/config
 v1 GET /v1/api/me
+v1 GET /v1/email-templates
 v1 GET /v1/files/{filename}
 v1 GET /v1/health
 v1 GET /v1/keys

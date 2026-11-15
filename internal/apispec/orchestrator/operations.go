@@ -1457,6 +1457,17 @@ var Operations = map[string]apispec.Operation{
 			apispec.RefResponse("404", "Error"),
 		},
 	},
+	"GET /email-templates": {
+		Summary: "List the bundle's email templates.",
+		Description: "The read-only email template library: live-read files from the client " +
+			"bundle's email_templates/ directory, each with its sections, rules and the " +
+			"bundle's pre-rendered preview. Shared with chat like the prompt library.\n",
+		Security:   adminScopedOrSession,
+		Permission: "view_tasks",
+		Responses: []apispec.Response{
+			apispec.OK("200", "The email templates, by name.", apispec.JSON(apispec.ArrayOf(apispec.Ref("EmailTemplate")))),
+		},
+	},
 	"POST /keys": {
 		Summary:     "Create an API key (plaintext shown once).",
 		Security:    adminKey,

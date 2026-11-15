@@ -855,6 +855,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/email-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the bundle's email templates.
+         * @description The read-only email template library: live-read files from the client bundle's email_templates/ directory, each with its sections, rules and the bundle's pre-rendered preview. Shared with chat like the prompt library.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The email templates, by name. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailTemplate"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files/{filename}": {
         parameters: {
             query?: never;
@@ -3345,6 +3384,47 @@ export interface components {
             fields?: components["schemas"]["PromptField"][];
             /** @description The form's template; each {key} token names one of fields. Present exactly when fields is. content stays the raw file. */
             prompt_template?: string;
+        };
+        /** @description One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed shape of an email a team sends repeatedly. The bundle's mail connector enforces the same file when it renders an email; fleet only presents it. */
+        EmailTemplate: {
+            id: string;
+            name: string;
+            description?: string;
+            /** @description client or internal. */
+            audience?: string;
+            use_when?: string;
+            based_on?: string;
+            path: string;
+            /** @description Cap on the prose of the whole email. Absent means none. */
+            max_words?: number;
+            subject: {
+                instruction?: string;
+                max_chars?: number;
+            };
+            rules?: string[];
+            /** @description Phrases the renderer refuses. A "re:" prefix marks a regular expression. */
+            never_say?: string[];
+            sections: components["schemas"]["EmailTemplateSection"][];
+            /** @description The bundle's rendered sample of the template, a complete HTML document. Untrusted markup: show it only in a sandboxed frame. */
+            preview_html?: string;
+            /** @description The optional form, in the form-prompt schema. */
+            fields?: components["schemas"]["PromptField"][];
+            /** @description The text the library inserts; each {key} token names one of fields. */
+            prompt_template?: string;
+        };
+        EmailTemplateSection: {
+            id: string;
+            title: string;
+            /** @description The fixed heading the renderer sets. */
+            heading?: string;
+            /** @description The mail connector's block type (text, table, chart, ...). */
+            block: string;
+            required: boolean;
+            instruction?: string;
+            /** @description Enforced bounds by name (max_words, max_bullets, max_rows, ...). */
+            limits?: {
+                [key: string]: number;
+            };
         };
         /** @description One input of a form prompt. The same shape as an empty-state card field. default takes the type's value shape: a string for text, textarea and select (one of options), a number for number, a boolean for toggle, and an object with from/to YYYY-MM-DD strings for daterange. */
         PromptField: {

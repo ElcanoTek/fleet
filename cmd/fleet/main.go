@@ -815,6 +815,7 @@ func run() error {
 	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
 	// read-only) and merges it with sched-DB private/workspace entries.
 	h.SetPromptCatalogProvider(bundle.Prompts)
+	h.SetEmailTemplateCatalogProvider(bundle.EmailTemplates)
 	// Identity — membership, roles, the Prompt Library fallback, session
 	// epochs and the adoption roster — needs no wiring: the Operations Center
 	// reads the one identity table, core.users, directly (#2049 M4, ADR-0105).

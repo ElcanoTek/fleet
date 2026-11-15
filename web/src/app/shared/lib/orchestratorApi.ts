@@ -1,5 +1,5 @@
 import { localizeError } from "@/app/lib/i18n/errors";
-import { localizePrompt, localizeTaskTemplate } from "@/app/lib/i18n/bundle";
+import { localizeEmailTemplate, localizePrompt, localizeTaskTemplate } from "@/app/lib/i18n/bundle";
 import { t as tr } from "@/app/lib/i18n";
 // Browser-side client for the orchestrator. Every call goes through the
 // /api/orchestrator/* proxy, which resolves the caller's identity from the
@@ -281,6 +281,12 @@ export type PromptLibraryItem = {
   /** The form's template; `{key}` tokens name entries of `fields`. */
   prompt_template?: string;
 };
+
+// One bundle-owned email template (docs/EMAIL-TEMPLATES.md): the fixed shape
+// of an email the team sends repeatedly, with the bundle's rendered preview.
+// Read-only; the bundle's mail connector enforces the same file.
+export type EmailTemplate = Omit<Schemas["EmailTemplate"], "fields"> & { fields?: PillField[] };
+export type EmailTemplateSection = Schemas["EmailTemplateSection"];
 
 export type PromptLibraryWrite = {
   name: string;
@@ -680,6 +686,7 @@ export const orchestratorApi = {
 
   // Hybrid prompt library shared by chat + Operations Center.
   prompts: async () => (await request<PromptLibraryItem[]>("/prompts")).map(localizePrompt),
+  emailTemplates: async () => (await request<EmailTemplate[]>("/email-templates")).map(localizeEmailTemplate),
   createPrompt: (body: PromptLibraryWrite) =>
     request<PromptLibraryItem>("/prompts", { method: "POST", body: JSON.stringify(body) }),
   updatePrompt: (id: string, body: PromptLibraryWrite) =>

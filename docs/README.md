@@ -358,6 +358,7 @@ above fails otherwise.
 - [`PROJECTS.md`](PROJECTS.md) — Projects / Spaces: shared team workspaces
 - [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) — Prompt-cache prefix-stability contract (#507), breakpoint placement per family (Gemini's marker dropped once the history outgrows it), and the opt-in live cache check with its 2026-10-14 results
 - [`PROMPT-LIBRARY.md`](PROMPT-LIBRARY.md) — Hybrid prompt library
+- [`EMAIL-TEMPLATES.md`](EMAIL-TEMPLATES.md) — Email templates library: a bundle's recurring emails shown as an example beside their enforced rules
 - [`PROVIDER-AWARE-MODELS.md`](PROVIDER-AWARE-MODELS.md) — Active-provider model discovery, picker filtering, and unavailable-selection recovery
 - [`PROVIDERS.md`](PROVIDERS.md) — Multi-provider LLM configuration (#289)
 - [`PUSH-NOTIFICATIONS.md`](PUSH-NOTIFICATIONS.md) — Browser push notifications (Web Push)

@@ -23,8 +23,10 @@ func (h *Handlers) SetPromptCatalogProvider(p func() ([]clientconfig.Prompt, []s
 	h.promptCatalog = p
 }
 
+// isPromptLibraryPath reports the library routes chat shares with the
+// Operations Center: the prompt library and the email template library.
 func isPromptLibraryPath(path string) bool {
-	return path == "/prompts" || strings.HasPrefix(path, "/prompts/")
+	return path == "/prompts" || strings.HasPrefix(path, "/prompts/") || path == "/email-templates"
 }
 
 // promptLibraryUser is the account's Prompt Library access by its Fleet role

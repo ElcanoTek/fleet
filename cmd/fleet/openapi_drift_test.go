@@ -270,6 +270,10 @@ var schemaModelRegistry = map[string]any{
 	// One input of a Git form prompt, carried verbatim from the bundle loader
 	// in PromptLibraryItem.fields.
 	"PromptField": clientconfig.PromptField{},
+	// The email template library (docs/EMAIL-TEMPLATES.md): the bundle reader's
+	// own types are the wire shape.
+	"EmailTemplate":        clientconfig.EmailTemplate{},
+	"EmailTemplateSection": clientconfig.EmailTemplateSection{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.
