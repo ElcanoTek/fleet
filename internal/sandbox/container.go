@@ -258,6 +258,11 @@ type ContainerConfig struct {
 	// negative value disables collection. Sampling is read-only and never
 	// touches the container's isolation or limits.
 	StatsInterval time.Duration
+
+	// cgroupParentFn overrides resolveDelegatedCgroupParent in package unit
+	// tests so arg-assembly tests are deterministic regardless of the runner's
+	// own /proc/self/cgroup.
+	cgroupParentFn func() string
 }
 
 // WorkspaceScope narrows a sandbox's view of the workspace root to one
@@ -719,6 +724,16 @@ func (c *containerImpl) start(ctx context.Context) error {
 	// always applied; storage-opt (total writable-LAYER cap) is added on top
 	// where the driver supports it. See diskQuotaArgs for why both.
 	args = append(args, diskQuotaArgs(c.cfg.DiskLimitGB, c.cfg.StorageOptSupported)...)
+	// Sibling cgroup parent under DelegateSubgroup=supervisor (see
+	// cgroup_parent.go): places each container in its own leaf cgroup beneath
+	// the delegated unit so cgroup v2 enforces --memory / --cpus / --pids-limit.
+	resolveCgroupParent := c.cfg.cgroupParentFn
+	if resolveCgroupParent == nil {
+		resolveCgroupParent = resolveDelegatedCgroupParent
+	}
+	if cgParent := resolveCgroupParent(); cgParent != "" {
+		args = append(args, fmt.Sprintf("--cgroup-parent=%s", cgParent))
+	}
 	// Supporting-doc bind mounts — same-path so the personas/protocols/
 	// system_prompts symlinks tools/workspace.go drops into the per-
 	// conversation workspace resolve inside the container too. Read-only:

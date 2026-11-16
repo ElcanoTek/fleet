@@ -1627,6 +1627,17 @@ if command -v systemctl >/dev/null 2>&1; then
         NEED_DAEMON_RELOAD=1
       fi
     fi
+    # Migrate pre-subgroup fleet.service units in place even when --adopt-units is
+    # not set, so DelegateSubgroup=supervisor reaches existing boxes on `fleet update --yes`
+    # and per-sandbox cgroup v2 memory/cpu/pids caps are enforced after step 5's restart.
+    if [[ "$unit" == "fleet.service" && "$DRY_RUN" != "1" ]] \
+      && grep -q '^Delegate=yes$' "$installed" 2>/dev/null \
+      && ! grep -q '^DelegateSubgroup=' "$installed" 2>/dev/null; then
+      if sed -i 's/^Delegate=yes$/Delegate=yes\nDelegateSubgroup=supervisor/' "$installed" 2>/dev/null; then
+        ok "migrated $installed: added DelegateSubgroup=supervisor under Delegate=yes"
+        NEED_DAEMON_RELOAD=1
+      fi
+    fi
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move
