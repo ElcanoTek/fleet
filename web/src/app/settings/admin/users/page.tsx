@@ -16,7 +16,7 @@ import { t as tr } from "@/app/lib/i18n";
 // /settings); authorization stays server-side — every endpoint here
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
-import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 import { useRouter } from "@/app/lib/navigation";
@@ -547,6 +547,26 @@ export default function AdminUsersPage() {
     }
     menuTriggerRef.current?.focus();
     menuTriggerRef.current = null;
+  }, [menuEmail]);
+
+  // openMenu places the panel from an estimate of its height. On a phone the
+  // text wraps and the panel is taller than the estimate, so for a user near
+  // the top of the list it opened downward with its last lines (what Delete
+  // user removes) below the screen, out of reach. Once the panel is laid out
+  // its real height is known: move it up until its bottom edge is on screen,
+  // and again if it grows (the delete confirmation, a refusal).
+  useLayoutEffect(() => {
+    const pop = popRef.current;
+    if (!menuEmail || !pop) return;
+    const fit = () => {
+      const maxTop = Math.max(8, window.innerHeight - 8 - pop.offsetHeight);
+      setMenu((m) => (m && m.y > maxTop ? { ...m, y: maxTop } : m));
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(pop);
+    return () => observer.disconnect();
   }, [menuEmail]);
 
   useEffect(() => {

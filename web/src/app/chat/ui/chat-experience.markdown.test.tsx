@@ -145,6 +145,35 @@ describe("renderAssistantContent — blocks", () => {
     expect(container.querySelector("h4")).toHaveClass("assistant-markdown-h3");
   });
 
+  // Steps separated by code blocks are separate lists; each keeps the number
+  // it was written with instead of starting again at 1.
+  it("keeps the number a list starts at", () => {
+    const { container } = renderMarkdown(
+      "1. Install\n\n```\nnpm i\n```\n\n2. Configure\n\n```\ninit\n```\n\n3. Run",
+    );
+    const lists = [...container.querySelectorAll("ol")];
+    expect(lists.map((ol) => ol.start)).toEqual([1, 2, 3]);
+    expect(lists[0]).not.toHaveAttribute("start");
+  });
+
+  it("widens the number gutter for a list that reaches three digits", () => {
+    const { container } = renderMarkdown("98. a\n99. b\n100. c");
+    expect(container.querySelector("ol")).toHaveAttribute("data-digits", "3");
+    expect(renderMarkdown("1. a\n2. b").container.querySelector("ol")).not.toHaveAttribute("data-digits");
+  });
+
+  // A literal <br> is how models break a line inside a table cell.
+  it("turns a <br> tag into a line break and leaves other tags as text", () => {
+    const { container } = renderMarkdown(
+      "| Plan | Includes |\n|---|---|\n| Team | 25 seats<br>Priority support<br/>SSO |\n\nPress <kbd>K</kbd> now.",
+    );
+    const cell = container.querySelectorAll("td")[1];
+    expect(cell.querySelectorAll("br")).toHaveLength(2);
+    expect(cell.textContent?.replace(/\n/g, "")).toBe("25 seatsPriority supportSSO");
+    expect(container.querySelector("kbd")).toBeNull();
+    expect(container.textContent).toContain("<kbd>K</kbd>");
+  });
+
   it("names a task-list checkbox and keeps it read-only", () => {
     renderMarkdown("- [x] shipped\n- [ ] pending");
     const boxes = screen.getAllByRole("checkbox", { name: "Task" });
@@ -162,13 +191,15 @@ describe("renderAssistantContent — blocks", () => {
     try {
       const { container, unmount } = renderMarkdown("```\nlong line\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |");
       expect(container.querySelector("pre")).toHaveAttribute("tabindex", "0");
-      expect(screen.getByRole("region", { name: "Code, scrolls sideways" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Table, scrolls sideways" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Code, scrolls sideways" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Table, scrolls sideways" })).toBeInTheDocument();
       unmount();
 
       scroll.mockReturnValue(300);
       const fits = renderMarkdown("```\nshort\n```");
       expect(fits.container.querySelector("pre")).not.toHaveAttribute("tabindex");
+      expect(screen.queryByRole("group")).toBeNull();
+      // Never a landmark: several wide blocks would add several of one name.
       expect(screen.queryByRole("region")).toBeNull();
     } finally {
       client.mockRestore();

@@ -437,7 +437,8 @@ your eye lands on the answer and then on anything that needs you:
 | Footer | The actions on a finished reply: **Copy**, **Regenerate** and **Retry with** the stronger model (both under the latest reply only; **Retry with** when the chat is not already on it and no switch card is waiting, since the card offers the same), **Branch**, **Save as workflow**, and **Save to memory** (the answer, as a memory). On a phone, or in a window too narrow to show them all on one line, **Copy** and **Regenerate** stay in view and the rest open from the **⋯** (more actions) button beside them, each with a line saying what it does. Each is covered where it belongs later in the guide. |
 
 Long conversations collapse their older turns behind **Show N earlier turns**,
-and a minimap along the edge lets you jump between messages.
+and a minimap along the edge lets you jump between messages (it is hidden in
+Dashboard view).
 
 ### The composer
 
@@ -1549,7 +1550,7 @@ row below.
 | --- | --- |
 | **Retrying** | A connection or a service hiccupped, and the turn is retrying by itself with a short countdown. Wait. It usually clears on its own. |
 | Nothing at all for a while | A model that reasons before it writes can be silent for a minute or more, and that is not a fault. By default the platform gives a model about a minute and a quarter to start. If it still has not started, you will see **Retrying** while the platform tries again by itself, and your deployment may try a backup model after that — which usually just answers, with nothing more for you to do. If the last attempt also never starts, a card says the model did not start responding. Retry from the card, or pick a different model. |
-| **Turn failed** | The turn did not complete. The banner says why when it can. On the latest turn, **Retry** resends your last message. If it fails the same way twice, change something: the model, the ask, or the attachment. |
+| **Turn failed** | The turn did not complete. The reply or the banner says why when it can. On the latest turn, **Retry** resends your last message. If it fails the same way twice, change something: the model, the ask, or the attachment. |
 | **Out of credits** | The deployment's API key has run out of credits or reached its spend limit. Top up the API key, or use **Contact licensing@elcanotek.com** on the card to add credits, then press **Retry**. |
 | Reply seems to stop | On a phone that locked, or a laptop that slept, the screen can lose the connection while the assistant keeps working. Wait a few seconds after the connection is back: the page re-checks by itself and either resumes the live stream or drops in the finished reply. If the turn had already failed while you were away, the page says what went wrong and offers **Retry** — or **Pick a different model**, when that is what the turn needed. After a long outage those checks space themselves out, so clicking back into the tab prompts one straight away. Refresh only if it is still stuck after that. The work was never lost either way. |
 | A notice at the top: **… was updated** | A newer version of the app has been released since this page loaded. Press **Reload** when it suits you, or dismiss the notice with **×**. It never reloads the page by itself. The same notice appears on every page of the app, and also when the app is added to an iPhone or iPad Home Screen, where there is no reload button of its own. |

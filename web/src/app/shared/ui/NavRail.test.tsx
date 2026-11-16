@@ -105,6 +105,68 @@ describe("NavRail phone drawer", () => {
     }
   });
 
+  // Below sm the open drawer covers the page: focus moves into it, Escape
+  // closes it and Tab stays inside, on every page (only Chat used to close it).
+  describe("keyboard, at phone width", () => {
+    // jsdom has no matchMedia at all.
+    const phone = (matches: boolean) => {
+      vi.stubGlobal("matchMedia", (query: string) => ({ matches, media: query, addEventListener() {}, removeEventListener() {} }));
+      return { mockRestore: () => vi.unstubAllGlobals() };
+    };
+    const rail = (open: boolean, setSidebarOpen: (open: boolean) => void) => (
+      <>
+        <button type="button" data-sidebar-toggle="">Open sidebar</button>
+        <a href="/behind">Behind the drawer</a>
+        <NavRail
+          activeView="orchestrator"
+          brandName="Acme"
+          sidebarOpen={open}
+          setSidebarOpen={setSidebarOpen}
+          collapse={collapse}
+          account={{ email: "someone@example.com", onSignOut: () => {} }}
+        />
+      </>
+    );
+
+    it("moves focus in, closes on Escape and keeps Tab inside", () => {
+      const offsetParent = vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(document.body);
+      const media = phone(true);
+      try {
+        const setSidebarOpen = vi.fn();
+        const { rerender, container } = render(rail(false, setSidebarOpen));
+        screen.getByRole("button", { name: "Open sidebar" }).focus();
+        rerender(rail(true, setSidebarOpen));
+        const aside = container.querySelector("aside")!;
+        expect(aside.contains(document.activeElement)).toBe(true);
+
+        // Focus that ended up on the page behind is brought back by Tab.
+        screen.getByRole("link", { name: "Behind the drawer" }).focus();
+        fireEvent.keyDown(window, { key: "Tab" });
+        expect(aside.contains(document.activeElement)).toBe(true);
+
+        fireEvent.keyDown(window, { key: "Escape" });
+        expect(setSidebarOpen).toHaveBeenCalledWith(false);
+      } finally {
+        media.mockRestore();
+        offsetParent.mockRestore();
+      }
+    });
+
+    it("does nothing from sm up, where the rail is part of the page", () => {
+      const media = phone(false);
+      try {
+        const setSidebarOpen = vi.fn();
+        render(rail(true, setSidebarOpen));
+        screen.getByRole("link", { name: "Behind the drawer" }).focus();
+        fireEvent.keyDown(window, { key: "Escape" });
+        expect(setSidebarOpen).not.toHaveBeenCalled();
+        expect(screen.getByRole("link", { name: "Behind the drawer" })).toHaveFocus();
+      } finally {
+        media.mockRestore();
+      }
+    });
+  });
+
   it("leaves focus alone when the drawer closes with focus elsewhere", () => {
     const rail = (open: boolean) => (
       <>

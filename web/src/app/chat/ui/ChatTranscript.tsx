@@ -453,6 +453,7 @@ export function ChatTranscript({
     messages,
     isStreaming,
     contentHeight: virtualizer.getTotalSize(),
+    conversationKey: currentConvKey,
   });
 
   // ── Message minimap (Codex-style jump rail) ────────────────────────────────

@@ -213,6 +213,16 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
+// The reader asked to be at the end: they sent a message, or pressed "Jump to
+// latest". Distance cannot say this. Their own long message moves the end
+// away by more than any follow window, and the jump button's smooth scroll is
+// still on its way when the next change arrives, so the callers that know
+// say so, and every mounted transcript counts its reader as at the end again.
+const followRequests = new Set<() => void>();
+export function requestFollowBottom(): void {
+  for (const pin of followRequests) pin();
+}
+
 export type UseStickToBottomInput = {
   /** The scrolling transcript container. */
   conversationRef: RefObject<HTMLElement | null>;
@@ -232,6 +242,12 @@ export type UseStickToBottomInput = {
    * untouched. Like `messages`, nothing reads it inside the effect.
    */
   contentHeight?: number;
+  /**
+   * Which conversation the transcript shows. The scrolling element is shared
+   * between conversations, so "the reader scrolled up" would otherwise carry
+   * from the chat they left into the one they open or start next.
+   */
+  conversationKey?: string | null;
 };
 
 /**
@@ -247,6 +263,7 @@ export function useStickToBottom({
   messages,
   isStreaming,
   contentHeight,
+  conversationKey,
 }: UseStickToBottomInput): void {
   const previousScrollHeightRef = useRef<number | null>(null);
   const smoothFollowInFlightRef = useRef(false);
@@ -277,6 +294,18 @@ export function useStickToBottom({
   const lastScrollRef = useRef<{ top: number; distance: number } | null>(null);
   const listenedRef = useRef<HTMLElement | null>(null);
   const onScrollRef = useRef<() => void>(() => {});
+  const conversationKeyRef = useRef(conversationKey);
+
+  useEffect(() => {
+    const pin = () => {
+      pinnedRef.current = true;
+      lastScrollRef.current = null;
+    };
+    followRequests.add(pin);
+    return () => {
+      followRequests.delete(pin);
+    };
+  }, []);
 
   // Mount-scoped: the settle timer outlives individual effect runs on purpose
   // (clearing it per run would release the in-flight guard early, which is the
@@ -299,6 +328,13 @@ export function useStickToBottom({
     const heightOnly =
       last !== null && last.messages === messages && last.isStreaming === isStreaming;
     lastTriggerRef.current = { messages, isStreaming };
+    // Another conversation: its reader starts at the end, wherever the last
+    // one was left.
+    if (conversationKeyRef.current !== conversationKey) {
+      conversationKeyRef.current = conversationKey;
+      pinnedRef.current = true;
+      lastScrollRef.current = null;
+    }
     // The scroller can be replaced (another conversation's transcript), so
     // the listener follows whichever element the ref holds now.
     const liveScroller = conversationRef.current;
@@ -332,6 +368,13 @@ export function useStickToBottom({
       const sentinel = streamEndRef.current;
       if (!sentinel) return;
       const scroller = conversationRef.current;
+      // Hidden (the Dashboard's Board pane, a project page laid over the
+      // chat): a hidden box measures 0 / 0 / 0, which reads as "at the end".
+      // Deciding on that would mark a reader who had scrolled up as pinned
+      // and carry them to the end when they came back. Wait until it shows.
+      if (scroller && typeof scroller.checkVisibility === "function" && !scroller.checkVisibility()) {
+        return;
+      }
       const metrics: ScrollMetrics | null = scroller
         ? {
             scrollTop: scroller.scrollTop,
@@ -404,5 +447,5 @@ export function useStickToBottom({
       }
     };
     runRef.current(heightOnly, previousScrollHeightRef.current);
-  }, [messages, isStreaming, contentHeight, conversationRef, streamEndRef]);
+  }, [messages, isStreaming, contentHeight, conversationKey, conversationRef, streamEndRef]);
 }

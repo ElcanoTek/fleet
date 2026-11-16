@@ -20,7 +20,7 @@ import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
-import { menuPeekHeight } from "./menuPeek";
+import { menuPeekHeight, menuShiftLeft } from "./menuPeek";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
@@ -126,6 +126,24 @@ const TOOL_BTN_ACTIVE =
 const COMPOSER_POP_BASE =
   "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid grid-cols-[minmax(0,1fr)] gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0";
 const COMPOSER_POP_WIDE = `${COMPOSER_POP_BASE} sm:w-[19rem]`;
+
+// keepMenuInWindow slides a composer menu left when it would cross the
+// window's right edge (menuShiftLeft). Only where the menu hangs from its
+// button (sm and up); on a phone it is a fixed sheet with its own insets. It
+// reads layout offsets, which the pop-up animation's transform does not move,
+// and doubles as a ref callback for the menus that need nothing else.
+function keepMenuInWindow(menu: HTMLElement | null) {
+  if (!menu) return;
+  menu.style.left = "";
+  const anchor = menu.offsetParent;
+  if (!anchor || getComputedStyle(menu).position !== "absolute") return;
+  const shift = menuShiftLeft(
+    anchor.getBoundingClientRect().left + menu.offsetLeft,
+    menu.offsetWidth,
+    document.documentElement.clientWidth,
+  );
+  if (shift > 0) menu.style.left = `${menu.offsetLeft - shift}px`;
+}
 
 // The design's .pop-row / .pop-title type ramp, for the composer's simple
 // menus (the tools popover has its own denser rows, ToolsPopover).
@@ -505,6 +523,7 @@ export function Composer({
   const fitMoreMenu = () => {
     const menu = moreMenuRef.current?.querySelector<HTMLElement>('[role="menu"]');
     if (!menu) return;
+    keepMenuInWindow(menu);
     menu.style.maxHeight = "";
     const rows = Array.from(
       menu.querySelectorAll<HTMLElement>('[role^="menuitem"]'),
@@ -1950,7 +1969,7 @@ export function Composer({
                         <Icon name="persona" className="size-3.5" />
                       </button>
                       {personaPickerOpen && !shareBusy ? (
-                        <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
+                        <div ref={keepMenuInWindow} className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
                           <div role="listbox" aria-label={tr("Persona")} className="grid gap-[0.1rem]">
                             {(() => {
                               const pick = (p: string) => {

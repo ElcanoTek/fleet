@@ -93,9 +93,31 @@ export function autoFenceRawHtmlDocument(content: string): string {
   return out.join("\n");
 }
 
+// A literal <br> is the one piece of HTML models write all the time, mostly to
+// break a line inside a table cell, where Markdown has no other way. Raw HTML
+// is shown as text here (no rehype-raw, on purpose), so the reader saw
+// "5 seats<br>Email support". This turns exactly that tag, and nothing else,
+// into Markdown's own line break; every other tag is still shown as text.
+type MdNode = { type: string; value?: string; children?: MdNode[] };
+const BR_TAG = /^<br\s*\/?>$/i;
+export function remarkLineBreakTags() {
+  const walk = (node: MdNode) => {
+    if (!node.children) return;
+    for (const child of node.children) {
+      if (child.type === "html" && typeof child.value === "string" && BR_TAG.test(child.value.trim())) {
+        child.type = "break";
+        delete child.value;
+      } else {
+        walk(child);
+      }
+    }
+  };
+  return (tree: MdNode) => walk(tree);
+}
+
 // Hoisted so ReactMarkdown never sees a fresh plugins array or urlTransform
 // closure identity on parent re-renders.
-const REMARK_PLUGINS = [remarkGfm];
+const REMARK_PLUGINS = [remarkGfm, remarkLineBreakTags];
 const SANDBOX_SAFE_URL_TRANSFORM = (url: string): string =>
   /^sandbox:/i.test(url) ? url : defaultUrlTransform(url);
 
@@ -147,7 +169,10 @@ function ScrollRegion({
     <Region
       ref={ref}
       className={className}
-      {...(overflows ? { tabIndex: 0, role: "region", "aria-label": label } : {})}
+      // A group, not a region: a region is a page landmark, and a reply with
+      // three wide code blocks would add three landmarks of the same name to
+      // a screen reader's list.
+      {...(overflows ? { tabIndex: 0, role: "group", "aria-label": label } : {})}
     >
       {children}
     </Region>
@@ -201,9 +226,23 @@ const AssistantMarkdown = memo(function AssistantMarkdown({
     ul: ({ children }) => (
       <ul className="assistant-markdown-ul">{children}</ul>
     ),
-    ol: ({ children }) => (
-      <ol className="assistant-markdown-ol">{children}</ol>
-    ),
+    // `start` is the number the list begins at. Steps separated by a code
+    // block are separate lists ("1." … code … "2." … code … "3."), so
+    // dropping it numbered every step 1. A list that reaches three or four
+    // digits gets a wider gutter, or its numbers hang outside the reply.
+    ol: ({ children, start }) => {
+      const first = typeof start === "number" ? start : 1;
+      const last = first + Children.toArray(children).filter(isValidElement).length - 1;
+      return (
+        <ol
+          className="assistant-markdown-ol"
+          start={typeof start === "number" ? start : undefined}
+          data-digits={last >= 1000 ? 4 : last >= 100 ? 3 : undefined}
+        >
+          {children}
+        </ol>
+      );
+    },
     li: ({ children }) => (
       <li className="assistant-markdown-li">{children}</li>
     ),

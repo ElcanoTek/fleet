@@ -8,6 +8,8 @@ import { t as tr } from "@/app/lib/i18n";
 // workspace route those links point at answers nothing for its reader.
 // ReadOnlyTranscript renders them as plain text rather than as dead links.
 
+import { useEffect } from "react";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { renderAssistantContent } from "@/app/chat/ui/AssistantContent";
 import {
   ReadOnlyTranscript,
@@ -33,12 +35,21 @@ export function SharedConversationView({ snapshot }: { snapshot: SharedSnapshot 
   const bubbles = toBubbles(snapshot.messages);
   const created = formatDate(snapshot.created_at);
 
+  // The tab is named after the chat, like the chat page itself: a reader with
+  // several shared links open could not tell the tabs apart when each said
+  // only the product's name.
+  const heading = snapshot.title || tr("Shared conversation");
+  useEffect(() => {
+    const appName = getBootstrap().branding.appName.trim();
+    document.title = appName ? `${heading} — ${appName}` : heading;
+  }, [heading]);
+
   // `shared-page` opts this document-scrolling page out of the app shell's
   // scroll-hostile body rules — see the matching block in globals.css.
   return (
     <main className="shared-page mx-auto flex min-h-screen w-full max-w-[48rem] flex-col gap-6 px-4 py-8 text-[var(--color-text-primary)]">
       <header className="border-b border-[var(--color-border-strong)] pb-4">
-        <h1 className="text-[1.4rem] font-semibold leading-tight">{snapshot.title || tr("Shared conversation")}</h1>
+        <h1 className="text-[1.4rem] font-semibold leading-tight">{heading}</h1>
         <p className="mt-1 text-[0.8125rem] text-[var(--color-text-muted)]">
           {[snapshot.model, created].filter(Boolean).join(" · ")}
         </p>

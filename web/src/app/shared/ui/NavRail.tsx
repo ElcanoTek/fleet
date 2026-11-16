@@ -137,13 +137,16 @@ function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: st
 }
 
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
-// selector Menu.tsx uses.
+// selector Menu.tsx uses. HTML elements only: `[href]` also matches the
+// <use href> inside every icon, which cannot take focus (and reports no
+// offsetParent at all, so the visibility test let it through as the "first"
+// item).
 function overlayFocusables(container: HTMLElement): HTMLElement[] {
   return Array.from(
     container.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     ),
-  ).filter((el) => el.offsetParent !== null);
+  ).filter((el) => el instanceof HTMLElement && el.offsetParent !== null);
 }
 
 export function NavRail({
@@ -196,6 +199,70 @@ export function NavRail({
       .find((button) => button.offsetParent !== null)
       ?.focus();
   }, [sidebarOpen]);
+
+  // The phone drawer (below sm) covers the page like the overlay below does,
+  // so it gets the same keyboard manners. Without them, on every page but
+  // Chat (which closes it on Escape itself), Escape did nothing, focus stayed
+  // on the button underneath, and Tab walked the page hidden behind the
+  // drawer before it reached the drawer. That is the layout a desktop zoomed
+  // far in falls into, where the keyboard is the way around.
+  //   - opening moves focus into the drawer;
+  //   - Escape closes it (the effect above then hands focus to the toggle);
+  //   - Tab stays within the drawer.
+  // A menu or dialog opened from the drawer is portaled out of it and runs
+  // its own trap, so focus inside one is left alone.
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const isPhone = () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 639.98px)").matches;
+    if (!isPhone()) return;
+    // On the frame the drawer opens it is still `invisible` (the visibility
+    // change rides the slide's transition and has not started), and a hidden
+    // element refuses focus: so try now, then again once it has begun.
+    const focusIn = () => {
+      const aside = asideRef.current;
+      if (aside && !aside.contains(document.activeElement)) {
+        overlayFocusables(aside)[0]?.focus();
+      }
+    };
+    focusIn();
+    let frame = requestAnimationFrame(() => {
+      focusIn();
+      frame = requestAnimationFrame(focusIn);
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPhone()) return;
+      if (e.key === "Escape") {
+        setSidebarOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const rail = asideRef.current;
+      if (!rail) return;
+      const items = overlayFocusables(rail);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (active instanceof Element && !rail.contains(active)) {
+        if (active.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')) return;
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [sidebarOpen, setSidebarOpen]);
 
   // Modal-drawer keyboard behavior while the narrow overlay is up, on ONE
   // window listener:

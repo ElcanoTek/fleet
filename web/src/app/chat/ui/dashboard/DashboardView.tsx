@@ -161,16 +161,23 @@ export function DashboardHud({
   }, []);
   return (
     <header data-testid="dashboard-hud" className="dash-hud">
-      <div className="flex min-w-0 flex-1 items-center gap-3 sm:flex-none">
+      {/* sm:flex-initial, not flex-none: the title block keeps its own width
+          while there is room and gives way (the title shortens) when there is
+          not. Fixed at its full width, a long chat title pushed Exit off the
+          right edge between 640 and about 880px. */}
+      <div className="flex min-w-0 flex-1 items-center gap-3 sm:flex-initial">
         <span className="dash-hud-mark max-sm:hidden" aria-hidden="true">
           <Icon name="target" className="size-4" />
         </span>
         <div className="min-w-0">
           <p className="dash-overline">{tr("Dashboard")}</p>
-          <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]">{title}</h1>
+          <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]" title={title}>{title}</h1>
         </div>
       </div>
-      <div className="flex min-w-0 items-center justify-center sm:flex-1">
+      {/* Grows into the spare room but never shrinks below the status light:
+          squeezed to nothing, the light sat on top of the Board / Chat
+          switch. */}
+      <div className="flex min-w-0 items-center justify-center sm:flex-[1_0_auto]">
         <StatusLight status={status} onApprovals={onApprovals} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">

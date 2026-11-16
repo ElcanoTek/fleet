@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { menuPeekHeight } from "./menuPeek";
+import { menuPeekHeight, menuShiftLeft } from "./menuPeek";
 
 // Four 44px rows, 2px apart, starting 5px down.
 const rows = [0, 1, 2, 3].map((i) => ({ top: 5 + i * 46, height: 44 }));
@@ -31,5 +31,23 @@ describe("menuPeekHeight", () => {
 
   it("does nothing when not even the first row can be cut", () => {
     expect(menuPeekHeight(8, rows)).toBeNull();
+  });
+});
+
+describe("menuShiftLeft", () => {
+  it("leaves a menu that fits where it is", () => {
+    expect(menuShiftLeft(452, 328, 1024)).toBe(0);
+    expect(menuShiftLeft(452, 328, 788)).toBe(0);
+  });
+
+  it("moves a menu left by what would cross the right edge, keeping a margin", () => {
+    // 452 + 328 = 780; a 768px window leaves 760 after the 8px margin.
+    expect(menuShiftLeft(452, 328, 768)).toBe(20);
+    expect(menuShiftLeft(452, 328, 641)).toBe(147);
+  });
+
+  it("never moves a menu past the left margin", () => {
+    expect(menuShiftLeft(40, 328, 300)).toBe(32);
+    expect(menuShiftLeft(4, 328, 300)).toBe(0);
   });
 });

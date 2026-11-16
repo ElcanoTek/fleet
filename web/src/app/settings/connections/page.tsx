@@ -3314,7 +3314,12 @@ function ConnectionsPageInner() {
         {rich("View all ({0})", thirdParty.length)}
       </button>
                     </div>
-                    <div className="grid grid-cols-3 gap-[0.6rem] max-[960px]:grid-cols-2 max-[600px]:grid-cols-1">
+                    {/* As many 13rem tiles as fit, not a fixed three: the
+                        settings column is only ~440px wide at 1024, where
+                        three tiles left 115px for names like "Productivity &
+                        Projects". Names wrap instead of running into the next
+                        tile, and the count keeps its place. */}
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(13rem,100%),1fr))] gap-[0.6rem]">
                       {categories.map((cat) => {
                         const sampleNames = thirdParty
                           .filter(
@@ -3331,17 +3336,19 @@ function ConnectionsPageInner() {
                             onClick={() => selectDirectoryCategory(cat.slug)}
                             className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-left transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)]"
                           >
-                            <div className="flex w-full items-center justify-between gap-2">
-                              <span className="inline-flex items-center gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
+                            <div className="flex w-full items-start justify-between gap-2">
+                              <span className="inline-flex min-w-0 items-start gap-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)]">
                                 <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
                                   <Icon
                                     name={categoryIcon(cat.slug)}
                                     className="size-[0.85rem]"
                                   />
                                 </span>
-                                <span className="truncate">{cat.label}</span>
+                                <span className="min-w-0 pt-[0.12rem] [overflow-wrap:break-word]">{cat.label}</span>
                               </span>
-                              <ConnBadge>{cat.count}</ConnBadge>
+                              <span className="shrink-0 pt-[0.08rem]">
+                                <ConnBadge>{cat.count}</ConnBadge>
+                              </span>
                             </div>
                             {sampleNames ? (
                               <span className="w-full truncate text-[0.72rem] text-[var(--color-text-muted)]">

@@ -6,6 +6,7 @@ import {
   SMOOTH_FOLLOW_SETTLE_MS,
   STREAMING_FOLLOW_WINDOW_PX,
   decideFollowBottom,
+  requestFollowBottom,
   useStickToBottom,
   type FollowBottomInput,
 } from "./stickToBottom";
@@ -458,6 +459,93 @@ describe("useStickToBottom", () => {
       userScrollsTo(1100);
 
       scroller.scrollHeight = 2700;
+      rerender({ messages: [1, 2, 3] });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Sending a message, or pressing Jump to latest, is the reader asking to be
+  // at the end: it holds wherever they had scrolled to.
+  it("follows a reader who had scrolled up once they ask for the end", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, userScrollsTo, refs } = liveHarness();
+      const { rerender } = renderHook(
+        ({ messages }: { messages: readonly unknown[] }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: false }),
+        { initialProps: { messages: [1] as readonly unknown[] } },
+      );
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      userScrollsTo(1400);
+      userScrollsTo(500);
+
+      requestFollowBottom();
+      scroller.scrollHeight = 2900;
+      rerender({ messages: [1, 2, 3] });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(2);
+      expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 2900, behavior: "smooth" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The scrolling element is shared between conversations: "scrolled up" in
+  // the chat the reader left must not apply to the one they start next.
+  it("starts another conversation's reader at the end", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, userScrollsTo, refs } = liveHarness();
+      const { rerender } = renderHook(
+        ({ messages, conversationKey }: { messages: readonly unknown[]; conversationKey: string }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: false, conversationKey }),
+        { initialProps: { messages: [1] as readonly unknown[], conversationKey: "a" } },
+      );
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      userScrollsTo(1400);
+      userScrollsTo(0);
+
+      // Same conversation: left alone.
+      scroller.scrollHeight = 2700;
+      rerender({ messages: [1, 2], conversationKey: "a" });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+
+      // A new chat whose first message is long.
+      scroller.scrollHeight = 1500;
+      scroller.scrollTop = 0;
+      rerender({ messages: [9, 10], conversationKey: "b" });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A hidden transcript (another pane or page laid over it) measures as
+  // nothing, which looks like "at the end". No decision is taken on it.
+  it("decides nothing while the transcript is hidden", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, userScrollsTo, refs } = liveHarness();
+      const visible = { value: true };
+      (scroller as unknown as { checkVisibility: () => boolean }).checkVisibility = () => visible.value;
+      const { rerender } = renderHook(
+        ({ messages }: { messages: readonly unknown[] }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: true }),
+        { initialProps: { messages: [1] as readonly unknown[] } },
+      );
+      userScrollsTo(1400);
+      userScrollsTo(500);
+
+      visible.value = false;
+      const shown = { ...scroller };
+      Object.assign(scroller, { scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
+      rerender({ messages: [1, 2] });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+
+      // Back in view, still streaming: the reader who scrolled up stays put.
+      visible.value = true;
+      Object.assign(scroller, { scrollTop: 500, scrollHeight: shown.scrollHeight + 400, clientHeight: 600 });
       rerender({ messages: [1, 2, 3] });
       expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
     } finally {

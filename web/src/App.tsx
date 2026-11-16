@@ -135,8 +135,9 @@ export function App() {
 
   // The tab title (the Next metadata). The chat view sets its own
   // "{conversation} — {app}" title once a conversation is open.
+  // A shared chat names its own tab too (SharedConversationView).
   useEffect(() => {
-    if (pathname === "/chat") return;
+    if (pathname === "/chat" || pathname.startsWith("/shared/")) return;
     document.title = title ? (appName.trim() ? `${title} — ${appName}` : title) : appName;
   }, [pathname, title, appName]);
 

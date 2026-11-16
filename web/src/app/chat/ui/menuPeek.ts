@@ -28,3 +28,22 @@ export function menuPeekHeight(
   const previous = rows[cutIndex - 1];
   return previous ? Math.round(previous.top + previous.height / 2) : null;
 }
+
+/**
+ * menuShiftLeft answers how far left a menu must move to stay inside the
+ * window. The composer's menus open to the right of their button; in a
+ * window narrower than button + menu (a tablet held upright, a sidebar-wide
+ * desktop) the right-hand part of every row, where the switches are, was cut
+ * off by the window edge. Never moves the menu past the left margin: a menu
+ * wider than the window keeps its start, where the row titles are.
+ */
+export function menuShiftLeft(
+  anchorLeft: number,
+  menuWidth: number,
+  viewportWidth: number,
+  margin = 8,
+): number {
+  const overflow = anchorLeft + menuWidth - (viewportWidth - margin);
+  if (overflow <= 0) return 0;
+  return Math.round(Math.min(overflow, Math.max(0, anchorLeft - margin)));
+}

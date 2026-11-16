@@ -1595,6 +1595,20 @@ button {
   margin: 0.5rem 0 0.12rem;
 }
 
+/* A small step per level, so a long structured answer shows which heading is
+   the title, which a section and which a sub-section. Kept modest: this is a
+   chat reply, not a document, and the third level stays at body size. */
+.assistant-markdown-h1 {
+  font-size: 1.25rem;
+  line-height: 1.35;
+  margin-top: 0.7rem;
+}
+.assistant-markdown-h2 {
+  font-size: 1.1rem;
+  line-height: 1.4;
+  margin-top: 0.6rem;
+}
+
 .assistant-markdown-h1:first-child,
 .assistant-markdown-h2:first-child,
 .assistant-markdown-h3:first-child,
@@ -1623,6 +1637,14 @@ button {
   color: var(--color-text-secondary);
 }
 
+/* A line break in a paragraph arrives as a <br> followed by a newline, and
+   the paragraph keeps newlines (pre-wrap): shown together they made one break
+   into a blank line. The newline does the job here; the <br> still does it in
+   table cells and list items, which do not keep newlines. */
+.assistant-markdown-p br {
+  display: none;
+}
+
 .assistant-markdown-ul,
 .assistant-markdown-ol {
   display: grid;
@@ -1648,11 +1670,31 @@ button {
   /* Room for a two-digit number. */
   padding-left: 1.5rem;
 }
-/* A task-list item shows its checkbox instead of a bullet. */
+/* A list numbered into the hundreds or thousands (AssistantContent sets the
+   attribute from where the list starts and how long it is). */
+.assistant-markdown-ol[data-digits="3"] {
+  padding-left: 2.1rem;
+}
+.assistant-markdown-ol[data-digits="4"] {
+  padding-left: 2.7rem;
+}
+/* A task-list item shows its checkbox instead of a bullet. The checkbox, not
+   the item, moves into the bullet's gutter: the item keeps its place in the
+   list, so a sub-task stays indented under its parent and a long label wraps
+   under its own first word. (Pulling the whole item left by the gutter put
+   every nested task back in line with its parent.) */
 .assistant-markdown-li:has(> input[type="checkbox"]),
 .assistant-markdown-li:has(> .assistant-markdown-p > input[type="checkbox"]) {
   list-style: none;
-  margin-left: -1.15rem;
+}
+.assistant-markdown-li > input[type="checkbox"],
+.assistant-markdown-li > .assistant-markdown-p > input[type="checkbox"] {
+  width: 0.8rem;
+  height: 0.8rem;
+  /* The label starts with a space of its own; together they put the first
+     line's text where the wrapped lines start. */
+  margin: 0 0.1rem 0 -1.15rem;
+  vertical-align: -0.08em;
 }
 
 .assistant-markdown-quote {
@@ -2968,7 +3010,9 @@ tr.sla-row-fail {
    per-user sparkline, and the inactive-seat roster. */
 .adoption-trends {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  /* min(280px, 100%): on a 320px phone the card is narrower than 280px, and
+     a fixed minimum made each chart wider than its card. */
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 0 1.25rem;
   margin-bottom: 1rem;
 }

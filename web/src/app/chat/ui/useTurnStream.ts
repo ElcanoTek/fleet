@@ -87,6 +87,7 @@ export type QueuedInput = {
   submission_id?: string;
 };
 import { formatBytes } from "./formatters";
+import { requestFollowBottom } from "./stickToBottom";
 import { joinTextSegments } from "./textSegments";
 import { foldNarration, settleDone, settleDoneMessages, settleNarration } from "./turnNarration";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
@@ -4486,6 +4487,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             .join("\n")])
         : undefined;
 
+    // Sending is the reader saying "take me to the end", wherever they had
+    // scrolled to and however long the message is.
+    requestFollowBottom();
     const nextMessages: Message[] = [
       {
         id: baseId,

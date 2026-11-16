@@ -170,6 +170,7 @@ import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
 import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 import { fetchMe } from "@/app/shared/lib/account";
+import { prefersReducedMotion, requestFollowBottom } from "./stickToBottom";
 import { useChatMemories } from "./useChatMemories";
 import { MemoryManagerDialog, MemoryPromoteDialog } from "./MemoryManagerDialog";
 import { isAbortError } from "@/app/shared/hooks/useCancellableFetch";
@@ -6288,8 +6289,21 @@ export function ChatExperience({
     writePref("chat-show-stats", next ? "1" : "0");
   };
 
+  // To the scroller's true end, and the reader counts as at the end from
+  // now. Scrolling the end marker into view stopped the transcript's bottom
+  // padding short of it, which the follow rule reads as "still reading
+  // further up": the next long message was then left below the screen.
   const jumpToLatest = () => {
-    streamEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    requestFollowBottom();
+    const scroller = conversationRef.current;
+    if (scroller && typeof scroller.scrollTo === "function") {
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+    } else {
+      streamEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
   };
 
   const addAttachmentFiles = (files: FileList | null) => {
