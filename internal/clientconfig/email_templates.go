@@ -25,7 +25,8 @@ const (
 // browser swaps one such color for another inside the preview's markup.
 var emailPreviewColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
-// EmailTemplate is one read-only, bundle-owned email template: the fixed
+// EmailTemplate is one email template, the bundle's own or one a team added
+// from chat (Source): the fixed
 // shape of an email a team sends repeatedly. The bundle's mail connector
 // enforces the same file when it renders an email, so what the library shows
 // here is what the renderer checks (docs/EMAIL-TEMPLATES.md).
@@ -42,6 +43,13 @@ type EmailTemplate struct {
 	UseWhen  string `json:"use_when,omitempty"`
 	BasedOn  string `json:"based_on,omitempty"`
 	Path     string `json:"path"`
+	// Source is "bundle" for a template the bundle ships and "team" for one a
+	// person added from chat (ReadTeamEmailTemplates). CreatedBy and CreatedAt
+	// are set on a team template only: who saved it and when (RFC 3339), as
+	// the bundle's connector recorded them.
+	Source    string `json:"source"`
+	CreatedBy string `json:"created_by,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
 	// MaxWords caps the prose of the whole email; 0 means no cap.
 	MaxWords int                  `json:"max_words,omitempty"`
 	Subject  EmailTemplateSubject `json:"subject"`
@@ -104,6 +112,8 @@ type emailTemplateFile struct {
 	Audience    string `yaml:"audience"`
 	UseWhen     string `yaml:"use_when"`
 	BasedOn     string `yaml:"based_on"`
+	CreatedBy   string `yaml:"created_by"`
+	CreatedAt   string `yaml:"created_at"`
 	MaxWords    int    `yaml:"max_words"`
 	Subject     struct {
 		Instruction string `yaml:"instruction"`
@@ -132,6 +142,20 @@ type emailTemplateFile struct {
 // strictly; this reader takes only what the library displays, so a key it does
 // not know is not an error here.
 func ReadEmailTemplates(dir string) (templates []EmailTemplate, problems []string) {
+	return readEmailTemplates(dir, EmailTemplateSourceBundle)
+}
+
+// Email template sources (EmailTemplate.Source).
+const (
+	EmailTemplateSourceBundle = "bundle"
+	EmailTemplateSourceTeam   = "team"
+)
+
+func readEmailTemplates(dir, source string) (templates []EmailTemplate, problems []string) {
+	// A team directory that was swapped for a link is not read at all.
+	if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 && source == EmailTemplateSourceTeam {
+		return nil, []string{"team email templates directory is a symlink; not read"}
+	}
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -171,7 +195,7 @@ func ReadEmailTemplates(dir string) (templates []EmailTemplate, problems []strin
 		template := EmailTemplate{
 			ID: id, Name: strings.TrimSpace(file.Name), Description: oneLine(file.Description),
 			Audience: strings.TrimSpace(file.Audience), UseWhen: oneLine(file.UseWhen), BasedOn: oneLine(file.BasedOn),
-			Path: "email_templates/" + filename, MaxWords: max(file.MaxWords, 0),
+			Path: "email_templates/" + filename, MaxWords: max(file.MaxWords, 0), Source: source,
 			Subject:  EmailTemplateSubject{Instruction: oneLine(file.Subject.Instruction), MaxChars: max(file.Subject.MaxChars, 0)},
 			Rules:    trimmedNonEmpty(file.Rules),
 			NeverSay: trimmedNonEmpty(file.NeverSay),
@@ -188,6 +212,10 @@ func ReadEmailTemplates(dir string) (templates []EmailTemplate, problems []strin
 			if section.ID != "" && section.Block != "" {
 				template.Sections = append(template.Sections, section)
 			}
+		}
+		if source == EmailTemplateSourceTeam {
+			template.Path = "team/" + filename
+			template.CreatedBy, template.CreatedAt = oneLine(file.CreatedBy), oneLine(file.CreatedAt)
 		}
 		if template.Name == "" || len(template.Sections) == 0 {
 			problems = append(problems, fmt.Sprintf("email template %s: needs a name and at least one section with an id and a block", filename))
@@ -225,7 +253,11 @@ func emailTemplatePreviewPath(dir, id string) string {
 // against the templates the directory actually holds, never joined into a
 // path as given, so it cannot name a file outside the library.
 func ReadEmailTemplate(dir, id string) (EmailTemplate, bool, []string) {
-	templates, problems := ReadEmailTemplates(dir)
+	return readEmailTemplate(dir, id, EmailTemplateSourceBundle)
+}
+
+func readEmailTemplate(dir, id, source string) (EmailTemplate, bool, []string) {
+	templates, problems := readEmailTemplates(dir, source)
 	for _, template := range templates {
 		if template.ID != id {
 			continue
@@ -368,4 +400,52 @@ func (b *Bundle) EmailTemplate(id string) (EmailTemplate, bool, []string) {
 		return EmailTemplate{}, false, nil
 	}
 	return ReadEmailTemplate(b.EmailTemplatesDir, id)
+}
+
+// EmailTemplateLibrary is what the Email templates library serves: the
+// bundle's own templates and, when TeamDir is set, the ones a team added from
+// chat (docs/EMAIL-TEMPLATES.md, "Team templates"). The bundle's connector
+// writes TeamDir; fleet only reads it, with the same bounds and the same
+// refusal of symlinks as the bundle directory.
+//
+// A team template never replaces a bundle template: on a shared id the
+// bundle's is served and the team's is reported.
+type EmailTemplateLibrary struct {
+	Bundle  *Bundle
+	TeamDir string
+}
+
+// Templates lists both sources by name, without previews.
+func (l EmailTemplateLibrary) Templates() ([]EmailTemplate, []string) {
+	templates, problems := l.Bundle.EmailTemplates()
+	if l.TeamDir == "" {
+		return templates, problems
+	}
+	taken := make(map[string]bool, len(templates))
+	for _, template := range templates {
+		taken[template.ID] = true
+	}
+	team, teamProblems := readEmailTemplates(l.TeamDir, EmailTemplateSourceTeam)
+	problems = append(problems, teamProblems...)
+	for _, template := range team {
+		if taken[template.ID] {
+			problems = append(problems, fmt.Sprintf("team email template %s: a bundle template has this id; the team one is not served", template.ID))
+			continue
+		}
+		templates = append(templates, template)
+	}
+	sort.SliceStable(templates, func(i, j int) bool {
+		return strings.ToLower(templates[i].Name) < strings.ToLower(templates[j].Name)
+	})
+	return templates, problems
+}
+
+// Template returns one template with its preview, the bundle's first.
+func (l EmailTemplateLibrary) Template(id string) (EmailTemplate, bool, []string) {
+	template, ok, problems := l.Bundle.EmailTemplate(id)
+	if ok || l.TeamDir == "" {
+		return template, ok, problems
+	}
+	template, ok, teamProblems := readEmailTemplate(l.TeamDir, id, EmailTemplateSourceTeam)
+	return template, ok, append(problems, teamProblems...)
 }

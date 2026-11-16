@@ -3439,6 +3439,15 @@ export interface components {
             use_when?: string;
             based_on?: string;
             path: string;
+            /**
+             * @description bundle for a template the bundle ships; team for one a person added from chat through the bundle's mail connector.
+             * @enum {string}
+             */
+            source: "bundle" | "team";
+            /** @description Team templates only: who saved it, as the connector recorded. */
+            created_by?: string;
+            /** @description Team templates only: when it was first saved (RFC 3339). */
+            created_at?: string;
             /** @description Cap on the prose of the whole email. Absent means none. */
             max_words?: number;
             subject: {

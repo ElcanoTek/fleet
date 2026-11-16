@@ -15,6 +15,7 @@ const weekly = {
   audience: "client",
   use_when: "A campaign has DSP reporting and the client gets a weekly note.",
   path: "email_templates/weekly-optimization-update.yaml",
+  source: "bundle",
   max_words: 260,
   subject: { instruction: "Campaign, channel, the one result that matters.", max_chars: 70 },
   rules: ["Write for a client who gives this one minute."],
@@ -185,4 +186,33 @@ test("the form picks who it goes to and how it looks, and asks for a draft", asy
   await dialog.getByRole("button", { name: "Use this template" }).click();
   await expect(dialog.getByTestId("recipient-suggestions").getByRole("button", { name: "new.buyer@acme.com" })).toBeVisible();
   await expect(dialog.getByTestId("palette-recent").getByRole("button", { name: /Header #1F3A5F, Accent #C2410C/ })).toBeVisible();
+});
+
+test("a team template is marked, and New template drafts the request to add one", async ({ page }) => {
+  const qbr = {
+    ...weekly,
+    id: "monthly-qbr-recap",
+    name: "Monthly QBR recap",
+    path: "team/monthly-qbr-recap.yaml",
+    source: "team",
+    created_by: "jeanne@example.com",
+    created_at: "2026-11-16T15:00:00Z",
+    has_preview: false,
+  };
+  await mockChatBoot(page);
+  await page.route("**/api/orchestrator/email-templates", (r: Route) => r.fulfill({ json: [qbr, weekly] }));
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "More options" }).click();
+  await page.getByRole("menuitem", { name: "Open email templates" }).click();
+  const dialog = page.getByRole("dialog", { name: "Email templates" });
+
+  await expect(dialog.getByRole("button", { name: /Monthly QBR recap/ }).getByText("Team")).toBeVisible();
+  await expect(dialog.getByText(/Added by jeanne@example\.com on/)).toBeVisible();
+  if (process.env.E2E_PICKER_SHOT) await page.screenshot({ path: process.env.E2E_PICKER_SHOT });
+
+  await dialog.getByRole("button", { name: "New template" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("textbox").first()).toHaveValue(/^Save an email as a team email template[\s\S]*save it for my approval\.$/);
 });

@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultTemplatePrompt,
   EmailTemplateLibrary,
+  newTemplatePrompt,
   resetEmailTemplateAvailabilityForTests,
+  templateProvenance,
   useHasEmailTemplates,
 } from "./EmailTemplateLibrary";
 import { orchestratorApi, type EmailTemplate } from "@/app/shared/lib/orchestratorApi";
@@ -19,6 +21,7 @@ const weekly: EmailTemplate = {
   audience: "client",
   use_when: "A campaign has DSP reporting and an optimization log.",
   path: "email_templates/weekly-optimization-update.yaml",
+  source: "bundle",
   max_words: 260,
   subject: { instruction: "Campaign, channel, the one result.", max_chars: 70 },
   rules: ["Write for a client who gives this one minute."],
@@ -47,6 +50,7 @@ const brief: EmailTemplate = {
   name: "Internal brief",
   audience: "internal",
   path: "email_templates/internal-brief.yaml",
+  source: "bundle",
   has_preview: false,
   subject: {},
   sections: [{ id: "flags", title: "Red flags", block: "text", required: true }],
@@ -133,6 +137,34 @@ describe("EmailTemplateLibrary", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Use this template" }));
     expect(onInsert).toHaveBeenCalledWith(defaultTemplatePrompt(brief));
     expect(defaultTemplatePrompt(brief)).toContain('"internal-brief"');
+  });
+
+  it("marks a team template, says who added it, and offers to add another", async () => {
+    const qbr: EmailTemplate = {
+      ...brief,
+      id: "monthly-qbr-recap",
+      name: "Monthly QBR recap",
+      path: "team/monthly-qbr-recap.yaml",
+      source: "team",
+      created_by: "jeanne@example.com",
+      created_at: "2026-11-16T15:00:00Z",
+    };
+    vi.mocked(orchestratorApi.emailTemplates).mockResolvedValue([qbr, weekly]);
+    const onInsert = open();
+    const dialog = await screen.findByRole("dialog", { name: "Email templates" });
+    const row = await within(dialog).findByRole("button", { name: /Monthly QBR recap/ });
+    expect(within(row).getByText("Team")).toBeTruthy();
+    expect(within(within(dialog).getByRole("button", { name: /Weekly optimization update/ })).queryByText("Team")).toBeNull();
+    expect(within(dialog).getByText(/^Added by jeanne@example\.com on /)).toBeTruthy();
+    expect(templateProvenance(weekly)).toBe("Tracked in email_templates/weekly-optimization-update.yaml");
+    expect(templateProvenance({ ...qbr, created_at: "not a date" })).toBe("Added by jeanne@example.com");
+    expect(templateProvenance({ ...qbr, created_by: undefined })).toBe("Added by your team");
+
+    // New template only writes a request into the draft; the assistant does the rest.
+    fireEvent.click(within(dialog).getByRole("button", { name: "New template" }));
+    expect(onInsert).toHaveBeenCalledWith(newTemplatePrompt());
+    expect(newTemplatePrompt()).toContain("save it for my approval");
+    expect(screen.queryByRole("dialog", { name: "Email templates" })).toBeNull();
   });
 
   it("filters by search and says when the workspace has none", async () => {

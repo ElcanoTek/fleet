@@ -460,7 +460,7 @@ Una convención que conviene adoptar desde el principio. **Una versión del equi
 
 Si tu instalación tiene correos estándar, **Más opciones** (`•••`) también muestra **Plantillas de correo**. Una plantilla es la forma fija de un correo que el equipo envía una y otra vez, como la actualización semanal para un cliente: las mismas secciones, en el mismo orden y con la misma extensión, lo pida quien lo pida y en cualquier chat. La opción no aparece en una instalación que no tiene ninguna.
 
-Selecciona una plantilla para ver dos cosas, una junto a la otra: un **correo de ejemplo** creado con datos de muestra y las **secciones, en orden**, cada una con lo que debe contener y sus límites (por ejemplo, *Hasta 3 viñetas*). Debajo están las reglas de todo el correo y las expresiones que nunca usa. Las plantillas vienen con tu instalación y son de solo lectura.
+Selecciona una plantilla para ver dos cosas, una junto a la otra: un **correo de ejemplo** creado con datos de muestra y las **secciones, en orden**, cada una con lo que debe contener y sus límites (por ejemplo, *Hasta 3 viñetas*). Debajo están las reglas de todo el correo y las expresiones que nunca usa. Algunas plantillas vienen con tu instalación; otras las ha añadido tu equipo y aparecen marcadas como **Equipo**, con el nombre de quien las añadió.
 
 Elige **Usar esta plantilla** y rellena el formulario. Además de las preguntas propias de la plantilla, puede pedirte a quién va el correo y qué aspecto tiene:
 
@@ -468,6 +468,8 @@ Elige **Usar esta plantilla** y rellena el formulario. Además de las preguntas 
 - **Estilo** muestra cada aspecto con sus colores, y el correo de ejemplo junto al formulario adopta el aspecto a medida que lo eliges. **Colores personalizados** te deja elegir los colores de cabecera y de acento de un cliente, y **Usados recientemente** recupera los últimos aspectos que usaste, de modo que eliges los colores de un cliente una sola vez.
 
 Después elige **Usar instrucción**. Como con un prompt de la biblioteca, esto solo pone una petición en tu borrador; no se escribe ni se envía nada hasta que envías el mensaje. El asistente escribe entonces el correo según la plantilla y lo pone en una tarjeta de aprobación que muestra el correo e indica los destinatarios. Solo se envía cuando eliges **Enviar** en esa tarjeta; si la rechazas o pides cambios, no sale nada. Un borrador que la incumple, por ser demasiado largo o añadir una sección, no se genera: el asistente recibe qué corregir y lo intenta de nuevo, de modo que el resultado se ajusta al ejemplo.
+
+**Añadir una plantilla.** Cuando un correo ha quedado como quieres que quede siempre, pídele al asistente que lo conserve: *«Guarda este correo como plantilla con el nombre Resumen mensual QBR».* También puedes elegir **Nueva plantilla** en la biblioteca, que escribe esa petición en tu borrador para que la completes. El asistente crea la plantilla a partir del correo del chat (sus secciones, su orden y su extensión), la comprueba y te pide que la apruebes en una tarjeta. Una vez aprobada, está en la biblioteca para todo tu equipo, con ese correo como ejemplo. El ejemplo lo ve todo el mundo, así que pide nombres y cifras inventados si los reales no deben mostrarse. Para cambiar una plantilla del equipo, guarda una versión nueva con el mismo nombre; para quitar una, pídeselo al asistente por su nombre. Las plantillas que vienen con tu instalación no se pueden cambiar desde el chat.
 
 ## 10. Del chat a una tarea
 

@@ -224,3 +224,79 @@ func TestReadEmailTemplatesMissingDirAndNilBundle(t *testing.T) {
 		t.Error("nil bundle has no template")
 	}
 }
+
+// The library serves the bundle's templates and the team's from one list. The
+// team directory is written by the bundle's connector, so fleet reads it with
+// the same distrust as any bundle file and never lets it replace a bundle
+// template.
+func TestEmailTemplateLibraryMergesTeamTemplates(t *testing.T) {
+	bundleDir, teamDir := t.TempDir(), t.TempDir()
+	writeEmailTemplateFile(t, bundleDir, "weekly-update.yaml", emailTemplateYAML)
+	writeEmailTemplateFile(t, bundleDir, "previews/weekly-update.html", "<!doctype html><p>bundle</p>")
+	team := "name: Monthly QBR recap\ncreated_by: jeanne@example.com\ncreated_at: \"2026-11-16T15:00:00Z\"\nsections:\n  - {id: flags, block: text}\n"
+	writeEmailTemplateFile(t, teamDir, "monthly-qbr-recap.yaml", team)
+	writeEmailTemplateFile(t, teamDir, "previews/monthly-qbr-recap.html", "<!doctype html><p>team</p>")
+	// A team file under a bundle id must not shadow the bundle's template.
+	writeEmailTemplateFile(t, teamDir, "weekly-update.yaml", "name: Hijack\nsections:\n  - {id: flags, block: text}\n")
+	writeEmailTemplateFile(t, teamDir, "previews/weekly-update.html", "<!doctype html><p>hijack</p>")
+
+	lib := EmailTemplateLibrary{Bundle: &Bundle{EmailTemplatesDir: bundleDir}, TeamDir: teamDir}
+	got, problems := lib.Templates()
+	if len(got) != 2 || got[0].ID != "monthly-qbr-recap" || got[1].ID != "weekly-update" {
+		t.Fatalf("templates = %+v", got)
+	}
+	qbr, weekly := got[0], got[1]
+	if qbr.Source != EmailTemplateSourceTeam || qbr.CreatedBy != "jeanne@example.com" || qbr.CreatedAt != "2026-11-16T15:00:00Z" || qbr.Path != "team/monthly-qbr-recap.yaml" || !qbr.HasPreview {
+		t.Errorf("team template = %+v", qbr)
+	}
+	if weekly.Source != EmailTemplateSourceBundle || weekly.Name == "Hijack" || weekly.CreatedBy != "" {
+		t.Errorf("bundle template = %+v", weekly)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "a bundle template has this id") {
+		t.Errorf("problems = %v, want the shadowed team file reported", problems)
+	}
+
+	one, ok, _ := lib.Template("monthly-qbr-recap")
+	if !ok || one.PreviewHTML != "<!doctype html><p>team</p>" || one.Source != EmailTemplateSourceTeam {
+		t.Errorf("team template read = %+v ok=%v", one, ok)
+	}
+	one, ok, _ = lib.Template("weekly-update")
+	if !ok || one.PreviewHTML != "<!doctype html><p>bundle</p>" || one.Source != EmailTemplateSourceBundle {
+		t.Errorf("a shared id must read the bundle's template: %+v ok=%v", one, ok)
+	}
+	if _, ok, _ := lib.Template("../weekly-update"); ok {
+		t.Error("an id is matched against the listed templates, never used as a path")
+	}
+
+	// A bundle template never claims an author, whatever its file says.
+	writeEmailTemplateFile(t, bundleDir, "weekly-update.yaml", emailTemplateYAML+"created_by: someone@example.com\n")
+	if got, _ := lib.Templates(); got[1].CreatedBy != "" {
+		t.Errorf("created_by is a team field: %+v", got[1])
+	}
+}
+
+func TestEmailTemplateLibraryWithoutATeamDirectory(t *testing.T) {
+	bundleDir := t.TempDir()
+	writeEmailTemplateFile(t, bundleDir, "weekly-update.yaml", emailTemplateYAML)
+	for _, teamDir := range []string{"", filepath.Join(t.TempDir(), "absent")} {
+		lib := EmailTemplateLibrary{Bundle: &Bundle{EmailTemplatesDir: bundleDir}, TeamDir: teamDir}
+		got, problems := lib.Templates()
+		if len(got) != 1 || len(problems) != 0 || got[0].Source != EmailTemplateSourceBundle {
+			t.Errorf("team dir %q: templates=%+v problems=%v", teamDir, got, problems)
+		}
+		if _, ok, _ := lib.Template("monthly-qbr-recap"); ok {
+			t.Errorf("team dir %q: no team template exists", teamDir)
+		}
+	}
+	// A team directory swapped for a link is not followed.
+	target, link := t.TempDir(), filepath.Join(t.TempDir(), "team")
+	writeEmailTemplateFile(t, target, "planted.yaml", "name: Planted\nsections:\n  - {id: flags, block: text}\n")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	lib := EmailTemplateLibrary{Bundle: &Bundle{EmailTemplatesDir: bundleDir}, TeamDir: link}
+	got, problems := lib.Templates()
+	if len(got) != 1 || len(problems) != 1 || !strings.Contains(problems[0], "symlink") {
+		t.Errorf("linked team dir: templates=%+v problems=%v", got, problems)
+	}
+}

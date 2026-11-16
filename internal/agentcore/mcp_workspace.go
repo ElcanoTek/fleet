@@ -303,6 +303,27 @@ func PerRunMCPWorkspaceBase(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, perRunMCPWorkspaceSubdir)
 }
 
+// teamEmailTemplatesSubdir is the one entry under mcp-runs/ that is not a run
+// dir: see TeamEmailTemplatesDir.
+const teamEmailTemplatesSubdir = "email-templates"
+
+// TeamEmailTemplatesDir returns <workspaceRoot>/mcp-runs/email-templates,
+// where a bundle's mail connector keeps the email templates a team adds from
+// chat and where the Email templates library reads them
+// (docs/EMAIL-TEMPLATES.md, "Team templates"). A bundle names it in its
+// connector env as "${FLEET_WORKSPACE_ROOT}/mcp-runs/email-templates".
+//
+// It lives under PerRunMCPWorkspaceBase on purpose. A saved template is shown
+// to everyone and its rules become instructions to later chats, so the only
+// way in must be the connector's approval-gated save. Everything under
+// mcp-runs/ is already overlaid read-only in every sandbox for exactly that
+// reason (host-side connectors write there by pathname, no sandbox can), so
+// the directory is protected on every backend without a mount of its own. The
+// name cannot collide with a run dir: those are "task-<id>" (taskMCPRunKey).
+func TeamEmailTemplatesDir(workspaceRoot string) string {
+	return filepath.Join(PerRunMCPWorkspaceBase(workspaceRoot), teamEmailTemplatesSubdir)
+}
+
 // SharedMCPWorkspaceDir returns the stable per-deployment directory substituted
 // for ${FLEET_WORKSPACE} on shared (process-lifetime) MCP spawns, creating it
 // best-effort. Creation failure is logged and the path still returned: the

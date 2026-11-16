@@ -5755,5 +5755,11 @@
   "Show fewer": "Mostrar menos",
   "Custom colors": "Colores personalizados",
   "Recently used": "Usados recientemente",
-  "Use {0}": "Usar {0}"
+  "Use {0}": "Usar {0}",
+  "Save an email as a team email template, so it comes out the same way next time.\nName: \nUse it when: \nBase it on: the email we just built in this chat\nTake the sections, their order and their length from that email, check the template, then save it for my approval.": "Guarda un correo como plantilla de correo del equipo, para que la próxima vez salga igual.\nNombre: \nÚsala cuando: \nBásala en: el correo que acabamos de crear en este chat\nToma las secciones, su orden y su extensión de ese correo, comprueba la plantilla y guárdala para que yo la apruebe.",
+  "Added by {0} on {1}": "Añadida por {0} el {1}",
+  "Added by {0}": "Añadida por {0}",
+  "Added by your team": "Añadida por tu equipo",
+  "New template": "Nueva plantilla",
+  "Puts a request in your draft. The assistant builds the template from an email in the chat and asks you to approve it.": "Pone una petición en tu borrador. El asistente crea la plantilla a partir de un correo del chat y te pide que la apruebes."
 }
