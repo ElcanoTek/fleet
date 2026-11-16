@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { navigate } from "@/app/lib/navigation";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
-import { btnClass, ConnBadge, InlineConfirmButton, RevealButton, SETTINGS_INPUT } from "../ui/atoms";
+import { btnClass, ConnBadge, InlineConfirmButton, RevealButton, SETTINGS_INPUT, MissingFieldsHint, useFocusOnOpen } from "../ui/atoms";
 import {
   ConnEmpty,
   ConnField,
@@ -107,6 +107,7 @@ export default function PersonasPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<PersonaDraft | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null);
   // The slug follows the display name until the user edits it by hand.
   const [slugTouched, setSlugTouched] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -397,6 +398,7 @@ export default function PersonasPage() {
               <ConnField label={draft.id === "" ? tr("Short name (lowercase-kebab)") : tr("Short name (fixed — chats refer to it)")}>
                 <input
                   id="personaName"
+                  ref={firstFieldRef}
                   className={SETTINGS_INPUT}
                   placeholder="my-twin"
                   value={draft.name}
@@ -569,7 +571,14 @@ export default function PersonasPage() {
               ) : null}
             </fieldset>
 
-            <div className="mt-[0.1rem] flex justify-end gap-2">
+            <div className="mt-[0.1rem] flex flex-wrap items-center justify-end gap-2">
+              <MissingFieldsHint
+                id="personaMissing"
+                missing={[
+                  ...(draft.name.trim() ? [] : [tr("Display name")]),
+                  ...(draft.instructions.trim() ? [] : [tr("Instructions")]),
+                ]}
+              />
               <button
                 type="button"
                 className={btnClass({ sm: true, reveal: true })}
@@ -581,6 +590,7 @@ export default function PersonasPage() {
                 type="button"
                 className={btnClass({ variant: "primary" })}
                 disabled={busy || !draft.name.trim() || !draft.instructions.trim()}
+                aria-describedby={draft.name.trim() && draft.instructions.trim() ? undefined : "personaMissing"}
                 onClick={() => void save()}
               >
                 {draft.id === "" ? tr("Create persona") : tr("Save changes")}

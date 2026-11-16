@@ -47,6 +47,7 @@ import {
   SetSwitch,
   SETTINGS_INPUT,
   type BadgeVariant,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import { useIsAdmin } from "../useIsAdmin";
 import { useClientConfig } from "@/app/lib/useClientConfig";
@@ -1524,6 +1525,7 @@ function ConnectionsPageInner() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const serverNameRef = useFocusOnOpen<HTMLInputElement>(addServerOpen);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   // Optional seat label for the manual add form (#988); "" = the unlabeled
@@ -2365,6 +2367,7 @@ function ConnectionsPageInner() {
                 <ConnField label={tr("Name")}>
                   <input
                     id="remoteServerName"
+                    ref={serverNameRef}
                     className={SETTINGS_INPUT}
                     value={name}
                     onChange={(e) => setName(e.target.value)}

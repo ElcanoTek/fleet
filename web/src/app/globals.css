@@ -3761,6 +3761,9 @@ tr.sla-row-fail {
 }
 .task-card {
   display: grid;
+  /* One column that may shrink: left to size itself it grows to the card's
+     longest unbroken word and takes every row of the card past the edge. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.45rem;
   width: 100%;
   text-align: left;
@@ -3788,6 +3791,7 @@ tr.sla-row-fail {
   font-size: 0.875rem;
   line-height: 1.45;
   color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 /* Titled tasks: the title is the identity line and the prompt drops to a
    muted subtitle beneath it. Untitled tasks keep the prompt at full strength,
@@ -3807,6 +3811,10 @@ tr.sla-row-fail {
   font-weight: 600;
   line-height: 1.35;
   color: var(--color-text-primary);
+  /* A file name or URL in the title has no spaces to wrap at; without this
+     it ran past the card and was cut off at its edge. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .task-card-title + .task-card-prompt {
   font-size: 0.8125rem;

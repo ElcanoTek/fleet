@@ -5660,5 +5660,6 @@
   "(removed)": "(removido)",
   "Added to the end of each task's prompt (everything else is kept):": "Adicionado ao final do prompt de cada tarefa (todo o resto é mantido):",
   "New prompt — replaces each task's whole current prompt; anything not in this text is removed:": "Novo prompt: substitui todo o prompt atual de cada tarefa; tudo o que não estiver neste texto é removido:",
-  "manage_tasks: action 'show' is read-only and is never approved; nothing was changed": "manage_tasks: a ação 'show' é somente leitura e nunca é aprovada; nada foi alterado"
+  "manage_tasks: action 'show' is read-only and is never approved; nothing was changed": "manage_tasks: a ação 'show' é somente leitura e nunca é aprovada; nada foi alterado",
+  "To continue, fill in: {0}": "Para continuar, preencha: {0}"
 }

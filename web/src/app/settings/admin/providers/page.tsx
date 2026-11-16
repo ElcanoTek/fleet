@@ -24,6 +24,8 @@ import {
   InlineConfirmButton,
   RevealButton,
   SETTINGS_INPUT,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../../ui/atoms";
 import {
   ConnEmpty,
@@ -407,6 +409,7 @@ function ProvidersAdmin() {
   const [providers, setProviders] = useState<LLMProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null);
   const [busy, setBusy] = useState(false);
   // Catch-all confirmation: an enabled provider with no models listed can
   // hijack every unmatched slug, so Save arms on the first click and fires on
@@ -641,6 +644,7 @@ function ProvidersAdmin() {
               >
                 <input
                   id="providerName"
+                  ref={firstFieldRef}
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   placeholder="my-provider"
@@ -805,7 +809,8 @@ function ProvidersAdmin() {
                 />
                 {tr("Enabled")}
               </label>
-              <span className="inline-flex items-center gap-2">
+              <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                <MissingFieldsHint id="providerMissing" missing={draft.name.trim() ? [] : [tr("Name")]} />
                 <button
                   type="button"
                   onClick={() => {
@@ -825,6 +830,7 @@ function ProvidersAdmin() {
                     if (e.key === "Escape") setCatchAllArmed(false);
                   }}
                   disabled={busy || !draft.name.trim()}
+                  aria-describedby={draft.name.trim() ? undefined : "providerMissing"}
                   data-testid="provider-save"
                   className={btnClass({ variant: "primary" })}
                 >

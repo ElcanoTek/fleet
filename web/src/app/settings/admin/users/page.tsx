@@ -25,6 +25,7 @@ import { fetchStats, formatAgo, type UserStat } from "../lib";
 import {
   InlineConfirmButton,
   RevealButton,
+  useFocusOnOpen,
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
@@ -555,6 +556,7 @@ export default function AdminUsersPage() {
   // user removes) below the screen, out of reach. Once the panel is laid out
   // its real height is known: move it up until its bottom edge is on screen,
   // and again if it grows (the delete confirmation, a refusal).
+  const menuY = menu?.y;
   useLayoutEffect(() => {
     const pop = popRef.current;
     if (!menuEmail || !pop) return;
@@ -567,7 +569,9 @@ export default function AdminUsersPage() {
     const observer = new ResizeObserver(fit);
     observer.observe(pop);
     return () => observer.disconnect();
-  }, [menuEmail]);
+    // menuY too: pressing the same row's button again places the panel from
+    // the estimate once more, with nothing else changed to re-run this.
+  }, [menuEmail, menuY]);
 
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
@@ -821,6 +825,7 @@ export default function AdminUsersPage() {
 
   // ── add-user form state ──
   const [addOpen, setAddOpen] = useState(false);
+  const newEmailRef = useFocusOnOpen<HTMLInputElement>(addOpen);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
@@ -1391,6 +1396,7 @@ export default function AdminUsersPage() {
                   <ConnField label={tr("Email")} grow>
                     <Input
                       id="newUserEmail"
+                      ref={newEmailRef}
                       aria-label={tr("New user email")}
                       type="email"
                       value={newEmail}

@@ -18,6 +18,8 @@ import {
   RevealButton,
   Segmented,
   SETTINGS_INPUT,
+  MissingFieldsHint,
+  useFocusOnOpen,
 } from "../ui/atoms";
 import {
   ConnEmpty,
@@ -60,6 +62,7 @@ export default function PromptsPage() {
   const [scope, setScope] = useState<"all" | "yours" | "workspace" | "deployment">("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
+  const firstFieldRef = useFocusOnOpen<HTMLInputElement>(draft !== null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -279,6 +282,7 @@ export default function PromptsPage() {
               <div className="mb-4 grid gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3.5">
                 <ConnField label={tr("Name")}>
                   <input
+                    ref={firstFieldRef}
                     aria-label={tr("Prompt name")}
                     placeholder={tr("e.g. Morning deal pacing check")}
                     value={draft.name}
@@ -325,7 +329,14 @@ export default function PromptsPage() {
                     />
                     <span>{tr("Share with this workspace")}</span>
                   </label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <MissingFieldsHint
+                      id="promptMissing"
+                      missing={[
+                        ...(draft.name.trim() ? [] : [tr("Name")]),
+                        ...(draft.content.trim() ? [] : [tr("Prompt text")]),
+                      ]}
+                    />
                     <button
                       type="button"
                       className={btnClass({ sm: true, reveal: true })}
@@ -337,6 +348,7 @@ export default function PromptsPage() {
                       disabled={
                         !draft.name.trim() || !draft.content.trim() || busy
                       }
+                      aria-describedby={draft.name.trim() && draft.content.trim() ? undefined : "promptMissing"}
                       onClick={() => void handleSave()}
                       className={btnClass({ variant: "primary", sm: true })}
                     >

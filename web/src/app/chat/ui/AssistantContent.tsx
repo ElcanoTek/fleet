@@ -93,26 +93,38 @@ export function autoFenceRawHtmlDocument(content: string): string {
   return out.join("\n");
 }
 
-// A literal <br> is the one piece of HTML models write all the time, mostly to
-// break a line inside a table cell, where Markdown has no other way. Raw HTML
-// is shown as text here (no rehype-raw, on purpose), so the reader saw
-// "5 seats<br>Email support". This turns exactly that tag, and nothing else,
-// into Markdown's own line break; every other tag is still shown as text.
+// A literal <br> is the one piece of HTML models write all the time, and raw
+// HTML is shown as text here (no rehype-raw, on purpose). Two uses of it are
+// a line break and nothing else, and are turned into Markdown's own:
+//   - inside a table cell, where Markdown has no other way to break a line
+//     ("5 seats<br>Email support");
+//   - at the end of a line ("Acme Corp<br>" then "123 Main St" on the next),
+//     the way an address or a signature is written. The line ending that
+//     follows goes with it, or the two together would leave a blank line.
+// Anywhere else it stays text: in the middle of a sentence it is someone
+// naming the tag ("How do I use the <br> tag?"), and hiding it would change
+// what they wrote. Every other tag is always shown as text.
 type MdNode = { type: string; value?: string; children?: MdNode[] };
 const BR_TAG = /^<br\s*\/?>$/i;
 export function remarkLineBreakTags() {
-  const walk = (node: MdNode) => {
-    if (!node.children) return;
-    for (const child of node.children) {
-      if (child.type === "html" && typeof child.value === "string" && BR_TAG.test(child.value.trim())) {
-        child.type = "break";
-        delete child.value;
-      } else {
-        walk(child);
+  const walk = (node: MdNode, inCell: boolean) => {
+    const children = node.children;
+    if (!children) return;
+    for (let i = 0; i < children.length; i += 1) {
+      const child = children[i];
+      if (child.type !== "html" || typeof child.value !== "string" || !BR_TAG.test(child.value.trim())) {
+        walk(child, inCell || child.type === "tableCell");
+        continue;
       }
+      const next = children[i + 1];
+      const endsLine = next?.type === "text" && typeof next.value === "string" && /^\r?\n/.test(next.value);
+      if (!inCell && !endsLine) continue;
+      child.type = "break";
+      delete child.value;
+      if (endsLine && next) next.value = (next.value ?? "").replace(/^\r?\n/, "");
     }
   };
-  return (tree: MdNode) => walk(tree);
+  return (tree: MdNode) => walk(tree, false);
 }
 
 // Hoisted so ReactMarkdown never sees a fresh plugins array or urlTransform

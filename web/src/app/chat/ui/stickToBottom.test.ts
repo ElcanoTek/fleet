@@ -3,6 +3,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import {
   FOLLOW_BOTTOM_EPSILON_PX,
   IDLE_FOLLOW_WINDOW_PX,
+  PIN_HOLD_MS,
   SMOOTH_FOLLOW_SETTLE_MS,
   STREAMING_FOLLOW_WINDOW_PX,
   decideFollowBottom,
@@ -486,6 +487,46 @@ describe("useStickToBottom", () => {
       rerender({ messages: [1, 2, 3] });
       expect(scroller.scrollTo).toHaveBeenCalledTimes(2);
       expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 2900, behavior: "smooth" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Jump to latest scrolls smoothly; a change that lands while it is still
+  // on its way must not count as the reader having scrolled away again.
+  it("keeps the pin through a change that outruns a requested jump", () => {
+    vi.useFakeTimers();
+    try {
+      const { scroller, userScrollsTo, refs } = liveHarness();
+      const one: readonly unknown[] = [1];
+      const { rerender } = renderHook(
+        ({ messages, contentHeight }: { messages: readonly unknown[]; contentHeight: number }) =>
+          useStickToBottom({ ...refs, messages, isStreaming: false, contentHeight }),
+        { initialProps: { messages: one, contentHeight: 2000 } },
+      );
+      vi.advanceTimersByTime(SMOOTH_FOLLOW_SETTLE_MS);
+      userScrollsTo(1400);
+      userScrollsTo(300);
+
+      requestFollowBottom();
+      // A height-only change (the same message list) while still far from
+      // the end: left behind, but inside the hold the reader still counts as
+      // at the end.
+      scroller.scrollHeight = 2300;
+      rerender({ messages: one, contentHeight: 2300 });
+      // The next message is not theirs; it is followed all the same.
+      scroller.scrollHeight = 2900;
+      rerender({ messages: [1, 2], contentHeight: 2900 });
+      expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 2900, behavior: "smooth" });
+
+      // After the hold a change they are left behind by clears the pin again.
+      vi.advanceTimersByTime(PIN_HOLD_MS + SMOOTH_FOLLOW_SETTLE_MS);
+      userScrollsTo(2300);
+      userScrollsTo(300);
+      const calls = scroller.scrollTo.mock.calls.length;
+      scroller.scrollHeight = 3600;
+      rerender({ messages: [1, 2, 3], contentHeight: 3600 });
+      expect(scroller.scrollTo).toHaveBeenCalledTimes(calls);
     } finally {
       vi.useRealTimers();
     }

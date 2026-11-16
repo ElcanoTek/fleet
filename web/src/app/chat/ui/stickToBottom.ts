@@ -223,6 +223,9 @@ export function requestFollowBottom(): void {
   for (const pin of followRequests) pin();
 }
 
+/** How long after a request to be at the end the pin survives a change that outran the scroll there. */
+export const PIN_HOLD_MS = 1500;
+
 export type UseStickToBottomInput = {
   /** The scrolling transcript container. */
   conversationRef: RefObject<HTMLElement | null>;
@@ -295,11 +298,23 @@ export function useStickToBottom({
   const listenedRef = useRef<HTMLElement | null>(null);
   const onScrollRef = useRef<() => void>(() => {});
   const conversationKeyRef = useRef(conversationKey);
+  // Until this time a "left behind" decision does not clear the pin. A
+  // request to be at the end (Jump to latest) scrolls there smoothly; a row
+  // measured for the first time on the way is a change the reader is not yet
+  // level with, and must not be read as them having scrolled away.
+  const pinHeldUntilRef = useRef(0);
+  // Where the reader was the last time the transcript was on screen, and
+  // whether it has been hidden since. A hidden box (display: none) forgets
+  // its scroll position, so it is put back when the box returns.
+  const lastVisibleTopRef = useRef<number | null>(null);
+  const wasHiddenRef = useRef(false);
+  const visibilityObserverRef = useRef<ResizeObserver | null>(null);
 
   useEffect(() => {
     const pin = () => {
       pinnedRef.current = true;
       lastScrollRef.current = null;
+      pinHeldUntilRef.current = Date.now() + PIN_HOLD_MS;
     };
     followRequests.add(pin);
     return () => {
@@ -318,6 +333,8 @@ export function useStickToBottom({
       }
       listenedRef.current?.removeEventListener("scroll", onScrollRef.current);
       listenedRef.current = null;
+      visibilityObserverRef.current?.disconnect();
+      visibilityObserverRef.current = null;
     },
     [],
   );
@@ -346,10 +363,60 @@ export function useStickToBottom({
       listenedRef.current = liveScroller;
       lastScrollRef.current = null;
       pinnedRef.current = true;
+      lastVisibleTopRef.current = null;
+      wasHiddenRef.current = false;
+      visibilityObserverRef.current?.disconnect();
+      visibilityObserverRef.current = null;
+      if (liveScroller && typeof ResizeObserver !== "undefined") {
+        // Hidden and shown again (the Dashboard's Board pane below lg, a
+        // project page laid over the chat): the reader goes back to where
+        // they were, or to the end if that is where they were.
+        visibilityObserverRef.current = new ResizeObserver(() => {
+          const el = listenedRef.current;
+          if (!el) return;
+          if (el.clientHeight === 0) {
+            wasHiddenRef.current = true;
+            return;
+          }
+          if (!wasHiddenRef.current) return;
+          wasHiddenRef.current = false;
+          lastScrollRef.current = null;
+          if (!pinnedRef.current) {
+            if (lastVisibleTopRef.current !== null) el.scrollTop = lastVisibleTopRef.current;
+            return;
+          }
+          // At the end before, at the end now. The rows are measured again
+          // over the next frames and the end moves with them, so go there
+          // again once they have, and do not let that re-measuring count as
+          // the reader having been left behind.
+          pinHeldUntilRef.current = Date.now() + PIN_HOLD_MS;
+          const toEnd = () => {
+            if (listenedRef.current === el && pinnedRef.current && el.clientHeight > 0) {
+              el.scrollTop = el.scrollHeight;
+            }
+          };
+          toEnd();
+          requestAnimationFrame(() => {
+            toEnd();
+            requestAnimationFrame(toEnd);
+          });
+          window.setTimeout(toEnd, 250);
+        });
+        visibilityObserverRef.current.observe(liveScroller);
+      }
       onScrollRef.current = () => {
         const el = listenedRef.current;
         if (!el) return;
+        // A hidden box reports 0 / 0 / 0, which would read as "at the end".
+        // Events between a hide and the observer above noticing the return
+        // are the browser resetting the position, not the reader.
+        if (el.clientHeight === 0) {
+          if (visibilityObserverRef.current) wasHiddenRef.current = true;
+          return;
+        }
+        if (wasHiddenRef.current) return;
         const top = el.scrollTop;
+        lastVisibleTopRef.current = top;
         const distance = el.scrollHeight - top - el.clientHeight;
         const last = lastScrollRef.current;
         lastScrollRef.current = { top, distance };
@@ -403,7 +470,9 @@ export function useStickToBottom({
       if (!decision.follow) {
         // Left behind by a change we chose not to follow: from here on they
         // count as reading further up, until they return to the end.
-        if (decision.reason === "user-scrolled-away") pinnedRef.current = false;
+        if (decision.reason === "user-scrolled-away" && Date.now() >= pinHeldUntilRef.current) {
+          pinnedRef.current = false;
+        }
         if (decision.reason === "smooth-follow-in-flight") {
           const pending = recheckAfterSettleRef.current;
           recheckAfterSettleRef.current = {

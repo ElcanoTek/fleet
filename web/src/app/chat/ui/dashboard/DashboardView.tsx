@@ -165,7 +165,7 @@ export function DashboardHud({
           while there is room and gives way (the title shortens) when there is
           not. Fixed at its full width, a long chat title pushed Exit off the
           right edge between 640 and about 880px. */}
-      <div className="flex min-w-0 flex-1 items-center gap-3 sm:flex-initial">
+      <div className="flex min-w-0 flex-1 items-center gap-3 sm:min-w-[6rem] sm:flex-initial">
         <span className="dash-hud-mark max-sm:hidden" aria-hidden="true">
           <Icon name="target" className="size-4" />
         </span>
@@ -174,10 +174,12 @@ export function DashboardHud({
           <h1 className="truncate text-[0.95rem] font-semibold text-[var(--color-text-primary)]" title={title}>{title}</h1>
         </div>
       </div>
-      {/* Grows into the spare room but never shrinks below the status light:
-          squeezed to nothing, the light sat on top of the Board / Chat
-          switch. */}
-      <div className="flex min-w-0 items-center justify-center sm:flex-[1_0_auto]">
+      {/* Takes the spare room and gives it back when the header is tight,
+          down to the width of the light with a short word beside it: below
+          that it sat on top of the Board / Chat switch. A long "working on"
+          label shortens (it truncates) before the title has to give way
+          entirely. */}
+      <div className="flex min-w-0 items-center justify-center sm:min-w-[6.5rem] sm:flex-[1_1_auto]">
         <StatusLight status={status} onApprovals={onApprovals} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">

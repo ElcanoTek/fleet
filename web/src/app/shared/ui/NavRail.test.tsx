@@ -152,6 +152,22 @@ describe("NavRail phone drawer", () => {
       }
     });
 
+    // Chat's "j" / "k" shortcut opens the drawer with focus on the page; it
+    // must stay there, or Enter would press Close instead of opening a chat.
+    it("leaves focus on the page when the drawer opens without a control focused", () => {
+      const offsetParent = vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(document.body);
+      const media = phone(true);
+      try {
+        const { rerender } = render(rail(false, () => {}));
+        (document.activeElement as HTMLElement | null)?.blur();
+        rerender(rail(true, () => {}));
+        expect(document.activeElement).toBe(document.body);
+      } finally {
+        media.mockRestore();
+        offsetParent.mockRestore();
+      }
+    });
+
     it("does nothing from sm up, where the rail is part of the page", () => {
       const media = phone(false);
       try {

@@ -342,10 +342,14 @@ export function CopyChip({ name }: { name: string }) {
         size="xs"
         aria-label={tr("Copy /{0} to clipboard", [name])}
         onClick={() => void copy()}
-        className="h-auto gap-[0.4rem] rounded-[0.45rem] border-border bg-(--color-overlay-soft) px-[0.6rem] py-[0.26rem] font-[family-name:var(--font-code)] text-[0.78rem] font-medium whitespace-normal text-foreground [overflow-wrap:anywhere]"
+        // max-w-full + shrink + min-w-0: the chip may be as wide as its row
+        // and no wider, so a long name (a skill name can be 64 characters)
+        // wraps inside the chip instead of running off a phone's screen. The
+        // base button is shrink-0, which kept it at its full one-line width.
+        className="h-auto max-w-full min-w-0 shrink gap-[0.4rem] rounded-[0.45rem] border-border bg-(--color-overlay-soft) px-[0.6rem] py-[0.26rem] text-left font-[family-name:var(--font-code)] text-[0.78rem] font-medium whitespace-normal text-foreground [overflow-wrap:anywhere]"
       >
         <span className="text-[var(--color-accent)]">/</span>
-        {name}
+        <span className="min-w-0">{name}</span>
         <Icon
           name={copied ? "check" : "copy"}
           className={cn(

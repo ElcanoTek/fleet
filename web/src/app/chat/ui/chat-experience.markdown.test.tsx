@@ -174,6 +174,21 @@ describe("renderAssistantContent — blocks", () => {
     expect(container.textContent).toContain("<kbd>K</kbd>");
   });
 
+  // Outside a table, only a <br> that ends a line is a line break: in the
+  // middle of a sentence it is someone naming the tag, and stays as typed.
+  it("keeps a <br> named in a sentence and breaks at one that ends a line", () => {
+    const named = renderMarkdown("How do I use the <br> tag in an email?");
+    expect(named.container.querySelector("br")).toBeNull();
+    expect(named.container.textContent).toContain("the <br> tag");
+    named.unmount();
+
+    const { container } = renderMarkdown("Acme Corp<br>\n123 Main St<br/>\nSpringfield");
+    const p = container.querySelector("p")!;
+    expect(p.querySelectorAll("br")).toHaveLength(2);
+    // One newline per break: the source line ending is not kept as well.
+    expect(p.textContent).toBe("Acme Corp\n123 Main St\nSpringfield");
+  });
+
   it("names a task-list checkbox and keeps it read-only", () => {
     renderMarkdown("- [x] shipped\n- [ ] pending");
     const boxes = screen.getAllByRole("checkbox", { name: "Task" });

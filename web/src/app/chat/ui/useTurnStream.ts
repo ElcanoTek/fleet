@@ -4444,6 +4444,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // without leaking into another draft opened in the meantime.
     const originPendingKey = convId ?? draftKeyRef?.current ?? "__draft_0__";
 
+    // Sending is the reader saying "take me to the end", wherever they had
+    // scrolled to and however long the message is. Said now, before the
+    // upload below is awaited: by the time a large file has gone up the
+    // reader may be in another chat, and it is this one they sent from.
+    requestFollowBottom();
+
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
@@ -4487,9 +4493,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             .join("\n")])
         : undefined;
 
-    // Sending is the reader saying "take me to the end", wherever they had
-    // scrolled to and however long the message is.
-    requestFollowBottom();
     const nextMessages: Message[] = [
       {
         id: baseId,

@@ -213,16 +213,25 @@ export function NavRail({
   // its own trap, so focus inside one is left alone.
   useEffect(() => {
     if (!sidebarOpen) return;
+    // The same test the layout uses (Tailwind's sm is 40rem, which follows
+    // the reader's font size), so the handling is on exactly while the rail
+    // is a drawer.
     const isPhone = () =>
       typeof window.matchMedia === "function" &&
-      window.matchMedia("(max-width: 639.98px)").matches;
+      window.matchMedia("(width < 40rem)").matches;
     if (!isPhone()) return;
     // On the frame the drawer opens it is still `invisible` (the visibility
     // change rides the slide's transition and has not started), and a hidden
     // element refuses focus: so try now, then again once it has begun.
+    // Only when focus was on a control (the button that opened the drawer):
+    // it would otherwise be left on something the drawer now covers. With
+    // focus on the page itself nothing is stranded, and Chat's "j" / "k"
+    // shortcut opens the drawer that way: Enter must still open the chat
+    // under its cursor, which it declines to do while a button has focus.
+    const openedFromControl = document.activeElement !== null && document.activeElement !== document.body;
     const focusIn = () => {
       const aside = asideRef.current;
-      if (aside && !aside.contains(document.activeElement)) {
+      if (openedFromControl && aside && !aside.contains(document.activeElement)) {
         overlayFocusables(aside)[0]?.focus();
       }
     };

@@ -331,3 +331,33 @@ export function ClampText({
     </div>
   );
 }
+
+/* ── Form helpers ── */
+
+// MissingFieldsHint says why a form's submit button is greyed out: which
+// required fields are still empty. Without it the button simply did not
+// respond and nothing on the form said what it was waiting for. Give the
+// button aria-describedby={id} so a screen reader hears it with the button.
+export function MissingFieldsHint({ id, missing }: { id: string; missing: string[] }) {
+  if (missing.length === 0) return null;
+  return (
+    <span id={id} className="self-center text-[0.72rem] text-[var(--color-text-muted)]">
+      {tr("To continue, fill in: {0}", [missing.join(", ")])}
+    </span>
+  );
+}
+
+// useFocusOnOpen puts the cursor in a form's first field when the form opens.
+// These forms open from a toggle button that stays where it is (and becomes
+// Cancel), so focus stayed on that button and the first field was a Tab away.
+// Attach the returned ref to the first field; `open` is whether the form is
+// showing. A form that is already open when the page loads is left alone.
+export function useFocusOnOpen<T extends HTMLElement>(open: boolean) {
+  const ref = useRef<T | null>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (open && !wasOpen.current) ref.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+  return ref;
+}
